@@ -5432,10 +5432,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
       req.on('end', () => {
         if (aborted) return;
+        // PARSE and HANDLE in separate try/catches (audit H18b). The single
+        // catch conflated "bad JSON" with "the route handler threw", and if
+        // the handler threw AFTER writing headers, the catch's writeHead(400)
+        // itself threw ERR_HTTP_HEADERS_SENT — an engine-side crash path
+        // reachable by any request that made a handler fail late.
+        let parsed;
         try {
-          callback(JSON.parse(body || '{}'));
+          parsed = JSON.parse(body || '{}');
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid JSON' }));
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        }
+        try {
+          callback(parsed);
+        } catch (e) {
+          console.warn(`  ⚠ [api] handler threw for ${req.method} ${req.url}: ` +
+            `${e && e.message ? e.message : e}`);
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: String((e && e.message) || e) }));
+          } else {
+            try { res.end(); } catch (e2) { /* socket already gone */ }
+          }
         }
       });
     };
@@ -5883,6 +5901,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
         const ctlRes = paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        // AN IGNORED WRITE MUST SAY SO (audit medium). This returned
+        // {status:'ok'} even when the router refused the control — a surface
+        // sweeping a fader saw success while the rig did nothing.
+        if (ctlRes && ctlRes.status && ctlRes.status !== 'ok') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: ctlRes.status, id: data.id, reason: ctlRes.reason || null }));
+        }
         // Legacy /control targets the deck base channel. CHANNEL-LOCAL write:
         // no cross-channel mirroring (operator ruling 2026-07-07 — parameter
         // isolation). It DOES mark the deck's params touched so the next entry
@@ -6107,9 +6133,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             error: `unknown sectionId ${data.sectionId} — no group in the loaded model maps to it (see GET /dimmer-groups)`,
           }));
         }
-        if (intensityController) intensityController.setSectionBrightness(sId, data.brightness);
+        // STRICT brightness (audit medium): a non-numeric value became NaN,
+        // was applied, AND was persisted to globals_state.yaml — a poisoned
+        // dimmer that survives reboot. Codex P0: reject, never coerce.
+        const bVal = data.brightness;
+        if (typeof bVal !== 'number' || !Number.isFinite(bVal) || bVal < 0 || bVal > 1) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `brightness must be a finite number in 0..1, got ${JSON.stringify(bVal)}` }));
+        }
+        if (intensityController) intensityController.setSectionBrightness(sId, bVal);
         if (!globalsState.dimmers) globalsState.dimmers = {};
-        globalsState.dimmers[groupName] = data.brightness;
+        globalsState.dimmers[groupName] = bVal;
         saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', sectionId: sId, group: groupName, brightness: data.brightness }));
@@ -6197,7 +6232,32 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               pixelsPerSecond: pps,
               amount: (data && typeof data.amount === 'number') ? data.amount : 1,
             };
-            if (Array.isArray(data.colors) && data.colors.length) params.colors = data.colors;
+            // COLOURS ARE VALIDATED, AND ALL-BLACK IS REFUSED (audit medium +
+            // H10's movement half). Unvalidated entries let string colours
+            // inject NaN into every painted pixel; an all-black palette is a
+            // walking blackout that passes every never-black failsafe.
+            if (data.colors !== undefined) {
+              if (!Array.isArray(data.colors) || data.colors.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'movement-rate: colors must be a non-empty array' }));
+              }
+              let peak = 0;
+              for (const c of data.colors) {
+                if (!Array.isArray(c) || c.length < 6
+                    || c.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1)) {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  return res.end(JSON.stringify({
+                    error: 'movement-rate: every color must be 6 finite numbers in 0..1' }));
+                }
+                for (const v of c) peak = Math.max(peak, v);
+              }
+              if (peak < 0.05) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({
+                  error: 'movement-rate: an all-black palette is a walking blackout — refused' }));
+              }
+              params.colors = data.colors;
+            }
             globalEffectsController.setMovementTrace(true, params, { presetId: 'xy_pad' });
           }
         } catch (e) {
@@ -6240,11 +6300,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const active = !!(data && data.active);
         const hz = num(data && data.hz, 0.2, 25, 6);
         const duty = num(data && data.duty, 0.02, 0.98, 0.5);
-        const intensity = num(data && data.intensity, 0, 1, 1);
+        // intensity floor 0.02, not 0 (audit H10): the gate maths scales OFF
+        // frames by 0 and ON frames by intensity, so an active strobe at
+        // intensity 0 multiplies EVERY frame by zero — a constant blackout
+        // that passes every never-black failsafe. "No flash" is active:false.
+        const intensity = num(data && data.intensity, 0.02, 1, 1);
         if (hz === null || duty === null || intensity === null) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
-            error: 'strobe-rate: hz 0.2..25, duty 0.02..0.98, intensity 0..1',
+            error: 'strobe-rate: hz 0.2..25, duty 0.02..0.98, intensity 0.02..1 (use active:false for off)',
           }));
         }
         try {
@@ -6253,7 +6317,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             globalEffectsController.setStrobe(true, hz, duty, intensity,
               frameIndex, { presetId: 'xy_pad', slotId: null });
           } else {
-            globalEffectsController.stopStrobe({ nowMs: Date.now() });
+            // No nowMs: stopStrobe defaults to performance.now(), the frame
+            // clock. Date.now() here (audit H18) put a wall-clock value into a
+            // performance.now() domain — the fade elapsed computed as ~55 YEARS
+            // negative, so an opt-in fadeOutMs strobe could never finish fading.
+            globalEffectsController.stopStrobe({});
           }
         } catch (e) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -7436,6 +7504,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
+        // STRICT TYPES, PATCH-STYLE (audit medium). This route silently
+        // coerced: delay_s 'abc' or 0 became 30 via `parseInt(..) || 30`,
+        // group fields silently clamped. A wrong autopilot cadence from a
+        // typo'd script is a wrong SHOW; reject bad fields loudly instead.
+        // Absent fields stay absent — this remains a merge, not a replace.
+        const apBad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'autopilot: ' + msg }));
+        };
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return apBad('body must be an object');
+        for (const boolKey of ['active', 'shuffle', 'groupMode']) {
+          if (data[boolKey] !== undefined && typeof data[boolKey] !== 'boolean') {
+            return apBad(`${boolKey} must be boolean, got ${JSON.stringify(data[boolKey])}`);
+          }
+        }
+        if (data.delay_s !== undefined) {
+          // NUMERIC STRINGS ARE ACCEPTED for delay_s only: the deployed
+          // CaptainPad posts delay_s as a string (utils/api.ts setAutopilot),
+          // and strictness must not brick the installed iPad app. '45' is
+          // unambiguous; 'abc' and 0 (which `parseInt(..) || 30` silently
+          // turned into 30) are still refused.
+          const d = (typeof data.delay_s === 'number') ? data.delay_s
+            : (typeof data.delay_s === 'string' && data.delay_s.trim() !== ''
+              ? Number(data.delay_s) : NaN);
+          if (!Number.isFinite(d) || d < 1 || d > 3600) {
+            return apBad(`delay_s must be seconds in 1..3600, got ${JSON.stringify(data.delay_s)}`);
+          }
+          data.delay_s = d;
+        }
+        const intBad = (k, lo, hi) => data[k] !== undefined && (typeof data[k] !== 'number'
+          || !Number.isInteger(data[k]) || data[k] < lo || data[k] > hi);
+        if (intBad('groupSize', AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX)) {
+          return apBad(`groupSize must be an integer in ${AUTO_GROUP_SIZE_MIN}..${AUTO_GROUP_SIZE_MAX}`);
+        }
+        if (intBad('groupDwell', AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX)) {
+          return apBad(`groupDwell must be an integer in ${AUTO_GROUP_DWELL_MIN}..${AUTO_GROUP_DWELL_MAX}`);
+        }
         // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
         // deck tab). main's frame-driven system: the daemon's timer is driven
         // by autopilot.updateState({active,delay_s}); the next-entry pick reads
@@ -9183,18 +9288,54 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // need to call applySnapshot/save/broadcastWs here — doing
         // so would double-broadcast every write (docs/24 §7.2).
         let rev = 0;
+        const ignored = [];
         for (const k in data) {
           const r = paramCenter.set(k, data[k], 'api');
           if (r.status === 'ok') rev = r.revision;
+          else ignored.push({ key: k, reason: r.reason || r.status });
         }
+        // SAY WHAT WAS REFUSED (audit medium/low). This returned a bare
+        // {status:'ok'} even when the source lock rejected every write — the
+        // WS path reports paramRejected, but the HTTP path (the one the touch
+        // panel itself uses) lied by omission. Still 200: partial application
+        // is this route's contract; the list makes it honest.
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', revision: rev }));
+        res.end(JSON.stringify(ignored.length
+          ? { status: 'partial', revision: rev, ignored }
+          : { status: 'ok', revision: rev }));
       });
     } else if (req.method === 'POST' && req.url === '/param-center/source-lock') {
       readBody(data => {
-        if (paramCenter) paramCenter.setSourceLock(data);
+        if (!paramCenter) { res.writeHead(503); return res.end(JSON.stringify({ error: 'no param center' })); }
+        // STRICT SCHEMA (audit H16). This used to hand ANY body straight to
+        // setSourceLock — a malformed lock (mode typo, garbage leases) could
+        // wedge every param write engine-wide with nothing saying why. The
+        // lock is the arm takeover's backbone; validate it like one.
+        const bad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'source-lock: ' + msg }));
+        };
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return bad('body must be an object');
+        if (['open', 'global', 'per-param'].indexOf(data.mode) === -1) {
+          return bad(`mode must be open|global|per-param, got ${JSON.stringify(data.mode)}`);
+        }
+        if (data.mode === 'global' && !(typeof data.source === 'string' && data.source.length > 0)) {
+          return bad('global mode requires a non-empty source string');
+        }
+        if (data.mode === 'per-param') {
+          const l = data.leases;
+          if (!l || typeof l !== 'object' || Array.isArray(l) || Object.keys(l).length === 0) {
+            return bad('per-param mode requires a non-empty leases object');
+          }
+          for (const k of Object.keys(l)) {
+            if (!(typeof l[k] === 'string' && l[k].length > 0)) {
+              return bad(`lease '${k}' must name its owning source as a non-empty string`);
+            }
+          }
+        }
+        paramCenter.setSourceLock(data);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', sourceLock: paramCenter ? paramCenter.getSourceLock() : null }));
+        res.end(JSON.stringify({ status: 'ok', sourceLock: paramCenter.getSourceLock() }));
         broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
       });
     }
