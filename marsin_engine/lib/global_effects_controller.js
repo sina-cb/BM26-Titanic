@@ -356,6 +356,16 @@ export class GlobalEffectsController {
     this._spatialInk = null;
     this._spatialEnergy = 0;
     this._spatialLastMs = 0;
+    // TOUCH STALENESS DEADMAN (audit C1). While drawing, the panel re-sends
+    // touch:true every ~33 ms; if those writes stop with touch stuck true (a
+    // panel that died mid-stroke), the brush would keep painting — or worse,
+    // ERASING — the same spot every frame FOREVER, and revertToAutomaticShow
+    // could not undo it because the erase re-applies each frame on top of the
+    // restored show. So the stage lifts a touch that has gone quiet. 10 s is
+    // unambiguous death, not a slow stroke (300× the drawing interval).
+    // A property, not a const, so tests can shrink the window.
+    this.spatialTouchStaleMs = 10_000;
+    this._spatialTouchSeenMs = null;   // frame-clock stamp of the last touch write
     // Where the brush was when it was last painted, so the stroke can be swept
     // from there to the current target instead of teleporting. null = no prior
     // point (stroke start), which paints a plain disc.
@@ -381,6 +391,22 @@ export class GlobalEffectsController {
       const sp = this.spatial;
       if (!sp.enabled) return;                       // zero cost when off
       if (!Array.isArray(pixels) || pixels.length === 0) return;
+      // TOUCH STALENESS (audit C1): a touch nobody has refreshed inside the
+      // window is a dead panel's finger, not a slow stroke — lift it, loudly.
+      // The stamp is lazy (first stage pass after the write) so the whole
+      // check lives in the frame clock the stage is already handed.
+      if (sp.touch) {
+        if (this._spatialTouchSeenMs === null) {
+          this._spatialTouchSeenMs = nowMs;
+        } else if (nowMs - this._spatialTouchSeenMs > this.spatialTouchStaleMs) {
+          sp.touch = false;
+          this._spatialTouchSeenMs = null;
+          console.warn(`  ⚠ [spatial] touch went stale (no write for ${this.spatialTouchStaleMs} ms) — ` +
+            'lifting the brush; a dead panel must not keep painting the ship');
+        }
+      } else {
+        this._spatialTouchSeenMs = null;
+      }
       if (!this._spatialHeat || this._spatialHeat.length < pixels.length) {
         this._spatialHeat = new Float32Array(pixels.length);
       }
@@ -1756,7 +1782,14 @@ export class GlobalEffectsController {
     };
     const sp = this.spatial;
     if (patch.enabled !== undefined) sp.enabled = !!patch.enabled;
-    if (patch.touch !== undefined) sp.touch = !!patch.touch;
+    if (patch.touch !== undefined) {
+      sp.touch = !!patch.touch;
+      // Every touch-carrying write restarts the staleness window (the stage
+      // stamps the frame clock on its next pass — one clock domain, no mixing
+      // Date.now() into the nowMs stream, which is exactly the bug class the
+      // strobe fade audit finding is about).
+      this._spatialTouchSeenMs = null;
+    }
     if (patch.targetX !== undefined) sp.targetX = num('targetX', 0, 1);
     if (patch.targetY !== undefined) sp.targetY = num('targetY', 0, 1);
     if (patch.radius !== undefined) sp.radius = num('radius', 0.01, 1);

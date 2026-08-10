@@ -558,7 +558,13 @@
          into the hull with nobody driving. Cleared, not just lifted, so the heat
          goes with it. req() so it lands even though we are disarming. */
       req('POST', '/spatial-paint', { enabled: false, touch: false, clear: true })
-        .catch(function () { /* the deadman revert clears it too */ });
+        .catch(function (e) { fail('disarm/spatial-clear', e); });
+      /* STOP THE XY STROBE AND WALK (audit H5). They run under presetId
+         'xy_pad' with no slot, so the disable-all below cannot see them —
+         disarming mid-strobe used to hand the automatic show back permanently
+         strobing. handbackStep so one failure cannot cancel the chain. */
+      handbackStep('xy-strobe', req('POST', '/strobe-rate', { active: false }));
+      handbackStep('xy-walk', req('POST', '/movement-rate', { active: false }));
       forgetSpatialCfg();   /* the engine no longer holds what we cached */
       /* Drop every painted group — the paint only exists because we armed. */
       var names = Object.keys(painted);
@@ -735,6 +741,16 @@
     fetch(ENGINE + '/audio-bindings/clear', { method: 'POST', keepalive: true,
       headers: { 'Content-Type': 'application/json' },
       body: '{}' }).catch(function () {});
+    /* Stop the XY strobe/walk too (audit H5): they are slot-less, so no sweep
+       will catch them, and a tab closed mid-strobe left the ship strobing.
+       The engine's deadman revert now also clears them, but that takes the
+       close-grace window — these keepalive posts stop it immediately. */
+    fetch(ENGINE + '/strobe-rate', { method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: false }) }).catch(function () {});
+    fetch(ENGINE + '/movement-rate', { method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: false }) }).catch(function () {});
   });
 
   /* ── PATTERN ────────────────────────────────────────────────────────── */

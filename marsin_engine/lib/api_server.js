@@ -4508,6 +4508,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         releaseTouchPaintForOwner(ownerId, `revert to automatic show (${why})`);
       });
 
+      // 5b. CLEAR THE PANEL-DRIVEN GLOBAL EFFECTS (audit C1/H5). These live in
+      //    controller memory, not in any slot, so neither disable-all nor the
+      //    paint release above touches them:
+      //    - spatial paint: a panel dying mid-ERASE leaves touch:true erasing
+      //      the same spot EVERY FRAME on top of the show this revert just
+      //      restored — a standing dark region no other failsafe clears.
+      //    - the XY strobe/walk run under presetId 'xy_pad' with no slot, so
+      //      the slot sweep cannot see them and the ship would come back
+      //      permanently strobing.
+      //    Unconditional (not owner-gated): only the armed panel drives these,
+      //    and a revert means that panel is gone.
+      step('panel-effects', () => {
+        if (!globalEffectsController) return;
+        globalEffectsController.setSpatialPaint({ enabled: false, touch: false, clear: true });
+        // No nowMs: stopStrobe defaults to performance.now(), the engine's
+        // frame clock. Passing Date.now() here would be the exact clock-domain
+        // bug the audit found in /strobe-rate (H18).
+        globalEffectsController.setStrobe(false);
+        globalEffectsController.setMovementTrace(false);
+        console.warn('  ⚠ [revert] panel-driven effects cleared: spatial paint, strobe, movement');
+      });
+
       // 6. FORCE THE DEFAULT AUTOMATIC SHOW. Deliberately NOT "restore whatever
       //    was there before" — what was there before is, by definition, a rig
       //    that a dead panel had already switched off. The operator asked for
@@ -6094,8 +6116,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'POST' && req.url === '/global-blackout') {
       readBody(data => {
-        if (data.state === undefined) {
-           res.writeHead(400); return res.end(JSON.stringify({ error: 'state boolean required' }));
+        // STRICT boolean (audit H17). This used to accept any truthy value, so
+        // {"state":"false"} — a stringified boolean from any confused client —
+        // ENGAGED the blackout and persisted it across boot. On a safety
+        // endpoint, coercion is the bug: reject anything that is not exactly
+        // true or false. Codex P0: throw, never guess.
+        if (typeof data.state !== 'boolean') {
+           res.writeHead(400); return res.end(JSON.stringify({
+             error: `state must be boolean true or false, got ${JSON.stringify(data.state)}` }));
         }
         if (intensityController) intensityController.setBlackout(data.state);
         globalsState.blackout = data.state;
