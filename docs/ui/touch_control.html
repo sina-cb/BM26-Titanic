@@ -2003,10 +2003,20 @@ select option:checked { background-color: #2a2050; color: #fff; }
     xyHandle.style.left = px + '%'; xyHandle.style.top = py + '%';
     gv.style.left = px + '%'; gh.style.top = py + '%';
   }
+  /* ONE FINGER OWNS THE STROKE (audit H13). Without a pin, a second finger's
+     events interleave into the first stroke and the brush teleports between
+     the two touch points, painting a line across the hull nobody drew. The
+     FIRST pointer down owns the pad until it lifts or is cancelled; everything
+     else is ignored. Shared by BOTH pad handler stacks below, and mirrored in
+     the wire — each script guards its own listeners. */
+  var padPointer = null;
   pad.addEventListener('pointerdown', function (e) {
+    if (padPointer !== null && e.pointerId !== padPointer) return;
+    padPointer = e.pointerId;
     try { pad.setPointerCapture(e.pointerId); } catch (err) { /* capture is optional; the drag still works */ } moveXyHandle(e);
   });
   pad.addEventListener('pointermove', function (e) {
+    if (padPointer !== null && e.pointerId !== padPointer) return;
     if (e.pressure > 0 || e.buttons) moveXyHandle(e);
   });
 
@@ -2522,6 +2532,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
   })();
 
   pad.addEventListener('pointerdown', function (e) {
+    if (e.pointerId !== padPointer) return;           /* pinned above */
     var p = padUV(e);
     paintXyReadout(p.u, p.v);
     if (!padIsDrawing()) return;
@@ -2533,6 +2544,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
     window.takeRecordPoint(p.u, p.v, true);
   });
   pad.addEventListener('pointermove', function (e) {
+    if (e.pointerId !== padPointer) return;
     if (!(e.pressure > 0 || e.buttons)) return;
     var p = padUV(e);
     paintXyReadout(p.u, p.v);
@@ -2542,8 +2554,14 @@ select option:checked { background-color: #2a2050; color: #fff; }
   });
   /* Let the ring go on lift, but leave it up briefly so the last brush position
      is still readable. window, not pad: a finger released off the pad's edge
-     never fires pointerup on the pad and the ring would stick forever. */
-  window.addEventListener('pointerup', function () {
+     never fires pointerup on the pad and the ring would stick forever.
+     pointercancel takes the SAME path (audit H14): an OS-cancelled touch — a
+     notification banner, a palm rejection, an app switch — used to leave the
+     brush 'down' with no pen-up recorded and the engine painting the last
+     point until the staleness deadman caught it. A cancel IS a lift. */
+  function padLift(e) {
+    if (e.pointerId !== undefined && padPointer !== null && e.pointerId !== padPointer) return;
+    padPointer = null;
     if (!ringAt.held) return;
     /* The pen-up is part of the gesture: without it a replayed take would join
        two separate strokes into one line across the hull. */
@@ -2551,7 +2569,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
     ringAt.held = false;
     ringAt.until = performance.now() + 600;
     inkKick();
-  });
+  }
+  window.addEventListener('pointerup', padLift);
+  window.addEventListener('pointercancel', padLift);
   /* Exposed so a preset can put a stroke back exactly as it was drawn. */
   window.inkGet = function () { return inkPts.map(function (p) { return [+p.u.toFixed(4), +p.v.toFixed(4)]; }); };
   window.inkSet = function (list) {

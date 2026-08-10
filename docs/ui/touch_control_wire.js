@@ -412,6 +412,13 @@
   }
 
   function takeControlBody() {
+    /* FORGET THE "ALREADY SENT" BRUSH CACHE (audit H8). Values chosen while
+       DISARMED were committed to spatialCfg by the flush even though write()
+       silently refused them, and forgetSpatialCfg only ran on disarm — so
+       SIZE/POWER/FADE picked before the first arm never reached the engine.
+       Forgetting at arm makes the first stroke re-assert everything the panel
+       is showing. */
+    forgetSpatialCfg();
     /* LIGHT THE SHIP FIRST — BEFORE the fade-out, not after the takeover.
        This release used to be the LAST link of the sequential chain below, so
        any earlier hang or rejection (all swallowed by the chain's single
@@ -1063,22 +1070,16 @@
     return Math.min(Math.max(v * POWER_MAX, 0.05), POWER_MAX);
   }
 
-  /* BRUSH SIZE — the area of effect, which the operator asked to control.
-     The engine held a fixed default the panel never sent, so one touch always
-     covered the same amount of hull no matter what the stroke was for.
-
-     0 -> 0.04 (a spot, a single fixture group's worth)
-     1 -> 0.50 (a wash across half the ship)
-     Linear on purpose: an operator dragging a slider mid-show should get what
-     the bar shows, not a curve that is clever about perceptual area. */
-  var BRUSH_MIN = 0.04, BRUSH_MAX = 0.50;
-  function brushRadius() {
-    var el = document.getElementById('brushSize');
-    var v = el && el.dataset.value !== undefined ? parseFloat(el.dataset.value) : 0.35;
-    if (!isFinite(v)) v = 0.35;
-    v = Math.min(Math.max(v, 0), 1);
-    return BRUSH_MIN + v * (BRUSH_MAX - BRUSH_MIN);
-  }
+  /* BRUSH SIZE lives PAGE-SIDE now: the SIZE chips drive brushPadFrac(), and
+     padBrushWorld() turns that into the per-axis world radii the wire reads
+     through padBrush() above. One mapping, one owner.
+     AUDIT H7: a second `function brushRadius()` used to live here, mapping the
+     SIZE slider straight to 0.04..0.50. Function declarations hoist last-wins,
+     so it silently overrode the world-derived brushRadius above while
+     brushRadiusY kept the world mapping — X and Y radii from DIFFERENT
+     mappings, quietly re-breaking the per-axis roundness correction the
+     operator asked for ("the circle is not a circle"). The slider→world
+     mapping lives page-side in padBrushWorld; the wire reads ONLY that. */
 
   /* Send only what actually changed — ACCUMULATING, not replacing.
 
@@ -1346,7 +1347,12 @@
        pointerup event to hang it on. */
     document.addEventListener('spatialplay', function (ev) {
       var d = ev.detail || {};
-      if (!spatialMode()) return;
+      /* PEN-UP IS UNCONDITIONAL (audit H9). This guard used to sit above the
+         !d.down branch, so switching to XY mode mid-playback dropped the final
+         touch:false and left the engine re-stamping heat at the last point
+         forever — the same standing-paint failure class as the stuck-ERASE
+         critical, reachable without a crash. Lifting a brush is always safe;
+         only laying paint DOWN needs the mode check. */
       if (!d.down) {
         sendDraw(function () {
           var body = { enabled: true, touch: false };
@@ -1355,6 +1361,7 @@
         });
         return;
       }
+      if (!spatialMode()) return;
       var r = xyPad.getBoundingClientRect();
       pushXY({ clientX: r.left + d.u * r.width, clientY: r.top + d.v * r.height });
     });
@@ -1369,13 +1376,32 @@
       });
     });
 
-    xyPad.addEventListener('pointerdown', pushXY);
+    /* ONE FINGER OWNS THE STROKE, wire side (audit H13). The page pins its own
+       listeners; this pins the writes. A second finger's samples used to
+       interleave into the drive stream and the engine's brush teleported
+       between the two touch points. */
+    var wirePointer = null;
+    xyPad.addEventListener('pointerdown', function (e) {
+      if (wirePointer !== null && e.pointerId !== wirePointer) return;
+      wirePointer = e.pointerId;
+      pushXY(e);
+    });
     xyPad.addEventListener('pointermove', function (e) {
+      if (wirePointer !== null && e.pointerId !== wirePointer) return;
       if (e.pressure > 0 || e.buttons) pushXY(e);
     });
     /* Releasing must drop sliderTouch, or the pool stays lit under a finger
-       that is no longer there. */
-    xyPad.addEventListener('pointerup', function () {
+       that is no longer there.
+       pointercancel takes the SAME lift path (audit H14): an OS-cancelled
+       touch is a lift the engine must hear about, or it paints the last point
+       until the staleness deadman finally catches it. */
+    var liftBrush = function (e) {
+      /* Only when a stroke is actually in progress: this is also on window, so
+         without the guard every chip tap's pointerup would send a spatial
+         body — asserting enabled:true for a stroke nobody drew. */
+      if (wirePointer === null) return;
+      if (e && e.pointerId !== undefined && e.pointerId !== wirePointer) return;
+      wirePointer = null;
       var t = state.exports.sliderTouch;
       if (t !== undefined) send('touch', function () { write('POST', '/control', { id: t, v0: 0 }); });
       /* LIFT THE BRUSH on the global effect too, or it keeps painting the last
@@ -1399,7 +1425,14 @@
         if (lastSpatial) { body.targetX = lastSpatial.nx; body.targetY = lastSpatial.nz; }
         write('POST', '/spatial-paint', body);
       });
-    });
+    };
+    xyPad.addEventListener('pointerup', liftBrush);
+    xyPad.addEventListener('pointercancel', liftBrush);
+    /* window too: with pointer capture the pad usually gets the up, but a
+       cancel delivered after capture is torn down (page visibility change)
+       lands on window only — and a missed lift is a painting ghost finger. */
+    window.addEventListener('pointerup', liftBrush);
+    window.addEventListener('pointercancel', liftBrush);
   }
 
   /* Switching mode re-labels the axes so the pad never claims the wrong thing. */
@@ -1456,7 +1489,11 @@
   var zf = document.getElementById('zFader');
   if (zf) {
     var pushZ = function () {
-      var v = parseFloat(document.getElementById('zVal').textContent) / 100;
+      /* dataset.value, NOT the #zVal readout text (audit H6). The readout is
+         updated only by the retired vertical-fader drag handler, so reading it
+         meant every SPEED chip sent the same stale 0.72 — the chips write
+         dataset.value, like every other chip row. */
+      var v = parseFloat(zf.dataset.value);
       if (isNaN(v)) return;
       send('speed', function () { write('POST', '/param-center', { speed: v }); });
     };
@@ -3114,4 +3151,8 @@
   }, POLL_MS);
 
   window.__wire = state;   /* for headless verification only */
+  /* The cache-forget the arm chain runs (audit H8) — exposed so a harness can
+     exercise the REAL function without seizing the live engine's arm lease by
+     clicking the real ARM button. Verification only, like __wire itself. */
+  state._forgetSpatialCfg = forgetSpatialCfg;
 })();
