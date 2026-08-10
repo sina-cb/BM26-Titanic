@@ -1,7 +1,13 @@
 # 44 — TOUCH CONTROL
 
-The CaptainPad tab for driving the ship **by hand**, live, without the deck or a
-plan. Everything here is a manual override of whatever the automatic system is
+The operator surface for driving the ship **by hand**, live, without the deck or
+a plan. It is a **standalone browser panel** — `docs/ui/touch_control.html`
+(geometry + rendering) with `docs/ui/touch_control_wire.js` (the engine socket)
+— served by the sim's HTTP server and driven on an iPad. The CaptainPad tab
+this doc originally described is retired; its component tree was deleted from
+`CaptainPad/components/touch_control/`.
+
+Everything here is a manual override of whatever the automatic system is
 doing, so the document is organised around the two questions that actually
 decide the layout:
 
@@ -17,25 +23,37 @@ a compromise rather than a good idea.
 
 ## 1. What the surface is
 
-One tab, three regions:
+One page, five panels — METER (live audio traces), COLOUR (wheel + 5 slots +
+scheme generators), SPATIAL/XY, EFFECTS, GROUPS (24 fader cards + presets).
+The SPATIAL/XY panel, the one this doc mostly concerns:
 
 ```
-┌─────────────────────────────┬──────────────────────────────┐
-│ COLOR                       │ XY  (toggle → SPATIAL)       │
-│  hue/sat pad                │  X = rig master brightness   │
-│  brightness · fade          │  Y = pattern rotate          │
-│  5 colour slots             │  Z = motion speed (fader)    │
-│  MASTER HUE COMPLEMENT      │  BPM sync                    │
-│  CONTRAST CYCLE PAINT SHIP  │                              │
-├─────────────────────────────┴──────────────────────────────┤
-│ EFFECTS   strobe · random · tracers (along / rise / ring)   │
-├────────────────────────────────────────────────────────────┤
-│ GROUPS    24 cards: name (aims colour) · ⏻ · brightness bar │
-└────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ SPATIAL / XY                        [XY MODE | SPATIAL MODE] │
+│  Y AXIS (WALK·STROBE) │ TAKE (REC·PLAY·LOOP·CLR)             │
+│  SIZE chips           │ POWER chips                          │
+│  FADE chips           │ STEP chips                           │
+│  ON TIME chips        │ SPEED chips                          │
+│ D ┌────────────────────────────────────────────────────┐ I   │
+│ R │            the pad — 150 charted fixtures,         │ N   │
+│ A │            de-rotated hull, mirrored X             │ K   │
+│ W └────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+DRAW (POOL·TRAIL·ERASE·IGNITE) and INK (ONE·MASTER·HUE·COMP·CLASH) run as
+vertical columns flanking the pad. **XY mode**: X drives the grand master,
+rescaled into **[0.05, 1]** — dim at the far left, never dark; Y drives the
+strobe rate or the group walk (operator-selectable), both exponential, bottom
+4% = off. **SPATIAL mode**: the pad is a per-pixel paint surface driving the
+`/spatial-paint` global effect, which works on **every** pattern. TAKEs record
+a gesture with its timing and replay/loop it; presets capture the whole panel
+(schema v3).
 
 Everything is gated behind a master **ARM** switch. Unarmed, the panel writes
-nothing to the rig.
+nothing to the rig (`write()` refuses; only reads and the arm chain itself use
+`req()`). Arming declares a **deadman lease** over `/ws/control` and will NOT
+proceed without the engine's ack — no socket, no takeover.
 
 ---
 
@@ -129,24 +147,23 @@ no-op. "Revert to auto" only means something inside the window.
 
 | Control | Writes | Notes |
 |---|---|---|
-| Colour pad | `colorPalette1/2` (CPC over WS) | Or ONE group, when a group is focused (§4) |
-| Colour brightness | the V of the chosen slot | |
+| Colour wheel | `colorPalette1/2` (`POST /param-center`) | Or ONE group, when a group is focused (§4) |
 | Colour fade | `colorTransitionMs` | Engine-side perceptual (OKLab) crossfade |
 | Slots 1–2 | `colorPalette1/2` | Reach every pattern |
 | Slots 3–5 | `sliderHue3/4/5`, `sliderVal3/4/5` | Only on patterns 66/67 — silent elsewhere |
-| MASTER / HUE / COMPLEMENT / CONTRAST | the five slots | Palette generators; ≥30° hue separation enforced |
-| CYCLE | both palette slots + zone rotation | Same colour to both slots, so only chosen colours appear |
-| PAINT SHIP | `PUT /group-fixed-colors/*` (leased) | Five zones; painted groups go static (§2.3) |
-| XY pad · X | `POST /mixer/master/fade` or `PATCH /mixer` | Rig master, floored at 10% |
-| XY pad · Y | `rotate` | Slewed if `motionTransitionMs` > 0 |
-| Z fader | `speed` | Overwritten by the engine while BPM sync is on |
-| BPM sync | `bpmSpeedSync` | Engine reads it as a bool at 0.5 |
-| SPATIAL pad | `sliderTargetX/Y` on the running pattern | Needs a pattern exposing them (`68_spatial_paint`) |
-| EFFECTS | GEM slot toggle / patch | Provisions only into slots ≥ 9 |
-| GROUPS · name | focuses the colour pad on that group | Rig-neutral by itself |
-| GROUPS · ⏻ | `POST /section-brightness` 0 / restore | Remembers the previous level |
-| GROUPS · bar | `POST /section-brightness` | That group's own brightness |
-| ARM | `POST /timeline/takeover` + engage ramp | Also snapshots the look being taken over |
+| MASTER / HUE / COMP / CLASH | the five slots | Palette generators; ≥30° hue separation enforced |
+| XY pad · X | `PATCH /mixer {master}` | Rescaled into **[XY_MASTER_FLOOR, 1]** (page-exported 0.05) — never dark |
+| XY pad · Y (STROBE) | `POST /strobe-rate {hz, duty, intensity}` | 0.5–20 Hz exponential via the page's `xyStrobeHz`; bottom 4% = off |
+| XY pad · Y (WALK) | `POST /movement-rate {pixelsPerSecond, colors}` | 0.5–30 grp/s via `xyWalkPps`; painted in the operator's palette |
+| ON TIME chips | `duty` in the strobe body | Share of each flash cycle lit (id stays `strobeDuty`) |
+| SPEED chips | `speed` (`POST /param-center`) | Reads `zFader.dataset.value`; overwritten while BPM sync is on |
+| SPATIAL pad | `POST /spatial-paint` (global effect) | Per-pixel stroke on ANY pattern; per-axis world radii from `padBrushWorld` |
+| DRAW modes | `mode` pool\|trail\|erase\|ignite | ERASE wipes to true black (operator ruling); POOL paints the opposite colour |
+| INK schemes | stroke colour walk + `colorPalette1` | Painting IS how you change colour |
+| TAKE | replays via `spatialplay` events | Same code path as a live finger; pen-up unconditional |
+| EFFECTS | GEM slot toggle / patch | Catalog fetched from the engine at runtime |
+| GROUPS · bar / ⏻ | `POST /section-brightness` | Strict numeric 0..1 engine-side |
+| ARM | source lock (6-key lease) + autopilots off + disable-all + overlay silence + deadman WS lease | Fail-closed: no deadman ack ⇒ no takeover. NOT rig-wide exclusivity — see the audit (report 20260810_2 §0) |
 
 ---
 
@@ -181,11 +198,25 @@ Plus:
 
 - **Leased colours are never persisted**, so an engine restart cannot resurrect
   a frozen group. Unleased (operator-saved) colours still persist as before.
-- **Disarm** releases paint, switches off only the effects this panel lit, and
-  restores the look snapshotted at ARM — ramped, not snapped.
-- **`pagehide`** does the same on the web build. Best-effort: the browser can
-  kill the page mid-flight, which is exactly why the engine-side lease is the
-  real guarantee.
+- **The arm deadman** (`/ws/control` lease, `BM26_ARM_LEASE_MS`): a dead panel
+  triggers `revertToAutomaticShow`, which lights the ship, opens the lock,
+  resumes the autopilots — **and clears the panel-driven global effects**:
+  spatial paint (a dead panel's ERASE used to keep darking the ship every
+  frame, immune to every failsafe) and the slot-less XY strobe/walk.
+- **Touch staleness**: a spatial `touch:true` nobody refreshes for 10 s
+  (`spatialTouchStaleMs`; drawing refreshes every 33 ms) is lifted by the
+  engine itself, loudly — a dead panel's finger, not a slow stroke.
+- **The panel hears the revert**: the `armRevert` broadcast forces the surface
+  to DISARMED with the reason on the pill, and a reconnect while armed
+  re-checks the lock instead of blindly re-arming — if the takeover is gone,
+  the panel says so and disarms rather than fighting the autopilot.
+- **Disarm** releases paint, stops the XY strobe/walk explicitly, switches off
+  the effects this panel lit, and hands back the automatic show — ramped, not
+  snapped, floored at `ARM_FADE_FLOOR` (0.12), never black.
+- **`pagehide`** does the same via keepalive posts (arm-fade up, lock open,
+  audio bindings clear, strobe/walk off). Best-effort: the browser can kill
+  the page mid-flight, which is exactly why the engine-side lease is the real
+  guarantee.
 
 Why this is allowed at all: the codex forbids fallback behaviours *unless
 explicitly asked*. This was explicitly requested, and it is built to fail

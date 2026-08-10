@@ -65,8 +65,20 @@
      make the bottom 5% of the travel dead and identical, whereas rescaling
      keeps the whole sweep live and puts exactly the floor at the far left.
      A blackout must stay an explicit, deliberate act — it is not something a
-     performance fader is allowed to do by accident. */
-  var XY_MASTER_FLOOR = 0.05;
+     performance fader is allowed to do by accident.
+     THE VALUE LIVES PAGE-SIDE now (audit medium: it was duplicated here and in
+     the page with only a comment pairing them). The page owns the pad and the
+     readout, so it owns the number; this reads the export and fails loudly if
+     the page ever stops providing it — a missing floor must never quietly
+     become "no floor". */
+  function xyMasterFloor() {
+    var f = window.XY_MASTER_FLOOR;
+    if (typeof f !== 'number' || !(f > 0 && f < 1)) {
+      fail('xy', 'the page did not export XY_MASTER_FLOOR — refusing to drive the master without a floor');
+      return null;
+    }
+    return f;
+  }
 
   var state = {
     armed: false,
@@ -213,13 +225,58 @@
      points — just sampled about three times as often, which is close enough to
      the engine's own 40 fps that the extra would be thrown away anyway. */
   var drawPending = null, drawTimer = null;
+  /* IN-FLIGHT BACKPRESSURE (audit medium): the 33 ms flush used to fire
+     regardless of whether the PREVIOUS /spatial-paint had answered, so a slow
+     link (iPad wifi at the show) accumulated concurrent POSTs — the exact
+     write pattern this file documents as having wedged the engine. One draw
+     write in flight at a time; last-writer-wins already holds the newest
+     sample, so nothing is lost by waiting a beat. */
+  var drawInFlight = false;
   function sendDraw(fn) {
     drawPending = fn;
     if (drawTimer) return;
     drawTimer = setInterval(function () {
       if (!drawPending) { clearInterval(drawTimer); drawTimer = null; return; }
-      var f = drawPending; drawPending = null; f();
+      if (drawInFlight) return;              /* the newest sample keeps waiting */
+      var f = drawPending; drawPending = null;
+      drawInFlight = true;
+      var p;
+      try { p = f(); } catch (e) { drawInFlight = false; throw e; }
+      /* A flush fn returns the write's promise when it has one; anything else
+         releases immediately (nothing to wait on). */
+      if (p && typeof p.then === 'function') {
+        p.then(function () { drawInFlight = false; },
+               function () { drawInFlight = false; });
+      } else {
+        drawInFlight = false;
+      }
     }, DRAW_FLUSH_MS);
+  }
+
+  /* THE CHART MUST MATCH THE SHIP (audit medium). Every dot on the pad is
+     plotted from tables BAKED out of a model export; regenerate the model and
+     the chart silently mis-aims — the operator paints one part of the map and
+     a different part of the hull lights. No silent wrongness: compare the
+     baked group list against the engine's live one at boot, banner loudly on
+     any difference. Once, at boot — the model cannot change under a running
+     engine without a scene switch, which reboots this page's world anyway. */
+  var chartDriftChecked = false;
+  function chartDriftCheck() {
+    if (chartDriftChecked) return;
+    chartDriftChecked = true;
+    var baked = window.padChartGroups;
+    if (!Array.isArray(baked) || !baked.length) return;   /* page predates the export */
+    req('GET', '/group-fixed-colors').then(function (d) {
+      var live = (d && d.groups) || [];
+      var a = baked.slice().sort().join('|');
+      var b = live.slice().sort().join('|');
+      if (a !== b) {
+        fail('chart', 'THE PAD CHART IS STALE: the engine model has ' + live.length +
+          ' groups, the baked chart has ' + baked.length +
+          (live.length === baked.length ? ' (names differ)' : '') +
+          ' — positions may mis-aim. Regenerate the chart tables (docs/44).');
+      }
+    }).catch(function () { chartDriftChecked = false; /* retry on the next refresh */ });
   }
 
   /* ── boot: learn the model and the deck channel ─────────────────────── */
@@ -243,6 +300,7 @@
         if (e && typeof e.id === 'number') state.exports[e.name] = e.id;
       });
       applyCapability();
+      chartDriftCheck();
       loadSlots();
       setStatus();
       return status;
@@ -1299,7 +1357,7 @@
               enabled: true, touch: true, targetX: sp.nx, targetY: sp.nz,
             };
             if (strokeCol) { body.color = strokeCol; body.colorAlt = strokeAlt; }
-            write('POST', '/spatial-paint', body);
+            return write('POST', '/spatial-paint', body);
           });
         }
         /* The pattern's OWN position sliders are still driven when the deck
@@ -1341,14 +1399,18 @@
               crawling at 0.5 Hz, so the pad has a natural "no strobe" position.
            The engine re-anchors the pulse train when the rate changes, so
            sweeping speeds the flashing up in place instead of restarting it. */
-        var master = XY_MASTER_FLOOR + x * (1 - XY_MASTER_FLOOR);
+        var floor = xyMasterFloor();
+        if (floor === null) return;                       /* refused, reported */
+        var master = floor + x * (1 - floor);
         send('xyMaster', function () { write('PATCH', '/mixer', { master: master }); });
         var up = 1 - y;                                   /* bottom 0 -> top 1 */
         var axis = (typeof window.xyYAxis === 'function') ? window.xyYAxis() : 'walk';
         send('xyEffect', function () {
           if (axis === 'strobe') {
-            if (up < 0.04) { write('POST', '/strobe-rate', { active: false }); return; }
-            var hz = 0.5 * Math.pow(40, (up - 0.04) / 0.96);   /* 0.5 .. 20 Hz */
+            /* The page's exported curve — one mapping shared with the readout,
+               so what the label says is what the engine hears. */
+            var hz = window.xyStrobeHz(up);
+            if (!hz) { write('POST', '/strobe-rate', { active: false }); return; }
             var dEl = document.getElementById('strobeDuty');
             var duty = dEl && dEl.dataset.value !== undefined ? parseFloat(dEl.dataset.value) : 0.5;
             if (!isFinite(duty)) duty = 0.5;
@@ -1361,8 +1423,8 @@
              strobe axis is — a linear sweep puts everything usable in the last
              few pixels. Painted in the operator's own palette so the walk is
              the colour they picked. */
-          if (up < 0.04) { write('POST', '/movement-rate', { active: false }); return; }
-          var pps = 0.5 * Math.pow(60, (up - 0.04) / 0.96);
+          var pps = window.xyWalkPps(up);
+          if (!pps) { write('POST', '/movement-rate', { active: false }); return; }
           var cols = null;
           try {
             var pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]');
@@ -1408,7 +1470,7 @@
         sendDraw(function () {
           var body = { enabled: true, touch: false };
           if (lastSpatial) { body.targetX = lastSpatial.nx; body.targetY = lastSpatial.nz; }
-          write('POST', '/spatial-paint', body);
+          return write('POST', '/spatial-paint', body);
         });
         return;
       }
@@ -1474,7 +1536,7 @@
       sendDraw(function () {
         var body = { enabled: true, touch: false };
         if (lastSpatial) { body.targetX = lastSpatial.nx; body.targetY = lastSpatial.nz; }
-        write('POST', '/spatial-paint', body);
+        return write('POST', '/spatial-paint', body);
       });
     };
     xyPad.addEventListener('pointerup', liftBrush);
@@ -2966,7 +3028,18 @@
 
   function drawMeterTraces(params) {
     trHead = (trHead + 1) % TRAIL;
-    METER_BARS.forEach(function (b) {
+    /* READS FIRST, THEN WRITES — never interleaved (audit: the settled
+       80%-profile mystery). The old loop wrote e.val.textContent (invalidating
+       layout) and then read c.clientWidth (forcing a synchronous reflow) PER
+       CANVAS: up to nine forced reflows per frame, which is where the CPU
+       actually went — the polylines themselves cost under 1 ms. All layout
+       reads happen in one pass over clean layout; text is only written when
+       the string CHANGED (~70 identical writes/s otherwise). */
+    var widths = METER_BARS.map(function (b) {
+      var e = meterEls[b.key];
+      return e ? e.ctx.canvas.clientWidth : 0;
+    });
+    METER_BARS.forEach(function (b, i) {
       var e = meterEls[b.key];
       if (!e) return;
       var entry = params[b.key];
@@ -2977,11 +3050,12 @@
       /* The buffer holds the NORMALISED trace; the readout shows the RAW value,
          the way the Companion prints 49 or 322 Hz rather than a fraction. */
       trBuf[b.key][(trHead + TRAIL - 1) % TRAIL] = v;
-      e.val.textContent = has
+      var txt = has
         ? (METER_LOG[b.key] ? String(Math.round(raw)) : raw.toFixed(2))
         : '--';
+      if (e.lastTxt !== txt) { e.lastTxt = txt; e.val.textContent = txt; }
       var c = e.ctx.canvas;
-      if (c.width !== c.clientWidth && c.clientWidth > 0) c.width = c.clientWidth;
+      if (c.width !== widths[i] && widths[i] > 0) c.width = widths[i];
       trLine(e.ctx, trBuf[b.key], c.width, c.height, 1.3, b.c);
     });
   }
@@ -3195,6 +3269,11 @@
     var ws;
     try { ws = new WebSocket(url); } catch (e) { return fail('meter socket', e); }
     ws.addEventListener('message', function (ev) {
+      /* CHEAP SNIFF BEFORE THE FULL PARSE (audit low): at ~35 msg/s × 59
+         params, fully parsing frames this handler then discards is real work.
+         Every frame this panel uses carries a "params" object; anything else
+         is skipped on a substring check that costs nanoseconds. */
+      if (typeof ev.data === 'string' && ev.data.indexOf('"params"') === -1) return;
       var msg;
       try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (!msg || !msg.params) return;
