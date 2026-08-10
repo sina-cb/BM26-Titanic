@@ -2070,6 +2070,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
     while (inkWalk.dist >= step) { inkWalk.dist -= step; inkWalk.idx++; }
   };
 
+  var inkPalCache = { src: null, list: [] };
   window.inkColour = function () {
     try {
       var scheme = inkScheme();
@@ -2078,7 +2079,16 @@ select option:checked { background-color: #2a2050; color: #fff; }
         if (set && set.length) return set[inkWalk.idx % set.length];
       }
       var host = document.getElementById('slots');
-      var list = JSON.parse((host && host.dataset.palette) || '[]');
+      /* Memoised on the raw string (audit low): this runs per pad SAMPLE
+         during a stroke, and re-parsing an unchanged palette twice per sample
+         is pure waste. The string is the cache key, so any palette change
+         invalidates naturally. */
+      var raw = (host && host.dataset.palette) || '[]';
+      if (inkPalCache.src !== raw) {
+        inkPalCache.src = raw;
+        inkPalCache.list = JSON.parse(raw);
+      }
+      var list = inkPalCache.list;
       var sel = host ? host.querySelector('.color-slot.is-selected') : null;
       var idx = sel ? (parseInt(sel.dataset.slot, 10) - 1) : 0;
       if (list[idx]) return list[idx];
@@ -2093,6 +2103,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
     var tf = 0.5;
     var el = document.getElementById('trailFade');
     if (el && el.dataset.value !== undefined) tf = parseFloat(el.dataset.value);
+    if (!isFinite(tf)) tf = 0.5;   /* a corrupt dataset must not make NaN ms */
     return (0.12 + Math.min(Math.max(tf, 0), 1) * 7.88) * 1000;
   }
 
@@ -2269,6 +2280,10 @@ select option:checked { background-color: #2a2050; color: #fff; }
   function takePlay(loop) {
     if (!take.pts.length) return;
     takeStop();
+    /* PLAY ends an armed recording (audit low): takeStop clears playback but
+       not `recording`, so REC stayed lit through playback and the next real
+       stroke appended to the old take with a phantom time gap. */
+    if (take.recording) { take.recording = false; takeLit('arm', false); }
     take.playing = true; take.loop = !!loop; take.idx = 0;
     takeLit(loop ? 'loop' : 'play', true);
     window.inkWalkReset();
@@ -2782,22 +2797,31 @@ select option:checked { background-color: #2a2050; color: #fff; }
     function sync() {
       var btns = toggle ? toggle.querySelectorAll('button') : null;
       var spatial = !!(btns && btns[1] && btns[1].classList.contains('is-active'));
-      row.classList.toggle('is-inert', !spatial);
       /* SIZE lives on its own row, so it needs the same treatment — a brush
          size means nothing while the pad is driving master + rotate. */
       /* fadeRow / stepRow were split out of drawRow / inkRow, so they need the
          same gating or they would stay live in XY where they mean nothing. */
+      var setInert = function (el, inert) {
+        el.classList.toggle('is-inert', inert);
+        /* pointer-events:none does not stop the KEYBOARD (audit low): a
+           focused chip in a dimmed row still fired real sliderchange events
+           from the wrong mode. Disabled buttons cannot be focused or fired. */
+        Array.prototype.forEach.call(el.querySelectorAll('button'), function (btn) {
+          btn.disabled = inert;
+        });
+      };
+      setInert(row, !spatial);   /* the DRAW column itself — same rule */
       ['sizeRow', 'powerRow', 'inkRow', 'recRow', 'drawHelp',
        'fadeRow', 'stepRow'].forEach(function (id) {
         var el = document.getElementById(id);
-        if (el) el.classList.toggle('is-inert', !spatial);
+        if (el) setInert(el, !spatial);
       });
       /* And the XY row is the mirror image: live only when the pad is NOT
          drawing. */
       /* dutyRow was split out of xyRow and belongs to the same side. */
       ['xyRow', 'dutyRow'].forEach(function (id) {
         var el = document.getElementById(id);
-        if (el) el.classList.toggle('is-inert', spatial);
+        if (el) setInert(el, spatial);
       });
       /* The pad's AXIS LABELS are deliberately NOT set here — the wire already
          swaps them for the mode (touch_control_wire.js, 'Y+ SHIP FORWARD' /
@@ -4270,6 +4294,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
       if (st.classList.contains('is-master')) return;
       var dot = wheelEl.querySelector('.wheel-dot[data-g="' + st.dataset.idx + '"]');
       var hsv = dot && dot.dataset.hsv ? dot.dataset.hsv.split(',').map(Number) : null;
+      /* A corrupt dataset.hsv must degrade to "no own colour", not NaN h/s/v
+         handed to every listener (audit low). */
+      if (hsv && !(isFinite(hsv[0]) && isFinite(hsv[1]) && isFinite(hsv[2]))) hsv = null;
       var pw = st.querySelector('[data-role=power]');
       list.push({
         name: st.querySelector('.fader-name').textContent,
@@ -4677,7 +4704,14 @@ select option:checked { background-color: #2a2050; color: #fff; }
     var fg = document.getElementById('fxGrid');
     if (fg) {
       Array.prototype.forEach.call(fg.querySelectorAll('.fx-cell'), function (c) {
-        fx.push({ slot: c.dataset.slot, opt: c.dataset.opt, on: c.classList.contains('is-on') });
+        /* Store the STABLE identity beside the index (audit medium): `opt` is
+           an index into a catalog whose tail is fetched from the engine at
+           runtime — a registry change between save and recall silently
+           re-pointed the button. (e, p) is the identity; opt is the fallback
+           for presets that predate it. */
+        var oo = FX_OPTS[Number(c.dataset.opt)] || {};
+        fx.push({ slot: c.dataset.slot, opt: c.dataset.opt, e: oo.e, p: oo.p,
+                  on: c.classList.contains('is-on') });
       });
     }
     var nf = document.getElementById('noteFollow');
@@ -4774,7 +4808,14 @@ select option:checked { background-color: #2a2050; color: #fff; }
         s.fx.forEach(function (f) {
           var c = fg.querySelector('.fx-cell[data-slot="' + f.slot + '"]');
           if (!c) return;
-          if (f.opt !== undefined && f.opt !== c.dataset.opt) assign(c, Number(f.opt));
+          var want = -1;
+          if (f.e && f.p) {
+            for (var oi = 0; oi < FX_OPTS.length; oi++) {
+              if (FX_OPTS[oi].e === f.e && FX_OPTS[oi].p === f.p) { want = oi; break; }
+            }
+          }
+          if (want === -1 && f.opt !== undefined) want = Number(f.opt);
+          if (want >= 0 && String(want) !== c.dataset.opt) assign(c, want);
           c.classList.toggle('is-on', !!f.on);
         });
       }
@@ -4855,13 +4896,27 @@ select option:checked { background-color: #2a2050; color: #fff; }
          leaves the control exactly where the operator has it now. Buttons
          are clicked, not classed, so the wire's listeners fire the same way
          a finger would. */
+      /* MODE-INDEPENDENT RESTORE. These used click(), but the inert rule now
+         DISABLES the inactive mode's buttons (so the keyboard cannot fire
+         them cross-mode) — and a disabled button swallows click() too, which
+         silently dropped these two on recall from the "wrong" mode. Set the
+         classes and fire the same event the click handler fires. Caught by
+         wave5_verify going red after the inert hardening. */
       if (typeof s.spatial.inkScheme === 'string') {
         var ib = document.querySelector('#inkModes button[data-ink="' + s.spatial.inkScheme + '"]');
-        if (ib && !ib.classList.contains('is-active')) ib.click();
+        if (ib && !ib.classList.contains('is-active')) {
+          Array.prototype.forEach.call(document.querySelectorAll('#inkModes button'),
+            function (b2) { b2.classList.toggle('is-active', b2 === ib); });
+        }
       }
       if (typeof s.spatial.yAxis === 'string') {
         var yb = document.querySelector('#xyYMode button[data-yax="' + s.spatial.yAxis + '"]');
-        if (yb && !yb.classList.contains('is-active')) yb.click();
+        if (yb && !yb.classList.contains('is-active')) {
+          Array.prototype.forEach.call(document.querySelectorAll('#xyYMode button'),
+            function (b3) { b3.classList.toggle('is-active', b3 === yb); });
+          document.dispatchEvent(new CustomEvent('xyaxischange',
+            { detail: { axis: s.spatial.yAxis } }));
+        }
       }
       var restoreSlider = function (id, val, lo, hi) {
         if (typeof val !== 'number' || !isFinite(val)) return;

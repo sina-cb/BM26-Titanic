@@ -146,12 +146,23 @@
     showPill(false);
   }
 
+  var lastFailAt = 0;
   function fail(what, err) {
     state.lastError = what + ': ' + (err && err.message ? err.message : err);
+    lastFailAt = Date.now();
     console.error('[wire]', what, err);
     setStatus();
   }
-  function clearError() { if (state.lastError) { state.lastError = null; setStatus(); } }
+  /* HOLD THE ERROR LONG ENOUGH TO READ (audit medium). clearError fires on any
+     successful write, so one healthy request wiped the pill while a whole
+     CLASS of writes kept failing — the operator saw a flicker at best. An
+     error now owns the pill for 5 s; a persistent failure re-stamps itself
+     faster than that, so real trouble stays visible and a one-off clears. */
+  function clearError() {
+    if (!state.lastError) return;
+    if (Date.now() - lastFailAt < 5000) return;
+    state.lastError = null; setStatus();
+  }
 
   /* ── transport ──────────────────────────────────────────────────────── */
   /* EVERY REQUEST IS BOUNDED. This was a bare fetch with no timeout, and this
@@ -568,6 +579,12 @@
              VSN1 / Deck can latch their own, so arming clears everything and
              reconcileEffects then turns on exactly what the grid shows. */
           .then(function () { return req('POST', '/global-effects/disable-all', {}); })
+          /* AND THE AUDIO BINDINGS (audit medium). They were cleared at DISARM
+             but not at ARM, so bindings left by a previous session — or by
+             CaptainPad — kept pulsing groups to the music UNDER the armed
+             panel. Arming means "the rig does what this surface shows", and
+             this surface shows no bindings until the operator makes some. */
+          .then(function () { return req('POST', '/audio-bindings/clear', {}); })
           .then(function () { return silenceOverlays(); });
           /* The blackout release used to sit HERE, at the end of the chain, and
              that was the bug: it is the one step that must not be gated on the
@@ -867,6 +884,18 @@
     fetch(ENGINE + '/movement-rate', { method: 'POST', keepalive: true,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: false }) }).catch(function () {});
+  });
+  /* THE BFCACHE TWIN (audit low). pagehide above dropped the source lock and
+     raised the house — but Safari can RESTORE the page from the back/forward
+     cache with all its JS state intact, so a restored panel resumed believing
+     it was armed while its exclusivity was gone. A restore is a fresh start:
+     force DISARMED and let the operator re-arm deliberately. */
+  window.addEventListener('pageshow', function (ev) {
+    if (ev.persisted && state.armed) {
+      forceDisarmedUi();
+      fail('arm', 'this page came back from the browser cache — its takeover was ' +
+        'released when it was hidden. Re-arm to take control.');
+    }
   });
 
   /* ── PATTERN ────────────────────────────────────────────────────────── */
@@ -3168,7 +3197,13 @@
   function openControlSocket() {
     var url = 'ws://' + location.hostname + ':6968/ws/control';
     var ws;
-    try { ws = new WebSocket(url); } catch (e) { return fail('control socket', e); }
+    try { ws = new WebSocket(url); } catch (e) {
+      /* A constructor throw must retry like a close does (audit low): fail()
+         alone permanently killed the deadman's reconnect loop. */
+      fail('control socket', e);
+      setTimeout(openControlSocket, 2000);
+      return;
+    }
     controlWs = ws;
     ws.addEventListener('open', function () {
       sendControl({ type: 'touchControlHello', ownerId: OWNER });
@@ -3267,7 +3302,11 @@
     buildMeter();
     var url = 'ws://' + location.hostname + ':6968/ws/signals';
     var ws;
-    try { ws = new WebSocket(url); } catch (e) { return fail('meter socket', e); }
+    try { ws = new WebSocket(url); } catch (e) {
+      fail('meter socket', e);
+      setTimeout(openMeterSocket, 2000);   /* same retry rule as the close path */
+      return;
+    }
     ws.addEventListener('message', function (ev) {
       /* CHEAP SNIFF BEFORE THE FULL PARSE (audit low): at ~35 msg/s × 59
          params, fully parsing frames this handler then discards is real work.
