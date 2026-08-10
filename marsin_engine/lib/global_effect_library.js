@@ -23,6 +23,7 @@ import { freezeFrameEffect } from '../effects/freeze_frame.js';
 import { paletteCrushEffect } from '../effects/palette_crush.js';
 import { oceanBreathEffect } from '../effects/ocean_breath.js';
 import { frostSparkleEffect } from '../effects/frost_sparkle.js';
+import { movementTraceEffect } from '../effects/movement_trace.js';
 
 /** Safety tiers, in increasing strictness. */
 export const SAFETY_TIERS = Object.freeze({
@@ -381,6 +382,69 @@ export const GLOBAL_EFFECT_LIBRARY = {
   },
 
   // E2 Waterline Sweep — spatial band across nx/ny/nz (step 1.5). Toggle.
+  // MOVEMENT family - patterns that travel along a GROUP, keyed on where a
+  // pixel sits inside that group rather than on world coordinates. They place
+  // the operator's palette and never invent colour, so they stack with the
+  // colour picker instead of fighting it. See effects/movement_trace.js.
+  movementTrace: {
+    id: 'movementTrace',
+    name: 'Movement Trace',
+    category: 'movement',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    valueParam: 'amount',
+    presets: {
+      every_other_repeat: {
+        label: 'Every Other - Repeat',
+        params: { mode: 'every_other', travel: 'repeat', blank: true, amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      every_other_reverse: {
+        label: 'Every Other - Reverse',
+        params: { mode: 'every_other', travel: 'reverse', blank: true, amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      every_other_two_tone: {
+        label: 'Every Other - Two Tone',
+        params: { mode: 'every_other', travel: 'repeat', blank: false, amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      one_per_color_repeat: {
+        label: 'One Per Colour - Repeat',
+        params: { mode: 'one_per_color', travel: 'repeat', amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      one_per_color_reverse: {
+        label: 'One Per Colour - Reverse',
+        params: { mode: 'one_per_color', travel: 'reverse', amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      pulse_slow_fade: {
+        label: 'Pulse - Burst then Long Fade',
+        params: { mode: 'pulse', travel: 'repeat', amount: 1, fadeSpan: 0, sync: 'free',
+          pixelsPerSecond: 0, burstMs: 200, decayMs: 5000, floor: 0.04 },
+        defaultBehavior: 'toggle',
+      },
+      whole_group_repeat: {
+        label: 'One Colour At A Time',
+        params: { mode: 'whole_group', travel: 'repeat', amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      whole_group_reverse: {
+        label: 'One Colour At A Time - Reverse',
+        params: { mode: 'whole_group', travel: 'reverse', amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 1 },
+        defaultBehavior: 'toggle',
+      },
+      one_per_color_double: {
+        label: 'One Per Colour - Double Time',
+        params: { mode: 'one_per_color', travel: 'repeat', amount: 1, fadeSpan: 1, sync: 'beat', pixelsPerBeat: 2 },
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: movementTraceEffect.apply,
+  },
+
   waterlineSweep: {
     id: 'waterlineSweep',
     name: 'Waterline Sweep',
@@ -551,6 +615,10 @@ const PRIMARY_INTENSITY_SOURCES = {
   crush: paletteCrushEffect,
   breath: oceanBreathEffect,
   sparkle: frostSparkleEffect,
+  // MOVEMENT family. Was in GLOBAL_EFFECT_LIBRARY but never pinned here, so
+  // it was the one library effect with no registry entry - both registry
+  // completeness tests failed and getPrimaryIntensity('movementTrace') threw.
+  movementTrace: movementTraceEffect,
 };
 
 /**
@@ -958,6 +1026,59 @@ export function validateParams(effectId, params = {}) {
         if (!isFiniteNumber(out.curve) || out.curve <= 0) {
           throw new Error(`beatPump.curve=${out.curve} must be > 0`);
         }
+      }
+      break;
+    }
+    case 'movementTrace': {
+      if (out.mode !== undefined && !['every_other', 'one_per_color', 'whole_group', 'pulse'].includes(out.mode)) {
+        throw new Error(`movementTrace.mode='${out.mode}' must be one of every_other|one_per_color|whole_group|pulse`);
+      }
+      for (const k of ['burstMs', 'decayMs']) {
+        if (out[k] !== undefined && (!isFiniteNumber(out[k]) || out[k] < 0)) {
+          throw new Error(`movementTrace.${k}=${out[k]} must be a non-negative number`);
+        }
+      }
+      if (out.floor !== undefined) {
+        if (!isFiniteNumber(out.floor)) throw new Error('movementTrace.floor must be a number');
+        out.floor = clamp01(out.floor);
+      }
+      if (out.travel !== undefined && !['repeat', 'reverse'].includes(out.travel)) {
+        throw new Error(`movementTrace.travel='${out.travel}' must be one of repeat|reverse`);
+      }
+      if (out.amount !== undefined) {
+        if (!isFiniteNumber(out.amount)) throw new Error('movementTrace.amount must be a number');
+        out.amount = clamp01(out.amount);
+      }
+      if (out.blank !== undefined && typeof out.blank !== 'boolean') {
+        throw new Error('movementTrace.blank must be a boolean');
+      }
+      if (out.fadeSpan !== undefined) {
+        if (!isFiniteNumber(out.fadeSpan)) throw new Error('movementTrace.fadeSpan must be a number');
+        out.fadeSpan = clamp01(out.fadeSpan);
+      }
+      if (out.switchMs !== undefined) {
+        if (!isFiniteNumber(out.switchMs) || out.switchMs < 0) {
+          throw new Error(`movementTrace.switchMs=${out.switchMs} must be a non-negative number`);
+        }
+      }
+      if (out.pixelsPerBeat !== undefined) {
+        if (!isFiniteNumber(out.pixelsPerBeat) || out.pixelsPerBeat < 0) {
+          throw new Error(`movementTrace.pixelsPerBeat=${out.pixelsPerBeat} must be a non-negative number`);
+        }
+      }
+      if (out.pixelsPerSecond !== undefined) {
+        if (!isFiniteNumber(out.pixelsPerSecond) || out.pixelsPerSecond < 0) {
+          throw new Error(`movementTrace.pixelsPerSecond=${out.pixelsPerSecond} must be a non-negative number`);
+        }
+      }
+      if (out.sync !== undefined && !['free', 'beat'].includes(out.sync)) {
+        throw new Error(`movementTrace.sync='${out.sync}' must be one of free|beat`);
+      }
+      if (out.colors !== undefined) {
+        if (!Array.isArray(out.colors) || out.colors.length === 0) {
+          throw new Error('movementTrace.colors must be a non-empty array of 6-channel colors');
+        }
+        out.colors.forEach((c) => validateColor6(c));
       }
       break;
     }

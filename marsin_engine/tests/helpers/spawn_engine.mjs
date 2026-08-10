@@ -62,6 +62,14 @@ export function createEngineHarness(options = {}) {
         env: {
           ...process.env,
           BM26_DISABLE_TIMELINE: '1',
+          // This harness stops engines with proc.kill('SIGTERM'), which on
+          // Windows terminates outright WITHOUT running the shutdown handler —
+          // so the engine's crash marker survives and every restart here looks
+          // like a crash. Left on, the crash-boot policy would revert the deck
+          // to the 'default' playlist and stomp whatever a test just restored
+          // (it did exactly that to the two playlist-persistence tests).
+          // Tests that want to exercise the revert set this back to '0'.
+          BM26_DISABLE_CRASH_REVERT: '1',
           MARSIN_STATE_DIR: tmpStateRoot,
           MARSIN_PLAYLISTS_DIR: playlistsDir,
           ...extraEnv,

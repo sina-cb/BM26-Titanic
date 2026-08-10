@@ -58,8 +58,18 @@ const PARAM_REGISTRY = [
     oscAddress: '/marsin/param/size', sharedFnName: 'size',
   },
   {
+    // `slew: true` on a FLOAT rides the same ramp machinery the colour
+    // palettes use, but timed by `motionTransitionMs` instead of
+    // `colorTransitionMs` — a colour crossfade and a motion glide are
+    // different musical decisions and must be tunable apart.
+    //
+    // motionTransitionMs defaults to 0, so by default this is EXACTLY the
+    // previous snap behaviour: `t` is forced to 1 on the first tick and the
+    // rendered value equals the target. Nothing glides until an operator (or
+    // the TOUCH CONTROL engage ramp) asks for it.
     key: 'rotate', label: 'Rotate', type: 'float',
     default: 0.0, range: [0, 1], clamp: true, persist: true,
+    slew: true,
     oscAddress: '/marsin/param/rotate', sharedFnName: 'rotate',
   },
   {
@@ -88,6 +98,21 @@ const PARAM_REGISTRY = [
     key: 'colorTransitionMs', label: 'Color Fade', type: 'float',
     default: 800, range: [0, 10000], clamp: true, persist: true,
     oscAddress: '/marsin/param/colorTransitionMs', sharedFnName: 'colorTransitionMs',
+  },
+  {
+    // Duration (ms) of the glide applied to slewed FLOAT params (currently
+    // `rotate`). The motion sibling of colorTransitionMs.
+    //
+    // DEFAULT 0 = instant, i.e. byte-for-byte the behaviour before float slew
+    // existed. This is deliberate: a rig that silently started easing its
+    // motion after an upgrade would be a nasty surprise mid-show. The TOUCH
+    // CONTROL engage ramp raises it for the crossfade and puts it back.
+    //
+    // Not itself slewed (a fade time that fades is nonsense), and no pattern
+    // exports it — it is read directly by tickParamTransitions().
+    key: 'motionTransitionMs', label: 'Motion Glide', type: 'float',
+    default: 0, range: [0, 10000], clamp: true, persist: true,
+    oscAddress: '/marsin/param/motionTransitionMs', sharedFnName: 'motionTransitionMs',
   },
   // ── Audio signal family (mic / stems / gains / raw mirrors / tempoBpm /
   //    structure-detector keys) — GENERATED from lib/audio_signals.js.
@@ -840,24 +865,36 @@ export class ParamCenter {
    * @param {number} nowMs — monotonic clock (engine passes performance.now())
    */
   tickColorTransitions(nowMs) {
-    const transSlot = this._store.colorTransitionMs;
-    const transMs = transSlot ? transSlot.value : 0;
+    const colorMs = this._store.colorTransitionMs ? this._store.colorTransitionMs.value : 0;
+    const motionMs = this._store.motionTransitionMs ? this._store.motionTransitionMs.value : 0;
     for (const key of this._slewKeys) {
       const from = this._rampFrom[key];
       if (from === null) continue; // settled — nothing to do
       if (this._rampStartMs[key] === null) this._rampStartMs[key] = nowMs;
+      const entry = this._registryByKey[key];
+      const isHsv = entry.type === 'hsv';
+      // Colours and motion are timed independently — see motionTransitionMs.
+      const transMs = isHsv ? colorMs : motionMs;
       const target = this._store[key].value;
       const t = transMs <= 0
         ? 1
         : clamp01((nowMs - this._rampStartMs[key]) / transMs);
-      // (Re)build the perceptual interpolator when either endpoint object
-      // changed — set() deep-copies both, so identity checks are exact.
-      let cached = this._rampSample[key];
-      if (!cached || cached.from !== from || cached.to !== target) {
-        cached = { from, to: target, sample: makeHsvTransition(from, target) };
-        this._rampSample[key] = cached;
+      if (isHsv) {
+        // (Re)build the perceptual interpolator when either endpoint object
+        // changed — set() deep-copies both, so identity checks are exact.
+        let cached = this._rampSample[key];
+        if (!cached || cached.from !== from || cached.to !== target) {
+          cached = { from, to: target, sample: makeHsvTransition(from, target) };
+          this._rampSample[key] = cached;
+        }
+        this._rendered[key] = cached.sample(easeInOut(t));
+      } else {
+        // Numeric glide. Plain eased lerp: a float param has no perceptual
+        // space to correct for the way a colour does, and the same easeInOut
+        // keeps a motion glide feeling like the colour crossfades beside it.
+        const e = easeInOut(t);
+        this._rendered[key] = from + (target - from) * e;
       }
-      this._rendered[key] = cached.sample(easeInOut(t));
       this._store[key].dirty = true; // force injection of _rendered
       if (t >= 1) {
         this._rendered[key] = deepCopy(target);
@@ -894,7 +931,10 @@ export class ParamCenter {
         const v = this._injectValue(entry, slot);
         wasmHost.setControl(ch.handle, mapping.id, v.h, v.s, v.v);
       } else {
-        wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
+        // _injectValue, not slot.value: a slewed FLOAT must inject its
+        // RAMPED value, exactly as a slewed colour does. For every
+        // non-slewed key this returns slot.value, so nothing else changes.
+        wasmHost.setControl(ch.handle, mapping.id, this._injectValue(entry, slot), 0, 0);
       }
     }
   }
@@ -919,7 +959,8 @@ export class ParamCenter {
           const v = this._injectValue(entry, slot);
           wasmHost.setControl(ch.handle, mapping.id, v.h, v.s, v.v);
         } else {
-          wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
+          // See _applyToHandle: slewed floats inject their ramped value.
+          wasmHost.setControl(ch.handle, mapping.id, this._injectValue(entry, slot), 0, 0);
         }
       }
     }

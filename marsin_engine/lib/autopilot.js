@@ -9,6 +9,22 @@ const __dirname = path.dirname(__filename);
 // comment-bearing config.yaml) set MARSIN_CONFIG_FILE to a scratch copy; the
 // spawned engine inherits it. Unset in production → the real config.yaml.
 const CONFIG_FILE = process.env.MARSIN_CONFIG_FILE || path.join(__dirname, '..', 'config.yaml');
+// RUNTIME STATE LIVES BESIDE THE CONFIG, NEVER INSIDE IT.
+//
+// `active` / `delay_s` / `shuffle` change constantly while a show runs — every
+// arm, every disarm, every deadman fire and every crash-boot revert sets them.
+// They were being written straight back into config.yaml, which is TRACKED and
+// comment-bearing, and `yaml.dump` rewrites the whole document: so normal show
+// operation produced git diffs on the show server AND silently destroyed the
+// file's comments (this is what kept turning `triggerMask: 0x07` into `7`).
+//
+// Config is what the operator chose; runtime state is what the show is doing.
+// Splitting them keeps config.yaml pristine while persistence across restarts
+// is unchanged — loadConfig overlays this file on top of the config below.
+// Same precedent as the gitignored states/*/timeline_state.yaml.
+// Derived from CONFIG_FILE so a test pointing at a scratch config automatically
+// gets a scratch runtime file too.
+const RUNTIME_FILE = CONFIG_FILE.replace(/\.ya?ml$/i, '') + '.autopilot_runtime.yaml';
 
 /**
  * Autopilot daemon — cycles the deck's pattern on a self-rescheduling
@@ -79,17 +95,31 @@ export class Autopilot {
   }
 
   loadConfig() {
+    let cfg = {};
     try {
       if (fs.existsSync(CONFIG_FILE)) {
-        return yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) || {};
+        cfg = yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) || {};
       }
     } catch(e) {}
-    return {};
+    // Overlay the last RUNTIME playlist state on top of the configured default,
+    // so active/delay/shuffle still survive a restart exactly as before — they
+    // are just no longer stored in the tracked file.
+    try {
+      if (fs.existsSync(RUNTIME_FILE)) {
+        const rt = yaml.load(fs.readFileSync(RUNTIME_FILE, 'utf8')) || {};
+        if (rt && rt.playlist && typeof rt.playlist === 'object') {
+          cfg.playlist = { ...(cfg.playlist || {}), ...rt.playlist };
+        }
+      }
+    } catch(e) {}
+    return cfg;
   }
 
   saveConfig() {
+    // ONLY the runtime playlist block, and ONLY to the runtime file. config.yaml
+    // is never written here — see the RUNTIME_FILE note at the top of this file.
     try {
-       fs.writeFileSync(CONFIG_FILE, yaml.dump(this.config));
+      fs.writeFileSync(RUNTIME_FILE, yaml.dump({ playlist: this.config.playlist || {} }));
     } catch(e) {}
   }
 

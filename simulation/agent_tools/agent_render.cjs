@@ -181,7 +181,11 @@ async function loadSimulation(page) {
   page.on('pageerror', err => console.error(`  [page error] ${err.message}`));
 
   console.log(`📡 Navigating to ${SIM_URL}`);
-  await page.goto(SIM_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+  // 'load', not 'networkidle2': the sim keeps persistent WebSockets open
+  // (sACN in/out bridges, engine blackout watcher retrying :6968 when no
+  // engine runs), so the network never idles and networkidle2 times out.
+  // The loading-overlay wait below is the real "simulation ready" gate.
+  await page.goto(SIM_URL, { waitUntil: 'load', timeout: 60000 });
   console.log('✅ Page loaded.');
 
   const webglOk = await page.evaluate(() => {

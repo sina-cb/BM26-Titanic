@@ -188,6 +188,16 @@ simulation/scenes/*/playlists/hil_*.yaml
 
 # Timeline companion runtime state (regenerated on boot)
 marsin_engine/states/*/timeline_state.yaml
+# Autopilot RUNTIME state (active/delay/shuffle). Split out of the tracked,
+# comment-bearing config.yaml, which normal show operation was rewriting on
+# every arm/disarm/deadman/crash-boot. See lib/autopilot.js RUNTIME_FILE.
+marsin_engine/config.autopilot_runtime.yaml
+marsin_engine/*.autopilot_runtime.yaml
+# Same split for the COLOUR autopilot, which was still rewriting config.yaml on
+# every disarm — measured turning triggerMask: 0x07 into 7 as collateral.
+# See lib/color_autopilot.js runtimeFile.
+marsin_engine/config.color_autopilot_runtime.yaml
+marsin_engine/*.color_autopilot_runtime.yaml
 
 # Local-only dev scene for the physical LED-controller bench (contains real
 # device MACs/provenance — never commit; Sina 2026-07-10).

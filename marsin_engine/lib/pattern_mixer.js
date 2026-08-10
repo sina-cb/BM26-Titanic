@@ -3353,9 +3353,24 @@ export class PatternMixer {
       }
     }
 
-    if (this.master < 1.0) {
-      this.applyMaster(this.outputBuffer, this.master);
-    }
+    /* THE GRAND MASTER IS NO LONGER APPLIED HERE.
+       It used to scale this composite - which meant it only ever governed the
+       PATTERN composition. Everything engine.js adds afterwards (the whole
+       global effects chain, and applyGroupFixedColors for a group set to OWN)
+       was written on top of an already-mastered buffer and so ignored the
+       fader completely. MEASURED on the rig: master 0, and a group painted
+       [0.690, 0.4557, 0] still went out as 175/116 on 24 fixtures - "part of
+       the boat all yellow at full blast" with the master down.
+
+       Operator ruling: the Touch Control master IS the master when armed, no
+       exceptions. So it MOVED to the final pixel stage in engine.js, after the
+       effects and after the paint. It must not also be applied here or the
+       patterns would be scaled twice (master squared).
+
+       Note for _enforceNeverBlack below: it reads this buffer PRE-master now.
+       That is deliberate and safer - it is gated on _isExpectingLight(), which
+       already returns false when master is 0, and it no longer mistakes a
+       legitimately mastered-down rig for a fault. */
 
     // ── R4 "NEVER FULLY BLACK" runtime enforcer (redteam _112 I1/I2) ──────
     // The composite is finished (deck ⊕ overlays ⊕ mixer, crossfaded, master
@@ -3373,11 +3388,14 @@ export class PatternMixer {
     // single broadcast could ship a master that's one frame older than
     // the per-channel vis, which is mildly confusing for debugging).
     if (wantVis) {
-      this._visData['master'] = this._extractVisInto('master', this.outputBuffer);
-      // Master meter: the final composed output's mean brightness. Already
-      // reflects master gain + view crossfade (applied to outputBuffer
-      // above), so no extra fader scale here.
-      this._visLevels['master'] = this._bufferMeanLevel(this.outputBuffer);
+      /* The master gain is applied downstream now (see the note above), so the
+         preview and the meter have to fold it in themselves - otherwise the
+         deck/mixer master meter would sit at full with the fader on the floor,
+         which is exactly the kind of UI that lies about the rig. */
+      const vis = this._extractVisInto('master', this.outputBuffer);
+      if (this.master < 1.0) this.applyMaster(vis, this.master);
+      this._visData['master'] = vis;
+      this._visLevels['master'] = this._bufferMeanLevel(this.outputBuffer) * this.master;
     }
 
     // FOLLOW/LINK (round-2 #6): snapshot THIS frame's effective fader for every

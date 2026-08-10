@@ -31,7 +31,7 @@ import {
   validateModulationMapping,
 } from './modulation_engine.js';
 import { validateMidiMapping } from './midi_mapping_engine.js';
-import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
+import { describeLibrary, GLOBAL_EFFECT_LIBRARY, getPrimaryIntensity } from './global_effect_library.js';
 import { migrateSlotFile } from './global_effect_slot_manager.js';
 import { createLayoutDeployHook, isLayoutDeployEnabled } from './vsn1_layout_deploy.js';
 import {
@@ -48,6 +48,7 @@ import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX, compileViewSelectionMask } from './pattern_mixer.js';
 import { SessionParamCache } from './session_param_cache.js';
+import { audioRegistryEntries } from '../audio/postproc/audio_signals.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -491,6 +492,49 @@ function listPatternsInDir(patternsDir, dir) {
     .filter(f => !f.startsWith('_'))
     .map(f => `${dir}/${f.replace(/\.js$/, '')}`)
     .sort();
+}
+
+// A pattern name may name a SUBDIRECTORY — "summer_camp/111_logsville_x" — and
+// that is the engine's OWN canonical form: listPatternsIn above emits
+// `${dir}/${file}` and GET /pattern-dirs advertises eight subfolders.
+//
+// The request-body routes used to normalise with path.basename(), which threw
+// the directory away, so nothing outside the top level could be addressed
+// through them at all (measured: POST /pattern with a summer_camp path failed
+// with "Pattern not found: patterns\111_....js"). But that basename was also
+// doing double duty as the PATH-TRAVERSAL GUARD — these names come off the
+// wire and get joined onto patternsDir — so it cannot simply be deleted.
+//
+// This validator replaces it: one optional directory segment, lowercase
+// alphanumerics with _ and -, nothing else. Dots are not in the class at all,
+// so "..", absolute paths and drive letters cannot express themselves; the
+// result is contained in patternsDir by construction rather than by a check
+// that could be got around. Same shape as VALID_PATTERN in playlist_manager.js,
+// which is what the playlist entries are already validated against.
+const VALID_PATTERN_NAME = /^[a-z0-9][a-z0-9_-]{0,63}(\/[a-z0-9][a-z0-9_-]{0,63})?$/;
+
+function resolvePatternName(raw) {
+  const name = String(raw === undefined || raw === null ? '' : raw)
+    .replace(/\\/g, '/')
+    .replace(/\.js$/i, '');
+  if (!VALID_PATTERN_NAME.test(name)) {
+    throw new Error(
+      `invalid pattern name '${raw}' - expected "<name>" or "<dir>/<name>" ` +
+      '(lowercase letters, digits, underscore or hyphen)');
+  }
+  return name;
+}
+
+// A rejected name is a CLIENT error, not an engine fault. PortWatch reaches us
+// over LoRa with whatever landed in its possibly-stale catalog, and the pattern
+// route's own comment calls a bad name "a routine, recoverable case" — so it
+// must answer 400, not 500. A 500 tells the operator the engine broke.
+function badPatternName(res, err) {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: String((err && err.message) || err), code: 'INVALID_PATTERN_NAME',
+  }));
+  return null;
 }
 
 function loadPattern(patternsDir, name) {
@@ -3084,7 +3128,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     if (mixerState.master !== undefined) {
-      mixer.setMaster(mixerState.master);
+      // A PERSISTED GRAND MASTER OF ZERO IS NEVER RESTORED — the same hazard as
+      // a persisted blackout (see applyGlobalsState), and the one that actually
+      // bites: clearing the blackout on boot does NOT light the ship if the
+      // master is separately restored at 0. The touch panel drives this master,
+      // so a crash while it was down used to boot dark and stay dark through
+      // every relaunch.
+      //
+      // ONLY the fully-dark case is overridden. A low-but-nonzero master is a
+      // legitimate saved look and is restored untouched.
+      if (!(mixerState.master > 0)) {
+        console.warn(`  ⚠ [state] mixer_state had master: ${mixerState.master} — a persisted ` +
+          'ZERO grand master is NEVER restored; a crash must not leave the Titanic dark. Booting at 1.0.');
+        mixer.setMaster(1.0);
+      } else {
+        mixer.setMaster(mixerState.master);
+      }
     }
 
     // If the saved deck channel failed to restore (e.g. its pattern was
@@ -4213,6 +4272,388 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return r;
   }
 
+  // ── TOUCH CONTROL deadman lease — paint that cannot outlive its owner ────
+  //
+  // PAINT SHIP writes group fixed-colour overrides, and those are a FLAT
+  // OVERWRITE: `px.r = c[0] * b` for every pixel in the group
+  // (effects/group_fixed_color.js), so a painted group goes STATIC and stops
+  // showing the pattern at all.
+  //
+  // Before this lease, a painted group survived every recovery an operator
+  // would reach for, which is why it needed fixing:
+  //   - the panel dying sends no DELETE (its releasePaint() never runs),
+  //   - panicStop() spares group locks BY DESIGN (global_effects_controller
+  //     ~1432, and the repo's own test asserts it), so e-stop does not clear it,
+  //   - the override was persisted to globals_state.yaml and RE-APPLIED at boot
+  //     (state_manager ~459), so restarting the engine brought the paint back.
+  // Net effect: an iPad that walked out of wifi range left part of the ship
+  // frozen with no recovery short of hand-editing YAML.
+  //
+  // Modelled exactly on the FLASH/BUMP lease above — two independent nets,
+  // because each covers what the other cannot:
+  //   1. LEASE: a PUT carrying `ownerId` is LEASED. The panel renews it by
+  //      heartbeat; a sweep clears any group whose lease lapsed. This is the
+  //      net for hard link loss, where no close event ever fires.
+  //   2. WS-CLOSE: a /ws/control socket that announced `touchControlHello`
+  //      owns an ownerId; when that socket closes we clear its groups at once.
+  //      This is the fast path for the common tab-closed / app-quit case,
+  //      without waiting out the lease.
+  //
+  // A leased override is deliberately NOT PERSISTED: its owner is by
+  // definition gone after a restart, so it must never come back from disk.
+  //
+  // NOT A SILENT FALLBACK (codex P0): every auto-release logs loudly and
+  // broadcasts the same `groupFixedColors` message a manual DELETE does, so
+  // every surface sees it and nothing is swallowed. A PUT with no `ownerId`
+  // keeps the previous permanent, persisted behaviour byte-for-byte, so saved
+  // operator looks and every existing caller are unaffected.
+  // Lease window. 12 s by default: comfortably longer than the panel's
+  // heartbeat cadence so a healthy link never drops paint, short enough that a
+  // dead panel un-freezes the ship well inside a song. Overridable via
+  // BM26_TOUCH_PAINT_LEASE_MS (tests drive expiry without a 12 s wait; an
+  // operator can retune on site). An invalid override THROWS at startup rather
+  // than silently falling back to the default — codex P0, a wrong lease here
+  // decides how long the ship can stay frozen.
+  const TOUCH_PAINT_LEASE_MS = (() => {
+    const raw = process.env.BM26_TOUCH_PAINT_LEASE_MS;
+    if (raw === undefined || raw === '') return 12_000;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error(
+        `BM26_TOUCH_PAINT_LEASE_MS must be a positive number of milliseconds, got '${raw}'`,
+      );
+    }
+    return n;
+  })();
+  // Sweep at a fraction of the lease so expiry is detected promptly even when
+  // the lease is tuned very short (tests), without busy-polling a long one.
+  const TOUCH_PAINT_SWEEP_MS = Math.max(50, Math.min(1_000, Math.floor(TOUCH_PAINT_LEASE_MS / 4)));
+  const touchPaintLease = new Map();   // group -> { expiresAt, ownerId }
+  let touchPaintSweepTimer = null;
+
+  function armTouchPaintSweep() {
+    if (touchPaintSweepTimer !== null) return;
+    touchPaintSweepTimer = setInterval(sweepExpiredTouchPaint, TOUCH_PAINT_SWEEP_MS);
+    // Never hold the event loop open just for this sweep.
+    if (typeof touchPaintSweepTimer.unref === 'function') touchPaintSweepTimer.unref();
+  }
+  function disarmTouchPaintSweep() {
+    if (touchPaintSweepTimer !== null) {
+      clearInterval(touchPaintSweepTimer);
+      touchPaintSweepTimer = null;
+    }
+  }
+
+  /** Stamp/renew a leased paint on one group. */
+  function touchPaintLeaseSet(group, ownerId) {
+    touchPaintLease.set(group, { expiresAt: Date.now() + TOUCH_PAINT_LEASE_MS, ownerId });
+    armTouchPaintSweep();
+  }
+
+  /**
+   * Clear a set of leased groups and tell everyone. Shared by the sweep and
+   * the WS-close path so both produce identical, visible side effects.
+   * Returns the group names actually cleared.
+   */
+  function releaseTouchPaintGroups(groups, why) {
+    const cleared = [];
+    for (const group of groups) {
+      touchPaintLease.delete(group);
+      if (globalEffectsController && globalEffectsController.clearGroupFixedColor(group)) {
+        cleared.push(group);
+      }
+    }
+    if (cleared.length > 0) {
+      // Leased paint is never written to globalsState, but clear defensively:
+      // a group could have been painted permanently first, then re-leased.
+      if (globalsState.groupFixedColors) {
+        for (const g of cleared) delete globalsState.groupFixedColors[g];
+        saveGlobals(false);
+      }
+      broadcastWs({
+        type: 'groupFixedColors',
+        overrides: globalEffectsController ? globalEffectsController.groupFixedColors : {},
+      });
+      console.log(`[touchPaint] ${why} — auto-released ${cleared.length} group(s): ${cleared.join(', ')}`);
+    }
+    if (touchPaintLease.size === 0) disarmTouchPaintSweep();
+    return cleared;
+  }
+
+  /** Periodic sweep: release any leased paint whose owner stopped renewing. */
+  function sweepExpiredTouchPaint() {
+    const now = Date.now();
+    const lapsed = [];
+    for (const [group, lease] of touchPaintLease) {
+      if (lease.expiresAt <= now) lapsed.push(group);
+    }
+    if (lapsed.length > 0) releaseTouchPaintGroups(lapsed, 'lease expired (owner stopped renewing)');
+    else if (touchPaintLease.size === 0) disarmTouchPaintSweep();
+  }
+
+  // ── REVERT TO THE AUTOMATIC SHOW ────────────────────────────────────────
+  //
+  // The one recovery path, shared by the panel deadman (a surface that stopped
+  // answering) and the crash boot policy (a run that ended uncleanly). The
+  // operator asked for exactly this: "if the system crashes the system reverts
+  // to the default automatic playlist."
+  //
+  // THIS IS A REQUESTED FALLBACK, SO IT IS LOUD. Codex P0 forbids silent
+  // fallbacks; it does not forbid a recovery the operator asked for. Every step
+  // announces itself and every failure is reported — the ship reverting by
+  // itself must never be something the operator has to infer.
+  //
+  // ORDER IS THE DESIGN. Lighting the ship comes FIRST and is never gated on
+  // anything below it: the mission rule is that the Titanic is visible at night,
+  // and a revert that threw while loading a playlist must still have left the
+  // hull lit. Every later step is individually wrapped, because
+  // timelineLoadPlaylistOnDeck and timelineSetAutopilotOnDeck both THROW ('no
+  // deck channel', 'playlist not found', 'has no loadable entries') and one
+  // failure must not abort the rest — least of all step 1.
+  const REVERT_PLAYLIST = 'default';
+  let revertInFlight = false;
+
+  function revertToAutomaticShow(why, ownerId) {
+    // Re-entrancy guard: the deadman sweep and a WS close can fire on the same
+    // tick, and running the playlist load twice would fight the deck swap.
+    if (revertInFlight) return false;
+    revertInFlight = true;
+    const step = (label, fn) => {
+      try {
+        fn();
+      } catch (e) {
+        console.warn(`  ⚠ [revert] step '${label}' FAILED: ${e && e.message ? e.message : e} ` +
+          '— continuing; the remaining steps still run.');
+      }
+    };
+    try {
+      console.warn(`  ⚠ [revert] REVERTING TO THE AUTOMATIC SHOW — ${why}` +
+        (ownerId ? ` (owner '${ownerId}')` : ''));
+
+      // 1. LIGHT THE SHIP. Blackout off, grand master up, arm envelope released.
+      //    All three, because they are three independent ways to be dark and
+      //    the panel drives all three. Modelled on forceLit() in /mixer/panic.
+      step('light', () => {
+        if (intensityController) {
+          intensityController.setBlackout(false);
+          intensityController.startArmFade(1, 0);
+          // SECTION DIMMERS ARE THE FOURTH WAY TO BE DARK, and the one no
+          // failsafe used to cover. The panel's 24 group faders and its ALL OFF
+          // button drive them, they persist, and clearing the blackout while
+          // every group dimmer sits at 0 lights precisely nothing. Only raised
+          // when they are ALL down — a partial look is the operator's and is
+          // left alone.
+          const dim = globalsState.dimmers || {};
+          const keys = Object.keys(dim);
+          if (keys.length > 0 && keys.every(k => !(Number(dim[k]) > 0))) {
+            // Same name -> sectionId resolution POST /section-brightness uses,
+            // so the revert raises exactly the groups the panel lowered.
+            const dimmerGroups = modelDimmerGroups();
+            for (const k of keys) {
+              dim[k] = 1;
+              if (Object.prototype.hasOwnProperty.call(dimmerGroups, k)) {
+                intensityController.setSectionBrightness(dimmerGroups[k], 1);
+              } else if (/^\d+$/.test(k)) {
+                intensityController.setSectionBrightness(parseInt(k, 10), 1);
+              }
+            }
+            console.warn(`  ⚠ [revert] every group dimmer was at zero — raised all ${keys.length} ` +
+              'to full, or the ship would stay dark with the blackout already off');
+          }
+        }
+        globalsState.blackout = false;
+        if (!(mixer.master > 0)) mixer.setMaster(1.0);
+        saveGlobals(false);
+        broadcastMixerState();
+        console.warn('  ⚠ [revert] 1/6 ship lit: blackout off, master up, dimmers checked, ' +
+          'arm envelope released');
+      });
+
+      // 2. RELEASE THE SOURCE LOCK. Mandatory: with the panel's lock still in
+      //    place the param centre rejects every autopilot/timeline/BPM write
+      //    with reason 'source_lock', so the "automatic show" could not change
+      //    colour or speed. Same broadcast the REST route emits.
+      step('source-lock', () => {
+        if (!paramCenter) return;
+        paramCenter.setSourceLock({ mode: 'open' });
+        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        console.warn('  ⚠ [revert] 2/6 param-centre source lock released (mode: open)');
+      });
+
+      // 3. UNRESTRICT THE EFFECT SCOPE and unpark every group — both are things
+      //    the panel set and only the panel would have cleared.
+      step('scope', () => {
+        if (!globalEffectsController) return;
+        globalEffectsController.setEffectGroups(null);
+        globalEffectsController.setParkedGroups(null);
+        broadcastWs({ type: 'effectGroups', groups: null });
+        broadcastWs({ type: 'parkedGroups', groups: null });
+        console.warn('  ⚠ [revert] 3/6 effect scope unrestricted, all groups unparked');
+      });
+
+      // 4. DROP THE AUDIO BINDINGS. The engine applies them every frame, so a
+      //    binding left behind keeps the rig moving to the music with nobody
+      //    driving it.
+      step('audio-bindings', () => {
+        const ab = globalEffectsController && globalEffectsController.audioBindings;
+        if (!ab) return;
+        ab.clearAll();
+        console.warn('  ⚠ [revert] 4/6 audio bindings cleared');
+      });
+
+      // 5. RELEASE THE DEAD OWNER'S PAINT. A painted group is a flat overwrite
+      //    and would stay frozen through the automatic show.
+      step('paint', () => {
+        if (!ownerId) return;
+        releaseTouchPaintForOwner(ownerId, `revert to automatic show (${why})`);
+      });
+
+      // 6. FORCE THE DEFAULT AUTOMATIC SHOW. Deliberately NOT "restore whatever
+      //    was there before" — what was there before is, by definition, a rig
+      //    that a dead panel had already switched off. The operator asked for
+      //    the default automatic playlist, so it is asserted.
+      step('playlist', () => {
+        timelineLoadPlaylistOnDeck(REVERT_PLAYLIST);
+        console.warn(`  ⚠ [revert] 5/6 playlist '${REVERT_PLAYLIST}' loaded on the deck`);
+      });
+      step('autopilot', () => {
+        timelineSetAutopilotOnDeck({ active: true });
+        console.warn('  ⚠ [revert] 6/6 deck autopilot ACTIVE — the automatic show is running');
+      });
+
+      broadcastWs({ type: 'armRevert', why, ownerId: ownerId || null });
+      return true;
+    } catch (e) {
+      // Belt and braces: this function must NEVER throw into its callers (a
+      // sweep timer or a WS close handler), because an exception there takes
+      // the engine down and a dead engine cannot light anything.
+      console.warn(`  ⚠ [revert] unexpected failure: ${e && e.message ? e.message : e}`);
+      return false;
+    } finally {
+      revertInFlight = false;
+    }
+  }
+
+  // ── ARM LEASE (the panel deadman) ───────────────────────────────────────
+  //
+  // Arming the touch panel takes the whole rig: the params are source-locked,
+  // both autopilots are switched off, every effect is disabled and the overlay
+  // faders are pulled to zero. Before this lease, a panel that stopped
+  // answering left ALL of that in place with nobody driving — the ship frozen
+  // mid-look, and the automatic show unable to come back.
+  //
+  // LIVENESS IS MEASURED WITH WEBSOCKET PING/PONG, NOT A JS HEARTBEAT.
+  // That is the whole point. A heartbeat sent from page JavaScript stops when
+  // the browser throttles a backgrounded tab — so an operator who switches apps
+  // on the iPad for half a minute would have the show yanked out from under
+  // them. A WS ping is answered by the browser's NETWORK STACK, not by page
+  // script, so it keeps answering through throttling, backgrounding and a
+  // locked screen. Only a genuinely dead link stops the pongs.
+  const ARM_LEASE_MS = (() => {
+    const raw = process.env.BM26_ARM_LEASE_MS;
+    if (raw === undefined) return 15_000;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error(
+        `BM26_ARM_LEASE_MS must be a positive number of milliseconds, got '${raw}'`,
+      );
+    }
+    return n;
+  })();
+  // Ping well inside the lease so a single dropped pong cannot expire it.
+  const ARM_PING_MS = Math.max(500, Math.floor(ARM_LEASE_MS / 5));
+  // How long a closed control socket has to come back before the show reverts.
+  // Long enough to cover an engine restart or a wifi blip and the panel's 2 s
+  // reconnect timer; short enough that a genuinely closed tab is not left
+  // driving the rig for the full lease.
+  const ARM_CLOSE_GRACE_MS = Math.max(1000, Math.min(5000, Math.floor(ARM_LEASE_MS / 3)));
+  const armLease = new Map();   // ownerId -> { expiresAt, ws }
+  let armSweepTimer = null;
+  // Set before the server tears its sockets down. closeNow() terminate()s every
+  // client, which fires 'close' on all of them — without this guard a clean
+  // shutdown or a scene switch would look exactly like a dead panel and revert
+  // the rig on its way out.
+  let shuttingDown = false;
+
+  function armSweepArm() {
+    if (armSweepTimer !== null) return;
+    armSweepTimer = setInterval(sweepArmLeases, ARM_PING_MS);
+    if (typeof armSweepTimer.unref === 'function') armSweepTimer.unref();
+  }
+  function armSweepDisarm() {
+    if (armSweepTimer !== null) { clearInterval(armSweepTimer); armSweepTimer = null; }
+  }
+
+  /** The panel says it is armed: start watching its socket. */
+  function armLeaseSet(ownerId, ws) {
+    armLease.set(ownerId, { expiresAt: Date.now() + ARM_LEASE_MS, ws });
+    armSweepArm();
+    console.log(`[armLease] owner '${ownerId}' ARMED — watching its socket ` +
+      `(lease ${ARM_LEASE_MS} ms, ping every ${ARM_PING_MS} ms)`);
+  }
+
+  /** Clean disarm, or an explicit release. No revert — the panel handled it. */
+  function armLeaseClear(ownerId, why) {
+    if (!armLease.has(ownerId)) return false;
+    armLease.delete(ownerId);
+    if (armLease.size === 0) armSweepDisarm();
+    console.log(`[armLease] owner '${ownerId}' released — ${why}`);
+    return true;
+  }
+
+  function armLeaseRenew(ownerId) {
+    const l = armLease.get(ownerId);
+    if (!l) return false;
+    l.expiresAt = Date.now() + ARM_LEASE_MS;
+    return true;
+  }
+
+  /**
+   * Ping every armed socket and expire the ones that stopped answering.
+   * Runs on the same timer: ping first, then judge, so a socket always gets a
+   * fresh chance before its lease is measured.
+   */
+  function sweepArmLeases() {
+    if (shuttingDown) return;
+    const now = Date.now();
+    for (const [ownerId, lease] of [...armLease]) {
+      const ws = lease.ws;
+      if (ws && ws.readyState === 1) {
+        try { ws.ping(); } catch { /* a failed ping just means no pong; the lease decides */ }
+      }
+      if (lease.expiresAt <= now) {
+        armLease.delete(ownerId);
+        if (armLease.size === 0) armSweepDisarm();
+        revertToAutomaticShow(
+          `the armed panel stopped answering for ${ARM_LEASE_MS} ms (tab closed, wifi drop, ` +
+          'device asleep, or power loss)', ownerId);
+      }
+    }
+    if (armLease.size === 0) armSweepDisarm();
+  }
+
+  /** Release every leased group held by one owner (WS close / explicit end). */
+  function releaseTouchPaintForOwner(ownerId, why) {
+    if (!ownerId) return [];
+    const mine = [];
+    for (const [group, lease] of touchPaintLease) {
+      if (lease.ownerId === ownerId) mine.push(group);
+    }
+    if (mine.length === 0) return [];
+    return releaseTouchPaintGroups(mine, why);
+  }
+
+  /** Renew every lease held by an owner. Returns how many were renewed. */
+  function renewTouchPaintForOwner(ownerId) {
+    if (!ownerId) return 0;
+    const now = Date.now();
+    let n = 0;
+    for (const [, lease] of touchPaintLease) {
+      if (lease.ownerId === ownerId) { lease.expiresAt = now + TOUCH_PAINT_LEASE_MS; n++; }
+    }
+    return n;
+  }
+
   function broadcastViewOverride() {
     broadcastWs({
       type: 'viewOverride',
@@ -5162,7 +5603,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!data.pattern) {
             res.writeHead(400); return res.end(JSON.stringify({ error: 'pattern required' }));
           }
-          const patternName = path.basename(data.pattern, '.js');
+          let patternName;
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
 
           // Compile FIRST so we never tear down the live deck channel
           // for a pattern that turns out to fail to compile / load.
@@ -5459,6 +5902,80 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // PUT    /group-fixed-colors/:group   → set/replace override
     // DELETE /group-fixed-colors/:group   → clear override
     // Group names are URL-encoded in the path (names may have spaces).
+    // ── PARKED (locked) groups ──────────────────────────────────────────
+    // GET  /parked-groups           → { groups: string[]|null }
+    // PUT  /parked-groups {groups}  → these groups hold exactly what they were
+    //   set to: the GRAND MASTER skips them. Operator ruling, made with the
+    //   conflict pointed out. BLACKOUT still kills them (IntensityController
+    //   runs later) - an e-stop is not defeatable from a UI toggle.
+    } else if (req.method === 'GET' && req.url === '/parked-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      const m = globalEffectsController.parkedGroupMask;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ groups: m ? [...m] : null }));
+    } else if (req.method === 'PUT' && req.url === '/parked-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      readBody(data => {
+        try {
+          const wanted = (data && data.groups !== undefined) ? data.groups : null;
+          if (Array.isArray(wanted)) {
+            const known = listModelGroups();
+            const bad = wanted.filter(g => !known.includes(g));
+            if (bad.length) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: `unknown group(s): ${bad.join(', ')}`, known }));
+            }
+          }
+          globalEffectsController.setParkedGroups(wanted);
+          const m = globalEffectsController.parkedGroupMask;
+          broadcastWs({ type: 'parkedGroups', groups: m ? [...m] : null });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', groups: m ? [...m] : null }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
+    // ── Per-group EFFECT SCOPE (docs/44) ────────────────────────────────
+    // GET  /effect-groups            → { groups: string[]|null }
+    // PUT  /effect-groups {groups}   → restrict the whole effect chain to those
+    //   groups. null = unrestricted (the default and the shipped behaviour).
+    //   [] is legal and means "no group" - an explicit operator choice, not a
+    //   mistake, so it is NOT turned back into "everywhere".
+    } else if (req.method === 'GET' && req.url === '/effect-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      const mask = globalEffectsController.effectGroupMask;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ groups: mask ? [...mask] : null }));
+    } else if (req.method === 'PUT' && req.url === '/effect-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      readBody(data => {
+        try {
+          const wanted = (data && data.groups !== undefined) ? data.groups : null;
+          if (Array.isArray(wanted)) {
+            // Reject a typo'd group loudly - a mask naming a group that does
+            // not exist would silently shrink the effect's reach.
+            const known = listModelGroups();
+            const bad = wanted.filter(g => !known.includes(g));
+            if (bad.length) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `unknown group(s): ${bad.join(', ')}`, known,
+              }));
+            }
+          }
+          globalEffectsController.setEffectGroups(wanted);
+          const mask = globalEffectsController.effectGroupMask;
+          broadcastWs({ type: 'effectGroups', groups: mask ? [...mask] : null });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', groups: mask ? [...mask] : null }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
     } else if (req.method === 'GET' && req.url === '/group-fixed-colors') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -5480,6 +5997,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       if (req.method === 'DELETE') {
         const removed = globalEffectsController.clearGroupFixedColor(group);
+        // Drop any deadman lease with it, so the sweep stops tracking a group
+        // that is already clear (and can disarm once the last one goes).
+        touchPaintLease.delete(group);
+        if (touchPaintLease.size === 0) disarmTouchPaintSweep();
         if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
         saveGlobals(false);
         broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
@@ -5495,16 +6016,49 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400);
             return res.end(JSON.stringify({ error: `unknown group '${group}' (model groups: ${known.join(', ')})` }));
           }
-          globalEffectsController.setGroupFixedColor(group, data.color, data.brightness);
-          if (!globalsState.groupFixedColors) globalsState.groupFixedColors = {};
-          globalsState.groupFixedColors[group] = {
-            color: [...data.color],
-            brightness: data.brightness,
-          };
-          saveGlobals(false);
+          // `colors` (optional) lets ONE group carry a whole palette, spread
+          // across its own pixels by per-group ordinal. `color` stays required
+          // and is what every existing caller sends.
+          globalEffectsController.setGroupFixedColor(
+            group, data.color, data.brightness, data.colors);
+
+          // LEASED paint (`ownerId` present) vs PERMANENT paint (absent).
+          //
+          // Leased: held alive only while its owner keeps renewing, and NOT
+          // written to globals_state.yaml — the owner is definitionally gone
+          // after a restart, so persisting it would resurrect a frozen group
+          // that nothing is left to release. Any previously-persisted entry for
+          // this group is removed for the same reason.
+          //
+          // Permanent (no ownerId): unchanged from before — applied, persisted,
+          // survives restart. This is what saved operator looks rely on.
+          const ownerId = typeof data.ownerId === 'string' && data.ownerId.length > 0
+            ? data.ownerId
+            : null;
+          if (ownerId) {
+            touchPaintLeaseSet(group, ownerId);
+            if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
+            saveGlobals(false);
+          } else {
+            // An unleased write takes the group back off the deadman.
+            touchPaintLease.delete(group);
+            if (touchPaintLease.size === 0) disarmTouchPaintSweep();
+            if (!globalsState.groupFixedColors) globalsState.groupFixedColors = {};
+            globalsState.groupFixedColors[group] = {
+              color: [...data.color],
+              brightness: data.brightness,
+            };
+            saveGlobals(false);
+          }
           broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', group, override: globalEffectsController.groupFixedColors[group] }));
+          res.end(JSON.stringify({
+            status: 'ok',
+            group,
+            override: globalEffectsController.groupFixedColors[group],
+            leased: Boolean(ownerId),
+            leaseMs: ownerId ? TOUCH_PAINT_LEASE_MS : null,
+          }));
         } catch (e) {
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
@@ -5550,6 +6104,191 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
       });
+      // DELIBERATELY does NOT touch the arm envelope. Releasing the blackout is
+      // a step INSIDE the panel's arm sequence — it happens while the envelope
+      // is holding the ship at 0 precisely so the takeover is invisible — so
+      // resetting armFade here would cancel the fade this endpoint is hiding
+      // behind. The recovery paths for a stuck envelope are POST /mixer/panic
+      // (forceLit), the arm deadman, and the fact that armFade is never
+      // persisted so any restart comes back at full level.
+    } else if (req.method === 'POST' && req.url === '/arm-fade') {
+      // THE TOUCH PANEL'S ARM ENVELOPE. See IntensityController.startArmFade for
+      // why the ramp lives in the engine rather than as a burst of writes from
+      // the browser. One request per fade leg; it returns IMMEDIATELY with the
+      // completion time rather than holding the socket open for the duration —
+      // concurrent/long-held writes from this panel have been measured to hang,
+      // and the panel already races an 8 s arm deadline. The client waits on its
+      // own timer; if the client dies mid-fade the engine still lands on target.
+      readBody(data => {
+        if (!intensityController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no intensity controller' }));
+        }
+        // 400, never a clamp. A silently coerced fade target is a silently wrong
+        // house level on the last stage before the wire (codex P0: no silent
+        // fallbacks — fail loudly).
+        let r;
+        try {
+          r = intensityController.startArmFade(data.target, data.durationMs);
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        broadcastWs({ type: 'armFade', ...r });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', ...r }));
+      });
+    } else if (req.method === 'POST' && req.url === '/movement-rate') {
+      // LIGHT WALKING DOWN THE FIXTURE GROUPS, at a live speed for the XY pad's
+      // Y axis (operator's own suggestion). movementTrace's 'whole_group' mode
+      // lights one group at a time and steps along; pixelsPerSecond is how fast
+      // it walks. Same reasoning as /strobe-rate for having its own route: the
+      // slot machinery is for occasional tweaks, this is a finger.
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no global effects controller' }));
+        }
+        const active = !!(data && data.active);
+        const pps = (data && data.pixelsPerSecond !== undefined) ? data.pixelsPerSecond : 6;
+        if (active && (typeof pps !== 'number' || !Number.isFinite(pps) || pps < 0.05 || pps > 120)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'movement-rate: pixelsPerSecond 0.05..120' }));
+        }
+        const mode = (data && data.mode) || 'whole_group';
+        if (['every_other', 'one_per_color', 'whole_group', 'pulse'].indexOf(mode) === -1) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `movement-rate: unknown mode '${mode}'` }));
+        }
+        try {
+          if (!active) {
+            globalEffectsController.setMovementTrace(false);
+          } else {
+            const params = {
+              mode, travel: 'repeat', sync: false,
+              pixelsPerSecond: pps,
+              amount: (data && typeof data.amount === 'number') ? data.amount : 1,
+            };
+            if (Array.isArray(data.colors) && data.colors.length) params.colors = data.colors;
+            globalEffectsController.setMovementTrace(true, params, { presetId: 'xy_pad' });
+          }
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        const m = globalEffectsController.movement || {};
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', active: !!m.enabled,
+          mode: m.mode, pixelsPerSecond: m.pixelsPerSecond, amount: m.amount }));
+      });
+    } else if (req.method === 'GET' && req.url === '/movement-rate') {
+      if (!globalEffectsController) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'no global effects controller' }));
+      }
+      const m = globalEffectsController.movement || {};
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ active: !!m.enabled, mode: m.mode,
+        pixelsPerSecond: m.pixelsPerSecond, amount: m.amount }));
+    } else if (req.method === 'POST' && req.url === '/strobe-rate') {
+      // LIVE STROBE SPEED for the XY pad's Y axis. setStrobe() already exists
+      // but was only reachable through the effect-slot machinery, which is
+      // built for occasional operator tweaks — this is a continuous stream off
+      // a finger, the same reason /spatial-paint bypasses it.
+      // The controller re-anchors the pulse train on an hz change ("the pulse
+      // train re-tempos in place instead of jumping to a fresh cycle start"),
+      // so sweeping the axis speeds the flashing up smoothly rather than
+      // restarting it on every sample.
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no global effects controller' }));
+        }
+        const num = (v, lo, hi, dflt) => {
+          if (v === undefined) return dflt;
+          if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) return null;
+          return v;
+        };
+        const active = !!(data && data.active);
+        const hz = num(data && data.hz, 0.2, 25, 6);
+        const duty = num(data && data.duty, 0.02, 0.98, 0.5);
+        const intensity = num(data && data.intensity, 0, 1, 1);
+        if (hz === null || duty === null || intensity === null) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'strobe-rate: hz 0.2..25, duty 0.02..0.98, intensity 0..1',
+          }));
+        }
+        try {
+          if (active) {
+            const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+            globalEffectsController.setStrobe(true, hz, duty, intensity,
+              frameIndex, { presetId: 'xy_pad', slotId: null });
+          } else {
+            globalEffectsController.stopStrobe({ nowMs: Date.now() });
+          }
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok', active: !!globalEffectsController.strobeActive,
+          hz, duty, intensity,
+        }));
+      });
+    } else if (req.method === 'GET' && req.url === '/strobe-rate') {
+      if (!globalEffectsController) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'no global effects controller' }));
+      }
+      const c = globalEffectsController.strobeConfig || {};
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        active: !!globalEffectsController.strobeActive,
+        hz: c.hz ?? null, actualHz: c.actualHz ?? null,
+        duty: c.duty ?? null, intensity: c.intensity ?? null,
+        presetId: c.presetId ?? null,
+      }));
+    } else if (req.method === 'POST' && req.url === '/spatial-paint') {
+      // THE OPERATOR'S STROKE, above the pattern layer so it works on EVERY
+      // pattern. Partial patch: the pad sends {targetX,targetY,touch} at drag
+      // rate and the mode/colour only when they change. Deliberately NOT routed
+      // through the slot-param machinery — that is built for occasional
+      // operator tweaks, and this is a positional stream at ~20 writes/second.
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no global effects controller' }));
+        }
+        let out;
+        try {
+          out = globalEffectsController.setSpatialPaint(data);
+        } catch (e) {
+          // 400, never a clamp: a coerced coordinate is a stroke landing where
+          // the operator did not point.
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', ...out }));
+      });
+    } else if (req.method === 'GET' && req.url === '/spatial-paint') {
+      if (!globalEffectsController) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'no global effects controller' }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(globalEffectsController.getSpatialPaint()));
+    } else if (req.method === 'GET' && req.url === '/arm-fade') {
+      // A read surface is mandatory, not a nicety: armFade gates the entire
+      // rig's output and is invisible everywhere else. Without this, an engine
+      // holding the ship at 0 looks identical to a working engine on every
+      // other endpoint.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(intensityController
+        ? intensityController.getArmFade()
+        : { armFade: null, ramping: false }));
     } else if (req.method === 'POST' && req.url === '/shutdown') {
       // Operator STOP path (report 20260805_160 T1, fixed in _169). The
       // launcher force-kills the whole process tree on Windows
@@ -6538,6 +7277,110 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
         .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
 
+    // ── AUDIO BINDINGS ────────────────────────────────────────────────
+    // One audio signal per effect slot / per group, chosen by the operator.
+    // GET /audio-sources lists what can be bound RIGHT NOW - the curated
+    // built-in keys plus whatever the Companion registered - each with its
+    // label, its range, and whether a live value is actually arriving. A
+    // dropdown built from this cannot drift from the audio panel, and a signal
+    // nobody is sending shows as not-live instead of silently doing nothing.
+    } else if (req.method === 'GET' && req.url === '/audio-sources') {
+      const snapshot = paramCenter ? paramCenter.getAll() : {};
+      const dyn = paramCenter && paramCenter.getDynamicLiveParamKeys
+        ? paramCenter.getDynamicLiveParamKeys() : [];
+      const seen = {};
+      const list = [];
+      // The BPM pulse is SYNTHETIC - derived from the arbitrated tempo, not
+      // from audio - so it is listed first and is always live. It is the only
+      // source that still works with the Companion switched off, which is why
+      // the panel can fall back to it.
+      list.push({ key: 'bpmPulse', label: 'BPM · Beat', range: [0, 1], builtin: true, live: true, synthetic: true });
+      seen.bpmPulse = 1;
+      for (const e of audioRegistryEntries()) {
+        seen[e.key] = 1;
+        list.push({
+          key: e.key,
+          label: e.label || e.key,
+          range: e.range || [0, 1],
+          builtin: true,
+          live: Object.prototype.hasOwnProperty.call(snapshot, e.key),
+        });
+      }
+      for (const k of dyn) {
+        if (seen[k]) continue;
+        list.push({ key: k, label: k, range: [0, 1], builtin: false,
+          live: Object.prototype.hasOwnProperty.call(snapshot, k) });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sources: list, audioPresent: list.some(x => x.live) }));
+
+    } else if (req.method === 'GET' && req.url === '/audio-bindings') {
+      const ab = globalEffectsController && globalEffectsController.audioBindings;
+      if (!ab) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_bindings_not_initialized' })); }
+      const gains = globalEffectsController._audioGains || { effects: {}, groups: {} };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ bindings: ab.getAll(), gains, missing: ab.missingSources }));
+
+    } else if (req.method === 'PUT' && req.url.startsWith('/audio-bindings/')) {
+      // PUT /audio-bindings/<effects|groups>/<id> { source, mode, depth,
+      // threshold, decayMs }. A body of null (or source:null) clears it.
+      const ab = globalEffectsController && globalEffectsController.audioBindings;
+      if (!ab) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_bindings_not_initialized' })); }
+      const parts = req.url.split('?')[0].split('/').filter(Boolean);
+      if (parts.length < 3) {
+        res.writeHead(400); return res.end(JSON.stringify({ error: 'expected /audio-bindings/<scope>/<id>' }));
+      }
+      const bScope = parts[1];
+      const bId = decodeURIComponent(parts.slice(2).join('/'));
+      readBody(body => {
+        try {
+          // CLEAR only when the body names no source AT ALL. Checking `source`
+          // alone silently cleared every multi-stem binding, because those
+          // carry `sources` and no `source`.
+          const hasOne = body && typeof body.source === 'string' && body.source;
+          const hasMany = body && Array.isArray(body.sources) && body.sources.length;
+          const b = (hasOne || hasMany) ? body : null;
+
+          // FAIL LOUD on an effect that has nothing for audio to drive.
+          // An effect binding rides the effect's own primary parameter
+          // (primaryIntensity). vintageWhite / blastWhite / uvBlast / invert /
+          // fogger declare `primaryIntensity: null` - they are on/off slams
+          // with no magnitude. Binding a signal to one of those used to be
+          // accepted and then silently do nothing, which is the "I set it and
+          // the rig ignored me" failure the codex forbids. Say so instead.
+          if (b && bScope === 'effects' && globalEffectSlotManager) {
+            const slot = globalEffectSlotManager.getSlot(Number(bId));
+            if (slot && slot.effectId) {
+              const desc = getPrimaryIntensity(slot.effectId);
+              if (!desc) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({
+                  error: `effect '${slot.effectId}' on slot ${bId} has no audio-drivable `
+                    + 'parameter (primaryIntensity is null - it is an on/off effect). '
+                    + 'Bind audio to an effect with a magnitude, or drive the group fader instead.',
+                  effectId: slot.effectId,
+                  slotId: Number(bId),
+                }));
+              }
+            }
+          }
+
+          const saved = ab.set(bScope, bId, b);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, scope: bScope, id: bId, binding: saved }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
+    } else if (req.method === 'POST' && req.url === '/audio-bindings/clear') {
+      const ab = globalEffectsController && globalEffectsController.audioBindings;
+      if (!ab) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_bindings_not_initialized' })); }
+      ab.clearAll();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
       // persisted to disk — the in-memory `viewOverrideMode` is the
@@ -6717,6 +7560,136 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         groupBits: (model && model.groupBits) || {},
         maskConstants: (model && model.maskConstants) || {},
         pixelCount: pixels.length,
+      }));
+    }
+    // GET /model/group-layout — the ship's TOP-DOWN footprint, per group.
+    //
+    // WHY THIS EXISTS: a spatial touch surface needs to know WHERE things are,
+    // and nothing exposed that. `/model/view-selection-options` returns group
+    // NAMES only, and the sim's hand-tuned 2D layout lives in a sim-side
+    // sidecar (simulation/scenes/<scene>/pixel_map_views.yaml) that CaptainPad
+    // cannot reach — it talks to the engine, not the sim's static server.
+    //
+    // So this derives the footprint from the LOADED MODEL, which means it can
+    // never drift out of sync with what is actually rendering, and it works
+    // offline (the playa has no internet, and the sim may not be up).
+    //
+    // Coordinates are the model's normalized nx/ny/nz. The client is expected
+    // to do its own rectification before drawing — MEASURED on titanic:
+    // nx 0.40..0.65 holds ZERO pixels (25% of the axis, the empty centre of the
+    // ship) and the two sides occupy different nz bands, so a raw
+    // screen-aligned pad is ~74% dead. Bounds are returned per group precisely
+    // so a client can lay the groups out honestly instead of guessing.
+    else if (req.method === 'GET' && req.url === '/model/group-layout') {
+      const pixels = (model && Array.isArray(model.pixels)) ? model.pixels : [];
+      const acc = new Map();
+      for (const p of pixels) {
+        if (!p || typeof p.group !== 'string' || p.group.length === 0) continue;
+        const nx = p.nx, ny = p.ny, nz = p.nz;
+        if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) continue;
+        let g = acc.get(p.group);
+        if (!g) {
+          g = {
+            name: p.group, pixelCount: 0, sx: 0, sy: 0, sz: 0,
+            minX: Infinity, maxX: -Infinity,
+            minY: Infinity, maxY: -Infinity,
+            minZ: Infinity, maxZ: -Infinity,
+          };
+          acc.set(p.group, g);
+        }
+        g.pixelCount++;
+        g.sx += nx; g.sy += ny; g.sz += nz;
+        if (nx < g.minX) g.minX = nx;
+        if (nx > g.maxX) g.maxX = nx;
+        if (ny < g.minY) g.minY = ny;
+        if (ny > g.maxY) g.maxY = ny;
+        if (nz < g.minZ) g.minZ = nz;
+        if (nz > g.maxZ) g.maxZ = nz;
+      }
+      const groups = [...acc.values()]
+        .map(g => ({
+          name: g.name,
+          pixelCount: g.pixelCount,
+          // Centroid in normalized model space.
+          cx: g.sx / g.pixelCount,
+          cy: g.sy / g.pixelCount,
+          cz: g.sz / g.pixelCount,
+          bounds: {
+            minX: g.minX, maxX: g.maxX,
+            minY: g.minY, maxY: g.maxY,
+            minZ: g.minZ, maxZ: g.maxZ,
+          },
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        // `opts.modelName` is the authoritative name here — the same source
+        // the scene-reload path derives its own `activeScene` from
+        // (api_server ~5519). `opts` is a startApiServer parameter, so it is
+        // genuinely in scope; `activeScene` is a LOCAL of another function and
+        // referencing it here crashed the engine with a ReferenceError.
+        scene: opts.modelName || null,
+        model: opts.modelName || null,
+        pixelCount: pixels.length,
+        placedPixelCount: groups.reduce((n, g) => n + g.pixelCount, 0),
+        groups,
+      }));
+    }
+    // GET /model/pixel-layout — PER-PIXEL geometry, for surfaces that must
+    // reproduce the sim's 2D pixel view.
+    //
+    // WHY GROUP-LEVEL IS NOT ENOUGH: `/model/group-layout` collapses each group
+    // to one centroid. On titanic four of the 24 groups hold 90 pixels each, so
+    // a spatial pad built on centroids would address 24 points instead of 964
+    // and could never reproduce the sim's picture.
+    //
+    // WHY RAW WORLD COORDS ARE INCLUDED: the sim's gap compression
+    // (`compressProjectedGaps`, simulation/src/gui/pixel_map/pixel_map_layout.js)
+    // operates on RAW WORLD units — `minWorldGap` / `gapWorld` are world units,
+    // not normalized. A client given only nx/ny/nz could NOT compute the same
+    // bands, so it could not match the sim. Both are therefore returned.
+    //
+    // WHY NOT JUST FETCH THE SIM: the sim's static server is a different
+    // process on a different port that may not be running (the `prod` profile
+    // does run it, but a show server need not), and CaptainPad's discovery
+    // deliberately scans only the engine port. Serving this from the engine
+    // keeps the iPad on ONE port and works with no sim at all — which matters
+    // because the playa has no internet and no guarantees.
+    //
+    // Size: ~964 records on titanic. Trimmed to the fields a spatial surface
+    // actually needs — patch/channels/vMask are deliberately omitted (they are
+    // wiring, not geometry, and would roughly double the payload).
+    else if (req.method === 'GET' && req.url === '/model/pixel-layout') {
+      const pixels = (model && Array.isArray(model.pixels)) ? model.pixels : [];
+      const out = [];
+      for (const p of pixels) {
+        if (!p) continue;
+        // Skip anything without usable geometry rather than emitting a hole a
+        // client would have to guess about (codex P0: no silent garbage).
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) continue;
+        if (!Number.isFinite(p.nx) || !Number.isFinite(p.ny) || !Number.isFinite(p.nz)) continue;
+        out.push({
+          i: p.i,
+          x: p.x, y: p.y, z: p.z,          // RAW world — needed for gap bands
+          nx: p.nx, ny: p.ny, nz: p.nz,    // normalized — what patterns consume
+          group: typeof p.group === 'string' ? p.group : null,
+          type: typeof p.type === 'string' ? p.type : null,
+          fixtureType: typeof p.fixtureType === 'string' ? p.fixtureType : null,
+          fId: p.fId,
+          sId: p.sId,
+          localIndex: p.localIndex,
+        });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        scene: opts.modelName || null,
+        model: opts.modelName || null,
+        pixelCount: pixels.length,
+        // If this is lower than pixelCount, some pixels had unusable geometry.
+        // Surfaced so a client can SEE the shortfall instead of silently
+        // drawing an incomplete ship.
+        returnedCount: out.length,
+        pixels: out,
       }));
     }
     // ---- MIXER API ----
@@ -7375,7 +8348,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           entryId = entry.id;
           patternName = entry.pattern;
         } else if (data.pattern) {
-          patternName = path.basename(data.pattern, '.js');
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           playlistName = 'default';
         } else {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
@@ -7626,7 +8600,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // every exit path (success, safe-default, broken-home loud fallback)
         // leaves the rig visible.
         const forceLit = () => {
-          if (intensityController) intensityController.setBlackout(false);
+          if (intensityController) {
+            intensityController.setBlackout(false);
+            // THE ARM ENVELOPE IS PART OF THE LIT GUARANTEE. It is the LAST
+            // scalar before the wire, so a panic that cleared the blackout and
+            // raised the master while armFade sat at 0 would answer
+            // `rigLit: true` over a completely black ship — the exact failure
+            // this endpoint exists to prevent. Snapped, not ramped: panic is an
+            // e-stop, and an e-stop does not have a fade time.
+            intensityController.startArmFade(1, 0);
+          }
           globalsState.blackout = false;
           saveGlobals(true);
           mixer.setMaster(1.0);
@@ -7886,7 +8869,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         // Pattern swap: recompile WASM, swap handle, preserve channel ID
         if (data.pattern !== undefined && data.pattern !== channel.pattern) {
-          const patternName = path.basename(data.pattern, '.js');
+          let patternName;
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
@@ -8949,7 +9934,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           entryId = entry.id;
           patternName = entry.pattern;
         } else if (data.pattern) {
-          patternName = path.basename(data.pattern, '.js');
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           playlistName = 'default';
         } else {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
@@ -9224,7 +10210,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.setDeckOverlayViewSelection(id, v.value);
         }
         if (data.pattern !== undefined && data.pattern !== overlay.pattern) {
-          const patternName = path.basename(data.pattern, '.js');
+          let patternName;
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
@@ -10322,7 +11310,71 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // daemon starts — armAutopilotProfile injects the timing profile the daemon's
   // first _scheduleNext will consult (timer vs event-driven). The name was
   // validated + cleared to 'random' at restore, so this never throws.
+  // THE CRASH MARKER lives in the OS temp dir, NOT in marsin_engine/states/.
+  // Everything in that tree is tracked, and a runtime file appearing and
+  // vanishing there would show up as a git diff on the show server on every
+  // start and stop. Keyed by scene AND port so two engines on one machine
+  // (dev + a probe) cannot read each other's marker.
+  // opts carries `modelName` (the scene/model, e.g. 'titanic'), NOT `scene`.
+  // Sanitised because it reaches a filename.
+  const crashMarkerScene = String(opts.modelName || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const crashMarkerPath = path.join(
+    os.tmpdir(), `bm26_engine_running_${crashMarkerScene}_${opts.port}.marker`);
+  // READ ONCE, HERE, before anything can write it. fs.existsSync is cheap and
+  // this runs once per boot.
+  const crashMarkerPresentAtBoot = fs.existsSync(crashMarkerPath);
+
+  function writeCrashMarker() {
+    try {
+      fs.writeFileSync(crashMarkerPath, String(process.pid), 'utf8');
+    } catch (e) {
+      // Not fatal: without the marker a crash simply will not be detected next
+      // boot. Loud, because that is a silently reduced safety net.
+      console.warn(`  ⚠ [boot] could not write the crash marker ${crashMarkerPath}: ` +
+        `${e && e.message ? e.message : e} — a crash will NOT be detected on the next start.`);
+    }
+  }
+  function clearCrashMarker() {
+    try {
+      if (fs.existsSync(crashMarkerPath)) fs.unlinkSync(crashMarkerPath);
+    } catch (_) { /* a stale marker only costs one spurious revert next boot */ }
+  }
+
   armAutopilotProfile(currentAutopilotProfileName());
+
+  // ── CRASH BOOT POLICY ───────────────────────────────────────────────────
+  //
+  // "If the system crashes the system reverts to the default automatic
+  // playlist." A crash is distinguished from a deliberate restart by a marker
+  // file: written once the server is listening, deleted on the clean shutdown
+  // path. Still there at boot => the previous run did not stop cleanly.
+  //
+  // WHY GATED, and not forced on every boot: --pattern is mandatory and the
+  // launcher passes one, so an operator restarting deliberately with a chosen
+  // pattern must keep it. Only a crash overrides that choice.
+  //
+  // POSITION IS DELIBERATE: after armAutopilotProfile (which the daemon's first
+  // schedule consults) and BEFORE autopilot.start(), so the daemon starts with
+  // the reverted playlist and an active flag rather than being reconfigured
+  // underneath itself. A CLI --pattern pin also suspends the deck autopilot at
+  // boot; the revert deliberately overrides that pin, and says so.
+  // TEST/HARNESS OPT-OUT. A harness that stops engines with a signal cannot
+  // produce a clean shutdown on Windows — Node's proc.kill('SIGTERM') there
+  // terminates the process outright without running the handler, so closeNow()
+  // never deletes the marker and EVERY harness restart looks like a crash. That
+  // would silently override the playlist a test just restored.
+  // Explicit, opt-in, and loud: never set this in production.
+  const crashRevertDisabled = process.env.BM26_DISABLE_CRASH_REVERT === '1';
+  if (crashMarkerPresentAtBoot && crashRevertDisabled) {
+    console.warn('  ⚠ [boot] crash marker present but BM26_DISABLE_CRASH_REVERT=1 — ' +
+      'NOT reverting to the automatic playlist. This must only ever be set by a test harness.');
+  }
+  if (crashMarkerPresentAtBoot && !crashRevertDisabled) {
+    console.warn('  ⚠ [boot] the previous run did not shut down cleanly (crash marker present at ' +
+      `${crashMarkerPath}). Reverting to the default automatic playlist; any --pattern pin is ` +
+      'deliberately overridden by the crash policy.');
+    revertToAutomaticShow('the previous run ended uncleanly (crash boot policy)', null);
+  }
   // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
   // (autopilot.state); the next-entry pick reads the restored deck
   // playlist.autopilot live. Mixer + deck overlays resume on their own — the
@@ -10736,6 +11788,95 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           saveAllState();
           broadcastMixerState();
+        } else if (d.type === 'touchControlHello') {
+          // A control surface (TOUCH CONTROL) announcing itself so the engine
+          // knows something manual is driving and can clean up after it.
+          // Before this, touch-control writes were byte-indistinguishable from
+          // any other WS client, so nothing could detect the surface going away.
+          if (typeof d.ownerId !== 'string' || d.ownerId.length === 0) {
+            ws.send(JSON.stringify({
+              type: 'touchControlRejected', reason: 'ownerId required (non-empty string)',
+            }));
+            return;
+          }
+          ws._touchControlOwnerId = d.ownerId;
+          console.log(`[touchPaint] owner '${d.ownerId}' registered on /ws/control`);
+          ws.send(JSON.stringify({
+            type: 'touchControlHelloAck', ownerId: d.ownerId, leaseMs: TOUCH_PAINT_LEASE_MS,
+          }));
+        } else if (d.type === 'touchControlArmed') {
+          // ARM / DISARM declaration. `armed:true` starts the deadman watching
+          // THIS socket; `armed:false` is a clean release with no revert,
+          // because the panel is doing the handback itself.
+          const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
+            ? d.ownerId
+            : ws._touchControlOwnerId;
+          if (!ownerId) {
+            ws.send(JSON.stringify({
+              type: 'touchControlRejected', reason: 'ownerId required before touchControlArmed',
+            }));
+            return;
+          }
+          ws._touchControlOwnerId = ownerId;
+          if (d.armed) {
+            // ONE DESK AT A TIME. Two panels both believing they are armed is
+            // strictly worse than one being told someone else has it: they
+            // fight over the same source lock, each disarm hands back state the
+            // other is still driving, and either one's tab closing used to
+            // revert the show out from under the other. So a second, DIFFERENT
+            // owner is REFUSED and told who holds it, rather than silently
+            // overwriting the lease. Re-arming as the SAME owner is a renewal
+            // (the panel re-asserts on every socket reconnect) and is allowed.
+            // ONLY A LIVE HOLDER CAN REFUSE. A lease whose socket is gone or
+            // half-open must never lock the desk: the 'close' event does not
+            // always arrive (a hard-killed client leaves the socket half-open,
+            // which is the whole reason the ping exists), and REPRODUCED here —
+            // a dead panel held the desk and refused three subsequent arms with
+            // no way for the operator to take it back short of restarting the
+            // engine. Being told "disarm the other first" is useless when the
+            // other is unreachable.
+            // So a stale holder is EVICTED and the new panel takes over, loudly.
+            const holder = [...armLease.keys()].find(k => k !== ownerId);
+            const holderLease = holder ? armLease.get(holder) : null;
+            const holderAlive = !!(holderLease && holderLease.ws && holderLease.ws.readyState === 1);
+            if (holder && !holderAlive) {
+              console.warn(`  ⚠ [armLease] evicting STALE holder '${holder}' (its socket is gone) — ` +
+                `'${ownerId}' takes the desk. A dead panel must never lock out a live one.`);
+              armLease.delete(holder);
+            }
+            if (holder && holderAlive) {
+              console.warn(`  ⚠ [armLease] REFUSED arm from '${ownerId}' — '${holder}' already ` +
+                'holds the desk. Two panels driving one rig is not supported; disarm the other first.');
+              ws.send(JSON.stringify({
+                type: 'touchControlArmedRejected', ownerId, heldBy: holder,
+                reason: 'another panel already holds the desk — disarm it first',
+              }));
+              return;
+            }
+            armLeaseSet(ownerId, ws);
+          } else {
+            armLeaseClear(ownerId, 'clean disarm (touchControlArmed false)');
+          }
+          ws.send(JSON.stringify({
+            type: 'touchControlArmedAck', ownerId, armed: !!d.armed, leaseMs: ARM_LEASE_MS,
+          }));
+        } else if (d.type === 'touchControlHeartbeat') {
+          // Renew every lease this owner holds. The panel sends this well
+          // inside TOUCH_PAINT_LEASE_MS while it is armed; stopping is exactly
+          // the signal the deadman is watching for.
+          const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
+            ? d.ownerId
+            : ws._touchControlOwnerId;
+          const renewed = renewTouchPaintForOwner(ownerId);
+          ws.send(JSON.stringify({ type: 'touchControlHeartbeatAck', ownerId: ownerId || null, renewed }));
+        } else if (d.type === 'touchControlRelease') {
+          // Explicit "I am done" (disarm). Same path the deadman would take,
+          // so a clean disarm and a crash converge on identical rig state.
+          const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
+            ? d.ownerId
+            : ws._touchControlOwnerId;
+          const cleared = releaseTouchPaintForOwner(ownerId, `owner '${ownerId}' released explicitly`);
+          ws.send(JSON.stringify({ type: 'touchControlReleased', ownerId: ownerId || null, cleared }));
         } else if (d.type === 'setSharedParam') {
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
@@ -10765,6 +11906,53 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // holding — instant cleanup so a channel can't stay pinned full. The lease
     // sweep is the backstop for the case where close never fires (hard link
     // loss); this is the fast path for clean disconnects.
+    // TOUCH CONTROL fast release: if the socket that owns leased paint closes
+    // (tab closed, app force-quit, backgrounded long enough to drop the
+    // socket), clear that owner's groups immediately rather than leaving the
+    // ship part-frozen for the remainder of the lease. The sweep above is the
+    // backstop for hard link loss, where 'close' never fires; this is the fast
+    // path for clean disconnects. Registered as its own listener so it runs
+    // regardless of whether the bump handler below early-returns.
+    // THE PONG IS THE HEARTBEAT. Sent by the browser's network stack, not by
+    // page JavaScript, so it survives a throttled or backgrounded tab — the
+    // whole reason the arm deadman is built on ping/pong rather than a timer in
+    // the page. See the ARM LEASE block for why that distinction matters.
+    ws.on('pong', () => {
+      const ownerId = ws._touchControlOwnerId;
+      if (ownerId) armLeaseRenew(ownerId);
+    });
+
+    ws.on('close', () => {
+      const ownerId = ws._touchControlOwnerId;
+      if (!ownerId) return;
+      releaseTouchPaintForOwner(ownerId, `/ws/control closed (owner '${ownerId}')`);
+      // ARM DEADMAN, fast path. Lease expiry is the net that catches hard link
+      // loss (where 'close' never fires); this catches the clean cases — tab
+      // closed, app quit — without making the operator wait out the lease.
+      // Skipped during shutdown: closeNow() terminates every client, and a
+      // clean stop or a scene switch must not look like a dead panel.
+      if (shuttingDown) return;
+      const lease = armLease.get(ownerId);
+      if (lease) {
+        // A CLOSE IS NOT PROOF THE PANEL IS GONE — it is also what a RECONNECT
+        // looks like from this side. The engine restarting, a wifi blip, or the
+        // iPad rotating all drop this socket, and the panel re-opens it and
+        // re-asserts within a second or two. Reverting the whole show instantly
+        // on close meant every one of those yanked the operator's look away.
+        //
+        // So a close SHORTENS the lease to a grace window instead of firing.
+        // Reconnect inside it (the panel re-sends touchControlArmed on every
+        // open) and nothing happens; stay gone and the normal sweep reverts.
+        // The fast path is preserved — a genuinely closed tab still recovers in
+        // ARM_CLOSE_GRACE_MS instead of waiting out the full lease.
+        lease.expiresAt = Math.min(lease.expiresAt, Date.now() + ARM_CLOSE_GRACE_MS);
+        lease.ws = null;
+        armSweepArm();
+        console.log(`[armLease] owner '${ownerId}' socket closed — ${ARM_CLOSE_GRACE_MS} ms ` +
+          'grace to reconnect before the show reverts');
+      }
+    });
+
     ws.on('close', () => {
       if (!ws._bumpedByThisWs || ws._bumpedByThisWs.size === 0) return;
       let releasedAny = false;
@@ -10821,6 +12009,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   });
 
   server.listen(opts.port, () => {
+    // "This engine is running." From here until closeNow() deletes it, the
+    // marker's presence at the NEXT boot means the run ended without a clean
+    // shutdown. Written on listen rather than earlier so a boot that dies
+    // before it can serve is not counted as a crashed show.
+    writeCrashMarker();
     console.log(`\n  🌐 Output Server listening on HTTP/WS port ${opts.port}`);
     console.log(`     Reachable on:`);
     for (const url of reachableUrls(opts.port)) {
@@ -10910,6 +12103,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // server.close() and the port release) and stop accepting connections so a
   // replacement engine can re-bind :6968 immediately.
   server.closeNow = () => {
+    // FIRST, BEFORE ANY SOCKET IS TOUCHED. Terminating the WS clients below
+    // fires 'close' on every one of them, which is indistinguishable from a
+    // panel dying — without this flag a clean shutdown or a scene switch would
+    // revert the rig to the automatic show on its way out the door, and the
+    // arm sweep could fire a revert against a half-torn-down engine.
+    shuttingDown = true;
+    armSweepDisarm();
+    armLease.clear();
+    // THIS IS WHAT MAKES THE CRASH MARKER MEAN SOMETHING. closeNow() runs only
+    // on the deliberate stop paths (SIGINT / SIGTERM / POST /shutdown), so
+    // deleting it here is exactly the definition of "ended cleanly". A crash,
+    // an OOM kill, a power cut or a Windows `taskkill /T /F` never reaches this
+    // line, leaves the marker behind, and is correctly treated as unclean.
+    clearCrashMarker();
     // TEARDOWN HYGIENE (report _30 step 10): drop the VSN1 deploy hook's live
     // handles — its debounce timer and any CLI child whose stdout/stderr pipes
     // this process still holds. The libuv `!(handle->flags & UV_HANDLE_CLOSING)`

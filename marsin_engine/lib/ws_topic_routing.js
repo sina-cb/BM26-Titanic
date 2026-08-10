@@ -93,6 +93,17 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
+  // The touch panel's ARM ENVELOPE (POST /arm-fade). The panel fades the ship
+  // out, takes the rig over invisibly, and fades back in on the finished look.
+  // Every other surface needs to know the house level is under a ramp, or it
+  // reports a lit rig while the ship is black. Operator-driven, one message per
+  // fade leg -> /ws/control, beside the other whole-rig controls.
+  armFade:                     TOPICS.CONTROL,
+  // The engine reverted the rig to the automatic show by itself — because the
+  // panel holding it stopped answering, or because the previous run ended
+  // uncleanly. Every surface needs to know the desk changed hands without
+  // anyone touching it, or CaptainPad shows a state nobody chose.
+  armRevert:                   TOPICS.CONTROL,
   // effects_v2 (project effects_v2_midi_layout): the engine-owned page VIEW
   // (0..3) over the 32 GEM slots. Broadcast on every PATCH /global-effects/page
   // so CaptainPad's page switcher + the VSN1 side buttons mirror the SAME page
@@ -121,6 +132,13 @@ const TOPIC_BY_TYPE = Object.freeze({
   // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's
   // FIXED COLORS chips. Low volume, operator-driven.
   groupFixedColors:            TOPICS.CONTROL,
+  // Per-group EFFECT SCOPE: which groups the effect chain is allowed to touch
+  // (null = the whole rig). Operator-driven, one small payload per change, and
+  // it belongs next to groupFixedColors it sits beside on the same surface.
+  effectGroups:                TOPICS.CONTROL,
+  // PARKED (locked) groups: which groups hold their setting and are skipped by
+  // the grand master. Operator-driven, tiny payload, same home as the rest.
+  parkedGroups:                TOPICS.CONTROL,
   // docs/31: engine-owned scheduler. Broadcasts on every create / patch
   // / delete / fire / stop / error. Small payload, low frequency
   // (operator-driven CRUD + at most one tick at SCHEDULER_TICK_MS=250 ms

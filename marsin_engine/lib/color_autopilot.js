@@ -137,15 +137,46 @@ export class ColorAutopilot {
     }
   }
 
+  /* RUNTIME STATE IS NOT CONFIG — the same split autopilot.js already makes.
+
+     `colorAutopilot.active` flips on every arm, disarm, deadman fire and
+     crash-boot revert, and saveConfig() used to yaml.dump the WHOLE document
+     back over config.yaml, which is tracked and comment-bearing. So ordinary
+     show operation produced git diffs on the show server and quietly rewrote
+     unrelated lines. MEASURED this session: one disarm left config.yaml with
+     `colorAutopilot.active: false -> true` AND `triggerMask: 0x07 -> 7` — the
+     hex literal destroyed as collateral by the round-trip, exactly the damage
+     autopilot.js's RUNTIME_FILE note describes.
+
+     Config is what the operator chose; runtime state is what the show is doing.
+     Persistence across restarts is unchanged — loadConfig overlays the runtime
+     file on top of the config. Derived from configFile so a test pointing at a
+     scratch config automatically gets a scratch runtime file too. */
+  get runtimeFile() {
+    return String(this.configFile).replace(/\.ya?ml$/i, '') + '.color_autopilot_runtime.yaml';
+  }
+
   loadConfig() {
+    let cfg = {};
     if (fs.existsSync(this.configFile)) {
-      return yaml.load(fs.readFileSync(this.configFile, 'utf8')) || {};
+      cfg = yaml.load(fs.readFileSync(this.configFile, 'utf8')) || {};
     }
-    return {};
+    try {
+      if (fs.existsSync(this.runtimeFile)) {
+        const rt = yaml.load(fs.readFileSync(this.runtimeFile, 'utf8')) || {};
+        if (rt && rt.colorAutopilot && typeof rt.colorAutopilot === 'object') {
+          cfg.colorAutopilot = { ...(cfg.colorAutopilot || {}), ...rt.colorAutopilot };
+        }
+      }
+    } catch (e) { /* a corrupt runtime file must not stop the show booting */ }
+    return cfg;
   }
 
   saveConfig() {
-    fs.writeFileSync(this.configFile, yaml.dump(this.config));
+    // ONLY the colorAutopilot block, and ONLY to the runtime file. config.yaml
+    // is never written here — see the runtimeFile note above.
+    fs.writeFileSync(this.runtimeFile,
+      yaml.dump({ colorAutopilot: this.config.colorAutopilot || {} }));
   }
 
   get state() {

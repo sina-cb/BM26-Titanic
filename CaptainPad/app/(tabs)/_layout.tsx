@@ -93,6 +93,16 @@ export default function TabLayout() {
             headerShown: false,
             sceneStyle: { marginLeft: 112, backgroundColor: palette.background }, // Shifts the screens to the right of the sidebar
           }}>
+          {/* TOUCH CONTROL FIRST. It is the surface the operator drives the
+              show from, so it should be the tab their thumb lands on, not the
+              last one in the list. */}
+          <Tabs.Screen
+            name="touch_control"
+            options={{
+              title: 'Touch Control',
+              tabBarIconName: 'square.grid.2x2',
+            } as any}
+          />
           <Tabs.Screen
             name="mixer"
             options={{
@@ -172,13 +182,6 @@ export default function TabLayout() {
               components/ui/icon-symbol.tsx: tsc resolves that import to the
               .ios.tsx variant (broad SF-Symbols union), so an unmapped name
               type-checks and then renders BLANK on web/Android. */}
-          <Tabs.Screen
-            name="touch_control"
-            options={{
-              title: 'Touch Control',
-              tabBarIconName: 'square.grid.2x2',
-            } as any}
-          />
         </Tabs>
         {/* Sticky overlay; lives outside the Tabs so it survives tab
             switches and renders on top of every screen. The lockout

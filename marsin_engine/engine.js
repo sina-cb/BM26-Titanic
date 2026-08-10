@@ -56,6 +56,8 @@ import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './
 import { appendAutoViews, buildViewTable } from './lib/view_catalog.js';
 import { createBitFreeViewPromoter } from './lib/in_view_intrinsic.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
+import { AudioBindings } from './lib/audio_bindings.js';
+import { resolveModulationSources } from './lib/modulation_engine.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { sceneStateDir, stateOverridesActive } from './lib/state_paths.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
@@ -658,6 +660,10 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   // on frames that broadcast vis (see the snapshot point in the render loop);
   // lazily sized to pixelCount*6.
   let preDimmerVisBuf = null;
+  /* Scratch for the per-group effect scope (see the snapshot/restore around the
+     effect chain). Allocated once on first use and only when a scope is set. */
+  let fxMaskBuf = null;
+  let fxMaskIdx = null;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
 
@@ -860,6 +866,17 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     const signals = {
       beatPhase: tempoBpm > 0 ? beats - Math.floor(beats) : 0,
       barPhase: tempoBpm > 0 ? (beats / 4) - Math.floor(beats / 4) : 0,
+      // THE ARBITRATED TEMPO ITSELF. Consumers that need a RATE rather than a
+      // phase (movement_trace's pixelsPerBeat, ocean_breath's tempo-locked
+      // period) read signals.bpm — and it was never here, so every one of them
+      // silently took its `: 120` fallback and ran at a fixed 120 regardless of
+      // what the deck was actually doing. beatPhase/barPhase were derived from
+      // this same tempoBpm all along; only the scalar was missing.
+      bpm: tempoBpm,
+      // Still false: the audio-reactive channels below are NOT invented here
+      // (see the note above). Nothing that only needs TEMPO may gate on this —
+      // tempo comes from the arbiter and is available whether or not a live
+      // audio feed is. Gating a tempo lock on audioPresent makes it dead code.
       audioPresent: false,
       micHigh: 0,
       kick: 0,
@@ -870,6 +887,77 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // drop hit envelopes, software sync strobe). Runs before
     // intensity / blackout per docs/28 §2.2 so master dimmers and
     // safety blackout always have the final say.
+    // AUDIO BINDINGS -> per-slot / per-group gains for THIS frame. Sources are
+    // normalised to 0..1 by the same resolver the modulation engine uses, so a
+    // wide-range signal (a dominant frequency in Hz) means the same thing here
+    // as it does there. Evaluated once and handed to the controller, which
+    // applies effect gains inside the chain and group gains after the paint.
+    // The bindings table lives on the controller so this loop - a separate
+    // function that never sees the engine's own locals - can reach it without
+    // threading another parameter through the signature.
+    const audioBindings = globalEffectsController && globalEffectsController.audioBindings;
+    if (audioBindings && globalEffectsController.setAudioGains) {
+      const audioTable = audioBindings.getAll();
+      const anyBound = Object.keys(audioTable.effects).length > 0
+        || Object.keys(audioTable.groups).length > 0;
+      if (anyBound) {
+        const snap = paramCenter ? paramCenter.getAll() : {};
+        const srcVals = resolveModulationSources({ paramCenterSnapshot: snap });
+        // BPM PULSE - a synthetic source, not an audio one. It comes off the
+        // ARBITRATED tempo (whatever the mixer is running: tapped, or followed
+        // from the Companion), so it is the one source that always exists even
+        // with no audio at all. That is what makes it usable as the default.
+        // Shape: full on the beat, falling away across it - a pump, not a
+        // square wave, so a fader bound to it breathes rather than chops.
+        const bpmNow = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0) ? mixer.tempoBpm : 0;
+        if (bpmNow > 0) {
+          const beatsNow = (now / 1000) * (bpmNow / 60);
+          const phase = beatsNow - Math.floor(beatsNow);
+          const fall = 1 - phase;
+          srcVals.bpmPulse = fall * fall;
+        }
+        const dtMs = audioBindings._lastMs ? now - audioBindings._lastMs : 0;
+        audioBindings._lastMs = now;
+        globalEffectsController.setAudioGains(audioBindings.evaluate(srcVals, now, dtMs));
+      } else {
+        globalEffectsController.setAudioGains(null);
+      }
+    }
+
+    // ── PRE-PAINT: the operator's colours for the groups effects PLAY ON ────
+    // Laid down BEFORE the chain so the effects modulate the group's chosen
+    // palette instead of being covered by it. Only groups inside the effect
+    // scope; with no scope this is a no-op and the paint behaves exactly as it
+    // always has (all of it after the chain, locked).
+    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels, 'pre');
+
+    // ── PER-GROUP EFFECT SCOPE — snapshot the pixels the chain may NOT touch ─
+    //
+    // Effects are written to sweep every pixel; only group_fixed_color even
+    // looks at `px.group`. Rather than thread a mask through all eleven effect
+    // stages - eleven chances to get it wrong, and a trap for whoever writes
+    // the twelfth - the scope is enforced by putting the out-of-scope pixels
+    // BACK after the chain has run. Whatever an effect did to them, however it
+    // did it, is undone.
+    //
+    // Costs nothing when unrestricted (mask null), which is the default and
+    // every pre-existing caller.
+    const fxMask = globalEffectsController ? globalEffectsController.effectGroupMask : null;
+    let fxMaskCount = 0;
+    if (fxMask) {
+      if (!fxMaskBuf) fxMaskBuf = new Float64Array(pixelCount * 6);
+      if (!fxMaskIdx) fxMaskIdx = new Int32Array(pixelCount);
+      for (let i = 0; i < pixelCount; i++) {
+        const px = model.pixels[i];
+        if (!px || fxMask.has(px.group)) continue;      // in scope → let it change
+        const o = fxMaskCount * 6;
+        fxMaskBuf[o] = px.r; fxMaskBuf[o + 1] = px.g; fxMaskBuf[o + 2] = px.b;
+        fxMaskBuf[o + 3] = px.w; fxMaskBuf[o + 4] = px.a; fxMaskBuf[o + 5] = px.u;
+        fxMaskIdx[fxMaskCount] = i;
+        fxMaskCount++;
+      }
+    }
+
     if (globalEffectsController && globalEffectsController.applyMacros) {
       globalEffectsController.applyMacros({
         pixels: model.pixels,
@@ -913,7 +1001,75 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // but BEFORE intensity/blackout below, so the master cutoffs always
     // keep the final say. Single application point — replaces the
     // summer-camp djLights hack's duplicated post-intensity path.
-    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels);
+    // ── PER-GROUP EFFECT SCOPE — put the out-of-scope pixels back ───────────
+    // Placed AFTER the whole chain (macros + invert + postInvert) and BEFORE
+    // the painted groups, so a group outside the scope carries on showing the
+    // PATTERN exactly as if no effect were running, and paint still wins over
+    // everything as it always did.
+    if (fxMask && fxMaskCount) {
+      for (let n = 0; n < fxMaskCount; n++) {
+        const px = model.pixels[fxMaskIdx[n]];
+        const o = n * 6;
+        px.r = fxMaskBuf[o]; px.g = fxMaskBuf[o + 1]; px.b = fxMaskBuf[o + 2];
+        px.w = fxMaskBuf[o + 3]; px.a = fxMaskBuf[o + 4]; px.u = fxMaskBuf[o + 5];
+      }
+    }
+
+    // POST-PAINT: every OTHER painted group - the ones no effect may touch.
+    // Still after the chain, still locked, exactly as docs/32 describes.
+    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels, 'post');
+
+    // ── SPATIAL PAINT — the operator's live finger, after the paint ────────
+    // The Touch Control SPATIAL pad draws a per-pixel stroke on the hull. It
+    // runs HERE, not in the effects chain, because the chain finishes before
+    // applyGroupFixedColors and paint then repaints its groups wholesale.
+    // MEASURED: a stroke lifting the rig's red 1893 -> 10345 (peak byte 255)
+    // collapsed to exactly 0 the moment all 24 groups were painted — so an
+    // operator who had used the colour slots drew and saw nothing, which is
+    // the reported "spatial mode does not work".
+    // A live gesture outranks a colour the operator set earlier; it does NOT
+    // outrank safety. Everything below — grand master, section dimmers,
+    // blackout — still runs after this and still wins.
+    if (globalEffectsController && globalEffectsController.applySpatialStage) {
+      globalEffectsController.applySpatialStage({ pixels: model.pixels, nowMs: now });
+    }
+
+    // ── GRAND MASTER — the last word, no exceptions ───────────────────────
+    // OPERATOR RULING: the Touch Control master IS the master when armed.
+    //
+    // It used to live in pattern_mixer.renderAll6ch(), applied to the pattern
+    // COMPOSITE - which meant it governed patterns and nothing else. Both of
+    // the stages above write AFTER that point, so both escaped it:
+    //   · the global effects chain (a group set to FX)
+    //   · applyGroupFixedColors (a group set to OWN)
+    // MEASURED on the rig: master 0, and the group painted [0.690, 0.4557, 0]
+    // still went out at 175/116 across 24 fixtures.
+    //
+    // Applying it HERE - after the effects and after the paint, before the
+    // section dimmers and the hardware blackout - means nothing downstream of
+    // the composite can outrank the fader. Section dimmers still trim further
+    // and blackout still wins outright, which is the correct precedence: the
+    // grand master scales the show, blackout kills it.
+    //
+    // All six channels, not just RGB: an amber or UV channel left unscaled is
+    // how "the master is down but part of the ship is still lit" happens.
+    // PARKED GROUPS ARE THE ONE EXCEPTION, and it is a deliberate operator
+    // ruling: a LOCKED group holds exactly what it was set to and the grand
+    // master does not touch it. The operator was shown that this contradicts
+    // "the master is the master, no exceptions" and chose it knowingly.
+    // BLACKOUT still kills a parked group - it runs later, in
+    // IntensityController, and an e-stop must never be defeatable from a UI
+    // toggle.
+    if (mixer.master < 1) {
+      const gm = mixer.master;
+      const parked = globalEffectsController ? globalEffectsController.parkedGroupMask : null;
+      for (let i = 0; i < pixelCount; i++) {
+        const px = model.pixels[i];
+        if (parked && parked.has(px.group)) continue;   // locked: held as set
+        px.r *= gm; px.g *= gm; px.b *= gm;
+        px.w *= gm; px.a *= gm; px.u *= gm;
+      }
+    }
 
     // Snapshot the PRE-DIMMER composite (after all global FX, before the
     // section dimmers + blackout) for the deck/mixer master preview. Only on
@@ -1458,6 +1614,12 @@ async function main() {
   // is a deferred ref filled in by api_server once broadcastWs is
   // in scope — same pattern as broadcastStatsRef above.
   const modulationBroadcastRef = { publish: () => {} };
+  // Operator-facing audio bindings: one signal per effect slot / per group.
+  // Held on engineCore so api_server can read and write the table, and
+  // evaluated once per frame in the render loop below.
+  const audioBindings = new AudioBindings();
+  if (globalEffectsController) globalEffectsController.audioBindings = audioBindings;
+
   const modulationController = new ModulationController({
     mixer,
     paramCenter,

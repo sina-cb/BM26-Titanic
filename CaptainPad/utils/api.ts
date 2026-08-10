@@ -585,16 +585,30 @@ export async function fetchGroupFixedColors(): Promise<ApiResult<GroupFixedColor
   }
 }
 
+/**
+ * Paint a group a flat colour.
+ *
+ * `ownerId` opts the write into the engine's TOUCH CONTROL deadman lease: the
+ * override is held only while that owner keeps renewing (WS
+ * `touchControlHeartbeat`), is released the moment the owner's socket closes,
+ * and is NOT persisted to globals_state.yaml — so a panel that dies can never
+ * leave a group frozen, and a restart cannot resurrect it.
+ *
+ * Omit `ownerId` for a PERMANENT, persisted override (the pre-existing
+ * behaviour that saved operator looks depend on). The engine echoes
+ * `{ leased, leaseMs }` so the caller can verify which it got.
+ */
 export async function setGroupFixedColor(
   group: string,
   color: number[],
   brightness: number,
+  ownerId?: string,
 ): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/group-fixed-colors/${encodeURIComponent(group)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ color, brightness }),
+      body: JSON.stringify(ownerId ? { color, brightness, ownerId } : { color, brightness }),
     });
     if (!res.ok) {
       const txt = await res.text();
@@ -619,6 +633,64 @@ export async function clearGroupFixedColor(group: string): Promise<ApiResult<any
     return { ok: true, data: await res.json() };
   } catch (err: any) {
     warnThrottled(`clear-group-fixed-color-${group}`, `Failed to clear fixed color for group ${group}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Ramp the grand master to `target` over `durationMs` instead of snapping.
+ *
+ * `PATCH /mixer { master }` routes to setMaster(), whose FIRST statement is
+ * `this._masterFade = null` — a direct write deliberately cancels any in-flight
+ * fade, so it can only ever snap. That is correct for a fader the operator is
+ * dragging, and wrong for engaging a manual surface, where the rig should ease
+ * in. This uses the engine's existing timed-fade path instead.
+ */
+export async function fadeMaster(target: number, durationMs: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/mixer/master/fade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, durationMs }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fade-master', 'Failed to fade master:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Per-pixel geometry for surfaces that must reproduce the sim's 2D pixel view.
+ *
+ * Carries RAW world x/y/z as well as normalized nx/ny/nz — the sim's gap
+ * compression works in WORLD units, so a client given only the normalized
+ * coords could not compute the same bands and could not match the picture.
+ *
+ * ~168 KB on titanic (964 pixels). Fetch ONCE when the spatial pad opens, not
+ * per frame.
+ */
+export async function fetchPixelLayout(): Promise<ApiResult<{
+  scene: string | null;
+  pixelCount: number;
+  returnedCount: number;
+  pixels: Array<{
+    i: number; x: number; y: number; z: number;
+    nx: number; ny: number; nz: number;
+    group: string | null; type: string | null; fixtureType: string | null;
+    fId: number; sId: number; localIndex: number;
+  }>;
+}>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/model/pixel-layout`, {}, 20000);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-pixel-layout', 'Failed to fetch pixel layout:', err);
     return { ok: false, error: err.message };
   }
 }

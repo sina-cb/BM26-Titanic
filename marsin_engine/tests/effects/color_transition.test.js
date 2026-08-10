@@ -43,7 +43,16 @@ test('colorTransitionMs registered, persistent, default 800, range [0,10000]', (
 test('colorPalette1/2 are flagged slew in the schema-backing registry', () => {
   const pc = new ParamCenter(tmpStatePath());
   // _slewKeys is the runtime projection of `slew: true` entries.
-  assert.deepEqual(pc._slewKeys.sort(), ['colorPalette1', 'colorPalette2']);
+  //
+  // Deliberately still EXHAUSTIVE, so an accidental `slew: true` on some new
+  // param is caught here. `rotate` joined the set when float slew was added
+  // (the MOTION glide — see tests/effects/motion_transition.test.js); it is
+  // timed by motionTransitionMs, which defaults to 0, so rotate still snaps
+  // unless an operator asks for a glide.
+  assert.deepEqual(pc._slewKeys.sort(), ['colorPalette1', 'colorPalette2', 'rotate']);
+  // The colour half of the contract, stated independently of the set's size.
+  assert.ok(pc._slewKeys.includes('colorPalette1'));
+  assert.ok(pc._slewKeys.includes('colorPalette2'));
 });
 
 test('transitionMs=0 snaps to target on the first tick', () => {

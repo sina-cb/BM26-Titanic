@@ -401,6 +401,25 @@ export class StateManager {
                     groupToSectionId = null) {
     if (paramCenter && globalsState.params) {
       // The saved canonical state is { revision, sourceLock, params: { speed: { value }, ... } }
+      //
+      // A PERSISTED sourceLock IS DELIBERATELY NEVER RESTORED.
+      //
+      // getCanonicalState() writes the lock to disk, and the touch panel takes
+      // one while armed (six params leased to 'api'). Restoring it would boot a
+      // ship that REJECTS its own autopilot, timeline and BPM writes with
+      // reason:'source_lock' — an unchangeable show, held by a panel that is by
+      // definition no longer there. The holder of a lock cannot survive the
+      // process that knew about it.
+      //
+      // This was already true only BY ACCIDENT: the loop below reads
+      // .params.params and simply never looks at .sourceLock. That is one
+      // refactor away from a locked-out ship, so it is now stated and logged.
+      const persistedLock = globalsState.params.sourceLock;
+      if (persistedLock && persistedLock.mode && persistedLock.mode !== 'open') {
+        console.warn(`  ⚠ [state] globals_state.yaml carries a sourceLock (mode: ${persistedLock.mode}) — ` +
+          'a lock whose holder is gone is NEVER restored; the param centre boots OPEN so the ' +
+          'autopilot and timeline can drive.');
+      }
       const paramData = globalsState.params.params || globalsState.params;
       for (const k in paramData) {
         const entry = paramData[k];
@@ -410,6 +429,24 @@ export class StateManager {
       }
     }
     if (intensityController && globalsState.blackout !== undefined) {
+      // A PERSISTED BLACKOUT IS NEVER RESTORED.
+      //
+      // Disarming the touch panel writes blackout: true, and POST
+      // /global-blackout persists it. So a crash any time after a disarm — or
+      // during one — used to boot the ship DARK, and the show-server supervisor
+      // would relaunch straight back into that darkness, forever. The engine's
+      // own /shutdown route already names this hazard in prose ("the next start
+      // would come up dark") and refuses to use /global-blackout because of it;
+      // this closes the same hole on the restore side.
+      //
+      // Blackout is an e-stop, not a look. If the operator wants the ship dark
+      // after a boot, they press it again. Mission rule: the Titanic being
+      // visible at night beats honouring a stale switch position.
+      if (globalsState.blackout) {
+        console.warn('  ⚠ [state] globals_state.yaml had blackout: true — a persisted ' +
+          'blackout is NEVER restored; a crash must not leave the Titanic dark. Forcing blackout OFF.');
+        globalsState.blackout = false;
+      }
       intensityController.setBlackout(globalsState.blackout);
     }
     if (globalEffectsController && globalsState.effects) {
@@ -434,6 +471,25 @@ export class StateManager {
       // when no pixel carries the id. A NAME key with no current mapping
       // (group renamed/removed, or the caller passed no map) is warned and
       // skipped — never silently guessed.
+      // AN ALL-DARK DIMMER TABLE IS NEVER RESTORED.
+      //
+      // The same hazard as a persisted blackout or a persisted zero grand
+      // master, and the one that was still open: the panel's 24 group faders
+      // and its ALL OFF button write POST /section-brightness, which persists
+      // here — and NOTHING clears it. Not /mixer/panic's forceLit, not
+      // revertToAutomaticShow, not the crash-boot policy. So an ALL OFF
+      // followed by a crash booted a ship that was lit in every register the
+      // failsafes check and still emitted no light, on every restart, forever.
+      //
+      // Only the FULLY dark case is refused; a partial look (some groups down,
+      // some up) is a legitimate saved state and is restored untouched.
+      const vals = Object.values(globalsState.dimmers);
+      if (vals.length > 0 && vals.every(v => !(Number(v) > 0))) {
+        console.warn(`  ⚠ [state] globals_state.yaml had ALL ${vals.length} group dimmers at zero — ` +
+          'an all-dark dimmer table is NEVER restored; a crash must not leave the Titanic dark. ' +
+          'Booting them at full.');
+        for (const k of Object.keys(globalsState.dimmers)) globalsState.dimmers[k] = 1;
+      }
       const groups = groupToSectionId || {};
       for (const [key, bright] of Object.entries(globalsState.dimmers)) {
         if (Object.prototype.hasOwnProperty.call(groups, key)) {
