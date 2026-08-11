@@ -11,7 +11,7 @@
  * 3-state machine (THIN → BUILD → SUSTAIN), and:
  *   - publishes six live keys back to CPC
  *     (audioStructure / audioBuildScore / audioEnergyRatio /
- *      audioVocalsHot / audioDropPulse / audioSlowZone), and
+ *      audioDropPulse / audioSlowZone), and
  *   - emits a sparse `dropFired` WS event on the broadcast hook the
  *     instant a drop lands.
  * It NEVER triggers an irreversible action — no deck swaps, blackouts,
@@ -592,21 +592,18 @@ export class AudioStructureDetector {
     this._slowZone = clamp01(this._slowZone);
 
     // 3. Stems booleans (only meaningful when fresh).
-    let stemsBass = 0, stemsDrums = 0, stemsVocals = 0;
+    let stemsBass = 0, stemsDrums = 0;
     if (stemsFresh) {
       // Finite guard, same fail-loud-but-isolated contract as micLow/micFlux
       // above: a non-finite stem value must not silently make the stems
       // booleans false (NaN comparisons are false) — warn once, treat as 0.
       const sB = this.paramCenter.get('stemsBassRaw');
       const sD = this.paramCenter.get('stemsDrumsRaw');
-      const sV = this.paramCenter.get('stemsVocalsRaw');
       stemsBass   = Number.isFinite(sB) ? sB : (this._warnNonFinite('stemsBassRaw', sB), 0);
       stemsDrums  = Number.isFinite(sD) ? sD : (this._warnNonFinite('stemsDrumsRaw', sD), 0);
-      stemsVocals = Number.isFinite(sV) ? sV : (this._warnNonFinite('stemsVocalsRaw', sV), 0);
     }
     const stemsFull = stemsFresh && stemsBass > 0.4 && stemsDrums > 0.4;
     const stemsThin = stemsFresh && stemsBass < 0.15 && stemsDrums < 0.15;
-    const vocalsHot = stemsFresh && stemsVocals > 0.4;
 
     // 4. Bar-phase gate — not bound on this rig (review §2.4). barPhase
     //    absent → nearDownbeat defaults true; gate effectively disabled.
@@ -856,7 +853,6 @@ export class AudioStructureDetector {
       { kind: 'scalar', key: 'audioStructure',   value: this._state },
       { kind: 'scalar', key: 'audioBuildScore',  value: this._buildScore },
       { kind: 'scalar', key: 'audioEnergyRatio', value: this._energyRatio },
-      { kind: 'scalar', key: 'audioVocalsHot',   value: vocalsHot ? 1.0 : 0.0 },
       { kind: 'scalar', key: 'audioDropPulse',   value: this._dropPulse },
       { kind: 'scalar', key: 'audioSlowZone',    value: this._slowZone },
     ], 'audioStructureDetector');
@@ -1006,7 +1002,7 @@ export class AudioStructureDetector {
     this._tickP99Ms = sorted[idx];
   }
 
-  /** @private zero all six live keys (disable / reset / boot). */
+  /** @private zero all five live keys (disable / reset / boot). */
   _zeroLiveKeys() {
     if (this._fatal) return;
     try {
@@ -1014,7 +1010,6 @@ export class AudioStructureDetector {
         { kind: 'scalar', key: 'audioStructure',   value: 0.0 },
         { kind: 'scalar', key: 'audioBuildScore',  value: 0.0 },
         { kind: 'scalar', key: 'audioEnergyRatio', value: 0.0 },
-        { kind: 'scalar', key: 'audioVocalsHot',   value: 0.0 },
         { kind: 'scalar', key: 'audioDropPulse',   value: 0.0 },
         { kind: 'scalar', key: 'audioSlowZone',    value: 0.0 },
       ], 'audioStructureDetector');

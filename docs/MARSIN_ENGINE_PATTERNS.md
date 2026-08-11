@@ -407,7 +407,7 @@ includes:
 | `micLow`, `micMid`, `micHigh`, `micKick`, `micFlux` | Mic band energies / kick / spectral flux (0..1) |
 | `micDomFreq1/2`, `micDomEnergy1/2` | Dominant-frequency analyzer outputs (Hz / 0..1) |
 | `tempoBpm`, `audioBpm`, `audioBeat`, `audioBeatInBar`, `audioBarPhase`, `audioDownbeat` | Tempo / beat-grid signals |
-| `audioStructure`, `audioBuildScore`, `audioEnergyRatio`, `audioVocalsHot`, `audioDropPulse`, `audioSlowZone` | Structure-detector outputs |
+| `audioStructure`, `audioBuildScore`, `audioEnergyRatio`, `audioDropPulse`, `audioSlowZone` | Structure-detector outputs |
 | `audioParty`, `audioNote`, `audioNoteHue`, `audioSwitchPattern`, `audioSwitchColor` | Derived cue signals |
 
 These are fed by the Audio Companion (the sole analyzer) over OSC. They live

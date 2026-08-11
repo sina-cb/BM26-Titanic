@@ -25,17 +25,27 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
+import {
+  buildAudioAnalyzerOptions,
+  loadEffectiveAudioAnalysisConfig,
+} from '../audio/config/audio_analysis_config.js';
 import { BpmTracker } from '../audio/signals/bpm_tracker.js';
 import { BpmSmoother } from '../lib/bpm_smoother.js';
 import { SYNTHS } from '../audio/synth/test_synths.js';
 import { readWavMono } from '../tests/integration/wav_io.mjs';
+import { isMainModule } from './cli_entrypoint.mjs';
 
-const SR = 44100, HOP = 512, FFT = 2048;
-const BANDS = { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 };
-const KICK = { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 70 };
-const SUB = { minHz: 30, maxHz: 60 };
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_DIR = path.resolve(__dirname, '..');
+const PRODUCTION_AUDIO = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: 'titanic',
+}).audioConfig;
+const SR = PRODUCTION_AUDIO.capture.sampleRate;
+const HOP = PRODUCTION_AUDIO.hopSize;
 const HOP_MS = (HOP / SR) * 1000;
 
 /** Run a synth (optionally a tempo step), return per-hop {t, raw, sm}. */
@@ -46,8 +56,8 @@ function runSynth(synthName, bpm1, { bpm2 = null, stepAtSec = 0, durSec = 28, op
   const sm = new BpmSmoother({ enabled: lpf, tauMs });
   let clockMs = 0, lastMs = 0;
   const rows = [];
-  const an = new AudioAnalyzer({
-    sampleRate: SR, fftSize: FFT, hopSize: HOP, bands: BANDS, kick: KICK, sub: SUB, nowFn: () => clockMs,
+  const an = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO, {
+    nowFn: () => clockMs,
     onAnalysis: ({ flux, kick }) => {
       const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
       const raw = tracker.update(flux, kick, dt).bpm;
@@ -55,11 +65,14 @@ function runSynth(synthName, bpm1, { bpm2 = null, stepAtSec = 0, durSec = 28, op
       if (lpf) { if (Number.isFinite(raw) && raw > 0) { const v = sm.push(raw, dt * 1000); if (Number.isFinite(v)) s = v; } else sm.reset(); }
       rows.push({ t: clockMs / 1000, raw, sm: s });
     },
-  });
-  const buf = new Float32Array(HOP);
+  }));
+  const buf = new Int16Array(HOP);
   for (let n = 0; n < durSec * SR; n += HOP) {
     const bpm = (bpm2 && (n / SR) >= stepAtSec) ? bpm2 : bpm1;
-    for (let i = 0; i < HOP; i++) buf[i] = Math.max(-1, Math.min(1, synth.sample(n + i, SR, { ...synth.defaults, bpm })));
+    for (let i = 0; i < HOP; i++) {
+      const sample = Math.max(-1, Math.min(1, synth.sample(n + i, SR, { ...synth.defaults, bpm })));
+      buf[i] = Math.round(32767 * sample);
+    }
     clockMs += HOP_MS;
     an.pushSamples(buf);
   }
@@ -82,6 +95,7 @@ function evalSteady(opts, tauMs) {
     const er = (x) => `${(((x - bpm) / bpm) * 100).toFixed(1)}%`.padStart(6);
     console.log(`  ${String(bpm).padStart(3)}  ${raw.toFixed(1).padStart(5)}  ${er(raw)}  ${lp.toFixed(1).padStart(5)}  ${er(lp)}`);
   }
+  return 7;
 }
 
 function evalStep(opts, tauMs) {
@@ -91,11 +105,14 @@ function evalStep(opts, tauMs) {
     const sSm = settleAfter(rows, 15, b);
     console.log(`  ${a}→${b}: settles +${sSm ? sSm.toFixed(1) : '—'}s   (steady ${mean(rows, 25, 32, 'sm').toFixed(1)})`);
   }
+  return 2;
 }
 
 function evalCorpus(opts) {
   const dir = path.join(os.homedir(), 'tmp', 'genre_corpus');
-  if (!fs.existsSync(dir)) { console.log('\n── CORPUS stability: corpus absent, skipped ──'); return; }
+  if (!fs.existsSync(dir)) {
+    throw new Error(`bpm_tune_eval: requested corpus is absent: ${dir}`);
+  }
   console.log('\n── CORPUS stability (mean / movement-sd over the locked tail) ──');
   const genres = fs.readdirSync(dir).filter((g) => fs.statSync(path.join(dir, g)).isDirectory());
   let sdSum = 0, n = 0;
@@ -103,10 +120,15 @@ function evalCorpus(opts) {
     const f = fs.readdirSync(path.join(dir, g)).find((x) => x.endsWith('.wav'));
     if (!f) continue;
     const { samples, sampleRate } = readWavMono(path.join(dir, g, f));
+    if (sampleRate !== SR) {
+      throw new Error(`bpm_tune_eval: WAV sample rate ${sampleRate} does not match production ${SR}`);
+    }
     const tracker = new BpmTracker(opts);
     let clockMs = 0, lastMs = 0; const bpms = [];
-    const an = new AudioAnalyzer({ sampleRate, fftSize: FFT, hopSize: HOP, bands: BANDS, kick: KICK, sub: SUB, nowFn: () => clockMs,
-      onAnalysis: ({ flux, kick }) => { const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs; bpms.push({ t: clockMs / 1000, bpm: tracker.update(flux, kick, dt).bpm }); } });
+    const an = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO, {
+      nowFn: () => clockMs,
+      onAnalysis: ({ flux, kick }) => { const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs; bpms.push({ t: clockMs / 1000, bpm: tracker.update(flux, kick, dt).bpm }); },
+    }));
     for (let i = 0; i < samples.length; i += HOP) { clockMs += HOP_MS; an.pushSamples(samples.subarray(i, Math.min(i + HOP, samples.length))); }
     const tail = bpms.filter((b) => b.t >= 12);
     const m = tail.reduce((s, b) => s + b.bpm, 0) / Math.max(1, tail.length);
@@ -114,7 +136,9 @@ function evalCorpus(opts) {
     sdSum += sd; n++;
     console.log(`  ${g.padEnd(16)} ${m.toFixed(1).padStart(6)} / sd ${sd.toFixed(2)}`);
   }
-  console.log(`  AVG movement sd = ${(sdSum / Math.max(1, n)).toFixed(2)}  (lower = more stable)`);
+  if (n === 0) throw new Error(`bpm_tune_eval: zero WAV cases processed under ${dir}`);
+  console.log(`  AVG movement sd = ${(sdSum / n).toFixed(2)}  (lower = more stable)`);
+  return n;
 }
 
 function main() {
@@ -128,9 +152,11 @@ function main() {
   const opts = args.opts || {};
   const tauMs = Number.isFinite(args.tau) ? args.tau : 250;
   console.log(`BPM tune eval — tracker opts=${JSON.stringify(opts)} · LPF tau=${tauMs}ms`);
-  evalSteady(opts, tauMs);
-  evalStep(opts, tauMs);
-  if (args.corpus) evalCorpus(opts);
+  let processedCases = evalSteady(opts, tauMs);
+  processedCases += evalStep(opts, tauMs);
+  if (args.corpus) processedCases += evalCorpus(opts);
+  if (processedCases === 0) throw new Error('bpm_tune_eval: zero cases processed');
+  console.log(`\nprocessed ${processedCases} cases`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isMainModule(import.meta.url)) main();

@@ -62,8 +62,20 @@ async function waitForServer(port, timeoutMs = 8000) {
 }
 
 test('the broadcast frame carries the NEW derived signal keys (live, test source)', async () => {
-  const port = 31930 + Math.floor(Math.random() * 25);
-  const proc = spawn('node', [SERVER, '--port', String(port)], {
+  const port = 31666;
+  const proc = spawn('node', [
+    SERVER,
+    '--port',
+    String(port),
+    '--model',
+    'test_bench',
+    '--source',
+    'test',
+    '--osc-port',
+    '31601',
+    '--engine-port',
+    '31668',
+  ], {
     cwd: path.join(__dirname, '..', '..'),
     stdio: ['ignore', 'ignore', 'ignore'],
   });

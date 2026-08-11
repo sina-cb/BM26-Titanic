@@ -139,6 +139,7 @@ const COMPANIONS = {
     label: 'Audio Companion',
     waitMs: 60000,
     healthPath: '/',
+    extraArgs: (opts) => ['--model', opts.scene],
   },
 };
 

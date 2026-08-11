@@ -38,7 +38,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COMPANION = path.resolve(__dirname, '../../audio/companion/companion_server.js');
 
 function arg(name, def) { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : def; }
-const PORT = parseInt(arg('--port', '6979'), 10);   // off the default 6973 so it won't clash
+const PORT = parseInt(arg('--port', '31666'), 10);
 const SECONDS = parseInt(arg('--seconds', '30'), 10);
 const SOURCE = arg('--source', 'mic');              // mic | file | test
 const DEVICE = arg('--device', null);
@@ -63,7 +63,19 @@ async function main() {
   log(`  window: ${SECONDS}s   companion port: ${PORT}`);
   log('='.repeat(58));
 
-  const child = spawn(process.execPath, [COMPANION, '--port', String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [
+    COMPANION,
+    '--port',
+    String(PORT),
+    '--model',
+    'test_bench',
+    '--source',
+    SOURCE,
+    '--osc-port',
+    '31601',
+    '--engine-port',
+    '31668',
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', () => {});
   child.stderr.on('data', (b) => process.stderr.write(`  [companion] ${b}`));
   const cleanup = () => { try { child.kill('SIGTERM'); } catch { /* already gone */ } };

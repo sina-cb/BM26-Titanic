@@ -53,7 +53,19 @@ async function waitForServer(port, timeoutMs = 8000) {
 // Boot the real companion server (test source mode by default in standalone),
 // switch it to TEST over WS so the OSC stream flows without a mic, and run `fn`.
 async function withCompanion(port, fn) {
-  const proc = spawn('node', [SERVER, '--port', String(port)], {
+  const proc = spawn('node', [
+    SERVER,
+    '--port',
+    String(port),
+    '--model',
+    'test_bench',
+    '--source',
+    'test',
+    '--osc-port',
+    '31601',
+    '--engine-port',
+    '31668',
+  ], {
     cwd: path.join(__dirname, '..', '..'),
     stdio: ['ignore', 'ignore', 'ignore'],
   });
@@ -75,7 +87,7 @@ async function withCompanion(port, fn) {
 }
 
 test('/osc_accounting enumerates every designed OUTPUT + the BPM emit, live', async () => {
-  const port = 31960 + Math.floor(Math.random() * 30);
+  const port = 31667;
   await withCompanion(port, async () => {
     // Catalog advertises the canonical GENRE_NAMES.
     const cat = await getJson(port, '/catalog');
@@ -123,7 +135,7 @@ test('a STOPPED OSC stream decays its accounting rate toward 0 (no stale-rate li
   // forever. We boot test mode so /marsin/mic/low streams (rate > 0), then
   // remove that signal so its packets STOP, wait past the idle cutoff, and
   // assert the accounting rate has decayed to ~0 while its count stays frozen.
-  const port = 31995 + Math.floor(Math.random() * 4);
+  const port = 31667;
   await withCompanion(port, async (ws) => {
     const addr = '/marsin/mic/low';
     let acc = await getJson(port, '/osc_accounting');

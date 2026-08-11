@@ -43,11 +43,15 @@ import dgram from 'node:dgram';
 import { fileURLToPath } from 'node:url';
 
 import { WebSocketServer } from 'ws';
-import yaml from 'js-yaml';
 import * as osc from 'osc-min';
 
 // ── THE ENGINE'S REAL AUDIO CODE (native — never reimplemented) ───────────
 import { AudioAnalyzer } from '../analyzer/audio_analyzer.js';
+import {
+  buildAudioAnalyzerOptions,
+  loadEffectiveAudioAnalysisConfig,
+  validateAudioAnalysisConfig,
+} from '../config/audio_analysis_config.js';
 import {
   SignalPostProcessor, KNOWN_SIGNALS, opCatalog,
   DANCE_OMEGA, danceSpringStep,
@@ -70,14 +74,54 @@ import { audioRegistryEntries } from '../postproc/audio_signals.js';
 import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
 import { BpmSmoother } from '../../lib/bpm_smoother.js';
 import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
+import { buildRawMirrorWrites } from './audio_pipeline.js';
+import { AUDIO_EVENT_SPECS, AudioEventTransport } from './event_transport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
 
+function requiredCliValue(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index < 0 || index + 1 >= process.argv.length || process.argv[index + 1].startsWith('--')) {
+    throw new Error(`Audio Companion requires ${flag} <value>`);
+  }
+  return process.argv[index + 1];
+}
+
+function optionalCliValue(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index < 0) return null;
+  if (index + 1 >= process.argv.length || process.argv[index + 1].startsWith('--')) {
+    throw new Error(`Audio Companion ${flag} requires a value`);
+  }
+  return process.argv[index + 1];
+}
+
+const ENGINE_DIR = path.resolve(__dirname, '..', '..');
+const MODEL_NAME = requiredCliValue('--model');
+const SOURCE_OVERRIDE = optionalCliValue('--source');
+const OSC_PORT_OVERRIDE = optionalCliValue('--osc-port');
+const ENGINE_PORT_OVERRIDE = optionalCliValue('--engine-port');
+if (SOURCE_OVERRIDE !== null && !['mic', 'test', 'file'].includes(SOURCE_OVERRIDE)) {
+  throw new Error('Audio Companion --source must be one of: mic, test, file');
+}
+for (const [flag, value] of [['--osc-port', OSC_PORT_OVERRIDE], ['--engine-port', ENGINE_PORT_OVERRIDE]]) {
+  if (value !== null && (!Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > 65535)) {
+    throw new Error(`Audio Companion ${flag} must be an integer in [1, 65535]`);
+  }
+}
+const RESOLVED_AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: MODEL_NAME,
+});
+const PRODUCTION_AUDIO_CONFIG = RESOLVED_AUDIO_CONFIG.audioConfig;
+
 // FFT must track config.yaml audio.fftSize so the companion's analysis + derived
 // signals (genre / note / dom / sub) match the engine's exactly. (The spectrum
 // visualizer below uses a separate, larger FFT for display only.)
-const SR = 44100, FFT = 2048, HOP = 512;
+const SR = PRODUCTION_AUDIO_CONFIG.capture.sampleRate;
+const FFT = PRODUCTION_AUDIO_CONFIG.fftSize;
+const HOP = PRODUCTION_AUDIO_CONFIG.hopSize;
 
 // Canonical GENRE name list — index-aligned with the sibling slot-0 detector's
 // `audioGenre` CPC key (an integer index) and its exported GENRE_NAMES. Kept
@@ -232,12 +276,12 @@ function recordOscSend(address, value) {
   acc.lastValue = value;
 }
 
-function sendOsc(address, value, oscType) {
+function sendOsc(address, value, oscType, force = false) {
   // OSC OUTPUT RATE throttle: _oscEmitThisHop is computed once per analyzer hop
   // (see onAnalysis). When this hop isn't a send frame, drop the packet entirely
   // — the value is re-sent on the next frame, and the accounting only counts
   // packets that actually went on the wire. (report 20260621_6)
-  if (!_oscEmitThisHop) return;
+  if (!_oscEmitThisHop && !force) return;
   // Per-signal SEND DISABLE (OSC OUT page checkbox): a disabled address is muted
   // on the wire — no packet, no accounting tick (its rate decays to 0).
   // Gated behind OSC_SEND_FILTER_ENABLED — currently OFF, so all signals send.
@@ -286,10 +330,13 @@ const ENGINE_INTERNAL_DERIVED = Object.freeze([
   { cpcKey: 'audioNote',          label: 'dominant pitch class 0–11' },
   { cpcKey: 'audioNoteHue',       label: 'note → hue (melody as colour)' },
   { cpcKey: 'audioSwitchPattern', label: 'cue: change pattern' },
+  { cpcKey: 'audioSwitchPatternSeq', label: 'cue: change pattern sequence' },
   { cpcKey: 'audioSwitchColor',   label: 'cue: change colour' },
+  { cpcKey: 'audioSwitchColorSeq', label: 'cue: change colour sequence' },
   { cpcKey: 'audioBeatInBar',     label: 'beat index within the bar' },
   { cpcKey: 'audioBarPhase',      label: 'phase 0→1 across the bar' },
   { cpcKey: 'audioDownbeat',      label: 'downbeat pulse' },
+  { cpcKey: 'audioDownbeatSeq',   label: 'downbeat sequence' },
   { cpcKey: 'micOnsetLow',        label: 'per-band onset: kick/low' },
   { cpcKey: 'micOnsetMid',        label: 'per-band onset: snare/mid' },
   { cpcKey: 'micOnsetHigh',       label: 'per-band onset: hat/high' },
@@ -301,9 +348,11 @@ const ENGINE_INTERNAL_DERIVED = Object.freeze([
   { cpcKey: 'audioRiserConf',     label: 'riser confidence 0–1' },
   { cpcKey: 'audioSilence',       label: 'inter-track silence latch' },
   { cpcKey: 'audioTrackChange',   label: 'new-track pulse' },
+  { cpcKey: 'audioTrackChangeSeq', label: 'new-track sequence' },
   { cpcKey: 'audioClimax',        label: 'sustained climax level' },
   { cpcKey: 'audioPhrasePhase',   label: 'phase 0→1 across the 8-bar phrase' },
   { cpcKey: 'audioPhraseBoundary',label: 'phrase-boundary pulse' },
+  { cpcKey: 'audioPhraseBoundarySeq', label: 'phrase-boundary sequence' },
   { cpcKey: 'audioDropCountdown', label: 'beat-synced drop count-in' },
   // structure-detector primitives (audio/detector) — also engine-internal.
   { cpcKey: 'audioBuildScore',    label: 'build-up score (detector)' },
@@ -336,11 +385,39 @@ for (const e of DERIVED_OSC_EMITS) {
 // (e.g. audioGenre = 2 "techno") is never a fractional float on the wire and is
 // never interpolated between classes by a downstream consumer. (Operator: "the
 // genre is not sent correctly" — the fix is integer-typed, un-smoothed emit.)
-const INTEGER_OSC_KEYS = new Set(['audioGenre', 'audioNote', 'audioStructure']);
-function emitAllDerived() {
+const INTEGER_OSC_KEYS = new Set([
+  'audioGenre',
+  'audioNote',
+  'audioStructure',
+  ...AUDIO_EVENT_SPECS.map(({ sequenceKey }) => sequenceKey),
+]);
+const EVENT_SEQUENCE_KEYS = new Set(AUDIO_EVENT_SPECS.map(({ sequenceKey }) => sequenceKey));
+const eventTransport = new AudioEventTransport();
+
+function emitAllDerived(dtMs) {
+  const eventStates = eventTransport.tick(
+    Object.fromEntries(AUDIO_EVENT_SPECS.map(({ key }) => [key, safeGet(key)])),
+    dtMs,
+  );
+  const eventStateByKey = new Map(eventStates.map((state) => [state.key, state]));
+
   for (const e of DERIVED_OSC_EMITS) {
-    const v = safeGet(e.key);
-    if (Number.isFinite(v)) sendOsc(e.address, v, INTEGER_OSC_KEYS.has(e.key) ? 'integer' : 'float');
+    if (EVENT_SEQUENCE_KEYS.has(e.key)) continue;
+    const eventState = eventStateByKey.get(e.key);
+    const v = eventState ? eventState.envelope : safeGet(e.key);
+    if (Number.isFinite(v)) {
+      sendOsc(e.address, v, INTEGER_OSC_KEYS.has(e.key) ? 'integer' : 'float', eventState?.rising === true);
+    }
+  }
+
+  for (const eventState of eventStates) {
+    if (!eventState.rising) continue;
+    const sequenceAddress = _audioAddrByKey.get(eventState.sequenceKey);
+    if (!sequenceAddress) {
+      throw new Error(`Missing audio event sequence OSC address for ${eventState.sequenceKey}`);
+    }
+    paramCenter.set(eventState.sequenceKey, eventState.sequence, 'audioEventTransport');
+    sendOsc(sequenceAddress, eventState.sequence, 'integer', true);
   }
 }
 
@@ -542,15 +619,17 @@ const source = {
 };
 // Global software preamp (the analyzer's bands.inputGain) — applies to EVERY
 // source (test/mic/file). This is the "microphone gain" the operator tunes.
-let inputGain = 1.0;
+let inputGain = PRODUCTION_AUDIO_CONFIG.bands.inputGain;
 // Source-stage smoothing (gentle one-pole LP on the PCM before the FFT).
-let sourceSmoothHz = 12000;
+let sourceSmoothHz = PRODUCTION_AUDIO_CONFIG.bands.sourceSmoothHz;
 // Noise gates (on-playa mic tuning, report 20260621_5). The global noiseGate is
 // the floor every band uses unless an explicit per-band gate specializes it.
 // null per-band → that band falls back to the global gate. The MIC TUNE page
 // reads/writes these and the noise-floor auto-calibration recommends them.
-let noiseGate = 0.04;
-let lowGate = null, midGate = null, highGate = null;
+let noiseGate = PRODUCTION_AUDIO_CONFIG.bands.noiseGate;
+let lowGate = PRODUCTION_AUDIO_CONFIG.bands.lowGate ?? null;
+let midGate = PRODUCTION_AUDIO_CONFIG.bands.midGate ?? null;
+let highGate = PRODUCTION_AUDIO_CONFIG.bands.highGate ?? null;
 // Realtime/smoothness diagnostic.
 const diag = { lastWall: 0, startWall: 0, frames: 0, samples: 0, deltas: [] };
 function recordFrame(n) {
@@ -701,9 +780,12 @@ let engineLink = null;
  * skipped so we don't thrash the capture stream on an unrelated PATCH.
  */
 function applyEngineSharedTuning(config) {
-  if (!config || typeof config !== 'object') return;
-  const bands = config.bands && typeof config.bands === 'object' ? config.bands : null;
-  if (bands) {
+  validateAudioAnalysisConfig(config);
+  if (config.capture.sampleRate !== SR || config.fftSize !== FFT || config.hopSize !== HOP) {
+    throw new Error('engine audio config changed sampleRate/fftSize/hopSize; restart the Companion');
+  }
+  const bands = config.bands;
+  {
     if (Number.isFinite(bands.inputGain) && bands.inputGain !== inputGain) {
       applyInputGain(bands.inputGain);
       broadcast({ type: 'inputGain', value: inputGain });
@@ -717,13 +799,35 @@ function applyEngineSharedTuning(config) {
     // are optional in the engine config; only adopt finite values.
     let gateChanged = false;
     if (Number.isFinite(bands.noiseGate) && bands.noiseGate !== noiseGate) { noiseGate = bands.noiseGate; gateChanged = true; }
-    if (Number.isFinite(bands.lowGate)  && bands.lowGate  !== lowGate)  { lowGate  = bands.lowGate;  gateChanged = true; }
-    if (Number.isFinite(bands.midGate)  && bands.midGate  !== midGate)  { midGate  = bands.midGate;  gateChanged = true; }
-    if (Number.isFinite(bands.highGate) && bands.highGate !== highGate) { highGate = bands.highGate; gateChanged = true; }
+    const nextLowGate = Number.isFinite(bands.lowGate) ? bands.lowGate : null;
+    const nextMidGate = Number.isFinite(bands.midGate) ? bands.midGate : null;
+    const nextHighGate = Number.isFinite(bands.highGate) ? bands.highGate : null;
+    if (nextLowGate !== lowGate) { lowGate = nextLowGate; gateChanged = true; }
+    if (nextMidGate !== midGate) { midGate = nextMidGate; gateChanged = true; }
+    if (nextHighGate !== highGate) { highGate = nextHighGate; gateChanged = true; }
     if (gateChanged) { applyGates(); broadcast({ type: 'gates', ...gateState() }); }
   }
-  const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
-  if (cap && cap.device !== undefined) applyEngineCaptureDevice(cap.device);
+  analyzer.reconfigure({
+    bands: {
+      ...bands,
+      lowGate: bands.lowGate ?? bands.noiseGate,
+      midGate: bands.midGate ?? bands.noiseGate,
+      highGate: bands.highGate ?? bands.noiseGate,
+    },
+    kick: config.kick,
+    sub: config.sub,
+  });
+  specAnalyzer.reconfigure({
+    bands: {
+      ...bands,
+      lowGate: bands.lowGate ?? bands.noiseGate,
+      midGate: bands.midGate ?? bands.noiseGate,
+      highGate: bands.highGate ?? bands.noiseGate,
+    },
+    kick: config.kick,
+    sub: config.sub,
+  });
+  if (config.capture.device !== undefined) applyEngineCaptureDevice(config.capture.device);
 }
 
 /**
@@ -869,17 +973,7 @@ const hasDanceMaker = (sig) => sig.chain.some(o => o.type === 'danceMaker' && o.
 // of truth: the key↔analyzer-field mapping is the same RAW_SOURCES.analyzer map
 // the designed signals read (ANALYZER_FIELD), no fork.
 function publishRawMirrors(r) {
-  paramCenter.setMany([
-    { kind: 'scalar', key: 'micLowRaw',     value: r.low ?? 0 },
-    { kind: 'scalar', key: 'micMidRaw',     value: r.mid ?? 0 },
-    { kind: 'scalar', key: 'micHighRaw',    value: r.high ?? 0 },
-    { kind: 'scalar', key: 'micKickRaw',    value: r.kick ?? 0 },
-    { kind: 'scalar', key: 'micFluxRaw',    value: r.flux ?? 0 },
-    { kind: 'scalar', key: 'micDomFreq1',   value: r.domFreq1 ?? 0 },
-    { kind: 'scalar', key: 'micDomEnergy1', value: r.domEnergy1 ?? 0 },
-    { kind: 'scalar', key: 'micDomFreq2',   value: r.domFreq2 ?? 0 },
-    { kind: 'scalar', key: 'micDomEnergy2', value: r.domEnergy2 ?? 0 },
-  ], 'companion');
+  paramCenter.setMany(buildRawMirrorWrites(r), 'companion');
 }
 function processDesignedSignals(r, dt) {
   const out = {};
@@ -911,10 +1005,7 @@ function processDesignedSignals(r, dt) {
   return out;
 }
 
-const analyzer = new AudioAnalyzer({
-  sampleRate: SR, fftSize: FFT, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
-  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
+const analyzer = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO_CONFIG, {
   nowFn: () => clockMs,
   onConditioned: (cond) => pushScope(cond),
   onAnalysis: (r) => {
@@ -963,7 +1054,7 @@ const analyzer = new AudioAnalyzer({
     // the engine receives them (instead of computing its own). (report 20260621_11)
     // This INCLUDES audioParty + audioStructure — the music-MOOD cues the Timeline
     // service reads live off the engine CPC (supersedes the old mood_emit.js).
-    emitAllDerived();
+    emitAllDerived(dt * 1000);
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
     // an operator frequency signal carries one, its spring-smoothed POST Hz IS
@@ -1023,15 +1114,16 @@ const analyzer = new AudioAnalyzer({
       },
     });
   },
-});
+}));
 
 // Higher-resolution FFT used ONLY for the spectrum visualizer.
-const specAnalyzer = new AudioAnalyzer({
-  sampleRate: SR, fftSize: 4096, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
-  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
-  nowFn: () => clockMs, onAnalysis: () => {},
-});
+const specAnalyzer = new AudioAnalyzer(buildAudioAnalyzerOptions({
+  ...PRODUCTION_AUDIO_CONFIG,
+  fftSize: 4096,
+}, {
+  nowFn: () => clockMs,
+  onAnalysis: () => {},
+}));
 
 let pendingFrames = [];
 const BROADCAST_MS = 16;
@@ -1731,10 +1823,7 @@ let configDevice = null;
 // endpoint is set but the engine isn't up yet.
 let engineEndpoint = null;
 function applyEngineConfig() {
-  const cfgPath = path.join(__dirname, '..', '..', 'config.yaml');
-  let cfg;
-  try { cfg = yaml.load(fs.readFileSync(cfgPath, 'utf8')); }
-  catch { return 'test'; }   // standalone (no engine config) → boot in test
+  const cfg = RESOLVED_AUDIO_CONFIG.rootConfig;
   const comp = cfg && cfg.companion;
   if (comp && comp.osc && typeof comp.osc.host === 'string' && Number.isInteger(comp.osc.port)) {
     design.osc = { host: comp.osc.host, port: comp.osc.port, rateHz: oscRateHz };
@@ -1745,6 +1834,9 @@ function applyEngineConfig() {
     // OSC OUTPUT RATE (it's a send-cadence choice, independent of the target).
     design.osc = { host: '127.0.0.1', port: cfg.osc.port, rateHz: oscRateHz };
   }
+  if (OSC_PORT_OVERRIDE !== null) {
+    design.osc = { host: '127.0.0.1', port: Number(OSC_PORT_OVERRIDE), rateHz: oscRateHz };
+  }
   // MIC selection: the engine/CaptainPad persist the operator's chosen input
   // as `audio.capture.device` (the unified device, via PATCH /audio/config),
   // so THAT is the engine's microphone selection — pass it to the Companion on
@@ -1753,14 +1845,16 @@ function applyEngineConfig() {
   // as audio.enabled:false (Companion = sole analyzer): then GET /audio/config
   // returns 503 and the runtime seed delivers nothing, so we'd otherwise boot
   // with no mic. (When engine audio IS live, the seed/echo reconciles on top.)
-  const engineCaptureDevice = cfg && cfg.audio && cfg.audio.capture
-    ? cfg.audio.capture.device : undefined;
+  const engineCaptureDevice = PRODUCTION_AUDIO_CONFIG.capture.device;
   if (comp && comp.device !== undefined && comp.device !== null) configDevice = comp.device;
   else if (engineCaptureDevice !== undefined) configDevice = engineCaptureDevice;
   // Resolve the engine API endpoint we live-sync the SHARED audio TUNING
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
   engineEndpoint = resolveEngineEndpoint(cfg);
+  if (ENGINE_PORT_OVERRIDE !== null) {
+    engineEndpoint = { host: '127.0.0.1', port: Number(ENGINE_PORT_OVERRIDE) };
+  }
   // BPM smoothing (operator request 2026-06-29). config.yaml
   // `companion.bpmSmoothing: { enabled, tauMs }` — absent ⇒ the BpmSmoother
   // defaults (on, 250 ms). Applied to audioBpm before the UI + OSC read it.
@@ -1769,8 +1863,11 @@ function applyEngineConfig() {
     if (typeof sm.enabled === 'boolean') bpmSmoother.setEnabled(sm.enabled);
     if (Number.isFinite(sm.tauMs)) bpmSmoother.setTauMs(sm.tauMs);
   }
-  if (comp && (comp.source === 'mic' || comp.source === 'test' || comp.source === 'file')) return comp.source;
-  return 'test';
+  if (SOURCE_OVERRIDE !== null) return SOURCE_OVERRIDE;
+  if (!comp || !['mic', 'test', 'file'].includes(comp.source)) {
+    throw new Error('config.yaml companion.source must be one of: mic, test, file');
+  }
+  return comp.source;
 }
 
 /**

@@ -40,6 +40,7 @@ import path from 'node:path';
 
 import { buildScenarios } from '../tests/integration/detector_scenarios.mjs';
 import { applyMicModel } from '../tests/integration/mic_model.mjs';
+import { isMainModule } from './cli_entrypoint.mjs';
 import {
   runClip, dropMetrics, f1Score, buildCorrelation, slowZoneSeparation,
 } from '../tests/integration/run_analysis.mjs';
@@ -398,11 +399,13 @@ function main() {
   const skipReal = args['no-real'] === true;
 
   const results = {};
+  let processedCases = 0;
   for (const name of configNames) {
     const detCfg = adhoc || CONFIGS[name];
     const r = evalConfig(detCfg, { tiers });
     if (!skipReal) r.real = evalRealCorpus(detCfg, { corpusDir: realCorpusDir });
     results[name] = { detectorConfig: detCfg, ...r };
+    processedCases += Object.keys(r.perScenario).length;
     printSummary(name, r);
     if (args.overlays) {
       const ov = writeOverlays(outDir, detCfg, name);
@@ -410,12 +413,22 @@ function main() {
     }
   }
 
+  if (processedCases === 0) {
+    throw new Error('detection_eval: zero cases processed');
+  }
+
   const outPath = resolveHome(args.out) || path.join(outDir, 'eval.json');
-  fs.writeFileSync(outPath, JSON.stringify({ tiers, micSeed: MIC_SEED, dropToleranceMs: DROP_TOLERANCE_MS, results }, null, 2));
-  console.log(`\nwrote ${outPath}`);
+  fs.writeFileSync(outPath, JSON.stringify({
+    processedCases,
+    tiers,
+    micSeed: MIC_SEED,
+    dropToleranceMs: DROP_TOLERANCE_MS,
+    results,
+  }, null, 2));
+  console.log(`\nprocessed ${processedCases} cases; wrote ${outPath}`);
 }
 
 // Run only when invoked as a CLI (not when imported by a test).
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   main();
 }

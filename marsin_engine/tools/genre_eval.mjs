@@ -37,20 +37,29 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
+import {
+  buildAudioAnalyzerOptions,
+  loadEffectiveAudioAnalysisConfig,
+} from '../audio/config/audio_analysis_config.js';
+import { buildRawMirrorWrites } from '../audio/companion/audio_pipeline.js';
 import { SignalPostProcessor } from '../audio/postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../audio/detector/audio_structure_detector.js';
 import { DerivedSignals } from '../audio/signals/derived_signals.js';
 import { GENRE_NAMES } from '../audio/signals/genre_classifier.js';
 import { ParamCenter } from '../lib/param_center.js';
 import { readWavMono } from '../tests/integration/wav_io.mjs';
+import { isMainModule } from './cli_entrypoint.mjs';
 
-// PRODUCT analyzer defaults (config.yaml). Keep in lock-step with run_analysis.mjs.
-const HOP_SIZE = 512;
-const BANDS = { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 };
-const KICK  = { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 70 };
-const SUB   = { minHz: 30, maxHz: 60 };
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_DIR = path.resolve(__dirname, '..');
+const PRODUCTION_AUDIO = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: 'titanic',
+}).audioConfig;
+const HOP_SIZE = PRODUCTION_AUDIO.hopSize;
 // Genre is meaningful only after the classifier's warmup (~5 s) + a few
 // seconds of window fill. Vote over the steady tail, ignoring the lead-in.
 const VOTE_START_MS = 12000;
@@ -61,7 +70,7 @@ const VOTE_START_MS = 12000;
 // the engine never uses and reported a fictitiously LOW accuracy (the profiles
 // are anchored to measured fft-2048 centroids). Tune/report at the deployed
 // fftSize; pass --fft to override for analysis.
-const PRODUCT_FFT_SIZE = 2048;
+const PRODUCT_FFT_SIZE = PRODUCTION_AUDIO.fftSize;
 
 function parseArgs(argv) {
   const a = { corpus: path.join(os.homedir(), 'tmp', 'genre_corpus'), forceParty: true, json: false, fftSize: PRODUCT_FFT_SIZE };
@@ -95,6 +104,10 @@ function genreIndex(name) {
  * real music (onThresh→0), which is faithful: loud party music WOULD latch.
  */
 export function runWav(samples, sampleRate, { forceParty, fftSize }) {
+  if (sampleRate !== PRODUCTION_AUDIO.capture.sampleRate) {
+    throw new Error(`genre_eval: WAV sample rate ${sampleRate} does not match production ` +
+      `${PRODUCTION_AUDIO.capture.sampleRate}; decode/resample the corpus first`);
+  }
   const paramCenter = new ParamCenter(null);
   const spp = new SignalPostProcessor({ paramCenter });
   const broadcasts = [];
@@ -122,8 +135,8 @@ export function runWav(samples, sampleRate, { forceParty, fftSize }) {
   const perHop = [];
   let partyEverOn = false;
 
-  const analyzer = new AudioAnalyzer({
-    sampleRate, fftSize, hopSize: HOP_SIZE, bands: BANDS, kick: KICK, sub: SUB,
+  const analyzerConfig = { ...PRODUCTION_AUDIO, fftSize };
+  const analyzer = new AudioAnalyzer(buildAudioAnalyzerOptions(analyzerConfig, {
     nowFn: () => clockMs,
     onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2,
                   onsetLow, onsetMid, onsetHigh, micSub,
@@ -140,16 +153,24 @@ export function runWav(samples, sampleRate, { forceParty, fftSize }) {
         { kind: 'scalar', key: 'micLow', value: lowPost }, { kind: 'scalar', key: 'micMid', value: midPost },
         { kind: 'scalar', key: 'micHigh', value: highPost }, { kind: 'scalar', key: 'micKick', value: kickPost },
         { kind: 'scalar', key: 'micFlux', value: fluxPost },
-        { kind: 'scalar', key: 'micLowRaw', value: low }, { kind: 'scalar', key: 'micMidRaw', value: mid },
-        { kind: 'scalar', key: 'micHighRaw', value: high }, { kind: 'scalar', key: 'micKickRaw', value: kick },
-        { kind: 'scalar', key: 'micFluxRaw', value: flux },
-        { kind: 'scalar', key: 'micDomFreq1', value: domFreq1 }, { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
-        { kind: 'scalar', key: 'micDomFreq2', value: domFreq2 }, { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
-        { kind: 'scalar', key: 'micOnsetLowRaw', value: onsetLow }, { kind: 'scalar', key: 'micOnsetMidRaw', value: onsetMid },
-        { kind: 'scalar', key: 'micOnsetHighRaw', value: onsetHigh }, { kind: 'scalar', key: 'micSubRaw', value: micSub },
-        { kind: 'scalar', key: 'micTonalStabilityRaw', value: tonalStability },
-        { kind: 'scalar', key: 'micChromaFluxRaw', value: chromaFlux },
-        { kind: 'scalar', key: 'micChromaTiltRaw', value: chromaTilt },
+        ...buildRawMirrorWrites({
+          low,
+          mid,
+          high,
+          kick,
+          flux,
+          domFreq1,
+          domEnergy1,
+          domFreq2,
+          domEnergy2,
+          onsetLow,
+          onsetMid,
+          onsetHigh,
+          micSub,
+          tonalStability,
+          chromaFlux,
+          chromaTilt,
+        }),
       ], 'audio', 'audio:mic');
       detector.tick(nowMs, dt);
       derived.tick(nowMs, dt);
@@ -161,7 +182,7 @@ export function runWav(samples, sampleRate, { forceParty, fftSize }) {
         feat: Array.from(fv) });
       if (paramCenter.get('audioParty') >= 0.5) partyEverOn = true;
     },
-  });
+  }));
 
   for (let i = 0; i < samples.length; i += HOP_SIZE) {
     const chunk = samples.subarray(i, Math.min(i + HOP_SIZE, samples.length));
@@ -200,6 +221,9 @@ function main() {
   // not scored against the 7-way matrix (the classifier can't emit them).
   const scoredGenres = genres.filter((g) => genreIndex(g) >= 1);
   const oovGenres = genres.filter((g) => genreIndex(g) < 1);
+  if (!scoredGenres.length) {
+    throw new Error(`genre_eval: zero scoreable genre folders under ${args.corpus}`);
+  }
 
   const labels = scoredGenres.map(genreIndex).sort((a, b) => a - b);
   const labelNames = labels.map((i) => GENRE_NAMES[i]);
@@ -231,6 +255,7 @@ function main() {
         meanFeat: r.meanFeat.map((v) => +v.toFixed(3)) });
     }
   }
+  if (total === 0) throw new Error('genre_eval: zero WAV cases processed');
 
   // Measured per-genre feature centroids (mean of per-track tail centroids) —
   // the empirical target the sibling should re-tune PROFILES toward.
@@ -249,7 +274,8 @@ function main() {
   // ── Report ──────────────────────────────────────────────────────────────
   if (args.json) {
     console.log(JSON.stringify({ corpus: args.corpus, fftSize: args.fftSize, forceParty: args.forceParty,
-      overall: { total, correct, accuracy: total ? correct / total : 0 },
+      processedCases: total,
+      overall: { total, correct, accuracy: correct / total },
       perGenre, confusion, labelNames, oovGenres, centroids, featLabels: FEAT_LABELS, rows }, null, 2));
     return;
   }
@@ -288,7 +314,8 @@ function main() {
     const acc = g.n ? (g.correct / g.n) : 0;
     console.log(`  ${genre.padEnd(15)} ${g.correct}/${g.n}  = ${(acc * 100).toFixed(0)}%`);
   }
-  console.log(`\nOVERALL: ${correct}/${total} = ${(total ? correct / total * 100 : 0).toFixed(1)}%`);
+  console.log(`\nOVERALL: ${correct}/${total} = ${(correct / total * 100).toFixed(1)}%`);
+  console.log(`processed ${total} cases`);
 
   // Measured feature centroids per genre — what the REAL analyzer reads. The
   // sibling re-tunes PROFILES toward these (and reweights features that overlap).
@@ -302,6 +329,6 @@ function main() {
 export { GENRE_NAMES };
 
 // Run as a CLI only when invoked directly (not when imported by a test).
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   main();
 }
