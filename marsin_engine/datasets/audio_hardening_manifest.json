@@ -1,0 +1,65 @@
+{
+  "dataset": "archive_org_cc_dance",
+  "version": "bm26_manifest_20260620",
+  "source": "https://archive.org",
+  "sourceManifest": "datasets/genre_corpus_manifest.json",
+  "license": "Per-track Creative Commons; exact license and attribution are retained in the local manifest",
+  "audioProperties": "mono PCM s16le, 44100 Hz, up to 60 seconds per case",
+  "processingVersion": "fetch_genre_corpus.mjs v1",
+  "splitPolicy": "For each genre, first available case is train, second is validation, third is frozen test",
+  "localManifestSha256": "e903c97bdf164027f4b1c3b206b637fdc42abf4f76fd0d377922d395c1029132",
+  "processedCases": 18,
+  "totalDecodedBytes": 94468598,
+  "exclusions": [
+    {
+      "identifier": "DWK031",
+      "reason": "Source media returned a persistent server error during acquisition"
+    }
+  ],
+  "splits": {
+    "train": [
+      "nws142",
+      "Prototype202Departures",
+      "Compiling_a_Network_v5.0",
+      "Torley_Wong_-_The_Final_Selection",
+      "exp037",
+      "Vkrsnl038MirandaShvangiradzeTalkToMeEp"
+    ],
+    "validation": [
+      "rest025",
+      "Prototype202AfternoonMix",
+      "Compiling_a_Network_v6.0",
+      "WkBw0034",
+      "www023",
+      "Vkrsnl037CandlegravityAMomentForMyself"
+    ],
+    "test": [
+      "rest037-kay_grove_-_samba_440-night_walk",
+      "Prototype202SummerBreezeMix",
+      "Compiling_a_Network_v1.0",
+      "mindcrack_beatpack_001",
+      "unfound08",
+      "DWK217"
+    ]
+  },
+  "caseChecksums": {
+    "nws142": "159bc27e5c134301ca0290b13adf85a28318b86c4424c091e1bf12e61ebb8520",
+    "rest025": "7a564a0bfb098e64665c637a8607cab73139ddee2ca322b2d1372c7819e6d428",
+    "rest037-kay_grove_-_samba_440-night_walk": "ccdf4918e4d9bb2ee4adaddea825a1a09f6669f5524034ec42b9161f2e2a7dc9",
+    "Prototype202Departures": "f197de2f111a303771335fecaa012269c3f5a3641c10ef608b8295a2a47501ad",
+    "Prototype202AfternoonMix": "4dec1a777e2b2c3eeb74e537cf0fbdaafc4113c930f2ba7f47a6f99a51a8573b",
+    "Prototype202SummerBreezeMix": "4dcbcc21fa1e2c17cfd348f6a917b4b571f32db3ac2a4c202b69f497d5351f5a",
+    "Compiling_a_Network_v5.0": "f48cfbdcbf8acb35046341532812c73f441ac6c12c62fb5c9747f24c9a734ee7",
+    "Compiling_a_Network_v6.0": "b98a7cb9f1a74aea97095773342b631e6cf5c292cc45cd79106ebb593e4e161c",
+    "Compiling_a_Network_v1.0": "2f43d6dfda37911fafd58010e673bca78816ac63676edd937c4707a3a7062635",
+    "Torley_Wong_-_The_Final_Selection": "373b447a00eae6dd6661cf48f0aa7299f10dc0f4f97e60a712ad6dbdb34447ed",
+    "WkBw0034": "f3c9096238db2b09363649bfecb787b377967a1e7315251b7d3dc3190cf42b35",
+    "mindcrack_beatpack_001": "5a02a12a22952b1f6c624281010286e12903c45aa7fa7acde55d53ce930197d5",
+    "exp037": "addefe4e98a231bf899169d42cd2ea4548bf06ca3d992d908645fd7468be6d38",
+    "www023": "9bb42113814eb27d74faa4370d62249aea8e6c35d4abba8692b493b10a4bd02c",
+    "unfound08": "57d5cf0ed663ca06b2148a6648ba07621ba2eae4fe91c463b8b9c3b1b129ed47",
+    "Vkrsnl038MirandaShvangiradzeTalkToMeEp": "9c9ad1fd0e8dda9713be32994743bcf37e3bb93f3fa8cc490de5ef4eb9b877be",
+    "Vkrsnl037CandlegravityAMomentForMyself": "91664671d75b3e03bb878979c46f34c44bb25f8a40c392e152795b6b978a732d",
+    "DWK217": "e1d92e7ca1df9d35457fcf847d7fb8f176417e6511c4660eee53b5d71444c958"
+  }
+}

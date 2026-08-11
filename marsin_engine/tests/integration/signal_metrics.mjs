@@ -117,4 +117,28 @@ export function signalFeel(series, hopMs, { transient = false, peakMin = 0.15 } 
   return out;
 }
 
+export function distributionMetrics(series) {
+  const a = Array.isArray(series) ? series : Array.from(series);
+  if (a.length === 0) throw new Error('distributionMetrics requires at least one sample');
+  let nonFinite = 0, zeros = 0, saturated = 0;
+  const finite = [];
+  for (const value of a) {
+    if (!Number.isFinite(value)) { nonFinite++; continue; }
+    finite.push(value);
+    if (value === 0) zeros++;
+    if (value >= 0.999) saturated++;
+  }
+  if (finite.length === 0) throw new Error('distributionMetrics has no finite samples');
+  return {
+    n: a.length,
+    p5: percentile(finite, 0.05),
+    p50: percentile(finite, 0.50),
+    p95: percentile(finite, 0.95),
+    usefulRange: percentile(finite, 0.95) - percentile(finite, 0.05),
+    zeroFraction: zeros / a.length,
+    saturationFraction: saturated / a.length,
+    nonFinite,
+  };
+}
+
 export { flickerRate, meanAbsDelta, variance, percentile, transientTiming };

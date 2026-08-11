@@ -46,6 +46,17 @@ test('targeted tiers hit their SNR within ~1.5 dB', () => {
   }
 });
 
+test('adversarial tier deterministically combines gain, clipping, echo, speech, wind, and bleed', () => {
+  const src = tone(44100 * 4, 220, 44100, 0.8);
+  const a = applyMicModel(src, 44100, { tier: 'adversarial', seed: 44 });
+  const b = applyMicModel(src, 44100, { tier: 'adversarial', seed: 44 });
+  assert.deepEqual(a.samples, b.samples);
+  assert.equal(a.meta.spec.inputGain, 1.8);
+  assert.equal(a.meta.spec.hardClip, 0.65);
+  assert.equal(a.meta.spec.speechLevel, 0.08);
+  assert.ok(a.meta.mixRms > 0);
+});
+
 test('output is Int16Array, same length, never clips out of range, all finite', () => {
   const src = tone(10000, 60, 44100, 0.95);
   const { samples } = applyMicModel(src, 44100, { tier: 'heavy', seed: 3 });

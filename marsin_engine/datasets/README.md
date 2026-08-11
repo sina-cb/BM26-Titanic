@@ -229,3 +229,40 @@ LibriVox), and `melodic_house`/`progressive` are dominated by a single netlabel
 artist (Prototype 202), so within-genre diversity is uneven. The numbers are a
 real, reproducible **lower bound** on field accuracy, not a polished benchmark —
 treat genre labels as the uploader's subject tags, not expert annotation.
+
+## Audio-hardening frozen subset
+
+The hardening pass uses a checksum-pinned 18-case subset of the Archive.org
+Creative Commons corpus: one train, validation, and frozen test case for each
+of the six scoreable dance genres. The tracked split/checksum summary is
+`datasets/audio_hardening_manifest.json`; the complete per-track provenance,
+download URL, exact license, processing string, and decoded WAV checksum live
+beside the audio under `~/tmp/audio_analysis_hardening/corpus/genre/manifest.json`.
+
+Rebuild it without writing audio into the repository:
+
+```bash
+cd marsin_engine
+node tools/fetch_genre_corpus.mjs \
+  --out ~/tmp/audio_analysis_hardening/corpus/genre \
+  --per-genre 3 \
+  --exclude DWK031
+```
+
+The exclusion is explicit because that source item returned a persistent
+server error. The builder fails on any other missing item, decoder error, empty
+output, malformed provenance, or incomplete split. It does not choose a
+replacement silently.
+
+Run the frozen test split with checksum verification:
+
+```bash
+node tools/genre_eval.mjs \
+  --corpus ~/tmp/audio_analysis_hardening/corpus/genre \
+  --manifest ~/tmp/audio_analysis_hardening/corpus/genre/manifest.json \
+  --split test --json
+```
+
+Genre labels remain uploader-supplied tags. Real dance tracks do not carry
+human drop timestamps, so their structure-detector event count is an unlabeled
+event rate, never drop precision or a phantom-fire count.
