@@ -9,12 +9,21 @@
  * WHY HIL: needs a real capture device (mic / line-in) or an Audio-Slice-style
  * local file, which CI / the remote container do not have. Run it on the rig.
  *
+ * ░░ OPT-IN ONLY — `BM26_HIL_OK=1` ░░
+ * This harness spawns a companion that OPENS A REAL CAPTURE DEVICE (default
+ * `--source mic`, 30 s). Its filename matches node's DEFAULT test glob
+ * (`**\/*_test.mjs`), so a stray `node --test` / `node --test tests` sweep used
+ * to discover it and open the operator's microphone — that actually happened.
+ * Without `BM26_HIL_OK=1` it now prints one line and exits 0 BEFORE any spawn,
+ * network, or config work. `npm run test:hil` does not set it either: this
+ * harness is run deliberately, by hand, on the rig.
+ *
  * Usage:
  *   cd marsin_engine
- *   node tests/hil/hil_audio_realtime_test.mjs                 # mic, 30 s
- *   node tests/hil/hil_audio_realtime_test.mjs --seconds 45
- *   node tests/hil/hil_audio_realtime_test.mjs --device "<name>"   # pin a device
- *   node tests/hil/hil_audio_realtime_test.mjs --source file --file /path/clip.wav
+ *   BM26_HIL_OK=1 node tests/hil/hil_audio_realtime_test.mjs                 # mic, 30 s
+ *   BM26_HIL_OK=1 node tests/hil/hil_audio_realtime_test.mjs --seconds 45
+ *   BM26_HIL_OK=1 node tests/hil/hil_audio_realtime_test.mjs --device "<name>"   # pin a device
+ *   BM26_HIL_OK=1 node tests/hil/hil_audio_realtime_test.mjs --source file --file /path/clip.wav
  *
  * REFERENCES (NOTE: only `test` mode is perfectly clocked — `file` AND `mic`
  * both go through ffmpeg, so both can look bursty):
@@ -34,11 +43,24 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { WebSocket } from 'ws';
 
+// ── HARD OPT-IN GUARD (must stay the FIRST executable statement) ────────────
+// Before any spawn, socket, port bind, or config read. A stray `node --test`
+// sweep (whose default glob matches `*_test.mjs`) lands here and leaves
+// immediately instead of opening the operator's microphone for 30 seconds.
+if (process.env.BM26_HIL_OK !== '1') {
+  process.stdout.write(
+    'hil_audio_realtime_test — SKIPPED: operator-only HIL harness (spawns a companion that opens a real capture device). '
+    + 'Set BM26_HIL_OK=1 to run it deliberately.\n',
+  );
+  process.exit(0);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COMPANION = path.resolve(__dirname, '../../audio/companion/companion_server.js');
 
 function arg(name, def) { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : def; }
 const PORT = parseInt(arg('--port', '31666'), 10);
+const HOST = arg('--host', '127.0.0.1');            // loopback by default, never 0.0.0.0
 const SECONDS = parseInt(arg('--seconds', '30'), 10);
 const SOURCE = arg('--source', 'mic');              // mic | file | test
 const DEVICE = arg('--device', null);
@@ -60,13 +82,17 @@ async function main() {
   log('='.repeat(58));
   log('hil_audio_realtime_test — docs/37 §13 smoothness / realtime');
   log(`  source: ${SOURCE}${DEVICE ? ` device="${DEVICE}"` : ''}${FILE ? ` file="${FILE}"` : ''}`);
-  log(`  window: ${SECONDS}s   companion port: ${PORT}`);
+  log(`  window: ${SECONDS}s   companion: ${HOST}:${PORT}`);
   log('='.repeat(58));
 
   const child = spawn(process.execPath, [
     COMPANION,
     '--port',
     String(PORT),
+    // Bind LOOPBACK, not 0.0.0.0 — a HIL companion carrying live room audio
+    // must not be reachable from the playa network while this runs.
+    '--host',
+    HOST,
     '--model',
     'test_bench',
     '--source',
@@ -82,8 +108,16 @@ async function main() {
   process.on('exit', cleanup);
   process.on('SIGINT', () => { cleanup(); process.exit(130); });
 
-  // Wait for the server to bind, then connect.
+  // Wait for the server to bind, then PROVE the child is still alive before
+  // connecting (mirrors tests/companion/*): a companion that died on a bad
+  // flag / busy port otherwise shows up as an opaque WS connect error, and the
+  // whole run gets graded against a source that never existed.
   await new Promise((r) => setTimeout(r, 1200));
+  if (child.exitCode !== null) {
+    log(`  ❌ the spawned companion exited (code ${child.exitCode}) before the test connected — see [companion] stderr above.`);
+    cleanup();
+    process.exit(2);
+  }
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
   let frames = 0;
   // Visualizer-payload evidence: how big are the spectrum/wave arrays the client

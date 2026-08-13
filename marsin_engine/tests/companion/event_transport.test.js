@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   AUDIO_EVENT_SPECS,
   AudioEventTransport,
+  dispatchAudioEvents,
   EVENT_SEQUENCE_MAX,
 } from '../../audio/companion/event_transport.js';
 
@@ -24,6 +25,38 @@ test('every event survives every throttle phase through a forced sequence update
     }
     assert.equal(sent.filter(({ rising }) => rising).length, 1, `phase ${phase}`);
     assert.equal(sent.find(({ rising }) => rising).sequence, 1, `phase ${phase}`);
+  }
+});
+
+test('production dispatcher force-sends every event envelope and sequence at every throttle phase', () => {
+  const addressByKey = new Map(AUDIO_EVENT_SPECS.flatMap(({ key, sequenceKey }) => [
+    [key, `/event/${key}`],
+    [sequenceKey, `/event/${sequenceKey}`],
+  ]));
+  for (const { key, sequenceKey } of AUDIO_EVENT_SPECS) {
+    for (let phase = 0; phase < 11; phase++) {
+      const transport = new AudioEventTransport({ envelopeMs: 100 });
+      const sent = [];
+      const sequences = [];
+      for (let hop = 0; hop < 22; hop++) {
+        const throttleOpen = hop % 11 === 0;
+        dispatchAudioEvents({
+          transport,
+          values: values({ [key]: hop === phase ? 1 : 0 }),
+          dtMs: 10,
+          addressByKey,
+          send: (address, value, oscType, force) => {
+            if (force || throttleOpen) sent.push({ address, value, oscType, force });
+          },
+          onSequence: (eventKey, sequence) => sequences.push({ eventKey, sequence }),
+        });
+      }
+      assert.equal(sent.filter(({ address }) => address === `/event/${sequenceKey}`).length, 1,
+        `${key} phase ${phase} sequence delivery`);
+      assert.equal(sent.some(({ address, force }) => address === `/event/${key}` && force), true,
+        `${key} phase ${phase} envelope delivery`);
+      assert.deepEqual(sequences, [{ eventKey: sequenceKey, sequence: 1 }]);
+    }
   }
 });
 

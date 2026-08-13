@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,8 @@ import {
 } from '../../audio/companion/audio_pipeline.js';
 import {
   buildAudioAnalyzerOptions,
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
   loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
@@ -44,6 +47,19 @@ test('production raw publication includes every derived-signal analyzer input', 
     'micChromaTiltRaw',
   ]);
   assert.deepEqual(writes.map(({ value }) => value), RAW_MIRROR_SOURCES.map((_, index) => index / 20));
+
+  const derivedSource = fs.readFileSync(
+    path.join(ENGINE_DIR, 'audio', 'signals', 'derived_signals.js'),
+    'utf8',
+  );
+  const consumedAnalyzerKeys = [...derivedSource.matchAll(/\bg\('([^']+)'\)/g)]
+    .map((match) => match[1])
+    .filter((key) => key.endsWith('Raw') || key.startsWith('micDom'));
+  const producedKeys = new Set(RAW_MIRROR_SOURCES.map(({ key }) => key));
+  const missing = [...new Set(consumedAnalyzerKeys)]
+    .filter((key) => !producedKeys.has(key))
+    .sort();
+  assert.deepEqual(missing, [], `DerivedSignals consumes unpublished analyzer inputs: ${missing}`);
 });
 
 test('raw publication fails loudly instead of replacing a missing analyzer field with zero', () => {
@@ -52,6 +68,33 @@ test('raw publication fails loudly instead of replacing a missing analyzer field
   );
   delete fields.micSub;
   assert.throws(() => buildRawMirrorWrites(fields), /micSub/);
+});
+
+test('the Companion can retune the published-BPM slew live, and rejects bad input', () => {
+  // The tracker runs in the COMPANION process, so a PATCH /audio/config echo
+  // lands here — on DerivedSignals — rather than on the engine's analyzer.
+  const audioConfig = loadEffectiveAudioAnalysisConfig({
+    engineDir: ENGINE_DIR,
+    modelName: 'titanic',
+  }).audioConfig;
+  const derived = new DerivedSignals({
+    paramCenter: new ParamCenter(null),
+    bpmTracker: buildBpmTrackerOptions(audioConfig),
+    derivedSignals: buildDerivedSignalsOptions(audioConfig),
+  });
+  assert.deepEqual(derived.getStatus().bpmSlew, {
+    enabled: audioConfig.bpmTracker.outputSlewEnabled,
+    bpmPerSec: audioConfig.bpmTracker.outputSlewBpmPerSec,
+  });
+  derived.setBpmOutputSlew({ enabled: true, bpmPerSec: 32 });
+  assert.deepEqual(derived.getStatus().bpmSlew, { enabled: true, bpmPerSec: 32 });
+  assert.throws(() => derived.setBpmOutputSlew({ enabled: true, bpmPerSec: 0 }),
+    /outputSlewBpmPerSec/);
+  assert.throws(() => derived.setBpmOutputSlew({ enabled: 'on', bpmPerSec: 32 }),
+    /outputSlewEnabled/);
+  // A rejected retune must not have half-applied.
+  assert.deepEqual(derived.getStatus().bpmSlew, { enabled: true, bpmPerSec: 32 });
+  assert.equal(derived.getStatus().bpmRaw, 0);
 });
 
 test('real Companion analyzer publication makes onset, chest-hit, chroma, and genre inputs live', () => {
@@ -65,7 +108,11 @@ test('real Companion analyzer publication makes onset, chest-hit, chroma, and ge
     broadcast: () => {},
     getConfig: () => audioConfig.structureDetector,
   });
-  const derived = new DerivedSignals({ paramCenter });
+  const derived = new DerivedSignals({
+    paramCenter,
+    bpmTracker: buildBpmTrackerOptions(audioConfig),
+    derivedSignals: buildDerivedSignalsOptions(audioConfig),
+  });
   let clockMs = 0;
   let lastMs = 0;
   const hopMs = (audioConfig.hopSize / audioConfig.capture.sampleRate) * 1000;
@@ -112,10 +159,10 @@ test('real Companion analyzer publication makes onset, chest-hit, chroma, and ge
   }
   detector.dispose();
 
-  for (const key of ['micOnsetLowRaw', 'micOnsetHighRaw', 'micSubRaw']) {
+  for (const key of ['micOnsetLowRaw', 'micOnsetMidRaw', 'micOnsetHighRaw', 'micSubRaw']) {
     assert.ok(maxima[key] > 0, `${key} must leave zero through production publication`);
   }
-  for (const key of ['micOnsetLow', 'micOnsetHigh', 'audioChestHit']) {
+  for (const key of ['micOnsetLow', 'micOnsetMid', 'micOnsetHigh', 'audioChestHit']) {
     assert.ok(maxima[key] > 0, `${key} must leave zero through the real derived chain: ` +
       JSON.stringify(maxima));
   }

@@ -66,3 +66,42 @@ export class AudioEventTransport {
     });
   }
 }
+
+/**
+ * Dispatch the production wire representation for every event.
+ * Event envelopes and sequence counters bypass the normal OSC phase gate on
+ * the rising hop so no analyzer event can disappear between send frames.
+ */
+export function dispatchAudioEvents({
+  transport,
+  values,
+  dtMs,
+  addressByKey,
+  send,
+  onSequence,
+}) {
+  if (!(transport instanceof AudioEventTransport)) {
+    throw new TypeError('dispatchAudioEvents requires an AudioEventTransport');
+  }
+  if (!addressByKey || typeof addressByKey.get !== 'function') {
+    throw new TypeError('dispatchAudioEvents requires an address map');
+  }
+  if (typeof send !== 'function' || typeof onSequence !== 'function') {
+    throw new TypeError('dispatchAudioEvents requires send and onSequence callbacks');
+  }
+
+  const states = transport.tick(values, dtMs);
+  for (const state of states) {
+    const envelopeAddress = addressByKey.get(state.key);
+    const sequenceAddress = addressByKey.get(state.sequenceKey);
+    if (!envelopeAddress || !sequenceAddress) {
+      throw new Error(`Missing audio event OSC address for ${state.key}/${state.sequenceKey}`);
+    }
+    send(envelopeAddress, state.envelope, 'float', state.rising);
+    if (state.rising) {
+      onSequence(state.sequenceKey, state.sequence);
+      send(sequenceAddress, state.sequence, 'integer', true);
+    }
+  }
+  return states;
+}

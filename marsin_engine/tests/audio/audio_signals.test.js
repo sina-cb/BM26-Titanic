@@ -208,6 +208,7 @@ test('GAIN_BY_KEY matches the pre-refactor osc_listener map (byte-identical, ord
     micMid: 'micMidGain',
     micHigh: 'micHighGain',
     micKick: 'micKickGain',
+    micFlux: 'micFluxGain',
   };
   assert.deepEqual(GAIN_BY_KEY, expected);
   // Key order matters for deterministic boot-time iteration.

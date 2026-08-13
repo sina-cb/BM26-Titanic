@@ -3,6 +3,9 @@
 This guide defines the engineering contracts, parameter conventions, and runtime lifecycles for developing LED patterns in the **MarsinEngine** ecosystem. 
 
 For the formal grammar, syntax rules, and standard functions of the programming language, see the [MarsinScript Language Specification](file:///Users/ssolaimanpour/workspace/BM26-Titanic/docs/MARSIN_PB_LANG_SPEC.md).
+For the current audio-signal catalog, temporal semantics, microphone
+calibration, and optimizer guidance, see
+[`AUDIO_SIGNALS.md`](AUDIO_SIGNALS.md).
 
 ---
 
@@ -350,6 +353,11 @@ The strict cp1↔cp2 contract is the default for production patterns, but two ex
 ---
 
 ## 8. Audio Reactivity (Modulators-Only Policy)
+
+The complete current signal catalog and the distinction between continuous
+levels, held gates, confidence values, event pulses, and monotonic event
+counters lives in [`AUDIO_SIGNALS.md`](AUDIO_SIGNALS.md). The source registry
+remains `marsin_engine/audio/postproc/audio_signals.js`.
 
 **Operator decision (2026-06-17): patterns MUST NOT read live audio signals
 natively.** There is no "declare `export var micLow` and the engine feeds it"

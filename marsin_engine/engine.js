@@ -37,8 +37,9 @@ import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
 import { TempoArbiter } from './lib/tempo_arbiter.js';
 import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
+import { validateAudioAnalysisConfig } from './audio/config/audio_analysis_config.js';
 import {
-  loadSceneAudio, saveSceneAudio,
+  loadSceneAudio, saveSceneAudio, sceneAudioPath,
 } from './audio/config/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
@@ -1712,7 +1713,16 @@ async function main() {
   // means re-running `--choose_mic --model <scene>` once on that rig.
   // The win: a single source of truth, no hidden machine-local file.
   const sceneStateDirPath = sceneStateDir(__dirname, opts.modelName);
-  const sceneAudioOv      = loadSceneAudio(sceneStateDirPath);
+  let sceneAudioOv;
+  try {
+    sceneAudioOv = loadSceneAudio(sceneStateDirPath);
+  } catch (err) {
+    // An unreadable state file is FATAL, not ignorable: booting past it
+    // would immediately boot-write defaults over the operator's saved mic
+    // and tuning (see audio_config_store.loadSceneAudio).
+    console.error(`  ❌ ${err.message}`);
+    process.exit(1);
+  }
   audioState.sceneDir     = sceneStateDirPath;
   // `defaults` is what the operator gets back when they hit "Reset to
   // defaults" in the Audio Analysis tab — the portable `config.yaml`
@@ -1720,6 +1730,48 @@ async function main() {
   // so the reset endpoint doesn't have to re-read disk on every call.
   audioState.defaults = baseAudioCfg;
   audioState.config = mergeAudioConfig(baseAudioCfg, sceneAudioOv);
+
+  // The MERGED boot config must satisfy exactly the contract every live
+  // PATCH is held to (applyLiveUpdate runs the same validator). Without
+  // this the only validated path was the PATCH: a hand-edited or stale
+  // audio_state.yaml could seed the analyzer, the Companion link and the
+  // boot-write with a config the engine would have rejected over REST —
+  // and the boot-write then made that invalid state the persisted truth.
+  // Codex P0: fail loudly at boot instead.
+  try {
+    validateAudioAnalysisConfig(audioState.config);
+  } catch (err) {
+    console.error(`  ❌ Invalid audio config: ${err.message}`);
+    console.error(`     Merged from the config.yaml \`audio:\` block (required) + ${sceneAudioPath(sceneStateDirPath)}`);
+    process.exit(1);
+  }
+
+  // derivedSignals groups LIVE-PATCHED during this runtime. Only these are
+  // written into the scene state (see pickLiveFields): persisting the whole
+  // derived tree on every knob turn used to freeze a copy of config.yaml
+  // into the scene file and shadow every later retune.
+  audioState.derivedDirtyGroups = new Set();
+
+  /**
+   * Persist the per-scene subset (enabled / fftSize / hopSize / bands /
+   * kick / sub / structureDetector / bpmTracker / capture mic-selection,
+   * plus any live-patched derivedSignals groups). MERGE on top of the
+   * existing file so orthogonal sections (`chains:`) survive, and merge
+   * derivedSignals group-wise so a group persisted by an EARLIER runtime
+   * isn't dropped by this one. THROWS on a failed write — the caller
+   * decides whether that is fatal (boot) or a 500 (REST).
+   */
+  function persistSceneAudioState() {
+    const onDisk = loadSceneAudio(audioState.sceneDir);
+    const live = pickLiveFields(audioState.config, {
+      derivedSignalsGroups: audioState.derivedDirtyGroups,
+    });
+    const next = { ...onDisk, ...live };
+    if (live.derivedSignals) {
+      next.derivedSignals = { ...(onDisk.derivedSignals || {}), ...live.derivedSignals };
+    }
+    saveSceneAudio(audioState.sceneDir, next);
+  }
 
   // docs/29: load the per-scene `chains:` block, if any, on top of
   // the processor's compiled-in DEFAULT_CHAINS. Validation runs
@@ -1997,6 +2049,7 @@ async function main() {
   audioState.applyLiveUpdate = async function applyLiveUpdate(partial, opts = {}) {
     const prev = audioState.config;
     const next = mergeAudioConfig(prev, partial);
+    validateAudioAnalysisConfig(next);
     const captureRestart = !!opts.requiresCaptureRestart
       || (partial && (partial.enabled !== undefined || partial.capture));
 
@@ -2021,13 +2074,20 @@ async function main() {
       audioState.config = next;
     }
 
-    // Persist the per-scene subset (enabled / fftSize / hopSize /
-    // bands / kick / capture mic-selection fields). MERGE on top of
-    // the existing file so we don't wipe orthogonal sections.
-    try {
-      const onDisk = loadSceneAudio(audioState.sceneDir);
-      saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
-    } catch (e) { console.warn(`[audio] failed to persist scene audio state: ${e.message}`); }
+    // Record which derivedSignals groups this PATCH actually touched, so
+    // the persist writes those groups and ONLY those (pickLiveFields).
+    if (partial && partial.derivedSignals && typeof partial.derivedSignals === 'object') {
+      for (const group of Object.keys(partial.derivedSignals)) {
+        audioState.derivedDirtyGroups.add(group);
+      }
+    }
+
+    // Persist the per-scene subset. Codex P0: a failed persist PROPAGATES —
+    // the REST route must answer with an error, not a 200 that pretends the
+    // knob was saved while the next boot silently restores the old value.
+    // (The in-memory config + analyzer already carry the change; the caller
+    // surfaces the divergence.)
+    persistSceneAudioState();
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
     // Rebroadcast the new config to EVERY /ws/control subscriber so the
     // engine stays the single source of truth: CaptainPad mirrors its
@@ -2064,6 +2124,10 @@ async function main() {
       audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
     }
     audioState.config = next;
+    // The reset wipes the persisted live subset, so nothing is "dirty"
+    // any more — a later knob turn starts the derivedSignals dirty set
+    // from empty and config.yaml wins for every untouched group.
+    audioState.derivedDirtyGroups.clear();
     try {
       // Strip the live-tunable subset off disk and keep capture.* and
       // enabled. (See May 2026 #12 above — enabled is sticky across
@@ -2098,9 +2162,10 @@ async function main() {
    //
    // Same merge pattern as applyLiveUpdate: load → merge → save. Any
    // future top-level sections (e.g. signal routing) are preserved.
+   // `derivedSignals` is NOT stamped here — nothing has been live-patched
+   // yet at boot, so the scene file keeps deferring to config.yaml.
    try {
-     const onDisk = loadSceneAudio(audioState.sceneDir);
-     saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
+     persistSceneAudioState();
    } catch (e) {
      console.warn(`[audio] failed to boot-write scene audio state: ${e.message}`);
    }

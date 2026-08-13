@@ -445,8 +445,7 @@ function gainOpIdFor(key) {
  */
 function gainByKeyForOsc() {
   const out = {};
-  const order = ['micLow', 'micMid', 'micHigh', 'micKick'];
-  for (const key of order) {
+  for (const key of processedSignalKeys()) {
     const d = descriptorByKey(key);
     if (d && d.gainKey) out[key] = d.gainKey;
   }

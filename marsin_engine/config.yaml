@@ -76,6 +76,170 @@ audio:
   sub:
     minHz: 30
     maxHz: 60
+  bpmTracker:
+    # 70, not 60. A/B'd with tools/bpm_tune_eval.mjs across all four mic tiers
+    # (identical settings otherwise): widening the band to 60 bought exactly one
+    # thing — the 60 BPM synth row, which only exists because the band reaches
+    # it — and COST two fast tempos to wrong locks the wider lag range opened up:
+    # moderate 174 → 112 (-35.6%) and heavy 124 → 96 (-22.3%), both correct at
+    # 70. Burning Man runs fast; a halved 174 on a dusty night is the expensive
+    # failure. Re-run the A/B before widening this again.
+    minBpm: 70
+    maxBpm: 180
+    activityThreshold: 0.05
+    silenceResetMs: 1200
+    silenceResetEnabled: false
+    # Published BPM walks to a new tempo instead of stepping to it, so a
+    # re-lock/track change can't glitch the lights. Live-tunable from the
+    # Audio Companion (OSC page) and PATCH /audio/config.
+    outputSlewEnabled: true
+    outputSlewBpmPerSec: 16
+  derivedSignals:
+    # Dominant-note colour smoothing. All hop counts below are at the shipped
+    # 86.13 analysis hops/s (11.61 ms per hop).
+    #
+    # LATENCY — MEASURED, not estimated. A change first needs
+    # ceil(medianN * minConsensus) = 9 hops for the new class to become the
+    # evidence-window mode, then holdHops (or nearHoldHops) more hops of
+    # agreement; the first of those is the same hop, hence the -1:
+    #   * FAR move (more than nearChangeSemitones = 2 semitones):
+    #     9 + 10 - 1 = 18 hops = 0.21 s ideal.
+    #   * NEAR move (<= 2 semitones): 9 + 24 - 1 = 32 hops = 0.37 s ideal.
+    #     nearHoldHops deliberately makes a small move expensive because a
+    #     1-2 semitone step is indistinguishable from a dominant-frequency
+    #     tracker glide. Most chord-progression moves ARE near moves, so
+    #     0.37 s is the typical case, not 0.21 s.
+    #   * NEAR move through the REAL analyzer at 18 dB SNR: 440 ms (p50) to
+    #     856 ms (p95) — the dom-freq tracker's own lag stacks on top.
+    #     (tests/audio/note_estimator_noisy.test.mjs)
+    #   * First note after boot or a long silence: 18 hops = 0.21 s.
+    #
+    # DESIGN CONSEQUENCE: this tracks CHORDS AND SUSTAINED NOTES. A note held
+    # for less than about 0.5 s never commits at all, so arps, fills and fast
+    # melodic lines FREEZE the colour on the last committed chord instead of
+    # chasing them. That is the intended trade — a rock-steady hue on a held
+    # chord beats a note-accurate strobe — but it means audioNote /
+    # audioNoteHue are a harmonic BED, not a transcription.
+    #
+    # SCOPE — WHERE THIS IS VALIDATED. Do not claim more than this:
+    #   * VALIDATED at the `moderate` mic tier ONLY (18 dB SNR), on a synthetic
+    #     124 BPM house chord progression, 12 seeds. Measured: 93.7% mean
+    #     accuracy over the settled part of each chord, 51.9% over the FULL
+    #     chord (commit latency eats the first ~45% of a 968 ms chord), 99.4%
+    #     mean chord-change recall, and 10 of 12 seeds with a perfectly ordered
+    #     change sequence (2 seeds emit one spurious or one missing flip).
+    #   * DEGRADED TO NON-FUNCTIONAL at the `heavy` tier (9 dB SNR). Measured
+    #     over seeds 1-4: 0-25% accuracy, 0-27% chord-change recall, and on one
+    #     seed the estimator never commits a single note across the whole 19 s
+    #     clip. Note colour must NOT be relied on for a far / loud / dusty
+    #     capture.
+    #   * UNVALIDATED at the `playa` and `adversarial` tiers (wind gusts,
+    #     neighbour-camp bleed, hard clipping): never scored for note tracking.
+    # Making the heavy tier work is a redesign (chroma-based pitch estimation),
+    # not a retune of these knobs — deliberately out of scope.
+    noteTracking:
+      minPitchHz: 40
+      maxPitchHz: 1200
+      preferLow: true
+      preferLowEnergyFrac: 0.5
+      energyGate: 0.05
+      medianN: 15
+      minConsensus: 0.55
+      holdHops: 10
+      nearChangeSemitones: 2
+      nearHoldHops: 24
+      kfQ: 0.15
+      kfR: 8
+      stableHops: 18
+    # Circle-of-fifths note → hue map. Hue only: Companion previews use full
+    # saturation/value, while patterns retain their own saturation/brightness.
+    noteColors:
+      c: 0.15
+      cSharp: 0.94
+      d: 0.44
+      dSharp: 0.04
+      e: 0.62
+      f: 0.12
+      fSharp: 0.86
+      g: 0.27
+      gSharp: 0.99
+      a: 0.56
+      aSharp: 0.08
+      b: 0.70
+    party:
+      wLow: 0.4
+      wMid: 0.4
+      wHigh: 0.2
+      loudTau: 0.4
+      onThresh: 0.22
+      offThresh: 0.12
+      holdMs: 1200
+      offConfirmMs: 800
+      warmupMs: 1500
+    trackChange:
+      wLow: 0.4
+      wMid: 0.4
+      wHigh: 0.2
+      loudTau: 0.35
+      onThresh: 0.2
+      offThresh: 0.1
+      silenceConfirmMs: 450
+      gapMinMs: 600
+      changeRefractoryMs: 4000
+      tempoUnlockMs: 1500
+      tempoJumpBpm: 6
+      warmupMs: 1500
+    switch:
+      startupGuardMs: 2000
+      patternMinDwellMs: 6000
+      dropMinDwellMs: 2500
+      energyRegimeHi: 0.6
+      energyRegimeLo: 0.3
+      regimeHoldMs: 1500
+      dropPulseFire: 0.5
+      slowZoneHi: 0.55
+      slowZoneLo: 0.35
+      quantizeToBeat: true
+      quantizeMaxWaitMs: 350
+      patternUrgeTau: 8
+      colorMinDwellMs: 2500
+      noteChangeMinDwellMs: 1800
+      colorUrgeTau: 4
+    bandOnsets:
+      threshold: 1.8
+      absFloor: 0.03
+      refractoryMs: 90
+      decayMs: 70
+      emaAlphaUp: 0.01
+      emaAlphaDown: 0.08
+      warmupHops: 30
+    chestHit:
+      droneTau: 0.5
+      tHigh: 0.18
+      tLow: 0.08
+      absFloor: 0.05
+      refractoryMs: 110
+      decayMs: 90
+      warmupHops: 30
+    phrase:
+      phraseBars: 8
+      downbeatFire: 0.5
+      dropFire: 0.5
+      dropReanchorMs: 1500
+    dropCountdown:
+      peakScore: 0.7
+      peakHoldMs: 600
+      dropPeakExit: 0.55
+      climbFromScore: 0.3
+      climbWindowMs: 4000
+      minConfArm: 0.7
+      peakMaxMs: 4000
+      beatFire: 0.6
+      beatRearm: 0.3
+      refractoryMs: 180
+      dropFire: 0.5
+      dropRefractoryMs: 4000
+      pulseDecayMs: 80
   structureDetector:
     enabled: true
     dropEdgeMode: windowed

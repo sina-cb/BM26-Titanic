@@ -74,6 +74,34 @@ function sha256(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
+/**
+ * The EXACT serialization of the frozen corpus manifest: 2-space JSON, LF line
+ * endings, one trailing newline. Every writer and every checker goes through
+ * this one function so the manifest's checksum is a property of the DATA, not
+ * of the machine that happened to write it.
+ */
+export function serializeCorpusManifest(entries) {
+  return `${JSON.stringify(entries, null, 2)}\n`.replace(/\r\n/g, '\n');
+}
+
+/**
+ * The canonical checksum of a corpus manifest — sha256 over the UTF-8 bytes of
+ * its serialization with CRLF normalized to LF and any BOM stripped.
+ *
+ * The normalization is EXPLICIT and load-bearing, not cosmetic: this repo runs
+ * with `core.autocrlf=true`, so the same manifest is LF in the git blob and
+ * CRLF in a Windows working tree. Hashing raw bytes would make the recorded
+ * checksum verify on one checkout and fail on another — a checksum that depends
+ * on the checkout is worse than no checksum. Documented in datasets/README.md.
+ *
+ * @param {string|Buffer} manifestText - serialized manifest bytes or text.
+ */
+export function corpusManifestSha256(manifestText) {
+  const text = Buffer.isBuffer(manifestText) ? manifestText.toString('utf8') : manifestText;
+  const canonical = text.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+  return crypto.createHash('sha256').update(Buffer.from(canonical, 'utf8')).digest('hex');
+}
+
 function selectCases(entries, perGenre, excludes) {
   const excluded = new Set(excludes);
   for (const identifier of excluded) {
@@ -174,10 +202,18 @@ async function main() {
   }
   validateFrozenManifest(built);
   const manifestPath = path.join(outputRoot, 'manifest.json');
-  fs.writeFileSync(manifestPath, `${JSON.stringify(built, null, 2)}\n`);
+  // Hash the EXACT bytes we write, at write time — the checksum can never drift
+  // from the file it describes.
+  const manifestText = serializeCorpusManifest(built);
+  fs.writeFileSync(manifestPath, manifestText);
+  const localManifestSha256 = corpusManifestSha256(manifestText);
   const provenancePath = path.join(outputRoot, 'provenance.json');
   fs.writeFileSync(provenancePath, `${JSON.stringify({
     sourceManifest: path.resolve(args.manifest),
+    localManifest: path.resolve(manifestPath),
+    // Reproduce with: corpusManifestSha256(fs.readFileSync(manifestPath))
+    localManifestSha256,
+    localManifestSerialization: 'sha256 over UTF-8 bytes of 2-space JSON with LF line endings and a trailing newline',
     processedCases: built.length,
     splitPolicy: 'first available per genre=train, second=validation, third=test',
     exclusions: args.excludes.map((identifier) => ({
@@ -186,6 +222,7 @@ async function main() {
     })),
   }, null, 2)}\n`);
   console.log(`processed ${built.length} cases; wrote ${manifestPath}`);
+  console.log(`localManifestSha256 ${localManifestSha256}`);
 }
 
 if (isMainModule(import.meta.url)) await main();

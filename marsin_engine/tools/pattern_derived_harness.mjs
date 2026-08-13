@@ -48,6 +48,11 @@
  * *_FAIL line and exits 2 (fail loud).
  */
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
+import {
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
+  loadEffectiveAudioAnalysisConfig,
+} from '../audio/config/audio_analysis_config.js';
 import { AudioStructureDetector } from '../audio/detector/audio_structure_detector.js';
 import { DerivedSignals } from '../audio/signals/derived_signals.js';
 import { ParamCenter } from '../lib/param_center.js';
@@ -117,7 +122,18 @@ const structureDetector = new AudioStructureDetector({
   // merges DETECTOR_DEFAULTS under whatever getConfig returns) — just flip it on.
   getConfig: () => ({ enabled: true }),
 });
-const derived = new DerivedSignals({ paramCenter });
+// The BPM tracker runs on the SHIPPED config.yaml options (band, silence, slew,
+// derived hop rate) so the harness measures the production detector, not the
+// module DEFAULTS.
+const productionAudio = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: 'titanic',
+}).audioConfig;
+const derived = new DerivedSignals({
+  paramCenter,
+  bpmTracker: buildBpmTrackerOptions(productionAudio),
+  derivedSignals: buildDerivedSignalsOptions(productionAudio),
+});
 
 const analyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: FFT, hopSize: HOP,

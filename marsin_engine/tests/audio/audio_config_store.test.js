@@ -117,10 +117,18 @@ test('loadSceneAudio — returns {} on missing file', () => {
   assert.deepEqual(loadSceneAudio(dir), {});
 });
 
-test('loadSceneAudio — returns {} on malformed yaml without throwing', () => {
+// Codex P0 — NO FALLBACK BEHAVIORS. A MISSING file is a legitimate "no scene
+// state yet" and still returns {} (above), but an UNREADABLE one is
+// corruption: the old behaviour swallowed the parse error, booted on
+// config.yaml defaults, and then let the next save overwrite the operator's
+// mic selection and tuning with the silently-dropped state. Fail loudly and
+// name the path so the operator can fix or delete the file.
+test('loadSceneAudio — THROWS on malformed yaml, naming the path', () => {
   const dir = tmpScene();
   fs.writeFileSync(sceneAudioPath(dir), 'this: is: not: valid: yaml: [');
-  assert.deepEqual(loadSceneAudio(dir), {});
+  assert.throws(() => loadSceneAudio(dir), /failed to parse .*audio_state\.yaml/);
+  assert.throws(() => loadSceneAudio(dir),
+    /will NOT overwrite a state file it could not read/);
 });
 
 test('saveSceneAudio + saveSelectedMic — full read-write cycle', () => {

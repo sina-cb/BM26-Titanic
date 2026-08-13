@@ -2,7 +2,11 @@
  * bpm_tracker.js — STABLE realtime BPM tracker for Burning Man EDM.
  *
  * Constructor shape + `update(flux, kick, dt)` signature. Returns:
- *   { bpm, beat, beatEdge, confidence, locked, barPhase, beatInBar, downbeat }
+ *   { bpm, bpmRaw, beat, beatEdge, confidence, locked, barPhase, beatInBar,
+ *     downbeat }
+ * `bpm` is the PUBLISHED tempo (optionally rate-limited — see the
+ * `outputSlew*` DEFAULTS); `bpmRaw` is the exact tempo model estimate that the
+ * lock, the beat phase and the offline tuning tools run on.
  *
  * ── Why this design ("v2") ─────────────────────────────────────────────────
  * The original v1 tracker was accurate ~90% of the time but "moved too fast":
@@ -53,7 +57,11 @@
  */
 
 const DEFAULTS = Object.freeze({
-  hopsPerSec: 86.13,
+  // hopsPerSec has NO default on purpose: it is the analysis hop rate, i.e.
+  // capture.sampleRate / hopSize, and both of those are operator-editable in
+  // config.yaml. A baked constant here would silently mis-scale every lag→BPM
+  // conversion the moment an operator changed either. `buildBpmTrackerOptions`
+  // derives it from the capture config and the constructor REQUIRES it.
   minBpm: 70,
   maxBpm: 180,
   kickWeight: 1.5,
@@ -66,6 +74,36 @@ const DEFAULTS = Object.freeze({
   priorStrength: 0.18,
   warmupFill: 0.85,
   confPeakW: 0.6,
+  activityThreshold: 0.02,
+  silenceResetMs: 1200,
+  silenceResetEnabled: false,
+
+  // ── RETAINED DIAGNOSIS: the chooser's known blind spot ────────────────────
+  // A "pure hypothesis" experiment (whole-band pure-autocorrelation peak picking
+  // with a subharmonic preference) lived here and was REMOVED — it never shipped
+  // enabled and it regressed the corpus. Its motivating diagnosis is real and
+  // stands: the comb+prior chooser below only compares the comb winner against
+  // its own ×2/÷2 octaves, so a 4/3 METRICAL ALIAS (the measured 90→120 failure)
+  // can never challenge a wrong lock — `_isMetricRelative` classifies it as
+  // "same tempo, different level" and suppresses it. A future redesign should
+  // not re-add a raw-AC peak picker: raw autocorrelation is biased toward short
+  // lags because the sum has more terms there. Use LAG-NORMALIZED AC (divide the
+  // lag-l sum by N-l) so peaks are comparable across the band, and score
+  // candidates against an EXPLICIT metrical-grid model (a tempo hypothesis
+  // predicts energy at its own lag AND its 2/3/4 multiples) instead of a bare
+  // "slowest peak within X% of the max" rule.
+
+  // ── Published-BPM slew (output stage only) ────────────────────────────────
+  // The tempo model is a LOCK: when it moves, it moves in one hop (a re-lock,
+  // an octave migration, a Kalman reseed), and every consumer downstream of the
+  // published `bpm` — patterns, speed sync, OSC — snaps with it. That step is
+  // the visible glitch. The slew rate-limits the PUBLISHED value only; the
+  // lock, the histogram, the Kalman state and the beat phase keep using the
+  // exact estimate (`bpmRaw`), so smoothing costs no tempo accuracy.
+  // 16 BPM/s settles a track-change jump (124→140) in 1.0 s and a full octave
+  // (60→120) in 3.8 s.
+  outputSlewEnabled: false,
+  outputSlewBpmPerSec: 16,
 
   // ── Tempo-octave (half/double) disambiguation ────────────────────────────
   // The comb-enhanced autocorrelation and the 128-BPM prior both bias the raw
@@ -177,9 +215,36 @@ const DEFAULTS = Object.freeze({
 const ST_SEARCH = 0;
 const ST_LOCK = 1;
 
+/** Validate an output-slew setting pair. Throws (codex P0 — no silent defaults). */
+function assertOutputSlew(enabled, bpmPerSec) {
+  if (typeof enabled !== 'boolean') {
+    throw new TypeError('BpmTracker outputSlewEnabled must be a boolean');
+  }
+  if (!Number.isFinite(bpmPerSec) || bpmPerSec <= 0) {
+    throw new RangeError('BpmTracker outputSlewBpmPerSec must be a finite number > 0');
+  }
+}
+
 export class BpmTracker {
   constructor(opts = {}) {
     const p = { ...DEFAULTS, ...opts };
+    if (!Number.isFinite(p.hopsPerSec) || p.hopsPerSec <= 0) {
+      throw new RangeError(
+        'BpmTracker requires a finite hopsPerSec > 0 (capture.sampleRate / hopSize; ' +
+        'use buildBpmTrackerOptions() — there is no default hop rate)');
+    }
+    if (!Number.isFinite(p.minBpm) || !Number.isFinite(p.maxBpm) ||
+        p.minBpm <= 0 || p.maxBpm <= p.minBpm) {
+      throw new RangeError('BpmTracker requires finite bounds with 0 < minBpm < maxBpm');
+    }
+    if (!Number.isFinite(p.activityThreshold) || p.activityThreshold <= 0 ||
+        p.activityThreshold > 1) {
+      throw new RangeError('BpmTracker activityThreshold must be in (0, 1]');
+    }
+    if (!Number.isFinite(p.silenceResetMs) || p.silenceResetMs <= 0) {
+      throw new RangeError('BpmTracker silenceResetMs must be a finite number > 0');
+    }
+    assertOutputSlew(p.outputSlewEnabled, p.outputSlewBpmPerSec);
     this.p = p;
 
     this._bufLen = Math.max(8, Math.ceil(p.windowS * p.hopsPerSec));
@@ -198,7 +263,7 @@ export class BpmTracker {
       this._prior[lag] = Math.exp(-(d * d) / (2 * 0.25 * 0.25));
     }
 
-    // Tempo histogram bins over [histFoldLo, 2*histFoldLo).
+    // The lock histogram is octave-folded into [histFoldLo, 2*histFoldLo).
     this._histLo = p.histFoldLo;
     this._histN = Math.ceil(p.histFoldLo / p.histBinBpm) + 1;
     this._hist = new Float32Array(this._histN);
@@ -238,6 +303,7 @@ export class BpmTracker {
     this._barsSeen = 0;              // # beats observed (gates anchor re-evaluation)
 
     this.bpm = 0;
+    this.bpmOut = 0;
     this.beat = 0;
     this.beatEdge = false;
     this.confidence = 0;
@@ -247,6 +313,8 @@ export class BpmTracker {
     this.downbeat = false;
 
     this._lastConf = 0;
+    this._silentMs = 0;
+    this._silenceLatched = false;
   }
 
   /**
@@ -254,20 +322,47 @@ export class BpmTracker {
    * @param {number} flux  spectral-flux onset strength this hop, [0,1]
    * @param {number} kick  kick-band onset strength this hop, [0,1]
    * @param {number} dt    seconds since the previous hop
-   * @returns {{bpm:number, beat:number, beatEdge:boolean, confidence:number,
-   *            locked:boolean, barPhase:number, beatInBar:number, downbeat:boolean}}
+   * @returns {{bpm:number, bpmRaw:number, beat:number, beatEdge:boolean,
+   *            confidence:number, locked:boolean, barPhase:number,
+   *            beatInBar:number, downbeat:boolean}}
    */
-  update(flux, kick, dt) {
+  update(flux, kick, dt, activity = null) {
     // Fail loud on non-finite input (codex P0): a NaN/Inf flux/kick/dt would
     // silently poison the whitening EMA, the autocorrelation ring, and the
     // Kalman state for the rest of the session. The caller (DerivedSignals)
     // already finite-guards its CPC reads, so a non-finite here is a real
     // upstream contract violation — surface it, don't swallow it.
-    if (!Number.isFinite(flux) || !Number.isFinite(kick) || !Number.isFinite(dt)) {
+    if (!Number.isFinite(flux) || !Number.isFinite(kick) || !Number.isFinite(dt) ||
+        (activity !== null && !Number.isFinite(activity))) {
       throw new TypeError(
-        `BpmTracker.update: non-finite input (flux=${flux}, kick=${kick}, dt=${dt})`);
+        `BpmTracker.update: non-finite input (flux=${flux}, kick=${kick}, dt=${dt}, activity=${activity})`);
     }
     const p = this.p;
+
+    if (p.silenceResetEnabled) {
+      // Contract violation, not a soft skip (codex P0 — fail loud): the operator
+      // asked for silence-driven resets, so a caller that never supplies band
+      // activity would leave the feature permanently, invisibly dead.
+      if (activity === null) {
+        throw new TypeError(
+          'BpmTracker.update: silenceResetEnabled requires band activity; caller passed none');
+      }
+      if (activity <= p.activityThreshold) {
+        this._silentMs += Math.max(0, dt * 1000);
+        if (this._silentMs >= p.silenceResetMs) {
+          if (!this._silenceLatched) {
+            this.reset();
+            this._silenceLatched = true;
+            this._silentMs = p.silenceResetMs;
+          }
+          this._slewOutput(dt);
+          return this._snapshot();
+        }
+      } else {
+        this._silentMs = 0;
+        this._silenceLatched = false;
+      }
+    }
     this._hopCount++;
 
     // 1. Onset strength + adaptive whitening.
@@ -293,8 +388,44 @@ export class BpmTracker {
     // Phase advance + beat pulse + bar division.
     this._advancePhase(onset, kick, dt);
 
+    this._slewOutput(dt);
+    return this._snapshot();
+  }
+
+  /**
+   * Retune the published-BPM slew while running (Audio Companion live control).
+   * Throws on an invalid pair — the caller must reject the operator's input, not
+   * quietly keep the old setting.
+   */
+  setOutputSlew({ enabled, bpmPerSec }) {
+    assertOutputSlew(enabled, bpmPerSec);
+    this.p = { ...this.p, outputSlewEnabled: enabled, outputSlewBpmPerSec: bpmPerSec };
+    if (!enabled) this.bpmOut = this.bpm;
+  }
+
+  /**
+   * @private walk the PUBLISHED bpm toward the exact estimate at a bounded rate.
+   * Acquisition (0 → a tempo) and loss (a tempo → 0) are NOT walked: there is no
+   * previous tempo to glide from, and ramping through 5, 10, 15 BPM would drag
+   * every beat-derived consumer through tempos the music never played.
+   * The step comes from the hop's own `dt`, so the rate is per second of AUDIO.
+   */
+  _slewOutput(dt) {
+    const target = this.bpm;
+    if (!this.p.outputSlewEnabled || target <= 0 || this.bpmOut <= 0) {
+      this.bpmOut = target;
+      return;
+    }
+    const step = this.p.outputSlewBpmPerSec * Math.max(0, dt);
+    const delta = target - this.bpmOut;
+    if (Math.abs(delta) <= step) this.bpmOut = target;
+    else this.bpmOut += Math.sign(delta) * step;
+  }
+
+  _snapshot() {
     return {
-      bpm: this.bpm,
+      bpm: this.bpmOut,
+      bpmRaw: this.bpm,
       beat: this.beat,
       beatEdge: this.beatEdge,
       confidence: this.confidence,
@@ -308,11 +439,11 @@ export class BpmTracker {
   /** @private fold any bpm into [histLo, 2*histLo) by ×2 / ÷2. */
   _foldOctave(bpm) {
     if (bpm <= 0) return 0;
-    let b = bpm;
+    let folded = bpm;
     const hi = 2 * this._histLo;
-    while (b >= hi) b /= 2;
-    while (b < this._histLo) b *= 2;
-    return b;
+    while (folded >= hi) folded /= 2;
+    while (folded < this._histLo) folded *= 2;
+    return folded;
   }
 
   /** @private map a folded bpm to the lock octave nearest the lock. */
@@ -520,10 +651,7 @@ export class BpmTracker {
         num += this._hist[i] * b; den += this._hist[i];
       }
       const lockFolded = den > 0 ? num / den : (this._histLo + winBin * p.histBinBpm);
-      // Choose the octave of the lock nearest the current running estimate
-      // (which the loose Kalman has tracked), so we don't fold a 170 track to 85.
       let lockBpm = this._toLockOctave(lockFolded, this._kfX > 0 ? this._kfX : measBpm);
-      // Keep the lock inside the BPM band; if folding pushed it out, halve/double.
       while (lockBpm > p.maxBpm) lockBpm /= 2;
       while (lockBpm < p.minBpm) lockBpm *= 2;
       this._lockBpm = lockBpm;
@@ -649,6 +777,10 @@ export class BpmTracker {
   /** @private true if `bpm` is a common metric multiple of `ref`. */
   _isMetricRelative(bpm, ref) {
     if (bpm <= 0 || ref <= 0) return false;
+    // NOTE (retained diagnosis, see DEFAULTS): suppressing the 3/2, 2/3, 4/3 and
+    // 3/4 relatives here is exactly what stops a metrical alias from challenging
+    // a WRONG lock (the measured 90→120 failure). Narrowing this list without a
+    // metrical-grid model regressed the corpus — fix it in the chooser, not here.
     const ratios = [0.25, 0.3333, 0.5, 0.6667, 0.75, 1.3333, 1.5, 2, 3, 4];
     for (const r of ratios) {
       if (Math.abs(bpm / ref - r) / r <= this.p.unlockTolFrac) return true;
@@ -683,7 +815,6 @@ export class BpmTracker {
     this.bpm = this._kfX;
     if (this._state === ST_LOCK) {
       this.locked = true;
-      // Report a high, steady confidence while locked (blend toward target).
       this.confidence += 0.1 * (p.lockConfReport - this.confidence);
     } else {
       this.locked = false;

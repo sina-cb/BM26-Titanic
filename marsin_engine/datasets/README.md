@@ -239,6 +239,36 @@ of the six scoreable dance genres. The tracked split/checksum summary is
 download URL, exact license, processing string, and decoded WAV checksum live
 beside the audio under `~/tmp/audio_analysis_hardening/corpus/genre/manifest.json`.
 
+### The three manifests, and what `localManifestSha256` actually hashes
+
+Three files with similar names do three different jobs — confusing them is the
+one real trap here:
+
+| File | Tracked? | What it is |
+|---|---|---|
+| `datasets/genre_corpus_manifest.json` | yes | the **source** catalogue (60 candidate tracks) the builder selects from |
+| `~/tmp/audio_analysis_hardening/corpus/genre/manifest.json` | **no** (lives beside the audio) | the **built** 18-case frozen manifest the eval harness reads |
+| `datasets/audio_hardening_corpus_manifest.json` | yes | a **byte-exact copy** of the built manifest, so its checksum is verifiable from the repo with no audio and no network |
+
+`audio_hardening_manifest.json` → `localManifestSha256` is the checksum of the
+**built** manifest (rows 2/3), **not** of `sourceManifest` (row 1). It is
+produced by `tools/fetch_genre_corpus.mjs`, which hashes the exact bytes it just
+wrote (`serializeCorpusManifest` → `corpusManifestSha256`) and records the digest
+in the build's `provenance.json`.
+
+**Line-ending normalization is explicit and load-bearing.** The canonical form
+is 2-space JSON, **LF** endings, one trailing newline; the digest is taken over
+those UTF-8 bytes with any BOM stripped and CRLF normalized to LF. This repo runs
+with `core.autocrlf=true`, so a tracked JSON file is LF in the git blob and CRLF
+in a Windows working tree — hashing raw bytes would produce a checksum that
+verifies on one checkout and fails on another.
+`tests/tools/audio_hardening_manifest.test.mjs` pins all of it: the digest
+verifies against the tracked copy, is identical for LF / CRLF / BOM inputs, and
+the manifest re-serializes byte-identically.
+
+Per-case WAV checksums (`caseChecksums`) are untouched by any of this — they
+hash decoded audio bytes and stay exactly as recorded.
+
 Rebuild it without writing audio into the repository:
 
 ```bash

@@ -43,6 +43,8 @@ import { fileURLToPath } from 'node:url';
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 import {
   buildAudioAnalyzerOptions,
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
   loadEffectiveAudioAnalysisConfig,
 } from '../audio/config/audio_analysis_config.js';
 import { buildRawMirrorWrites } from '../audio/companion/audio_pipeline.js';
@@ -154,7 +156,11 @@ export function runWav(samples, sampleRate, { forceParty, fftSize }) {
   const detector = new AudioStructureDetector({
     paramCenter, broadcast: (m) => broadcasts.push(m), getConfig: () => ({ enabled: true }),
   });
-  const derived = new DerivedSignals({ paramCenter });
+  const derived = new DerivedSignals({
+    paramCenter,
+    bpmTracker: buildBpmTrackerOptions(PRODUCTION_AUDIO),
+    derivedSignals: buildDerivedSignalsOptions(PRODUCTION_AUDIO),
+  });
 
   // Force party: drop the PartyMode on/off thresholds + warmup so the gate
   // latches immediately on real music. This is faithful (a loud dance track
