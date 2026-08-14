@@ -282,11 +282,12 @@ export function buildDormantPlan(nowMs, { name = 'zoom_e2e_dormant', startInDays
  * @param {string}  o.activePlan     config `timeline.activePlan`
  * @param {object}  [o.timelinePatch] merged over the config `timeline:` block
  * @param {string}  [o.pattern]
+ * @param {object}  [o.extraEnv]      test-only engine environment overrides
  */
 export function createTimelineE2E(o) {
   const {
     prefix, plans = {}, copyPlans = [], activePlan,
-    timelinePatch = {}, pattern = '13_sparkle',
+    timelinePatch = {}, pattern = '13_sparkle', extraEnv = {},
   } = o;
   if (!prefix) throw new Error('createTimelineE2E: `prefix` is required');
   if (!activePlan) throw new Error('createTimelineE2E: `activePlan` is required');
@@ -328,6 +329,7 @@ export function createTimelineE2E(o) {
   function env() {
     return {
       ...process.env,
+      ...extraEnv,
       MARSIN_CONFIG_FILE: configFile,
       MARSIN_STATE_DIR: stateRoot,
       MARSIN_PLAYLISTS_DIR: playlistsDir,

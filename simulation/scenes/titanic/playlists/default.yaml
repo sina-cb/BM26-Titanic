@@ -265,20 +265,15 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.3
-      sliderDirection: 0.5
       sliderLevel: 1
-      sliderKick: 0
-      sliderRadius: 0.5
-      sliderDensity: 0.5
-      sliderSparkleIntensity: 0.7
-      sliderSparkleSize: 0.5
-      sliderBackgroundLevel: 0.3
-      sliderWhiteGlint: 0.5
-      sliderAmberGlint: 0.3
-      sliderUvGlint: 0.3
-      sliderWhiteLevel: 0.5
-      sliderWhiteKick: 0
-      sliderWhiteWarmth: 0.5
+      sliderStarCount: 0.5
+      sliderBrilliance: 0.7
+      sliderTwinkleFocus: 0.5
+      sliderAfterglow: 0.5
+      sliderStarChorus: 0.55
+      sliderBurst: 0
+      sliderJewelryWhite: 0.5
+      sliderUvStars: 0.3
     modulations: []
     midiMappings: []
     notes: null

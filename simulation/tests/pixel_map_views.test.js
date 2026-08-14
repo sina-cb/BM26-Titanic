@@ -501,7 +501,7 @@ test('seedDefaultViews fills an empty container, no-ops a populated one', () => 
   assert.equal(c.views.length, 4);
 });
 
-test('default top_down: ONE spatial panel = bars + strands + rings + small stacks', () => {
+test('default top_down: ONE spatial panel = bars + strands + rings + stacks + auditoriums', () => {
   const c = buildDefaultViews();
   const view = findView(c, 'top_down');
   // The chimney pars ride the same spatial projection as the rest of the rig, so
@@ -512,8 +512,8 @@ test('default top_down: ONE spatial panel = bars + strands + rings + small stack
   assert.equal(main.def.layout, 'spatial');
   assert.equal(main.def.projection, 'top');
   assert.equal(main.error, undefined);
-  // 20 bars (no ghost bars left to drop) + 8 strands + 8+8 chimney + 4+4 stacks
-  assert.equal(main.clusters.length, 20 + 8 + 16 + 8);
+  // 20 bars + 8 strands + 8+8 chimney + 4+4 stacks + 8+8 auditorium
+  assert.equal(main.clusters.length, 20 + 8 + 16 + 8 + 16);
   // The de-orphaned real back wall is DRAWN, not excluded (2026-07-30).
   assert.equal(main.clusters.filter((c2) => c2.group === BACK_BAR_GROUPS[0]).length, 5,
     'the real (de-orphaned) Left Back Wall must appear on Top-Down');
@@ -527,8 +527,10 @@ test('default top_down: ONE spatial panel = bars + strands + rings + small stack
     assert.equal(main.clusters.filter((c2) => c2.group === g).length, 4,
       `small smoke stack '${g}' must contribute its 4 pars to the Top-Down view`);
   }
-  // The auditorium pars must NOT be dragged in by the group selectors.
-  assert.equal(main.clusters.filter((c2) => AUDITORIUM_GROUPS.includes(c2.group)).length, 0);
+  for (const group of AUDITORIUM_GROUPS) {
+    assert.equal(main.clusters.filter((c2) => c2.group === group).length, 8,
+      `auditorium group '${group}' must be visible in Top-Down`);
+  }
   // Neither the TE sign (LED-class) nor the 12 orphan duplicates pollute it.
   assert.equal(main.clusters.filter((c2) => c2.group === 'TE Sign').length, 0);
   assert.equal(main.clusters.filter((c2) => ORPHAN_GROUPS.includes(c2.group)).length, 0);
@@ -540,8 +542,8 @@ test('default top_down: ONE spatial panel = bars + strands + rings + small stack
   // the shipped 17, still square so a diagonal bar reads the same.
   assert.equal(main.styles.ShehdsBar.sizeX, 14);
   assert.equal(main.styles.ShehdsBar.sizeY, 14);
-  // …and the operator-ordered side-gap compression is declared on the panel.
-  assert.deepEqual(main.def.compress, { minWorldGap: 5, gapWorld: 4 });
+  assert.equal(main.def.compress, undefined,
+    'Top-Down must not compress physical space in an orthographic projection');
 });
 
 test('default front: one panel per side, front lights + TWO ropes each', () => {

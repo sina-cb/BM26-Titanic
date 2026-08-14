@@ -27,6 +27,7 @@ import { createEngineHarness } from '../helpers/spawn_engine.mjs';
 
 // Short arm lease so the deadman fires in ~2 s: grace = clamp(lease/3, 1s, 5s).
 const ARM_LEASE_MS = 3000;
+const ALL_PIXEL_INDICES = Array.from({ length: 166 }, (_, index) => index);
 
 const h = createEngineHarness({
   scene: 'test_bench',
@@ -67,8 +68,8 @@ function rpc(ws, msg, expectType) {
   });
 }
 
-async function spatial() {
-  const { data } = await h.api('GET', '/spatial-paint');
+async function spatial(headers = {}) {
+  const { data } = await h.api('GET', '/spatial-paint', undefined, headers);
   return data;
 }
 
@@ -80,6 +81,7 @@ before(async () => {
 after(async () => { await h.teardown(); });
 
 test('deadman revert clears a stuck ERASE and the slot-less strobe/walk', async () => {
+  const ownerHeaders = { 'X-Touch-Control-Owner': 'revert-test' };
   const ws = await openControlWs();
   const ack = await rpc(ws, { type: 'touchControlArmed', armed: true, ownerId: 'revert-test' },
     'touchControlArmedAck');
@@ -88,17 +90,19 @@ test('deadman revert clears a stuck ERASE and the slot-less strobe/walk', async 
   // The dead panel's last words: an ERASE mid-stroke, a strobe, a walk.
   let r = await h.api('POST', '/spatial-paint', {
     enabled: true, touch: true, targetX: 0.5, targetY: 0.5,
+    axisX: 'nx', axisY: 'nz', pixelIndices: ALL_PIXEL_INDICES,
     mode: 'erase', radius: 0.4, radiusY: 0.4, amount: 1,
-  });
+  }, ownerHeaders);
   assert.equal(r.status, 200, `spatial assert failed: ${JSON.stringify(r.data)}`);
-  r = await h.api('POST', '/strobe-rate', { active: true, hz: 4, duty: 0.5, intensity: 1 });
+  r = await h.api('POST', '/strobe-rate', { active: true, hz: 4, duty: 0.5, intensity: 1 },
+    ownerHeaders);
   assert.equal(r.status, 200, `strobe assert failed: ${JSON.stringify(r.data)}`);
   r = await h.api('POST', '/movement-rate', {
     active: true, mode: 'whole_group', pixelsPerSecond: 5, amount: 1,
-  });
+  }, ownerHeaders);
   assert.equal(r.status, 200, `movement assert failed: ${JSON.stringify(r.data)}`);
 
-  const sp = await spatial();
+  const sp = await spatial(ownerHeaders);
   assert.equal(sp.enabled, true, 'precondition: spatial live');
   assert.equal(sp.touch, true, 'precondition: touch held');
 
@@ -106,16 +110,29 @@ test('deadman revert clears a stuck ERASE and the slot-less strobe/walk', async 
   ws.terminate();
   await sleep(2500);
 
-  const after_ = await spatial();
-  assert.equal(after_.enabled, false,
-    'REVERT MUST DISABLE SPATIAL PAINT — a dead panel\'s ERASE must not keep darking the ship');
-  assert.equal(after_.touch, false, 'the stuck touch must be lifted');
+  const sharedAfter = await spatial();
+  assert.equal(sharedAfter.enabled, false,
+    'private Live ERASE must never touch the shared spatial controller');
+  assert.equal(sharedAfter.touch, false);
 
-  const strobe = await h.api('GET', '/strobe-rate');
-  assert.equal(strobe.data.active, false,
-    'REVERT MUST STOP THE XY STROBE — it has no slot, disable-all cannot see it');
-  const move = await h.api('GET', '/movement-rate');
-  assert.equal(move.data.active, false, 'REVERT MUST STOP THE XY WALK');
+  const fresh = await openControlWs();
+  const freshOwner = 'revert-test-fresh';
+  const freshHeaders = { 'X-Touch-Control-Owner': freshOwner };
+  const freshAck = await rpc(fresh, {
+    type: 'touchControlArmed', armed: true, ownerId: freshOwner,
+  }, 'touchControlArmedAck');
+  assert.equal(freshAck.armed, true);
+  const freshSpatial = await spatial(freshHeaders);
+  assert.equal(freshSpatial.enabled, false, 'dead ERASE must not survive into a fresh session');
+  assert.equal(freshSpatial.touch, false);
+  assert.equal((await h.api('GET', '/strobe-rate', undefined, freshHeaders)).data.active, false,
+    'dead private strobe must not survive into a fresh session');
+  assert.equal((await h.api('GET', '/movement-rate', undefined, freshHeaders)).data.active, false,
+    'dead private movement must not survive into a fresh session');
+  await rpc(fresh, {
+    type: 'touchControlArmed', armed: false, ownerId: freshOwner,
+  }, 'touchControlArmedAck');
+  fresh.close();
 });
 
 test('a touch nobody refreshes goes stale and lifts on its own', async () => {
@@ -126,6 +143,7 @@ test('a touch nobody refreshes goes stale and lifts on its own', async () => {
   // (shrinking it would mean an env knob the show build does not need).
   const r = await h.api('POST', '/spatial-paint', {
     enabled: true, touch: true, targetX: 0.3, targetY: 0.3, mode: 'trail',
+    axisX: 'nx', axisY: 'nz', pixelIndices: ALL_PIXEL_INDICES,
   });
   assert.equal(r.status, 200);
   assert.equal((await spatial()).touch, true, 'precondition: touch held');

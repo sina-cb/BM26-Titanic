@@ -2,9 +2,12 @@
 # Contains:
 #   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)
 #   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})
-# Written by `engine.js --choose_mic --model <scene>` (mic) and by
-# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
-# the engine is running.
+#   - derivedSignals groups the operator has actually live-patched; every
+#     group absent here is owned by config.yaml and follows its retunes
+# The ENGINE is the SOLE writer: `engine.js --choose_mic --model <scene>` (mic)
+# and PATCH /audio/config (tuning — including Audio Companion edits, which the
+# Companion writes THROUGH to the engine rather than to this file).
+# Do not hand-edit while the engine is running.
 capture:
   device: test
   deviceLabel: Microphone (Amazon USB Streaming Mic)

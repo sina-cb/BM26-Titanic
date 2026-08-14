@@ -12,6 +12,8 @@ import { PassThrough } from 'node:stream';
 
 import { AudioCapture } from '../../audio/capture/audio_capture.js';
 
+const VIRTUAL_LIVE_DEVICE = Object.freeze({ platform: 'linux', device: 'default' });
+
 /** Build a fake child that AudioCapture can talk to. */
 function makeFakeChild() {
   const child = new EventEmitter();
@@ -79,6 +81,7 @@ test('reframes mixed-size byte chunks into exact-size Int16Array frames', async 
   const { spawnFn, state } = makeFakeSpawn();
   const frames = [];
   const cap = new AudioCapture({
+    ...VIRTUAL_LIVE_DEVICE,
     onFrame: (i16) => frames.push(i16),
     frameSamples: 4,            // 4 samples * 1 chan * 2 bytes = 8 bytes/frame
     channels: 1,
@@ -110,6 +113,7 @@ test('emits status lifecycle: starting → running → stopped', async () => {
   const { spawnFn, state } = makeFakeSpawn();
   const phases = [];
   const cap = new AudioCapture({
+    ...VIRTUAL_LIVE_DEVICE,
     onFrame: () => {},
     onStatus: (s) => phases.push(s.phase),
     frameSamples: 2,
@@ -127,8 +131,10 @@ test('emits status lifecycle: starting → running → stopped', async () => {
 test('exponential backoff doubles on unexpected exit, capped at 30s', () => {
   const { spawnFn, state } = makeFakeSpawn();
   const cap = new AudioCapture({
+    ...VIRTUAL_LIVE_DEVICE,
     onFrame: () => {},
     frameSamples: 2,
+    maxConsecutiveFailures: 100,
     spawnFn,
   });
   cap.start();
@@ -150,6 +156,7 @@ test('exponential backoff doubles on unexpected exit, capped at 30s', () => {
 test('stop() during pending restart cancels the timer and resolves', async () => {
   const { spawnFn, state } = makeFakeSpawn();
   const cap = new AudioCapture({
+    ...VIRTUAL_LIVE_DEVICE,
     onFrame: () => {},
     frameSamples: 2,
     spawnFn,
@@ -222,6 +229,7 @@ test('a throwing onFrame does not break framing of subsequent frames', () => {
   const { spawnFn, state } = makeFakeSpawn();
   let count = 0;
   const cap = new AudioCapture({
+    ...VIRTUAL_LIVE_DEVICE,
     onFrame: () => { count++; if (count === 1) throw new Error('boom'); },
     frameSamples: 2,
     spawnFn,

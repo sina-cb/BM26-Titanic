@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "scene": "titanic",
+  "playlist": "baby_tease",
+  "seconds": 165,
+  "fps": 2,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/baby_tease.yaml",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "132_baby_tease",
+      "title": "Baby Tease - The Impossible Question",
+      "goal": "An outcome-blind 158-second question swings through mixed pink-heavy and blue-heavy rounds, fast side scarcity games, Pink/All/Blue/All flashes, and five white blasts before holding exact blackout for the operator's manual answer.",
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.32,
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.72,
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderSparkle",
+          "label": "Sparkle",
+          "value": 0.58,
+          "description": "Fine highlight texture.",
+          "audio": null
+        },
+        {
+          "name": "sliderRestartTease",
+          "label": "Restart Tease",
+          "value": 0,
+          "description": "Restart Tease character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderReplayFinale",
+          "label": "Replay Finale",
+          "value": 0,
+          "description": "Replay Finale character control.",
+          "audio": null
+        }
+      ],
+      "gif": "001_132_baby_tease.gif",
+      "video": "001_132_baby_tease.mp4",
+      "seconds": 165,
+      "chapters": [
+        {
+          "time": 0,
+          "label": "Heavy-color rounds"
+        },
+        {
+          "time": 60,
+          "label": "Side scarcity swings"
+        },
+        {
+          "time": 120,
+          "label": "Pink / All / Blue / All"
+        },
+        {
+          "time": 150,
+          "label": "White-flash finale"
+        },
+        {
+          "time": 158,
+          "label": "Blackout"
+        }
+      ],
+      "featureLabel": "IDENTITY · TE SIGNS"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 /*
-  68_spatial_paint.js — "Spatial Paint"
+  130_spatial_paint.js — "Spatial Paint"
 
   IDENTITY: a soft, moving POOL of the operator's colour that follows a point
   the operator touches in the ship's top-down plane. Drag the point and the
@@ -11,7 +11,7 @@
   spatial concept is view/group masks, not Cartesian space, so a touch surface
   that wants to say "light HERE" has nowhere to put the coordinate. Rather than
   add engine-wide params for one surface, the target rides this pattern's own
-  LOCAL sliders (§3.2) — the same trick 66/67 use for their extra colours.
+  LOCAL sliders (§3.2) — the same trick 128/129 use for their extra colours.
   Nothing else in the engine changes and no other pattern is touched.
 
   THE COORDINATE CONTRACT (read this before changing anything):
@@ -86,7 +86,7 @@ var HEAT_MAX = 2048;
 var heat = array(HEAT_MAX);
 
 export var drawMode = 0.0;     // 0 POOL · 1 TRAIL · 2 ERASE · 3 IGNITE
-export var trailFade = 0.5;    // 0 = vanishes at once, 1 = lingers ~8 s
+export var trailFade = 2.0 / 7.0; // 0.1..1.5 s; default 0.5 s
 
 // Trail energy, measured LAST frame and read THIS frame. Accumulated during
 // render3D (where every pixel is already being visited) rather than in a
@@ -94,7 +94,7 @@ export var trailFade = 0.5;    // 0 = vanishes at once, 1 = lingers ~8 s
 var trailEnergy = 0.0;
 var energyAcc = 0.0;
 var energySeen = 0.0;
-var heatDecay = 1.0;           // per-frame multiplier, recomputed in beforeRender
+var heatFadeStep = 0.0;        // linear heat removed per frame
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderLevel(v) { level = v; }
@@ -212,12 +212,10 @@ export function beforeRender(delta) {
   if (pulsePhase > PHASE_WRAP) pulsePhase = pulsePhase - PHASE_WRAP;
 
   // ── TRAIL BOOKKEEPING ─────────────────────────────────────────────────────
-  // Half-life from trailFade: 0 -> ~0.12 s (a wet brush that dries instantly),
-  // 1 -> ~8 s (a long comet). Expressed as a per-frame multiplier off dt so the
-  // stroke lingers for the same WALL-CLOCK time at any frame rate — a trail
-  // that decays per-frame would shorten whenever the engine sped up.
-  var halfLife = 0.12 + clamp(trailFade, 0.0, 1.0) * 7.88;
-  heatDecay = pow(0.5, dt / halfLife);
+  // Direct wall-clock time-to-zero: 0 -> 0.1 s, 1 -> 1.5 s. Subtracting the
+  // elapsed fraction makes the displayed durations exact at every frame rate.
+  var fadeSeconds = 0.1 + clamp(trailFade, 0.0, 1.0) * 1.4;
+  heatFadeStep = dt / fadeSeconds;
 
   // Roll last frame's accumulation into the value render3D reads, then reset.
   // IGNITE uses this to raise the WHOLE ship with the stroke and let it fall as
@@ -234,7 +232,7 @@ export function beforeRender(delta) {
   // All FIVE. Colours 1-2 carry full HSV from the engine's own pickers;
   // colours 3-5 are this pattern's local palette and take cp1's SATURATION
   // (so the set reads as one family) but carry their OWN brightness via
-  // val3/4/5 — exactly the convention 66/67 use.
+  // val3/4/5 — exactly the convention 128/129 use.
   _hsv2rgb(cp1H, cp1S, cp1V);                    pr0 = cr; pg0 = cg; pb0 = cb;
   _hsv2rgb(cp2H, cp2S, cp2V);                    pr1 = cr; pg1 = cg; pb1 = cb;
   _hsv2rgb(hue3, cp1S, clamp(val3, 0.0, 1.0));   pr2 = cr; pg2 = cg; pb2 = cb;
@@ -304,14 +302,13 @@ export function render3D(index, xIn, yIn, zIn) {
   // audio.
   var myHeat = 0.0;
   if (index >= 0 && index < HEAT_MAX) {
-    myHeat = heat[index] * heatDecay;
+    myHeat = max(0.0, heat[index] - heatFadeStep);
     // Only a finger that is DOWN paints. Lifting leaves the stroke to cool
     // rather than erasing it — that is what "lingering" means.
     if (touch > 0.5 && d2 < r2) {
       var stamp = 1.0 - (d2 / r2);
       if (stamp > myHeat) myHeat = stamp;
     }
-    if (myHeat < 0.002) myHeat = 0.0;   // stop denormal crawl
     heat[index] = myHeat;
     energyAcc = energyAcc + myHeat;
     energySeen = energySeen + 1.0;
@@ -349,7 +346,7 @@ export function render3D(index, xIn, yIn, zIn) {
   // ── WHICH OF THE FIVE COLOURS DOES THIS PIXEL WEAR? ─────────────────────
   // By `sectionId`, NOT by an axis. That is the rule this ship forces: its
   // named areas do not separate along nx/ny/nz (the hull runs diagonally and
-  // nx 0.40..0.65 is empty), which is exactly why 67_five_colour_stations
+  // nx 0.40..0.65 is empty), which is exactly why 129_five_colour_stations
   // branches on sectionId too. Every section keeps ONE colour, so all five are
   // on the rig at once and dragging over an area pulses it in ITS OWN colour.
   var zone = sectionId % 5;

@@ -148,6 +148,22 @@ export function validatePanelDef(panel, where) {
         `'${panel.layout}', whose fixtures are placed from per-fixture anchors`);
     }
   }
+  if (panel.fit !== undefined) {
+    if (typeof panel.fit !== 'boolean') {
+      throw new Error(`[PixelMapViews] ${pWhere}: fit must be boolean, got ` +
+        `${JSON.stringify(panel.fit)}`);
+    }
+    if (panel.layout !== 'planar') {
+      throw new Error(`[PixelMapViews] ${pWhere}: fit is only meaningful on a ` +
+        `'planar' panel — layout is '${panel.layout}'`);
+    }
+  }
+  if (panel.washAngle !== undefined &&
+      (typeof panel.washAngle !== 'number' || !Number.isFinite(panel.washAngle)
+        || panel.washAngle < -180 || panel.washAngle > 180)) {
+    throw new Error(`[PixelMapViews] ${pWhere}: washAngle must be a finite ` +
+      `number from -180 to 180 degrees, got ${JSON.stringify(panel.washAngle)}`);
+  }
   // ─── The two operator-ordered departures from the true projection ────────
   // Both only make sense where the projected axes ARE world axes, i.e. on a
   // `spatial` panel — anywhere else they are a wiring bug, not a preference.
@@ -220,6 +236,11 @@ export function validateOffsets(offsets, where) {
         || !Number.isFinite(v.dx) || !Number.isFinite(v.dy)) {
       throw new Error(`[PixelMapViews] ${where}: offset '${k}' must have finite ` +
         `numeric dx and dy, got ${JSON.stringify(v)}`);
+    }
+    if (v.rot !== undefined && (typeof v.rot !== 'number' || !Number.isFinite(v.rot)
+        || v.rot < -180 || v.rot > 180)) {
+      throw new Error(`[PixelMapViews] ${where}: offset '${k}'.rot must be a ` +
+        `finite number from -180 to 180 degrees, got ${JSON.stringify(v.rot)}`);
     }
   }
 }
@@ -316,6 +337,8 @@ function normalizePanel(panel) {
   if (panel.exclude !== undefined) out.exclude = panel.exclude.map(normalizeSelector);
   if (panel.projection !== undefined) out.projection = panel.projection;
   if (panel.rotate !== undefined) out.rotate = panel.rotate;
+  if (panel.fit !== undefined) out.fit = panel.fit;
+  if (panel.washAngle !== undefined) out.washAngle = panel.washAngle;
   if (panel.compress !== undefined) out.compress = { ...panel.compress };
   if (panel.expandPitch !== undefined) out.expandPitch = { ...panel.expandPitch };
   if (panel.weight !== undefined) out.weight = panel.weight;
@@ -348,7 +371,10 @@ export function normalizeViewDef(view) {
   }
   if (view.offsets && Object.keys(view.offsets).length) {
     out.offsets = {};
-    for (const [k, v] of Object.entries(view.offsets)) out.offsets[k] = { dx: v.dx, dy: v.dy };
+    for (const [k, v] of Object.entries(view.offsets)) {
+      out.offsets[k] = { dx: v.dx, dy: v.dy };
+      if (v.rot !== undefined) out.offsets[k].rot = v.rot;
+    }
   }
   return out;
 }

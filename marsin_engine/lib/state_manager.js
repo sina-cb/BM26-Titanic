@@ -471,25 +471,10 @@ export class StateManager {
       // when no pixel carries the id. A NAME key with no current mapping
       // (group renamed/removed, or the caller passed no map) is warned and
       // skipped — never silently guessed.
-      // AN ALL-DARK DIMMER TABLE IS NEVER RESTORED.
-      //
-      // The same hazard as a persisted blackout or a persisted zero grand
-      // master, and the one that was still open: the panel's 24 group faders
-      // and its ALL OFF button write POST /section-brightness, which persists
-      // here — and NOTHING clears it. Not /mixer/panic's forceLit, not
-      // revertToAutomaticShow, not the crash-boot policy. So an ALL OFF
-      // followed by a crash booted a ship that was lit in every register the
-      // failsafes check and still emitted no light, on every restart, forever.
-      //
-      // Only the FULLY dark case is refused; a partial look (some groups down,
-      // some up) is a legitimate saved state and is restored untouched.
-      const vals = Object.values(globalsState.dimmers);
-      if (vals.length > 0 && vals.every(v => !(Number(v) > 0))) {
-        console.warn(`  ⚠ [state] globals_state.yaml had ALL ${vals.length} group dimmers at zero — ` +
-          'an all-dark dimmer table is NEVER restored; a crash must not leave the Titanic dark. ' +
-          'Booting them at full.');
-        for (const k of Object.keys(globalsState.dimmers)) globalsState.dimmers[k] = 1;
-      }
+      // Dimmer Rack is the persistent operator authority, including an
+      // intentional all-zero table. Live Touch owns separate transient
+      // multipliers and no recovery path may "repair" the rack behind the
+      // operator's back.
       const groups = groupToSectionId || {};
       for (const [key, bright] of Object.entries(globalsState.dimmers)) {
         if (Object.prototype.hasOwnProperty.call(groups, key)) {

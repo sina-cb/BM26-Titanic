@@ -122,6 +122,42 @@ test('a second LIVE panel is refused the desk, not silently given it', async () 
   await sleep(300);
 });
 
+test('the armed owner is the only HTTP writer until its lease is released', async () => {
+  const c = await control('http_owner');
+  arm(c);
+  await sleep(300);
+
+  let r = await h.api('POST', '/param-center', { speed: 0.25 });
+  assert.equal(r.status, 423, 'an unowned HTTP client must not overwrite the armed desk');
+  assert.equal(r.data.code, 'TOUCH_CONTROL_LEASE_HELD');
+
+  r = await h.api('POST', '/param-center', { speed: 0.5 },
+    { 'X-Touch-Control-Owner': 'wrong_owner' });
+  assert.equal(r.status, 409, 'a forged/stale owner must not overwrite the armed desk');
+  assert.equal(r.data.code, 'TOUCH_CONTROL_LEASE_INACTIVE');
+
+  r = await h.api('POST', '/param-center', { speed: 0.75 },
+    { 'X-Touch-Control-Owner': 'http_owner' });
+  assert.equal(r.status, 200, `the active owner must retain control: ${JSON.stringify(r.data)}`);
+
+  // E-stop paths remain available even when the desk is held.
+  r = await h.api('POST', '/global-blackout', { state: false });
+  assert.equal(r.status, 200, 'emergency blackout control must remain reachable from another surface');
+
+  arm(c, false);
+  await sleep(300);
+
+  r = await h.api('POST', '/param-center', { speed: 0.4 },
+    { 'X-Touch-Control-Owner': 'http_owner' });
+  assert.equal(r.status, 409, 'a released panel must not keep writing with its stale identity');
+
+  r = await h.api('POST', '/param-center', { speed: 0.6 });
+  assert.equal(r.status, 200, 'ordinary clients regain write access after the desk is cleanly released');
+
+  c.ws.close();
+  await sleep(200);
+});
+
 test('a STALE holder never locks the desk — a live panel takes over', async () => {
   const ghost = await control('ghost_panel');
   arm(ghost);

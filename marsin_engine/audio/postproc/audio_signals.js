@@ -102,7 +102,6 @@ const DETECTORS = [
   { key: 'audioStructure',   label: 'Audio · Structure',    range: [0, 2], hz: 10, osc: '/marsin/audio/structure' },
   { key: 'audioBuildScore',  label: 'Audio · Build Score',  range: [0, 1], hz: 10, osc: '/marsin/audio/build' },
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', range: [0, 1], hz: 10, osc: '/marsin/audio/energy' },
-  { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5,  osc: '/marsin/audio/vocalshot' },
   { key: 'audioDropPulse',   label: 'Audio · Drop Pulse',   range: [0, 1], hz: 15, osc: '/marsin/audio/drop' },
   { key: 'audioSlowZone',    label: 'Audio · Slow Zone',    range: [0, 1], hz: 10, osc: '/marsin/audio/slow' },
 ];
@@ -117,10 +116,13 @@ const DERIVED = [
   { key: 'audioNote',          label: 'Audio · Note',           range: [0, 11],  hz: 10, osc: '/marsin/audio/note' },
   { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10, osc: '/marsin/audio/notehue' },
   { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15, osc: '/marsin/audio/switchpattern' },
+  { key: 'audioSwitchPatternSeq', label: 'Audio · Switch Pattern Sequence', range: [0, 2147483647], hz: 5, osc: '/marsin/audio/switchpatternseq' },
   { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15, osc: '/marsin/audio/switchcolor' },
+  { key: 'audioSwitchColorSeq', label: 'Audio · Switch Color Sequence', range: [0, 2147483647], hz: 5, osc: '/marsin/audio/switchcolorseq' },
   { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30, osc: '/marsin/audio/beatinbar' },
   { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30, osc: '/marsin/audio/barphase' },
   { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30, osc: '/marsin/audio/downbeat' },
+  { key: 'audioDownbeatSeq',   label: 'Audio · Downbeat Sequence', range: [0, 2147483647], hz: 5, osc: '/marsin/audio/downbeatseq' },
   // Coarse dance-genre classifier (party-mode only). audioGenre is an integer
   // index 0..6 (GENRE_NAMES in audio/signals/genre_classifier.js); conf 0..1.
   { key: 'audioGenre',         label: 'Audio · Genre',          range: [0, 6],   hz: 5,  osc: '/marsin/audio/genre' },
@@ -133,9 +135,11 @@ const DERIVED = [
   { key: 'audioRiserConf',      label: 'Audio · Riser Conf',      range: [0, 1],  hz: 10, osc: '/marsin/audio/riserconf' },
   { key: 'audioSilence',        label: 'Audio · Silence',         range: [0, 1],  hz: 5,  osc: '/marsin/audio/silence' },
   { key: 'audioTrackChange',    label: 'Audio · Track Change',    range: [0, 1],  hz: 15, osc: '/marsin/audio/trackchange' },
+  { key: 'audioTrackChangeSeq', label: 'Audio · Track Change Sequence', range: [0, 2147483647], hz: 5, osc: '/marsin/audio/trackchangeseq' },
   { key: 'audioClimax',         label: 'Audio · Climax',          range: [0, 1],  hz: 10, osc: '/marsin/audio/climax' },
   { key: 'audioPhrasePhase',    label: 'Audio · Phrase Phase',    range: [0, 1],  hz: 15, osc: '/marsin/audio/phrasephase' },
   { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', range: [0, 1],  hz: 15, osc: '/marsin/audio/phraseboundary' },
+  { key: 'audioPhraseBoundarySeq', label: 'Audio · Phrase Boundary Sequence', range: [0, 2147483647], hz: 5, osc: '/marsin/audio/phraseboundaryseq' },
   { key: 'audioDropCountdown',  label: 'Audio · Drop Countdown',  range: [0, 1],  hz: 30, osc: '/marsin/audio/dropcountdown' },
   // party_detection (R1, report 20260725_10): the HARD party gate the show
   // director trusts (`timeline.mood.key`), plus the five metrics it decides on
@@ -445,17 +449,39 @@ function gainOpIdFor(key) {
 
 /**
  * { liveKey: gainKey } for every processed signal that has a gain knob —
- * i.e. osc_listener.js's GAIN_BY_KEY. micFlux is processed and HAS a
- * gainKey but its gain is applied in the analyzer, not the OSC path — so
- * it is excluded here. (Stems removed 2026-06-17; the mic bands are now
- * the only OSC-gained signals.)
+ * i.e. osc_listener.js's GAIN_BY_KEY. The Companion is the sole analyzer, so
+ * micFlux arrives over OSC and follows the same gain path as the other bands.
  */
 function gainByKeyForOsc() {
   const out = {};
-  const order = ['micLow', 'micMid', 'micHigh', 'micKick'];
-  for (const key of order) {
+  for (const key of processedSignalKeys()) {
     const d = descriptorByKey(key);
     if (d && d.gainKey) out[key] = d.gainKey;
+  }
+  return out;
+}
+
+/**
+ * { signalKey: shortName } for the chain-processed mic family. The short name
+ * is derived from the last segment of the canonical OSC address and is the
+ * analyzer field consumed by the offline pattern/audio harness.
+ *
+ * This keeps gallery and suggestion tooling pinned to the production registry.
+ * A missing address is a wiring error and fails loudly.
+ */
+function micSignalShortNames() {
+  const out = {};
+  for (const key of processedSignalKeys()) {
+    const descriptor = descriptorByKey(key);
+    const short = descriptor && typeof descriptor.oscAddress === 'string'
+      ? descriptor.oscAddress.split('/').pop()
+      : '';
+    if (!short) {
+      throw new Error(
+        `audio_signals: processed signal "${key}" has no OSC address to derive a short name from`,
+      );
+    }
+    out[key] = short;
   }
   return out;
 }
@@ -469,4 +495,5 @@ export {
   defaultGainChainFor,
   gainOpIdFor,
   gainByKeyForOsc,
+  micSignalShortNames,
 };

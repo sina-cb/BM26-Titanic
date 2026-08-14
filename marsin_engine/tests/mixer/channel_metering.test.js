@@ -173,8 +173,10 @@ test('a group fader scales the member level proportionally', () => {
   assert.ok(Math.abs(m.getVisLevels()['ch1'] - 0.5) < APPROX, `group fader scales level, got ${m.getVisLevels()['ch1']}`);
 });
 
-test('the deck channel meters its own clamped fader (PFL, no group/solo)', () => {
+test('the active Deck setting meters its own clamped fader (PFL, no group/solo)', () => {
   const m = makeMixer();
+  m.viewFader = 0;
+  m.targetViewFader = 0;
   m.setDeckChannel({
     id: 'deck', pattern: 'white', handle: constPainter(255),
     mode: 'blend_screen', fader: 0.5, enabled: true,

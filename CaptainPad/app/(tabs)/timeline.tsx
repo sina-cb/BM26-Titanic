@@ -44,7 +44,7 @@
  *   - With NO draft, the strip shows the live active-plan overview.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking, Alert } from 'react-native';
 import { useFocusEffect, router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -70,6 +70,7 @@ import {
   TimelineOverview,
   TimelineResolve,
   TimelineTravelSpec,
+  TimelineActiveSequence,
   OverviewCue,
   ShowPlan,
   PlanCue,
@@ -95,6 +96,7 @@ import {
 } from '@/utils/party_api';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
+import { babyRevealConfirmation } from '@/components/timeline/baby_reveal_confirmation';
 
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
@@ -723,6 +725,13 @@ export default function TimelineScreen() {
   }, [draft, refreshPlaylists]);
 
   const openEditCue = useCallback((cue: PlanCue) => {
+    if (cue.action.type === 'sequence') {
+      Alert.alert(
+        'Sequenced event is locked',
+        'This cue contains second-accurate event steps that the visual cue editor cannot safely rewrite. Edit its plan YAML and revalidate instead.',
+      );
+      return;
+    }
     refreshPlaylists();
     setEditingCue(cue);
     setCueSheetOpen(true);
@@ -1273,6 +1282,7 @@ export default function TimelineScreen() {
                     // highlight when viewing live OR editing the active plan —
                     // but never when a DIFFERENT plan is loaded in the maker.
                     isActive={(draft === null || draft.name === activePlanName) && state?.activeCue?.id === cue.id}
+                    activeSequence={state?.activeSequence ?? null}
                     onFire={fireCue}
                     styles={styles}
                     C={C}
@@ -1873,7 +1883,7 @@ function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone:
 // Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
 // cue (countdown / error / enabled) over it when one matches by id.
 function CueRow({
-  cue, dayIndex, live, fireable, fireBlockedReason, isActive, onFire, styles, C,
+  cue, dayIndex, live, fireable, fireBlockedReason, isActive, activeSequence, onFire, styles, C,
 }: {
   cue: OverviewCue;
   /** When set (ALL DAYS view), prefixes the row with its day number. */
@@ -1886,6 +1896,7 @@ function CueRow({
   fireBlockedReason: 'save' | 'activate' | null;
   /** True when this cue is the live event driving the deck right now. */
   isActive: boolean;
+  activeSequence: TimelineActiveSequence | null;
   onFire: (id: string) => void;
   styles: Styles;
   C: Palette;
@@ -1896,7 +1907,10 @@ function CueRow({
   const subtitle = dayIndex !== null
     ? `D${dayIndex + 1} · ${atText} · ${triggerText}`
     : `${atText} · ${triggerText}`;
-  const countdown = live
+  const sequenceRunning = activeSequence?.cueId === cue.id;
+  const countdown = sequenceRunning
+    ? `STEP ${Math.min(activeSequence!.nextStepIndex + 1, activeSequence!.totalSteps)}/${activeSequence!.totalSteps} · ${formatCountdown(activeSequence!.nextInSec)}`
+    : live
     ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
     : atText;
   // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan (`fireable`,
@@ -1910,6 +1924,22 @@ function CueRow({
     : fireBlockedReason === 'activate'
       ? 'activate this plan to fire'
       : null;
+  const fire = () => {
+    const confirmation = babyRevealConfirmation(cue.id);
+    if (!confirmation) {
+      onFire(cue.id);
+      return;
+    }
+    Alert.alert(
+      confirmation.title,
+      confirmation.body,
+      [
+        { text: 'CANCEL', style: 'cancel' },
+        { text: confirmation.confirmLabel, style: 'destructive', onPress: () => onFire(cue.id) },
+      ],
+      { cancelable: true },
+    );
+  };
   return (
     <View style={[
       styles.cueRow,
@@ -1929,7 +1959,7 @@ function CueRow({
       </View>
       <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
       <TouchableOpacity
-        onPress={() => onFire(cue.id)}
+        onPress={fire}
         disabled={!canFire}
         style={[styles.fireButton, !canFire && { opacity: 0.4 }]}
         accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (${fireHint || 'unavailable'})`}

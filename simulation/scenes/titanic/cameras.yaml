@@ -22,13 +22,13 @@ presets:
   - name: Aerial
     key: aerial
     position:
-      x: 12.251
-      'y': 160.894
-      z: 90.627
+      x: 42.903
+      'y': 161.352
+      z: 80.146
     target:
-      x: -13.73
-      'y': 8.045
-      z: 7.969
+      x: 16.922
+      'y': 8.503
+      z: -2.512
   - name: Dramatic
     key: dramatic
     position:
@@ -69,16 +69,6 @@ presets:
       x: -22
       'y': 6
       z: 8
-  - name: LED Grids
-    key: led-grids
-    position:
-      x: 0
-      'y': 9
-      z: 26
-    target:
-      x: 0
-      'y': 9
-      z: 17
   - name: LED Grid Close
     key: led-grid-close
     position:

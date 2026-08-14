@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { View, TouchableOpacity, Text, ScrollView } from 'react-native';
+import { Alert, View, TouchableOpacity, Text, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -11,9 +11,16 @@ import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
 import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
 import { PendingProgramOverlay } from '@/components/timeline/PendingProgramOverlay';
 import { ZoomBanner } from '@/components/timeline/ZoomBanner';
+import {
+  LiveTouchCoordinatorProvider,
+  LiveTouchHandoffOverlay,
+  useLiveTouchCoordinator,
+} from '@/components/live_touch_coordinator';
+import { layerSettingForRoute } from '@/utils/layer_settings';
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
   const palette = usePalette();
+  const { requestHandoff } = useLiveTouchCoordinator();
   return (
     <View style={{
       width: 112,
@@ -41,39 +48,84 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
         showsVerticalScrollIndicator={false}
       >
         {state.routes.map((route: any, index: number) => {
-          const { options } = descriptors[route.key];
-          const isFocused = state.index === index;
-          const onPress = () => {
-             const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
-             if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
-          };
+           const { options } = descriptors[route.key];
+           const isFocused = state.index === index;
+           const onPress = () => {
+              const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+              if (isFocused || event.defaultPrevented) return;
+
+              const currentRoute = state.routes[state.index];
+              if (currentRoute?.name !== 'touch_control' || route.name === 'touch_control') {
+                navigation.navigate(route.name);
+                return;
+              }
+
+              const requestedLayer = layerSettingForRoute(route.name);
+              if (requestedLayer !== 'deck' && requestedLayer !== 'mixer') {
+                /* Browsing a non-Layers surface is intentionally passive:
+                   Live keeps ownership until Deck/Mixer or ARM-off is chosen. */
+                navigation.navigate(route.name);
+                return;
+              }
+              void requestHandoff(requestedLayer)
+                .then((completed) => {
+                  if (completed) navigation.navigate(route.name);
+                })
+                .catch((error) => {
+                  Alert.alert(
+                    'Live Touch handoff failed',
+                    error instanceof Error ? error.message : String(error),
+                  );
+                });
+           };
 
           // Extract icon name from options custom field (we'll set it below)
           const iconName = options.tabBarIconName || 'house.fill';
+          const groupTitle = options.tabBarGroup as string | undefined;
+          const previousRoute = index > 0 ? state.routes[index - 1] : null;
+          const previousGroup = previousRoute
+            ? descriptors[previousRoute.key].options.tabBarGroup
+            : undefined;
+          const showGroupTitle = !!groupTitle && groupTitle !== previousGroup;
 
           return (
-            <TouchableOpacity key={route.key} onPress={onPress} style={{
-              alignItems: 'center',
-              paddingVertical: 16,
-              marginBottom: 16,
-              borderRadius: 16,
-              backgroundColor: isFocused ? palette.sidebarActiveBackground : 'transparent',
-              borderWidth: isFocused ? 1 : 0,
-              borderColor: palette.sidebarActiveBorder,
-            }}>
-               <IconSymbol
-                 name={iconName}
-                 size={32}
-                 color={isFocused ? palette.primaryFixedDim : palette.tabIconDefault}
-               />
-               <Text style={{
-                 fontFamily: 'SpaceGrotesk_700Bold',
-                 fontSize: 10,
-                 marginTop: 8,
-                 textTransform: 'uppercase',
-                 color: isFocused ? palette.primaryFixedDim : palette.tabIconDefault
-               }}>{options.title}</Text>
-            </TouchableOpacity>
+            <React.Fragment key={route.key}>
+              {showGroupTitle ? (
+                <Text style={{
+                  marginBottom: 6,
+                  color: palette.secondary,
+                  fontFamily: 'SpaceGrotesk_700Bold',
+                  fontSize: 9,
+                  letterSpacing: 1.2,
+                  textAlign: 'center',
+                  textTransform: 'uppercase',
+                }}>
+                  {groupTitle}
+                </Text>
+              ) : null}
+              <TouchableOpacity onPress={onPress} style={{
+                alignItems: 'center',
+                paddingVertical: 16,
+                marginBottom: 16,
+                borderRadius: 16,
+                backgroundColor: isFocused ? palette.sidebarActiveBackground : 'transparent',
+                borderWidth: isFocused ? 1 : 0,
+                borderColor: palette.sidebarActiveBorder,
+              }}>
+                 <IconSymbol
+                   name={iconName}
+                   size={32}
+                   color={isFocused ? palette.primaryFixedDim : palette.tabIconDefault}
+                 />
+                 <Text style={{
+                   fontFamily: 'SpaceGrotesk_700Bold',
+                   fontSize: 10,
+                   marginTop: 8,
+                   textTransform: 'uppercase',
+                   color: isFocused ? palette.primaryFixedDim : palette.tabIconDefault
+                 }}>{options.title}</Text>
+              </TouchableOpacity>
+            </React.Fragment>
           )
         })}
       </ScrollView>
@@ -86,21 +138,30 @@ export default function TabLayout() {
 
   return (
     <RigProvider>
-      <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }}>
+      <LiveTouchCoordinatorProvider>
+        <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }}>
         <Tabs
           tabBar={(props) => <CustomSideBar {...props} />}
           screenOptions={{
             headerShown: false,
             sceneStyle: { marginLeft: 112, backgroundColor: palette.background }, // Shifts the screens to the right of the sidebar
           }}>
-          {/* TOUCH CONTROL FIRST. It is the surface the operator drives the
-              show from, so it should be the tab their thumb lands on, not the
-              last one in the list. */}
+          {/* Layer settings share one transition router. Deck and Mixer take
+              over on tab selection; Live Touch only takes over after ARM. */}
+          <Tabs.Screen
+            name="index"
+            options={{
+              title: 'Deck',
+              tabBarIconName: 'slider.vertical.3',
+              tabBarGroup: 'Layers',
+            } as any}
+          />
           <Tabs.Screen
             name="touch_control"
             options={{
-              title: 'Touch Control',
+              title: 'Live Touch',
               tabBarIconName: 'square.grid.2x2',
+              tabBarGroup: 'Layers',
             } as any}
           />
           <Tabs.Screen
@@ -108,14 +169,7 @@ export default function TabLayout() {
             options={{
               title: 'Mixer',
               tabBarIconName: 'slider.horizontal.3',
-            } as any}
-          />
-          <Tabs.Screen
-            name="index"
-            options={{
-              title: 'Deck',
-              // Custom prop for our sidebar to read:
-              tabBarIconName: 'slider.vertical.3',
+              tabBarGroup: 'Layers',
             } as any}
           />
           <Tabs.Screen
@@ -174,14 +228,6 @@ export default function TabLayout() {
               tabBarIconName: 'gear',
             } as any}
           />
-          {/* Manual touch surface: colour pad + tempo/brightness/3D. Declared
-              LAST so the existing rail order is untouched — this is exactly
-              where the route already sat as an undeclared file route; the
-              entry only supplies the label and icon it was missing.
-              `tabBarIconName` MUST be a key of the MAPPING table in
-              components/ui/icon-symbol.tsx: tsc resolves that import to the
-              .ios.tsx variant (broad SF-Symbols union), so an unmapped name
-              type-checks and then renders BLANK on web/Android. */}
         </Tabs>
         {/* Sticky overlay; lives outside the Tabs so it survives tab
             switches and renders on top of every screen. The lockout
@@ -189,6 +235,7 @@ export default function TabLayout() {
             zIndex 900) so the banner's "VIEW DECK" shortcut button
             stays tappable while everything else is curtained off. */}
         <EngineLockoutOverlay />
+        <LiveTouchHandoffOverlay />
         <ViewOverrideBanner />
         {/* Global, non-disruptive "scheduled show pending" strip. Lives
             outside <Tabs> so it floats over every tab; box-none lets taps
@@ -200,7 +247,8 @@ export default function TabLayout() {
             carries the DEFERRED-show notice, so PendingProgramOverlay stands
             down under a zoom (see that component's zoom guard). */}
         <ZoomBanner />
-      </SafeAreaView>
+        </SafeAreaView>
+      </LiveTouchCoordinatorProvider>
     </RigProvider>
   );
 }

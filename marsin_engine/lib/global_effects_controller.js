@@ -32,7 +32,12 @@ import { groupFixedColorEffect } from '../effects/group_fixed_color.js';
 import { invertEffect } from '../effects/invert.js';
 import { beatPumpEffect } from '../effects/e1_beat_pump.js';
 import { waterlineSweepEffect } from '../effects/e2_waterline_sweep.js';
-import { applySpatialPaint, applySpatialIgnite } from '../effects/spatial_paint.js';
+import {
+  applySpatialPaint,
+  applySpatialIgnite,
+  SPATIAL_AXIS_PAIRS,
+  SPATIAL_FADE_SECONDS,
+} from '../effects/spatial_paint.js';
 import { kickPunchEffect } from '../effects/e3_kick_punch.js';
 import { movementTraceEffect } from '../effects/movement_trace.js';
 import { freezeFrameEffect } from '../effects/freeze_frame.js';
@@ -66,6 +71,8 @@ export class GlobalEffectsController {
 
     // ── Macro runtime state (transient on boot per §8) ──────────────
     this.frameRate = (config && config.engine && config.engine.fps) || 40;
+    this.modelPixelCount = Number.isInteger(config.modelPixelCount) && config.modelPixelCount > 0
+      ? config.modelPixelCount : null;
 
     // Strobe.
     this.strobeActive = false;
@@ -322,7 +329,7 @@ export class GlobalEffectsController {
     //
     // Lives HERE, above the pattern layer, because the operator's requirement is
     // that drawing works on EVERY pattern. The same idea exists as pattern
-    // 68_spatial_paint riding that pattern's own sliders, which is dead on all
+    // 130_spatial_paint riding that pattern's own sliders, which is dead on all
     // other patterns and dies mid-show when the autopilot cycles the deck.
     //
     // Runs at 'end' — after the deck, the wash, the sweep and the trails — so
@@ -341,8 +348,13 @@ export class GlobalEffectsController {
       radiusY: 0.10,
       amount: 0.9,
       touch: false,
+      // Active owner-scoped fingers. Empty keeps the legacy single-target API
+      // byte-compatible; a populated array carries independent sweep origins.
+      strokes: [],
       mode: 'trail',
-      fade: 0.5,                       // 0 -> ~0.12 s linger, 1 -> ~8 s
+      fadeSeconds: 0.5,
+      axisX: 'nx', axisY: 'nz',
+      pixelIndices: null,
       color: [1, 1, 1, 0, 0, 0],
       // The CONTRASTING colour (opposite hue), sent by the panel alongside the
       // ink. POOL paints in it and IGNITE lifts the hull in it, so neither can
@@ -356,6 +368,7 @@ export class GlobalEffectsController {
     this._spatialInk = null;
     this._spatialEnergy = 0;
     this._spatialLastMs = 0;
+    this._spatialPixelMask = null;
     // TOUCH STALENESS DEADMAN (audit C1). While drawing, the panel re-sends
     // touch:true every ~33 ms; if those writes stop with touch stuck true (a
     // panel that died mid-stroke), the brush would keep painting — or worse,
@@ -400,6 +413,7 @@ export class GlobalEffectsController {
           this._spatialTouchSeenMs = nowMs;
         } else if (nowMs - this._spatialTouchSeenMs > this.spatialTouchStaleMs) {
           sp.touch = false;
+          sp.strokes = [];
           this._spatialTouchSeenMs = null;
           console.warn(`  ⚠ [spatial] touch went stale (no write for ${this.spatialTouchStaleMs} ms) — ` +
             'lifting the brush; a dead panel must not keep painting the ship');
@@ -418,23 +432,25 @@ export class GlobalEffectsController {
       // WALL-CLOCK decay, not per-frame: a stroke must linger for the number of
       // seconds it was asked for whatever the frame rate or speed multiplier is.
       let dt = this._spatialLastMs === 0 ? 0 : (nowMs - this._spatialLastMs) / 1000;
-      if (dt < 0 || dt > 1) dt = 0;
+      if (dt < 0) dt = 0;
       this._spatialLastMs = nowMs;
-      const halfLife = 0.12 + Math.min(Math.max(sp.fade, 0), 1) * 7.88;
-      const decay = Math.pow(0.5, dt / halfLife);
+      const fadeStep = dt / sp.fadeSeconds;
 
       this._spatialEnergy = applySpatialPaint({
         pixels, heat: this._spatialHeat, ink: this._spatialInk,
         targetX: sp.targetX, targetY: sp.targetY,
         prevX: this._spatialPrevX, prevY: this._spatialPrevY,
+        strokes: sp.strokes.length ? sp.strokes : undefined,
         radius: sp.radius, radiusY: sp.radiusY, amount: sp.amount,
         touch: sp.touch, mode: sp.mode, color6: sp.color, colorAlt: sp.colorAlt,
-        decay,
+        fadeStep, axisX: sp.axisX, axisY: sp.axisY, pixelMask: this._spatialPixelMask,
       });
       // Only a PAINTING brush leaves a trail to sweep from. While lifted, the
       // segment must collapse, or the next touch-down would draw a line across
       // the hull from wherever the last stroke ended.
-      if (sp.touch) { this._spatialPrevX = sp.targetX; this._spatialPrevY = sp.targetY; }
+      if (sp.touch && sp.strokes.length === 0) {
+        this._spatialPrevX = sp.targetX; this._spatialPrevY = sp.targetY;
+      }
       else { this._spatialPrevX = null; this._spatialPrevY = null; }
 
       // IGNITE lifts the WHOLE hull with the stroke and lets it fall as the
@@ -1781,9 +1797,74 @@ export class GlobalEffectsController {
       return v;
     };
     const sp = this.spatial;
-    if (patch.enabled !== undefined) sp.enabled = !!patch.enabled;
-    if (patch.touch !== undefined) {
+    const clearSpatial = () => {
+      if (this._spatialHeat) this._spatialHeat.fill(0);
+      if (this._spatialInk) this._spatialInk.fill(0);
+      this._spatialEnergy = 0;
+      this._spatialPrevX = null;
+      this._spatialPrevY = null;
+      this._spatialTouchSeenMs = null;
+      sp.touch = false;
+      sp.strokes = [];
+    };
+    const hasAxisX = patch.axisX !== undefined;
+    const hasAxisY = patch.axisY !== undefined;
+    if (hasAxisX !== hasAxisY) {
+      throw new Error('setSpatialPaint: axisX and axisY must be changed together');
+    }
+    let nextAxisX = sp.axisX;
+    let nextAxisY = sp.axisY;
+    if (hasAxisX) {
+      if (SPATIAL_AXIS_PAIRS.indexOf(`${patch.axisX}:${patch.axisY}`) === -1) {
+        throw new Error(`setSpatialPaint: unsupported axis pair '${patch.axisX}:${patch.axisY}'`);
+      }
+      nextAxisX = patch.axisX;
+      nextAxisY = patch.axisY;
+    }
+    let nextIndices = sp.pixelIndices;
+    let nextMask = this._spatialPixelMask;
+    if (patch.pixelIndices !== undefined) {
+      if (this.modelPixelCount === null) {
+        throw new Error('setSpatialPaint: modelPixelCount is required for a pixel mask');
+      }
+      if (!Array.isArray(patch.pixelIndices) || patch.pixelIndices.length === 0) {
+        throw new Error('setSpatialPaint: pixelIndices must be a non-empty array');
+      }
+      const seen = new Set();
+      nextIndices = patch.pixelIndices.map((value, index) => {
+        if (!Number.isInteger(value) || value < 0 || value >= this.modelPixelCount) {
+          throw new Error(`setSpatialPaint: pixelIndices[${index}] is out of range`);
+        }
+        if (seen.has(value)) throw new Error(`setSpatialPaint: duplicate pixel index ${value}`);
+        seen.add(value);
+        return value;
+      }).sort((a, b) => a - b);
+      nextMask = new Uint8Array(this.modelPixelCount);
+      for (const index of nextIndices) nextMask[index] = 1;
+    }
+    const maskChanged = nextIndices !== sp.pixelIndices && (!sp.pixelIndices
+      || sp.pixelIndices.length !== nextIndices.length
+      || sp.pixelIndices.some((value, index) => value !== nextIndices[index]));
+    const projectionChanged = nextAxisX !== sp.axisX || nextAxisY !== sp.axisY || maskChanged;
+    if (patch.enabled && !nextMask) {
+      throw new Error('setSpatialPaint: enabled paint requires a verified pixelIndices mask');
+    }
+    sp.axisX = nextAxisX;
+    sp.axisY = nextAxisY;
+    if (maskChanged) {
+      sp.pixelIndices = nextIndices;
+      this._spatialPixelMask = nextMask;
+    }
+    // Clear before applying the rest of this patch. This makes
+    // {clear:true,touch:true,...} an atomic "new stroke on a clean canvas"
+    // instead of clearing the touch that the same request just installed.
+    if (projectionChanged || patch.clear) clearSpatial();
+    if (patch.enabled !== undefined) {
+      sp.enabled = !!patch.enabled;
+    }
+    if (patch.touch !== undefined && patch.strokes === undefined) {
       sp.touch = !!patch.touch;
+      if (!sp.touch) sp.strokes = [];
       // Every touch-carrying write restarts the staleness window (the stage
       // stamps the frame clock on its next pass — one clock domain, no mixing
       // Date.now() into the nowMs stream, which is exactly the bug class the
@@ -1792,11 +1873,86 @@ export class GlobalEffectsController {
     }
     if (patch.targetX !== undefined) sp.targetX = num('targetX', 0, 1);
     if (patch.targetY !== undefined) sp.targetY = num('targetY', 0, 1);
+    if (patch.strokes !== undefined) {
+      if (!Array.isArray(patch.strokes)) {
+        throw new Error('setSpatialPaint: strokes must be an array');
+      }
+      if (patch.strokes.length > 10) {
+        throw new Error('setSpatialPaint: strokes supports at most 10 simultaneous touches');
+      }
+      const ids = new Set();
+      const nextStrokes = patch.strokes.map((stroke, index) => {
+        if (!stroke || typeof stroke !== 'object') {
+          throw new Error(`setSpatialPaint: strokes[${index}] must be an object`);
+        }
+        if (!Number.isInteger(stroke.id) || stroke.id < 0 || stroke.id > 0x7fffffff) {
+          throw new Error(`setSpatialPaint: strokes[${index}].id must be a non-negative integer`);
+        }
+        if (ids.has(stroke.id)) {
+          throw new Error(`setSpatialPaint: duplicate stroke id ${stroke.id}`);
+        }
+        ids.add(stroke.id);
+        const coordinate = (key) => {
+          const value = stroke[key];
+          if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+            throw new Error(`setSpatialPaint: strokes[${index}].${key} must be in [0,1]`);
+          }
+          return value;
+        };
+        const hasPrevX = stroke.prevX !== undefined;
+        const hasPrevY = stroke.prevY !== undefined;
+        if (hasPrevX !== hasPrevY) {
+          throw new Error(`setSpatialPaint: strokes[${index}] prevX and prevY must be supplied together`);
+        }
+        const out = {
+          id: stroke.id,
+          targetX: coordinate('targetX'),
+          targetY: coordinate('targetY'),
+        };
+        if (hasPrevX) {
+          out.prevX = coordinate('prevX');
+          out.prevY = coordinate('prevY');
+        }
+        const color = (key) => {
+          if (stroke[key] === undefined) return undefined;
+          if (!Array.isArray(stroke[key]) || stroke[key].length < 6) {
+            throw new Error(`setSpatialPaint: strokes[${index}].${key} must be a 6-element RGBWAU array`);
+          }
+          return stroke[key].slice(0, 6).map((value, channel) => {
+            if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+              throw new Error(`setSpatialPaint: strokes[${index}].${key}[${channel}] must be in [0,1]`);
+            }
+            return value;
+          });
+        };
+        const strokeColor = color('color');
+        const strokeAlt = color('colorAlt');
+        if (strokeColor) out.color = strokeColor;
+        if (strokeAlt) out.colorAlt = strokeAlt;
+        return out;
+      });
+      const nextTouch = nextStrokes.length > 0;
+      if (patch.touch !== undefined && !!patch.touch !== nextTouch) {
+        throw new Error('setSpatialPaint: touch must match whether strokes is empty');
+      }
+      sp.strokes = nextStrokes;
+      sp.touch = nextTouch;
+      this._spatialPrevX = null;
+      this._spatialPrevY = null;
+      this._spatialTouchSeenMs = null;
+    }
     if (patch.radius !== undefined) sp.radius = num('radius', 0.01, 1);
     if (patch.radiusY !== undefined) sp.radiusY = num('radiusY', 0.01, 2);
     // POWER overdrives past 1 (operator ruling: it did not hit hard enough).
     if (patch.amount !== undefined) sp.amount = num('amount', 0, 3);
-    if (patch.fade !== undefined) sp.fade = num('fade', 0, 1);
+    if (patch.fadeSeconds !== undefined) {
+      const value = num('fadeSeconds', SPATIAL_FADE_SECONDS[0],
+        SPATIAL_FADE_SECONDS[SPATIAL_FADE_SECONDS.length - 1]);
+      if (SPATIAL_FADE_SECONDS.indexOf(value) === -1) {
+        throw new Error(`setSpatialPaint: fadeSeconds must be one of ${SPATIAL_FADE_SECONDS.join('|')}`);
+      }
+      sp.fadeSeconds = value;
+    }
     if (patch.mode !== undefined) {
       if (['pool', 'trail', 'erase', 'ignite'].indexOf(patch.mode) === -1) {
         throw new Error(`setSpatialPaint: mode '${patch.mode}' must be pool|trail|erase|ignite`);
@@ -1817,23 +1973,17 @@ export class GlobalEffectsController {
       sp.colorAlt = patch.colorAlt.slice(0, 6).map(v => (typeof v === 'number' && Number.isFinite(v)
         ? Math.min(1, Math.max(0, v)) : 0));
     }
-    // Clearing the stroke wipes the heat too, otherwise disabling and
-    // re-enabling would resurrect a trail the operator thought they had dropped.
-    if (patch.clear) {
-      if (this._spatialHeat) this._spatialHeat.fill(0);
-      if (this._spatialInk) this._spatialInk.fill(0);
-      this._spatialEnergy = 0;
-      this._spatialPrevX = null;
-      this._spatialPrevY = null;
-    }
     return this.getSpatialPaint();
   }
 
   getSpatialPaint() {
     const sp = this.spatial;
     return {
-      enabled: sp.enabled, touch: sp.touch, targetX: sp.targetX, targetY: sp.targetY,
-      radius: sp.radius, radiusY: sp.radiusY, amount: sp.amount, mode: sp.mode, fade: sp.fade,
+      enabled: sp.enabled, touch: sp.touch, activeTouchCount: sp.strokes.length,
+      targetX: sp.targetX, targetY: sp.targetY,
+      radius: sp.radius, radiusY: sp.radiusY, amount: sp.amount, mode: sp.mode,
+      fadeSeconds: sp.fadeSeconds, axisX: sp.axisX, axisY: sp.axisY,
+      pixelIndices: sp.pixelIndices ? sp.pixelIndices.slice() : null,
       color: sp.color.slice(), colorAlt: sp.colorAlt.slice(),
       energy: this._spatialEnergy,
     };

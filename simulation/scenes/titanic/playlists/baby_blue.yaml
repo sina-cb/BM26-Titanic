@@ -1,0 +1,143 @@
+schemaVersion: 1
+name: baby_blue
+entries:
+  - id: e_baby_blue_118_grand_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: Baby Blue · Family Orbit Rings
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderLevel: 0.78
+      sliderRingWidth: 0.82
+      sliderOrbitTilt: 0.58
+      sliderContrast: 0.62
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_119_bow_stern_tidal_push
+    pattern: 119_bow_stern_tidal_push
+    label: Baby Blue · Welcome Tide
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.59
+      sliderWaveWidth: 0.56
+      sliderRecoil: 0.48
+      sliderContrast: 0.58
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: Baby Blue · Crossing Beacons
+    defaults:
+      sliderLocalSpeed: 0.35
+      sliderLevel: 0.70
+      sliderBeamWidth: 0.38
+      sliderCrossing: 0.5
+      sliderAfterglow: 0.45
+      sliderSafetyFloor: 0.65
+      sliderFlash: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: Baby Blue · Celebration Spiral
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.84
+      sliderSpiralWidth: 0.5
+      sliderTurns: 0.5
+      sliderWakeContrast: 0.58
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_122_breathing_horizon
+    pattern: 122_breathing_horizon
+    label: Baby Blue · New Horizon
+    defaults:
+      sliderLocalSpeed: 0.8
+      sliderLevel: 0.59
+      sliderHorizonWidth: 0.5
+      sliderBreathDepth: 0.5
+      sliderAfterglow: 0.58
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_123_mirrored_broadside_call
+    pattern: 123_mirrored_broadside_call
+    label: Baby Blue · Broadside Joy
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderLevel: 0.69
+      sliderWallWidth: 0.48
+      sliderExpansion: 0.72
+      sliderContrast: 0.62
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_124_aurora_crown
+    pattern: 124_aurora_crown
+    label: Baby Blue · Baby Aurora Crown
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderLevel: 0.70
+      sliderCrownHeight: 0.55
+      sliderArcWidth: 0.5
+      sliderCurl: 0.45
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_125_eclipse_orbit
+    pattern: 125_eclipse_orbit
+    label: Baby Blue · Gentle Eclipse
+    defaults:
+      sliderLocalSpeed: 0.18
+      sliderLevel: 0.85
+      sliderEclipseSize: 0.52
+      sliderRimWidth: 0.52
+      sliderDepth: 0.58
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_126_cathedral_rib_wave
+    pattern: 126_cathedral_rib_wave
+    label: Baby Blue · Family Cathedral
+    defaults:
+      sliderLocalSpeed: 0.75
+      sliderLevel: 0.90
+      sliderRibCount: 0.31
+      sliderRibWidth: 0.23
+      sliderBow: 0.48
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.
+  - id: e_baby_blue_127_grand_maelstrom
+    pattern: 127_grand_maelstrom
+    label: Baby Blue · Joyful Maelstrom
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.63
+      sliderArmWidth: 0.58
+      sliderArmCount: 0.32
+      sliderDepth: 0.56
+      sliderSafetyFloor: 0.65
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Baby-blue/cyan family photo movement; no audio modulation.

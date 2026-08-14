@@ -22,9 +22,20 @@ import {
   PARTY_TUNABLES, PARTY_TUNABLE_KEYS, patchPartyBlock, persistPartyConfig,
   formatYamlScalar, percentile, calibrationSuggestions,
 } from '../../audio/companion/party_tuning.js';
+import {
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
+  loadEffectiveAudioAnalysisConfig,
+} from '../../audio/config/audio_analysis_config.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
 import { PARTY_MODE_STRONG_DEFAULTS, PartyModeStrong } from '../../audio/signals/party_mode_strong.js';
 import { ParamCenter } from '../../lib/param_center.js';
+
+const ENGINE_DIR = path.resolve(import.meta.dirname, '..', '..');
+const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: 'titanic',
+}).audioConfig;
 
 // A config.yaml shaped like the real one but DENSE with comments — inline,
 // full-line, blank lines, a trailing comment on a key we edit, and neighbouring
@@ -209,7 +220,11 @@ test('suggestions are null with only one capture — never a half-guess', () => 
 
 function makeDerived() {
   const pc = new ParamCenter(null);
-  return new DerivedSignals({ paramCenter: pc });
+  return new DerivedSignals({
+    paramCenter: pc,
+    bpmTracker: buildBpmTrackerOptions(AUDIO_CONFIG),
+    derivedSignals: buildDerivedSignalsOptions(AUDIO_CONFIG),
+  });
 }
 
 test('APPLY reaches the live detector and is readable back', () => {

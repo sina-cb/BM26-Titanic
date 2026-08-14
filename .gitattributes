@@ -17,4 +17,13 @@
 # NOTE: adding an attribute does NOT rewrite an ALREADY-CHECKED-OUT tree. Run
 #   git add --renormalize .
 # once (see the _31 report) to bring existing working copies into line.
+/.gitattributes text eol=lf
 *.lua text eol=lf
+
+# Operator control paths are reviewed with `git diff --check`; pin the files
+# changed by the live-control-panel work so a Windows checkout cannot recommit
+# CRLF and turn one API edit into a 12k-line whitespace diff.
+/marsin_engine/lib/api_server.js -text diff whitespace=cr-at-eol
+/docs/ui/touch_control.html text eol=lf
+/docs/ui/touch_control_wire.js text eol=lf
+/CaptainPad/app/(tabs)/touch_control.tsx text eol=lf

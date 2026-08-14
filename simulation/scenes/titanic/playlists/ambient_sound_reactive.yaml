@@ -1,0 +1,1250 @@
+schemaVersion: 1
+name: ambient_sound_reactive
+entries:
+  - id: e_ambient_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.31
+      sliderLevel: 0.21
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.28
+      sliderJewelryWhite: 0.64
+      sliderJewelryFlash: 0.11
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.35
+          - 0.82
+        curve: easeOut
+      - id: mod_sliderEmberSwell_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderEmberSwell
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.08
+          - 0.78
+        curve: easeOut
+      - id: mod_sliderJewelryFlash_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderJewelryFlash
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_1_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.17
+      sliderDirection: 0.6
+      sliderLevel: 0.22
+      sliderKick: 0.25
+      sliderRadius: 0.76
+      sliderSharpness: 0.3
+      sliderCount: 0.86
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_2_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.15
+      sliderLevel: 0.4
+      sliderDetail: 0.42
+      sliderKick: 0.5
+      sliderJewelryWhite: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.72
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: easeIn
+      - id: mod_sliderDetail_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDetail
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.78
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_3_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderDetail: 0.5
+      sliderPortholeWhite: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.72
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.76
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_4_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderDensity: 0.5
+      sliderUvGlow: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteSpeed: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.78
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.7
+        curve: easeIn
+      - id: mod_sliderUvGlow_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderUvGlow
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.18
+          - 0.72
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_5_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderBreathDepth: 0.5
+      sliderBreathShape: 0.4
+      sliderBloom: 0.5
+      sliderRibbing: 0.45
+      sliderSparkle: 0.12
+      sliderWhiteGlow: 0.45
+      sliderFieldDetail: 0.72
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.72
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: easeIn
+      - id: mod_sliderSparkle_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderSparkle
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.04
+          - 0.72
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_6_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderStarCount: 0.5
+      sliderBrilliance: 0.7
+      sliderTwinkleFocus: 0.5
+      sliderAfterglow: 0.5
+      sliderStarChorus: 0.55
+      sliderBurst: 0
+      sliderJewelryWhite: 0.5
+      sliderUvStars: 0.3
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.7
+        curve: linear
+      - id: mod_sliderBrilliance_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderBrilliance
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.16
+          - 0.76
+        curve: linear
+      - id: mod_sliderBurst_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderBurst
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.78
+        curve: easeIn
+      - id: mod_sliderStarCount_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderStarCount
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.12
+          - 0.86
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_ambient_7_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderCurrentWidth: 0.5
+      sliderShimmer: 0.5
+      sliderDetail: 0.5
+      sliderJewelryWhite: 0.5
+      sliderUvUndertow: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.74
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.68
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_8_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.72
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: easeIn
+      - id: mod_sliderUvLevel_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderUvLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.12
+          - 0.7
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_9_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderLineSoftness: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.72
+        curve: easeIn
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_10_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderCounterPhase: 0.5
+      sliderFloorLevel: 0.45
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0
+      sliderWhiteSpread: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.72
+        curve: easeIn
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.68
+        curve: linear
+      - id: mod_sliderWhiteKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderWhiteKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.52
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_11_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.71
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderFocus: 0.5
+      sliderTrailBlend: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.74
+        curve: easeIn
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_12_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderWhiteFoam: 0.55
+      sliderUvUndertow: 0.3
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.72
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.68
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_13_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderFrondDensity: 0.5
+      sliderTipGlow: 0.5
+      sliderBaseDarkness: 0.5
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.74
+        curve: easeIn
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: linear
+      - id: mod_sliderDetail_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDetail
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.78
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_14_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.5
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations:
+      - id: mod_sliderShimmer_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderShimmer
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.04
+          - 0.86
+        curve: easeIn
+      - id: mod_sliderRipple_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderRipple
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_15_33_aurora_breath
+    pattern: 33_aurora_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderShimmer: 0.4
+      sliderBreathRate: 0.5
+      sliderBreathDepth: 0.5
+      sliderRibbons: 0.5
+      sliderSoft: 0.5
+      sliderBase: 0.14
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.16
+          - 0.76
+        curve: easeIn
+      - id: mod_sliderShimmer_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderShimmer
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.76
+        curve: easeIn
+      - id: mod_sliderBreathDepth_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderBreathDepth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.72
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_16_35_sparkle_rain
+    pattern: 35_sparkle_rain
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderDensity: 0.5
+      sliderKick: 0
+      sliderFall: 0.5
+      sliderIntensity: 0.85
+      sliderBase: 0.12
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.72
+        curve: linear
+      - id: mod_sliderDensity_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDensity
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.8
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_17_41_reaction_diffusion
+    pattern: 41_reaction_diffusion
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderFeed: 0.5
+      sliderSeed: 0
+      sliderBase: 0.06
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.76
+        curve: linear
+      - id: mod_sliderSeed_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSeed
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_18_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSwell: 0.45
+      sliderBlinder: 0
+      sliderShimmer: 0
+      sliderNoiseScale: 0.5
+    modulations:
+      - id: mod_sliderSwell_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderSwell
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.16
+          - 0.78
+        curve: linear
+      - id: mod_sliderBlinder_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderBlinder
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: linear
+      - id: mod_sliderShimmer_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderShimmer
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.66
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_19_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSwell: 0.45
+      sliderSparkle: 0.2
+      sliderKick: 0
+      sliderUvGlow: 0.6
+      sliderBase: 0.12
+    modulations:
+      - id: mod_sliderSwell_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderSwell
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.76
+        curve: linear
+      - id: mod_sliderSparkle_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderSparkle
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.76
+        curve: easeIn
+      - id: mod_sliderKick_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_20_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSwell: 0.45
+      sliderFoam: 0.3
+      sliderSpan: 0.5
+      sliderDepth: 0.5
+    modulations:
+      - id: mod_sliderSwell_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderSwell
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.76
+        curve: linear
+      - id: mod_sliderFoam_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderFoam
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.76
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_21_46_abyssal_fronds
+    pattern: 46_abyssal_fronds
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderGlints: 0.5
+      sliderBreathRate: 0.5
+      sliderBreathDepth: 0.5
+      sliderFrondDensity: 0.5
+      sliderBaseGlow: 0.4
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.22
+          - 0.76
+        curve: linear
+      - id: mod_sliderGlints_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderGlints
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_ambient_22_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderInk: 0.5
+      sliderFlow: 0.45
+      sliderDiffuse: 0.5
+      sliderBase: 0.09
+    modulations:
+      - id: mod_sliderFlow_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderFlow
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.78
+        curve: linear
+      - id: mod_sliderInk_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderInk
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: linear
+      - id: mod_sliderDiffuse_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderDiffuse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.78
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_ambient_23_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.45
+      sliderFlash: 0
+      sliderWidth: 0.5
+    modulations:
+      - id: mod_sliderBeam_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBeam
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.78
+        curve: linear
+      - id: mod_sliderFlash_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderFlash
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.86
+        curve: linear
+      - id: mod_sliderWidth_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.76
+        curve: linear
+    midiMappings: []
+    notes: null

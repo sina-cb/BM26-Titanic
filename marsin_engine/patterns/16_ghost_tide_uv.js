@@ -8,33 +8,38 @@
   IDENTITY (preserved): tidal foam sweep + UV undertow + explicit white/UV, mist
   colour blend cp1<->cp2. Upgrades: 0..1 coords used directly (no re-normalize),
   identity-slider convention, audio reactivity (foam crest pops on the kick,
-  whole tide brightens with the bass), guarded direction with smooth autonomous
-  reversal so the tide occasionally turns.
+  whole tide brightens with the bass), and one calm forward heading with a
+  smooth autonomous rate sway. Every RGB contribution is derived from the
+  cp1<->cp2 palette; only the named white/amber foam and UV undertow use their
+  dedicated emitters.
 
   NON-REPEATING MATH
     The sweep and undertow are two delta-accumulated phases at an irrational ratio
-    (tide rate 0.025 : undertow 0.0145 ≈ 1 : 0.58). Phases accumulate continuously
+    (tide rate 0.38; undertow ratio 0.58017). Phases accumulate continuously
     and wrap at PHASE_WRAP turns, far from any in-frame use — no seam (skill 12 §7).
-    Autonomous tidal sway: a smooth rate envelope (0.55 + 0.45*cos(slowClock))
+    Autonomous tidal sway: a smooth rate envelope (0.55 + 0.45*wave(slowClock))
     on a slow incommensurate clock eases the tide between a slow creep and a
     faster surge. The envelope keeps a positive floor so the sweep never freezes
     mid-stroke (the og identity is a continuous, never-stalling tidal sweep).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
   AUDIO_MODULATION_V1:
-    sliderLevel   <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderLevel   <- micLow  range 0.15..1.00 curve ease    # PRIMARY overall brightness (bass)
     sliderKick    <- micKick range 0.00..1.00 curve pow2    # foam / white crest pop
-    sliderRadius  <- micFlux range 0.40..0.90 curve linear  # foam crest width / how far it surges
+    sliderRadius  <- micFlux range 0.10..0.95 curve ease    # true surge excursion, independent of foam width
     sliderUvLevel <- micHigh range 0.20..0.90 curve linear  # UV undertow glow (highs / sparkle band)
-  # static (unmapped): direction, tideWidth, whiteLevel, palette pickers
+  # static (unmapped): tideWidth, whiteLevel, palette pickers
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
+// Canonical append-only optional fixture roles; absent roles match no pixels.
+var FIX_RAW_LED = 1;
+var FIX_TE_SIGN = 7;
+
 export var localSpeed = 0.5;   // tide rate (0 still creeps, 1 ~4x faster)
-export var direction = 0.5;    // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
 export var level = 1.0;        // PRIMARY audio: overall brightness (micLow)
 export var kick = 0.0;         // audio: kick -> foam/white crest pop (micKick)
-export var radius = 0.5;       // audio: foam crest width / surge (micFlux)
+export var radius = 0.5;       // audio: surge/travel excursion (micFlux)
 export var tideWidth = 0.5;    // base foam width (0..1; scaled in render)
 export var whiteLevel = 0.6;   // foam white-channel level
 export var uvLevel = 0.6;      // UV undertow glow (audio: micHigh)
@@ -45,11 +50,6 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) {
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
-}
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
@@ -59,10 +59,15 @@ export function sliderUvLevel(v) { uvLevel = v; }
 
 var tide = 0.0;          // sweep phase (turns, accumulated)
 var undertow = 0.0;      // undertow phase
-var autoClock = 0.0;     // slow clock for autonomous reversal
-var dirSign = 1.0;
+var autoClock = 0.0;     // slow clock for autonomous rate sway
+var surgeClock = 0.17;   // independent travel/excursion clock
+var vintageClock = 0.31; // independent Jewelry sparkle clock
+var parClock = 0.47;     // independent organ-pool clock
+var signClock = 0.63;    // independent Identity bloom clock
 var liveWidth = 0.42;    // resolved foam width this frame
+var surgeTravel = 0.0;   // resolved Radius-driven phase excursion
 var PHASE_WRAP = 10000.0;
+var FLOW_DIRECTION = 1.0;
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -102,79 +107,153 @@ export function beforeRender(delta) {
   if (dt > 0.1) dt = 0.1;
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  dirSign = direction;
-  if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
-  else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
-
   // Autonomous tidal ebb/flow: a smooth rate sway that eases the tide between a
   // slow creep and a faster surge on a slow incommensurate clock. The envelope
   // keeps a positive floor (0.10..1.00) so the sweep NEVER freezes mid-stroke —
   // an earlier (0.4 + 0.6*cos) envelope reached zero at cos=-0.667 and stalled
   // the whole rig for ~1s on every cycle, which the discontinuity detector
-  // flagged. Direction still sets the sweep sense; the og identity is a
-  // continuous, never-stalling tidal sweep.
+  // flagged. The fixed forward heading keeps the original continuous,
+  // never-stalling tidal identity without exposing a direction control.
   autoClock = autoClock + dt * 0.049 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  // A baseline sweep magnitude (sign from direction) keeps the tide visibly
-  // sweeping even at the guarded-center default; direction still steers the bias.
-  var dirBias = dirSign;
-  var dirMag = (dirBias < 0.0) ? -1.0 : 1.0;
-  var sweepRate = dirBias + dirMag * 0.7;   // never near-zero at center
-  var rate = (0.55 + 0.45 * cos(autoClock)) * sweepRate * localMultiplier;
+  var rate = (0.55 + 0.45 * wave(autoClock))
+           * FLOW_DIRECTION * localMultiplier;
 
   // Two phases at an irrational ratio (1 : 0.58) so the look never re-locks.
-  tide = tide + dt * 0.50 * rate;          if (tide >= PHASE_WRAP) tide -= PHASE_WRAP; else if (tide <= -PHASE_WRAP) tide += PHASE_WRAP;
-  undertow = undertow + dt * 0.29 * rate;  if (undertow >= PHASE_WRAP) undertow -= PHASE_WRAP; else if (undertow <= -PHASE_WRAP) undertow += PHASE_WRAP;
+  tide = tide + dt * 0.38 * rate;
+  if (tide >= PHASE_WRAP) tide -= PHASE_WRAP;
+  else if (tide <= -PHASE_WRAP) tide += PHASE_WRAP;
+  undertow = undertow + dt * 0.38 * 0.58017 * rate;
+  if (undertow >= PHASE_WRAP) undertow -= PHASE_WRAP;
+  else if (undertow <= -PHASE_WRAP) undertow += PHASE_WRAP;
 
-  // Foam width: base + audio surge (micFlux). Kept in a sane range.
-  liveWidth = 0.15 + tideWidth * 0.45 + radius * 0.30;
+  // Radius owns a genuine back-and-forth travel excursion. TideWidth alone
+  // owns crest thickness, so the two controls no longer describe one width.
+  surgeClock = surgeClock + dt * 0.071 * localMultiplier;
+  if (surgeClock >= PHASE_WRAP) surgeClock = surgeClock - PHASE_WRAP;
+  surgeTravel = (wave(surgeClock) - 0.5) * 2.0 * (0.04 + radius * 0.48);
+  liveWidth = 0.08 + tideWidth * 0.34;
+
+  vintageClock = vintageClock + dt * 0.31 * localMultiplier;
+  if (vintageClock >= PHASE_WRAP) vintageClock = vintageClock - PHASE_WRAP;
+  parClock = parClock + dt * 0.037 * localMultiplier;
+  if (parClock >= PHASE_WRAP) parClock = parClock - PHASE_WRAP;
+  // Identity owns an independent, visible ghost-current clock. Integer
+  // consumers below keep its very-late PHASE_WRAP continuous.
+  signClock = signClock + dt * 0.041 * localMultiplier;
+  if (signClock >= PHASE_WRAP) signClock = signClock - PHASE_WRAP;
   _hsv2rgb1();
   _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
-  // Coords are already 0..1 — use directly (clamped). No re-normalize (the old
-  // (x+1.264)/3.125 form was the regression that rendered this dim/black).
   var nx = max(0.0, min(1.0, x));
   var ny = max(0.0, min(1.0, y));
+  var nz = max(0.0, min(1.0, z));
 
-  // The sweeping foam line. tide is in turns; wave() keeps it periodic & smooth.
-  var sweep = wave(nx * 0.42 + ny * 0.30 + tide);
+  // Radius shifts the whole tide through a real travel excursion. TideWidth
+  // changes only the thickness of this crest below.
+  var sweep = wave(nx * 0.42 + ny * 0.30 + tide + surgeTravel);
   var edge = abs(sweep - 0.5) * 2.0;
   var foam = max(0.0, 1.0 - edge / liveWidth);
   foam = pow(foam, 2.4);
 
-  // Slow undertow roll under the foam — sets the mist colour & UV swell.
   var lowRoll = wave((ny * 2.2) - (nx * 0.8) + undertow);
-  var mist = pow(lowRoll, 2.0) * (0.22 + foam * 0.50);
+  var mist = pow(lowRoll, 2.0) * (0.14 + foam * 0.42);
 
-  // Kick pops the foam crest (white + mist), only where there is foam.
   var crest = foam * (1.0 + kick * 1.4);
-
-  // Contrast the mist blend so both palette ends read at once (troughs sit at
-  // cp1, crests reach cp2) instead of hovering around a single mid hue.
   var tColour = max(0.0, min(1.0, (lowRoll - 0.5) * 1.5 + 0.5));
-  var rBase = (pr1 + (pr2 - pr1) * tColour) * (mist + crest * 0.25);
-  var gBase = (pg1 + (pg2 - pg1) * tColour) * (mist + crest * 0.25);
-  var bBase = (pb1 + (pb2 - pb1) * tColour) * (mist + crest * 0.25);
+  var body = mist + crest * 0.22;
+  var rBase = (pr1 + (pr2 - pr1) * tColour) * body;
+  var gBase = (pg1 + (pg2 - pg1) * tColour) * body;
+  var bBase = (pb1 + (pb2 - pb1) * tColour) * body;
 
-  var white = crest * whiteLevel;
-  var uv = ((1.0 - ny) * lowRoll * 0.45 + foam * 0.55) * uvLevel;
+  // Quieter default than the former 2.16x silence gain. The bass mapping still
+  // has a wide, direct range and kick can make the crest decisive.
+  var levelGain = 0.12 + level * 0.65;
+  var floorBase = 0.006;
+  var floorMix = 0.5;
+  var r = (rBase + (pr1 + (pr2 - pr1) * floorMix) * floorBase) * levelGain;
+  var g = (gBase + (pg1 + (pg2 - pg1) * floorMix) * floorBase) * levelGain;
+  var b = (bBase + (pb1 + (pb2 - pb1) * floorMix) * floorBase) * levelGain;
+  var white = 0.0;
+  var uv = 0.0;
 
-  // PRIMARY: overall brightness from micLow. level^2 makes the bass the dominant
-  // brightness driver across every channel (corr>=0.5); a small clock-driven
-  // base floor keeps silence calm-but-visible, while troughs read near-black.
-  var levelGain = 0.16 + level * level * 2.0;
-  var floorBase = 0.015;
-  var r = min(1.0, (rBase + floorBase) * levelGain);
-  var g = min(1.0, (gBase + floorBase) * levelGain);
-  var b = min(1.0, (bBase + floorBase) * levelGain);
-  white = min(1.0, white * levelGain);
-  uv = min(1.0, uv * levelGain);
+  if (fixtureType == FIX_BAR_18) {
+    // Hull bars carry the complete foam + undertow picture. Foam is rendered
+    // in the selected palette so the W/A emitters remain reserved for Jewelry.
+    var pale = crest * whiteLevel * levelGain * 0.52;
+    var foamMix = max(0.0, min(1.0, 0.35 + lowRoll * 0.30));
+    r = r + (pr1 + (pr2 - pr1) * foamMix) * pale;
+    g = g + (pg1 + (pg2 - pg1) * foamMix) * pale;
+    b = b + (pb1 + (pb2 - pb1) * foamMix) * pale;
+    uv = ((1.0 - ny) * lowRoll * 0.40 + foam * 0.60)
+       * uvLevel * levelGain;
+  }
+  else if (fixtureType == FIX_RAW_LED) {
+    // Silhouette strands trace a palette-authored crest and have no UV emitter.
+    var trace = crest * levelGain * 0.72;
+    var traceMix = max(0.0, min(1.0, 0.45 + lowRoll * 0.45));
+    r = r * 0.42 + (pr1 + (pr2 - pr1) * traceMix) * trace;
+    g = g * 0.42 + (pg1 + (pg2 - pg1) * traceMix) * trace;
+    b = b * 0.42 + (pb1 + (pb2 - pb1) * traceMix) * trace;
+  }
+  else if (fixtureType == FIX_VINTAGE_6) {
+    // Sparse palette-colored foam droplets with matched native W+A.
+    var sparkle = wave(vintageClock + pixelLocalIndex * 0.381966
+                     + nx * 0.17 + ny * 0.11);
+    sparkle = sparkle * sparkle; sparkle = sparkle * sparkle;
+    var jewelryFoam = crest * sparkle * whiteLevel * levelGain;
+    var jewelryMix = max(0.0, min(1.0, 0.20 + lowRoll * 0.55));
+    r = r * 0.35 + (pr1 + (pr2 - pr1) * jewelryMix) * jewelryFoam;
+    g = g * 0.35 + (pg1 + (pg2 - pg1) * jewelryMix) * jewelryFoam;
+    b = b * 0.35 + (pb1 + (pb2 - pb1) * jewelryMix) * jewelryFoam;
+    white = jewelryFoam;
+  }
+  else if (fixtureType == FIX_PAR) {
+    // Organs hold restrained palette/UV pools stirred by the low undertow.
+    var pool = wave(parClock + nx * 0.17 + nz * 0.13);
+    var poolBri = levelGain * (0.08 + lowRoll * 0.22 + pool * 0.12);
+    var poolMix = max(0.0, min(1.0, 0.15 + lowRoll * 0.55 + foam * 0.25));
+    var poolLift = poolBri + crest * levelGain * 0.12;
+    r = (pr1 + (pr2 - pr1) * poolMix) * poolLift;
+    g = (pg1 + (pg2 - pg1) * poolMix) * poolLift;
+    b = (pb1 + (pb2 - pb1) * poolMix) * poolLift;
+    uv = (lowRoll * 0.24 + foam * 0.30) * uvLevel * levelGain;
+  }
+  else if (fixtureType == FIX_TE_SIGN) {
+    // Identity is a miniature ghost sea: one broad oblique foam front crosses
+    // the letters while two counter-flowing XYZ currents continuously open and
+    // close phosphorescent cells behind it. This is visibly more intricate
+    // than Moon River's single river or Caustic Shimmer's glass lenses, while
+    // every edge remains continuous (no temporal hashes or threshold flicker).
+    var signSweep = wave(nx * 0.57 + ny * 0.33 - nz * 0.19
+                       + tide + surgeTravel + pixelLocalIndex * 0.0025);
+    var signEdge = abs(signSweep - 0.5) * 2.0;
+    var signFoam = max(0.0, 1.0 - signEdge / (liveWidth * 0.78));
+    signFoam = pow(signFoam, 2.8);
+    var signCurrentA = wave(nx * 1.73 + ny * 2.31 - nz * 0.83
+                         + signClock * 3.0 + pixelLocalIndex * 0.0060);
+    var signCurrentB = wave(-nx * 2.17 + ny * 1.37 + nz * 1.91
+                         - signClock * 5.0 + pixelLocalIndex * 0.0035);
+    var signCell = 1.0 - abs(signCurrentA - signCurrentB);
+    signCell = pow(max(0.0, signCell), 3.2);
+    var signMist = wave(ny * 1.70 - nx * 0.60 + nz * 0.90
+                      + undertow + signCell * 0.23);
+    signMist = pow(signMist, 2.0);
+    var signBri = (0.255 + signMist * 0.090 + signCell * 0.145
+                 + signFoam * 0.245 + kick * 0.050)
+                 * (0.78 + level * 0.22);
+    var signMix = max(0.0, min(1.0, 0.10 + signCurrentA * 0.19
+                            + signCurrentB * 0.16 + signMist * 0.17
+                            + signFoam * 0.30));
+    r = (pr1 + (pr2 - pr1) * signMix) * signBri;
+    g = (pg1 + (pg2 - pg1) * signMix) * signBri;
+    b = (pb1 + (pb2 - pb1) * signMix) * signBri;
+  }
 
-  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
-  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
-  // strands already render (they fold amber into RGB). Convention:
-  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
-  rgbwau(r, g, b, white, white, uv);
+  // Only the capable bar and PAR fixtures receive UV above. Vintage W and A
+  // are byte-identical by construction; every other fixture leaves both zero.
+  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b),
+         min(1.0, white), min(1.0, white), min(1.0, uv));
 }

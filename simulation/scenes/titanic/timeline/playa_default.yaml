@@ -217,6 +217,150 @@ cues:
       min: 120
     days:
       - 7
+  - id: c_baby_reveal_pink
+    label: BABY REVEAL - PINK
+    enabled: true
+    catchUp: false
+    trigger:
+      type: manual
+    action:
+      type: sequence
+      steps:
+        - afterSec: 0
+          action:
+            type: playlist
+            name: baby_reveal
+            entryId: e_baby_reveal_pink
+            palette: baby_reveal_duet
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: false
+              delay_s: 90
+              shuffle: false
+            transition:
+              mode: trans_crossfade
+              durationMs: 1
+              enabled: false
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_reveal_duet
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+        - afterSec: 992
+          action:
+            type: playlist
+            name: baby_pink
+            palette: baby_pink
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: true
+              delay_s: 90
+              shuffle: true
+            transition:
+              mode: trans_crossfade
+              durationMs: 3000
+              enabled: true
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_pink
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+    kind: program
+    hold:
+      min: 120
+    days: all
+  - id: c_baby_reveal_blue
+    label: BABY REVEAL - BLUE
+    enabled: true
+    catchUp: false
+    trigger:
+      type: manual
+    action:
+      type: sequence
+      steps:
+        - afterSec: 0
+          action:
+            type: playlist
+            name: baby_reveal
+            entryId: e_baby_reveal_blue
+            palette: baby_reveal_duet
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: false
+              delay_s: 90
+              shuffle: false
+            transition:
+              mode: trans_crossfade
+              durationMs: 1
+              enabled: false
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_reveal_duet
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+        - afterSec: 992
+          action:
+            type: playlist
+            name: baby_blue
+            palette: baby_blue
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: true
+              delay_s: 90
+              shuffle: true
+            transition:
+              mode: trans_crossfade
+              durationMs: 3000
+              enabled: true
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_blue
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+    kind: program
+    hold:
+      min: 120
+    days: all
 defaultCue:
   label: Ambient program
   action:

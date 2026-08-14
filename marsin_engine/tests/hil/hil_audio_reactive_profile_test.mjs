@@ -6,8 +6,8 @@
  * `POST /param-center` (the audio signal keys are registered at boot when audio
  * is enabled — test_bench boots with the mic analyzer):
  *   1. Arming audio_reactive sets `bpmSpeedSync=1` (speed follows tempo).
- *   2. A `audioSwitchPattern` pulse (with silence=0, party=1) ADVANCES the deck.
- *   3. A bare `audioSwitchColor` transient does NOT recolour (must hold).
+ *   2. An `audioSwitchPatternSeq` event advances the deck.
+ *   3. A bare `audioSwitchColorSeq` event does not recolour (must hold).
  *   4. A STABLE descriptor change held past the dwell DOES recolour the palette.
  *   5. ENERGY ARC — a sustained calm SAGS the actual mapped `speed` (the
  *      energy→speed-scale layered on bpmSpeedSync); the bpmSpeedMax WINDOW stays
@@ -175,8 +175,8 @@ function stopEngine() {
     await httpJson('POST', '/param-center/source-lock', {
       mode: 'per-param',
       leases: {
-        audioSilence: 'api', audioParty: 'api', audioSwitchPattern: 'api',
-        audioSwitchColor: 'api', audioNoteHue: 'api', audioNote: 'api',
+        audioSilence: 'api', audioParty: 'api', audioSwitchPatternSeq: 'api',
+        audioSwitchColorSeq: 'api', audioNoteHue: 'api', audioNote: 'api',
         audioEnergyRatio: 'api', audioSlowZone: 'api', audioStructure: 'api',
         audioDropPulse: 'api', audioBpm: 'api',
       },
@@ -194,12 +194,12 @@ function stopEngine() {
       'bpmSpeedSync not armed', `got=${await cpc('bpmSpeedSync')}`);
 
     // ── TEST 2: a switchPattern pulse advances the deck ───────────────────
-    console.log('\n[TEST 2] audioSwitchPattern pulse advances the deck pattern');
-    await setCpc({ audioSilence: 0, audioParty: 1, audioSwitchPattern: 0 });
+    console.log('\n[TEST 2] audioSwitchPatternSeq event advances the deck pattern');
+    await setCpc({ audioSilence: 0, audioParty: 1, audioSwitchPatternSeq: 0 });
     const before = await deckActiveEntry();
     // arm sets _lastAdvanceMs=now, so wait out the 12 s minInterval re-guard.
     await sleep(12500);
-    await setCpc({ audioSwitchPattern: 1 });   // rising to >0 → triggers advance
+    await setCpc({ audioSwitchPatternSeq: 1 });
     await sleep(500);
     const after = await deckActiveEntry();
     check(after !== null && after !== before,
@@ -214,8 +214,8 @@ function stopEngine() {
     await setCpc({ audioEnergyRatio: 0.4, audioSlowZone: 0.1, audioStructure: 1, audioNote: 4, audioNoteHue: 0.5 });
     await sleep(1500);   // let the descriptor settle across several ticks
     const palBefore = JSON.stringify(await cpc('colorPalette1'));
-    await setCpc({ audioSwitchColor: 0 }); await sleep(100);
-    await setCpc({ audioSwitchColor: 1 });   // a raw transient — must NOT recolour
+    await setCpc({ audioSwitchColorSeq: 0 }); await sleep(100);
+    await setCpc({ audioSwitchColorSeq: 1 });
     await sleep(800);
     const palAfterTransient = JSON.stringify(await cpc('colorPalette1'));
     check(palAfterTransient === palBefore,
@@ -266,7 +266,7 @@ function stopEngine() {
     // Arm on a calm, then hold energy elevated PAST switchConfirmMs (15 s). A
     // brief swell shorter than the window would NOT switch (art-car rejection —
     // unit-tested); here we prove the sustained path fires end-to-end.
-    await setCpc({ audioSilence: 0, audioParty: 1, audioSwitchPattern: 0, audioDropPulse: 0 });
+    await setCpc({ audioSilence: 0, audioParty: 1, audioSwitchPatternSeq: 0, audioDropPulse: 0 });
     await setCpc({ audioEnergyRatio: 0.08 });
     await sleep(13000);  // calm: arm the pickup AND clear the 12 s minInterval
     const beforeP = await deckActiveEntry();
@@ -280,10 +280,10 @@ function stopEngine() {
 
     // ── TEST 7: silence suppresses the advance ────────────────────────────
     console.log('\n[TEST 7] audioSilence=1 suppresses a pattern advance');
-    await setCpc({ audioSilence: 1, audioSwitchPattern: 0 });
+    await setCpc({ audioSilence: 1, audioSwitchPatternSeq: 0 });
     await sleep(12500);  // clear minInterval so ONLY the silence gate matters
     const beforeS = await deckActiveEntry();
-    await setCpc({ audioSwitchPattern: 1 });   // rising, but silence gate is shut
+    await setCpc({ audioSwitchPatternSeq: 1 });
     await sleep(600);
     const afterS = await deckActiveEntry();
     check(afterS === beforeS,

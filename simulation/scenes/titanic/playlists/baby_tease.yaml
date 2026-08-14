@@ -1,0 +1,16 @@
+schemaVersion: 1
+name: baby_tease
+entries:
+  - id: e_baby_tease_impossible_question
+    pattern: 132_baby_tease
+    label: Baby Tease - The Impossible Question
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderLevel: 0.9
+      sliderSpatialDepth: 0.72
+      sliderSparkle: 0.58
+      sliderRestartTease: 0
+      sliderReplayFinale: 0
+    modulations: []
+    midiMappings: []
+    notes: 'Outcome-blind 158 s tease. Ends in indefinite blackout; manually push baby_girl or baby_boy.'

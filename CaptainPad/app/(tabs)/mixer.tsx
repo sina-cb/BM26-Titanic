@@ -4,13 +4,15 @@ import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextIn
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
-import { useFocusEffect, router } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
+import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
+import { mixerFocusMayActivate } from '@/utils/layer_settings';
 import {
   fetchMixerState, updateMixerChannel, removeMixerChannel, setMixerChannelControl,
   addMixerChannel, updateMixerMaster,
-  fetchChannelBlends, fetchTransitions, setMixerView,
+  fetchChannelBlends, fetchTransitions, activateLayerSetting,
   fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
   type PlaylistData,
@@ -1167,6 +1169,7 @@ ChannelStrip.displayName = 'ChannelStrip';
 // ── Main Mixer Screen ──────────────────────────────────────────────────
 export default function MixerScreen() {
   const C = usePalette();
+  const { waitForHandoff } = useLiveTouchCoordinator();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const { width, height } = useWindowDimensions();
@@ -1375,7 +1378,7 @@ export default function MixerScreen() {
   //
   // Ordering is race-free: the takeover POST clears the plan's deck-pin, and
   // that release runs to completion (microtask drain) BEFORE the engine can
-  // process the next request — so the /mixer/view write below always lands on
+  // process the next request — so the /layers/activate write below always lands on
   // the LIVE fader (→ mixer, targetViewFader 1.0), never gets swallowed as a
   // saved-only value.
   //
@@ -1389,39 +1392,42 @@ export default function MixerScreen() {
       Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
       return;
     }
-    await setMixerView('mixer');
+    const layerResult = await activateLayerSetting('mixer', { reason: 'captainpad_mixer_takeover' });
+    if (!layerResult.ok) {
+      Alert.alert('Mixer activation failed', layerResult.error || 'The engine rejected the Mixer layer setting.');
+    }
   }, [timelineTakeover]);
 
-  // On mixer-tab focus, switch the engine output to the mixer — but ONLY when
-  // NO plan is driving the rig. Bug 2026-07-02: this used to fire off a ref
-  // that was still `undefined` (falsey) before the first timelineState arrived,
-  // so entering the mixer while a plan drove the DECK yanked the output to the
-  // (empty, fader-0) mixer view and blacked the whole rig out — even on
-  // takeover. Now we WAIT for the state, and while a plan is active
-  // (planActive) we leave the output on the deck (the live look stays up); the
-  // operator flips the DECK/MIXER toggle if they actually want mixer output.
+  // Mixer focus uses the canonical Layers transaction when the plan is not
+  // authoritative. A currently-held operator takeover lease is already an
+  // explicit override, so Mixer may activate under that lease; an un-overridden
+  // active plan keeps this surface read-only until TEMPORARY TAKE OVER above.
   const isMixerFocusedRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      // Switch the MIDI controller to its Mixer mapping context. setMixerView
-      // is deferred to the plan-gated effect below (main's blackout fix), so we
-      // no longer yank the output to the mixer directly on tab focus.
       setMidiActiveContext('mixer');
       isMixerFocusedRef.current = true;
-      viewGateHandledRef.current = false; // re-evaluate the switch each entry
+      viewGateHandledRef.current = false;
       return () => { isMixerFocusedRef.current = false; };
     }, [])
   );
   useEffect(() => {
     if (!isMixerFocusedRef.current || viewGateHandledRef.current) return;
-    if (!timelineState) return; // wait for the first state before deciding
+    if (!timelineState) return;
     viewGateHandledRef.current = true;
-    // Switch to mixer output ONLY when the rig is truly free — no plan driving
-    // AND no operator takeover in progress. Under a lock OR a takeover, leave
-    // the output on the (lit) deck so we never black the rig out; the operator
-    // flips the DECK/MIXER toggle for mixer output.
-    if (timelineState.planActive !== true && !leaseHeld) setMixerView('mixer');
-  }, [timelineState, leaseHeld]);
+    if (mixerFocusMayActivate(timelineState.planActive === true, leaseHeld)) {
+      void waitForHandoff('mixer').then((handoffResult) => {
+        if (handoffResult !== null) return;
+        return activateLayerSetting('mixer', { reason: 'captainpad_mixer_tab' }).then((result) => {
+          if (!result.ok) {
+            Alert.alert('Mixer activation failed', result.error || 'The engine rejected the Mixer layer setting.');
+          }
+        });
+      }).catch((error) => {
+        Alert.alert('Mixer handoff failed', error instanceof Error ? error.message : String(error));
+      });
+    }
+  }, [timelineState, leaseHeld, waitForHandoff]);
 
   // Control plane handler (consumed by useEngineConnection below): mixer
   // state, baseChannelId, maxChannels, in-flight add reconciliation. ALSO:
@@ -1567,7 +1573,7 @@ export default function MixerScreen() {
         }
       }
     }
-  }, []);
+  }, [setInlinePlaylist]);
 
   // Connection state pill (mirror status → setIsConnected). The shared
   // hook funnels BOTH the boot-time testConnection probe and live

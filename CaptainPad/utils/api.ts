@@ -1,5 +1,9 @@
 import { Platform } from 'react-native';
 import { engineEvents } from './engineEvents';
+import {
+  parseLayerSettingsState,
+} from './layer_settings';
+import type { LayerSettingId, LayerSettingsState } from './layer_settings';
 // Engine address resolution lives in the dependency-free apiBase.ts —
 // engineBus.ts needs it too, and importing it from here created the
 // require cycle api → engineEvents → engineBus → api. Re-exported so
@@ -740,20 +744,62 @@ export async function setGlobalEffect(effect: string, state: boolean): Promise<A
   }
 }
 
-export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<any>> {
-  // The deck is always bound to its base channel — the old `deckChannel`
-  // override argument was removed along with the TARGET CHANNEL picker
-  // in May 2026. See docs/16_captain_pad.md §"Target channel removal".
+export type ActivateLayerSettingOptions = {
+  durationMs?: number;
+  reason?: string;
+  ownerId?: string;
+};
+
+async function layerSettingsError(response: Response): Promise<string> {
+  let body: unknown;
   try {
-    const res = await fetchWithTimeout(`${api_base}/mixer/view`, {
+    body = await response.json();
+  } catch (error) {
+    throw new Error(`Layer settings returned HTTP ${response.status} with invalid JSON: ${String(error)}`);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error(`Layer settings returned HTTP ${response.status} with an invalid error body`);
+  }
+  const errorBody = body as { code?: unknown; error?: unknown };
+  if (typeof errorBody.code !== 'string' || typeof errorBody.error !== 'string') {
+    throw new Error(`Layer settings returned HTTP ${response.status} without code and error`);
+  }
+  return `${errorBody.code}: ${errorBody.error}`;
+}
+
+export async function fetchLayerSettingsState(): Promise<ApiResult<LayerSettingsState>> {
+  try {
+    const response = await fetchWithTimeout(`${api_base}/layers/state`);
+    if (!response.ok) return { ok: false, error: await layerSettingsError(response) };
+    return { ok: true, data: parseLayerSettingsState(await response.json()) };
+  } catch (err: any) {
+    warnThrottled('fetch-layer-settings', 'Failed to fetch layer settings:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function activateLayerSetting(
+  target: LayerSettingId,
+  options: ActivateLayerSettingOptions = {},
+): Promise<ApiResult<LayerSettingsState>> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (options.ownerId) headers['X-Touch-Control-Owner'] = options.ownerId;
+
+    const response = await fetchWithTimeout(`${api_base}/layers/activate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ view }),
+      headers,
+      body: JSON.stringify({
+        target,
+        ...(options.durationMs === undefined ? {} : { durationMs: options.durationMs }),
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+        ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
+      }),
     });
-    const data = await res.json();
-    return { ok: true, data };
-  } catch(err: any) {
-    warnThrottled(`set-mixer-view-${view}`, `Failed to set mixer view to ${view}:`, err);
+    if (!response.ok) return { ok: false, error: await layerSettingsError(response) };
+    return { ok: true, data: parseLayerSettingsState(await response.json()) };
+  } catch (err: any) {
+    warnThrottled(`activate-layer-setting-${target}`, `Failed to activate layer setting ${target}:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -1326,7 +1372,14 @@ export async function fetchViewSelectionOptions(): Promise<ApiResult<{
   // Consumed by the shared ViewSelectionPicker (report 20260724_8). Optional
   // in the type so a stale engine that omits it is detectable — the picker
   // fails LOUD (visible banner) rather than silently hiding the catalog.
-  namedViews?: { name: string; kind: string; bit: number; memberCount: number }[];
+  namedViews?: {
+    name: string;
+    kind: string;
+    bit: number;
+    memberCount: number;
+    groupNames?: string[];
+    partialGroupNames?: string[];
+  }[];
   pixelCount: number;
 }>> {
   try {

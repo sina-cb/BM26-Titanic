@@ -1,5 +1,6 @@
-// Contract tests for the portable model-calibration pattern family (66-73)
-// and its byte-identical Titanic/test-bench playlist.
+// Contract tests for the portable model-calibration pattern family (66-74)
+// and its structurally identical Titanic/test-bench playlists. Saved defaults
+// remain scene-local because the operator tunes and stores them independently.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,6 +26,7 @@ const CALIBRATION_PATTERNS = [
   '71_calibration_fixture_pixel_order',
   '72_calibration_controller_focus',
   '73_calibration_emitter_channels',
+  '74_calibration_bpm_ruler',
 ];
 
 function readPattern(name) {
@@ -42,8 +44,12 @@ test('calibration family is draft-marked and registered in the manifest', () => 
     const source = readPattern(name);
     assert.ok(manifest.includes(name), `${name} is missing from patterns/manifest.json`);
     assert.match(source.split(/\r?\n/, 1)[0], /^\/\/ DRAFT — pending operator review$/);
-    assert.doesNotMatch(source, /\bsliderLocalSpeed\b/, `${name} is a static utility, not a clocked pattern`);
-    assert.doesNotMatch(source, /\bbeforeRender\s*\(/, `${name} must remain operator-positioned and static`);
+    assert.doesNotMatch(source, /\bsliderLocalSpeed\b/,
+      `${name} must not add a local clock multiplier to calibration`);
+    if (name !== '74_calibration_bpm_ruler') {
+      assert.doesNotMatch(source, /\bbeforeRender\s*\(/,
+        `${name} must remain operator-positioned and static`);
+    }
   }
 });
 
@@ -55,6 +61,18 @@ test('X, Y, and Z planes expose the same truthful knob order', () => {
       'sliderBackground',
     ], name);
   }
+});
+
+test('BPM ruler exposes alignment and visibility controls without a local rate', () => {
+  const source = readPattern('74_calibration_bpm_ruler');
+  assert.deepEqual(sliderNames(source), [
+    'sliderPhaseOffset',
+    'sliderWidth',
+    'sliderLevel',
+    'sliderBackground',
+  ]);
+  assert.match(source, /barPhase\s*=\s*frac\(t\s*\*\s*0\.5\s*\+\s*phaseOffset\)/,
+    'BPM ruler must derive its 120 BPM reference directly from the engine-owned clock');
 });
 
 for (const modelName of ['test_bench', 'titanic']) {
@@ -86,23 +104,24 @@ for (const modelName of ['test_bench', 'titanic']) {
 test('both scenes carry the same complete calibration playlist and truthful defaults', () => {
   const benchPath = path.join(SCENES_DIR, 'test_bench', 'playlists', 'calibration.yaml');
   const titanicPath = path.join(SCENES_DIR, 'titanic', 'playlists', 'calibration.yaml');
-  const benchBytes = fs.readFileSync(benchPath);
-  const titanicBytes = fs.readFileSync(titanicPath);
-  assert.deepEqual(benchBytes, titanicBytes, 'scene calibration playlists must stay byte-identical');
+  const playlists = [benchPath, titanicPath]
+    .map((playlistPath) => yaml.load(fs.readFileSync(playlistPath, 'utf8')));
 
-  const playlist = yaml.load(benchBytes.toString('utf8'));
-  assert.equal(playlist.schemaVersion, 1);
-  assert.equal(playlist.name, 'calibration');
-  assert.deepEqual(playlist.entries.map((entry) => entry.pattern), CALIBRATION_PATTERNS);
+  for (const playlist of playlists) {
+    assert.equal(playlist.schemaVersion, 1);
+    assert.equal(playlist.name, 'calibration');
+    assert.deepEqual(playlist.entries.map((entry) => entry.pattern), CALIBRATION_PATTERNS);
 
-  for (const entry of playlist.entries) {
-    assert.deepEqual(
-      Object.keys(entry.defaults),
-      sliderNames(readPattern(entry.pattern)),
-      `${entry.pattern} playlist defaults must match its slider declarations in knob order`,
-    );
-    assert.deepEqual(entry.modulations, []);
-    assert.deepEqual(entry.midiMappings, []);
-    assert.ok(entry.notes.length > 20, `${entry.pattern} needs an operator-facing calibration instruction`);
+    for (const entry of playlist.entries) {
+      assert.deepEqual(
+        Object.keys(entry.defaults),
+        sliderNames(readPattern(entry.pattern)),
+        `${entry.pattern} playlist defaults must match its slider declarations in knob order`,
+      );
+      assert.deepEqual(entry.modulations, []);
+      assert.deepEqual(entry.midiMappings, []);
+      assert.ok(entry.notes.length > 20,
+        `${entry.pattern} needs an operator-facing calibration instruction`);
+    }
   }
 });

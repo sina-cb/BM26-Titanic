@@ -43,11 +43,22 @@ import dgram from 'node:dgram';
 import { fileURLToPath } from 'node:url';
 
 import { WebSocketServer } from 'ws';
-import yaml from 'js-yaml';
 import * as osc from 'osc-min';
 
 // ── THE ENGINE'S REAL AUDIO CODE (native — never reimplemented) ───────────
 import { AudioAnalyzer } from '../analyzer/audio_analyzer.js';
+import {
+  buildAudioAnalyzerOptions,
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
+  loadEffectiveAudioAnalysisConfig,
+  validateAudioAnalysisConfig,
+} from '../config/audio_analysis_config.js';
+import { mergeAudioConfig } from '../config/audio_config.js';
+import {
+  DERIVED_SIGNALS_LIVE_FIELDS,
+  NOTE_COLOR_WHEEL_DEFAULTS,
+} from '../config/derived_signals_config.js';
 import {
   SignalPostProcessor, KNOWN_SIGNALS, opCatalog,
   DANCE_OMEGA, danceSpringStep,
@@ -63,6 +74,7 @@ import {
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal, validateView,
   parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
+  CURATED_OUTPUTS, missingCuratedOutputs,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import {
@@ -79,6 +91,12 @@ import { audioRegistryEntries } from '../postproc/audio_signals.js';
 import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
 import { BpmSmoother } from '../../lib/bpm_smoother.js';
 import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
+import { buildRawMirrorWrites } from './audio_pipeline.js';
+import {
+  AUDIO_EVENT_SPECS,
+  AudioEventTransport,
+  dispatchAudioEvents,
+} from './event_transport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -106,10 +124,91 @@ const ENGINE_CONFIG_PATH = (() => {
   return override;
 })();
 
+function requiredCliValue(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index < 0 || index + 1 >= process.argv.length || process.argv[index + 1].startsWith('--')) {
+    throw new Error(`Audio Companion requires ${flag} <value>`);
+  }
+  return process.argv[index + 1];
+}
+
+function optionalCliValue(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index < 0) return null;
+  if (index + 1 >= process.argv.length || process.argv[index + 1].startsWith('--')) {
+    throw new Error(`Audio Companion ${flag} requires a value`);
+  }
+  return process.argv[index + 1];
+}
+
+const ENGINE_DIR = path.resolve(__dirname, '..', '..');
+const MODEL_NAME = requiredCliValue('--model');
+const SOURCE_OVERRIDE = optionalCliValue('--source');
+const OSC_PORT_OVERRIDE = optionalCliValue('--osc-port');
+const ENGINE_PORT_OVERRIDE = optionalCliValue('--engine-port');
+const HOST_OVERRIDE = optionalCliValue('--host');
+const MIC_DISABLED = process.argv.includes('--no-mic');
+if (SOURCE_OVERRIDE !== null && !['mic', 'test', 'file'].includes(SOURCE_OVERRIDE)) {
+  throw new Error('Audio Companion --source must be one of: mic, test, file');
+}
+if (MIC_DISABLED && SOURCE_OVERRIDE === 'mic') {
+  throw new Error('Audio Companion --no-mic cannot be combined with --source mic');
+}
+// --no-mic REQUIRES an explicit non-mic source. Without one the boot source
+// comes from config.yaml `companion.source`, which is `mic` on the show rig —
+// setMode('mic') then throws inside the ffmpeg-resolver `.finally()` and the
+// process dies on an unhandled rejection AFTER the analyzer/servers were built.
+// Reject the combination here so it fails loudly and immediately instead.
+if (MIC_DISABLED && SOURCE_OVERRIDE === null) {
+  throw new Error('Audio Companion --no-mic requires --source test|file (the config.yaml companion.source may be mic)');
+}
+for (const [flag, value] of [['--osc-port', OSC_PORT_OVERRIDE], ['--engine-port', ENGINE_PORT_OVERRIDE]]) {
+  if (value !== null && (!Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > 65535)) {
+    throw new Error(`Audio Companion ${flag} must be an integer in [1, 65535]`);
+  }
+}
+// --no-mic REQUIRES EXPLICIT ISOLATED PORTS. The loopback interlock further down
+// only proves the effective targets are on THIS host — and on the show rig they
+// are: config.yaml's engine endpoint is `127.0.0.1:6968`, which is the LIVE
+// PRODUCTION ENGINE. A `--no-mic --source test` run with no port flags therefore
+// passes the loopback check and still POSTs its design manifest + PATCHes the
+// audio config straight into the running show. Loopback is not isolation.
+//
+// So the ports must be stated ON THE COMMAND LINE, deliberately, every time.
+// Nothing is defaulted here (codex P0 — a guessed port is a fallback): an
+// omitted flag is a hard refusal naming the documented bench ports.
+if (MIC_DISABLED) {
+  const missingPortFlags = [];
+  if (OSC_PORT_OVERRIDE === null) missingPortFlags.push('--osc-port');
+  if (ENGINE_PORT_OVERRIDE === null) missingPortFlags.push('--engine-port');
+  if (missingPortFlags.length) {
+    throw new Error(
+      `Audio Companion --no-mic requires explicit isolated ports; missing: ${missingPortFlags.join(', ')}\n`
+      + '  --no-mic means "this process must not touch the show", but a loopback target is NOT\n'
+      + '  isolation: config.yaml points the engine endpoint at 127.0.0.1:6968, which IS the live\n'
+      + '  production engine. Without both port flags a --no-mic run still POSTs its design\n'
+      + '  manifest, PATCHes the live audio config, and streams OSC into the running show.\n'
+      + '  Fix: name the isolated bench ports explicitly, e.g.\n'
+      + '    --osc-port 31601 --engine-port 31668   (the reserved bench ports; see audio/companion/README.md)',
+    );
+  }
+}
+if (HOST_OVERRIDE !== null && !/^[A-Za-z0-9.:-]+$/.test(HOST_OVERRIDE)) {
+  throw new Error('Audio Companion --host must be a hostname or IP address');
+}
+const RESOLVED_AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: MODEL_NAME,
+});
+const PRODUCTION_AUDIO_CONFIG = RESOLVED_AUDIO_CONFIG.audioConfig;
+let effectiveAudioConfig = PRODUCTION_AUDIO_CONFIG;
+
 // FFT must track config.yaml audio.fftSize so the companion's analysis + derived
 // signals (genre / note / dom / sub) match the engine's exactly. (The spectrum
 // visualizer below uses a separate, larger FFT for display only.)
-const SR = 44100, FFT = 2048, HOP = 512;
+const SR = PRODUCTION_AUDIO_CONFIG.capture.sampleRate;
+const FFT = PRODUCTION_AUDIO_CONFIG.fftSize;
+const HOP = PRODUCTION_AUDIO_CONFIG.hopSize;
 
 // Canonical GENRE name list — index-aligned with the sibling slot-0 detector's
 // `audioGenre` CPC key (an integer index) and its exported GENRE_NAMES. Kept
@@ -162,6 +261,44 @@ const ANALYZER_FIELD = Object.fromEntries(
 // Gain ops read and the detector reads/writes.
 const paramCenter = new ParamCenter(null);
 
+// ── CPC WRITE ACCOUNTING (production evidence, not registration evidence) ────
+// /signal_snapshot used to report a descriptor's static `live` flag, which only
+// proves a key is REGISTERED — a key nothing ever writes looked identical to a
+// key the analyzer drives 86×/s. These counters are incremented from the ACTUAL
+// ParamCenter write path (every accepted set/setMany, whoever the writer is),
+// so a snapshot entry with writes === 0 is honest evidence that NOTHING is
+// producing that key. `analyzerHops` is the hop index at the time of the write,
+// so a stale-but-nonzero producer is distinguishable from a live one.
+// Cost: one Map bump per accepted write; the subscribe() event itself is built
+// by ParamCenter whether or not anyone listens.
+const cpcWrites = new Map();       // key -> { writes, lastWriteHop }
+const designedWrites = new Map();  // key -> { writes, lastWriteHop, address, lastValue }
+let analyzerHops = 0;              // analyzer hops since boot (the snapshot clock)
+paramCenter.subscribe((ev) => {
+  for (const key of ev.changedKeys) {
+    const slot = cpcWrites.get(key);
+    if (slot) { slot.writes++; slot.lastWriteHop = analyzerHops; }
+    else cpcWrites.set(key, { writes: 1, lastWriteHop: analyzerHops });
+  }
+});
+
+function recordDesignedWrite(cpcKey, address, value) {
+  const slot = designedWrites.get(cpcKey);
+  if (slot) {
+    slot.writes++;
+    slot.lastWriteHop = analyzerHops;
+    slot.address = address;
+    slot.lastValue = value;
+  } else {
+    designedWrites.set(cpcKey, {
+      writes: 1,
+      lastWriteHop: analyzerHops,
+      address,
+      lastValue: value,
+    });
+  }
+}
+
 // ── Designed signals (the operator's output design) ──────────────────────────
 // Loaded from companion_config.yaml on boot. Each designed signal owns a real
 // SignalPostProcessor instance (the engine's DSP, unforked) holding its chain
@@ -173,6 +310,24 @@ const paramCenter = new ParamCenter(null);
 const PROXY_KEY = KNOWN_SIGNALS[0];   // micLow — the chain-runner proxy key
 let design = loadCompanionConfig();   // { osc, signals }
 const runners = new Map();            // signalId -> SignalPostProcessor
+
+function warnMissingCuratedOutputs(cfg) {
+  const missing = missingCuratedOutputs(cfg);
+  if (!missing.length) return;
+  console.warn('COMPANION DESIGN INCOMPLETE - engine-bound signals are not published:');
+  for (const key of missing) console.warn(`  ${key} -> ${CURATED_OUTPUTS[key]}`);
+  console.warn('Those CPC keys remain at zero; override modulations can pin their targets.');
+  console.warn(`Add the missing signals or remove ${COMPANION_CONFIG_PATH}, then restart.`);
+}
+warnMissingCuratedOutputs(design);
+
+function designHealth() {
+  return { missingCuratedOutputs: missingCuratedOutputs(design) };
+}
+
+function pushDesignHealth() {
+  broadcast({ type: 'designHealth', ...designHealth() });
+}
 
 // OSC OUTPUT RATE (report 20260621_6). The analyzer runs ~86 hops/s; sending an
 // OSC packet for every output on every hop floods the wire (and the engine).
@@ -194,6 +349,97 @@ const oscDisabled = new Set(Array.isArray(design.osc.disabled) ? design.osc.disa
 // but it has NO effect on emission right now. Re-enable by setting this true.
 // Follow-up: Notion "Fix OSC send filter (per-signal mute)".
 const OSC_SEND_FILTER_ENABLED = false;
+
+// ── Effective OUTBOUND targets (single source of truth) ─────────────────────
+// The Companion talks to the engine over two wires: UDP OSC (the signal
+// stream) and the HTTP/WS config link (design manifest POST + live audio-config
+// PATCH). BOTH targets are resolved HERE so the boot-time isolation interlock
+// below and applyEngineConfig() can never disagree about where we are pointed.
+function resolveConfiguredOscTarget() {
+  const cfg = RESOLVED_AUDIO_CONFIG.rootConfig;
+  const comp = cfg && cfg.companion;
+  if (comp && comp.osc && typeof comp.osc.host === 'string' && Number.isInteger(comp.osc.port)) {
+    return { host: comp.osc.host, port: comp.osc.port };
+  }
+  // Fall back to the engine's own OSC port; loopback host (the companion and
+  // engine run on the same Pi). osc.host in config is the engine BIND addr
+  // (0.0.0.0) — not a send target — so we send to loopback.
+  if (cfg && cfg.osc && Number.isInteger(cfg.osc.port)) return { host: '127.0.0.1', port: cfg.osc.port };
+  return { host: design.osc.host, port: design.osc.port };
+}
+
+function resolveOscTarget() {
+  if (OSC_PORT_OVERRIDE !== null) return { host: '127.0.0.1', port: Number(OSC_PORT_OVERRIDE) };
+  return resolveConfiguredOscTarget();
+}
+
+function resolveConfiguredEngineTarget() {
+  return resolveEngineEndpoint(RESOLVED_AUDIO_CONFIG.rootConfig);
+}
+
+function resolveEngineTarget() {
+  if (ENGINE_PORT_OVERRIDE !== null) return { host: '127.0.0.1', port: Number(ENGINE_PORT_OVERRIDE) };
+  return resolveConfiguredEngineTarget();
+}
+
+/** Is `host` a loopback address (the only target --no-mic tolerates)? */
+function isLoopbackHost(host) {
+  if (typeof host !== 'string') return false;
+  const h = host.trim().replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || h === '0:0:0:0:0:0:0:1' || /^127\./.test(h);
+}
+
+function targetsMatch(a, b) {
+  if (!a || !b || a.port !== b.port) return false;
+  if (isLoopbackHost(a.host) && isLoopbackHost(b.host)) return true;
+  return String(a.host).trim().toLowerCase() === String(b.host).trim().toLowerCase();
+}
+
+// ── --no-mic ISOLATION INTERLOCK ────────────────────────────────────────────
+// `--no-mic` means "this process must not touch the show". Refusing to open a
+// capture device is only HALF of that: an un-isolated companion still POSTs its
+// design manifest to the configured engine, PATCHes that engine's live audio
+// config, and streams OSC at the configured target — i.e. it reconfigures the
+// production engine from a test run. Until now loopback only happened as a
+// silent SIDE EFFECT of --osc-port / --engine-port rewriting the host.
+//
+// So: under --no-mic both effective targets MUST be loopback. Nothing is
+// rewritten here (no silent redirect, codex P0) — a non-loopback target is a
+// hard refusal telling the operator which flag to pass.
+//
+// This second stage verifies both host isolation and endpoint isolation. The
+// explicit flags pin loopback, but an explicit show port is still production;
+// compare effective targets with their configured production counterparts.
+if (MIC_DISABLED) {
+  const oscTarget = resolveOscTarget();
+  const engineTarget = resolveEngineTarget();
+  const configuredOscTarget = resolveConfiguredOscTarget();
+  const configuredEngineTarget = resolveConfiguredEngineTarget();
+  const offenders = [];
+  if (!isLoopbackHost(oscTarget.host)) {
+    offenders.push(`  OSC target      ${oscTarget.host}:${oscTarget.port}  → pass --osc-port <port> (forces 127.0.0.1)`);
+  }
+  if (engineTarget && !isLoopbackHost(engineTarget.host)) {
+    offenders.push(`  engine endpoint ${engineTarget.host}:${engineTarget.port}  → pass --engine-port <port> (forces 127.0.0.1)`);
+  }
+  if (targetsMatch(oscTarget, configuredOscTarget)) {
+    offenders.push(`  OSC target      ${oscTarget.host}:${oscTarget.port} matches configured production OSC endpoint`);
+  }
+  if (targetsMatch(engineTarget, configuredEngineTarget)) {
+    offenders.push(`  engine endpoint ${engineTarget.host}:${engineTarget.port} matches configured production engine endpoint`);
+  }
+  if (offenders.length) {
+    throw new Error(
+      '--no-mic requires an ISOLATED companion, but these outbound targets are unsafe:\n'
+      + `${offenders.join('\n')}\n`
+      + '  (a --no-mic companion still POSTs its design manifest, PATCHes the engine audio config,\n'
+      + '   and streams OSC — pointing that at a non-loopback host reconfigures a real engine.)\n'
+      + '  Loopback is not isolation when it names the configured show ports.\n'
+      + '  Fix: pass explicit, unused bench ports that differ from production.',
+    );
+  }
+}
+
 // The analyzer emits ~SR/HOP hops/sec (~86). A naive "≥ interval elapsed" gate
 // would quantize the send rate to integer divisors of the hop rate (86, 43, 29…)
 // — set 60 and you'd actually get 43. Instead a PHASE ACCUMULATOR adds
@@ -264,12 +510,12 @@ function recordOscSend(address, value) {
   acc.lastValue = value;
 }
 
-function sendOsc(address, value, oscType) {
+function sendOsc(address, value, oscType, force = false) {
   // OSC OUTPUT RATE throttle: _oscEmitThisHop is computed once per analyzer hop
   // (see onAnalysis). When this hop isn't a send frame, drop the packet entirely
   // — the value is re-sent on the next frame, and the accounting only counts
   // packets that actually went on the wire. (report 20260621_6)
-  if (!_oscEmitThisHop) return;
+  if (!_oscEmitThisHop && !force) return;
   // Per-signal SEND DISABLE (OSC OUT page checkbox): a disabled address is muted
   // on the wire — no packet, no accounting tick (its rate decays to 0).
   // Gated behind OSC_SEND_FILTER_ENABLED — currently OFF, so all signals send.
@@ -318,10 +564,13 @@ const ENGINE_INTERNAL_DERIVED = Object.freeze([
   { cpcKey: 'audioNote',          label: 'dominant pitch class 0–11' },
   { cpcKey: 'audioNoteHue',       label: 'note → hue (melody as colour)' },
   { cpcKey: 'audioSwitchPattern', label: 'cue: change pattern' },
+  { cpcKey: 'audioSwitchPatternSeq', label: 'cue: change pattern sequence' },
   { cpcKey: 'audioSwitchColor',   label: 'cue: change colour' },
+  { cpcKey: 'audioSwitchColorSeq', label: 'cue: change colour sequence' },
   { cpcKey: 'audioBeatInBar',     label: 'beat index within the bar' },
   { cpcKey: 'audioBarPhase',      label: 'phase 0→1 across the bar' },
   { cpcKey: 'audioDownbeat',      label: 'downbeat pulse' },
+  { cpcKey: 'audioDownbeatSeq',   label: 'downbeat sequence' },
   { cpcKey: 'micOnsetLow',        label: 'per-band onset: kick/low' },
   { cpcKey: 'micOnsetMid',        label: 'per-band onset: snare/mid' },
   { cpcKey: 'micOnsetHigh',       label: 'per-band onset: hat/high' },
@@ -333,9 +582,11 @@ const ENGINE_INTERNAL_DERIVED = Object.freeze([
   { cpcKey: 'audioRiserConf',     label: 'riser confidence 0–1' },
   { cpcKey: 'audioSilence',       label: 'inter-track silence latch' },
   { cpcKey: 'audioTrackChange',   label: 'new-track pulse' },
+  { cpcKey: 'audioTrackChangeSeq', label: 'new-track sequence' },
   { cpcKey: 'audioClimax',        label: 'sustained climax level' },
   { cpcKey: 'audioPhrasePhase',   label: 'phase 0→1 across the 8-bar phrase' },
   { cpcKey: 'audioPhraseBoundary',label: 'phrase-boundary pulse' },
+  { cpcKey: 'audioPhraseBoundarySeq', label: 'phrase-boundary sequence' },
   { cpcKey: 'audioDropCountdown', label: 'beat-synced drop count-in' },
   // party_detection (R1, report 20260725_10). audioPartyStrong is the key the
   // SHOW DIRECTOR reads (`timeline.mood.key`) — if it is not on this list it
@@ -379,12 +630,33 @@ for (const e of DERIVED_OSC_EMITS) {
 // (e.g. audioGenre = 2 "techno") is never a fractional float on the wire and is
 // never interpolated between classes by a downstream consumer. (Operator: "the
 // genre is not sent correctly" — the fix is integer-typed, un-smoothed emit.)
-const INTEGER_OSC_KEYS = new Set(['audioGenre', 'audioNote', 'audioStructure']);
-function emitAllDerived() {
+const INTEGER_OSC_KEYS = new Set([
+  'audioGenre',
+  'audioNote',
+  'audioStructure',
+  ...AUDIO_EVENT_SPECS.map(({ sequenceKey }) => sequenceKey),
+]);
+const EVENT_SEQUENCE_KEYS = new Set(AUDIO_EVENT_SPECS.map(({ sequenceKey }) => sequenceKey));
+const EVENT_ENVELOPE_KEYS = new Set(AUDIO_EVENT_SPECS.map(({ key }) => key));
+const eventTransport = new AudioEventTransport();
+
+function emitAllDerived(dtMs) {
   for (const e of DERIVED_OSC_EMITS) {
+    if (EVENT_SEQUENCE_KEYS.has(e.key) || EVENT_ENVELOPE_KEYS.has(e.key)) continue;
     const v = safeGet(e.key);
-    if (Number.isFinite(v)) sendOsc(e.address, v, INTEGER_OSC_KEYS.has(e.key) ? 'integer' : 'float');
+    if (Number.isFinite(v)) {
+      sendOsc(e.address, v, INTEGER_OSC_KEYS.has(e.key) ? 'integer' : 'float');
+    }
   }
+
+  dispatchAudioEvents({
+    transport: eventTransport,
+    values: Object.fromEntries(AUDIO_EVENT_SPECS.map(({ key }) => [key, safeGet(key)])),
+    dtMs,
+    addressByKey: _audioAddrByKey,
+    send: sendOsc,
+    onSequence: (key, sequence) => paramCenter.set(key, sequence, 'audioEventTransport'),
+  });
 }
 
 // The reported rate must reflect a stream that has STOPPED (a disabled tap, or
@@ -590,15 +862,24 @@ const source = {
 };
 // Global software preamp (the analyzer's bands.inputGain) — applies to EVERY
 // source (test/mic/file). This is the "microphone gain" the operator tunes.
-let inputGain = 1.0;
+let inputGain = PRODUCTION_AUDIO_CONFIG.bands.inputGain;
 // Source-stage smoothing (gentle one-pole LP on the PCM before the FFT).
-let sourceSmoothHz = 12000;
+let sourceSmoothHz = PRODUCTION_AUDIO_CONFIG.bands.sourceSmoothHz;
 // Noise gates (on-playa mic tuning, report 20260621_5). The global noiseGate is
 // the floor every band uses unless an explicit per-band gate specializes it.
 // null per-band → that band falls back to the global gate. The MIC TUNE page
 // reads/writes these and the noise-floor auto-calibration recommends them.
-let noiseGate = 0.04;
-let lowGate = null, midGate = null, highGate = null;
+let noiseGate = PRODUCTION_AUDIO_CONFIG.bands.noiseGate;
+let lowGate = PRODUCTION_AUDIO_CONFIG.bands.lowGate ?? null;
+let midGate = PRODUCTION_AUDIO_CONFIG.bands.midGate ?? null;
+let highGate = PRODUCTION_AUDIO_CONFIG.bands.highGate ?? null;
+// Published-BPM slew (audio.bpmTracker.outputSlew*). Live-tunable like the
+// gates: the OSC page writes it, the engine config echo reconciles it, and
+// /signal_snapshot reports THIS pair — not the boot config — as effective.
+const bpmSlew = {
+  enabled: PRODUCTION_AUDIO_CONFIG.bpmTracker.outputSlewEnabled,
+  bpmPerSec: PRODUCTION_AUDIO_CONFIG.bpmTracker.outputSlewBpmPerSec,
+};
 // Realtime/smoothness diagnostic.
 const diag = { lastWall: 0, startWall: 0, frames: 0, samples: 0, deltas: [] };
 function recordFrame(n) {
@@ -963,9 +1244,15 @@ let engineLink = null;
  * skipped so we don't thrash the capture stream on an unrelated PATCH.
  */
 function applyEngineSharedTuning(config) {
-  if (!config || typeof config !== 'object') return;
-  const bands = config.bands && typeof config.bands === 'object' ? config.bands : null;
-  if (bands) {
+  validateAudioAnalysisConfig(config);
+  if (config.capture.sampleRate !== SR || config.fftSize !== FFT || config.hopSize !== HOP) {
+    throw new Error('engine audio config changed sampleRate/fftSize/hopSize; restart the Companion');
+  }
+  reconcileDerivedConfig(config.derivedSignals);
+  effectiveAudioConfig = config;
+  broadcast({ type: 'derivedConfig', config: derived.getConfig() });
+  const bands = config.bands;
+  {
     if (Number.isFinite(bands.inputGain) && bands.inputGain !== inputGain) {
       applyInputGain(bands.inputGain);
       broadcast({ type: 'inputGain', ...gainMsg() });
@@ -979,13 +1266,47 @@ function applyEngineSharedTuning(config) {
     // are optional in the engine config; only adopt finite values.
     let gateChanged = false;
     if (Number.isFinite(bands.noiseGate) && bands.noiseGate !== noiseGate) { noiseGate = bands.noiseGate; gateChanged = true; }
-    if (Number.isFinite(bands.lowGate)  && bands.lowGate  !== lowGate)  { lowGate  = bands.lowGate;  gateChanged = true; }
-    if (Number.isFinite(bands.midGate)  && bands.midGate  !== midGate)  { midGate  = bands.midGate;  gateChanged = true; }
-    if (Number.isFinite(bands.highGate) && bands.highGate !== highGate) { highGate = bands.highGate; gateChanged = true; }
+    const nextLowGate = Number.isFinite(bands.lowGate) ? bands.lowGate : null;
+    const nextMidGate = Number.isFinite(bands.midGate) ? bands.midGate : null;
+    const nextHighGate = Number.isFinite(bands.highGate) ? bands.highGate : null;
+    if (nextLowGate !== lowGate) { lowGate = nextLowGate; gateChanged = true; }
+    if (nextMidGate !== midGate) { midGate = nextMidGate; gateChanged = true; }
+    if (nextHighGate !== highGate) { highGate = nextHighGate; gateChanged = true; }
     if (gateChanged) { applyGates(); broadcast({ type: 'gates', ...gatesMsg() }); }
   }
-  const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
-  if (cap && cap.device !== undefined) applyEngineCaptureDevice(cap.device);
+  // Published-BPM slew: the tracker lives HERE, so the engine only stores and
+  // rebroadcasts the pair — this is where it becomes real. validateAudio-
+  // AnalysisConfig above already rejected a malformed pair loudly.
+  {
+    const next = {
+      enabled: config.bpmTracker.outputSlewEnabled,
+      bpmPerSec: config.bpmTracker.outputSlewBpmPerSec,
+    };
+    if (next.enabled !== bpmSlew.enabled || next.bpmPerSec !== bpmSlew.bpmPerSec) {
+      applyBpmSlew(next);
+    }
+  }
+  analyzer.reconfigure({
+    bands: {
+      ...bands,
+      lowGate: bands.lowGate ?? bands.noiseGate,
+      midGate: bands.midGate ?? bands.noiseGate,
+      highGate: bands.highGate ?? bands.noiseGate,
+    },
+    kick: config.kick,
+    sub: config.sub,
+  });
+  specAnalyzer.reconfigure({
+    bands: {
+      ...bands,
+      lowGate: bands.lowGate ?? bands.noiseGate,
+      midGate: bands.midGate ?? bands.noiseGate,
+      highGate: bands.highGate ?? bands.noiseGate,
+    },
+    kick: config.kick,
+    sub: config.sub,
+  });
+  if (config.capture.device !== undefined) applyEngineCaptureDevice(config.capture.device);
 }
 
 /**
@@ -1024,6 +1345,14 @@ function applyEngineCaptureDevice(device) {
       setMode('file', { file: target.file });
     }
   } else { // mic
+    if (MIC_DISABLED) {
+      broadcast({
+        type: 'sourceStatus',
+        mode,
+        status: { enabled: false, error: 'physical microphone disabled by --no-mic' },
+      });
+      return;
+    }
     const changed = mode !== 'mic' || configDevice !== target.device;
     const reArm = !changed && captureGaveUp();
     if (reArm) {
@@ -1114,9 +1443,249 @@ function broadcast(obj) { const m = JSON.stringify(obj); for (const c of clients
 const detector = new AudioStructureDetector({
   paramCenter,
   broadcast: (msg) => { if (msg && msg.type === 'dropFired') broadcast({ type: 'dropFired', ts: msg.ts, confidence: msg.confidence }); },
-  getConfig: () => ({ enabled: true }),
+  getConfig: () => effectiveAudioConfig.structureDetector,
 });
-const derived = new DerivedSignals({ paramCenter });
+const derived = new DerivedSignals({
+  paramCenter,
+  bpmTracker: buildBpmTrackerOptions(PRODUCTION_AUDIO_CONFIG),
+  derivedSignals: buildDerivedSignalsOptions(PRODUCTION_AUDIO_CONFIG),
+});
+
+/**
+ * Apply a published-BPM slew setting to the LIVE tracker + the local mirror,
+ * then echo it to UI clients. Throws (from BpmTracker.setOutputSlew) on an
+ * invalid pair — callers surface the rejection instead of clamping it.
+ */
+function applyBpmSlew(next) {
+  derived.setBpmOutputSlew(next);
+  bpmSlew.enabled = next.enabled;
+  bpmSlew.bpmPerSec = next.bpmPerSec;
+  broadcast({ type: 'bpmSlew', ...bpmSlew });
+}
+
+function liveDerivedGroup(group, values) {
+  const fields = DERIVED_SIGNALS_LIVE_FIELDS[group];
+  if (!fields) throw new TypeError(`unknown derived signal group "${group}"`);
+  const out = {};
+  for (const field of fields) out[field] = values[field];
+  return out;
+}
+
+// ── Derived tuning: applied HERE, persisted by the ENGINE ────────────────────
+//
+// SINGLE WRITER. `states/<scene>/audio_state.yaml` is written by the ENGINE and
+// nobody else. This process used to write it too (load → merge → save, with a
+// read-back verify) while the engine did its own load → merge → save on the
+// PATCH the same edit triggered: two uncoordinated read-modify-write cycles on
+// one file, i.e. a lost-update race whose loser was whichever process read
+// first. The Companion now only APPLIES the edit to its live modules and writes
+// it THROUGH to the engine, which validates, persists and rebroadcasts.
+//
+// OFFLINE. With the engine down there is nowhere to persist, so the edit lives
+// only in this process's memory. It is applied (analysis never blocks), the
+// operator is told loudly that it is local-only, and it is PARKED here for
+// replay on reconnect. Until the engine accepts it, the group is LOCALLY
+// AUTHORITATIVE — reconcileDerivedConfig skips pending groups so an engine echo
+// carrying the pre-edit value can't silently undo the operator's change.
+//
+// group → the live-field object we are trying to get the engine to accept.
+const pendingDerivedEdits = new Map();
+const derivedWriteQueues = new Map();
+
+function derivedWriteQueue(group) {
+  let queue = derivedWriteQueues.get(group);
+  if (!queue) {
+    queue = { pending: null, running: null };
+    derivedWriteQueues.set(group, queue);
+  }
+  return queue;
+}
+
+// Stub CPC for the all-or-nothing construction probe below. DerivedSignals'
+// constructor only reads get()/setMany() off it and never calls them, so this
+// never touches the real ParamCenter.
+const PROBE_PARAM_CENTER = Object.freeze({ get: () => 0, setMany: () => {} });
+
+/**
+ * Adopt the engine's derived tuning. ALL-OR-NOTHING: `derived.reconfigure`
+ * rebuilds a group's module from scratch and therefore DROPS its runtime state
+ * (party latch, committed genre, phrase position, drop countdown), so applying
+ * three of five groups and then throwing leaves the analyzer in a state that
+ * matches neither the engine nor the operator. Every replacement module is
+ * therefore proven constructible FIRST — a throwaway DerivedSignals built from
+ * the full target config runs exactly the same constructors with exactly the
+ * same values — and only then are the real swaps performed, where nothing can
+ * fail. Groups whose live values already match are skipped entirely, so an
+ * unrelated config echo never resets a module that didn't change.
+ */
+function reconcileDerivedConfig(nextConfig) {
+  const current = derived.getConfig();
+  const changed = [];
+  for (const [group, values] of Object.entries(nextConfig)) {
+    // A local edit the engine hasn't accepted yet outranks the engine's echo.
+    if (pendingDerivedEdits.has(group)) continue;
+    const patch = liveDerivedGroup(group, values);
+    const before = liveDerivedGroup(group, current[group]);
+    if (JSON.stringify(patch) !== JSON.stringify(before)) changed.push([group, patch]);
+  }
+  if (changed.length === 0) return;
+  const target = derived.getConfig();
+  for (const [group, patch] of changed) target[group] = { ...target[group], ...patch };
+  // Throws if ANY group's values are unacceptable to its module — before a
+  // single live module has been swapped.
+  new DerivedSignals({
+    paramCenter: PROBE_PARAM_CENTER,
+    bpmTracker: buildBpmTrackerOptions(PRODUCTION_AUDIO_CONFIG),
+    derivedSignals: target,
+  });
+  for (const [group, patch] of changed) derived.reconfigure(group, patch);
+}
+
+/**
+ * Apply one operator derived-tuning edit to the LIVE modules. Throws on an
+ * invalid patch — `derived.reconfigure` validates the merged config before it
+ * constructs anything, so a rejected patch leaves every module untouched and
+ * there is nothing to roll back.
+ */
+function applyDerivedConfigPatch(group, patch) {
+  const config = derived.reconfigure(group, patch);
+  effectiveAudioConfig = mergeAudioConfig(effectiveAudioConfig, { derivedSignals: config });
+  broadcast({ type: 'derivedConfig', config });
+  return config;
+}
+
+async function drainDerivedGroupWrites(group, queue) {
+  while (queue.pending && engineLink && engineLink.connected) {
+    const attempted = queue.pending;
+    queue.pending = null;
+    try {
+      await engineLink.patch({ derivedSignals: { [group]: attempted } });
+      if (pendingDerivedEdits.get(group) === attempted && queue.pending === null) {
+        pendingDerivedEdits.delete(group);
+      }
+    } catch (error) {
+      if (pendingDerivedEdits.get(group) === attempted && queue.pending === null) {
+        await revertRejectedDerivedGroup(group, attempted, error);
+      } else {
+        broadcast({
+          type: 'engineLink',
+          connected: !!(engineLink && engineLink.connected),
+          error: `superseded derived "${group}" PATCH failed: ${error && error.message}`,
+        });
+      }
+    }
+  }
+}
+
+function startDerivedGroupWrites(group) {
+  const queue = derivedWriteQueue(group);
+  if (queue.running || !queue.pending || !engineLink || !engineLink.connected) {
+    return queue.running;
+  }
+  queue.running = drainDerivedGroupWrites(group, queue)
+    .catch((error) => {
+      broadcast({
+        type: 'engineLink',
+        connected: !!(engineLink && engineLink.connected),
+        error: `derived "${group}" queue failed: ${error && error.message}`,
+      });
+    })
+    .finally(() => {
+      queue.running = null;
+      if (queue.pending && engineLink && engineLink.connected) {
+        startDerivedGroupWrites(group);
+      }
+    });
+  return queue.running;
+}
+
+/** Write one derived group through to the engine (the sole persister). */
+function writeThroughDerivedGroup(group, config) {
+  const fullGroup = liveDerivedGroup(group, config[group]);
+  // Park it BEFORE the PATCH: while the write is in flight the engine may echo
+  // a config frame that still carries the old value, and reconcile must not
+  // undo the operator mid-flight.
+  pendingDerivedEdits.set(group, fullGroup);
+  // A queued value is a complete group snapshot, so a newer edit can safely
+  // coalesce an older queued edit while the current request finishes.
+  derivedWriteQueue(group).pending = fullGroup;
+  if (!engineLink || !engineLink.connected) {
+    broadcast({
+      type: 'engineLink',
+      connected: false,
+      note: `engine offline — derived "${group}" applied locally only, not saved; will retry on reconnect`,
+    });
+    return;
+  }
+  startDerivedGroupWrites(group);
+}
+
+/**
+ * The engine REFUSED a derived edit (validation, or the persist failed). The
+ * operator's UI is showing a value the show will never run, so snap back to
+ * the engine's truth and name the exact keys that reverted.
+ */
+async function revertRejectedDerivedGroup(group, attempted, error) {
+  if (pendingDerivedEdits.get(group) !== attempted) return;   // superseded
+  const reason = `derived "${group}" rejected by engine: ${error && error.message}`;
+  let engineConfig = null;
+  try {
+    engineConfig = engineLink ? await engineLink.fetchConfig() : null;
+  } catch (fetchError) {
+    // A transport failure is not an authoritative rejection. Keep the exact
+    // local snapshot pending so onStatus(reconnected) replays it.
+    broadcast({
+      type: 'engineLink',
+      connected: !!(engineLink && engineLink.connected),
+      error: `${reason} (engine truth unreadable: ${fetchError && fetchError.message}; kept pending for reconnect)`,
+    });
+    return;
+  }
+  if (pendingDerivedEdits.get(group) !== attempted) return;   // superseded during fetch
+  const engineValues = engineConfig && engineConfig.derivedSignals
+    && engineConfig.derivedSignals[group];
+  if (!engineValues) {
+    // No readable authoritative group means there is no valid revert target.
+    // Keep it pending exactly like a transport failure.
+    broadcast({
+      type: 'engineLink',
+      connected: !!(engineLink && engineLink.connected),
+      error: `${reason} (engine returned no authoritative "${group}" config; kept pending for reconnect)`,
+    });
+    return;
+  }
+  const engineGroup = liveDerivedGroup(group, engineValues);
+  const reverted = Object.keys(attempted)
+    .filter((field) => JSON.stringify(engineGroup[field]) !== JSON.stringify(attempted[field]));
+  pendingDerivedEdits.delete(group);
+  reconcileDerivedConfig({ [group]: engineValues });
+  broadcast({ type: 'derivedConfig', config: derived.getConfig() });
+  broadcast({
+    type: 'flash',
+    text: reverted.length
+      ? `${reason} — reverted: ${reverted.join(', ')}`
+      : reason,
+    error: true,
+  });
+}
+
+/**
+ * Replay every derived edit made while the engine was down. Runs on link
+ * (re)connect, ahead of the seed's reconciliation in effect: any group still
+ * pending is skipped by reconcileDerivedConfig, so the operator's value holds
+ * until the engine has actually ruled on it.
+ */
+async function replayPendingDerivedEdits() {
+  const writes = [];
+  for (const [group, values] of [...pendingDerivedEdits.entries()]) {
+    if (!engineLink || !engineLink.connected) return;   // dropped again — stay pending
+    const queue = derivedWriteQueue(group);
+    queue.pending = values;
+    const running = startDerivedGroupWrites(group);
+    if (running) writes.push(running);
+  }
+  await Promise.all(writes);
+}
 
 let clockMs = 0, lastMs = 0;
 
@@ -1287,27 +1856,27 @@ const hasDanceMaker = (sig) => sig.chain.some(o => o.type === 'danceMaker' && o.
 // of truth: the key↔analyzer-field mapping is the same RAW_SOURCES.analyzer map
 // the designed signals read (ANALYZER_FIELD), no fork.
 function publishRawMirrors(r) {
-  paramCenter.setMany([
-    { kind: 'scalar', key: 'micLowRaw',     value: r.low ?? 0 },
-    { kind: 'scalar', key: 'micMidRaw',     value: r.mid ?? 0 },
-    { kind: 'scalar', key: 'micHighRaw',    value: r.high ?? 0 },
-    { kind: 'scalar', key: 'micKickRaw',    value: r.kick ?? 0 },
-    { kind: 'scalar', key: 'micFluxRaw',    value: r.flux ?? 0 },
-    { kind: 'scalar', key: 'micDomFreq1',   value: r.domFreq1 ?? 0 },
-    { kind: 'scalar', key: 'micDomEnergy1', value: r.domEnergy1 ?? 0 },
-    { kind: 'scalar', key: 'micDomFreq2',   value: r.domFreq2 ?? 0 },
-    { kind: 'scalar', key: 'micDomEnergy2', value: r.domEnergy2 ?? 0 },
-  ], 'companion');
+  paramCenter.setMany(buildRawMirrorWrites(r), 'companion');
 }
 function processDesignedSignals(r, dt) {
   const out = {};
   danceFromOp.dom1 = null; danceFromOp.dom2 = null;
   for (const sig of design.signals) {
-    const raw = r[ANALYZER_FIELD[sig.source]] ?? 0;
+    // NO SILENT ZEROS (codex P0). The curated publish path fails exactly like
+    // the raw-mirror path (buildRawMirrorWrites throws on a non-finite field):
+    // a missing analyzer field or a missing runner is a BROKEN design, and
+    // publishing 0 for it would look like "the room is silent" to every
+    // downstream consumer — the most dangerous lie this pipeline can tell.
+    const field = ANALYZER_FIELD[sig.source];
+    const raw = r[field];
+    if (!Number.isFinite(raw)) {
+      throw new TypeError(`companion: signal "${sig.id}" source ${sig.source} → analyzer field "${field}" is not finite (got ${raw})`);
+    }
     const spp = runners.get(sig.id);
-    // Every designed signal owns a runner (buildRunners builds one per signal,
-    // intensity or frequency). The `?? raw` is defensive only.
-    const post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
+    if (!spp) {
+      throw new Error(`companion: designed signal "${sig.id}" has no SignalPostProcessor runner (buildRunners is out of sync with design.signals)`);
+    }
+    const post = spp.process(PROXY_KEY, raw, dt);
     // Dom split (2026-06-17): a dom lane's freq and energy are now SEPARATE
     // signals, each emitting ONLY its own post-processed osc_out value. The freq
     // signal emits its shaped Hz; the energy signal (source rawDom1/2Energy) is an
@@ -1323,20 +1892,20 @@ function processDesignedSignals(r, dt) {
     if (tap) {
       // Each signal emits ONLY its own osc_out value to its address (the operator
       // rename, if any, else the derived /marsin/audio/<cpcKey>).
-      sendOsc(resolveOscOut(tap.params.name, tap.params.address).address, post);
+      const output = resolveOscOut(tap.params.name, tap.params.address);
+      recordDesignedWrite(output.cpcKey, output.address, post);
+      sendOsc(output.address, post);
     }
   }
   return out;
 }
 
-const analyzer = new AudioAnalyzer({
-  sampleRate: SR, fftSize: FFT, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
-  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
+const analyzer = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO_CONFIG, {
   nowFn: () => clockMs,
   onConditioned: (cond) => pushScope(cond),
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
+    analyzerHops++;   // the /signal_snapshot write-accounting clock
     // OSC OUTPUT RATE gate (report 20260621_6): decide ONCE per hop whether this
     // is a send frame, so every output emits together at ~oscRateHz on average.
     // Phase accumulator (see OSC_HOP_RATE_HZ comment) — tied to hops, so it holds
@@ -1345,10 +1914,13 @@ const analyzer = new AudioAnalyzer({
     _oscEmitThisHop = _oscPhase >= 1;
     if (_oscEmitThisHop) _oscPhase -= 1;
     if (_oscPhase > 1) _oscPhase = 1;   // cap: at most one emit/hop, never bursts
-    recordAnalysis(r.low ?? 0);
-    if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
+    // No `?? 0` here either: publishRawMirrors() throws on a non-finite band a
+    // few lines below, so a zero substituted here would only corrupt the
+    // calibration accumulators on a hop that is already about to fail loudly.
+    recordAnalysis(r.low);
+    if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low, r.mid, r.high);
     if (noiseCal.recording) {
-      noiseCal.low.push(r.low ?? 0); noiseCal.mid.push(r.mid ?? 0); noiseCal.high.push(r.high ?? 0);
+      noiseCal.low.push(r.low); noiseCal.mid.push(r.mid); noiseCal.high.push(r.high);
       if (clockMs - noiseCal.startClock >= NOISECAL_MS) finishNoiseCal();
     }
     const signals = processDesignedSignals(r, dt);   // designed chains + OSC out
@@ -1390,7 +1962,7 @@ const analyzer = new AudioAnalyzer({
     // the engine receives them (instead of computing its own). (report 20260621_11)
     // This INCLUDES audioParty + audioStructure — the music-MOOD cues the Timeline
     // service reads live off the engine CPC (supersedes the old mood_emit.js).
-    emitAllDerived();
+    emitAllDerived(dt * 1000);
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
     // an operator frequency signal carries one, its spring-smoothed POST Hz IS
@@ -1410,7 +1982,7 @@ const analyzer = new AudioAnalyzer({
       type: 'frame', t: clockMs, signals,
       // Live post-envelope band levels — drive the MIC TUNE page meters so the
       // operator SEES each band's level against its gate line in real time.
-      bands: { low: r.low ?? 0, mid: r.mid ?? 0, high: r.high ?? 0 },
+      bands: { low: r.low, mid: r.mid, high: r.high },
       dom: {
         f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1,
         f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2,
@@ -1448,17 +2020,19 @@ const analyzer = new AudioAnalyzer({
         onsetLow: safeGet('micOnsetLow'), onsetMid: safeGet('micOnsetMid'),
         onsetHigh: safeGet('micOnsetHigh'), chestHit: safeGet('audioChestHit'),
       },
+      derivedMetrics: derived.getMetrics(),
     });
   },
-});
+}));
 
 // Higher-resolution FFT used ONLY for the spectrum visualizer.
-const specAnalyzer = new AudioAnalyzer({
-  sampleRate: SR, fftSize: 4096, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
-  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
-  nowFn: () => clockMs, onAnalysis: () => {},
-});
+const specAnalyzer = new AudioAnalyzer(buildAudioAnalyzerOptions({
+  ...PRODUCTION_AUDIO_CONFIG,
+  fftSize: 4096,
+}, {
+  nowFn: () => clockMs,
+  onAnalysis: () => {},
+}));
 
 let pendingFrames = [];
 const BROADCAST_MS = 16;
@@ -1698,6 +2272,9 @@ function startCapture(device) {
   }
 }
 function setMode(next, opts = {}) {
+  if (next === 'mic' && MIC_DISABLED) {
+    throw new Error('physical microphone disabled by --no-mic');
+  }
   stopSource();
   pendingFrames = [];
   analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
@@ -1722,6 +2299,42 @@ function setMode(next, opts = {}) {
 // ── signal management + chain edit + export ─────────────────────────────────
 function uid(prefix) { return `${prefix}_${Math.random().toString(36).slice(2, 7)}`; }
 
+/**
+ * OUTPUT-COLLISION CHECK — the SHARED gate every design mutation runs.
+ *
+ * The loader (validateCompanionConfig) refuses a config in which two OUTPUT
+ * signals resolve to the same cpcKey or send to the same OSC address: either
+ * one silently clobbers the other at the engine. Every LIVE mutation must
+ * enforce the SAME two rules, or the operator can hand-build (over the WS API)
+ * a design the loader would have rejected — one that clobbers a curated,
+ * mission-critical key and then fails to reload on the next boot.
+ *
+ * `candidate` is the post-validateSignal normalized signal; `replacesId` is the
+ * signal it stands in for (its own id on an edit, null on an add) so a signal
+ * never collides with itself.
+ *
+ * Returns an error string, or null when the candidate is collision-free.
+ */
+function outputCollisionError(candidate, replacesId = null) {
+  const cpcKey = outputCpcKeyOf(candidate);
+  if (cpcKey === null) return null;        // not a live OUTPUT → nothing to collide with
+  const tap = oscOutTapOf(candidate);
+  const address = resolveOscOut(tap.params.name, tap.params.address).address;
+  for (const other of design.signals) {
+    if (other.id === replacesId || other.id === candidate.id) continue;
+    const otherKey = outputCpcKeyOf(other);
+    if (otherKey === null) continue;
+    if (otherKey === cpcKey) {
+      return `cpcKey "${cpcKey}" is already published by signal "${other.id}" (name collision — the engine would see one key written twice)`;
+    }
+    const otherTap = oscOutTapOf(other);
+    if (resolveOscOut(otherTap.params.name, otherTap.params.address).address === address) {
+      return `OSC address "${address}" is already used by signal "${other.id}" (address collision)`;
+    }
+  }
+  return null;
+}
+
 // Add a signal from a raw source. A new signal is IMMEDIATELY an OUTPUT: it is
 // born with a terminal `osc_out` tap already attached. Single-name rehaul: the
 // tap carries ONE `name` (the operator-facing identifier that derives the
@@ -1742,6 +2355,8 @@ function addSignal(sourceId) {
   };
   const v = validateSignal(sig);
   if (!v.ok) return { ok: false, error: v.error };
+  const collision = outputCollisionError(v.normalized);
+  if (collision) return { ok: false, error: collision };
   design.signals.push(v.normalized);
   buildRunners();
   return { ok: true, signal: v.normalized };
@@ -1768,6 +2383,12 @@ function setSignalChain(id, chain) {
   const candidate = { ...sig, chain };
   const v = validateSignal(candidate);
   if (!v.ok) return { ok: false, error: v.error };
+  // A chain edit can rename the terminal osc_out (or re-enable a disabled tap),
+  // which changes the cpcKey AND the wire address — run the same collision gate
+  // the loader runs so a live edit can never build a design that would be
+  // rejected on reload (and would clobber another output in the meantime).
+  const collision = outputCollisionError(v.normalized, id);
+  if (collision) return { ok: false, error: collision };
   sig.chain = v.normalized.chain;
   sig.output = v.normalized.output;
   buildRunners();
@@ -1799,15 +2420,10 @@ function setSignalOscAddress(id, address) {
   const v = validateSignal(candidate);
   if (!v.ok) return { ok: false, error: v.error };
   const resolved = resolveOscOut(tap.params.name, newTap.params.address).address;
-  // Wire uniqueness vs every OTHER output (validateSignal only checks one signal).
-  for (const other of design.signals) {
-    if (other.id === id) continue;
-    const ot = oscOutTap(other);
-    if (!ot) continue;
-    if (resolveOscOut(ot.params.name, ot.params.address).address === resolved) {
-      return { ok: false, error: `OSC address "${resolved}" is already used by signal "${other.id}"` };
-    }
-  }
+  // cpcKey + wire uniqueness vs every OTHER output — the SAME shared gate the
+  // loader and the chain editor use (validateSignal only checks one signal).
+  const collision = outputCollisionError(v.normalized, id);
+  if (collision) return { ok: false, error: collision };
   sig.chain = v.normalized.chain;
   sig.output = v.normalized.output;
   buildRunners();
@@ -1859,9 +2475,94 @@ function catalog() {
     signals: design.signals,
     views: design.views,
     osc: design.osc,
-    source, gains: {}, inputGain, sourceSmoothHz,
+    curatedOutputs: CURATED_OUTPUTS,
+    ...designHealth(),
+    source, gains: {}, inputGain, sourceSmoothHz, bpmSlew: { ...bpmSlew },
+    derivedConfig: derived.getConfig(),
     genreNames: GENRE_NAMES,
     synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
+  };
+}
+
+// Machine-readable diagnostic surface for the LIVE-policy audio keys.
+//
+// WHAT THIS PROVES, EXACTLY: the row set comes from the registry descriptors
+// flagged `live` — that is REGISTRATION, not production. Production is proved
+// per row by `writes` / `lastWriteHop`, counted in both the real ParamCenter
+// write path and direct designed-chain production. `producer` keeps those two
+// sources separate; `transport` reports packets on the actual OSC address.
+// `writes === 0` means neither producer path has run, and
+// `analyzerHops - lastWriteHop` growing means the producer has gone quiet.
+// `value` remains the current CPC value (null when unregistered locally).
+//
+// The row set intentionally includes internal raw mirrors (onsets, sub, chroma,
+// tonal stability) that are not part of the designed-signal UI. Read-only and
+// cheap: two Map lookups per row, no analysis work.
+function signalSnapshot() {
+  const snapshotNow = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now()
+    : Date.now();
+  const signals = audioRegistryEntries()
+    .filter((entry) => entry.live)
+    .map((entry) => {
+      const cpc = cpcWrites.get(entry.key);
+      const designed = designedWrites.get(entry.key);
+      const transportAddress = designed ? designed.address : entry.oscAddress;
+      const transport = transportAddress ? oscAccounting.get(transportAddress) : null;
+      const producerWrites = (cpc ? cpc.writes : 0) + (designed ? designed.writes : 0);
+      const lastWriteHop = Math.max(
+        cpc ? cpc.lastWriteHop : -1,
+        designed ? designed.lastWriteHop : -1,
+      );
+      return {
+        key: entry.key,
+        label: entry.label,
+        type: entry.type,
+        value: safeGet(entry.key),
+        range: entry.range,
+        oscAddress: entry.oscAddress ?? null,
+        // Registration vs production, kept separate and both honest.
+        registered: paramCenter.isRegisteredKey(entry.key),
+        writes: producerWrites,
+        lastWriteHop: lastWriteHop >= 0 ? lastWriteHop : null,
+        producer: {
+          cpcWrites: cpc ? cpc.writes : 0,
+          designedWrites: designed ? designed.writes : 0,
+          kinds: [cpc && 'param_center', designed && 'designed_chain'].filter(Boolean),
+        },
+        transport: transportAddress ? {
+          address: transportAddress,
+          count: transport ? transport.count : 0,
+          value: transport ? transport.lastValue : null,
+          rateHz: transport
+            ? +effectiveRateHz(transport, snapshotNow).toFixed(2)
+            : 0,
+        } : null,
+      };
+    });
+  return {
+    mode,
+    micDisabled: MIC_DISABLED,
+    // Hop index the write accounting above is measured against.
+    analyzerHops,
+    engineLink: { connected: !!(engineLink && engineLink.connected) },
+    targets: {
+      osc: { host: design.osc.host, port: design.osc.port },
+      engine: engineEndpoint ? { host: engineEndpoint.host, port: engineEndpoint.port } : null,
+    },
+    audioAnalysisConfig: {
+      ...effectiveAudioConfig,
+      // The slew is live-tunable, so the boot config is not the effective one.
+      bpmTracker: {
+        ...effectiveAudioConfig.bpmTracker,
+        outputSlewEnabled: bpmSlew.enabled,
+        outputSlewBpmPerSec: bpmSlew.bpmPerSec,
+      },
+    },
+    // Published vs exact tempo: `published` is what every consumer sees (the
+    // slewed walk), `raw` is the tracker's own estimate driving the lock.
+    bpmOutput: { published: safeGet('audioBpm'), raw: derived.getStatus().bpmRaw },
+    signals,
   };
 }
 
@@ -2042,6 +2743,51 @@ function handleMessage(ws, raw) {
       broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
     }
   }
+  // PUBLISHED-BPM SLEW: how fast the BPM the engine sees walks to a new tempo.
+  // Written through to the engine so CaptainPad/config stay the single source
+  // of truth; invalid input is REJECTED (no clamp, no partial apply).
+  else if (m.type === 'setBpmSlew') {
+    const next = { enabled: m.enabled, bpmPerSec: +m.bpmPerSec };
+    try {
+      writeThroughShared(
+        () => applyBpmSlew(next),
+        { bpmTracker: { outputSlewEnabled: next.enabled, outputSlewBpmPerSec: next.bpmPerSec } },
+      );
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'flash', text: `BPM slew: ${e && e.message}`, error: true }));
+      ws.send(JSON.stringify({ type: 'bpmSlew', ...bpmSlew }));
+    }
+  }
+  else if (m.type === 'setDerivedConfig') {
+    try {
+      const config = applyDerivedConfigPatch(m.group, m.patch);
+      writeThroughDerivedGroup(m.group, config);
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `derived config: ${error && error.message}`,
+        error: true,
+      }));
+      ws.send(JSON.stringify({ type: 'derivedConfig', config: derived.getConfig() }));
+    }
+  }
+  else if (m.type === 'resetDerivedConfig') {
+    try {
+      if (m.group !== 'noteColors') {
+        throw new TypeError(`derived reset does not support group "${m.group}"`);
+      }
+      const config = applyDerivedConfigPatch('noteColors', { ...NOTE_COLOR_WHEEL_DEFAULTS });
+      writeThroughDerivedGroup('noteColors', config);
+      ws.send(JSON.stringify({ type: 'flash', text: 'All note colors reset to the reference wheel' }));
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `derived reset: ${error && error.message}`,
+        error: true,
+      }));
+      ws.send(JSON.stringify({ type: 'derivedConfig', config: derived.getConfig() }));
+    }
+  }
   // Per-signal OSC SEND toggle (OSC OUT page checkbox). enabled:false mutes the
   // address on the wire; true re-enables it. Persisted into design.osc.disabled
   // so Export config keeps it. Keyed by wire ADDRESS (covers designed + derived
@@ -2167,12 +2913,12 @@ function handleMessage(ws, raw) {
   }
   else if (m.type === 'addSignal') {
     const res = addSignal(m.source);
-    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); pushManifest(); }
+    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); pushDesignHealth(); pushManifest(); }
     ws.send(JSON.stringify({ type: 'addResult', ...res }));
   } else if (m.type === 'removeSignal') {
     const res = removeSignal(m.id);
     // Removing a signal can prune it from views, so re-broadcast views too.
-    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); broadcast({ type: 'views', views: design.views }); pushManifest(); }
+    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); broadcast({ type: 'views', views: design.views }); pushDesignHealth(); pushManifest(); }
     ws.send(JSON.stringify({ type: 'removeResult', id: m.id, ...res }));
   } else if (m.type === 'addView') {
     const res = addView(m.label, m.viewType, m.signals);
@@ -2184,7 +2930,7 @@ function handleMessage(ws, raw) {
     ws.send(JSON.stringify({ type: 'removeViewResult', id: m.id, ...res }));
   } else if (m.type === 'setChain') {
     const res = setSignalChain(m.id, m.chain);
-    if (res.ok) pushManifest();   // cpcKey / address / output may have changed
+    if (res.ok) { pushDesignHealth(); pushManifest(); }   // cpcKey / address / output may have changed
     ws.send(JSON.stringify({ type: 'chainResult', id: m.id, ...res }));
   } else if (m.type === 'export') {
     ws.send(JSON.stringify({ type: 'export', yaml: exportYaml() }));
@@ -2192,8 +2938,16 @@ function handleMessage(ws, raw) {
     try { const res = exportToDisk(); pushManifest(); ws.send(JSON.stringify({ type: 'exportSaved', ...res })); }
     catch (e) { ws.send(JSON.stringify({ type: 'exportSaved', ok: false, error: String(e && e.message) })); }
   } else if (m.type === 'listDevices') {
-    listAudioDevices({ ffmpegPath }).then(d => ws.send(JSON.stringify({ type: 'devices', ...d })))
-      .catch(e => ws.send(JSON.stringify({ type: 'devices', devices: [], error: String(e && e.message) })));
+    if (MIC_DISABLED) {
+      ws.send(JSON.stringify({
+        type: 'devices',
+        devices: [],
+        error: 'physical microphone disabled by --no-mic',
+      }));
+    } else {
+      listAudioDevices({ ffmpegPath }).then(d => ws.send(JSON.stringify({ type: 'devices', ...d })))
+        .catch(e => ws.send(JSON.stringify({ type: 'devices', devices: [], error: String(e && e.message) })));
+    }
   }
 }
 
@@ -2324,6 +3078,11 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(buildOscAccounting()));
     return;
   }
+  if (p === '/signal_snapshot') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(signalSnapshot()));
+    return;
+  }
   if (p === '/file') {
     const fp = new URL(req.url, 'http://x').searchParams.get('path') || '';
     if (!fp || !AUDIO_EXT.has(path.extname(fp).toLowerCase())) { res.writeHead(400); res.end('bad file'); return; }
@@ -2384,10 +3143,15 @@ wss.on('connection', (ws) => {
     type: 'hello',
     ops: opCatalog(), frequencyOps: FREQUENCY_OPS, frequencyOnlyOps: FREQUENCY_ONLY_OPS,
     rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES, viewTypes: VIEW_TYPES,
+    curatedOutputs: CURATED_OUTPUTS,
+    ...designHealth(),
     signals: design.signals, views: design.views, osc: design.osc,
     genreNames: GENRE_NAMES,
     synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
+    bpmSlew: { ...bpmSlew },
+    derivedConfig: derived.getConfig(),
+    micDisabled: MIC_DISABLED,
     device: configDevice,
     // Current noise-gate state for the MIC TUNE page (global + per-band; null
     // per-band → uses the global gate). `gatesSummary` is the always-visible
@@ -2452,20 +3216,14 @@ let configDevice = null;
 // endpoint is set but the engine isn't up yet.
 let engineEndpoint = null;
 function applyEngineConfig() {
-  const cfgPath = ENGINE_CONFIG_PATH;
-  let cfg;
-  try { cfg = yaml.load(fs.readFileSync(cfgPath, 'utf8')); }
-  catch { return 'test'; }   // standalone (no engine config) → boot in test
+  const cfg = RESOLVED_AUDIO_CONFIG.rootConfig;
   const comp = cfg && cfg.companion;
-  if (comp && comp.osc && typeof comp.osc.host === 'string' && Number.isInteger(comp.osc.port)) {
-    design.osc = { host: comp.osc.host, port: comp.osc.port, rateHz: oscRateHz };
-  } else if (cfg && cfg.osc && Number.isInteger(cfg.osc.port)) {
-    // Fall back to the engine's own OSC port; loopback host (the companion and
-    // engine run on the same Pi). osc.host in config is the engine BIND addr
-    // (0.0.0.0) — not a send target — so we send to loopback. Preserve the
-    // OSC OUTPUT RATE (it's a send-cadence choice, independent of the target).
-    design.osc = { host: '127.0.0.1', port: cfg.osc.port, rateHz: oscRateHz };
-  }
+  // Both outbound targets come from the SAME resolvers the --no-mic isolation
+  // interlock checked at boot, so the interlock can never be checking a
+  // different endpoint than the one we actually send to. Preserve the OSC
+  // OUTPUT RATE + the send-disable list (send-cadence / mute choices, both
+  // independent of the target).
+  design.osc = { ...design.osc, ...resolveOscTarget(), rateHz: oscRateHz };
   // MIC selection: the engine/CaptainPad persist the operator's chosen input
   // as `audio.capture.device` (the unified device, via PATCH /audio/config),
   // so THAT is the engine's microphone selection — pass it to the Companion on
@@ -2474,14 +3232,12 @@ function applyEngineConfig() {
   // as audio.enabled:false (Companion = sole analyzer): then GET /audio/config
   // returns 503 and the runtime seed delivers nothing, so we'd otherwise boot
   // with no mic. (When engine audio IS live, the seed/echo reconciles on top.)
-  const engineCaptureDevice = cfg && cfg.audio && cfg.audio.capture
-    ? cfg.audio.capture.device : undefined;
+  const engineCaptureDevice = PRODUCTION_AUDIO_CONFIG.capture.device;
   if (comp && comp.device !== undefined && comp.device !== null) configDevice = comp.device;
   else if (engineCaptureDevice !== undefined) configDevice = engineCaptureDevice;
   // Resolve the engine API endpoint we live-sync the SHARED audio TUNING
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
-  engineEndpoint = resolveEngineEndpoint(cfg);
   // party_detection (R1, report 20260725_10): the HARD party gate's thresholds
   // are OPERATOR tunables, not corpus constants — they are calibrated against
   // the real venue (see the `party:` block in config.yaml). Absent ⇒ the coded
@@ -2495,6 +3251,7 @@ function applyEngineConfig() {
     derived.setPartyStrongParams(cfg.party);
     console.log(`  🎉 party gate tunables applied from config.yaml (${Object.keys(cfg.party).length} keys)`);
   }
+  engineEndpoint = resolveEngineTarget();
   // BPM smoothing (operator request 2026-06-29). config.yaml
   // `companion.bpmSmoothing: { enabled, tauMs }` — absent ⇒ the BpmSmoother
   // defaults (on, 250 ms). Applied to audioBpm before the UI + OSC read it.
@@ -2503,8 +3260,11 @@ function applyEngineConfig() {
     if (typeof sm.enabled === 'boolean') bpmSmoother.setEnabled(sm.enabled);
     if (Number.isFinite(sm.tauMs)) bpmSmoother.setTauMs(sm.tauMs);
   }
-  if (comp && (comp.source === 'mic' || comp.source === 'test' || comp.source === 'file')) return comp.source;
-  return 'test';
+  if (SOURCE_OVERRIDE !== null) return SOURCE_OVERRIDE;
+  if (!comp || !['mic', 'test', 'file'].includes(comp.source)) {
+    throw new Error('config.yaml companion.source must be one of: mic, test, file');
+  }
+  return comp.source;
 }
 
 /**
@@ -2520,10 +3280,29 @@ function startEngineLink() {
     host: engineEndpoint.host,
     port: engineEndpoint.port,
     onConfig: (config) => applyEngineSharedTuning(config),
+    // The Companion could not adopt the engine's config — it is now analyzing
+    // with tuning that is NOT what the operator set. That must be visible in
+    // the UI (a persistent engine-sync error), not buried in stderr.
+    onConfigError: (error) => {
+      console.error(`  ⚠️  engine config REJECTED by the Companion: ${error && error.message}`);
+      broadcast({
+        type: 'engineLink',
+        connected: !!(engineLink && engineLink.connected),
+        error: `could not apply engine config: ${error && error.message}`,
+      });
+    },
     onStatus: (connected, info) => {
       broadcast({ type: 'engineLink', connected, ...(info || {}) });
       if (connected) {
         console.log(`  🔗 engine config link UP → ${engineLink.wsUrl} (shared audio tuning synced)`);
+        // Derived edits made while the engine was down were never persisted
+        // (the engine is the sole persister). Push them now, before the seed's
+        // reconciliation can decide the engine's stale value is the truth.
+        replayPendingDerivedEdits().catch((error) => broadcast({
+          type: 'engineLink',
+          connected: !!(engineLink && engineLink.connected),
+          error: `derived replay failed: ${error && error.message}`,
+        }));
         // Self-heal: re-advertise the OUTPUT manifest on every (re)connect so a
         // signal added/removed/renamed while the engine was down is reconciled
         // — otherwise a removal would leave a dangling dynamic key + its
@@ -2538,6 +3317,13 @@ function startEngineLink() {
 }
 
 const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6966; })();
+// Bind LOOPBACK by default. The Companion's WS surface retunes the live show
+// (derived tuning, gates, source, OSC target) with no authentication, so the
+// default must not be an open port on every interface the box has — on playa
+// that is an open guest network. Exposing it on the LAN is a deliberate,
+// explicit act: `--host 0.0.0.0`. The launcher (the production boot path)
+// passes exactly that, so the show rig's behaviour is unchanged.
+const HOST = HOST_OVERRIDE || '127.0.0.1';
 resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch(() => { ffmpegPath = 'ffmpeg'; }).finally(() => {
   const bootMode = applyEngineConfig();
   // Mic boot can fail with no device (e.g. headless); test is always safe and
@@ -2547,8 +3333,8 @@ resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch((
   // onConfig callback drives applyInputGain/applySmooth on it). Reconnects
   // in the background; analysis never blocks on it.
   startEngineLink();
-  server.listen(PORT, () => {
-    console.log(`Audio Companion (signal designer) → http://localhost:${PORT}  → OSC ${design.osc.host}:${design.osc.port}`);
+  server.listen(PORT, HOST, () => {
+    console.log(`Audio Companion (signal designer) → http://${HOST}:${PORT}  → OSC ${design.osc.host}:${design.osc.port}`);
     if (engineEndpoint) {
       console.log(`     ↔ engine tuning sync: ${engineEndpoint.host}:${engineEndpoint.port} (single source of truth; degrades gracefully)`);
     }

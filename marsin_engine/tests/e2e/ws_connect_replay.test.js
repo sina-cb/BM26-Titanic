@@ -80,6 +80,12 @@ const CAPTAINPAD_CONSUMED_TYPES = new Set([
   'sharedParams', 'paramSchema', 'liveParams', 'mixer', 'deck', 'oscStats', 'audioStatus',
 ]);
 
+// The Live Touch WebView owns a separate /ws/control client. Keep these out
+// of ENGINE_ONLY_TYPES so this contract records their actual consumer.
+const TOUCH_CONTROL_WIRE_CONSUMED_TYPES = new Set([
+  'touchControlBrightness', 'dimmerState',
+]);
+
 // Every OTHER type this suite has observed replayed on /ws/control at
 // test-write time (see the per-socket `.on('connection', ...)` handlers,
 // api_server.js:10150-10306). Not asserted to be UNCONSUMED by CaptainPad —
@@ -87,11 +93,11 @@ const CAPTAINPAD_CONSUMED_TYPES = new Set([
 const ENGINE_ONLY_TYPES = new Set([
   'autopilot', 'colorAutopilot', 'undoState', 'viewOverride', 'audioConfig',
   'audioChainsChanged', 'engineSettings', 'performanceMode', 'effectBanks',
-  'timelineState', 'partyConfig',
+  'timelineState', 'partyConfig', 'layerSettings',
   // Not part of the connect-replay proper — a periodic render-loop stats
   // tick that can land inside the collection window since it isn't gated
   // by connection timing. Still /ws/control (router-confirmed below).
-  'stats',
+  'stats', 'fireSyncStats',
 ]);
 
 test('/ws/control replay includes at minimum {mixer, deck}', async () => {
@@ -112,7 +118,9 @@ test('every /ws/control replayed type is consumed by CaptainPad OR is an explici
   const unexpected = [];
   for (const m of messages) {
     assert.equal(typeof m.type, 'string', `every frame must carry a string type: ${JSON.stringify(m)}`);
-    if (!CAPTAINPAD_CONSUMED_TYPES.has(m.type) && !ENGINE_ONLY_TYPES.has(m.type)) {
+    if (!CAPTAINPAD_CONSUMED_TYPES.has(m.type)
+        && !TOUCH_CONTROL_WIRE_CONSUMED_TYPES.has(m.type)
+        && !ENGINE_ONLY_TYPES.has(m.type)) {
       unexpected.push(m.type);
     }
   }

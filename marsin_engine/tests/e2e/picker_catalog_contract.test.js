@@ -95,6 +95,9 @@ test('GET /model/view-selection-options: field presence + JS type for every fiel
       `unexpected kind '${v.kind}' — view_selection_picker_logic.ts classifyNamedView only checks .kind === 'group'|'composite'`);
     assert.ok(Number.isFinite(v.bit), `namedViews entry .bit must be finite: ${JSON.stringify(v)}`);
     assert.ok(Number.isFinite(v.memberCount), `namedViews entry .memberCount must be finite: ${JSON.stringify(v)}`);
+    assert.ok(Array.isArray(v.groupNames), `namedViews entry .groupNames must be an array: ${JSON.stringify(v)}`);
+    assert.ok(Array.isArray(v.partialGroupNames),
+      `namedViews entry .partialGroupNames must be an array: ${JSON.stringify(v)}`);
   }
 
   // viewMasks (back-compat bit-backed subset) — the fields
@@ -124,6 +127,10 @@ test('titanic: at least one word-1 view ("Hull Canvas") surfaces under namedView
     // name-based resolution path (see file header correction).
     const hullCanvas = data.namedViews.find((v) => v.name === 'Hull Canvas');
     assert.equal('word' in hullCanvas, false);
+    assert.deepEqual(hullCanvas.groupNames,
+      ['Left Back Wall', 'Left Front Wall', 'Right Back Wall', 'Right Front Wall']);
+    assert.deepEqual(hullCanvas.partialGroupNames, []);
+    assert.equal(hullCanvas.memberCount, 360);
   } finally {
     await titanicHarness.teardown();
   }

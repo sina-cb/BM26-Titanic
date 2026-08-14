@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 
 import {
   audioRegistryEntries,
+  micSignalShortNames,
   processedSignalKeys,
 } from '../../audio/postproc/audio_signals.js';
 import { ParamCenter } from '../../lib/param_center.js';
@@ -64,7 +65,6 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioStructure', label: 'Audio · Structure', ...LIVE({ default: 0.0, range: [0, 2], broadcastHz: 10, oscAddress: '/marsin/audio/structure', sharedFnName: 'audioStructure' }) },
   { key: 'audioBuildScore', label: 'Audio · Build Score', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/build', sharedFnName: 'audioBuildScore' }) },
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/energy', sharedFnName: 'audioEnergyRatio' }) },
-  { key: 'audioVocalsHot', label: 'Audio · Vocals Hot', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/vocalshot', sharedFnName: 'audioVocalsHot' }) },
   { key: 'audioDropPulse', label: 'Audio · Drop Pulse', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/drop', sharedFnName: 'audioDropPulse' }) },
   { key: 'audioSlowZone', label: 'Audio · Slow Zone', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/slow', sharedFnName: 'audioSlowZone' }) },
   { key: 'micDomFreq1', label: 'Mic · Dom Freq 1', ...LIVE({ range: [0, 22050], broadcastHz: 15, oscAddress: '/marsin/dom/freq1', sharedFnName: 'micDomFreq1' }) },
@@ -77,10 +77,13 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioNote', label: 'Audio · Note', ...LIVE({ range: [0, 11], broadcastHz: 10, oscAddress: '/marsin/audio/note', sharedFnName: 'audioNote' }) },
   { key: 'audioNoteHue', label: 'Audio · Note Hue', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/notehue', sharedFnName: 'audioNoteHue' }) },
   { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/switchpattern', sharedFnName: 'audioSwitchPattern' }) },
+  { key: 'audioSwitchPatternSeq', label: 'Audio · Switch Pattern Sequence', ...LIVE({ range: [0, 2147483647], broadcastHz: 5, oscAddress: '/marsin/audio/switchpatternseq', sharedFnName: 'audioSwitchPatternSeq' }) },
   { key: 'audioSwitchColor', label: 'Audio · Switch Color', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/switchcolor', sharedFnName: 'audioSwitchColor' }) },
+  { key: 'audioSwitchColorSeq', label: 'Audio · Switch Color Sequence', ...LIVE({ range: [0, 2147483647], broadcastHz: 5, oscAddress: '/marsin/audio/switchcolorseq', sharedFnName: 'audioSwitchColorSeq' }) },
   { key: 'audioBeatInBar', label: 'Audio · Beat In Bar', ...LIVE({ range: [0, 4], broadcastHz: 30, oscAddress: '/marsin/audio/beatinbar', sharedFnName: 'audioBeatInBar' }) },
   { key: 'audioBarPhase', label: 'Audio · Bar Phase', ...LIVE({ broadcastHz: 30, oscAddress: '/marsin/audio/barphase', sharedFnName: 'audioBarPhase' }) },
   { key: 'audioDownbeat', label: 'Audio · Downbeat', ...LIVE({ broadcastHz: 30, oscAddress: '/marsin/audio/downbeat', sharedFnName: 'audioDownbeat' }) },
+  { key: 'audioDownbeatSeq', label: 'Audio · Downbeat Sequence', ...LIVE({ range: [0, 2147483647], broadcastHz: 5, oscAddress: '/marsin/audio/downbeatseq', sharedFnName: 'audioDownbeatSeq' }) },
   // Genre classifier (party-mode dance-genre index + confidence). Now Companion-
   // emitted over OSC (2026-06-21 sole-analyzer move).
   { key: 'audioGenre', label: 'Audio · Genre', ...LIVE({ range: [0, 6], broadcastHz: 5, oscAddress: '/marsin/audio/genre', sharedFnName: 'audioGenre' }) },
@@ -93,9 +96,11 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioRiserConf', label: 'Audio · Riser Conf', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/riserconf', sharedFnName: 'audioRiserConf' }) },
   { key: 'audioSilence', label: 'Audio · Silence', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/silence', sharedFnName: 'audioSilence' }) },
   { key: 'audioTrackChange', label: 'Audio · Track Change', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/trackchange', sharedFnName: 'audioTrackChange' }) },
+  { key: 'audioTrackChangeSeq', label: 'Audio · Track Change Sequence', ...LIVE({ range: [0, 2147483647], broadcastHz: 5, oscAddress: '/marsin/audio/trackchangeseq', sharedFnName: 'audioTrackChangeSeq' }) },
   { key: 'audioClimax', label: 'Audio · Climax', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/climax', sharedFnName: 'audioClimax' }) },
   { key: 'audioPhrasePhase', label: 'Audio · Phrase Phase', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/phrasephase', sharedFnName: 'audioPhrasePhase' }) },
   { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/phraseboundary', sharedFnName: 'audioPhraseBoundary' }) },
+  { key: 'audioPhraseBoundarySeq', label: 'Audio · Phrase Boundary Sequence', ...LIVE({ range: [0, 2147483647], broadcastHz: 5, oscAddress: '/marsin/audio/phraseboundaryseq', sharedFnName: 'audioPhraseBoundarySeq' }) },
   { key: 'audioDropCountdown', label: 'Audio · Drop Countdown', ...LIVE({ broadcastHz: 30, oscAddress: '/marsin/audio/dropcountdown', sharedFnName: 'audioDropCountdown' }) },
   // party_detection (R1, report 20260725_10): the hard party gate + the five
   // metrics it decides on (previously computed and thrown away).
@@ -212,8 +217,20 @@ test('GAIN_BY_KEY matches the pre-refactor osc_listener map (byte-identical, ord
     micMid: 'micMidGain',
     micHigh: 'micHighGain',
     micKick: 'micKickGain',
+    micFlux: 'micFluxGain',
   };
   assert.deepEqual(GAIN_BY_KEY, expected);
   // Key order matters for deterministic boot-time iteration.
   assert.deepEqual(Object.keys(GAIN_BY_KEY), Object.keys(expected));
+});
+
+test('offline pattern tooling derives mic field names from the production OSC registry', () => {
+  assert.deepEqual(micSignalShortNames(), {
+    micLow: 'low',
+    micMid: 'mid',
+    micHigh: 'high',
+    micKick: 'kick',
+    micFlux: 'flux',
+  });
+  assert.deepEqual(Object.keys(micSignalShortNames()), processedSignalKeys());
 });

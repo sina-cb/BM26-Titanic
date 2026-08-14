@@ -77,6 +77,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   // event it parallels. Replayed on /ws/control connect.
   colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
+  // Canonical Deck / Mixer / Live Touch setting and its shared blend
+  // transaction. Low-volume operator state, replayed on control connect.
+  layerSettings:               TOPICS.CONTROL,
+  touchControlBrightness:      TOPICS.CONTROL,
+  dimmerState:                 TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
   // Engine-wide settings (auto-save toggle). Broadcast on every POST /settings
   // + replayed on /ws/control connect so every CaptainPad config screen

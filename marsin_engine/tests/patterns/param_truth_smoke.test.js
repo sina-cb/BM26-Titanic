@@ -42,7 +42,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FULL_SWEEP_PATTERN = '27_swipe';
 const NARROW = {
   '01_cylon_sweep': ['sliderLocalSpeed', 'sliderLevel'],
-  '13_sparkle': ['sliderAmberGlint', 'sliderDensity'],
+  '05_orbital_attractor_field': ['sliderFocus', 'sliderDirection'],
 };
 const SUBSET = [FULL_SWEEP_PATTERN, ...Object.keys(NARROW)];
 
@@ -157,20 +157,20 @@ test('the harness sweeps a subset offline and classifies every declared slider',
     // second one — spinning up another WASM host costs real memory, and this
     // file runs in parallel with the rest of the suite.
     //
-    // 13_sparkle computes `a = glint * amberGlint * warm` and then overwrites it
-    // with the `a = clamp01(w)` white/amber lane match, so sliderAmberGlint
-    // cannot reach the output. This is a REAL pattern bug, reported to the
-    // curator lineage; the assertion is here because byte-identical detection is
-    // the harness's sharpest self-check and must not regress.
+    // 05_orbital_attractor_field declares Focus, but changing it across its
+    // complete range is byte-identical on both test_bench and titanic. This is
+    // a REAL pattern bug, reported to the curator lineage; the assertion is here
+    // because byte-identical detection is the harness's sharpest self-check and
+    // must not regress.
     //
-    // If the curator fixes 13_sparkle this assertion is EXPECTED to fail —
+    // If the curator fixes 05_orbital_attractor_field this assertion is EXPECTED to fail —
     // retarget the fixture rather than loosening the check.
-    const sparkle = results.find(r => r.pattern === '13_sparkle');
-    const dead = sparkle.params.sliderAmberGlint;
-    assert.ok(dead, '13_sparkle: sliderAmberGlint not found');
+    const orbital = results.find(r => r.pattern === '05_orbital_attractor_field');
+    const dead = orbital.params.sliderFocus;
+    assert.ok(dead, '05_orbital_attractor_field: sliderFocus not found');
     assert.equal(dead.verdict, VERDICT.DEAD,
       `expected DEAD for a control whose write is overwritten, got ${dead.verdict} `
-      + `(${dead.reason}) — if 13_sparkle was fixed, retarget this fixture`);
+      + `(${dead.reason}) — if 05_orbital_attractor_field was fixed, retarget this fixture`);
     assert.equal(dead.reason, 'byte_identical_across_full_range');
   });
 

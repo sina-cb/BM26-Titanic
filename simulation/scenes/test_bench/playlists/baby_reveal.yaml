@@ -1,0 +1,29 @@
+schemaVersion: 1
+name: baby_reveal
+entries:
+  - id: e_baby_reveal_pink
+    pattern: 131_baby_reveal
+    label: Baby Reveal - Girl / Pink
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderFinalColor: 0
+      sliderLevel: 0.9
+      sliderSpatialDepth: 0.72
+      sliderSparkle: 0.58
+      sliderRestartReveal: 0
+    modulations: []
+    midiMappings: []
+    notes: 'Six-act 90 s tease, 2 s blackout, explosive baby pink reveal, then photo hold.'
+  - id: e_baby_reveal_blue
+    pattern: 131_baby_reveal
+    label: Baby Reveal - Boy / Blue
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderFinalColor: 1
+      sliderLevel: 0.9
+      sliderSpatialDepth: 0.72
+      sliderSparkle: 0.58
+      sliderRestartReveal: 0
+    modulations: []
+    midiMappings: []
+    notes: 'Six-act 90 s tease, 2 s blackout, explosive baby blue reveal, then photo hold.'

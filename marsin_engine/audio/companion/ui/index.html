@@ -16,10 +16,11 @@
     <div class="top-right">
       <span id="flash" class="flash"></span>
       <div class="nav-seg" id="nav-seg">
-        <button class="nav-btn active" data-page="design">DESIGN</button>
-        <button class="nav-btn" data-page="mic">MIC TUNE</button>
-        <button class="nav-btn" data-page="party">PARTY</button>
-        <button class="nav-btn" data-page="osc">OSC OUT</button>
+        <button class="nav-btn active" id="nav-design" data-page="design" role="tab" aria-controls="page-design" aria-selected="true">DESIGN</button>
+        <button class="nav-btn" id="nav-mic" data-page="mic" role="tab" aria-controls="page-mic" aria-selected="false">MIC TUNE</button>
+        <button class="nav-btn" id="nav-party" data-page="party" role="tab" aria-controls="page-party" aria-selected="false">PARTY</button>
+        <button class="nav-btn" id="nav-derived" data-page="derived" role="tab" aria-controls="page-derived" aria-selected="false">DERIVED TUNE</button>
+        <button class="nav-btn" id="nav-osc" data-page="osc" role="tab" aria-controls="page-osc" aria-selected="false">OSC OUT</button>
       </div>
       <label class="theme-pick" title="UI theme">
         <span class="theme-lab">THEME</span>
@@ -36,7 +37,7 @@
     <div id="gainbar" class="gainbar"></div>
   </div>
 
-  <main class="layout" id="page-design">
+  <main class="layout" id="page-design" role="tabpanel" aria-labelledby="nav-design">
     <aside class="sidebar">
       <div class="panel-label">SIGNALS</div>
       <div id="signals" class="signals"></div>
@@ -152,7 +153,7 @@
 
   <!-- OSC OUT accounting page (TASK 1): one page = every signal sent to the
        engine. Live table, themed, enumerated at runtime (no hardcoded list). -->
-  <section class="osc-page" id="page-osc" style="display:none">
+  <section class="osc-page" id="page-osc" role="tabpanel" aria-labelledby="nav-osc" hidden>
     <div class="osc-head">
       <div class="osc-title">OSC OUT — signals sent to the marsin engine</div>
       <div class="osc-stats">
@@ -192,7 +193,7 @@
   <!-- MIC TUNE page (report 20260621_5): tune/threshold/filter the mic for the
        loud, dusty, windy playa. Designed automatic-first — one tap calibrates
        the noise floor and sets all gates; everything else is manual override. -->
-  <section class="mic-page" id="page-mic" style="display:none">
+  <section class="mic-page" id="page-mic" role="tabpanel" aria-labelledby="nav-mic" hidden>
     <div class="mic-head">
       <div class="mic-title">MIC TUNE <span class="mic-sub">quiet the noise, keep the music — for the loud/dusty/windy playa</span></div>
       <div class="mic-link" id="mic-link">engine sync: <span id="mic-link-state" class="mic-link-state">—</span></div>
@@ -206,22 +207,21 @@
       <span class="mic-flow-step"><b>③</b> When a loud source returns, nudge the <b>HIGH</b> gate down — highs don't carry over distance, so they need this last touch.</span>
     </div>
 
-    <!-- AUTO hero: the two one-tap calibrations. Noise floor first (the new,
-         playa-critical one), then gain. -->
+    <!-- AUTO hero: the existing two-step process in execution order. Gain is
+         first because changing it changes the measured noise floor. -->
     <div class="mic-auto">
-      <div class="mic-auto-card noise">
+      <div class="mic-auto-card gain">
         <div class="mac-step">①</div>
         <div class="mac-body">
-          <div class="mac-title">Calibrate noise floor</div>
-          <div class="mac-hint">Run this at your <b>quiet baseline</b> — whatever's normal when no loud source (art car) is nearby. It does <b>not</b> need to be silent. Listens for ~4&nbsp;s and sets each band's gate to reject that ambient, so quiet moments stay calm while louder music clears the gate. Set the <b>gain</b> first (→) so the gate matches the level you'll run.</div>
+          <div class="mac-title">Calibrate gain <span class="mic-sub">loud source playing</span></div>
+          <div class="mac-hint">Do this at a <b>typical loud</b> level. Listens for ~5&nbsp;s and recommends the software preamp so the strongest band peaks near <b>0.70</b> without clipping. Gain changes every measured level, so set it before the noise floor.</div>
           <div class="mac-actions">
-            <button id="noisecal-btn" class="primary big">▶ Calibrate noise floor</button>
-            <span id="noisecal-status" class="mac-status"></span>
+            <button id="gaincal-btn" class="primary big">▶ Calibrate gain</button>
+            <span id="gaincal-status" class="mac-status"></span>
           </div>
-          <div id="noisecal-result" class="mac-result" style="display:none">
-            <span class="mac-rec">recommended → <b id="nc-low">—</b> low · <b id="nc-mid">—</b> mid · <b id="nc-high">—</b> high</span>
-            <button id="noisecal-apply" class="primary">✓ Apply</button>
-            <button id="noisecal-save" class="primary">💾 Save to <span id="noisecal-save-name">profile</span></button>
+          <div id="gaincal-result" class="mac-result" style="display:none">
+            <span class="mac-rec">peak <b id="gc-peak">—</b> · <b id="gc-verdict">—</b> · recommend ×<b id="gc-rec">—</b></span>
+            <button id="gaincal-apply" class="primary">✓ Apply gain</button>
           </div>
           <!-- Apply feedback (operator request 2026-08-03). The transient line
                carries the SERVER'S READ-BACK of what actually landed (a
@@ -231,19 +231,19 @@
           <div id="noisecal-current" class="mac-current">noise floor: —</div>
         </div>
       </div>
-      <div class="mic-auto-card gain">
+      <div class="mic-auto-card noise">
         <div class="mac-step">②</div>
         <div class="mac-body">
-          <div class="mac-title">Calibrate gain</div>
-          <div class="mac-hint">Do this when a loud source (art car) is near, at a <b>typical loud</b> level. Recommends an input gain so loud music sits healthy (not clipping). Set this <b>before</b> the noise floor — gain and the gates are linked, so changing gain a lot afterward means re-calibrating the floor.</div>
+          <div class="mac-title">Calibrate noise floor <span class="mic-sub">quiet baseline</span></div>
+          <div class="mac-hint">With gain already set and no nearby loud source, listen for ~4&nbsp;s. Each band's gate is set from that band's ambient floor. Below its gate, <b>that band becomes zero</b>; the separate <code>audioSilence</code> detector then decides whether the whole scene is quiet.</div>
           <div class="mac-actions">
-            <button id="gaincal-btn" class="primary big">▶ Calibrate gain</button>
-            <span id="gaincal-status" class="mac-status"></span>
+            <button id="noisecal-btn" class="primary big">▶ Calibrate noise floor</button>
+            <span id="noisecal-status" class="mac-status"></span>
           </div>
-          <div id="gaincal-result" class="mac-result" style="display:none">
-            <span class="mac-rec">peak <b id="gc-peak">—</b> · <b id="gc-verdict">—</b> · recommend ×<b id="gc-rec">—</b></span>
-            <button id="gaincal-apply" class="primary">✓ Apply gain</button>
-            <button id="gaincal-save" class="primary">💾 Save to <span id="gaincal-save-name">profile</span></button>
+          <div id="noisecal-result" class="mac-result" style="display:none">
+            <span class="mac-rec">recommended → <b id="nc-low">—</b> low · <b id="nc-mid">—</b> mid · <b id="nc-high">—</b> high</span>
+            <button id="noisecal-apply" class="primary">✓ Apply</button>
+            <button id="noisecal-save" class="primary">💾 Save to <span id="noisecal-save-name">profile</span></button>
           </div>
           <!-- Apply feedback (report 20260725_131), identical contract to the
                noise-floor card above: the transient line carries the SERVER'S
@@ -258,7 +258,7 @@
 
     <!-- Live per-band meters with gate lines + sliders. -->
     <div class="mic-bands" id="mic-bands">
-      <div class="mic-bands-title">PER-BAND LEVEL &amp; GATE <span class="mic-bands-sub">live level (bar) vs gate threshold (line) — anything below the line reads as silence</span></div>
+      <div class="mic-bands-title">PER-BAND LEVEL &amp; GATE <span class="mic-bands-sub">live level (bar) vs gate (line) — below the line, that band becomes zero; this is not the whole-scene <code>audioSilence</code> decision</span></div>
       <div class="band-row" data-band="low">
         <span class="band-name">LOW</span>
         <div class="band-meter"><i class="band-fill" id="bm-low-fill"></i><span class="band-gateline" id="bm-low-gate"></span></div>
@@ -285,6 +285,8 @@
       </div>
     </div>
 
+    <button class="derived-link" id="mic-derived-link" type="button">Tune whole-scene silence →</button>
+
     <!-- Global controls. -->
     <div class="mic-globals two">
       <div class="mic-global">
@@ -305,7 +307,7 @@
     <div class="mic-profiles-card">
       <div class="mp-head">
         <span class="mg-name">PROFILES</span>
-        <span class="mp-sub">click to apply · the active profile is what calibration saves into</span>
+        <span class="mp-sub">click to apply · selected = calibration save target; unsaved live values can differ</span>
       </div>
       <div class="mp-chips" id="mp-chips"></div>
       <div class="mp-active" id="mp-active"></div>
@@ -501,7 +503,175 @@
     </div>
   </section>
 
-  <div id="export-modal" class="modal"
+  <!-- Derived-signal policy lives separately from microphone calibration. The
+       controls below edit the detector states and event triggers; they do not
+       change the noise-floor calibration process above. -->
+  <section class="derived-page" id="page-derived" role="tabpanel" aria-labelledby="nav-derived" hidden>
+    <div class="derived-head">
+      <div class="derived-page-title">DERIVED TUNE <span class="derived-page-sub">turn analyzed audio into stable states and one-shot cues</span></div>
+      <div class="mic-link">engine sync: <span id="derived-link-state" class="mic-link-state">—</span></div>
+    </div>
+
+    <div class="derived-explainer">
+      <strong>MIC TUNE cleans the input first.</strong> These controls decide what the cleaned signal means:
+      whether the scene is silent, whether a party is underway, and when a musical event should trigger.
+    </div>
+
+    <div class="derived-primary-grid">
+      <section class="derived-card" id="derived-silence-card" aria-labelledby="derived-silence-title">
+        <div class="derived-card-head">
+          <div><span class="signal-kind state">STATE</span><h2 id="derived-silence-title">SILENCE + TRACK CHANGE</h2></div>
+          <output id="derived-silence-state" class="derived-state-pill">waiting</output>
+        </div>
+        <p class="derived-copy">This is <b>not</b> the microphone noise floor. It combines the gated LOW, MID and HIGH bands, smooths them, and confirms a quiet gap before declaring <code>audioSilence</code>. Hysteresis prevents flicker between silence and music.</p>
+        <div class="derived-meter-block">
+          <div class="derived-meter-label"><span>combined loudness</span><output id="derived-silence-loudness">—</output></div>
+          <div class="derived-meter" role="meter" aria-label="Silence detector combined loudness" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" id="derived-silence-meter"><i id="derived-silence-fill"></i><span id="derived-silence-off-marker" class="derived-marker off"></span><span id="derived-silence-on-marker" class="derived-marker on"></span></div>
+          <div class="derived-meter-legend"><span>silence below <b id="derived-silence-off-readout">—</b></span><span>music returns above <b id="derived-silence-on-readout">—</b></span></div>
+        </div>
+        <div class="derived-controls" data-group="trackChange">
+          <label class="derived-field" for="derived-track-off"><span>Silence below</span><input id="derived-track-off" type="number" min="0" max="1" step="0.01" data-key="offThresh" aria-describedby="derived-track-threshold-help" /></label>
+          <label class="derived-field" for="derived-track-on"><span>Music returns above</span><input id="derived-track-on" type="number" min="0" max="1" step="0.01" data-key="onThresh" aria-describedby="derived-track-threshold-help" /></label>
+          <label class="derived-field" for="derived-track-confirm"><span>Confirm quiet for</span><span class="derived-input-unit"><input id="derived-track-confirm" type="number" min="0" max="10000" step="10" data-key="silenceConfirmMs" /><em>ms</em></span></label>
+          <label class="derived-field" for="derived-track-gap"><span>Minimum track gap</span><span class="derived-input-unit"><input id="derived-track-gap" type="number" min="0" max="30000" step="10" data-key="gapMinMs" /><em>ms</em></span></label>
+          <p class="derived-field-help" id="derived-track-threshold-help">Silence must remain below the lower line; it clears only above the upper line.</p>
+        </div>
+        <details class="derived-advanced">
+          <summary>Advanced track-change timing</summary>
+          <div class="derived-controls" data-group="trackChange">
+            <label class="derived-field" for="derived-track-refractory"><span>Event spacing</span><span class="derived-input-unit"><input id="derived-track-refractory" type="number" min="0" max="60000" step="100" data-key="changeRefractoryMs" /><em>ms</em></span></label>
+            <label class="derived-field" for="derived-track-unlock"><span>Tempo unlock</span><span class="derived-input-unit"><input id="derived-track-unlock" type="number" min="0" max="30000" step="100" data-key="tempoUnlockMs" /><em>ms</em></span></label>
+            <label class="derived-field" for="derived-track-jump"><span>New-tempo jump</span><span class="derived-input-unit"><input id="derived-track-jump" type="number" min="0" max="60" step="1" data-key="tempoJumpBpm" /><em>BPM</em></span></label>
+            <label class="derived-field" for="derived-track-smooth"><span>Reaction smoothing</span><span class="derived-input-unit"><input id="derived-track-smooth" type="number" min="0.01" max="10" step="0.01" data-key="loudTau" /><em>s</em></span></label>
+            <label class="derived-field" for="derived-track-warmup"><span>Startup guard</span><span class="derived-input-unit"><input id="derived-track-warmup" type="number" min="0" max="30000" step="100" data-key="warmupMs" /><em>ms</em></span></label>
+          </div>
+        </details>
+      </section>
+
+      <section class="derived-card" aria-labelledby="derived-party-title">
+        <div class="derived-card-head">
+          <div><span class="signal-kind state">STATE</span><h2 id="derived-party-title">PARTY DETECTION</h2></div>
+          <output id="derived-party-state" class="derived-state-pill">waiting</output>
+        </div>
+        <p class="derived-copy">A stable scene gate, not a beat trigger. Full-band music turns <code>audioParty</code> on; hysteresis, hold and quiet confirmation stop a brief dip or lone rumble from changing the whole show.</p>
+        <div class="derived-meter-block">
+          <div class="derived-meter-label"><span>full-band loudness</span><output id="derived-party-loudness">—</output></div>
+          <div class="derived-meter" role="meter" aria-label="Party detector full-band loudness" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" id="derived-party-meter"><i id="derived-party-fill"></i><span id="derived-party-off-marker" class="derived-marker off"></span><span id="derived-party-on-marker" class="derived-marker on"></span></div>
+          <div class="derived-meter-legend"><span>calm below <b id="derived-party-off-readout">—</b></span><span>party above <b id="derived-party-on-readout">—</b></span></div>
+        </div>
+        <div class="derived-controls" data-group="party">
+          <label class="derived-field" for="derived-party-off"><span>Party ends below</span><input id="derived-party-off" type="number" min="0" max="1" step="0.01" data-key="offThresh" /></label>
+          <label class="derived-field" for="derived-party-on"><span>Party starts above</span><input id="derived-party-on" type="number" min="0" max="1" step="0.01" data-key="onThresh" /></label>
+          <label class="derived-field" for="derived-party-hold"><span>Minimum party hold</span><span class="derived-input-unit"><input id="derived-party-hold" type="number" min="0" max="30000" step="100" data-key="holdMs" /><em>ms</em></span></label>
+          <label class="derived-field" for="derived-party-confirm"><span>Confirm calm for</span><span class="derived-input-unit"><input id="derived-party-confirm" type="number" min="0" max="30000" step="100" data-key="offConfirmMs" /><em>ms</em></span></label>
+        </div>
+        <details class="derived-advanced">
+          <summary>Advanced party timing</summary>
+          <div class="derived-controls" data-group="party">
+            <label class="derived-field" for="derived-party-smooth"><span>Reaction smoothing</span><span class="derived-input-unit"><input id="derived-party-smooth" type="number" min="0.01" max="10" step="0.01" data-key="loudTau" /><em>s</em></span></label>
+            <label class="derived-field" for="derived-party-warmup"><span>Startup guard</span><span class="derived-input-unit"><input id="derived-party-warmup" type="number" min="0" max="30000" step="100" data-key="warmupMs" /><em>ms</em></span></label>
+          </div>
+        </details>
+      </section>
+    </div>
+
+    <section class="derived-card note-tracking-card" aria-labelledby="derived-note-tracking-title">
+      <div class="derived-card-head">
+        <div><span class="signal-kind state">SMOOTHER</span><h2 id="derived-note-tracking-title">NOTE TRACKING</h2></div>
+      </div>
+      <p class="derived-copy">The colour note follows one bass-note anchor; it is not chord detection. A new pitch must agree and persist before the hue changes, while ambiguous noisy frames hold the current colour. The shipped timing usually responds within one 124 BPM beat and leaves room inside a two-beat harmonic segment.</p>
+      <div class="derived-controls" data-group="noteTracking">
+        <!-- Bounds MIRROR the validator (NOTE_ESTIMATOR_RANGES in
+             audio/signals/note_estimator.js): medianN [3,51], minConsensus
+             [0.34,1], holdHops [1,200], nearHoldHops [1,400]. The server
+             energyGate (0,1), preferLowEnergyFrac (0,1], stableHops [1,240].
+             The server rejects an out-of-range edit loudly — the UI must never offer a
+             value that can only ever be refused. medianN steps by 1: the
+             "window must be odd" rule was removed, an even window is exactly
+             as well-defined. -->
+        <label class="derived-field" for="derived-note-window"><span>Evidence window</span><span class="derived-input-unit"><input id="derived-note-window" type="number" min="3" max="51" step="1" data-key="medianN" /><em>hops</em></span></label>
+        <label class="derived-field" for="derived-note-consensus"><span>Minimum agreement</span><input id="derived-note-consensus" type="number" min="0.34" max="1" step="0.01" data-key="minConsensus" /></label>
+        <label class="derived-field" for="derived-note-confirm"><span>Confirm new note</span><span class="derived-input-unit"><input id="derived-note-confirm" type="number" min="1" max="200" step="1" data-key="holdHops" /><em>hops</em></span></label>
+        <label class="derived-field" for="derived-note-stable"><span>Stable after</span><span class="derived-input-unit"><input id="derived-note-stable" type="number" min="1" max="240" step="1" data-key="stableHops" /><em>hops</em></span></label>
+        <p class="derived-field-help" id="derived-note-timing">Ideal response ≈ 0.21 s far / 0.37 s near move at ~86 hops/s; measured ~0.44 s typical under noise.</p>
+      </div>
+      <details class="derived-advanced">
+        <summary>Advanced note evidence</summary>
+        <div class="derived-controls" data-group="noteTracking">
+          <label class="derived-field" for="derived-note-gate"><span>Pitch energy floor</span><input id="derived-note-gate" type="number" min="0.01" max="0.99" step="0.01" data-key="energyGate" /></label>
+          <label class="derived-field" for="derived-note-low-bias"><span>Low partial strength</span><input id="derived-note-low-bias" type="number" min="0.01" max="1" step="0.01" data-key="preferLowEnergyFrac" /></label>
+          <label class="derived-field" for="derived-note-near-range"><span>Near-change range</span><span class="derived-input-unit"><input id="derived-note-near-range" type="number" min="1" max="6" step="1" data-key="nearChangeSemitones" /><em>semitones</em></span></label>
+          <label class="derived-field" for="derived-note-near-hold"><span>Confirm near change</span><span class="derived-input-unit"><input id="derived-note-near-hold" type="number" min="1" max="400" step="1" data-key="nearHoldHops" /><em>hops</em></span></label>
+        </div>
+      </details>
+    </section>
+
+    <section class="derived-card note-colors-card" aria-labelledby="derived-note-colors-title">
+      <div class="derived-card-head">
+        <div><span class="signal-kind continuous">HUE ONLY</span><h2 id="derived-note-colors-title">NOTES → COLORS</h2></div>
+        <div class="note-color-locks" aria-label="Color intensity is fixed for this preview"><span>SAT 100%</span><span>VALUE 100%</span></div>
+      </div>
+      <p class="derived-copy">The circle follows the supplied circle-of-fifths wheel. Select a note to edit its hue. This mapping changes only <code>audioNoteHue</code>; it never dims the color or reduces saturation.</p>
+      <div class="note-color-layout">
+        <div id="note-color-wheel" class="note-color-wheel" role="group" aria-label="Circle-of-fifths note color mapping">
+          <div class="note-color-center">
+            <span id="note-color-current-note">C</span>
+            <i id="note-color-current-swatch"></i>
+            <small>live note hue</small>
+          </div>
+        </div>
+        <div class="note-color-editor">
+          <div class="note-color-selected"><span>EDIT NOTE</span><b id="note-color-selected-note">C</b><i id="note-color-selected-swatch"></i><button id="note-color-reset-all" type="button" aria-describedby="note-color-reset-help">RESET ALL</button></div>
+          <label for="note-color-hue">Hue</label>
+          <input id="note-color-hue" type="range" min="0" max="359" step="1" aria-describedby="note-color-help" />
+          <div class="note-color-number"><input id="note-color-hue-num" type="number" min="0" max="359" step="1" aria-label="Selected note hue in degrees" /><span>°</span></div>
+          <p id="note-color-help">Hue is the only editable component. The wheel and swatches preview HSV at full saturation and full value.</p>
+          <p id="note-color-reset-help">RESET ALL restores all 12 hues to the supplied reference wheel. Tap it once to arm, then tap CONFIRM RESET within 3 seconds.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="derived-card tempo-card" aria-labelledby="derived-tempo-title">
+      <div class="derived-card-head">
+        <div><span class="signal-kind continuous">CONTINUOUS</span><h2 id="derived-tempo-title">TEMPO OUTPUT</h2></div>
+      </div>
+      <!-- PUBLISHED vs RAW tempo. `published` is the slewed value every consumer
+           (engine, patterns, OSC) sees; `raw` is the tracker's exact estimate.
+           Polled from the server's /signal_snapshot while this page is open —
+           the live frame carries the published BPM only. -->
+      <div class="tempo-readout">
+        <span class="tempo-readout-lab">PUBLISHED</span><b id="bpm-published">—</b>
+        <span class="tempo-readout-sep">/</span>
+        <span class="tempo-readout-lab">RAW</span><b id="bpm-raw">—</b>
+        <span class="tempo-readout-unit">BPM</span>
+      </div>
+      <p class="derived-copy">A gap between the two means the slew is still walking toward the detected tempo; a steady gap means the rate below is too slow for this material.</p>
+      <!-- Existing IDs and wire behaviour are preserved: only this control's page changed. -->
+      <div class="osc-rate-ctrl derived-bpm-slew">
+        <label class="orc-slew-on" for="bpm-slew-on"><input id="bpm-slew-on" type="checkbox" /> BPM SLEW</label>
+        <label class="sr-only" for="bpm-slew-slider">Published BPM slew rate</label>
+        <!-- Slider and number share ONE max (240 = the server's accepted range
+             ceiling); a 120 slider max silently pinned any higher number. -->
+        <input id="bpm-slew-slider" class="orc-slider" type="range" min="1" max="240" step="1" aria-describedby="bpm-slew-help" />
+        <label class="sr-only" for="bpm-slew-num">Published BPM slew rate in BPM per second</label>
+        <input id="bpm-slew-num" class="orc-num" type="number" min="1" max="240" step="1" aria-describedby="bpm-slew-help" />
+        <span class="orc-unit">bpm/s</span>
+        <span class="orc-hint" id="bpm-slew-help">Only the published BPM walks toward a new tempo. The detector and raw BPM are untouched; 16 settles a typical track change in about 1 second.</span>
+      </div>
+    </section>
+
+    <section class="derived-card events-card" aria-labelledby="derived-events-title">
+      <div class="derived-card-head">
+        <div><span class="signal-kind event">EVENT</span><h2 id="derived-events-title">EVENT TRIGGERS</h2></div>
+      </div>
+      <p class="derived-copy">Events fire once at musical moments. Patterns use the short envelope; automation should use the matching <code>…Seq</code> counter so a one-hop event cannot be missed.</p>
+      <div id="derived-event-groups" class="derived-event-groups"></div>
+    </section>
+
+    <div id="derived-status" class="sr-only" role="status" aria-live="polite"></div>
+  </section>
+
+  <div id="export-modal" class="modal">
     <div class="modal-box">
       <div class="modal-head"><span>signal design — <code>audio/companion/companion_config.yaml</code> (the output design)</span>
         <button id="export-close" class="op-btn">✕</button></div>

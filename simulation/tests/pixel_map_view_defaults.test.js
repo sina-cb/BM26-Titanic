@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
 import {
-  CHIMNEY_GROUPS, SMALL_SMOKESTACK_GROUPS, FRONT_BAR_GROUPS,
+  CHIMNEY_GROUPS, SMALL_SMOKESTACK_GROUPS, AUDITORIUM_GROUPS, FRONT_BAR_GROUPS,
   FRONT_VINTAGE_GROUPS, FRONT_STRAND_GROUPS, ORPHAN_GROUPS, TE_SIGN_GROUPS,
   VINTAGE_LED_PITCH,
   DEFAULT_VIEWS, buildDefaultViews,
@@ -324,12 +324,13 @@ test('both chimney rings name the CURRENT operator groups, not retired ones', ()
   }
 });
 
-test('the Top-Down default view selects both chimney groups and both small stacks', () => {
+test('the Top-Down default view selects chimney, small-stack, and auditorium groups', () => {
   const topDown = DEFAULT_VIEWS.find((v) => v.id === 'top_down');
   assert.ok(topDown, 'a top_down default view exists');
   const selectedGroups = topDown.panels[0].select
     .filter((s) => s.group).map((s) => s.group);
-  assert.deepEqual(selectedGroups, [...CHIMNEY_GROUPS, ...SMALL_SMOKESTACK_GROUPS]);
+  assert.deepEqual(selectedGroups,
+    [...CHIMNEY_GROUPS, ...SMALL_SMOKESTACK_GROUPS, ...AUDITORIUM_GROUPS]);
 });
 
 test('the Front default view names exactly the eight front groups, one panel per side', () => {
@@ -468,60 +469,13 @@ test('both Front panels declare the vintage pitch, and nothing else does', () =>
   }
 });
 
-test('Top-Down declares the side-gap compression, and only Top-Down does', () => {
-  // Operator-ordered departure from the true projection, 2026-07-30. Named
-  // constants, not a silent heuristic — and scoped to the one view he asked for.
+test('Top-Down defaults to an unmodified orthographic projection', () => {
   const topDown = DEFAULT_VIEWS.find((v) => v.id === 'top_down');
-  const c = topDown.panels[0].compress;
-  assert.deepEqual(c, { minWorldGap: 5, gapWorld: 4 });
-  for (const view of DEFAULT_VIEWS) {
-    if (view.id === 'top_down') continue;
-    for (const panel of view.panels) {
-      assert.equal(panel.compress, undefined,
-        `view '${view.id}' must keep its TRUE projection — compression was ` +
-        'ordered for Top-Down ONLY');
-    }
+  const panel = topDown.panels[0];
+  assert.equal(panel.projection, 'top');
+  assert.equal(panel.layout, 'spatial');
+  for (const property of ['compress', 'expandPitch', 'washAngle', 'rotate']) {
+    assert.equal(panel[property], undefined,
+      `Top-Down.${property} would distort the authoritative orthographic geometry`);
   }
-});
-
-test('the compression threshold has real headroom on the live scene', () => {
-  // The whole design rests on there being a wide margin between the dead bands
-  // it collapses and the largest legitimate gap INSIDE a side. Recompute both
-  // from the scene, so a fixture move that narrows that margin fails here
-  // instead of silently tearing a side in half.
-  const scene = titanicScene();
-  const fixtures = scene.parLights.fixtures || [];
-  const strands = scene.ledStrands.strands || [];
-  const topDown = DEFAULT_VIEWS.find((v) => v.id === 'top_down');
-  const { minWorldGap } = topDown.panels[0].compress;
-
-  // Every x the Top-Down panel actually draws (bars + chimney + small stacks +
-  // strand pixels), minus the excluded ghosts.
-  const chim = new Set([...CHIMNEY_GROUPS, ...SMALL_SMOKESTACK_GROUPS]);
-  const xs = [];
-  for (const l of fixtures) {
-    if (ORPHAN_GROUPS.includes(l.group)) continue;
-    if (l.fixtureType === 'ShehdsBar' || chim.has(l.group)) xs.push(l.x);
-  }
-  for (const s of strands) {
-    for (let i = 0; i < 40; i++) {
-      const t = i / 39;
-      xs.push(s.startX + (s.endX - s.startX) * t);
-    }
-  }
-  xs.sort((a, b) => a - b);
-  const gaps = [];
-  for (let i = 1; i < xs.length; i++) gaps.push(xs[i] - xs[i - 1]);
-  const collapsed = gaps.filter((g) => g > minWorldGap);
-  const kept = gaps.filter((g) => g <= minWorldGap);
-  assert.ok(collapsed.length >= 2,
-    `expected the ship's dead bands to qualify, found ${collapsed.length}`);
-  const smallestCollapsed = Math.min(...collapsed);
-  const largestKept = Math.max(...kept);
-  assert.ok(smallestCollapsed > minWorldGap * 1.5,
-    `the smallest collapsed band (${smallestCollapsed.toFixed(2)}) is too close ` +
-    `to the ${minWorldGap}-unit threshold`);
-  assert.ok(largestKept < minWorldGap / 1.5,
-    `the largest gap INSIDE a side (${largestKept.toFixed(2)}) is too close to ` +
-    `the ${minWorldGap}-unit threshold — compression could tear a side apart`);
 });

@@ -254,9 +254,9 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.5
-      sliderDensity: 0.5
-      sliderWhiteLift: 0.5
-      sliderUvLift: 1
+      sliderDetail: 0.5
+      sliderJewelryWhite: 0.5
+      sliderUvUndertow: 1
     modulations: []
     midiMappings: []
     notes: null
@@ -306,11 +306,6 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.51
-      sliderFlockReach: 0.56
-      sliderFlockFocus: 0.41
-      sliderFilamentDensity: 0.68
-      sliderContrast: 0.32
-      sliderAfterglow: 0.22
     modulations: []
     midiMappings: []
     notes: null
@@ -319,7 +314,7 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.5
-      sliderReach: 0.5
+      sliderRadius: 0.5
       sliderFocus: 0.5
       sliderTrailBlend: 0.55
     modulations: []
@@ -330,8 +325,8 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.5
-      sliderRaySpan: 0.5
-      sliderDepthFocus: 0.5
+      sliderRadius: 0.5
+      sliderDetail: 0.5
       sliderWhiteFoam: 0.55
       sliderUvUndertow: 1
     modulations: []
@@ -342,11 +337,6 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.5
-      sliderFlockReach: 0.5
-      sliderFlockFocus: 0.5
-      sliderFilamentDensity: 0.5
-      sliderContrast: 0.5
-      sliderAfterglow: 0.18
     modulations: []
     midiMappings: []
     notes: null
@@ -641,7 +631,7 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.8
-      sliderSwell: 0.21
+      sliderLevel: 0.21
       sliderShimmer: 0.81
       sliderRibbons: 0.21
       sliderSoft: 0.27

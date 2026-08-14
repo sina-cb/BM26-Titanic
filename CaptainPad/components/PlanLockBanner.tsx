@@ -60,6 +60,10 @@ export const PlanLockBanner: React.FC<{
   // controlLock is NOT 'plan' (planActive false under 'overridden'), so
   // exactly one variant renders at a time.
   const { leaseHeld, leaseRemainingSec, resumeNow } = useOperatorTakeover();
+  const [leaseDismissed, setLeaseDismissed] = useState(false);
+  useEffect(() => {
+    if (!leaseHeld) setLeaseDismissed(false);
+  }, [leaseHeld]);
   const handleGoToPlan = () => {
     try { router.push('/timeline'); } catch { /* router not ready during very early boot */ }
   };
@@ -90,7 +94,7 @@ export const PlanLockBanner: React.FC<{
   // was driving the deck — the exact bug this banner exists to surface.)
   const slide = useRef(new Animated.Value(0)).current;
 
-  const visible = planLocked || leaseHeld;
+  const visible = planLocked || (leaseHeld && !leaseDismissed);
   useEffect(() => {
     Animated.timing(slide, {
       toValue: visible ? 1 : 0,
@@ -141,6 +145,7 @@ export const PlanLockBanner: React.FC<{
           borderColor: '#9a6a12',
           borderRadius: 10,
           paddingHorizontal: 12,
+          paddingRight: leaseHeld ? 34 : 12,
           paddingVertical: 8,
           flexDirection: 'row',
           alignItems: 'center',
@@ -149,6 +154,27 @@ export const PlanLockBanner: React.FC<{
           elevation: 8,
         }}
       >
+        {leaseHeld ? (
+          <TouchableOpacity
+            onPress={() => setLeaseDismissed(true)}
+            style={{
+              position: 'absolute',
+              right: 5,
+              top: 5,
+              width: 26,
+              height: 26,
+              borderRadius: 13,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss takeover lease notice"
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, lineHeight: 20, color: '#1a1a1a' }}>
+              ×
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         <PulsingDot />
         <View style={{ flex: 1 }}>
           <Text

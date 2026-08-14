@@ -74,6 +74,22 @@ signals:
         params:
           name: micKick
     output: true
+  - id: flux
+    label: micFlux
+    source: rawFlux
+    type: intensity
+    chain:
+      - id: flux_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 22
+      - id: flux_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micFlux
+    output: true
   - id: dom1
     label: micDomFreq1
     source: rawDom1

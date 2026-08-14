@@ -6,7 +6,9 @@
  * offline on the FMA EDM corpus (report 202606; ~28 µs/hop total).
  *
  * Publishes:
- *   audioBpm          — realtime tempo (Kalman-smoothed), [0,180] (BpmTracker v2 clamp)
+ *   audioBpm          — realtime tempo (Kalman-smoothed), [0,180] (BpmTracker v2 clamp).
+ *                       Rate-limited on the way out when the tracker's output
+ *                       slew is on; getStatus().bpmRaw carries the exact tempo.
  *   audioBeat         — phase-locked beat pulse [0,1]
  *   audioParty        — loud-music gate, 0/1 (hysteresis + hold)
  *   audioPartyStrong  — HARD party gate, 0/1 (level×calibrated-floor AND rhythmic
@@ -19,7 +21,7 @@
  *   audioBpmLocked    — BpmTracker lock state 0/1 (was computed + thrown away)
  *   audioBpmConf      — BpmTracker confidence [0,1] (was computed + thrown away)
  *   audioNote         — dominant pitch class 0–11 (−1→0 when no stable note)
- *   audioNoteHue      — pitchClass/12 → [0,1], for "play the notes as colour"
+ *   audioNoteHue      — configurable note-color wheel hue in [0,1]
  *   audioSwitchPattern— pulse: a musically-sensible moment to change PATTERN
  *   audioSwitchColor  — pulse: a musically-sensible moment to change COLOUR
  *   audioGenre        — coarse dance-genre index (0 ambient .. 6 downtempo;
@@ -61,24 +63,17 @@ import { TrackChange } from './track_change.js';
 import { Climax } from './climax.js';
 import { PhraseTracker } from './phrase_tracker.js';
 import { DropCountdown } from './drop_countdown.js';
-
-// Corpus-tuned params (signals_params.json). Hop rate ~86.13/s.
-const PARAMS = Object.freeze({
-  // NOTE: there is intentionally NO `bpm` block here. BPM uses the BpmTracker v2
-  // baked-in DEFAULTS, which are the corpus-validated ones (see bpm_tracker.js
-  // header). A former `PARAMS.bpm` was dead config (never passed to the tracker)
-  // and carried stale v1-only keys (octaveCorrFloor/octaveVotes/lockConf/…) that
-  // no longer exist in v2 — removed to stop it lying about what runs.
-  party: { wLow: 0.4, wMid: 0.4, wHigh: 0.2, loudTau: 0.4, onThresh: 0.22, offThresh: 0.12, holdMs: 1200, offConfirmMs: 800, warmupMs: 1500 },
-  note:  { minPitchHz: 40, maxPitchHz: 1200, preferLow: true, preferLowEnergyFrac: 0.5, energyGate: 0.05, medianN: 15, holdHops: 26, kfQ: 0.15, kfR: 8, stableHops: 26 },
-  sw:    { startupGuardMs: 2000, patternMinDwellMs: 6000, dropMinDwellMs: 2500, energyRegimeHi: 0.6, energyRegimeLo: 0.3, regimeHoldMs: 1500, dropPulseFire: 0.5, slowZoneHi: 0.55, slowZoneLo: 0.35, quantizeToBeat: true, quantizeMaxWaitMs: 350, patternUrgeTau: 8, colorMinDwellMs: 2500, noteChangeMinDwellMs: 1800, colorUrgeTau: 4 },
-});
+import {
+  mergeDerivedSignalsConfig,
+  NOTE_COLOR_PITCH_KEYS,
+  validateDerivedSignalsConfig,
+} from '../config/derived_signals_config.js';
 
 // Safe per-module result shapes used when a sub-module update() throws this hop.
 // These mirror the field names the publish step reads, holding the neutral /
 // zero value so a single failing module degrades to "off" rather than poisoning
 // the others. (Frozen — never mutated; the publish step only reads them.)
-const SAFE_BPM = Object.freeze({ bpm: 0, beat: 0, beatEdge: false, locked: false, confidence: 0, beatInBar: 0, barPhase: 0, downbeat: false });
+const SAFE_BPM = Object.freeze({ bpm: 0, bpmRaw: 0, beat: 0, beatEdge: false, locked: false, confidence: 0, beatInBar: 0, barPhase: 0, downbeat: false });
 const SAFE_NOTE = Object.freeze({ pitchClass: -1, hue: 0, stable: false });
 const SAFE_PARTY = Object.freeze({ party: false });
 // partyStrong's safe shape: OFF + all metrics zero. A failing detector must read
@@ -97,30 +92,41 @@ const SAFE_PHRASE = Object.freeze({ phrasePhase: 0, phraseBoundary: false });
 const SAFE_COUNTDOWN = Object.freeze({ countdown: 0 });
 
 export class DerivedSignals {
-  /** @param {{paramCenter:object}} deps */
-  constructor({ paramCenter }) {
+  /** @param {{paramCenter:object,bpmTracker:object,derivedSignals:object}} deps */
+  constructor({ paramCenter, bpmTracker, derivedSignals }) {
     if (!paramCenter || typeof paramCenter.get !== 'function' || typeof paramCenter.setMany !== 'function') {
       throw new TypeError('DerivedSignals: paramCenter with get()/setMany() is required');
     }
+    // No default (codex P0): an empty object here silently ran the tracker on its
+    // baked DEFAULTS instead of the shipped config.yaml band/slew/hop rate, so
+    // every caller that forgot it was measuring a different detector than
+    // production. The tracker options must come from buildBpmTrackerOptions().
+    if (!bpmTracker || typeof bpmTracker !== 'object') {
+      throw new Error('DerivedSignals requires bpmTracker options (buildBpmTrackerOptions)');
+    }
+    validateDerivedSignalsConfig(derivedSignals);
     this.paramCenter = paramCenter;
-    this._bpm = new BpmTracker();   // v2: tuned DEFAULTS baked in (2-state lock + beat/bar)
-    this._party = new PartyMode(PARAMS.party);
-    // Hard party gate (report 20260725_10 §4.1). Its thresholds are OPERATOR
-    // tunables, not corpus constants: the companion applies config.yaml's
-    // `party:` block on boot via setPartyStrongParams().
+    this._derivedConfig = {};
+    for (const [group, values] of Object.entries(derivedSignals)) {
+      this._derivedConfig[group] = { ...values };
+    }
+    this._bpm = new BpmTracker(bpmTracker);
+    this._party = new PartyMode(this._derivedConfig.party);
+    // Hard party gate thresholds remain operator tunables supplied by the
+    // Companion's validated `party:` config block.
     this._partyStrong = new PartyModeStrong();
-    this._note = new NoteEstimator(PARAMS.note);
-    this._switch = new SwitchSignals(PARAMS.sw);
+    this._note = new NoteEstimator(this._derivedConfig.noteTracking);
+    this._switch = new SwitchSignals(this._derivedConfig.switch);
     // analyzer_features (slot 3): band-onset chase + sub-bass chest hit shapers.
-    this._onsets = new BandOnsetBank();
-    this._sub = new SubBass();
+    this._onsets = new BandOnsetBank(this._derivedConfig.bandOnsets);
+    this._sub = new SubBass(this._derivedConfig.chestHit);
     this._genre = new GenreClassifier();   // genre_signals (slot 0): tuned DEFAULTS baked in
     // new_derived_signals: anticipation/track-change/climax/phrase/countdown.
     this._riser = new BuildAnticipation();
-    this._trackChange = new TrackChange();
+    this._trackChange = new TrackChange(this._derivedConfig.trackChange);
     this._climax = new Climax();
-    this._phrase = new PhraseTracker();
-    this._countdown = new DropCountdown();
+    this._phrase = new PhraseTracker(this._derivedConfig.phrase);
+    this._countdown = new DropCountdown(this._derivedConfig.dropCountdown);
     this._fatal = false;
     // Per-module failure tracking (fail-loud + operator-visible, NOT fail-quiet).
     // moduleErrors maps a module name → its last error message; degraded is true
@@ -136,6 +142,9 @@ export class DerivedSignals {
     // hue 0 (a defined, non-spurious neutral), then track the live note.
     this._heldPc = 0;
     this._heldHue = 0;
+    // Last EXACT tracker tempo, before the published-BPM slew. Only observable
+    // through getStatus() — the published `audioBpm` key is the slewed one.
+    this._bpmRaw = 0;
 
     // ── Hoisted publish payload (codex: allocation-free hot path) ─────────────
     // The {kind,key} shapes are static; only `.value` changes each hop. Build
@@ -224,7 +233,7 @@ export class DerivedSignals {
     // new_derived_signals: anticipation/track-change/climax/phrase/countdown.
     this._riser.reset(); this._trackChange.reset(); this._climax.reset();
     this._phrase.reset(); this._countdown.reset();
-    this._heldPc = 0; this._heldHue = 0;
+    this._heldPc = 0; this._heldHue = 0; this._bpmRaw = 0;
     if (!this._fatal) this._zero();
   }
 
@@ -274,7 +283,11 @@ export class DerivedSignals {
     // Each sub-module runs under its OWN guard (_runModule): a throw in one
     // (e.g. the genre classifier) can no longer blank BPM/party/note — it
     // degrades only its own keys for that hop and is reported loud + visible.
-    const b = this._runModule('bpm', () => this._bpm.update(g('micFluxRaw'), g('micKickRaw'), dt), SAFE_BPM);
+    const b = this._runModule('bpm', () => this._bpm.update(
+      g('micFluxRaw'), g('micKickRaw'), dt,
+      Math.max(g('micLowRaw'), g('micMidRaw'), g('micHighRaw')),
+    ), SAFE_BPM);
+    this._bpmRaw = b.bpmRaw;
     const n = this._runModule('note', () => this._note.update(g('micDomFreq1'), g('micDomEnergy1'), g('micDomFreq2'), g('micDomEnergy2')), SAFE_NOTE);
     const p = this._runModule('party', () => this._party.update(g('micLowRaw'), g('micMidRaw'), g('micHighRaw'), dt, now), SAFE_PARTY);
     // NOTE PUBLISH: the estimator returns pitchClass = -1 ("no note") during
@@ -284,7 +297,7 @@ export class DerivedSignals {
     // the estimator's own design says colour should freeze, not blink to C.
     if (n.pitchClass >= 0) {
       this._heldPc = n.pitchClass;
-      this._heldHue = n.hue;
+      this._heldHue = this._derivedConfig.noteColors[NOTE_COLOR_PITCH_KEYS[n.pitchClass]];
     }
     const s = this._runModule('switch', () => this._switch.update({
       nowMs: now, dt,
@@ -408,7 +421,98 @@ export class DerivedSignals {
       degraded: this._degraded,
       // shallow copy so callers can't mutate our internal map
       moduleErrors: { ...this._moduleErrors },
+      // BPM observability: the published key is slewed, so the operator needs
+      // the exact tracker tempo somewhere to tell "the walk is catching up"
+      // apart from "the detector read a different tempo".
+      bpmRaw: this._bpmRaw,
+      bpmSlew: {
+        enabled: this._bpm.p.outputSlewEnabled,
+        bpmPerSec: this._bpm.p.outputSlewBpmPerSec,
+      },
+      derivedConfig: this.getConfig(),
+      derivedMetrics: this.getMetrics(),
     };
+  }
+
+  /** Allocation-small live diagnostics for the Companion frame. */
+  getMetrics() {
+    return {
+      partyLoudness: this._party.loudness,
+      silenceLoudness: this._trackChange.loudness,
+    };
+  }
+
+  /** Return a defensive copy of the effective operator-facing config. */
+  getConfig() {
+    const out = {};
+    for (const [group, values] of Object.entries(this._derivedConfig)) {
+      out[group] = { ...values };
+    }
+    return out;
+  }
+
+  /**
+   * Atomically retune one derived module. A touched module starts from neutral
+   * state and reruns its own warmup; every untouched module keeps its state.
+   */
+  reconfigure(group, patch) {
+    if (typeof group !== 'string' || !group) {
+      throw new TypeError('DerivedSignals.reconfigure requires a group name');
+    }
+    const nextConfig = mergeDerivedSignalsConfig(this._derivedConfig, { [group]: patch });
+    const values = nextConfig[group];
+    let replacement;
+    let dependentGenre = null;
+    if (group === 'noteTracking') {
+      replacement = new NoteEstimator(values);
+    } else if (group === 'noteColors') {
+      // Hue mapping is stateless. Change only the held colour for the current
+      // note; never reset pitch estimation or another derived detector.
+      replacement = null;
+    } else if (group === 'party') {
+      replacement = new PartyMode(values);
+      // Genre is party-gated. Reset it with the party latch so no committed
+      // classification survives a material change to what counts as party.
+      dependentGenre = new GenreClassifier();
+    } else if (group === 'trackChange') {
+      replacement = new TrackChange(values);
+    } else if (group === 'switch') {
+      replacement = new SwitchSignals(values);
+    } else if (group === 'bandOnsets') {
+      replacement = new BandOnsetBank(values);
+    } else if (group === 'chestHit') {
+      replacement = new SubBass(values);
+    } else if (group === 'phrase') {
+      replacement = new PhraseTracker(values);
+    } else if (group === 'dropCountdown') {
+      replacement = new DropCountdown(values);
+    } else {
+      throw new TypeError(`DerivedSignals.reconfigure unknown group "${group}"`);
+    }
+
+    if (group === 'noteTracking') {
+      this._note = replacement;
+    } else if (group === 'noteColors') {
+      this._heldHue = values[NOTE_COLOR_PITCH_KEYS[this._heldPc]];
+    } else if (group === 'party') {
+      this._party = replacement;
+      this._genre = dependentGenre;
+    } else if (group === 'trackChange') this._trackChange = replacement;
+    else if (group === 'switch') this._switch = replacement;
+    else if (group === 'bandOnsets') this._onsets = replacement;
+    else if (group === 'chestHit') this._sub = replacement;
+    else if (group === 'phrase') this._phrase = replacement;
+    else if (group === 'dropCountdown') this._countdown = replacement;
+    this._derivedConfig = nextConfig;
+    return this.getConfig();
+  }
+
+  /**
+   * Retune the published-BPM slew live (Audio Companion). Throws on an invalid
+   * setting — the caller surfaces the rejection to the operator.
+   */
+  setBpmOutputSlew({ enabled, bpmPerSec }) {
+    this._bpm.setOutputSlew({ enabled, bpmPerSec });
   }
 
   _zero() {

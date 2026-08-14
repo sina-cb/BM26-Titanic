@@ -54,25 +54,162 @@ export const NOTE_ESTIMATOR_DEFAULTS = Object.freeze({
   preferLow: true,      // pick the lower strong partial (the root), not the loudest harmonic
   preferLowEnergyFrac: 0.5, // a lower partial wins if it has ≥ this fraction of the louder's energy
   energyGate: 0.05,     // below this energy → hold the last note
-  medianN: 15,          // median window for raw pitch class (~0.17 s; reject flips)
-  holdHops: 26,         // consecutive-agreement hops to commit a pc change (~0.3 s)
+  medianN: 15,          // evidence window for raw pitch class (~0.17 s)
+  minConsensus: 0.55,   // ambiguous windows hold; a plurality alone cannot change colour
+  holdHops: 10,         // sustained evidence to commit a change (~0.12 s after the window)
+  nearChangeSemitones: 2, // small moves resemble dom-tracker glides; demand more evidence
+  nearHoldHops: 24,     // ~0.28 s confirmation for a 1–2 semitone move
   kfQ: 0.15,            // Kalman process noise on MIDI value (stiffer = steadier colour)
   kfR: 8.0,             // Kalman measurement noise on MIDI value
-  stableHops: 26,       // pc must hold this long to report stable=true (~0.3 s)
+  stableHops: 18,       // committed pc must hold this long to report stable=true (~0.21 s)
 });
+
+/**
+ * Legal range for every noteTracking field — the SINGLE SOURCE of truth,
+ * shared by this constructor and the operator-facing config validator
+ * (audio/config/derived_signals_config.js imports this).
+ *
+ * The bounds are MUSICAL, not merely type-safe: a value inside them must still
+ * produce a working note tracker. Degenerate settings that would disable or
+ * freeze the feature from the Companion UI are rejected here rather than
+ * silently shipping a dead colour channel:
+ *   - medianN < 3 has no majority to speak of; > 51 is a 0.6 s window that can
+ *     no longer resolve a bass/root change at dance tempos.
+ *   - minConsensus < 1/3 is not consensus — three-way ties would commit.
+ *   - energyGate must stay strictly between 0 and 1: zero treats a frequency
+ *     lane with no energy as evidence, while one rejects every non-clipped
+ *     analyzer frame. preferLowEnergyFrac must be positive so a silent low
+ *     lane cannot always defeat a healthy upper partial.
+ *   - holdHops / nearHoldHops of 0 removes the hysteresis entirely (hue
+ *     strobes); the upper caps (200 hops ≈ 2.3 s, 400 hops ≈ 4.6 s) are the
+ *     point past which a change would never land inside a musical phrase.
+ * `kind` is 'number' | 'integer' | 'boolean'; `exclusiveMin` / `exclusiveMax`
+ * make the corresponding bound open.
+ */
+export const NOTE_ESTIMATOR_RANGES = Object.freeze({
+  minPitchHz: Object.freeze({ kind: 'number', min: 20, max: 20000 }),
+  maxPitchHz: Object.freeze({ kind: 'number', min: 20, max: 20000 }),
+  preferLow: Object.freeze({ kind: 'boolean' }),
+  preferLowEnergyFrac: Object.freeze({
+    kind: 'number', min: 0, max: 1, exclusiveMin: true,
+  }),
+  energyGate: Object.freeze({
+    kind: 'number', min: 0, max: 1, exclusiveMin: true, exclusiveMax: true,
+  }),
+  medianN: Object.freeze({ kind: 'integer', min: 3, max: 51 }),
+  minConsensus: Object.freeze({ kind: 'number', min: 0.34, max: 1 }),
+  holdHops: Object.freeze({ kind: 'integer', min: 1, max: 200 }),
+  nearChangeSemitones: Object.freeze({ kind: 'integer', min: 1, max: 6 }),
+  nearHoldHops: Object.freeze({ kind: 'integer', min: 1, max: 400 }),
+  kfQ: Object.freeze({ kind: 'number', min: 0, max: 10000, exclusiveMin: true }),
+  kfR: Object.freeze({ kind: 'number', min: 0, max: 10000, exclusiveMin: true }),
+  stableHops: Object.freeze({ kind: 'integer', min: 1, max: 240 }),
+});
+
+/** Human-readable interval text for an error message. */
+function rangeText(spec) {
+  return `${spec.exclusiveMin ? '(' : '['}${spec.min}, ${spec.max}`
+    + `${spec.exclusiveMax ? ')' : ']'}`;
+}
+
+/**
+ * Validate ONE noteTracking field. Throws TypeError on a wrong type and
+ * RangeError on an out-of-range value. `label` prefixes the message so the
+ * config validator can report `audio.derivedSignals.noteTracking.<field>`.
+ */
+export function validateNoteEstimatorField(field, value, label = 'noteTracking') {
+  const spec = NOTE_ESTIMATOR_RANGES[field];
+  if (!spec) throw new TypeError(`${label} has unknown field "${field}"`);
+  if (spec.kind === 'boolean') {
+    if (typeof value !== 'boolean') {
+      throw new TypeError(`${label}.${field} must be a boolean`);
+    }
+    return;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${label}.${field} must be a finite number`);
+  }
+  if (spec.kind === 'integer' && !Number.isInteger(value)) {
+    throw new RangeError(`${label}.${field} must be an integer in ${rangeText(spec)}`);
+  }
+  const belowMin = spec.exclusiveMin ? value <= spec.min : value < spec.min;
+  const aboveMax = spec.exclusiveMax ? value >= spec.max : value > spec.max;
+  if (belowMin || aboveMax) {
+    throw new RangeError(`${label}.${field} must be in ${rangeText(spec)}`);
+  }
+}
+
+/**
+ * Cross-field invariants. Exported so the operator-facing validator enforces
+ * exactly the same ones the estimator relies on.
+ *   - minPitchHz < maxPitchHz: an empty or inverted pitch band accepts nothing.
+ *   - the pitch band spans at least one octave: a near-zero-width legal band
+ *     is indistinguishable from disabling the tracker.
+ *   - nearHoldHops >= holdHops: `nearHoldHops` is the EXTRA evidence demanded
+ *     of a small (≤ nearChangeSemitones) move, which is the ambiguous case.
+ *     Making it cheaper than a far move inverts the whole design.
+ */
+export function requireNoteEstimatorOrdering(values, label = 'noteTracking') {
+  if (values.minPitchHz >= values.maxPitchHz) {
+    throw new RangeError(`${label} requires minPitchHz < maxPitchHz`);
+  }
+  if (values.maxPitchHz / values.minPitchHz < 2) {
+    throw new RangeError(`${label} pitch range must span at least one octave`);
+  }
+  if (values.nearHoldHops < values.holdHops) {
+    throw new RangeError(`${label} requires nearHoldHops >= holdHops`);
+  }
+}
+
+/**
+ * Validate a COMPLETE noteTracking configuration: every key of
+ * NOTE_ESTIMATOR_DEFAULTS present, no unknown keys, every value in range, and
+ * the cross-field ordering satisfied. No defaults are filled in (codex P0 — a
+ * missing key is a caller bug, not something to paper over).
+ */
+export function validateNoteEstimatorConfig(config, label = 'noteTracking') {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new TypeError(`${label} requires a complete config object`);
+  }
+  for (const field of Object.keys(config)) {
+    if (!(field in NOTE_ESTIMATOR_DEFAULTS)) {
+      throw new TypeError(`${label} has unknown field "${field}"`);
+    }
+  }
+  for (const field of Object.keys(NOTE_ESTIMATOR_DEFAULTS)) {
+    if (!(field in config)) {
+      throw new TypeError(`${label} requires "${field}"`);
+    }
+    validateNoteEstimatorField(field, config[field], label);
+  }
+  requireNoteEstimatorOrdering(config, label);
+  return config;
+}
 
 function freqToMidi(f) { return 69 + 12 * Math.log2(f / 440); }
 
 export class NoteEstimator {
-  constructor(opts = {}) {
-    this.p = { ...NOTE_ESTIMATOR_DEFAULTS, ...opts };
-    this._medBuf = new Float32Array(this.p.medianN);
-    this._medScratch = new Float32Array(this.p.medianN);
+  /**
+   * @param {object} config COMPLETE noteTracking config — every key of
+   *   NOTE_ESTIMATOR_DEFAULTS, in range. There is NO default and NO
+   *   spread-over-defaults: the old `{...DEFAULTS, ...opts}` form let a caller
+   *   that forgot the shipped config.yaml values run a *different* estimator
+   *   than production while every test still passed (the same failure mode the
+   *   DerivedSignals bpmTracker contract exists to prevent). Build it with
+   *   buildDerivedSignalsOptions(audioConfig).noteTracking.
+   */
+  constructor(config) {
+    validateNoteEstimatorConfig(config, 'NoteEstimator config');
+    this.p = { ...config };
+    this._medBuf = new Int32Array(this.p.medianN);
+    // Pitch-class histogram for _medianPc(). Allocated ONCE here — the hot path
+    // must not allocate (86 hops/s).
+    this._pcCounts = new Int32Array(12);
     this.reset();
   }
 
   reset() {
-    this._medBuf.fill(NaN);
+    this._medBuf.fill(-1);
     this._medHead = 0;
     this._medFilled = 0;
     this._kfX = 0; this._kfP = 1e6; this._kfStarted = false;
@@ -155,12 +292,32 @@ export class NoteEstimator {
     this.midi = this._kfX;
 
     // 3c. Commit a pitch-class change only after HOLD_HOPS of median agreement.
-    if (medPc === this._candPc) {
+    if (medPc < 0) {
+      // An ambiguous window is weak contrary evidence, not a new note. Decay
+      // the pending change rather than handing a noisy plurality the colour.
+      this._candHeld = Math.max(0, this._candHeld - 1);
+    } else if (medPc === this._committedPc) {
+      // Strong evidence for the currently displayed note cancels a pending
+      // change immediately. This is the hysteresis that prevents hue flicker.
+      this._candPc = medPc;
+      this._candHeld = 0;
+    } else if (medPc === this._candPc) {
       this._candHeld++;
     } else {
       this._candPc = medPc; this._candHeld = 1;
     }
-    if (this._candHeld >= p.holdHops && this._candPc !== this._committedPc) {
+    // The window trails the live dominant-frequency track. Requiring the
+    // current raw class to agree prevents committing a stale intermediate
+    // semitone after the analyzer has already reached the destination note.
+    const pcDelta = this._committedPc < 0
+      ? 12
+      : Math.min(
+        Math.abs(this._candPc - this._committedPc),
+        12 - Math.abs(this._candPc - this._committedPc),
+      );
+    const requiredHold = pcDelta <= p.nearChangeSemitones ? p.nearHoldHops : p.holdHops;
+    if (this._candHeld >= requiredHold && rawPc === this._candPc
+        && this._candPc !== this._committedPc) {
       this._committedPc = this._candPc;
       this._committedHeld = 0;
     }
@@ -192,20 +349,36 @@ export class NoteEstimator {
    * but {0,11,0,11,0} = 0 — it flips on count parity, and a real cluster
    * straddling the wrap collapses to ~F). A histogram mode is circular-safe
    * and is exactly "the dominant note" we want.
+   *
+   * CONSENSUS IS SCORED OVER THE FULL WINDOW (`medianN`), not over how much of
+   * it has been filled. Dividing by `_medFilled` made a one-sample window score
+   * consensus 1.0, so a fresh estimator committed a note off a SINGLE noisy hop
+   * (measured: first commit at hop 10 = 116 ms, from one sample of evidence).
+   * With `medianN` as the denominator the window must actually hold
+   * ceil(medianN * minConsensus) agreeing hops before anything can be
+   * committed — warmup is now genuinely evidence-gated (first commit on update
+   * 18 = 209 ms for the shipped config). Once the ring is full the two
+   * denominators are identical, so steady-state behaviour is unchanged.
+   *
+   * `_medBuf` slots 0.._medFilled-1 are always written with a valid 0..11
+   * pitch class before this runs, so there is no "empty window" case to guard.
    */
   _medianPc() {
-    if (this._medFilled === 0) return this._committedPc;
-    const counts = this._pcCounts || (this._pcCounts = new Int32Array(12));
+    const counts = this._pcCounts;
     counts.fill(0);
-    let any = false;
-    for (let i = 0; i < this._medFilled; i++) {
-      const v = this._medBuf[i];
-      if (!Number.isNaN(v)) { const pc = ((v % 12) + 12) % 12 | 0; counts[pc]++; any = true; }
-    }
-    if (!any) return this._committedPc;
+    for (let i = 0; i < this._medFilled; i++) counts[this._medBuf[i]]++;
     let best = 0;
-    for (let pc = 1; pc < 12; pc++) if (counts[pc] > counts[best]) best = pc;
-    return best;
+    for (let pc = 1; pc < 12; pc++) {
+      if (counts[pc] > counts[best]) best = pc;
+    }
+    // Tie-break toward the current colour, then the pending candidate. This
+    // avoids the old implicit C bias when two pitch classes had equal votes.
+    if (this._committedPc >= 0 && counts[this._committedPc] === counts[best]) {
+      best = this._committedPc;
+    } else if (this._candPc >= 0 && counts[this._candPc] === counts[best]) {
+      best = this._candPc;
+    }
+    return counts[best] / this.p.medianN >= this.p.minConsensus ? best : -1;
   }
 }
 

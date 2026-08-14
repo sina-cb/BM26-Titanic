@@ -29,13 +29,30 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
 
 import { ParamCenter } from '../../lib/param_center.js';
 import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
+import {
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
+  loadEffectiveAudioAnalysisConfig,
+} from '../../audio/config/audio_analysis_config.js';
 import { SignalPostProcessor } from '../../audio/postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
+
+const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+// DerivedSignals requires the SHIPPED tracker options — the perf/finiteness
+// budget must be measured against the production config, not module DEFAULTS.
+const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
+  engineDir: ENGINE_DIR,
+  modelName: 'titanic',
+}).audioConfig;
+const BPM_TRACKER = buildBpmTrackerOptions(AUDIO_CONFIG);
+const DERIVED_CONFIG = buildDerivedSignalsOptions(AUDIO_CONFIG);
 
 const SR = 44100;
 const FFT_SIZE = 2048;               // deployed default (config.yaml, Wave D1)
@@ -107,7 +124,9 @@ function buildChain() {
     broadcast: () => {},                     // sink drop events
     getConfig: () => ({ enabled: true }),
   });
-  const derived = new DerivedSignals({ paramCenter: pc });
+  const derived = new DerivedSignals({
+    paramCenter: pc, bpmTracker: BPM_TRACKER, derivedSignals: DERIVED_CONFIG,
+  });
 
   let clockMs = 0;
   let lastAnalysisAtMs = 0;
@@ -242,7 +261,9 @@ test('FINITENESS: a non-finite INPUT key does not poison the chain (fail loud, n
   // Drive the derived chain directly with a NaN input mirror; the finite guard
   // must coerce it to 0 + warn (once), and every published key stays finite.
   const pc = new ParamCenter(null);
-  const ds = new DerivedSignals({ paramCenter: pc });
+  const ds = new DerivedSignals({
+    paramCenter: pc, bpmTracker: BPM_TRACKER, derivedSignals: DERIVED_CONFIG,
+  });
   const DT = HOP_SIZE / SR;
   let now = 0;
   for (let i = 0; i < 200; i++) {
@@ -271,7 +292,9 @@ test('FAIL-LOUD: a throwing sub-module is isolated (other signals keep publishin
   // OLD behaviour disabled the WHOLE chain for the session (fail-quiet); now a
   // single bad module degrades only its own keys and reports loud + visible.
   const pc = new ParamCenter(null);
-  const ds = new DerivedSignals({ paramCenter: pc });
+  const ds = new DerivedSignals({
+    paramCenter: pc, bpmTracker: BPM_TRACKER, derivedSignals: DERIVED_CONFIG,
+  });
   // Replace the climax module with one that always throws.
   ds._climax = { update() { throw new Error('synthetic climax failure'); }, reset() {} };
   const DT = HOP_SIZE / SR;

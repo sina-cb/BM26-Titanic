@@ -12,21 +12,16 @@
       starts false and every send() is refused while it is false, so opening
       this page cannot change the show.
 
-   3. WRITES ARE COALESCED. `POST /control` and `POST /param-center` both call
-      saveAllState() on the engine side — an fsync'd YAML write. A raw drag at
-      60fps would issue 60 of those per second onto the 40fps render thread.
+   3. WRITES ARE COALESCED. Continuous local controls use
+      `POST /layers/live_touch/control`; shared controls remain bounded too. A
+      raw drag at 60fps would compete with the 40fps render thread.
       Every continuous control goes through send() which keeps only the LATEST
       value per key and flushes on an interval.
 
    4. CAPABILITY IS CHECKED, NOT ASSUMED, AND FROM THE RIGHT SOURCE.
-      The deck channel is `mixer.baseChannelId` === 'ch_base', and it is NOT
-      serialised into `mixer.channels` at all — that array holds only the
-      OVERLAY channels. An earlier version of this file fell back to
-      `channels[0]`, read an overlay running a different pattern, and reported
-      the XY pad dead while the deck was in fact running 68_spatial_paint.
-      That is exactly the silent fallback the codex forbids. Deck exports now
-      come from GET /exports, which the engine documents as "exports of base
-      channel", and a missing deck is an ERROR, never a substitute.
+      Live Touch stages its own pattern and reads its own exports through
+      `/layers/live_touch/*`. It never borrows the Deck channel or substitutes
+      an overlay when its own layer is unavailable.
    ──────────────────────────────────────────────────────────────────────────── */
 
 (function () {
@@ -39,23 +34,9 @@
      engine would only discard. */
   var DRAW_FLUSH_MS = 33;
   var POLL_MS = 2000;
-  /* ARM ENVELOPE. Deliberately NOT the panel's FADE bar: that one is a look
-     transition time and is legitimately set to 0 for snap cuts, which would
-     give a hard arm cut — exactly the thing this removes. 1500 ms is 60 frames
-     at 40 fps, unmistakably a fade, and small next to an arm that already costs
-     seven sequential round trips plus its assertions. */
-  var ARM_FADE_MS = 1500;
-  /* THE NEVER-BLACK FLOOR. The arm envelope dips to THIS, not to zero.
-     Operator ruling: "there is never a moment when the ship is black and all
-     lights are out." The envelope exists to hide the takeover, and it was
-     hiding it by extinguishing the ship for several seconds — on a hull whose
-     entire mission is to be visible at night, and in a window where a dropped
-     request or a dead tab left it black with nothing to raise it.
-     Dimming to a floor hides the takeover nearly as well and can never present
-     as a dark ship. The ONLY thing that may take the rig fully black is an
-     explicit operator blackout / e-stop; the panel has no such control, so
-     nothing here should ever reach 0. */
-  var ARM_FADE_FLOOR = 0.12;
+  /* Every Layers switch uses the engine's one canonical linear blend.
+     Live Touch must not add a private dip/fade around that operation. */
+  var LAYER_TRANSITION_MS = 100;
   /* THE SAME RULE, APPLIED TO THE XY MASTER AXIS. Operator: "the xy mode cannot
      go dark on full left on the panel, the floor must be at 5%, never dark on
      that panel." X drove the grand master straight from the pad fraction, so
@@ -82,12 +63,19 @@
 
   var state = {
     armed: false,
+    phase: 'idle',
     online: false,
     channelId: null,
     channelPattern: null,
     exports: {},               /* name -> numeric id */
     sectionIds: {},            /* group name -> sectionId */
     dimmers: {},
+    liveBrightnessRevision: null,
+    rackBrightnessRevision: null,
+    rackCeilings: {},
+    liveEffectiveCaps: {},
+    sessionRevision: null,
+    groupProfilesReady: false,
     lastError: null,
   };
 
@@ -164,6 +152,10 @@
     state.lastError = null; setStatus();
   }
 
+  document.addEventListener('panelerror', function (event) {
+    fail('panel', event.detail && event.detail.message ? event.detail.message : 'page state is invalid');
+  });
+
   /* ── transport ──────────────────────────────────────────────────────── */
   /* EVERY REQUEST IS BOUNDED. This was a bare fetch with no timeout, and this
      file documents (twice, from measurement) that concurrent writes from this
@@ -175,10 +167,11 @@
      reported as one instead of silently stalling the show. */
   var REQ_TIMEOUT_MS = 6000;
 
-  function req(method, path, body) {
-    var opts = { method: method };
+  function requestJson(method, path, body, ownerTagged) {
+    var opts = { method: method, headers: {} };
+    if (ownerTagged) opts.headers['X-Touch-Control-Owner'] = OWNER;
     if (body !== undefined) {
-      opts.headers = { 'Content-Type': 'application/json' };
+      opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
     var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
@@ -204,11 +197,41 @@
     );
   }
 
+  var prepareOperations = null;
+  function req(method, path, body) {
+    if (prepareOperations && method !== 'GET') {
+      prepareOperations.push({ method: method, path: path, body: body === undefined ? {} : body });
+      return Promise.resolve({ status: 'queued-for-prepare' });
+    }
+    return requestJson(method, path, body, true);
+  }
+
+  /* Deck and Mixer are public layer-setting operations when Live Touch does
+     not own a lease. Sending an owner header after release is not harmless:
+     the engine correctly rejects stale owner-tagged mutations. */
+  function unownedReq(method, path, body) {
+    return requestJson(method, path, body, false);
+  }
+
   /* Writes are REFUSED while disarmed — that is the safety, not a courtesy. */
   function write(method, path, body) {
-    if (!state.armed) return Promise.resolve(null);
+    if (state.phase !== 'armed') return Promise.resolve(null);
     return req(method, path, body).then(function (v) { clearError(); return v; })
       .catch(function (e) { fail('write', e); return null; });
+  }
+
+  /* ARM assertions are a different contract from live, coalesced writes. A
+     failed assertion must reject the ARM chain; converting it to null would let
+     the panel fade up while the engine still holds stale state. */
+  function strictWrite(method, path, body) {
+    if (state.phase !== 'arming' && state.phase !== 'armed') {
+      return Promise.reject(new Error('refusing ' + method + ' ' + path + ' without a Live Touch lease'));
+    }
+    return req(method, path, body).then(function (v) { clearError(); return v; });
+  }
+
+  function liveStateCanWrite(strict) {
+    return state.phase === 'armed' || (strict === true && state.phase === 'arming');
   }
 
   /* ── coalescing queue ───────────────────────────────────────────────── */
@@ -235,7 +258,7 @@
      newest position wins, so a slow network can never build a backlog of stale
      points — just sampled about three times as often, which is close enough to
      the engine's own 40 fps that the extra would be thrown away anyway. */
-  var drawPending = null, drawTimer = null;
+  var drawPending = null, drawTimer = null, drawFrame = null, drawLastSentAt = 0;
   /* IN-FLIGHT BACKPRESSURE (audit medium): the 33 ms flush used to fire
      regardless of whether the PREVIOUS /spatial-paint had answered, so a slow
      link (iPad wifi at the show) accumulated concurrent POSTs — the exact
@@ -243,74 +266,93 @@
      write in flight at a time; last-writer-wins already holds the newest
      sample, so nothing is lost by waiting a beat. */
   var drawInFlight = false;
-  function sendDraw(fn) {
-    drawPending = fn;
-    if (drawTimer) return;
-    drawTimer = setInterval(function () {
-      if (!drawPending) { clearInterval(drawTimer); drawTimer = null; return; }
-      if (drawInFlight) return;              /* the newest sample keeps waiting */
-      var f = drawPending; drawPending = null;
-      drawInFlight = true;
-      var p;
-      try { p = f(); } catch (e) { drawInFlight = false; throw e; }
-      /* A flush fn returns the write's promise when it has one; anything else
-         releases immediately (nothing to wait on). */
-      if (p && typeof p.then === 'function') {
-        p.then(function () { drawInFlight = false; },
-               function () { drawInFlight = false; });
-      } else {
-        drawInFlight = false;
+  function scheduleDrawPump() {
+    if (drawFrame !== null || drawTimer !== null || !drawPending || drawInFlight) return;
+    drawFrame = requestAnimationFrame(function () {
+      drawFrame = null;
+      if (!drawPending || drawInFlight) return;
+      var wait = DRAW_FLUSH_MS - (performance.now() - drawLastSentAt);
+      if (!drawPending.final && wait > 0) {
+        drawTimer = setTimeout(function () { drawTimer = null; scheduleDrawPump(); }, wait);
+        return;
       }
-    }, DRAW_FLUSH_MS);
+      var item = drawPending;
+      drawPending = null;
+      drawInFlight = true;
+      drawLastSentAt = performance.now();
+      var promise;
+      try { promise = item.fn(); }
+      catch (error) {
+        drawInFlight = false;
+        fail('spatial draw', error);
+        scheduleDrawPump();
+        return;
+      }
+      Promise.resolve(promise).then(function () {
+        drawInFlight = false;
+        scheduleDrawPump();
+      }, function (error) {
+        drawInFlight = false;
+        fail('spatial draw', error);
+        scheduleDrawPump();
+      });
+    });
   }
 
-  /* THE CHART MUST MATCH THE SHIP (audit medium). Every dot on the pad is
-     plotted from tables BAKED out of a model export; regenerate the model and
-     the chart silently mis-aims — the operator paints one part of the map and
-     a different part of the hull lights. No silent wrongness: compare the
-     baked group list against the engine's live one at boot, banner loudly on
-     any difference. Once, at boot — the model cannot change under a running
-     engine without a scene switch, which reboots this page's world anyway. */
+  function sendDraw(fn, finalSample) {
+    drawPending = { fn: fn, final: finalSample === true };
+    if (finalSample && drawTimer !== null) {
+      clearTimeout(drawTimer);
+      drawTimer = null;
+    }
+    scheduleDrawPump();
+  }
+
+  /* THE CHART MUST MATCH THE SHIP. The page SHA-256 verifies its generated
+     geometry against pixel_map_views.yaml. This second gate verifies every
+     live engine pixel identity + coordinate before ARM can take control. */
   var chartDriftChecked = false;
   function chartDriftCheck() {
-    if (chartDriftChecked) return;
+    if (chartDriftChecked) return Promise.resolve(true);
     chartDriftChecked = true;
-    var baked = window.padChartGroups;
-    if (!Array.isArray(baked) || !baked.length) return;   /* page predates the export */
-    req('GET', '/group-fixed-colors').then(function (d) {
-      var live = (d && d.groups) || [];
-      var a = baked.slice().sort().join('|');
-      var b = live.slice().sort().join('|');
-      if (a !== b) {
-        fail('chart', 'THE PAD CHART IS STALE: the engine model has ' + live.length +
-          ' groups, the baked chart has ' + baked.length +
-          (live.length === baked.length ? ' (names differ)' : '') +
-          ' — positions may mis-aim. Regenerate the chart tables (docs/44).');
-      }
-    }).catch(function () { chartDriftChecked = false; /* retry on the next refresh */ });
+    if (!window.TouchPixelViews) {
+      chartDriftChecked = false;
+      fail('chart', 'PIXEL VIEW UNAVAILABLE: canonical view reader did not load');
+      return Promise.resolve(false);
+    }
+    return Promise.all([
+      window.TouchPixelViews.ready(),
+      req('GET', '/model/pixel-layout'),
+    ]).then(function (results) {
+      return window.TouchPixelViews.verifyEngineLayout(results[1]);
+    }).then(function () {
+      return true;
+    }).catch(function (error) {
+      chartDriftChecked = false;
+      fail('chart', error);
+      return false;
+    });
   }
 
-  /* ── boot: learn the model and the deck channel ─────────────────────── */
+  /* ── boot: learn the model and Live Touch's isolated channel ────────── */
   function refresh() {
     return Promise.all([
       req('GET', '/status'),
-      req('GET', '/exports'),
       req('GET', '/dimmer-groups'),
       req('GET', '/dimmers'),
+      req('GET', '/layers/state'),
     ]).then(function (r) {
-      var status = r[0], exports = r[1], groups = r[2], dimmers = r[3];
+      var status = r[0], groups = r[1], dimmers = r[2], layerState = requireLayerState(r[3]);
       state.online = true;
       state.sectionIds = groups || {};
       state.dimmers = dimmers || {};
-      state.channelPattern = status && status.activePattern;
-
-      if (!Array.isArray(exports)) throw new Error('GET /exports did not return a list');
-      if (!exports.length) throw new Error('deck has no exports — is a pattern loaded?');
-      state.exports = {};
-      exports.forEach(function (e) {
-        if (e && typeof e.id === 'number') state.exports[e.name] = e.id;
-      });
-      applyCapability();
+      state.channelPattern = layerState.liveTouch && layerState.liveTouch.pattern;
+      if (!(layerState.liveTouch && layerState.liveTouch.ready)) {
+        /* A fresh, DISARMED engine intentionally has no Live channel yet.
+           Focusing the tab stays passive and online; ARM stages the selected
+           pattern, then refreshes the authoritative exports. */
+        state.exports = {};
+      }
       chartDriftCheck();
       loadSlots();
       setStatus();
@@ -321,92 +363,53 @@
     });
   }
 
+  function refreshLiveExports() {
+    return req('GET', '/layers/live_touch/exports').then(function (exports) {
+      if (!Array.isArray(exports) || !exports.length) {
+        throw new Error('Live Touch staged pattern returned no exports');
+      }
+      state.exports = {};
+      exports.forEach(function (entry) {
+        if (entry && typeof entry.id === 'number') state.exports[entry.name] = entry.id;
+      });
+      applyCapability();
+      return exports;
+    });
+  }
+
+  function refreshGroupProfiles() {
+    if (state.groupProfilesReady) return Promise.resolve(true);
+    if (!window.TouchGroupProfiles || typeof window.TouchGroupProfiles.install !== 'function') {
+      return Promise.reject(new Error('canonical group profile reader did not load'));
+    }
+    return req('GET', '/model/view-selection-options').then(function (catalog) {
+      window.TouchGroupProfiles.install(catalog);
+      state.groupProfilesReady = true;
+      return true;
+    }).catch(function (error) {
+      state.groupProfilesReady = false;
+      fail('group profiles', error);
+      return false;
+    });
+  }
+
   /* The XY pad is only real on a pattern that exports the target sliders.
      Saying so beats letting the operator drag a pad that writes nothing —
      which is exactly the failure this check exists to prevent. */
   function applyCapability() {
-    /* THE PAD IS ALWAYS CAPABLE NOW — and this used to say the opposite.
-       When SPATIAL rode the deck pattern's sliderTargetX/Y, a pattern without
-       them genuinely could not be drawn on, so the pad showed a red overlay:
-       "XY INACTIVE — deck is running <pattern>, which exports no
-       sliderTargetX/Y. Pick 68 · Spatial Paint."
-       The stroke is a GLOBAL EFFECT now (POST /spatial-paint, applied after the
-       deck and after the group paint), so it works on every pattern and
-       survives the autopilot cycling the deck. The warning outlived the
-       limitation and became a lie — the worst kind, because it tells the
-       operator the feature is dead at exactly the moment it is working, and
-       sends them off to load a pattern they no longer need.
-       Kept as a function rather than deleted: two call sites depend on it, and
-       it still has a job — clearing any stale overlay a cached page left behind. */
+    /* The owner-scoped spatial stage works on every staged Live pattern.
+       Clear any stale capability overlay left by an older cached page. */
     var warn = document.getElementById('padCapWarn');
     if (warn) warn.remove();
   }
 
   /* ── ARM ────────────────────────────────────────────────────────────── */
-  /* ARMING TAKES THE WHOLE SYSTEM. While armed this panel is the only thing
-     driving the show, and disarming hands everything back exactly as it was.
-
-     Three things happen, and all three are reversible:
-
-     a) A GLOBAL SOURCE LOCK on the param centre, locked to source 'api'.
-        POST /param-center hardcodes source='api', so HTTP keeps working while
-        every other writer — the WS clients (CaptainPad), bpm-sync, MIDI, OSC —
-        is rejected with reason 'source_lock'. Honest limit: this locks to the
-        HTTP CHANNEL, not to this browser tab, so another HTTP client could
-        still write. It is exclusivity against the automatic systems, which is
-        what "I have the desk now" actually needs to mean.
-
-     b) The AUTOPILOTS are switched off, after their state is captured. They
-        change patterns and palettes on a timer; leaving them running would
-        mean the panel and the autopilot fighting over the same rig.
-
-     c) Blackout is released. Disarming re-blacks out, so a disarmed panel
-        never leaves the rig lit with nothing driving it. */
-  var armAsserts = [];          /* run on arm: make the rig match the panel */
-  var priorAutopilot = null, priorColorAutopilot = null;
-  var priorOverlayFaders = null;   /* overlay channel id -> its fader before we armed */
-
-  /* SILENCE THE OVERLAY LAYERS.
-     The mixer can stack extra channels ON TOP of the deck, and the touch panel
-     only drives the deck — so an overlay is invisible to this surface and
-     unreachable from it. MEASURED: an overlay running 00_golden_hour_wash at
-     fader 1.0 in blend_screen was screen-blending its W+A "rich golden white"
-     over the deck, so a chosen GREEN arrived on the rig as YELLOW with no
-     control on this panel able to explain or stop it.
-     While armed the panel owns the look, so overlays are faded out and put back
-     exactly as they were on disarm. Their patterns keep running; only their
-     contribution is muted, so nothing is lost. */
-  function silenceOverlays() {
-    return req('GET', '/mixer').then(function (m) {
-      priorOverlayFaders = {};
-      /* ONE AT A TIME. Concurrent writes to this engine from a browser hang -
-         MEASURED: five fired together never returned at all, while the same
-         requests one after another each complete. This was the last Promise.all
-         left inside takeControl, and takeControl's promise never settling is
-         what silently skipped every arm assertion. */
-      var ids = (m.channels || []).filter(function (c) {
-        if (c.id === m.baseChannelId) return false;     /* the deck is ours to drive */
-        priorOverlayFaders[c.id] = c.fader;
-        return !!c.fader;
-      }).map(function (c) { return c.id; });
-      return ids.reduce(function (chain, id) {
-        return chain.then(function () {
-          return req('PATCH', '/mixer/channels/' + encodeURIComponent(id), { fader: 0 });
-        });
-      }, Promise.resolve());
-    }).catch(function (e) { fail('overlays', e); });
-  }
-
-  function restoreOverlays() {
-    if (!priorOverlayFaders) return Promise.resolve();
-    var jobs = Object.keys(priorOverlayFaders).map(function (id) {
-      return req('PATCH', '/mixer/channels/' + encodeURIComponent(id),
-                 { fader: priorOverlayFaders[id] }).catch(function () {});
-    });
-    priorOverlayFaders = null;
-    return Promise.all(jobs);
-  }
-
+  /* ARM owns only the Live Touch setting. It acquires the deadman lease,
+     stages Live-local state, then asks the shared Layers router to blend into
+     live_touch. Deck and Mixer keep their own patterns, faders and autopilots;
+     this page neither captures nor mutates them. */
+  var armAsserts = [];          /* awaited on arm: make the rig match the panel */
+  var fxCatalogReady = false;   /* engine registry is authoritative; no stale built-in list */
   /* ONE HANDBACK STEP. Reports loudly, then RESOLVES so the handback continues.
 
      Why this exists: the disarm handback was a bare Promise.all of six req()s
@@ -422,67 +425,176 @@
      Handback is a SAFETY operation: every step is independent, and a step that
      fails must cost only itself. This is not a silent fallback — fail() puts it
      on the status pill; it just refuses to let one casualty take the rest. */
+  var handbackFailures = null;
   function handbackStep(label, p) {
-    return p.catch(function (e) { fail('disarm/' + label, e); return null; });
+    return p.catch(function (error) {
+      fail('disarm/' + label, error);
+      if (handbackFailures) handbackFailures.push(label + ': ' + error.message);
+      return null;
+    });
   }
 
-  /* THE ARM ENVELOPE — one request per leg. The engine owns the ramp, so it
-     lands on target even if this panel dies mid-fade; a client-side ramp of
-     many writes would both hang (see the concurrency notes above) and strand
-     the ship at whatever level it had reached.
-
-     Uses req(), NOT write(): write() refuses while disarmed, and the disarm
-     fade has to land. NEVER rejects — a failed fade must not be able to abort
-     the arm chain and leave the ship parked dark. */
-  function armFadeTo(target, ms) {
-    return req('POST', '/arm-fade', { target: target, durationMs: ms })
-      .catch(function (e) { fail('arm fade', e); return null; });
-  }
-
-  function waitMs(ms) {
-    return new Promise(function (resolve) { setTimeout(resolve, ms); });
-  }
-
-  function takeControl() {
-    /* THE DEADMAN MUST EXIST BEFORE ANYTHING TOUCHES THE RIG.
-       Declared first: if this panel dies anywhere in the takeover below, the
-       engine has to already know it was armed, or nothing recovers the ship. */
-    armRefused = false;
-    armAckPending = true;
-    var declared = sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
-    /* NO SOCKET, NO TAKEOVER (audit H4). sendControl returns false when the
-       control socket is down, and this used to be ignored — the panel then
-       seized the whole rig with no deadman watching it AND bypassed the
-       second-desk refusal, which only arrives over that same socket. Fail
-       closed: abort the arm, put the surface back to DISARMED, say why. */
-    if (!declared) {
-      armAckPending = false;
+  function abortArm(label, err) {
+    armChainTarget = false;
+    fail(label + ' - ABORTED', err);
+    if (!armLeaseRequested && !armLeaseAcquired) {
       forceDisarmedUi();
-      fail('arm', 'ABORTED — the control link to the engine is down, so no deadman ' +
-        'could watch this panel. Re-arm once the link is back.');
-      return Promise.resolve(null);
+      return Promise.resolve();
     }
-    /* WAIT FOR THE LEASE TO BE ACKNOWLEDGED BEFORE TOUCHING THE RIG.
-       This used to be fire-and-forget: the panel dimmed the ship and began the
-       takeover without ever confirming the engine had registered a deadman, so
-       a dropped message meant a rig under manual control with nothing watching
-       it. It is also where a REFUSAL arrives when another panel holds the desk. */
-    return waitForArmAck(1500)
-      .then(function () {
+
+    if (!armLeaseAcquired) {
+      /* WebSocket frames are ordered. Sending release after a timed-out ARM
+         request closes a lease even when its positive ACK was merely late. */
+      return releaseArmLease().then(forceDisarmedUi).catch(function (releaseError) {
+        fail(label + ' - LEASE RELEASE UNCONFIRMED', releaseError);
+        throw releaseError;
+      });
+    }
+
+    /* Once the lease exists, owner-tagged cleanup MUST precede its release.
+       If activation was accepted before a later acknowledgement failed, first
+       land the canonical Deck handback so no Live buffer remains visible. */
+    setArmUiPhase('disarming');
+    return req('GET', '/layers/state').then(requireLayerState).then(function (layerState) {
+      var liveParticipates = layerState.active === 'live_touch'
+        || layerState.target === 'live_touch'
+        || (layerState.transition && (layerState.transition.from === 'live_touch'
+          || layerState.transition.to === 'live_touch'));
+      if (!liveParticipates) return null;
+      return activateLayerSetting('deck', 'live_touch_arm_abort', true)
+        .then(function () { return waitForLayerSetting('deck', 15000); });
+    }).then(cleanupLiveState).then(releaseArmLease).then(function () {
+      state.liveBrightnessRevision = null;
+      forceDisarmedUi();
+    }).catch(function (cleanupError) {
+      fail(label + ' - ABORT CLEANUP INCOMPLETE', cleanupError);
+      throw cleanupError;
+    });
+  }
+
+  function runSeries(tasks) {
+    return tasks.reduce(function (chain, task) {
+      return chain.then(task);
+    }, Promise.resolve());
+  }
+
+  function requireLayerState(value) {
+    var ids = { deck: true, mixer: true, live_touch: true };
+    if (!value || value.type !== 'layerSettings' || !ids[value.active] || !ids[value.target]) {
+      throw new Error('engine returned an invalid layerSettings state');
+    }
+    if (value.queued !== null && !ids[value.queued]) {
+      throw new Error('engine returned an invalid queued layer setting');
+    }
+    if (value.transition !== null && (!value.transition || !ids[value.transition.from]
+      || !ids[value.transition.to] || typeof value.transition.progress !== 'number'
+      || value.transition.progress < 0 || value.transition.progress > 1
+      || value.transition.curve !== 'linear')) {
+      throw new Error('engine returned an invalid layer transition');
+    }
+    if (!value.liveTouch || typeof value.liveTouch.armed !== 'boolean'
+      || (value.liveTouch.ownerId !== null && typeof value.liveTouch.ownerId !== 'string')
+      || typeof value.liveTouch.ready !== 'boolean'
+      || (value.liveTouch.pattern !== null && typeof value.liveTouch.pattern !== 'string')) {
+      throw new Error('engine returned an invalid Live Touch layer state');
+    }
+    return value;
+  }
+
+  function activateLayerSetting(target, reason, ownerRequired) {
+    var transport = ownerRequired ? req : unownedReq;
+    return transport('POST', '/layers/activate', {
+      target: target,
+      durationMs: LAYER_TRANSITION_MS,
+      reason: reason,
+      ownerId: ownerRequired ? OWNER : undefined,
+    }).then(requireLayerState);
+  }
+
+  function waitForLayerSetting(target, timeoutMs) {
+    var startedAt = Date.now();
+    return new Promise(function (resolve, reject) {
+      (function poll() {
+        req('GET', '/layers/state').then(requireLayerState).then(function (layerState) {
+          if (layerState.active === target && layerState.target === target
+            && layerState.transition === null && layerState.queued === null) {
+            resolve(layerState);
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            reject(new Error('layer transition to ' + target + ' did not land within ' + timeoutMs + 'ms'));
+            return;
+          }
+          setTimeout(poll, 50);
+        }).catch(reject);
+      }());
+    });
+  }
+
+  function stageSelectedLivePattern() {
+    var selected = patSel && PATTERN_FILES && PATTERN_FILES[patSel.value];
+    if (!selected) throw new Error('Live Touch has no valid selected pattern');
+    return req('PUT', '/layers/live_touch/pattern', { pattern: selected }).then(function (response) {
+      if (!response || !Number.isInteger(response.sessionRevision)) {
+        throw new Error('Live Touch pattern stage returned no session revision');
+      }
+      state.sessionRevision = response.sessionRevision;
+      state.channelPattern = selected;
+      return refreshLiveExports();
+    });
+  }
+
+  function parentOrigin() {
+    var raw = new URL(location.href).searchParams.get('captainpad_origin');
+    if (!raw) throw new Error('Live Touch is embedded without captainpad_origin');
+    var parsed = new URL(raw);
+    if (parsed.origin !== raw) throw new Error('captainpad_origin contains a path');
+    return parsed.origin;
+  }
+
+  function acknowledgeSurfaceRelease(requestId, target) {
+    if (!requestId) return;
+    window.parent.postMessage({
+      type: 'touch-control-surface-released',
+      version: 1,
+      requestId: requestId,
+      target: target,
+    }, parentOrigin());
+  }
+
+  function verifyArmReadiness() {
+    if (!fxCatalogReady) {
+      forceDisarmedUi();
+      return Promise.reject(new Error(
+        'the engine effect catalog is unavailable, so effect buttons cannot be trusted'
+      ));
+    }
+    return chartDriftCheck().then(function (verified) {
+      if (!verified || !window.TouchPixelViews || !window.TouchPixelViews.canArm()) {
+        throw new Error('the canonical pixel view has not verified the current engine model');
+      }
+    });
+  }
+
+  function acquireArmLease() {
+    return Promise.resolve().then(function () {
+      armRefused = false;
+      armAckPending = true;
+      armLeaseRequested = true;
+      if (!sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true })) {
+        armAckPending = false;
+        armLeaseRequested = false;
+        throw new Error('the control link is down; no deadman can watch Live Touch');
+      }
+      return waitForArmAck(1500);
+    }).then(function () {
         if (armRefused) throw new Error('arm refused by the engine');
         if (armAckPending) {
-          /* NO ACK, NO TAKEOVER (audit H4). This used to log "proceeding, but
-             nothing is watching this panel" and take the rig anyway — an armed
-             desk with no deadman is exactly the unlit-ship failure the whole
-             lease exists to prevent. Codex: fail closed. */
           armAckPending = false;
-          forceDisarmedUi();
-          fail('arm', 'ABORTED — the engine did not acknowledge the deadman lease ' +
-            'within 1.5 s. Nothing would be watching this panel; re-arm to retry.');
-          return null;
+          throw new Error('the engine did not acknowledge the deadman lease within 1.5 s');
         }
-        return takeControlBody();
-      });
+        return null;
+    });
   }
 
   function waitForArmAck(timeoutMs) {
@@ -496,420 +608,511 @@
     });
   }
 
-  function takeControlBody() {
-    /* FORGET THE "ALREADY SENT" BRUSH CACHE (audit H8). Values chosen while
-       DISARMED were committed to spatialCfg by the flush even though write()
-       silently refused them, and forgetSpatialCfg only ran on disarm — so
-       SIZE/POWER/FADE picked before the first arm never reached the engine.
-       Forgetting at arm makes the first stroke re-assert everything the panel
-       is showing. */
-    forgetSpatialCfg();
-    /* LIGHT THE SHIP FIRST — BEFORE the fade-out, not after the takeover.
-       This release used to be the LAST link of the sequential chain below, so
-       any earlier hang or rejection (all swallowed by the chain's single
-       .catch) meant it never ran, while the post-race chain went on to fade the
-       envelope back up over a still-blacked-out ship: black hull, panel reading
-       ARMED, and a healthy deadman that will never fire because the panel is
-       alive, just wrong. Disarm no longer blacks out, but ANY other surface or
-       a stale persisted state can have left blackout engaged, so arming
-       asserts it off up front and again before the fade-up.
-       The engine states this rule for itself in revertToAutomaticShow:
-       "lighting the ship comes FIRST and is never gated on anything below it."
-       takeControl now obeys the same rule. */
-    return req('POST', '/global-blackout', { state: false })
-      .catch(function (e) { fail('arm (blackout release)', e); })
-      /* FADE DOWN TO THE FLOOR, NOT TO BLACK. Every step below is a hard visual
-         cut on a lit ship — the source lock, both autopilots dying, disable-all
-         and the overlay faders snapping to zero. At the floor they are muted
-         rather than hidden, and the ship is never extinguished to achieve it. */
-      .then(function () { return armFadeTo(ARM_FADE_FLOOR, ARM_FADE_MS); })
-      .then(function () { return waitMs(ARM_FADE_MS); })
-      .then(function () {
-        return Promise.all([req('GET', '/autopilot'), req('GET', '/deck/color-autopilot'),
-          req('GET', '/param-center')]);
-      })
-      .then(function (r) {
-        priorAutopilot = r[0];
-        priorColorAutopilot = r[1];
-        /* BREAK THE RATCHET AT ITS ORIGIN.
-           These captures are what disarm restores. The trap: arming turns both
-           autopilots OFF, so if a panel dies while armed, the NEXT arm captures
-           that OFF as the "prior" state and disarm faithfully restores it. The
-           automatic show can then never come back on its own, and every
-           subsequent cycle re-confirms it. Measured live: source lock still
-           per-param/api, autopilot.active false, no panel open.
-
-           A SOURCE LOCK ALREADY PRESENT AT ARM TIME IS THE FINGERPRINT of a
-           previous arm that never released — takeControl is the only thing that
-           sets one and releaseControl always clears it. So the autopilot state
-           we are reading is not the operator's choice, it is wreckage. Do not
-           trust it: record the AUTOMATIC SHOW as what to hand back.
-
-           Deliberately narrow: with no stale lock the captures are used exactly
-           as before, so a genuine "I turned the autopilot off first" is still
-           honoured. */
-        var pcState = r[2];
-        var staleLock = pcState && pcState.sourceLock
-          && pcState.sourceLock.mode && pcState.sourceLock.mode !== 'open';
-        if (staleLock) {
-          fail('arm', 'a source lock was already held when arming — a previous panel died while ' +
-            'armed. Ignoring the autopilot state it left behind; disarm will hand back the ' +
-            'automatic show.');
-          priorAutopilot = { active: true };
-          priorColorAutopilot = { active: true };
-        }
-        /* ONE AT A TIME, not Promise.all. MEASURED: fired concurrently, all
-           five of these POSTs hung with no response and takeControl's promise
-           never settled - so every assertion after it (the master, the fade,
-           the palette) silently never ran, with no error anywhere. A lone POST
-           from the same page completes fine, so it is the burst that does it.
-           Arming is a once-per-show action; doing it in order costs nothing
-           and it actually finishes. */
-        return req('POST', '/param-center/source-lock', {
-          mode: 'per-param',
-          leases: {
-            colorPalette1: 'api', colorPalette2: 'api',
-            colorTransitionMs: 'api', motionTransitionMs: 'api',
-            rotate: 'api', speed: 'api',
-          },
-        })
-          .then(function () { return req('POST', '/autopilot', { active: false }); })
-          .then(function () { return req('POST', '/deck/color-autopilot', { active: false }); })
-          /* START FROM SILENCE: slots persist their enabled state and the
-             VSN1 / Deck can latch their own, so arming clears everything and
-             reconcileEffects then turns on exactly what the grid shows. */
-          .then(function () { return req('POST', '/global-effects/disable-all', {}); })
-          /* AND THE AUDIO BINDINGS (audit medium). They were cleared at DISARM
-             but not at ARM, so bindings left by a previous session — or by
-             CaptainPad — kept pulsing groups to the music UNDER the armed
-             panel. Arming means "the rig does what this surface shows", and
-             this surface shows no bindings until the operator makes some. */
-          .then(function () { return req('POST', '/audio-bindings/clear', {}); })
-          .then(function () { return silenceOverlays(); });
-          /* The blackout release used to sit HERE, at the end of the chain, and
-             that was the bug: it is the one step that must not be gated on the
-             five before it. It now runs before the fade-out (see the top of
-             takeControl) and is re-asserted before the fade-up. */
-      })
-      .then(function () { clearError(); })
-      .catch(function (e) { fail('take control', e); });
+  function waitForDisarmAck(timeoutMs) {
+    return new Promise(function (resolve) {
+      var waited = 0;
+      (function poll() {
+        if (!disarmAckPending || waited >= timeoutMs) return resolve();
+        waited += 50;
+        setTimeout(poll, 50);
+      })();
+    });
   }
 
-  function releaseControl() {
-    /* FADE OUT FIRST, for the same reason arming does. One step covers every
-       abrupt disarm change at once: the audio bindings clearing, the parked
-       groups releasing, the overlay faders jumping back, the burst of 24 group
-       paint DELETEs, and disable-all. */
-    return armFadeTo(ARM_FADE_FLOOR, ARM_FADE_MS)
-      .then(function () { return waitMs(ARM_FADE_MS); })
-      .then(function () { return releaseControlBody(); });
+  function releaseArmLease() {
+    disarmAckPending = true;
+    if (!sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: false })) {
+      disarmAckPending = false;
+      return Promise.reject(new Error('the control link is down; Live Touch lease release was not sent'));
+    }
+    return waitForDisarmAck(1500).then(function () {
+      if (disarmAckPending) {
+        disarmAckPending = false;
+        throw new Error('the engine did not acknowledge Live Touch lease release within 1.5 s');
+      }
+    });
   }
 
-  function releaseControlBody() {
-    /* Give the system back BEFORE blacking out, so nothing is left locked if
-       the blackout call is the one that fails. */
-    return Promise.all([
-      /* AUDIO BINDINGS ARE PART OF BEING ARMED. They live on the engine and it
-         applies them every frame, so a binding left behind kept the groups
-         pulsing to the music long after the panel was disarmed - the rig
-         moving with nobody driving it. Clearing them here means a disarmed
-         panel does exactly nothing, which is what disarmed has to mean. */
-      handbackStep('audio-bindings', req('POST', '/audio-bindings/clear', {})),
-      /* THE EFFECT SCOPE IS PART OF BEING ARMED, for the same reason the audio
-         bindings are. It lives on the engine, so a scope left behind by a
-         disarmed panel would silently confine the VSN1's and the Deck's effects
-         to whatever this panel last had marked - the rig obeying a surface
-         nobody is driving. Disarmed means unrestricted. */
-      handbackStep('effect-groups', req('PUT', '/effect-groups', { groups: null })),
-      /* Locks are part of being armed too - a park left behind by a disarmed
-         panel would keep a group lit through the master with nobody driving. */
-      handbackStep('parked-groups', req('PUT', '/parked-groups', { groups: null })),
-      handbackStep('source-lock', req('POST', '/param-center/source-lock', { mode: 'open' })),
-      /* THE RATCHET. These captures live only as long as the PAGE. Arming turns
-         both autopilots off; if the panel is reloaded or dies before disarm,
-         the capture is gone and this used to send NOTHING — the automatic show
-         stayed off with nobody driving. Worse, the next arm then captured that
-         "off" as the prior state and faithfully restored off, so the show could
-         never come back on its own. Measured live: sourceLock still per-param
-         /api with autopilot.active false and no panel open.
-
-         With no capture we now assert the AUTOMATIC SHOW rather than staying
-         silent. The operator asked for exactly this ("if the system crashes
-         revert to the default automatic playlist"), so it is a requested
-         fallback, not an invented one — and it says so out loud. A capture we
-         DO hold is still restored faithfully, so a deliberate autopilot-off is
-         respected within a single page session. */
-      handbackStep('autopilot', priorAutopilot
-        ? req('POST', '/autopilot', { active: !!priorAutopilot.active })
-        : req('POST', '/autopilot', { active: true }).then(function () {
-            fail('disarm', 'no pre-arm autopilot state was captured (panel reloaded while armed) — ' +
-              'asserting the automatic show ON rather than leaving the ship with nobody driving');
-          })),
-      handbackStep('color-autopilot', priorColorAutopilot
-        ? req('POST', '/deck/color-autopilot', { active: !!priorColorAutopilot.active })
-        : req('POST', '/deck/color-autopilot', { active: true })),
-    ]).then(function () {
-      return restoreOverlays();
-    }).then(function () {
-      /* DROP THE SPATIAL STROKE. It is a global effect, so unlike the pattern's
-         own sliders it keeps running after this panel lets go — a stroke burned
-         into the hull with nobody driving. Cleared, not just lifted, so the heat
-         goes with it. req() so it lands even though we are disarming. */
-      req('POST', '/spatial-paint', { enabled: false, touch: false, clear: true })
-        .catch(function (e) { fail('disarm/spatial-clear', e); });
+  function cleanupLiveState() {
+    /* Live Touch owns these transient controls. Clear them after the shared
+       Layers blend has landed; Deck and Mixer settings are never captured,
+       muted, or restored by this surface. */
+    if (handbackFailures !== null) {
+      return Promise.reject(new Error('a second Live Touch cleanup started concurrently'));
+    }
+    handbackFailures = [];
+    var openingSteps = [
+      function () { return handbackStep('audio-bindings', req('POST', '/audio-bindings/clear', {})); },
+      function () { return handbackStep('effect-groups', req('PUT', '/effect-groups', { groups: null })); },
+      function () { return handbackStep('parked-groups', req('PUT', '/parked-groups', { groups: null })); },
+    ];
+    return runSeries(openingSteps).then(function () {
+      /* DROP THE LIVE SPATIAL STROKE before releasing its in-memory context.
+         req() carries the owner while the lease remains valid. */
+      var cleanupTasks = [function () {
+        return handbackStep('spatial-clear',
+          req('POST', '/spatial-paint', { enabled: false, touch: false, clear: true }));
+      }];
       /* STOP THE XY STROBE AND WALK (audit H5). They run under presetId
          'xy_pad' with no slot, so the disable-all below cannot see them —
          disarming mid-strobe used to hand the automatic show back permanently
          strobing. handbackStep so one failure cannot cancel the chain. */
-      handbackStep('xy-strobe', req('POST', '/strobe-rate', { active: false }));
-      handbackStep('xy-walk', req('POST', '/movement-rate', { active: false }));
+      cleanupTasks.push(function () {
+        return handbackStep('xy-strobe', req('POST', '/strobe-rate', { active: false }));
+      });
+      cleanupTasks.push(function () {
+        return handbackStep('xy-walk', req('POST', '/movement-rate', { active: false }));
+      });
       forgetSpatialCfg();   /* the engine no longer holds what we cached */
       /* Drop every painted group — the paint only exists because we armed. */
       var names = Object.keys(painted);
       names.forEach(function (nm) { delete painted[nm]; });
-      return Promise.all(names.map(function (nm) {
-        return req('DELETE', '/group-fixed-colors/' + encodeURIComponent(nm)).catch(function () {});
-      }));
+      names.forEach(function (nm) {
+        cleanupTasks.push(function () {
+          return handbackStep('group-paint/' + nm,
+            req('DELETE', '/group-fixed-colors/' + encodeURIComponent(nm)));
+        });
+      });
+      return runSeries(cleanupTasks);
     }).then(function () {
       /* Stop everything this panel started. Effects only run because the panel
          is armed, so releasing control must not leave them playing. */
       return handbackStep('disable-all', req('POST', '/global-effects/disable-all', {}));
     }).then(function () {
-      /* Give the effect presets their own colours back before letting go. */
+      /* Restore the seeded Live-session slot values before release. Durable
+         Deck/Mixer/global presets are never touched by these owner-tagged calls. */
       return handbackStep('effect-colours', restoreEffectColours());
     }).then(function () {
-      /* DISARM HANDS THE SHIP BACK LIT. IT DOES NOT BLACK IT OUT.
-         This used to be POST /global-blackout {state:true} — a clean disarm
-         left the hull dark with nothing watching it, while the DEADMAN, facing
-         the very same situation (this panel no longer driving), handed the deck
-         back to the automatic show. A dead panel therefore produced a better
-         outcome than a deliberate disarm, which is backwards.
-         Operator ruling: the ship is never black as a side effect. The panel
-         has no blackout control of its own (grep: zero), so this was not an
-         operator command — it was residue from a time when "disarmed" was
-         implemented as "off" rather than as "handed back".
-         The handback above has already reopened the source lock and restored
-         both autopilots, so the deck is under automatic control again; all this
-         has to do is guarantee it is VISIBLE. */
-      return req('POST', '/global-blackout', { state: false });
-    }).then(function () { clearError(); })
-      .catch(function (e) { fail('release control', e); })
-      /* RESET THE ENVELOPE UNCONDITIONALLY — after the .catch, so it runs on the
-         failure path too. Blackout is what holds the rig dark after a disarm;
-         armFade must NEVER be the thing holding it dark. Left at 0, the next
-         un-blackout from any surface — CaptainPad, the timeline, the crash
-         failsafe, /mixer/panic — would produce nothing, and the operator would
-         be looking at a black ship with every control reporting it lit. */
-      .then(function () { return armFadeTo(1, 0); })
-      /* RELEASE THE DEADMAN LAST — after the handback and after the envelope is
-         back up. Cancelling it earlier would open a window where this panel is
-         still fading the ship out with nothing watching it: die in there and
-         the ship stays black forever. Sent even on the failure path (this sits
-         after the .catch), because a half-finished disarm that leaves the lease
-         standing would revert the rig a few seconds later for no reason. */
-      .then(function () {
-        sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: false });
-      });
+      var failures = handbackFailures;
+      handbackFailures = null;
+      if (failures.length) {
+        throw new Error('Live Touch cleanup incomplete: ' + failures.join('; '));
+      }
+      clearError();
+    }, function (error) {
+      handbackFailures = null;
+      throw error;
+    });
   }
 
   var armEl = document.getElementById('arm');
-  /* ONE CHAIN AT A TIME (audit H12). A double-tap used to run takeControl and
-     releaseControl CONCURRENTLY — the second tap flipped the class and started
-     the opposite chain while the first was mid-flight, so the handback raced
-     the takeover for the same locks. While a chain runs, further taps are
-     refused and the button is put back to the direction already in flight. */
+  /* Serialize ARM and destination handback. The same Layers transaction must
+     never be raced by a second tap or a tab change. */
   var armChainBusy = false;
   var armChainTarget = false;
-  function setArmedUi(t) {
-    /* Mirror of forceDisarmedUi, both directions — the page's own handler owns
-       these five surfaces, so a refused tap must restore all five. */
-    state.armed = t;
+  var pendingSurfaceRelease = null;
+  var surfaceHandoffBusy = false;
+  var pageSessionInvalidated = false;
+  var pageRestoreHandbackPending = false;
+
+  function setArmUiPhase(phase) {
+    var armed = phase === 'armed';
+    state.phase = phase;
+    state.armed = armed;
     if (armEl) {
-      armEl.classList.toggle('is-armed', t);
-      armEl.setAttribute('aria-checked', String(t));
+      armEl.classList.toggle('is-armed', armed);
+      armEl.setAttribute('aria-checked', String(armed));
     }
     var st = document.getElementById('armState');
-    if (st) st.textContent = t ? 'ARMED' : 'DISARMED';
+    if (st) st.textContent = phase === 'arming' ? 'ARMING'
+      : (phase === 'disarming' ? 'DISARMING' : (armed ? 'ARMED' : 'DISARMED'));
     var lk = document.getElementById('armLock');
-    if (lk) lk.textContent = t ? '🔓' : '🔒';
+    if (lk) lk.textContent = armed ? '🔓' : '🔒';
     var sh = document.getElementById('shell');
-    if (sh) sh.classList.toggle('disarmed', !t);
+    if (sh) sh.classList.toggle('disarmed', !armed);
     setStatus();
   }
+
+  function setArmedUi(t) {
+    setArmUiPhase(t ? 'armed' : 'idle');
+  }
+
+  function assertArmPageSession() {
+    if (pageSessionInvalidated) {
+      throw new Error('Live Touch ARM was cancelled by page lifecycle');
+    }
+  }
+
+  function collectEffectSlotBuildOperations() {
+    if (!fxGrid) return Promise.reject(new Error('effect grid is missing'));
+    var cells = Array.prototype.slice.call(fxGrid.querySelectorAll('.fx-cell'));
+    var mine = {};
+    cells.forEach(function (cell) { mine[Number(cell.dataset.slot)] = true; });
+    var tasks = cells.map(function (cell) {
+      return function () { return provisionCell(cell); };
+    });
+    for (var id = OURS_FROM; id <= MAX_SLOTS; id++) {
+      if (!mine[id] && slotBinding[id]) {
+        (function (slotId) {
+          tasks.push(function () {
+            return strictWrite('PATCH', '/global-effect-slots/' + slotId, { enabled: false });
+          });
+        }(id));
+      }
+    }
+    return runSeries(tasks);
+  }
+
+  function collectStaticPrepareOperations() {
+    var wanted = desiredStatic(true);
+    Object.keys(wanted).forEach(function (name) {
+      var value = wanted[name];
+      prepareOperations.push({
+        method: 'PUT',
+        path: '/group-fixed-colors/' + encodeURIComponent(name),
+        body: { color: value.color, colors: value.colors || undefined,
+          brightness: 1, ownerId: OWNER },
+      });
+    });
+    Object.keys(painted).forEach(function (name) {
+      if (wanted[name]) return;
+      prepareOperations.push({
+        method: 'DELETE',
+        path: '/group-fixed-colors/' + encodeURIComponent(name),
+        body: {},
+      });
+    });
+    return wanted;
+  }
+
+  function initialSpatialPrepareBody() {
+    if (!window.TouchPixelViews || typeof window.TouchPixelViews.currentViewSpec !== 'function') {
+      throw new Error('canonical pixel view cannot describe its engine projection');
+    }
+    var spec = window.TouchPixelViews.currentViewSpec();
+    var fadeElement = document.getElementById('trailFade');
+    var fadeSeconds = fadeElement ? Number(fadeElement.dataset.value) : NaN;
+    if ([0.1, 0.5, 1, 1.5].indexOf(fadeSeconds) === -1) {
+      throw new Error('FADE must be 0.1, 0.5, 1.0, or 1.5 seconds');
+    }
+    var brush = brushPatch();
+    var amount = brushAmount();
+    var modeElement = document.querySelector('#drawModes button.is-active');
+    var modeValue = modeElement ? Number(modeElement.dataset.dm) : NaN;
+    if (!brush || amount === null || !isFinite(modeValue)) {
+      throw new Error('spatial brush controls are incomplete');
+    }
+    var ink = typeof window.inkColour === 'function' ? window.inkColour() : null;
+    if (!ink || !isFinite(ink.h) || !isFinite(ink.s) || !isFinite(ink.v)) {
+      throw new Error('spatial ink colour is unavailable');
+    }
+    return {
+      enabled: true,
+      touch: false,
+      clear: true,
+      mode: DRAW_MODES[Math.round(Math.min(Math.max(modeValue, 0), 1) * 3)],
+      fadeSeconds: fadeSeconds,
+      radius: brush.radius,
+      radiusY: brush.radiusY,
+      amount: amount,
+      color: hsvToRgb6(ink.h, ink.s, ink.v),
+      colorAlt: hsvToRgb6((ink.h + 0.5) % 1, Math.max(ink.s, 0.85), Math.max(ink.v, 0.9)),
+      axisX: spec.axisX,
+      axisY: spec.axisY,
+      pixelIndices: spec.pixelIndices,
+    };
+  }
+
+  function verifyPreparedSlots() {
+    return loadSlots(true).then(function () {
+      Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell'), function (cell) {
+        var slotId = Number(cell.dataset.slot);
+        var expected = cell.dataset.fxkey + '|' + cell.dataset.preset;
+        if (slotBinding[slotId] !== expected) {
+          throw new Error('slot ' + slotId + ' failed atomic prepare readback');
+        }
+      });
+    });
+  }
+
+  function assertLiveSurfaceState() {
+    var brightness;
+    var spatialBody;
+    var wantedStatic;
+    liveBrightnessPending = { master: null, groups: {} };
+    liveBrightnessPendingFade = null;
+    if (liveBrightnessTimer) {
+      cancelAnimationFrame(liveBrightnessTimer);
+      liveBrightnessTimer = null;
+    }
+    return Promise.resolve().then(assertArmPageSession)
+      .then(function () { return req('GET', '/touch-control/brightness'); })
+      .then(function (payload) {
+        acceptLiveBrightness(payload, true);
+        brightness = collectLiveBrightness();
+        brightness.expectedRevision = state.liveBrightnessRevision;
+        if (!Number.isInteger(state.sessionRevision)) {
+          throw new Error('Live Touch has no staged session revision');
+        }
+        prepareOperations = [];
+      })
+      .then(function () { return req('POST', '/global-effects/disable-all', {}); })
+      .then(function () { return req('POST', '/audio-bindings/clear', {}); })
+      .then(collectEffectSlotBuildOperations)
+      .then(function () { return pushPalette(true); })
+      .then(function () { return pushEffectColours(true); })
+      .then(function () { return reconcileEffects(true); })
+      .then(function () {
+        return runSeries(armAsserts.map(function (fn) {
+          return function () { return fn(true); };
+        }));
+      })
+      .then(function () {
+        spatialBody = initialSpatialPrepareBody();
+        prepareOperations.push({ method: 'POST', path: '/spatial-paint', body: spatialBody });
+        wantedStatic = collectStaticPrepareOperations();
+        var operations = prepareOperations;
+        prepareOperations = null;
+        assertArmPageSession();
+        return requestJson('POST', '/layers/live_touch/prepare', {
+          expectedSessionRevision: state.sessionRevision,
+          operations: operations,
+          brightness: brightness,
+        }, true).then(function (response) {
+          if (!response || !Number.isInteger(response.sessionRevision)
+              || !Number.isInteger(response.brightnessRevision)
+              || response.operationCount !== operations.length) {
+            throw new Error('atomic Live Touch prepare returned an invalid acknowledgement');
+          }
+          state.sessionRevision = response.sessionRevision;
+          state.liveBrightnessRevision = response.brightnessRevision;
+          Object.keys(painted).forEach(function (name) { delete painted[name]; });
+          Object.keys(wantedStatic).forEach(function (name) { painted[name] = wantedStatic[name]; });
+          Object.keys(spatialBody).forEach(function (key) {
+            if (Object.prototype.hasOwnProperty.call(spatialCfg, key)) {
+              spatialCfg[key] = Array.isArray(spatialBody[key])
+                ? spatialBody[key].slice() : spatialBody[key];
+            }
+          });
+          return Promise.all([
+            verifyPreparedSlots(),
+            req('GET', '/touch-control/brightness').then(function (value) {
+              return acceptLiveBrightness(value, true);
+            }),
+          ]);
+        });
+      }).then(assertArmPageSession, function (error) {
+        prepareOperations = null;
+        throw error;
+      });
+  }
+
+  function armLiveTouch() {
+    armChainTarget = true;
+    setArmUiPhase('arming');
+    if (!window.TouchControlLifecycle) {
+      return Promise.reject(new Error('Live Touch lifecycle controller did not load'));
+    }
+    return window.TouchControlLifecycle.arm({
+      isCancelled: function () { return pageSessionInvalidated; },
+      verify: verifyArmReadiness,
+      acquireLease: acquireArmLease,
+      stage: function () {
+        /* The global owner guard rejects tagged writes before acquireLease.
+           Staging lives here, after acknowledgement and before activation. */
+        return stageSelectedLivePattern().then(function () { forgetSpatialCfg(); });
+      },
+      assertState: assertLiveSurfaceState,
+      activate: function () { return activateLayerSetting('live_touch', 'live_touch_arm', true); },
+      waitForLanding: function () { return waitForLayerSetting('live_touch', 15000); },
+      markArmed: function () {
+        setArmUiPhase('armed');
+        clearError();
+      },
+    });
+  }
+
+  function handbackLiveTouch(target, reason) {
+    armChainTarget = false;
+    setArmUiPhase('disarming');
+    return activateLayerSetting(target, reason, true)
+      .then(function () { return waitForLayerSetting(target, 15000); })
+      .then(cleanupLiveState)
+      .then(releaseArmLease)
+      .then(function () {
+        /* Never release the deadman before the destination has landed and all
+           owner-scoped transient state has been authoritatively cleared. */
+        state.liveBrightnessRevision = null;
+        setArmUiPhase('idle');
+        clearError();
+      });
+  }
+
+  function finishArmChain() {
+    armChainBusy = false;
+    if (pageRestoreHandbackPending) {
+      if (state.phase === 'armed' && !surfaceHandoffBusy) {
+        pageRestoreHandbackPending = false;
+        startArmChain(false);
+        return;
+      }
+      if (state.phase === 'idle') pageRestoreHandbackPending = false;
+    }
+    if (state.phase === 'idle') pageSessionInvalidated = false;
+    drainSurfaceRelease();
+  }
+
+  function startArmChain(armRequested) {
+    if (armChainBusy || surfaceHandoffBusy) {
+      setArmUiPhase(state.phase);
+      fail('arm', 'an ARM or Layers handoff is already in progress');
+      return;
+    }
+    armChainBusy = true;
+    var operation = armRequested
+      ? armLiveTouch().catch(function (error) { return abortArm('arm setup', error); })
+      : handbackLiveTouch('deck', 'live_touch_manual_disarm').catch(function (error) {
+          fail('disarm', error);
+        });
+    operation.then(finishArmChain, finishArmChain);
+  }
+
   if (armEl) {
     armEl.addEventListener('click', function () {
-      /* Read the class the page's own handler just set, so the wire follows
-         the UI rather than keeping a second, drifting copy of the truth. */
+      /* The page toggles first; the wire immediately converts that optimistic
+         state to ARMING/DISARMING until the engine confirms the blend. */
       setTimeout(function () {
-        if (armChainBusy) {
-          setArmedUi(armChainTarget);
-          fail('arm', 'an arm/disarm is already in progress — wait for it to finish');
-          return;
-        }
-        armChainBusy = true;
-        state.armed = armEl.classList.contains('is-armed');
-        armChainTarget = state.armed;
-        setStatus();
-        /* BOUNDED. takeControl() has been observed never settling, and every
-           assertion below hangs off it - so the panel said ARMED and sent
-           almost nothing, silently. It now gets a deadline: whatever it has
-           managed lands, and after that the panel asserts its visible state
-           anyway. A slow or wedged setup step must not mean the rig quietly
-           ignores the surface; it means we say so and carry on. */
-        var armStep = state.armed ? takeControl() : releaseControl();
-        /* Never rejects, so the chain below always continues; failures are
-           already reported by fail() inside takeControl/releaseControl. */
-        var armSettled = armStep.catch(function () { return null; });
-        var armDeadline = new Promise(function (resolve) {
-          setTimeout(function () { resolve('timeout'); }, 8000 + ARM_FADE_MS);
-        });
-        /* THE DEADLINE REPORTS; IT NO LONGER FORKS.
-           This used to be a bare Promise.race, which is a RACE, not an abort —
-           when the deadline won, everything below (the assertions, applyStatic,
-           the fade-up) ran CONCURRENTLY with a takeControl that was still in
-           flight. Measured: it fired on every single arm and disarm, so the
-           fade-UP could and did overlap the fade-DOWN.
-           Now the race only decides WHEN TO WARN. The continuation then waits
-           for the real chain to settle, which is finally guaranteed to happen
-           because every req() is bounded by REQ_TIMEOUT_MS — the unbounded
-           fetch that made a never-settling chain possible is gone. */
-        Promise.race([armSettled, armDeadline])
-          .then(function (r) {
-            if (r === 'timeout') {
-              fail('arm', 'setup is taking longer than ' + ((8000 + ARM_FADE_MS) / 1000) +
-                's — still waiting for it to finish before asserting the panel state');
-              return armSettled;   // do NOT proceed alongside it
-            }
-            return null;
-          })
-          /* takeControl() had NO catch, so one failed request inside it
-             rejected the whole chain and every assertion below was skipped
-             WITHOUT A WORD - which is why the fade bar never reached the
-             engine and the audio bindings never landed. Absorb and report,
-             then carry on asserting: a partial failure must not silently
-             become "armed but nothing was sent". */
-          .catch(function (e) { fail('arm', e); })
-          .then(function () {
-          if (!state.armed) return;
-          /* ASSERT THE WHOLE VISIBLE STATE ON ARM.
-             Writes are refused while disarmed, so anything set before arming —
-             a palette preset, an effect selection — never reached the engine,
-             and nothing re-sent it afterwards. The rig then showed a mixture:
-             slot 1 from some earlier write, slot 2 stale from a previous
-             session, and slots 3-5 still at the PATTERN'S OWN DEFAULTS
-             (67_five_colour_stations defaults to hue 0.33 green / 0.55 cyan /
-             0.80 magenta) — which is exactly the "colours that don't belong".
-             Arming now means "make the rig match this panel". */
-          return buildEffectSlots()
-            .then(function () { pushPalette(); return pushEffectColours(); })
-            .then(function () { return reconcileEffects(); })
-            /* ABSORB, DO NOT SWALLOW. Every arm assertion hung off the END of
-               this chain, so one rejection anywhere above it skipped ALL of
-               them silently - the fade never asserted, the audio bindings
-               never asserted, and arming looked like it had worked. MEASURED:
-               24 fader controls on screen and 0 bindings on the engine after
-               arming. The failure is now reported and the assertions still
-               run, because they are what makes the rig match the panel. */
-            .catch(function (e) { fail('arm', e); })
-            .then(function () {
-              armAsserts.forEach(function (fn) {
-                try { fn(); } catch (e) { fail('arm assert', e); }
-              });
-              /* FADE UP ONLY ONCE THE LOOK HAS LANDED. The blackout was
-                 released back inside takeControl, but the palette, the effect
-                 slots and the group paint are all asserted here, AFTER it —
-                 so raising the house any earlier would fade up into a stale
-                 look and then visibly correct itself. applyStatic() resolves
-                 when its last staggered write has settled, which is the only
-                 honest "the ship now shows what the panel shows" signal.
-
-                 Guarded: if the assertions somehow never settle, the ship must
-                 not be left dark, so the fade-up also runs on the failure path. */
-              return applyStatic()
-                .catch(function (e) { fail('arm assert', e); })
-                /* RE-ASSERT THE LIT STATE IMMEDIATELY BEFORE RAISING THE HOUSE.
-                   The release at the top of takeControl can have been swallowed
-                   (its own .catch) or undone by another surface during the
-                   seconds the takeover takes. Raising the envelope over an
-                   engaged blackout is the exact "black ship reporting ARMED"
-                   failure, so the last thing before the fade-up is to make sure
-                   there is something to fade up TO. */
-                .then(function () {
-                  return req('POST', '/global-blackout', { state: false })
-                    .catch(function (e) { fail('arm (blackout re-assert)', e); });
-                })
-                .then(function () { return armFadeTo(1, ARM_FADE_MS); });
-            });
-        })
-          /* The chain is over either way — the next tap may start a new one.
-             Both paths, because a rejection anywhere above must not leave the
-             button permanently refused (audit H12). */
-          .then(function () { armChainBusy = false; },
-                function () { armChainBusy = false; });
+        startArmChain(armEl.classList.contains('is-armed'));
       }, 0);
     });
   }
 
-  /* Releasing on unload matters more than usual here: a closed tab that still
-     held the source lock would leave the autopilots frozen out with nothing
-     driving the rig. */
-  window.addEventListener('pagehide', function () {
-    if (!state.armed) return;
-    /* RAISE THE HOUSE BEFORE ANYTHING ELSE. The envelope is held at 0 for the
-       whole of arming and disarming, so a tab that dies inside either window
-       would leave the ship BLACK with no panel left to raise it — a strictly
-       worse failure than the frozen-but-lit one this handler was written for.
-       Sent first, and snapped rather than ramped, because the page is being
-       torn down and only keepalive requests survive. */
-    fetch(ENGINE + '/arm-fade', { method: 'POST', keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: 1, durationMs: 0 }) }).catch(function () {});
-    fetch(ENGINE + '/param-center/source-lock', { method: 'POST', keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'open' }) }).catch(function () {});
-    /* And drop the audio bindings. Closing the tab while armed used to leave
-       them on the engine, which applies them every frame - the rig would go on
-       pulsing to the music with no panel open at all. keepalive so the request
-       still goes out as the page is torn down. */
-    fetch(ENGINE + '/audio-bindings/clear', { method: 'POST', keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}' }).catch(function () {});
-    /* Stop the XY strobe/walk too (audit H5): they are slot-less, so no sweep
-       will catch them, and a tab closed mid-strobe left the ship strobing.
-       The engine's deadman revert now also clears them, but that takes the
-       close-grace window — these keepalive posts stop it immediately. */
-    fetch(ENGINE + '/strobe-rate', { method: 'POST', keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: false }) }).catch(function () {});
-    fetch(ENGINE + '/movement-rate', { method: 'POST', keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: false }) }).catch(function () {});
-  });
-  /* THE BFCACHE TWIN (audit low). pagehide above dropped the source lock and
-     raised the house — but Safari can RESTORE the page from the back/forward
-     cache with all its JS state intact, so a restored panel resumed believing
-     it was armed while its exclusivity was gone. A restore is a fresh start:
-     force DISARMED and let the operator re-arm deliberately. */
-  window.addEventListener('pageshow', function (ev) {
-    if (ev.persisted && state.armed) {
-      forceDisarmedUi();
-      fail('arm', 'this page came back from the browser cache — its takeover was ' +
-        'released when it was hidden. Re-arm to take control.');
+  function drainSurfaceRelease() {
+    if (!pendingSurfaceRelease || armChainBusy || surfaceHandoffBusy) return;
+    var request = pendingSurfaceRelease;
+    pendingSurfaceRelease = null;
+    var action;
+    try { action = window.TouchControlLifecycle.planHandoff(state.phase, request); }
+    catch (error) { fail('Layers handoff', error); return; }
+    if (action === 'ack') {
+        try { acknowledgeSurfaceRelease(request.requestId, request.target); }
+        catch (error) { fail('Layers handoff', error); }
+        return;
     }
+    if (action === 'activate') {
+      /* A newer route can supersede an in-flight request after the first
+         destination already landed and released the lease. Prove the latest
+         destination with an unowned canonical activation before ACKing it. */
+      surfaceHandoffBusy = true;
+      activateLayerSetting(request.target, 'captainpad_idle_route_sync', false)
+        .then(function () { return waitForLayerSetting(request.target, 15000); })
+        .then(function () {
+          acknowledgeSurfaceRelease(request.requestId, request.target);
+          surfaceHandoffBusy = false;
+          drainSurfaceRelease();
+        }).catch(function (error) {
+          surfaceHandoffBusy = false;
+          pendingSurfaceRelease = request;
+          fail('Layers handoff', error);
+        });
+      return;
+    }
+    if (action === 'wait') {
+      pendingSurfaceRelease = request;
+      return;
+    }
+    surfaceHandoffBusy = true;
+    handbackLiveTouch(request.target, 'captainpad_surface_blur').then(function () {
+      acknowledgeSurfaceRelease(request.requestId, request.target);
+      surfaceHandoffBusy = false;
+      drainSurfaceRelease();
+    }).catch(function (error) {
+      surfaceHandoffBusy = false;
+      pendingSurfaceRelease = request;
+      /* Do not invent ARMED after an uncertain failure. Keep DISARMING and the
+         parent curtain until a retry or the engine's deadman proves recovery. */
+      fail('Layers handoff', error);
+    });
+  }
+
+  document.addEventListener('captainpad:surface-blur', function (event) {
+    var detail = event.detail || {};
+    if ((detail.target !== 'deck' && detail.target !== 'mixer')
+        || typeof detail.requestId !== 'string' || !detail.requestId) {
+      fail('Layers handoff', 'invalid surface-blur request');
+      return;
+    }
+    if (detail.reason !== 'navigation' && detail.reason !== 'background') {
+      fail('Layers handoff', 'invalid surface-blur reason');
+      return;
+    }
+    pendingSurfaceRelease = {
+      requestId: detail.requestId,
+      target: detail.target,
+      reason: detail.reason,
+      forceDestination: detail.reason === 'navigation' || armChainBusy
+        || surfaceHandoffBusy || state.phase !== 'idle',
+    };
+    drainSurfaceRelease();
+  });
+
+  document.addEventListener('captainpad:surface-focus', function () {
+    /* Focusing this tab is passive. Only the ARM control activates Live Touch. */
+  });
+
+  /* A hard page exit cannot await the normal parent handshake. Start the same
+     Live→Deck blend with keepalive; the engine's deadman owns final cleanup if
+     teardown wins the race. */
+  window.addEventListener('pagehide', function () {
+    if (state.phase === 'idle') return;
+    fetch(ENGINE + '/layers/activate', { method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-Touch-Control-Owner': OWNER },
+      body: JSON.stringify({
+        target: 'deck', durationMs: LAYER_TRANSITION_MS,
+        reason: 'live_touch_pagehide', ownerId: OWNER,
+      }) }).catch(function () {});
+    /* Do not clear the owner-scoped look before the blend lands. The socket
+       close/deadman destroys the in-memory Live context after handback. */
+  });
+  /* Safari can restore the iframe with its old JS state after pagehide already
+     began a Deck handback. Treat that as a fresh, explicitly DISARMED visit. */
+  window.addEventListener('pageshow', function (ev) {
+    var recovery = window.TouchControlLifecycle.pageShowRecovery(ev.persisted, state.phase);
+    if (recovery === 'none') return;
+    fail('arm', 'this page came back from the browser cache; its previous takeover ' +
+      'must finish handing back before it can be armed again.');
+    if (recovery === 'cancel_arm') {
+      /* Do not erase lease bookkeeping. The guarded ARM chain rejects as soon
+         as its current step settles, then abortArm performs landed cleanup and
+         authoritative lease release. */
+      pageSessionInvalidated = true;
+      setArmUiPhase('disarming');
+      return;
+    }
+    if (recovery === 'handback') {
+      pageSessionInvalidated = true;
+      pageRestoreHandbackPending = true;
+      if (!armChainBusy && !surfaceHandoffBusy) {
+        pageRestoreHandbackPending = false;
+        startArmChain(false);
+      }
+    }
+    /* A disarming page already owns the exact cleanup/release transaction.
+       Let that serialized chain finish instead of starting a parallel one. */
   });
 
   /* ── PATTERN ────────────────────────────────────────────────────────── */
   var PATTERN_FILES = {
-    '68': '68_spatial_paint',
-    '66': '66_five_colour_prism',
-    '67': '67_five_colour_stations',
+    '130': '130_spatial_paint',
+    '128': '128_five_colour_prism',
+    '129': '129_five_colour_stations',
   };
   var patSel = document.getElementById('patternSel');
   if (patSel) {
     patSel.addEventListener('change', function () {
       var name = PATTERN_FILES[patSel.value];
       if (!name) return fail('pattern', 'no file mapped for ' + patSel.value);
-      write('PUT', '/pattern', { pattern: name }).then(refresh);
+      write('PUT', '/layers/live_touch/pattern', { pattern: name }).then(function (result) {
+        if (result === null) return null; /* disarmed or already reported */
+        state.channelPattern = name;
+        /* Export IDs belong to one WASM instance. Reusing the previous map
+           after a live pattern swap can drive an unrelated setter by number. */
+        return refreshLiveExports().then(function () {
+          /* Pattern-local slots 3-5 were reset with the instance. Reassert the
+             palette the surface still shows before accepting another gesture. */
+          return pushPalette(true);
+        });
+      }).catch(function (error) { fail('pattern', error); });
     });
   }
 
@@ -999,12 +1202,35 @@
     });
   }
 
-  function pushPalette() {
-    if (!slotsEl) return;
+  function pushPalette(strict) {
+    if (!slotsEl) return strict ? Promise.reject(new Error('palette slots are missing')) : Promise.resolve();
     var pal;
     try { pal = JSON.parse(slotsEl.dataset.palette || '[]'); }
-    catch (e) { return fail('palette', 'unreadable palette: ' + e.message); }
-    if (!pal.length) return;
+    catch (e) {
+      fail('palette', 'unreadable palette: ' + e.message);
+      return strict ? Promise.reject(e) : Promise.resolve();
+    }
+    if (!pal.length) return strict ? Promise.reject(new Error('palette is empty')) : Promise.resolve();
+
+    if (strict) {
+      var tasks = [];
+      var body = { colorPalette1: pal[0] };
+      if (pal[1]) body.colorPalette2 = pal[1];
+      tasks.push(function () { return strictWrite('POST', '/param-center', body); });
+      [3, 4, 5].forEach(function (n) {
+        var c = pal[n - 1];
+        if (!c) return;
+        var hueId = state.exports['sliderHue' + n];
+        var valId = state.exports['sliderVal' + n];
+        if (hueId !== undefined) tasks.push(function () {
+          return strictWrite('POST', '/layers/live_touch/control', { id: hueId, v0: c.h });
+        });
+        if (valId !== undefined) tasks.push(function () {
+          return strictWrite('POST', '/layers/live_touch/control', { id: valId, v0: c.v });
+        });
+      });
+      return runSeries(tasks);
+    }
 
     /* Slots 1 and 2 are the ENGINE palette — every pattern sees them. */
     send('palette', function () {
@@ -1021,12 +1247,13 @@
       var hueId = state.exports['sliderHue' + n];
       var valId = state.exports['sliderVal' + n];
       if (hueId !== undefined) {
-        send('hue' + n, function () { write('POST', '/control', { id: hueId, v0: c.h }); });
+        send('hue' + n, function () { write('POST', '/layers/live_touch/control', { id: hueId, v0: c.h }); });
       }
       if (valId !== undefined) {
-        send('val' + n, function () { write('POST', '/control', { id: valId, v0: c.v }); });
+        send('val' + n, function () { write('POST', '/layers/live_touch/control', { id: valId, v0: c.v }); });
       }
     });
+    return Promise.resolve();
   }
 
   /* ── THE WHEEL ALSO COLOURS THE EFFECTS ─────────────────────────────
@@ -1043,8 +1270,8 @@
      Colours are dealt out across the five palette slots rather than all taking
      slot 1: with COMPLEMENT or CONTRAST loaded, several live effects then carry
      the different colours of the scheme instead of flattening to one. */
-  function pushEffectColours() {
-    if (!state.armed || !fxGrid) return Promise.resolve();
+  function pushEffectColours(strict) {
+    if (!liveStateCanWrite(strict) || !fxGrid) return Promise.resolve();
     var pal;
     try { pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]'); }
     catch (e) { return Promise.resolve(); }
@@ -1067,13 +1294,16 @@
       if (neut) Object.keys(neut).forEach(function (k) { merged[k] = neut[k]; });
       merged.color = hsvToRgb6(col.h, col.s, col.v);
       liveOverride[id] = merged;
-      jobs.push(write('PATCH', '/global-effect-slots/' + id, { paramsOverride: merged }));
+      jobs.push((strict ? strictWrite : write)('PATCH', '/global-effect-slots/' + id, { paramsOverride: merged }));
     });
-    return Promise.all(jobs).catch(function (e) { fail('effect colour', e); });
+    return Promise.all(jobs).catch(function (e) {
+      fail('effect colour', e);
+      if (strict) throw e;
+    });
   }
 
   function restoreEffectColours() {
-    var jobs = [];
+    var tasks = [];
     Object.keys(presetOverride).forEach(function (id) {
       if (Number(id) < OURS_FROM) return;
       var orig = presetOverride[id];
@@ -1081,10 +1311,12 @@
       liveOverride[id] = JSON.parse(JSON.stringify(orig));
       /* Sending the ORIGINAL object back clears the colour key entirely, so the
          preset's own colour applies again rather than a stored copy of it. */
-      jobs.push(req('PATCH', '/global-effect-slots/' + id, { paramsOverride: orig })
-        .catch(function () {}));
+      tasks.push(function () {
+        return handbackStep('effect-colour/' + id,
+          req('PATCH', '/global-effect-slots/' + id, { paramsOverride: orig }));
+      });
     });
-    return Promise.all(jobs);
+    return runSeries(tasks);
   }
 
   /* Fires for the wheel AND for every preset button, because both go through
@@ -1119,16 +1351,14 @@
      "RIG MASTER BRIGHTNESS" and "PATTERN ROTATE", so the surface was promising
      something it never did. Each mode now does what its labels claim:
 
-       SPATIAL MODE  x/y -> sliderTargetX / sliderTargetY. Paint where you
-                     touch, in the ship's own coordinates. Needs a pattern that
-                     exports the target sliders (the banner says when it does
-                     not).
-       XY MODE       x -> the grand master, floored at XY_MASTER_FLOOR
-                          (PATCH /mixer master) — dim at the far left, never 0
+       SPATIAL MODE  x/y -> owner-scoped spatial paint in ship coordinates.
+       XY MODE       x -> the Live master factor, floored at XY_MASTER_FLOOR
+                          and always subordinate to the Dimmer Rack
                      y -> strobe rate or group walk, per the Y AXIS buttons
                      Coordinate-blind, works on ANY pattern. */
   var xyPad = document.getElementById('xyPad');
   var modeToggle = document.getElementById('modeToggle');
+  var wirePadRect = null;
 
   function spatialMode() {
     if (!modeToggle) return true;
@@ -1140,16 +1370,13 @@
      Mode, fade and colour are STROKE STATE, not per-sample data, so they are
      asserted on change rather than on every pointer move.
 
-     These used to write the PATTERN's sliders (68_spatial_paint) and nothing
-     else, which made them dead on all 200+ other patterns — DRAW mode even
-     told the operator to "load 68_spatial_paint". The stroke is now a global
-     effect, so they drive that; the pattern's own sliders are still written
-     when that pattern happens to be on the deck, because its pool is richer
-     and there is no reason to lose it. */
+     The owner-scoped spatial stage is applied to the isolated Live buffer, so
+     it remains available across Live pattern changes without touching Deck. */
   var DRAW_MODES = ['pool', 'trail', 'erase', 'ignite'];
   var spatialCfg = {
-    mode: null, fade: null, color: null, colorAlt: null,
+    mode: null, fadeSeconds: null, color: null, colorAlt: null,
     radius: null, radiusY: null, amount: null,
+    axisX: null, axisY: null, pixelIndices: null,
   };
 
   /* POWER — how hard the stroke acts. Straight through to the effect's
@@ -1162,17 +1389,6 @@
      Floored at 0.05 rather than 0: a stroke at literally zero is a control that
      looks live and does nothing, which is the failure mode this whole session
      has been about. */
-  var POWER_MAX = 2;
-  function brushAmount() {
-    var el = document.getElementById('brushPower');
-    var v = el && el.dataset.value !== undefined ? parseFloat(el.dataset.value) : 0.45;
-    if (!isFinite(v)) v = 0.45;
-    /* The slider's full travel is 0..POWER_MAX, so the top half of the control
-       is OVERDRIVE — past 100% the coverage is already total and the extra
-       drives the colour itself. Floored so the control is never a no-op. */
-    return Math.min(Math.max(v * POWER_MAX, 0.05), POWER_MAX);
-  }
-
   /* BRUSH SIZE — the area of effect, which the operator asked to control.
      The engine held a fixed default the panel never sent, so one touch always
      covered the same amount of hull no matter what the stroke was for.
@@ -1186,22 +1402,29 @@
      duplicating that here is how the ring and the rig drift apart — which is
      the exact bug that made "the circle does not hold what it erases". The
      chart's scale is UNIFORM, so one radius covers both axes and the brush is a
-     true circle. The fallback is only for a page too old to expose it. */
-  function padBrush() {
+     true circle. A missing or invalid export disables the stroke loudly; an
+     invented radius would make the drawn ring disagree with the rig. */
+  function padBrush(target) {
     if (typeof window.padBrushWorld === 'function') {
-      var r = window.padBrushWorld();
+      var r = window.padBrushWorld(target);
       if (r && isFinite(r.x) && r.x > 0 && isFinite(r.y) && r.y > 0) return r;
     }
-    return { x: 0.15, y: 0.15 };
+    fail('brush size', 'the page did not provide a valid padBrushWorld radius');
+    return null;
   }
-  function brushRadius()  { return Math.min(1, padBrush().x); }
-  function brushRadiusY() { return Math.min(2, padBrush().y); }
+  function brushPatch(target) {
+    var r = padBrush(target);
+    return r ? { radius: Math.min(1, r.x), radiusY: Math.min(2, r.y) } : null;
+  }
 
   var POWER_MAX = 2;
   function brushAmount() {
     var el = document.getElementById('brushPower');
-    var v = el && el.dataset.value !== undefined ? parseFloat(el.dataset.value) : 0.45;
-    if (!isFinite(v)) v = 0.45;
+    var v = el && el.dataset.value !== undefined ? parseFloat(el.dataset.value) : NaN;
+    if (!isFinite(v)) {
+      fail('brush power', 'the page did not provide a valid brush power');
+      return null;
+    }
     /* The slider's full travel is 0..POWER_MAX, so the top half of the control
        is OVERDRIVE — past 100% the coverage is already total and the extra
        drives the colour itself. Floored so the control is never a no-op. */
@@ -1267,68 +1490,152 @@
     });
   }
 
-  /* Re-assert on the next stroke after a disarm: releaseControl clears the
+  /* Re-assert on the next stroke after a disarm: cleanupLiveState clears the
      effect, so the cached values no longer match the engine. */
   function forgetSpatialCfg() {
     /* EVERY key, not three. It used to drop only mode/fade/colour, leaving
        radius/radiusY/amount cached as "already sent" across a disarm — so after
        re-arming, the engine had its defaults and the panel believed it had
        already told it otherwise. */
-    spatialCfg = { mode: null, fade: null, color: null, colorAlt: null,
-                   radius: null, radiusY: null, amount: null };
+    spatialCfg = { mode: null, fadeSeconds: null, color: null, colorAlt: null,
+                   radius: null, radiusY: null, amount: null,
+                   axisX: null, axisY: null, pixelIndices: null };
     spatialPatch = null;
   }
 
   document.addEventListener('drawmode', function (ev) {
     var v = Math.min(Math.max(Number(ev.detail.value) || 0, 0), 1);
     assertSpatial({ mode: DRAW_MODES[Math.round(v * 3)] });
-    /* Extra, not instead: only 68_spatial_paint has this slider. */
+    /* Extra, not instead: only 130_spatial_paint has this slider. */
     var id = state.exports.sliderDrawMode;
     if (id === undefined) return;
-    send('drawMode', function () { write('POST', '/control', { id: id, v0: ev.detail.value }); });
+    send('drawMode', function () { write('POST', '/layers/live_touch/control', { id: id, v0: ev.detail.value }); });
   });
 
   var brushSizeEl = document.getElementById('brushSize');
   if (brushSizeEl) {
     brushSizeEl.addEventListener('sliderchange', function () {
-      assertSpatial({ radius: brushRadius(), radiusY: brushRadiusY() });
+      var patch = brushPatch();
+      if (patch) assertSpatial(patch);
     });
   }
 
   var brushPowerEl = document.getElementById('brushPower');
   if (brushPowerEl) {
     brushPowerEl.addEventListener('sliderchange', function () {
-      assertSpatial({ amount: brushAmount() });
+      var amount = brushAmount();
+      if (amount !== null) assertSpatial({ amount: amount });
     });
   }
 
   var trailFadeEl = document.getElementById('trailFade');
   if (trailFadeEl) {
     trailFadeEl.addEventListener('sliderchange', function (ev) {
-      var v = Math.min(Math.max(Number(ev.detail.value) || 0, 0), 1);
-      assertSpatial({ fade: v });
+      var seconds = Number(ev.detail.value);
+      if ([0.1, 0.5, 1, 1.5].indexOf(seconds) === -1) {
+        fail('trail fade', 'FADE must be 0.1, 0.5, 1.0, or 1.5 seconds');
+        return;
+      }
+      assertSpatial({ fadeSeconds: seconds });
       var id = state.exports.sliderTrailFade;
       if (id === undefined) return;
-      send('trailFade', function () { write('POST', '/control', { id: id, v0: ev.detail.value }); });
+      var normalized = (seconds - 0.1) / 1.4;
+      send('trailFade', function () {
+        write('POST', '/layers/live_touch/control', { id: id, v0: normalized });
+      });
     });
   }
 
   /* The group-paint interim that used to live here is GONE: the stroke is now
-     per-pixel via POST /spatial-paint (a global effect), which is what the
+     per-pixel via owner-tagged POST /spatial-paint, which is what the
      operator asked for. Group paint was pattern-agnostic but only 24-way. */
 
   if (xyPad) {
     var lastSpatial = null;      /* newest world point the pad produced */
+    var spatialPointers = new Map();
+    var lastSpatialBrush = null;
+    var lastSpatialMode = null;
+    var lastStrokeColor = null;
+    var lastStrokeAlt = null;
+    var TAKE_POINTER_ID = 0x7ffffffe;
+
+    function spatialPayload(includeRetiring) {
+      var snapshots = [];
+      spatialPointers.forEach(function (pointer) {
+        if (!pointer.current || (pointer.retiring && !includeRetiring)) return;
+        var stroke = {
+          id: pointer.id,
+          targetX: pointer.current.targetX,
+          targetY: pointer.current.targetY,
+          color: pointer.color,
+          colorAlt: pointer.colorAlt,
+        };
+        if (pointer.sent) {
+          stroke.prevX = pointer.sent.targetX;
+          stroke.prevY = pointer.sent.targetY;
+        }
+        snapshots.push({ pointer: pointer, target: pointer.current, stroke: stroke });
+      });
+      var body = {
+        enabled: true,
+        touch: snapshots.length > 0,
+        strokes: snapshots.map(function (snapshot) { return snapshot.stroke; }),
+      };
+      if (lastSpatialBrush) {
+        body.radius = lastSpatialBrush.radius;
+        body.radiusY = lastSpatialBrush.radiusY;
+        body.amount = lastSpatialBrush.amount;
+      }
+      if (lastSpatialMode) body.mode = lastSpatialMode;
+      if (lastStrokeColor) body.color = lastStrokeColor;
+      if (lastStrokeAlt) body.colorAlt = lastStrokeAlt;
+      return { body: body, snapshots: snapshots };
+    }
+
+    function commitSpatialPayload(payload) {
+      payload.snapshots.forEach(function (snapshot) {
+        if (spatialPointers.get(snapshot.pointer.id) === snapshot.pointer) {
+          snapshot.pointer.sent = snapshot.target;
+        }
+      });
+    }
+
+    function queueSpatialTouches(finalSample) {
+      sendDraw(function () {
+        var first = spatialPayload(true);
+        var retiring = first.snapshots.filter(function (snapshot) {
+          return snapshot.pointer.retiring;
+        });
+        return write('POST', '/spatial-paint', first.body).then(function (response) {
+          commitSpatialPayload(first);
+          retiring.forEach(function (snapshot) {
+            if (spatialPointers.get(snapshot.pointer.id) === snapshot.pointer) {
+              spatialPointers.delete(snapshot.pointer.id);
+            }
+          });
+          if (!retiring.length) return response;
+          /* A released finger is stamped once at its final coordinate, then a
+             second ordered state removes only that finger. Other fingers stay
+             down throughout; one lift can never cancel the whole gesture. */
+          var landed = spatialPayload(false);
+          return write('POST', '/spatial-paint', landed.body).then(function (nextResponse) {
+            commitSpatialPayload(landed);
+            if (spatialPointers.size === 0) wirePadRect = null;
+            return nextResponse;
+          });
+        });
+      }, finalSample);
+    }
+
     var pushXY = function (e) {
-      var r = xyPad.getBoundingClientRect();
+      var r = wirePadRect || xyPad.getBoundingClientRect();
       var x = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
       var y = Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1);
 
       if (spatialMode()) {
-        /* PER-PIXEL, ON EVERY PATTERN.
-           The stroke is a GLOBAL EFFECT (POST /spatial-paint), so it runs on the
-           composed buffer after whatever the deck is doing — no pattern needs to
-           cooperate and the autopilot cycling the deck cannot kill it. This
+        /* PER-PIXEL, ON EVERY LIVE PATTERN.
+           The stroke runs in the lease-owned Live creative stage before the
+           canonical blend; Deck and Mixer remain untouched. This
            replaced an interim that painted whole GROUPS: pattern-agnostic but
            only 24-way, where the operator asked for per-pixel.
            One write per sample carrying position + finger state; colour and mode
@@ -1358,11 +1665,14 @@
           var dmB = document.querySelector('#drawModes button.is-active');
           if (dmB) {
             var dv = Math.min(Math.max(parseFloat(dmB.dataset.dm) || 0, 0), 1);
-            assertSpatial({ mode: DRAW_MODES[Math.round(dv * 3)] });
+            lastSpatialMode = DRAW_MODES[Math.round(dv * 3)];
+            assertSpatial({ mode: lastSpatialMode });
           }
-          assertSpatial({ radius: brushRadius(), radiusY: brushRadiusY(),
-                          amount: brushAmount() });
-          lastSpatial = sp;   /* the lift replays it, see pointerup */
+          var brush = brushPatch(sp);
+          var amount = brushAmount();
+          if (!brush || amount === null) return;
+          brush.amount = amount;
+          assertSpatial(brush);
           /* THE COLOUR TRAVELS WITH THE POSITION, in one body.
              It used to go on the config queue (100 ms) while the position went
              on the drawing queue (33 ms), so a colour change could arrive up to
@@ -1381,44 +1691,56 @@
                                     Math.max(c2.s, 0.85), Math.max(c2.v, 0.9));
             }
           }
-          sendDraw(function () {
-            var body = {
-              enabled: true, touch: true, targetX: sp.nx, targetY: sp.nz,
-            };
-            if (strokeCol) { body.color = strokeCol; body.colorAlt = strokeAlt; }
-            return write('POST', '/spatial-paint', body);
-          });
+          if (!strokeCol) {
+            fail('spatial colour', 'the page supplied no valid ink colour; refusing the stroke');
+            return;
+          }
+          var pointerId = Number.isInteger(e.pointerId) ? e.pointerId : TAKE_POINTER_ID;
+          var pointer = spatialPointers.get(pointerId);
+          if (!pointer || pointer.retiring) return;
+          pointer.current = sp;
+          pointer.color = strokeCol;
+          pointer.colorAlt = strokeAlt;
+          lastSpatial = sp;
+          lastSpatialBrush = brush;
+          lastStrokeColor = strokeCol;
+          lastStrokeAlt = strokeAlt;
+          queueSpatialTouches(false);
         }
-        /* The pattern's OWN position sliders are still driven when the deck
-           happens to expose them (68_spatial_paint), so that pattern keeps its
+        /* The Live pattern's OWN position sliders are also driven when it
+           exposes them (130_spatial_paint), so that pattern keeps its
            richer pool on top. Absent everywhere else, which is now harmless. */
         var idX = state.exports.sliderTargetX, idY = state.exports.sliderTargetY;
+        /* Pattern 130 is authored in nx/nz. The owner-scoped global brush is
+           projection-aware; do not feed Front or Sign coordinates into a
+           top-plane pattern export and create a second, misplaced stroke. */
+        if (!sp || sp.axisX !== 'nx' || sp.axisY !== 'nz') return;
         if (idX === undefined || idY === undefined) return;
         /* RECTIFY PAD → SHIP. The pad shows the sim's COMPRESSED top-down map,
            but the pattern is fed WORLD nx/nz. Sending the raw pad fraction
            would aim the light at the wrong place on a hull that runs diagonally
            and is 73.6% empty in this plane (docs/44 §2.5) — the operator would
            draw on one part of the map and watch a different part light up.
-           The page owns the geometry and exposes the lookup; if it is somehow
-           absent we send the raw value rather than nothing, because a slightly
-           wrong position still beats a dead pad. */
-        var wx = x, wy = 1 - y;
-        if (typeof window.padToWorld === 'function') {
-          var wpt = window.padToWorld(x, y);
-          if (wpt) { wx = wpt.nx; wy = wpt.nz; }
+           The page owns the geometry and exposes the lookup. If it is absent,
+           refuse the stroke: raw panel fractions are not ship coordinates. */
+        if (typeof window.padToWorld !== 'function') {
+          return fail('spatial', 'canonical pixel projection is unavailable');
         }
+        var wpt = sp;
+        var wx = wpt.targetX, wy = wpt.targetY;
         send('xy', function () {
-          write('POST', '/control', { id: idX, v0: wx });
-          write('POST', '/control', { id: idY, v0: wy });
+          write('POST', '/layers/live_touch/control', { id: idX, v0: wx });
+          write('POST', '/layers/live_touch/control', { id: idY, v0: wy });
           var t = state.exports.sliderTouch;
-          if (t !== undefined) write('POST', '/control', { id: t, v0: 1 });
+          if (t !== undefined) write('POST', '/layers/live_touch/control', { id: t, v0: 1 });
         });
       } else {
         /* XY MODE = BRIGHTNESS x STROBE SPEED (operator ruling). Y used to drive
            the pattern's rotate, which is a look-tweak rather than a performance
            control — nothing you reach for mid-song.
 
-           X: the grand master, left DIM to right bright — dim, never dark. It
+           X: the Live Touch master factor, left DIM to right bright. The
+              Dimmer Rack remains the authoritative ceiling. It
               is rescaled into [XY_MASTER_FLOOR, 1] so the far left is 5%, not
               0 (see the constant for why).
            Y: strobe rate, 0.5 Hz at the bottom to 20 Hz at the top, on an
@@ -1431,7 +1753,7 @@
         var floor = xyMasterFloor();
         if (floor === null) return;                       /* refused, reported */
         var master = floor + x * (1 - floor);
-        send('xyMaster', function () { write('PATCH', '/mixer', { master: master }); });
+        queueLiveMaster(master);
         var up = 1 - y;                                   /* bottom 0 -> top 1 */
         var axis = (typeof window.xyYAxis === 'function') ? window.xyYAxis() : 'walk';
         send('xyEffect', function () {
@@ -1458,7 +1780,16 @@
           try {
             var pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]');
             if (pal.length) cols = pal.map(function (c) { return hsvToRgb6(c.h, c.s, c.v); });
-          } catch (e) { /* no palette yet: the engine keeps its own colours */ }
+          } catch (e) {
+            fail('xy walk', 'the palette is unreadable: ' + e.message);
+            write('POST', '/movement-rate', { active: false });
+            return;
+          }
+          if (!cols) {
+            fail('xy walk', 'the palette is empty; refusing to move with engine-owned colours');
+            write('POST', '/movement-rate', { active: false });
+            return;
+          }
           var body = { active: true, mode: 'whole_group', pixelsPerSecond: pps, amount: 1 };
           if (cols) body.colors = cols;
           write('POST', '/movement-rate', body);
@@ -1475,9 +1806,15 @@
        sees under their finger and what the hull does cannot disagree. */
     xyPad.addEventListener('pointerdown', function () {
       if (!spatialMode()) return;
-      if (typeof window.inkColour !== 'function') return;
+      if (typeof window.inkColour !== 'function') {
+        fail('draw colour', 'the page did not export inkColour; refusing the stroke');
+        return;
+      }
       var c = window.inkColour();
-      if (!c) return;
+      if (!c) {
+        fail('draw colour', 'the page supplied no valid ink colour; refusing the stroke');
+        return;
+      }
       send('drawColour', function () {
         write('POST', '/param-center', { colorPalette1: { h: c.h, s: c.s, v: c.v } });
       });
@@ -1496,16 +1833,26 @@
          critical, reachable without a crash. Lifting a brush is always safe;
          only laying paint DOWN needs the mode check. */
       if (!d.down) {
-        sendDraw(function () {
-          var body = { enabled: true, touch: false };
-          if (lastSpatial) { body.targetX = lastSpatial.nx; body.targetY = lastSpatial.nz; }
-          return write('POST', '/spatial-paint', body);
-        });
+        var playback = spatialPointers.get(TAKE_POINTER_ID);
+        if (playback && !playback.retiring) {
+          playback.retiring = true;
+          queueSpatialTouches(true);
+        }
         return;
       }
       if (!spatialMode()) return;
+      if (!spatialPointers.has(TAKE_POINTER_ID)) {
+        if (spatialPointers.size >= 10) {
+          fail('spatial playback', 'ten live touches are already active');
+          return;
+        }
+        spatialPointers.set(TAKE_POINTER_ID, {
+          id: TAKE_POINTER_ID, current: null, sent: null, retiring: false,
+        });
+      }
       var r = xyPad.getBoundingClientRect();
-      pushXY({ clientX: r.left + d.u * r.width, clientY: r.top + d.v * r.height });
+      pushXY({ pointerId: TAKE_POINTER_ID,
+        clientX: r.left + d.u * r.width, clientY: r.top + d.v * r.height });
     });
 
     /* SWITCHING WHAT Y DRIVES must stop the other one, or it keeps running with
@@ -1518,18 +1865,37 @@
       });
     });
 
-    /* ONE FINGER OWNS THE STROKE, wire side (audit H13). The page pins its own
-       listeners; this pins the writes. A second finger's samples used to
-       interleave into the drive stream and the engine's brush teleported
-       between the two touch points. */
+    /* Spatial mode accepts independent simultaneous pointers. XY mode remains
+       a single master/strobe control: two fingers cannot both own one scalar. */
     var wirePointer = null;
     xyPad.addEventListener('pointerdown', function (e) {
-      if (wirePointer !== null && e.pointerId !== wirePointer) return;
-      wirePointer = e.pointerId;
+      if (spatialMode()) {
+        if (spatialPointers.has(e.pointerId)) return;
+        if (spatialPointers.size >= 10) {
+          fail('spatial touch', 'a maximum of ten simultaneous touches is supported');
+          return;
+        }
+        spatialPointers.set(e.pointerId, {
+          id: e.pointerId, current: null, sent: null, retiring: false,
+        });
+      } else {
+        if (wirePointer !== null && e.pointerId !== wirePointer) return;
+        wirePointer = e.pointerId;
+      }
+      wirePadRect = xyPad.getBoundingClientRect();
+      try { xyPad.setPointerCapture(e.pointerId); } catch (error) {
+        spatialPointers.delete(e.pointerId);
+        if (wirePointer === e.pointerId) wirePointer = null;
+        if (!spatialPointers.size && wirePointer === null) wirePadRect = null;
+        fail('spatial pointer capture', error);
+        return;
+      }
       pushXY(e);
     });
     xyPad.addEventListener('pointermove', function (e) {
-      if (wirePointer !== null && e.pointerId !== wirePointer) return;
+      if (spatialPointers.has(e.pointerId)) {
+        if (spatialPointers.get(e.pointerId).retiring) return;
+      } else if (wirePointer !== e.pointerId) return;
       if (e.pressure > 0 || e.buttons) pushXY(e);
     });
     /* Releasing must drop sliderTouch, or the pool stays lit under a finger
@@ -1541,12 +1907,32 @@
       /* Only when a stroke is actually in progress: this is also on window, so
          without the guard every chip tap's pointerup would send a spatial
          body — asserting enabled:true for a stroke nobody drew. */
-      if (wirePointer === null) return;
-      if (e && e.pointerId !== undefined && e.pointerId !== wirePointer) return;
+      var pointerId = e && e.pointerId;
+      var spatialPointer = spatialPointers.get(pointerId);
+      if (spatialPointer) {
+        if (spatialPointer.retiring) return;
+        /* Pointer-up carries a useful final coordinate. Stage it while the
+           finger is still logically down, then retire that finger in-order. */
+        pushXY(e);
+        spatialPointer.retiring = true;
+        queueSpatialTouches(true);
+        var remaining = Array.from(spatialPointers.values()).filter(function (pointer) {
+          return !pointer.retiring;
+        });
+        var spatialTouch = state.exports.sliderTouch;
+        if (!remaining.length && spatialTouch !== undefined) {
+          send('touch', function () {
+            write('POST', '/layers/live_touch/control', { id: spatialTouch, v0: 0 });
+          });
+        }
+        return;
+      }
+      if (wirePointer === null || pointerId !== wirePointer) return;
       wirePointer = null;
+      if (!spatialPointers.size) wirePadRect = null;
       var t = state.exports.sliderTouch;
-      if (t !== undefined) send('touch', function () { write('POST', '/control', { id: t, v0: 0 }); });
-      /* LIFT THE BRUSH on the global effect too, or it keeps painting the last
+      if (t !== undefined) send('touch', function () { write('POST', '/layers/live_touch/control', { id: t, v0: 0 }); });
+      /* LIFT THE BRUSH on the Live spatial stage too, or it keeps painting the last
          point forever and the trail never starts cooling.
 
          SENT THROUGH THE SAME COALESCING KEY as the moves, and CARRYING THE
@@ -1564,9 +1950,12 @@
       /* Same queue as the moves, so the lift still cannot overtake them. */
       sendDraw(function () {
         var body = { enabled: true, touch: false };
-        if (lastSpatial) { body.targetX = lastSpatial.nx; body.targetY = lastSpatial.nz; }
+        if (lastSpatial) {
+          body.targetX = lastSpatial.targetX;
+          body.targetY = lastSpatial.targetY;
+        }
         return write('POST', '/spatial-paint', body);
-      });
+      }, true);
     };
     xyPad.addEventListener('pointerup', liftBrush);
     xyPad.addEventListener('pointercancel', liftBrush);
@@ -1575,54 +1964,89 @@
        lands on window only — and a missed lift is a painting ghost finger. */
     window.addEventListener('pointerup', liftBrush);
     window.addEventListener('pointercancel', liftBrush);
+
+    xyPad.addEventListener('touchpixelviewchange', function (event) {
+      var spec = event.detail;
+      if (!spec || typeof spec.axisX !== 'string' || typeof spec.axisY !== 'string'
+          || !Array.isArray(spec.pixelIndices) || spec.pixelIndices.length === 0) {
+        fail('pixel view', 'view change did not include a canonical projection and pixel mask');
+        return;
+      }
+      currentPixelViewId = spec.viewId;
+      relabelPadAxes();
+      lastSpatial = null;
+      spatialPointers.clear();
+      wirePadRect = null;
+      if (state.phase !== 'armed') {
+        forgetSpatialCfg();
+        return;
+      }
+      sendDraw(function () {
+        var body = {
+          touch: false,
+          strokes: [],
+          axisX: spec.axisX,
+          axisY: spec.axisY,
+          pixelIndices: spec.pixelIndices,
+        };
+        return write('POST', '/spatial-paint', body).then(function (response) {
+          if (!response) return response;
+          spatialCfg.axisX = spec.axisX;
+          spatialCfg.axisY = spec.axisY;
+          spatialCfg.pixelIndices = spec.pixelIndices.slice();
+          return response;
+        });
+      }, true);
+    });
+  }
+
+  /* The selected chart defines the real model axes. Labels are part of the
+     safety contract: they must describe the same projection sent to the engine. */
+  var currentPixelViewId = 'top_down';
+  function relabelPadAxes() {
+    var sp = spatialMode();
+    var top = document.querySelector('.pad-label.top');
+    var bot = document.querySelector('.pad-label.bottom');
+    var lft = document.querySelectorAll('.xy-frame .axis-label')[0];
+    var rgt = document.querySelectorAll('.xy-frame .axis-label')[1];
+    if (!sp) {
+      if (top) top.textContent = 'Y+ STROBE FAST';
+      if (bot) bot.textContent = 'Y− STROBE OFF';
+      if (lft) lft.innerHTML = '<b>X−</b>DIM 5%';
+      if (rgt) rgt.innerHTML = '<b>X+</b>BRIGHT';
+      return;
+    }
+    var topPlane = currentPixelViewId === 'top_down' || currentPixelViewId === 'strands';
+    if (top) top.textContent = topPlane ? 'Z+ SHIP FORWARD' : 'Y+ UP';
+    if (bot) bot.textContent = topPlane ? 'Z− SHIP AFT' : 'Y− DOWN';
+    if (currentPixelViewId === 'te_sign') {
+      if (lft) lft.innerHTML = '<b>Z−</b>AFT';
+      if (rgt) rgt.innerHTML = '<b>Z+</b>FORWARD';
+    } else {
+      if (lft) lft.innerHTML = '<b>X−</b>STARBOARD';
+      if (rgt) rgt.innerHTML = '<b>X+</b>PORT';
+    }
   }
 
   /* Switching mode re-labels the axes so the pad never claims the wrong thing. */
   if (modeToggle) {
     modeToggle.addEventListener('click', function () {
       setTimeout(function () {
-        var sp = spatialMode();
-        var top = document.querySelector('.pad-label.top');
-        var bot = document.querySelector('.pad-label.bottom');
-        /* DESCENDANT, not child: the axis labels now sit INSIDE the DRAW and
-           INK columns that flank the pad, so a '>' here silently matched
-           nothing and the axes kept saying DARK/BRIGHT in spatial mode. */
-        var lft = document.querySelectorAll('.xy-frame .axis-label')[0];
-        var rgt = document.querySelectorAll('.xy-frame .axis-label')[1];
-        if (top) top.textContent = sp ? 'Y+ SHIP FORWARD' : 'Y+ STROBE FAST';
-        if (bot) bot.textContent = sp ? 'Y− SHIP AFT' : 'Y− STROBE OFF';
-        /* STARBOARD IS ON THE LEFT of this chart. The pad's X was mirrored so
-           the drawing matches what the operator sees in the sim; the labels
-           follow the ship, not the old orientation, because a flipped axis with
-           the old words would just move the lie somewhere else. */
-        /* "DIM 5%", not "DARK": the axis is floored at XY_MASTER_FLOOR and can
-           no longer reach black, so the old word promised something the control
-           will not do. A label that lies is worse than no label. */
-        if (lft) lft.innerHTML = sp ? '<b>X−</b>STARBOARD' : '<b>X−</b>DIM 5%';
-        if (rgt) rgt.innerHTML = sp ? '<b>X+</b>PORT' : '<b>X+</b>BRIGHT';
+        relabelPadAxes();
         applyCapability();
-        /* SPATIAL MODE LOADS THE PATTERN IT NEEDS.
-           This is why "spatial mode does not work": the pad drives
-           68_spatial_paint's OWN sliders (targetX/targetY/touch — the engine has
-           no positional parameter of its own), and NOTHING on this surface ever
-           put that pattern on the deck. Meanwhile the autopilot changes the deck
-           every 90 s, so even after an operator loaded it by hand from the
-           PATTERN selector, the mode silently went dead on the next cycle.
-           MEASURED: mid-session the deck had drifted to
-           summer_camp/53_shadow_eclipse and sliderTargetX was simply absent.
-           Switching INTO spatial now loads it if — and only if — the current
-           deck pattern cannot do the job, so an operator who already has it
-           loaded (or a future pattern that also exports the sliders) is left
-           alone. Announced, not silent: changing the deck pattern is a visible
-           act and the operator must know the mode did it. */
-        /* DELIBERATELY NO PATTERN AUTO-LOAD HERE.
-           An earlier version loaded 68_spatial_paint when the deck could not do
-           position. That contradicts the operator's requirement that SPATIAL
-           work on ALL patterns: hijacking their deck is not "working
-           everywhere", it is replacing what they were watching. Drawing now
-           paints the touched GROUP, which overrides any pattern, so the mode is
-           real regardless — and the per-pixel pool remains an extra that a
-           position-capable pattern adds on top. */
+        if (!spatialMode() && spatialPointers.size) {
+          spatialPointers.forEach(function (pointer) { pointer.retiring = true; });
+          queueSpatialTouches(true);
+          var touchId = state.exports.sliderTouch;
+          if (touchId !== undefined) {
+            send('touch', function () {
+              write('POST', '/layers/live_touch/control', { id: touchId, v0: 0 });
+            });
+          }
+        }
+        /* DELIBERATELY NO PATTERN AUTO-LOAD HERE. Mode changes never stage a
+           pattern or touch Deck; only explicit ARM stages the selected Live
+           pattern, and the isolated spatial stage works across that channel. */
       }, 0);
     });
   }
@@ -1665,8 +2089,8 @@
              doing nothing.
        TAP   manual tempo; the Companion is ignored even if it is streaming.
 
-     Tempo source is a rig-wide routing choice, like the audio bindings, so it
-     is written with req() and works while disarmed. */
+     Tempo source is part of the owner-scoped Live context and is writable only
+     while armed. Owner-tagged GET /mixer overlays the local tempo readback. */
   var bpmVal = document.getElementById('bpmVal');
   var bpmSync = document.getElementById('bpmSync');
   var bpmEcho = false;      /* set while WE repaint the readout */
@@ -1716,17 +2140,19 @@
      disarm, so this is what puts them back - and it means what the engine is
      doing always matches what the surface shows, rather than whatever was last
      written to it. */
-  function pushAllAudioBindings() {
+  function pushAllAudioBindings(strict) {
+    var tasks = [];
     if (bank) {
       Array.prototype.forEach.call(bank.querySelectorAll('.fader-audio'), function (w) {
-        faderAudioWrite(w);
+        tasks.push(function () { return faderAudioWrite(w, strict); });
       });
     }
     if (fxGrid) {
       Array.prototype.forEach.call(fxGrid.querySelectorAll('.aud-row'), function (r) {
-        audWrite(r);
+        tasks.push(function () { return audWrite(r, strict); });
       });
     }
+    return strict ? runSeries(tasks) : Promise.all(tasks.map(function (task) { return task(); }));
   }
   armAsserts.push(pushAllAudioBindings);
   /* Re-state the effect scope on ARM. Disarming clears it to unrestricted, so
@@ -1734,81 +2160,185 @@
      engine had forgotten them - the panel showing one thing and the rig doing
      another. The dedupe key is reset first or the re-assert would be swallowed
      as "no change". */
-  armAsserts.push(function () { lastFxGroups = null; pushEffectGroups(); });
-  /* Assert the master on arm too: the fader's position is the operator's
-     intent, and arming has to make the rig agree with the panel. */
-  armAsserts.push(function () {
-    /* Written INLINE rather than through pushMaster(): that lives inside an
-       `if (bank)` block further down the file, and depending on its scope from
-       here is the kind of subtlety that fails silently. The master is the one
-       control that must never be wrong, so this asks nothing of anything. */
-    var m = document.querySelector('#groupsGrid .fader-strip.is-master');
-    if (!m) return fail('arm master', 'no master strip in the bank');
-    var lvl = parseFloat(m.dataset.level);
-    if (!isFinite(lvl)) return fail('arm master', 'master fader has no level');
-    var pw = m.querySelector('[data-role=power]');
-    var v = (pw && !pw.classList.contains('is-on')) ? 0 : lvl / 100;
-    /* req(), not write(). EVIDENCE: every assertion that uses req() lands (the
-       24 group audio bindings) and every one that uses write() does not - and
-       write() is the one that refuses while disarmed. So state.armed is not yet
-       true when these run. Arming IS the operator asking for this, so the
-       master goes out unconditionally rather than waiting on a flag that is
-       still catching up. */
-    req('PATCH', '/mixer', { master: v }).catch(function (e) { fail('arm master', e); });
-  });
-
+  armAsserts.push(function (strict) { lastFxGroups = null; return pushEffectGroups(strict); });
   if (bpmSync) {
     bpmSync.addEventListener('click', function () {
       var next = bpmSync.textContent === 'TAP' ? 'osc' : 'tap';
-      req('POST', '/mixer/tempo/source', { source: next })
+      write('POST', '/mixer/tempo/source', { source: next })
         .then(paintTempo)
         .catch(function (e) { fail('tempo source', e); });
     });
   }
   refreshTempo();
 
-  /* ── GROUP brightness queue ─────────────────────────────────────────
-     `/section-brightness` takes ONE group per call and does a saveGlobals on
-     each, so a master drag over 24 linked groups is 24 disk-touching requests
-     per tick. MEASURED unbounded: 141 writes/s dragged the engine from 40 fps
-     down to ~15 — a visible stutter on the rig, which is exactly the failure a
-     grand master must not cause.
+  /* ── LIVE BRIGHTNESS FACTORS ──────────────────────────────────────────
+     These are transient multipliers, never Dimmer Rack or Mixer authority.
+     The engine applies rack ceiling × Live master × Live group. All mutations
+     are revisioned and serialized so two fast faders cannot race revisions. */
+  var liveBrightnessPending = { master: null, groups: {} };
+  var liveBrightnessPendingFade = null;
+  var liveBrightnessTimer = null;
+  var liveBrightnessBusy = false;
 
-     So group writes get their own budgeted queue:
-       · a value that has not moved by 1% is not sent at all,
-       · at most GROUP_WRITES_PER_TICK go out per 100ms (~40/s), the rest wait
-         their turn — pending values are overwritten in place, so nothing
-         queues up stale,
-       · releasing the fader flushes everything at once, so the final position
-         is always exact even if the drag was rate-limited. */
-  var GROUP_WRITES_PER_TICK = 4;
-  var groupPending = {};       /* sectionId -> brightness not yet sent */
-  var groupLastSent = {};
-  var groupTimer = null;
+  function acceptLiveBrightness(payload, requireActive) {
+    if (!payload || typeof payload.active !== 'boolean'
+        || !Number.isInteger(payload.revision) || payload.revision < 0
+        || !Number.isInteger(payload.rackRevision) || payload.rackRevision < 0
+        || !payload.groups || typeof payload.groups !== 'object' || Array.isArray(payload.groups)
+        || !payload.rackCeilings || typeof payload.rackCeilings !== 'object'
+        || Array.isArray(payload.rackCeilings)
+        || !payload.effectiveCaps || typeof payload.effectiveCaps !== 'object'
+        || Array.isArray(payload.effectiveCaps)) {
+      throw new Error('engine returned invalid Live Touch brightness state');
+    }
+    if (requireActive && (!payload.active || payload.ownerId !== OWNER)) {
+      throw new Error('Live Touch brightness lease is not owned by this surface');
+    }
 
-  function queueGroup(sId, b) {
-    if (groupLastSent[sId] !== undefined && Math.abs(groupLastSent[sId] - b) < 0.01) return;
-    groupPending[sId] = b;
-    if (groupTimer) return;
-    groupTimer = setInterval(function () { flushGroups(false); }, FLUSH_MS);
+    var acceptance = window.TouchControlLifecycle.revisionAcceptance(
+      state.liveBrightnessRevision,
+      state.rackBrightnessRevision,
+      payload.revision,
+      payload.rackRevision
+    );
+    if (acceptance.live) {
+      state.liveBrightnessRevision = payload.active ? payload.revision : null;
+    }
+    if (acceptance.rack) {
+      state.rackBrightnessRevision = payload.rackRevision;
+      state.rackCeilings = payload.rackCeilings;
+    }
+    if (acceptance.effective) {
+      state.liveEffectiveCaps = payload.effectiveCaps;
+    } else if (acceptance.live || acceptance.rack) {
+      /* A cap belongs to one exact (Live, Rack) revision pair. Keep no value
+         when only one side of an interleaved payload was current. */
+      state.liveEffectiveCaps = {};
+    }
+    return payload;
   }
 
-  function flushGroups(all) {
-    var keys = Object.keys(groupPending);
-    if (!keys.length) {
-      if (groupTimer) { clearInterval(groupTimer); groupTimer = null; }
-      return;
+  function stripLevel(strip) {
+    var level = parseFloat(strip.dataset.level || '0') / 100;
+    if (!isFinite(level) || level < 0 || level > 1) {
+      throw new Error('brightness strip has an invalid level');
     }
-    var n = all ? keys.length : Math.min(keys.length, GROUP_WRITES_PER_TICK);
-    for (var i = 0; i < n; i++) {
-      var sId = keys[i], b = groupPending[sId];
-      delete groupPending[sId];
-      groupLastSent[sId] = b;
-      write('POST', '/section-brightness', { sectionId: Number(sId), brightness: b });
-    }
+    var power = strip.querySelector('[data-role=power]');
+    return power && !power.classList.contains('is-on') ? 0 : level;
   }
 
-  /* ── GROUP faders → section brightness ──────────────────────────────── */
+  function collectLiveBrightness() {
+    var masterStrip = document.querySelector('#groupsGrid .fader-strip.is-master');
+    if (!masterStrip) throw new Error('Live Touch has no master brightness strip');
+    var groups = {};
+    var seen = {};
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#groupsGrid .fader-strip:not(.is-master)'),
+      function (strip) {
+        var nameElement = strip.querySelector('.fader-name');
+        var name = nameElement && nameElement.textContent;
+        if (!name || !Object.prototype.hasOwnProperty.call(state.sectionIds, name)) {
+          throw new Error('Live Touch brightness has an unknown group "' + name + '"');
+        }
+        if (seen[name]) throw new Error('Live Touch brightness repeats group "' + name + '"');
+        seen[name] = true;
+        groups[name] = stripLevel(strip);
+      }
+    );
+    Object.keys(state.sectionIds).forEach(function (name) {
+      if (!seen[name]) throw new Error('Live Touch brightness is missing group "' + name + '"');
+    });
+    return { master: stripLevel(masterStrip), groups: groups };
+  }
+
+  function initializeLiveBrightness() {
+    liveBrightnessPending = { master: null, groups: {} };
+    liveBrightnessPendingFade = null;
+    if (liveBrightnessTimer) { cancelAnimationFrame(liveBrightnessTimer); liveBrightnessTimer = null; }
+    return req('GET', '/touch-control/brightness').then(function (payload) {
+      acceptLiveBrightness(payload, true);
+      var initial = collectLiveBrightness();
+      initial.expectedRevision = state.liveBrightnessRevision;
+      return req('PUT', '/touch-control/brightness', initial);
+    }).then(function (payload) {
+      return acceptLiveBrightness(payload, true);
+    });
+  }
+
+  function pumpLiveBrightness() {
+    if (liveBrightnessBusy || state.phase !== 'armed') return Promise.resolve();
+    var body = null;
+    var path = '/touch-control/brightness';
+    if (liveBrightnessPending.master !== null
+        || Object.keys(liveBrightnessPending.groups).length > 0) {
+      body = { expectedRevision: state.liveBrightnessRevision };
+      if (liveBrightnessPending.master !== null) body.master = liveBrightnessPending.master;
+      if (Object.keys(liveBrightnessPending.groups).length > 0) {
+        body.groups = liveBrightnessPending.groups;
+      }
+      liveBrightnessPending = { master: null, groups: {} };
+    } else if (liveBrightnessPendingFade) {
+      path = '/touch-control/brightness/master/fade';
+      body = {
+        expectedRevision: state.liveBrightnessRevision,
+        target: liveBrightnessPendingFade.target,
+        durationMs: liveBrightnessPendingFade.durationMs,
+      };
+      liveBrightnessPendingFade = null;
+    }
+    if (!body) return Promise.resolve();
+    if (!Number.isInteger(body.expectedRevision)) {
+      fail('brightness', 'no active Live Touch brightness revision');
+      return Promise.resolve();
+    }
+    liveBrightnessBusy = true;
+    var succeeded = true;
+    return req(path === '/touch-control/brightness' ? 'PATCH' : 'POST', path, body)
+      .then(function (payload) { acceptLiveBrightness(payload, true); })
+      .catch(function (error) {
+        succeeded = false;
+        liveBrightnessPending = { master: null, groups: {} };
+        liveBrightnessPendingFade = null;
+        fail('brightness', error);
+      })
+      .then(function () {
+        liveBrightnessBusy = false;
+        return succeeded ? pumpLiveBrightness() : null;
+      });
+  }
+
+  function scheduleLiveBrightness() {
+    if (liveBrightnessTimer || state.phase !== 'armed') return;
+    liveBrightnessTimer = requestAnimationFrame(function () {
+      liveBrightnessTimer = null;
+      pumpLiveBrightness();
+    });
+  }
+
+  function queueLiveMaster(value) {
+    if (state.phase !== 'armed') return;
+    liveBrightnessPending.master = value;
+    scheduleLiveBrightness();
+  }
+
+  function queueGroup(name, value) {
+    if (state.phase !== 'armed') return;
+    liveBrightnessPending.groups[name] = value;
+    scheduleLiveBrightness();
+  }
+
+  function flushGroups() {
+    if (liveBrightnessTimer) { cancelAnimationFrame(liveBrightnessTimer); liveBrightnessTimer = null; }
+    return pumpLiveBrightness();
+  }
+
+  function queueLiveMasterFade(target, durationMs) {
+    if (state.phase !== 'armed') return;
+    liveBrightnessPendingFade = { target: target, durationMs: durationMs };
+    flushGroups();
+  }
+
+  /* ── GROUP faders → Live Touch brightness factors ─────────────────── */
   var bank = document.getElementById('groupsGrid');
 
   /* Ticking GLOBAL/FX/OWN, switching a group off, or dragging a group's own dot
@@ -1853,7 +2383,7 @@
   /* ── FX marks → the engine's effect scope ─────────────────────────────
      PUT /effect-groups restricts the ENTIRE effect chain to the named groups,
      so an effect can play on the smokestacks while the hull carries on with the
-     pattern. Effects are otherwise rig-wide: only group_fixed_color even looks
+     Live pattern. Effects are otherwise Live-wide: only group_fixed_color looks
      at a pixel's group, so without this there is no way to aim one.
 
      NOTHING MARKED SENDS null - unrestricted, which is the shipped behaviour
@@ -1865,13 +2395,13 @@
      Only sent when the set actually CHANGES - this rides the same event as the
      paint, which fires on every dot drag. */
   var lastFxGroups = null;
-  function pushEffectGroups() {
+  function pushEffectGroups(strict) {
     var names = groupModes()
       .filter(function (m) { return m && m.fx; })
       .map(function (m) { return m.name; });
     var payload = names.length ? names : null;
     var key = JSON.stringify(payload);
-    if (key === lastFxGroups) return;
+    if (key === lastFxGroups) return Promise.resolve();
     lastFxGroups = key;
     /* write(), NOT req(). I first sent this with req() on the grounds that a
        scope is a routing choice like the audio dropdowns. That was wrong, and
@@ -1879,35 +2409,35 @@
        landed, so the engine was carrying a scope from a surface that is
        writing nothing else - a disarmed panel silently confining the VSN1's
        and the Deck's effects. Disarmed has to mean disarmed.
-       armAsserts re-states the scope on ARM, and releaseControl clears it, so
+       armAsserts re-states the scope on ARM, and cleanupLiveState clears it, so
        nothing is lost by making it obey the same gate as the paint. */
-    write('PUT', '/effect-groups', { groups: payload })
-      .catch(function (e) { fail('effect groups', e); });
+    return (strict ? strictWrite : write)('PUT', '/effect-groups', { groups: payload })
+      .catch(function (e) {
+        fail('effect groups', e);
+        if (strict) throw e;
+      });
   }
 
   if (bank) {
-    /* THE MASTER FADER IS THE SHIP'S MASTER. It used to be panel-only: it
-       scaled the linked group faders in the UI and never spoke to the engine,
-       so it governed whichever channels happened to be linked and nothing
-       else. It now drives the engine's grand master, which every fixture
-       passes through - so it controls all the lights, all the time,
-       regardless of what is linked, painted or running. */
+    /* Live Touch faders are normalized performance factors. The Dimmer Rack
+       remains the authoritative ceiling for every group. */
     var pushMaster = function (strip) {
       var lvl = parseFloat(strip.dataset.level || '0') / 100;
       var on = strip.querySelector('[data-role=power]');
       var v = (on && !on.classList.contains('is-on')) ? 0 : lvl;
-      send('shipMaster', function () { write('PATCH', '/mixer', { master: v }); });
+      queueLiveMaster(v);
     };
 
     var pushGroup = function (strip) {
       if (strip.classList.contains('is-master')) return pushMaster(strip);
       var name = strip.querySelector('.fader-name');
       if (!name) return;
-      var sId = state.sectionIds[name.textContent];
-      if (sId === undefined) return fail('group', 'no sectionId for "' + name.textContent + '"');
+      if (state.sectionIds[name.textContent] === undefined) {
+        return fail('group', 'no Dimmer Rack group for "' + name.textContent + '"');
+      }
       var on = strip.querySelector('[data-role=power]');
       var lvl = parseFloat(strip.dataset.level || '0') / 100;
-      queueGroup(sId, (on && !on.classList.contains('is-on')) ? 0 : lvl);
+      queueGroup(name.textContent, (on && !on.classList.contains('is-on')) ? 0 : lvl);
     };
 
     /* Every group's level, re-stated. Called from groupmodeschange (see the
@@ -1939,6 +2469,36 @@
     bank.addEventListener('click', function (e) {
       var s = e.target.closest('.fader-strip'); if (s) pushGroup(s);
     });
+    bank.addEventListener('groupprofilebrightnesschange', function (event) {
+      var detail = event.detail || {};
+      if (!Array.isArray(detail.names) || !detail.names.length) {
+        fail('group profile', 'brightness change did not name canonical groups');
+        return;
+      }
+      detail.names.forEach(function (name) {
+        var strip = Array.prototype.find.call(
+          bank.querySelectorAll('.fader-strip:not(.is-master)'),
+          function (candidate) {
+            var label = candidate.querySelector('.fader-name');
+            return label && label.textContent === name;
+          });
+        if (!strip) {
+          fail('group profile', 'brightness change named unknown group "' + name + '"');
+          return;
+        }
+        pushGroup(strip);
+      });
+      if (detail.final === true) flushGroups(true);
+    });
+    bank.addEventListener('groupprofilemasterchange', function (event) {
+      var detail = event.detail || {};
+      if (typeof detail.value !== 'number' || detail.value < 0 || detail.value > 1) {
+        fail('group profile', 'master change was outside 0..1');
+        return;
+      }
+      queueLiveMaster(detail.value);
+      if (detail.final === true) flushGroups(true);
+    });
     /* The master moves many strips at once and fires no per-strip event. */
     var mtr = bank.querySelector('[data-role=masterfader]');
     if (mtr) {
@@ -1952,17 +2512,15 @@
     }
   }
 
-  /* ── EFFECTS → global effect SLOTS ─────────────────────────────────
+  /* ── EFFECTS → owner-scoped Live effect slots ──────────────────────
      `POST /global-effect` only accepts the legacy DMX toggles (fogger,
      vintageWhite, blastWhite, uvBlast). Every pixel effect — strobe, colorWash,
      waterlineSweep, dropHit, beatPump… — is SLOT based: the engine holds
      provisioned effectId+presetId pairs and you press the slot.
 
-     MEASURED against the live engine: 17 slots exist and none are free.
-     Slots 1-8 belong to the Deck and the VSN1 hardware and are NOT ours to
-     press. That leaves slots 9-17, so of the 25 cells on this grid only the
-     ones already provisioned there are live. The rest are marked, not faked —
-     a cell that cannot reach the rig must never look like one that can. */
+     Owner-tagged calls are intercepted into the in-memory Live context. The
+     panel preserves its established slot 9-17 allocation and never mutates
+     durable Deck/Mixer/global slots. */
   var slotOf = {};   /* "effectId|presetId" -> slotId */
 
   /* Effects that actually carry a colour (their presets define a 6-element
@@ -2005,7 +2563,7 @@
   var presetOverride = {};      /* slotId -> its ORIGINAL override, captured once */
   var liveOverride = {};        /* slotId -> its current override */
 
-  function loadSlots() {
+  function loadSlots(strict) {
     return req('GET', '/global-effect-slots').then(function (r) {
       slotOf = {};
       (r.slots || []).forEach(function (sl) {
@@ -2021,7 +2579,10 @@
         }
       });
       markCells();
-    }).catch(function (e) { fail('slots', e); });
+    }).catch(function (e) {
+      fail('slots', e);
+      if (strict) throw e;
+    });
   }
 
   /* Effects that are momentary rather than latching, per the library's
@@ -2042,10 +2603,12 @@
      that one slot — no searching for a free one, no chance of colliding with
      the Deck's or the VSN1's 1-8. */
   function provisionCell(cell) {
-    if (!state.armed) return Promise.resolve();
+    if (!liveStateCanWrite(true)) return Promise.reject(new Error('cannot provision effects without a Live lease'));
     var id = Number(cell.dataset.slot);
     if (!(id >= OURS_FROM && id <= MAX_SLOTS)) {
-      return Promise.resolve(fail('build', 'button has slot ' + id + ', outside 9..32'));
+      var slotError = new Error('button has slot ' + id + ', outside 9..32');
+      fail('build', slotError);
+      return Promise.reject(slotError);
     }
     var eff = cell.dataset.fxkey;
     var body = {
@@ -2076,24 +2639,41 @@
     }
     body.paramsOverride = ov;
     liveOverride[id] = ov;
-    return write('PATCH', '/global-effect-slots/' + id, body);
+    return strictWrite('PATCH', '/global-effect-slots/' + id, body);
   }
 
   function buildEffectSlots() {
-    if (!state.armed || !fxGrid) return Promise.resolve();
+    if (!liveStateCanWrite(true) || !fxGrid) return Promise.resolve();
     var cells = Array.prototype.slice.call(fxGrid.querySelectorAll('.fx-cell'));
     var mine = {};
     cells.forEach(function (c) { mine[Number(c.dataset.slot)] = true; });
     /* Retire any slot in OUR range that no button owns. Left enabled, a stale
        slot from an earlier layout can still be fired by anything else and shows
        up as an effect the panel never started. */
-    var retire = [];
+    var tasks = cells.map(function (cell) {
+      return function () { return provisionCell(cell); };
+    });
     for (var id = OURS_FROM; id <= MAX_SLOTS; id++) {
       if (!mine[id] && slotBinding[id]) {
-        retire.push(write('PATCH', '/global-effect-slots/' + id, { enabled: false }));
+        (function (slotId) {
+          tasks.push(function () {
+            return strictWrite('PATCH', '/global-effect-slots/' + slotId, { enabled: false });
+          });
+        }(id));
       }
     }
-    return Promise.all(cells.map(provisionCell).concat(retire)).then(loadSlots);
+    return runSeries(tasks)
+      .then(function () { return loadSlots(true); })
+      .then(function () {
+        cells.forEach(function (cell) {
+          var slotId = Number(cell.dataset.slot);
+          var expected = cell.dataset.fxkey + '|' + cell.dataset.preset;
+          if (slotBinding[slotId] !== expected) {
+            throw new Error('slot ' + slotId + ' readback is "' + slotBinding[slotId] +
+              '" after provisioning; expected "' + expected + '"');
+          }
+        });
+      });
   }
 
   function markCells() {
@@ -2184,9 +2764,13 @@
   var SETTLE_MS = 1800;
   var lastPress = {};
 
-  function reconcileEffects() {
-    if (!fxGrid || !state.armed) return Promise.resolve();
-    if (rcBusy) { rcAgain = true; return Promise.resolve(); }
+  function reconcileEffects(strict) {
+    strict = strict === true;
+    if (!fxGrid || !liveStateCanWrite(strict)) return Promise.resolve();
+    if (rcBusy) {
+      rcAgain = true;
+      return strict ? Promise.reject(new Error('effect reconciliation is already in progress')) : Promise.resolve();
+    }
     rcBusy = true;
     return engineOnSlots().then(function (on) {
       var want = {};
@@ -2196,7 +2780,7 @@
         want[id] = want[id] || c.classList.contains('is-on');
       });
       var now = Date.now();
-      var jobs = [];
+      var tasks = [];
       function cellFor(id) {
         return fxGrid ? fxGrid.querySelector('.fx-cell[data-slot="' + id + '"]') : null;
       }
@@ -2207,10 +2791,14 @@
         var key = cell && cell.dataset.fxkey;
         if (key && LEGACY_DMX.indexOf(key) !== -1) {
           /* Set, do not toggle — see LEGACY_DMX above. */
-          jobs.push(write('POST', '/global-effect', { effect: key, state: !!want[id] }));
+          tasks.push(function () {
+            return (strict ? strictWrite : write)('POST', '/global-effect', { effect: key, state: !!want[id] });
+          });
           return;
         }
-        jobs.push(write('POST', '/global-effect-slots/' + id + '/press'));
+        tasks.push(function () {
+          return (strict ? strictWrite : write)('POST', '/global-effect-slots/' + id + '/press');
+        });
       }
       Object.keys(want).forEach(function (id) {
         /* NEVER try to hold a trigger on. It fires and ends, so the engine
@@ -2231,13 +2819,17 @@
         if (want[id] || slotBehavior[id] === 'trigger') return;
         pressOnce(id);
       });
-      return Promise.all(jobs);
+      return runSeries(tasks);
     }).then(function () {
       rcBusy = false;
       if (!rcAgain) return;
       rcAgain = false;
-      return reconcileEffects();
-    }).catch(function (e) { rcBusy = false; fail('effects', e); });
+      return reconcileEffects(strict);
+    }).catch(function (e) {
+      rcBusy = false;
+      fail('effects', e);
+      if (strict) throw e;
+    });
   }
 
   if (fxGrid) {
@@ -2245,6 +2837,11 @@
     fxGrid.addEventListener('fxassign', function (e) {
       var cell = e.target.closest('.fx-cell');
       if (!cell) return;
+      /* Building the catalog dispatches fxassign for every default cell while
+         the Live tab is still passive.  Catalog construction is local UI
+         state, not operator intent, so it must not attempt owner-tagged slot
+         provisioning until ARM has acquired the Live session. */
+      if (!liveStateCanWrite(false)) return;
       provisionCell(cell).then(loadSlots).then(function () {
         pushEffectColours();
         return reconcileEffects();
@@ -2313,13 +2910,13 @@
      latch keys, so there is nothing to send an intensity for. Each preset
      already defines its own amount. */
 
-  /* ── BRIGHT → grand master ─────────────────────────────────────────── */
+  /* ── BRIGHT → transient Live Touch master factor ─────────────────── */
   var briSlider = document.querySelector('.slider-vertical.bright');
   if (briSlider) {
     briSlider.addEventListener('sliderchange', function () {
       var v = parseFloat(briSlider.dataset.value);
       if (!isFinite(v)) return;
-      send('master', function () { write('PATCH', '/mixer', { master: v }); });
+      queueLiveMaster(v);
     });
   }
 
@@ -2344,8 +2941,8 @@
              the same pair the FADE bar drives; the value is restored
              afterwards so a transition choice never silently rewrites the
              operator's own fade setting.
-       dip   POST /mixer/master/fade {target, durationMs} - the engine's timed
-             grand-master fade. Down to black, swap unseen, back up.
+       dip   fades the transient Live Touch master. It cannot exceed or mutate
+             the authoritative Dimmer Rack ceiling.
 
      write(), not req(): both put light on the rig, so a disarmed panel must
      not be able to do either. */
@@ -2363,16 +2960,22 @@
       write('POST', '/param-center', { colorTransitionMs: back, motionTransitionMs: back })
         .catch(function (err) { fail('preset fade', err); });
     } else if (d.kind === 'dip') {
-      write('POST', '/mixer/master/fade', { target: d.target, durationMs: d.ms })
-        .catch(function (err) { fail('preset dip', err); });
+      queueLiveMasterFade(d.target, d.ms);
     }
   });
 
   if (fadeSlider) {
-    var pushFade = function () {
+    var pushFade = function (strict) {
+      strict = strict === true;
       var v = parseFloat(fadeSlider.dataset.value);
-      if (!isFinite(v)) return;
+      if (!isFinite(v)) return strict ? Promise.reject(new Error('fade control has no value')) : Promise.resolve();
       fadeMs = Math.round(v * FADE_MAX_MS);
+      if (strict) {
+        return strictWrite('POST', '/param-center', {
+          colorTransitionMs: fadeMs,
+          motionTransitionMs: fadeMs,
+        });
+      }
       send('fade', function () {
         write('POST', '/param-center', {
           colorTransitionMs: fadeMs,
@@ -2386,6 +2989,7 @@
          step lasts as long as a beat and a fixed millisecond fade would mean
          something different at every tempo. */
       pushMovementFade();
+      return Promise.resolve();
     };
     fadeSlider.addEventListener('sliderchange', pushFade);
     /* Assert it on arm too, so the rig starts with the bar's actual value
@@ -2413,19 +3017,16 @@
      panel's disarm clears the other's lease and releases the other's paint.
      crypto.randomUUID is only defined in a SECURE CONTEXT; the playa serves
      this page over plain http on a LAN address, so it will often be absent.
-     getRandomValues is available far more widely; the last branch is a
-     capability fallback, not a behavioural one, and still beats a 2-char id. */
+     getRandomValues is available there and is mandatory: inventing a weaker ID
+     would weaken the one-desk-at-a-time safety guarantee. */
   var OWNER = 'touch_control_' + (function () {
-    try {
-      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-      if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-        var a = new Uint32Array(4);
-        crypto.getRandomValues(a);
-        return Array.prototype.map.call(a, function (n) { return n.toString(36); }).join('');
-      }
-    } catch (e) { /* fall through to the last resort below */ }
-    return String(Date.now().toString(36)) + '_' +
-      Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+    if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+      throw new Error('secure random IDs are unavailable; refusing to create an arm/paint lease owner');
+    }
+    if (crypto.randomUUID) return crypto.randomUUID();
+    var a = new Uint32Array(4);
+    crypto.getRandomValues(a);
+    return Array.prototype.map.call(a, function (n) { return n.toString(36); }).join('');
   })();
   var painted = {};                 /* group name -> [r,g,b,w,a,u] */
 
@@ -2544,9 +3145,9 @@
    * A group on OWN still cannot show an effect. That is an ENGINE property
    * (group_fixed_color repaints after the chain), not a checkbox, and the
    * panel says so in the groups header rather than silently picking. */
-  function desiredStatic() {
+  function desiredStatic(strict) {
     var out = {};
-    if (!state.armed) return out;
+    if (!liveStateCanWrite(strict)) return out;
     var pal;
     try { pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]'); }
     catch (e) { return out; }
@@ -2590,34 +3191,41 @@
     return out;
   }
 
-  /* Resolves when the pending repaint's LAST staggered write has settled. The
-     arm fade-up chains off this: it is the only honest signal that the look the
-     ship is about to be faded up into has actually landed. */
+  /* Resolves when the pending repaint's LAST staggered write has settled. ARM
+     cannot activate the Live setting until the prepared look has landed. */
   var staticDeferred = null;
+  var staticStrict = false;
 
-  /* One staggered write, as a promise that settles when the write does. write()
-     absorbs its own rejections, so this can never reject — a failed paint must
-     not be able to strand the house faded out. */
-  function staggeredWrite(delayMs, fn) {
-    return new Promise(function (resolve) {
+  /* One staggered write, as a promise that settles when the write does. Normal
+     performance writes report and absorb errors; strict ARM setup rejects. */
+  function staggeredWrite(delayMs, fn, strict) {
+    return new Promise(function (resolve, reject) {
       setTimeout(function () {
-        Promise.resolve(fn()).then(function () { resolve(); }, function () { resolve(); });
+        Promise.resolve(fn()).then(resolve, strict ? reject : resolve);
       }, delayMs);
     });
   }
 
-  function applyStatic() {
-    staticWanted = desiredStatic();
-    /* EVERY PATH RETURNS A PROMISE. This used to `return;` when a repaint was
-       already pending, and the arm fade-up now chains off it — .then() on
-       undefined is a TypeError, which would leave the ship faded out with
-       nothing left to raise it. A coalesced call hands back the SAME promise
-       the in-flight timer will settle. */
-    if (staticTimer) return staticDeferred.promise;
-    var resolveStatic;
-    staticDeferred = { promise: new Promise(function (r) { resolveStatic = r; }) };
+  function applyStatic(strict) {
+    strict = strict === true;
+    staticWanted = desiredStatic(strict);
+    /* EVERY PATH RETURNS A PROMISE. A coalesced ARM assertion hands back the
+       same promise the in-flight timer will settle, so activation cannot race
+       an unfinished Live-local repaint. */
+    if (staticTimer) {
+      if (strict) staticStrict = true;
+      return staticDeferred.promise;
+    }
+    staticStrict = strict;
+    var resolveStatic, rejectStatic;
+    staticDeferred = { promise: new Promise(function (resolve, reject) {
+      resolveStatic = resolve;
+      rejectStatic = reject;
+    }) };
     staticTimer = setTimeout(function () {
       staticTimer = null;
+      var strictRun = staticStrict;
+      staticStrict = false;
       var jobs = [];
       var want = staticWanted || {};
       /* Only the groups whose colour actually changed are written — a wheel
@@ -2638,9 +3246,9 @@
           painted[name] = want[name];
           jobs.push(staggeredWrite(i * gap, function () {
             var v = want[name];
-            return write('PUT', '/group-fixed-colors/' + encodeURIComponent(name),
+            return (strictRun ? strictWrite : write)('PUT', '/group-fixed-colors/' + encodeURIComponent(name),
               { color: v.color, colors: v.colors || undefined, brightness: 1, ownerId: OWNER });
-          }));
+          }, strictRun));
         });
       }
       /* RELEASING the paint is what happens the instant an effect is chosen,
@@ -2655,14 +3263,14 @@
         going.forEach(function (name, i) {
           delete painted[name];
           jobs.push(staggeredWrite(i * offGap, function () {
-            return write('DELETE', '/group-fixed-colors/' + encodeURIComponent(name));
-          }));
+            return (strictRun ? strictWrite : write)('DELETE', '/group-fixed-colors/' + encodeURIComponent(name));
+          }, strictRun));
         });
       }
       /* The look has landed only when every staggered write has SETTLED, not
          when the last timer merely fired. Hard-coding a duration here would
          silently break the day someone adds a group. */
-      Promise.all(jobs).then(function () { resolveStatic(); });
+      Promise.all(jobs).then(resolveStatic, rejectStatic);
     }, STATIC_MS);
     return staticDeferred.promise;
   }
@@ -2676,20 +3284,9 @@
     });
   }, 5000);
 
-  /* Leaving the page: DELETE each painted group. keepalive lets the request
-     outlive the page. If it does not land, the engine's deadman lease releases
-     the group within ~12s anyway — which is exactly why the paint is leased.
-     No invented endpoint here: this is the same DELETE the checkbox uses. */
-  window.addEventListener('pagehide', function () {
-    Object.keys(painted).forEach(function (name) {
-      fetch(ENGINE + '/group-fixed-colors/' + encodeURIComponent(name),
-            { method: 'DELETE', keepalive: true }).catch(function () {});
-    });
-  });
-
   /* ── go ─────────────────────────────────────────────────────────────── */
   setStatus();
-  refresh();
+  refresh().then(refreshGroupProfiles);
 
   /* ── AUDIO BINDINGS ───────────────────────────────────────────────────
      One audio signal per effect button and per group fader, chosen on the
@@ -2703,10 +3300,9 @@
        HIT  the target is FIRED when the signal spikes past a threshold and
             then decays (bind KICK to a strobe and it punches once per kick)
 
-     Binding is a rig-wide routing decision, not a look, so it is written
-     whether or not the panel is armed - the same way the audio panel itself
-     works. What the binding DOES still only happens while an effect is
-     running or a group is lit. */
+     Bindings are part of the lease-owned Live look. Opening the tab cannot
+     write them, and lease release destroys them with the rest of the Live
+     session context. */
   var AUD_ORDER = ['micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
     'micDomFreq1', 'micDomFreq2', 'micDomEnergy1', 'micDomEnergy2'];
   var audSources = null;
@@ -2753,7 +3349,8 @@
     return row;
   }
 
-  function audWrite(row) {
+  function audWrite(row, strict) {
+    strict = strict === true;
     var sel = row.querySelector('[data-role=audpick]');
     var btn = row.querySelector('[data-role=audmode]');
     var scope = row.dataset.scope;
@@ -2782,7 +3379,10 @@
       : { source: null };
     /* req(), not write(): a routing choice must land even while disarmed,
        otherwise the dropdown would silently do nothing until ARM. */
-    req('PUT', path, body).catch(function (e) { fail('audio binding', e); });
+    return req('PUT', path, body).catch(function (e) {
+      fail('audio binding', e);
+      if (strict) throw e;
+    });
   }
 
 
@@ -2853,7 +3453,8 @@
     sel.classList.toggle('is-bound', !!sel.value);
   }
 
-  function faderAudioWrite(wrap) {
+  function faderAudioWrite(wrap, strict) {
+    strict = strict === true;
     paintFaderAudio(wrap);
     var sel = wrap.querySelector('[data-role=faudpick]');
     var list = [];
@@ -2868,8 +3469,11 @@
        turned it off; only DISARM did. Same shape as audWrite() for the effect
        rows: no choice, no binding. */
     var body = list.length ? { sources: list, mode: 'level', depth: 1 } : { source: null };
-    req('PUT', '/audio-bindings/groups/' + encodeURIComponent(wrap.dataset.bid), body)
-      .catch(function (e) { fail('fader audio', e); });
+    return req('PUT', '/audio-bindings/groups/' + encodeURIComponent(wrap.dataset.bid), body)
+      .catch(function (e) {
+        fail('fader audio', e);
+        if (strict) throw e;
+      });
   }
 
   document.addEventListener('change', function (e) {
@@ -2902,8 +3506,8 @@
      DISARMED panel cannot leave the engine holding a park nobody is driving,
      re-asserted on arm, cleared on disarm. Empty list sends null. */
   var lastParked = null;
-  function pushParkedGroups() {
-    if (!bank) return;
+  function pushParkedGroups(strict) {
+    if (!bank) return strict ? Promise.reject(new Error('group bank is missing')) : Promise.resolve();
     var names = [];
     Array.prototype.forEach.call(bank.querySelectorAll('.fader-strip.is-locked'), function (st) {
       if (st.classList.contains('is-master')) return;
@@ -2912,12 +3516,15 @@
     });
     var payload = names.length ? names : null;
     var key = JSON.stringify(payload);
-    if (key === lastParked) return;
+    if (key === lastParked) return Promise.resolve();
     lastParked = key;
-    write('PUT', '/parked-groups', { groups: payload })
-      .catch(function (e) { fail('locked groups', e); });
+    return (strict ? strictWrite : write)('PUT', '/parked-groups', { groups: payload })
+      .catch(function (e) {
+        fail('locked groups', e);
+        if (strict) throw e;
+      });
   }
-  armAsserts.push(function () { lastParked = null; pushParkedGroups(); });
+  armAsserts.push(function (strict) { lastParked = null; return pushParkedGroups(strict); });
 
 
   /* ── LIVE AUDIO METER ─────────────────────────────────────────────────
@@ -3143,7 +3750,10 @@
      automatic show rather than leaving it frozen with nobody driving. */
   var controlWs = null;
   var armAckPending = false;   /* waiting for the engine to confirm the lease */
+  var disarmAckPending = false;/* waiting for authoritative lease release */
   var armRefused = false;      /* another panel holds the desk */
+  var armLeaseRequested = false;
+  var armLeaseAcquired = false;
 
   /* Put the SURFACE back to disarmed, not just the wire's flag.
      The panel's arm state lives in the DOM (the class, aria-checked, the label,
@@ -3152,7 +3762,15 @@
      button that says ARMED while the wire refuses every write — the worst of
      both. Mirrors exactly what touch_control.html's handler does. */
   function forceDisarmedUi() {
+    armChainTarget = false;
+    armAckPending = false;
+    disarmAckPending = false;
+    armLeaseRequested = false;
+    armLeaseAcquired = false;
+    state.phase = 'idle';
     state.armed = false;
+    state.liveBrightnessRevision = null;
+    state.sessionRevision = null;
     var a = document.getElementById('arm');
     if (a) {
       a.classList.remove('is-armed');
@@ -3172,28 +3790,6 @@
     try { controlWs.send(JSON.stringify(msg)); return true; } catch (e) { return false; }
   }
 
-  /* SURFACE AN EXTERNAL BLACKOUT WHILE ARMED (audit medium; operator ruling
-     pending — the default is SURFACE, not block). /global-blackout and a
-     master fade to 0 are deliberately open to every surface, so another
-     client CAN dark the rig under an armed panel — but the panel showing
-     ARMED over a black ship with no explanation is the part that must not
-     happen. The armed panel's own master never goes below the 5% floor, so
-     anything under 4% here was not this surface. */
-  setInterval(function () {
-    if (!state.armed) return;
-    req('GET', '/mixer').then(function (m) {
-      if (!m) return;
-      var master = (m.master !== undefined) ? m.master : (m.mixer || {}).master;
-      if (m.blackout === true) {
-        fail('watch', 'BLACKOUT was engaged by ANOTHER surface while this panel is armed — ' +
-          'the ship is dark. Disarm+re-arm asserts it off, or use /mixer/panic.');
-      } else if (typeof master === 'number' && master < 0.04) {
-        fail('watch', 'the grand master was driven to ' + Math.round(master * 100) +
-          '% by another surface while this panel is armed');
-      }
-    }).catch(function () { /* transient — the deadman owns link-loss reporting */ });
-  }, 4000);
-
   function openControlSocket() {
     var url = 'ws://' + location.hostname + ':6968/ws/control';
     var ws;
@@ -3207,24 +3803,18 @@
     controlWs = ws;
     ws.addEventListener('open', function () {
       sendControl({ type: 'touchControlHello', ownerId: OWNER });
-      /* RESYNC, DON'T JUST RE-ASSERT (audit H2). Re-declaring only the lease
-         after a reconnect acked a deadman for a panel whose TAKEOVER might be
-         gone: after an engine restart or a deadman revert, the source lock is
-         open and the autopilot is running — an armed panel over an automatic
-         show, each fighting the other. So: confirm the takeover still stands
-         (the six-key lease survives an ordinary WS blip); if it does not,
-         force DISARMED and tell the operator to re-arm. Deliberately NOT an
-         automatic re-takeover: an unattended iPad reconnecting in a pocket
-         must not re-seize the rig. */
+      /* Reconnect only renews a lease the canonical Layers state still proves.
+         It never re-activates Live Touch automatically. */
       if (state.armed) {
-        req('GET', '/param-center').then(function (pc) {
-          var lock = pc && pc.sourceLock;
-          var held = !!(lock && (lock.mode === 'global'
-            || (lock.mode === 'per-param' && Object.keys(lock.leases || {}).length > 0)));
-          if (!held) {
+        req('GET', '/layers/state').then(requireLayerState).then(function (layerState) {
+          var liveParticipates = layerState.active === 'live_touch'
+            || (layerState.transition && (layerState.transition.from === 'live_touch'
+              || layerState.transition.to === 'live_touch'));
+          var held = layerState.liveTouch && layerState.liveTouch.armed
+            && layerState.liveTouch.ownerId === OWNER;
+          if (!held || !liveParticipates) {
             forceDisarmedUi();
-            fail('arm', 'the engine lost this panel\'s takeover while the link was down ' +
-              '(restart or revert) — the automatic show is driving. Re-arm to take control.');
+            fail('arm', 'the engine no longer reports this panel as the active Live Touch owner; re-arm');
             return;
           }
           sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
@@ -3241,26 +3831,68 @@
       try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (!m) return;
       if (m.type === 'touchControlArmedAck') {
-        armAckPending = false;
-        clearError();
+        if (m.ownerId !== OWNER) return;
+        if (m.requestedArmed === true && m.armed === true) {
+          if (!Number.isInteger(m.sessionRevision) || m.sessionRevision < 0) {
+            armRefused = true;
+            armAckPending = false;
+            fail('arm', 'engine lease ACK omitted the Live session revision');
+            return;
+          }
+          state.sessionRevision = m.sessionRevision;
+          armLeaseRequested = true;
+          armLeaseAcquired = true;
+          armAckPending = false;
+          clearError();
+        } else if (m.requestedArmed === false && m.armed === false) {
+          state.sessionRevision = null;
+          armLeaseRequested = false;
+          armLeaseAcquired = false;
+          disarmAckPending = false;
+          clearError();
+        }
+      } else if (m.type === 'touchControlBrightness') {
+        if (m.ownerId === OWNER && m.active) {
+          try { acceptLiveBrightness(m, true); }
+          catch (error) { fail('brightness', error); }
+        } else if (!m.active) {
+          state.liveBrightnessRevision = null;
+        }
+      } else if (m.type === 'dimmerState') {
+        if (!Number.isInteger(m.revision) || m.revision < 0
+            || !m.rackCeilings || typeof m.rackCeilings !== 'object'
+            || Array.isArray(m.rackCeilings)) {
+          fail('brightness', 'engine sent an invalid Dimmer Rack ceiling update');
+        } else if (Number.isInteger(state.rackBrightnessRevision)
+          && m.revision < state.rackBrightnessRevision) {
+          return;
+        } else {
+          state.rackCeilings = m.rackCeilings;
+          state.rackBrightnessRevision = m.revision;
+          state.liveEffectiveCaps = {};
+        }
       } else if (m.type === 'armRevert') {
-        /* THE ENGINE TOOK THE SHOW BACK (audit H2). Deadman, crash-boot policy
-           or lease sweep — whichever fired, the source lock is open and the
-           autopilot is driving. This broadcast used to be dropped on the
+        /* THE ENGINE TOOK THE SHOW BACK. Deadman, crash-boot policy or lease
+           sweep — whichever fired, Live no longer participates. This broadcast used to be dropped on the
            floor, so the panel sat there reading ARMED, every control lit, over
            a show it no longer controlled. The panel must never outrank the
            engine's own account of who is driving. */
-        if (state.armed) {
+        if (state.phase !== 'idle') {
+          armLeaseRequested = false;
+          armLeaseAcquired = false;
+          disarmAckPending = false;
           forceDisarmedUi();
           fail('arm', 'the engine REVERTED to the automatic show' +
             (m.why ? ' — ' + m.why : '') + '. This panel is disarmed; re-arm to take control.');
         }
       } else if (m.type === 'touchControlArmedRejected') {
         /* ONE DESK AT A TIME. Another panel already holds the rig, so this one
-           must not proceed to take it — two surfaces fighting over one source
-           lock is exactly what the refusal exists to prevent. Reported loudly:
+           must not proceed to take it — two surfaces fighting over one owner
+           lease is exactly what the refusal exists to prevent. Reported loudly:
            silently staying disarmed would look like a broken ARM button. */
         armAckPending = false;
+        armLeaseRequested = false;
+        armLeaseAcquired = false;
         armRefused = true;
         forceDisarmedUi();
         fail('arm', 'REFUSED — ' + (m.reason || 'another panel holds the desk') +
@@ -3285,18 +3917,22 @@
      The WIRE fetches and the PAGE renders, per the split this file exists to
      keep: the page never talks to the engine.
 
-     FAIL LOUD if it cannot be fetched (codex P0): the panel still works from
-     its built-in list, but the operator is told the catalog is stale rather
-     than quietly getting a short menu. */
+     FAIL CLOSED if it cannot be fetched or validated (codex P0): effect slots
+     cannot be trusted without the engine's registry, so ARM remains refused. */
   function publishFxCatalog() {
     return req('GET', '/global-effect-library').then(function (lib) {
       if (!lib || !lib.effects) throw new Error('/global-effect-library returned no effects');
-      document.dispatchEvent(new CustomEvent('fxcatalog', { detail: { effects: lib.effects } }));
+      var detail = { effects: lib.effects, accepted: false, error: null };
+      document.dispatchEvent(new CustomEvent('fxcatalog', { detail: detail }));
+      if (detail.error) throw detail.error;
+      if (!detail.accepted) throw new Error('page did not accept the effect catalog');
+      fxCatalogReady = true;
     }).catch(function (e) {
+      fxCatalogReady = false;
       fail('fx catalog', e);
+      throw e;
     });
   }
-  publishFxCatalog();
 
   function openMeterSocket() {
     buildMeter();
@@ -3365,7 +4001,11 @@
     audWrite(btn.closest('.aud-row'));
   }, true);
 
-  buildAudioBindings();
+  /* Effect binding rows depend on the catalog-created cells. Do not race the
+     page's catalog validation, and do not synthesize an empty effect surface. */
+  publishFxCatalog()
+    .then(function () { return buildAudioBindings(); })
+    .catch(function () { /* publishFxCatalog already failed loudly and ARM is gated */ });
 
   setInterval(function () {
     refresh();
@@ -3373,7 +4013,7 @@
     /* Hold the rule while armed: if anything lights an effect from outside
        this panel — the VSN1, the Deck, a restored state — the next tick puts
        the rig back to what the grid shows. Costs one GET when nothing differs. */
-    if (state.armed) reconcileEffects();
+    if (state.armed && !armChainBusy) reconcileEffects();
   }, POLL_MS);
 
   window.__wire = state;   /* for headless verification only */

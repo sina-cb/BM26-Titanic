@@ -1,98 +1,81 @@
 /*
-  14_lunar_current.js
-  HD Lunar Current — wide, smooth moonlit currents drifting through the rig with
-  caustic shimmer and a UV/white crown on the upper heads. Strict cp1<->cp2 in
-  RGB space. cp1 = the cool current body, cp2 = the brighter caustic accent.
+  14_lunar_current.js — "Moon River"
 
-  Identity kept: broad longitudinal current + cross caustic, an upper crown
-  glow, optional W/UV lift. Now HD, audio-reactive, with a slowly self-reversing
-  current and a level/kick/radius audio surface, and NO coord re-normalization
-  (the old (x+1.264)/3.125 rendered patterns black — coords are already 0..1).
+  One coherent moonlit current meanders through the model instead of repeating
+  a generic full-rig wave field. Dark banks frame a broad river; a separately
+  phased interference lace creates caustic filaments and nodes inside it.
 
-  CORE NON-REPEATING MATH (skill 12 §3/§7):
-    Two drift accumulators advance in the irrational ratio √3 (1.73205) and the
-    caustic sample frequency is density*φ, so the current never re-locks. A third
-    shimmer phase uses √2. Phases accumulate against a large PHASE_WRAP to avoid
-    wrapped-then-scaled seams.
+  Every live-editable control is continuously followed in beforeRender. No
+  accumulated phase is ever multiplied by a slider in render and no parameter
+  reseeds a hash. Travel has one calm forward heading, leaving Local Speed as
+  the only rate control. Width and Detail
+  morph rather than teleporting the topology; Shimmer fades stable caustic lace
+  in and out without changing its phase history.
 
-  SPEED / DIRECTION:
-    localSpeed scales drift via rate = pow(2,(localSpeed-0.5)*4) (creeps at 0,
-    ~4x at 1). `direction` (guarded off center) sets the current's travel; an
-    autonomous incommensurate clock (~83s) occasionally reverses it on its own,
-    like a tide turning.
+  PORTABLE INSTRUMENT STAGING:
+    FIX_BAR_18     — primary moon-river canvas and UV undertow.
+    FIX_RAW_LED    — saturated silhouette edge and lace tracing.
+    FIX_VINTAGE_6  — sparse golden Jewelry reflections with matched W+A.
+    FIX_PAR        — restrained warm lunar pools and UV depth.
+    FIX_TE_SIGN    — calm readable Identity bed with a deliberate river pass.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
   AUDIO_MODULATION_V1:
-    sliderLevel   <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
-    sliderKick    <- micKick range 0.00..1.00 curve pow2    # caustic-crest brightness pop
-    sliderRadius  <- micFlux range 0.40..0.90 curve linear  # current swell / caustic reach
-    sliderShimmer <- micMid  range 0.30..0.85 curve linear  # caustic shimmer detail (mids -> geometry)
-  # static (unmapped): direction, density, whiteLift, uvLift, palette pickers
+    sliderLevel        <- micLow  range 0.22..0.74 curve linear # whole-look energy
+    sliderKick         <- micKick range 0.00..0.72 curve pow2   # lunar crest flash
+    sliderCurrentWidth <- micFlux range 0.16..0.78 curve ease   # river opens on builds
+    sliderShimmer      <- micMid  range 0.12..0.82 curve linear # caustic lace energy
+    # STATIC: localSpeed, detail, jewelryWhite, uvUndertow, palettes
 */
 
-// ── Exported controls (UI order = declaration order) ─────────────────────────
-export var localSpeed = 0.5;   // master motion rate
-export var direction = 0.5;    // current travel direction (0.5 = guarded center)
-export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
-export var kick = 0.0;         // AUDIO: caustic-crest brightness pop
-export var radius = 0.5;       // AUDIO: current swell / caustic reach
-export var shimmer = 0.5;      // AUDIO: caustic shimmer detail
-export var density = 0.5;      // current spatial frequency
-export var whiteLift = 0.5;    // upper-crown white emitter
-export var uvLift = 0.5;       // upper-crown UV emitter
+// Exported controls — declaration order is physical MIDI knob order.
+// Canonical append-only optional fixture role; absent roles match no pixels.
+var FIX_RAW_LED = 1;
 
-export var cp1H = 0.58, cp1S = 0.85, cp1V = 1.0; // Current colour (og default)
-export var cp2H = 0.50, cp2S = 1.00, cp2V = 1.0; // Caustic accent (og default)
+export var localSpeed = 0.50;
+export var level = 1.00;
+export var kick = 0.00;
+export var currentWidth = 0.50;
+export var shimmer = 0.50;
+export var detail = 0.50;
+export var jewelryWhite = 0.50;
+export var uvUndertow = 0.50;
+
+export var cp1H = 0.58, cp1S = 0.85, cp1V = 1.0;
+export var cp2H = 0.50, cp2S = 1.00, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) { direction = v; }
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
-export function sliderRadius(v) { radius = v; }
+export function sliderCurrentWidth(v) { currentWidth = v; }
 export function sliderShimmer(v) { shimmer = v; }
-export function sliderDensity(v) { density = v; }
-export function sliderWhiteLift(v) { whiteLift = v; }
-export function sliderUvLift(v) { uvLift = v; }
+export function sliderDetail(v) { detail = v; }
+export function sliderJewelryWhite(v) { jewelryWhite = v; }
+export function sliderUvUndertow(v) { uvUndertow = v; }
 
-// ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 1.0;          // base current drift turns/sec at localSpeed = 1.0 (restored toward og time(0.035/0.015))
+// Optional append-only role id. Models without TE signs simply have no type 7.
+var FIX_TE_SIGN = 7;
 var PHASE_WRAP = 10000.0;
-var AUTO_PERIOD = 83.0;
-var BASE_FLOOR = 0.05;       // small non-black floor (moonlit base glow)
+var FLOW_DIRECTION = 1.0;
 
-// ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
-var pr1 = 1, pg1 = 0, pb1 = 0;
-var pr2 = 0, pg2 = 0, pb2 = 1;
-function _hsv2rgb1() {
-  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
-  var iv = floor(hv * 6) % 6;
-  var fv = hv * 6 - floor(hv * 6);
-  var pv = cp1V * (1 - cp1S);
-  var qv = cp1V * (1 - fv * cp1S);
-  var tv = cp1V * (1 - (1 - fv) * cp1S);
-  if      (iv == 0) { pr1 = cp1V; pg1 = tv;    pb1 = pv;    }
-  else if (iv == 1) { pr1 = qv;    pg1 = cp1V; pb1 = pv;    }
-  else if (iv == 2) { pr1 = pv;    pg1 = cp1V; pb1 = tv;    }
-  else if (iv == 3) { pr1 = pv;    pg1 = qv;    pb1 = cp1V; }
-  else if (iv == 4) { pr1 = tv;    pg1 = pv;    pb1 = cp1V; }
-  else             { pr1 = cp1V; pg1 = pv;    pb1 = qv;    }
-}
-function _hsv2rgb2() {
-  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
-  var iv = floor(hv * 6) % 6;
-  var fv = hv * 6 - floor(hv * 6);
-  var pv = cp2V * (1 - cp2S);
-  var qv = cp2V * (1 - fv * cp2S);
-  var tv = cp2V * (1 - (1 - fv) * cp2S);
-  if      (iv == 0) { pr2 = cp2V; pg2 = tv;    pb2 = pv;    }
-  else if (iv == 1) { pr2 = qv;    pg2 = cp2V; pb2 = pv;    }
-  else if (iv == 2) { pr2 = pv;    pg2 = cp2V; pb2 = tv;    }
-  else if (iv == 3) { pr2 = pv;    pg2 = qv;    pb2 = cp2V; }
-  else if (iv == 4) { pr2 = tv;    pg2 = pv;    pb2 = cp2V; }
-  else             { pr2 = cp2V; pg2 = pv;    pb2 = qv;    }
-}
+var currentPhase = 0.0;
+var lacePhase = 0.0;
+var tidePhase = 0.0;
+
+// Smoothed live controls. Geometry follows more slowly than audio intensity so
+// edits are visually continuous while kick and level remain musically useful.
+var smSpeed = 0.50;
+var smLevel = 1.00;
+var smKick = 0.00;
+var smWidth = 0.50;
+var smShimmer = 0.50;
+var smDetail = 0.50;
+var smWhite = 0.50;
+var smUv = 0.50;
+
+var pr1 = 1.0, pg1 = 0.0, pb1 = 0.0;
+var pr2 = 0.0, pg2 = 1.0, pb2 = 1.0;
 
 function clamp01(v) {
   if (v < 0.0) return 0.0;
@@ -100,102 +83,194 @@ function clamp01(v) {
   return v;
 }
 
-// ── Persistent state ─────────────────────────────────────────────────────────
-var driftA = 0.0;     // longitudinal current drift (direction-aware)
-var driftB = 0.0;     // cross caustic drift (direction-aware)
-var shimmerPhase = 0.0;
-var autoClock = 0.0;
-var effDir = 1.0;
-var localMul = 1.0;
-var tideBreath = 1.0;   // gentle autonomous tidal swell (rest motion, not level)
+function smooth01(v) {
+  v = clamp01(v);
+  return v * v * (3.0 - 2.0 * v);
+}
+
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0.0) hv += 1.0;
+  var iv = floor(hv * 6.0) % 6;
+  var fv = hv * 6.0 - floor(hv * 6.0);
+  var pv = cp1V * (1.0 - cp1S);
+  var qv = cp1V * (1.0 - fv * cp1S);
+  var tv = cp1V * (1.0 - (1.0 - fv) * cp1S);
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
+  else if (iv == 1) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
+  else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
+  else if (iv == 3) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
+  else              { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
+}
+
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0.0) hv += 1.0;
+  var iv = floor(hv * 6.0) % 6;
+  var fv = hv * 6.0 - floor(hv * 6.0);
+  var pv = cp2V * (1.0 - cp2S);
+  var qv = cp2V * (1.0 - fv * cp2S);
+  var tv = cp2V * (1.0 - (1.0 - fv) * cp2S);
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
+  else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
+  else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
+  else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = qv;   }
+  else              { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
+}
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
 
-  localMul = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var geometryFollow = clamp01(dt * 2.6);
+  var speedFollow = clamp01(dt * 3.4);
+  var levelFollow = clamp01(dt * 9.0);
+  var kickFollow = clamp01(dt * 18.0);
 
-  var manDir = (direction * 2.0) - 1.0;
-  if (manDir >= 0.0 && manDir < 0.06) manDir = 0.06;
-  else if (manDir < 0.0 && manDir > -0.06) manDir = -0.06;
+  smSpeed = smSpeed + (clamp01(localSpeed) - smSpeed) * speedFollow;
+  smLevel = smLevel + (clamp01(level) - smLevel) * levelFollow;
+  smKick = smKick + (clamp01(kick) - smKick) * kickFollow;
+  smWidth = smWidth + (clamp01(currentWidth) - smWidth) * geometryFollow;
+  smShimmer = smShimmer + (clamp01(shimmer) - smShimmer) * geometryFollow;
+  smDetail = smDetail + (clamp01(detail) - smDetail) * geometryFollow;
+  smWhite = smWhite + (clamp01(jewelryWhite) - smWhite) * levelFollow;
+  smUv = smUv + (clamp01(uvUndertow) - smUv) * levelFollow;
 
-  autoClock = autoClock + dt;
-  if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  var autoSign = (sin(autoClock / AUTO_PERIOD * PI2) >= 0.0) ? 1.0 : -1.0;
-  effDir = manDir * autoSign;
+  var rate = pow(2.0, (smSpeed - 0.5) * 4.0);
+  currentPhase = currentPhase + dt * rate * FLOW_DIRECTION * 0.22;
+  // Caustic structure drifts far more slowly than the river. Spatial detail is
+  // crisp; temporal motion stays liquid instead of scintillating frame to frame.
+  lacePhase = lacePhase + dt * rate * 0.017;
+  tidePhase = tidePhase + dt * (0.012 + rate * 0.004);
 
-  driftA = driftA + dt * localMul * MAX_RATE * effDir;
-  driftB = driftB + dt * localMul * MAX_RATE * 1.73205 * effDir;
-  shimmerPhase = shimmerPhase + dt * localMul * MAX_RATE * 1.41421;
-  if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
-  else if (driftA <= -PHASE_WRAP) driftA = driftA + PHASE_WRAP;
-  if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
-  else if (driftB <= -PHASE_WRAP) driftB = driftB + PHASE_WRAP;
-  if (shimmerPhase >= PHASE_WRAP) shimmerPhase = shimmerPhase - PHASE_WRAP;
-
-  // Gentle autonomous tidal swell: the whole current rises and ebbs on a slow
-  // incommensurate clock. This is a REST-motion breath (independent of level) so
-  // the rig is never static in silence; level still dominates total brightness.
-  tideBreath = 0.70 + 0.30 * wave(shimmerPhase * 0.8 + autoClock * 0.011);
+  if (currentPhase >= PHASE_WRAP) currentPhase -= PHASE_WRAP;
+  else if (currentPhase <= -PHASE_WRAP) currentPhase += PHASE_WRAP;
+  if (lacePhase >= PHASE_WRAP) lacePhase -= PHASE_WRAP;
+  if (tidePhase >= PHASE_WRAP) tidePhase -= PHASE_WRAP;
 
   _hsv2rgb1();
   _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
-  // Coords are already 0..1 — use directly (clamp only). NEVER re-normalize.
   var nx = clamp01(x);
   var ny = clamp01(y);
+  var nz = clamp01(z);
 
-  var dens = 1.0 + density * 5.0;
-  var reach = 0.7 + radius * 1.2;   // AUDIO: current swell / caustic reach
+  // A single curved river centerline. The two broad bends are incommensurate
+  // and depth-aware, so the path feels organic without tiling the whole model.
+  var bendA = wave(nx * 1.13 - currentPhase + nz * 0.23) - 0.5;
+  var bendB = wave(nx * 1.87 + currentPhase * 0.618 - nz * 0.41) - 0.5;
+  var centerY = 0.50 + bendA * 0.38 + bendB * 0.14;
+  var width = 0.055 + smWidth * 0.32;
+  var riverDistance = abs(ny - centerY);
+  var river = smooth01(1.0 - riverDistance / width);
 
-  // Broad longitudinal current + cross caustic (incommensurate frequencies).
-  var longWave = wave((nx * dens) + (ny * 0.8) - driftA * 1.4);
-  var crossWave = wave((ny * dens * 0.7 * reach) - (nx * 0.6) + driftB * 1.4
-                       + shimmerPhase * 0.07 * shimmer);
-  var currentRaw = (longWave * 0.65) + (crossWave * 0.35);
-  var current = pow(currentRaw, 1.8);
+  // A narrow bank line and a broad shadow bank create depth and negative space.
+  var bankDistance = abs(riverDistance - width * 0.78);
+  var bank = smooth01(1.0 - bankDistance / (0.025 + width * 0.16));
+  var shadow = smooth01(1.0 - riverDistance / (width * 1.65));
+  shadow = shadow * (1.0 - river);
 
-  // Caustic crest gate — sharpens with shimmer, pops with kick. A hard
-  // (crossWave > edge) ? 1 : 0 gate teleports the caustic on in a single frame
-  // (a real seam: px jumps ~120/255 between consecutive frames as crossWave
-  // crosses the edge in silence). Replace with a STEEP smoothstep over a narrow
-  // band so the caustic still reads as a crisp moonlit crest (same edge, same
-  // pow sharpness below) but rises continuously across the crossing.
-  var crestEdge = 0.86 - shimmer * 0.1;
-  var crestBand = 0.04;                       // narrow -> still a crisp caustic
-  var crestU = (crossWave - (crestEdge - crestBand)) / (crestBand * 2.0);
-  crestU = clamp01(crestU);
-  var crest = crestU * crestU * (3.0 - 2.0 * crestU); // smoothstep(edge-band, edge+band)
-  crest = crest * pow(currentRaw, 2.0);
+  // Caustic lace: two oblique coordinate fields interfere only inside the
+  // river. Detail changes bounded spatial frequency; Shimmer changes amplitude
+  // and sharpness but never multiplies an accumulated phase.
+  // The wider 0.20..6.22 span makes Detail an unmistakable broad-pool -> fine
+  // lace control while preserving the operator's saved .88 look (~5.50 cycles).
+  // smDetail is eased in beforeRender, so live edits do not snap the topology.
+  var laceFreq = 0.20 + smDetail * 6.02;
+  var laceA = wave((nx * 0.83 + ny * 1.31 + nz * 0.47) * laceFreq
+                 + lacePhase);
+  var laceB = wave((nx * -1.17 + ny * 0.71 + nz * 0.93) * laceFreq
+                 - lacePhase * 0.618);
+  var filament = 1.0 - clamp01(abs(laceA - laceB)
+                             * (1.5 + smDetail * 3.0));
+  filament = smooth01(filament);
+  var node = pow(clamp01(laceA * laceB * 1.12), 1.5 + smDetail * 2.0);
+  var laceShape = clamp01(filament * 0.62 + node * 0.38 - 0.05) * river;
+  var lace = laceShape * smShimmer;
+  var laceCore = pow(laceShape, 1.85) * smShimmer;
 
-  // Upper-head crown weighting.
-  var crown = pow(ny, 1.6);
+  var tide = 0.78 + wave(tidePhase + nx * 0.09 + nz * 0.07) * 0.22;
+  var kickShape = smKick * (2.0 - smKick);
+  var lunarFlash = kickShape * clamp01(river * 0.48 + laceCore * 0.92
+                                     + bank * 0.18);
 
-  // Single-expression brightness (avoid repeated `v=v*x` VM mis-compile).
-  var swell = current * (0.6 + 0.4 * crown) + crest * (0.5 + kick * 0.8);
-  var bri = (BASE_FLOOR + clamp01(swell) * (1.0 - BASE_FLOOR)) * level * tideBreath;
+  // Low ambient haze, one coherent body, crisp cp2 lace, and dark banks. The
+  // current remains legible at low width without filling the entire rig.
+  var bodyBri = (0.008 + river * (0.33 + river * 0.78)
+               + bank * 0.075 + lace * 0.26 + laceCore * 0.46
+               + lunarFlash * 0.70) * tide * smLevel;
+  bodyBri = clamp01(bodyBri);
+  var colorMix = clamp01(0.08 + lace * 0.48 + laceCore * 0.54
+                       + lunarFlash * 0.36);
 
-  // Strict cp1<->cp2 RGB lerp driven by the caustic; a contrasted curve spreads
-  // pixels toward BOTH palette ends (caustic peaks -> cp2, troughs -> cp1) so
-  // the rig genuinely shows two hues; crest fully pushes toward cp2.
-  var spread2 = wave(crossWave * 1.3 + ny * 0.5 - driftB * 0.06);
-  // Contrast curve centred so the rig genuinely shows BOTH palette ends at once
-  // (troughs sit at cp1, crests reach cp2) rather than skewing all-caustic.
-  var tColour = clamp01(pow(spread2, 1.15) * 1.05 + crest * 0.55);
-  var r = (pr1 + (pr2 - pr1) * tColour) * bri;
-  var g = (pg1 + (pg2 - pg1) * tColour) * bri;
-  var b = (pb1 + (pb2 - pb1) * tColour) * bri;
+  var r = (pr1 + (pr2 - pr1) * colorMix) * bodyBri;
+  var g = (pg1 + (pg2 - pg1) * colorMix) * bodyBri;
+  var b = (pb1 + (pb2 - pb1) * colorMix) * bodyBri;
+  var w = 0.0;
+  var u = 0.0;
 
-  // Upper-crown white / UV emitters (kept audio-coupled via level).
-  var w = (current * crown * whiteLift + crest * crown * kick * 0.5) * level;
-  var u = (0.2 + crossWave * 0.8) * crown * uvLift * level;
+  if (fixtureType == FIX_BAR_18) {
+    // Hull: retain palette authorship but bias blue toward visible teal on wood.
+    r = r * 0.52 + bodyBri * 0.018;
+    g = g * 0.88 + bodyBri * 0.11;
+    b = b * 0.66 + bodyBri * 0.07;
+    u = clamp01(smUv * smLevel * (river * 0.12 + lace * 0.62
+                                + lunarFlash * 0.36));
+  } else if (fixtureType == FIX_RAW_LED) {
+    // Silhouette: saturated tracing on banks and caustic cores.
+    var trace = clamp01(bodyBri * 0.24 + bank * smLevel * 0.16
+                      + laceCore * smLevel * 0.72 + lunarFlash * 0.28);
+    r = trace * 0.025;
+    g = trace * 0.29;
+    b = trace;
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    // Jewelry: sparse champagne reflections, with honest matched native white.
+    var fleckSeed = wave(pixelLocalIndex * 0.371 + nx * 1.73 + ny * 0.83
+                       + lacePhase * 0.19);
+    var fleck = pow(fleckSeed, 5.5 + smDetail * 3.5)
+              * clamp01(bank * 0.42 + laceCore * 0.88
+                                             + lunarFlash * 0.74);
+    var warm = clamp01((river * 0.050 + fleck * 0.74 + lunarFlash * 0.22)
+                     * smLevel);
+    r = warm;
+    g = warm * 0.43;
+    b = warm * 0.045;
+    w = clamp01(smWhite * smLevel * (river * 0.045 + fleck * 1.34
+                                   + lunarFlash * 0.52));
+  } else if (fixtureType == FIX_PAR) {
+    // Organs: palette-authored pools below the current with UV depth. These
+    // deliberately follow the selected colors instead of imposing orange.
+    var pool = clamp01((river * 0.22 + bank * 0.11 + lunarFlash * 0.22)
+                     * smLevel);
+    var poolMix = clamp01(0.18 + river * 0.34 + lace * 0.32
+                        + lunarFlash * 0.16);
+    r = (pr1 + (pr2 - pr1) * poolMix) * pool;
+    g = (pg1 + (pg2 - pg1) * poolMix) * pool;
+    b = (pb1 + (pb2 - pb1) * poolMix) * pool;
+    u = clamp01(smUv * smLevel * (shadow * 0.18 + lace * 0.34
+                                + lunarFlash * 0.22));
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity: the physical pixels already draw the letters, so preserve that
+    // silhouette with a firm moonlit floor. One broad current front crosses
+    // the actual XYZ letter geometry; the local index only bends that front
+    // around the strokes. There is no second lattice or per-pixel flicker.
+    var signFlowCoord = nx * 0.37 + ny * 0.91 - nz * 0.67
+                      + pixelLocalIndex * 0.003;
+    var signCurrent = wave(signFlowCoord - currentPhase * 0.75);
+    var signBody = smooth01(signCurrent);
+    var signCrest = smooth01(1.0 - abs(signCurrent - 0.78) / 0.34);
+    var signBri = (0.27 + signBody * 0.12 + signCrest * 0.12
+                 + river * 0.025 + lunarFlash * 0.10)
+                 * (0.78 + smLevel * 0.22);
+    var signMix = clamp01(0.16 + signBody * 0.35 + signCrest * 0.25
+                        + river * 0.08 + lunarFlash * 0.16);
+    r = (pr1 + (pr2 - pr1) * signMix) * signBri;
+    g = (pg1 + (pg2 - pg1) * signMix) * signBri;
+    b = (pb1 + (pb2 - pb1) * signMix) * signBri;
+  }
 
-  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
-  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
-  // strands already render (they fold amber into RGB). Convention:
-  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(w), clamp01(u));
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), w, w, u);
 }

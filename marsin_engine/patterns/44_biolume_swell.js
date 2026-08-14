@@ -7,10 +7,14 @@
   GLOW rides a slow counter-wave (the original's signature blacklight feel),
   gated by a named slider. Calm non-black ambient floor in silence.
 
+  TE signs carry a broad bioluminescent crest emblem with sparse traced foam
+  points: a stable Identity treatment, distinct from reef filaments and fronds.
+
   WHOLE-RIG, coordinate-driven: a 2D swell field f(nx,ny,t) sweeps across pars
   (top), bars (mid) and vintage (low) so the swell is one coherent body of
   water rolling over the entire structure. No section self-filter — every
-  fixture participates in the swell.
+  fixture participates in the swell. RGB stays strictly between cp1 and cp2;
+  only the named white and UV accents use dedicated non-palette emitters.
 
   CONTROLS (UI order = declaration order)
     - localSpeed : overall swell + counter-wave rate.
@@ -43,7 +47,7 @@
 export var localSpeed = 0.5;   // overall swell + counter-wave rate
 export var swell = 0.5;        // swell amplitude + OVERALL BRIGHTNESS (micLow) — mid bias (crests pop, two-colour reads)
 export var sparkle = 0.2;      // crest plankton glints count+brightness (micHigh)
-export var kick = 0.0;         // crest burst (micKick)
+export var kick = 0.0;         // crest burst (micFlux)
 export var uvGlow = 0.6;       // named UV blacklight glow amount
 export var base = 0.12;        // calm ambient floor (never fully black)
 
@@ -55,7 +59,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderSwell(v) { swell = v; }     // micLow maps here (PRIMARY)
 export function sliderSparkle(v) { sparkle = v; } // micHigh maps here
-export function sliderKick(v) { kick = v; }       // micKick maps here
+export function sliderKick(v) { kick = v; }       // micFlux maps here
 export function sliderUvGlow(v) { uvGlow = v; }
 export function sliderBase(v) { base = v; }
 
@@ -63,6 +67,11 @@ export function sliderBase(v) { base = v; }
 var SQRT2 = 1.41421356;
 var SQRT3 = 1.73205081;
 var PHI   = 1.61803399;
+
+// Optional accent role: canonical append-only id from
+// lib/fixture_type_constants.js. Self-declaring it keeps this shared pattern
+// compilable on scenes without TE signs; it is never a load-bearing target.
+var FIX_TE_SIGN = 7;
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -104,7 +113,8 @@ function clamp01(v) {
 
 // ── Per-frame scalars ─────────────────────────────────────────────────────────
 var tSwell = 0.0;     // primary swell phase (irrational rate)
-var tCounter = 0.0;   // counter-wave phase for UV
+var tCounter = 0.0;   // counter-wave phase for the secondary swell component
+var tUv = 0.0;        // independent UV phase; avoids a non-integer wrap seam
 var tGlint = 0.0;     // plankton glint churn phase
 var ampNow = 0.0;     // resolved swell amplitude this frame (from swell slider)
 var briGain = 0.0;    // overall brightness gain (from swell slider — PRIMARY)
@@ -125,9 +135,11 @@ export function beforeRender(delta) {
   // Irrational rates -> phases never share a common period (no integer loop).
   tSwell   = tSwell   + dt * 0.32 * SQRT2 * rate;
   tCounter = tCounter + dt * 0.21 * SQRT3 * rate;
+  tUv      = tUv      + dt * 0.21 * SQRT3 * 0.37 * SQRT2 * rate;
   tGlint   = tGlint   + dt * 0.83 * PHI * rate;
   if (tSwell   > 100000.0) tSwell   = tSwell   - 100000.0;
   if (tCounter > 100000.0) tCounter = tCounter - 100000.0;
+  if (tUv      > 100000.0) tUv      = tUv      - 100000.0;
   if (tGlint   > 100000.0) tGlint   = tGlint   - 100000.0;
 
   // PRIMARY audio dim: micLow -> swell amplitude AND overall brightness.
@@ -141,12 +153,14 @@ export function beforeRender(delta) {
   // and the wide 0.06..1.0 span makes total brightness a near-linear readout of
   // micLow (PRIMARY corr driver).
   var swCurve = pow(sw, 1.8);
-  briGain = 0.06 + swCurve * 0.94;    // overall brightness (PRIMARY corr driver)
+  // Commissioned a modest lift across every model while retaining the same
+  // Swell curve and full-range audio ownership.
+  briGain = 0.075 + swCurve * 1.00;   // overall brightness (PRIMARY corr driver)
 
   // Louder lows -> broader/softer crests (more lit); quiet -> very sharp/dark.
   crestSharp = 3.0 + (1.0 - sw) * 5.0;
 
-  // micKick -> a crest burst. To keep micLow as the dominant brightness driver
+  // micFlux -> a crest burst. To keep micLow as the dominant brightness driver
   // (P0 PRIMARY), the kick RESHAPES the crest (broadens its core) instead of
   // adding net brightness — a punch in DEFINITION, not a brightness spike.
   kickBloom = clamp01(kick);
@@ -170,7 +184,8 @@ export function render3D(index, x, y, z) {
   var sFld = 0.5 + (swellRaw - 0.5) * ampNow;
 
   // ── Sharp bioluminescent CREST: pow-sharpened peak of the swell ──────────
-  var crest = pow(clamp01(sFld), crestSharp); // crisp HD cores, dark troughs
+  var crestExp = crestSharp * (1.0 - kickBloom * 0.42);
+  var crest = pow(clamp01(sFld), crestExp); // kick visibly blooms crest reach
 
   // ── Plankton GLINTS (2nd audio dim, micHigh): crisp deterministic sparks
   // that pop ON the crests where the water is brightest. ───────────────────
@@ -183,9 +198,14 @@ export function render3D(index, x, y, z) {
     var gamt = (spk - glintThresh) / (1.0 - glintThresh + 0.0001);
     glint = clamp01(gamt) * (0.45 + clamp01(sparkle) * 0.55) * (0.4 + crest * 0.6);
   }
+  // Continuous phosphor flecks keep Sparkle perceptible on large and small
+  // models instead of relying only on a few thresholded pixels.
+  var fleck = wave(x * 17.0 + y * 11.0 + z * 7.0 - tGlint * 0.13);
+  fleck = pow(fleck, 5.0 + sparkle * 7.0);
+  glint = clamp01(glint + fleck * sparkle * (0.18 + crest * 0.82));
 
   // ── Calm ambient FLOOR — slow breathing swell so silence still reads ─────
-  var floorV = base * (0.45 + 0.55 * sFld);
+  var floorV = base * (0.08 + 0.42 * sFld);
 
   // BRIGHTNESS BACKBONE: the ambient water body, scaled by briGain (micLow).
   // This is the dominant per-pixel brightness, so the per-frame TOTAL tracks
@@ -194,8 +214,9 @@ export function render3D(index, x, y, z) {
   // Ambient water glows with the swell but darkens in troughs (pow > 1 deepens
   // the troughs -> crisp contrast, dark water between crests = HD).
   var bodyWave = pow(clamp01(sFld), 1.8) * 0.7;
-  var body = floorV;
-  if (bodyWave > body) body = bodyWave;
+  // Base is a true trough floor: it lifts dark water monotonically without
+  // being swallowed by a max() against the body wave.
+  var body = bodyWave * (1.0 - base * 0.35) + floorV;
   // EVERY brightness term is multiplied by briGain (micLow) so the whole rig
   // dims/brightens together with the lows -> total brightness is a clean readout
   // of micLow (PRIMARY corr bar). Crest/glint only REDISTRIBUTE that brightness
@@ -203,10 +224,11 @@ export function render3D(index, x, y, z) {
   var lit = body;
   if (crest > lit) lit = crest;                  // crest dominates where it pops
   if (glint > lit) lit = glint;                  // sparks top everything
-  var v = clamp01(lit * briGain);
+  // `v` is a VM-reserved identifier; using it as a local made Base cancel.
+  var bval = clamp01(lit * briGain);
 
   // ── Colour: blend cp1 (deep blue swell) -> cp2 (green crest) along the crest
-  // sharpness; glints push hard to cp2 for bright pops. micKick is a COLOUR/UV
+  // sharpness; glints push hard to cp2 for bright pops. micFlux is a COLOUR/UV
   // dimension: a hit shoves the crest hue toward cp2 (a green flash) without
   // inflating total brightness, so micLow stays the dominant brightness driver. ─
   // tcol is driven by the swell height with a gentler curve so a meaningful
@@ -227,9 +249,49 @@ export function render3D(index, x, y, z) {
   if (glint > 0.0) tcol = clamp01(tcol + 0.4);
   tcol = clamp01(tcol);
 
-  var r = (pr1 + (pr2 - pr1) * tcol) * v;
-  var g = (pg1 + (pg2 - pg1) * tcol) * v;
-  var b = (pb1 + (pb2 - pb1) * tcol) * v;
+  var r = (pr1 + (pr2 - pr1) * tcol) * bval;
+  var g = (pg1 + (pg2 - pg1) * tcol) * bval;
+  var b = (pb1 + (pb2 - pb1) * tcol) * bval;
+
+  if (fixtureType == FIX_TE_SIGN) {
+    // Identity: a single broad swell rises through each letterform. XYZ keeps
+    // the crest coherent across the physical faces; pixelLocalIndex traces a
+    // restrained set of foam points along the sign wiring path.
+    var sx = clamp01(x);
+    var sy = clamp01(y);
+    var sz = clamp01(z);
+    var signWave = wave(tSwell * 1.20 + pixelLocalIndex * 0.0045
+                        + sy * 0.55 + abs(sx - 0.5) * 0.44
+                        + abs(sz - 0.67) * 0.26);
+    var signCrest = smoothstep(0.52 - kickBloom * 0.10, 0.86, signWave);
+    signCrest = pow(signCrest, 1.35);
+
+    var foamSeed = wave(pixelLocalIndex * 0.381966
+                        + abs(sx - 0.5) * 1.41
+                        + sy * 1.73 + abs(sz - 0.67) * 0.618);
+    var foamGate = (foamSeed < 0.045 + sparkle * 0.085) ? 1.0 : 0.0;
+    var foamLife = wave(tGlint * 0.25 + foamSeed * 0.73
+                        + sx * 0.11 + sy * 0.07 + sz * 0.05);
+    var signFoam = pow(foamLife, 6.0 + sparkle * 4.0)
+                 * foamGate * (0.18 + sparkle * 1.12)
+                 * (0.38 + signCrest * 0.62);
+
+    // A palette-derived identity floor survives quiet Swell settings. Swell
+    // remains a strong gain and crest-width control; Base raises the bed.
+    var signFloor = 0.46 + base * 0.22;
+    var signGain = 0.42 + briGain * 0.58;
+    var signV = (signFloor + signWave * 0.10
+                + signCrest * 0.22 + signFoam * 0.46) * signGain;
+    signV = clamp01(signV);
+    var signBlend = clamp01(0.08 + signWave * 0.20
+                            + signCrest * 0.54 + signFoam * 0.38);
+    r = (pr1 + (pr2 - pr1) * signBlend) * signV;
+    g = (pg1 + (pg2 - pg1) * signBlend) * signV;
+    b = (pb1 + (pb2 - pb1) * signBlend) * signV;
+  }
+
+  // Keep RGB strictly on the selected cp1/cp2 line. Fixture capability only
+  // gates the dedicated UV and white accents below.
 
   // ── UV GLOW: additive blacklight emitter on a slow counter-wave, gated by
   // the named uvGlow slider. Riding ny so it sweeps vertically like the
@@ -237,12 +299,22 @@ export function render3D(index, x, y, z) {
   // (and therefore its contribution to total brightness) RISES AND FALLS WITH
   // micLow — keeping it from decoupling the PRIMARY brightness correlation. The
   // slow counter-wave only shapes WHERE it glows, not the frame-total level. ─
-  var uvWave = 0.45 + 0.55 * wave(tCounter * 0.37 * SQRT2 - y * 0.5);
-  var outU = clamp01(uvWave * uvGlow * 0.45 * briGain);
+  var uvWave = 0.45 + 0.55 * wave(tUv - y * 0.5);
+  var outU = 0.0;
+  if ((fixtureType == FIX_BAR_18) || (fixtureType == FIX_PAR)) {
+    outU = clamp01(uvWave * uvGlow * 0.45 * briGain);
+  }
 
   // Crisp white pop on the crest cores keeps glints HD without non-palette hue.
   // Gated by briGain so the white highlight also tracks micLow (no audio-free add).
-  var outW = clamp01((crest * 0.3 + glint * 0.6) * briGain);
+  var outW = clamp01((crest * 0.10 + glint * 0.28) * briGain);
+  if (fixtureType == FIX_VINTAGE_6) {
+    outW = clamp01((crest * 0.30 + glint * 0.95) * briGain);
+  }
+  else if (fixtureType == FIX_TE_SIGN) {
+    // Identity stays strictly on the selected cp1<->cp2 crest palette.
+    outW = 0.0;
+  }
 
   // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
   // reads yellow — matched W+A is the ship's warm white, and it is what the LED

@@ -1,0 +1,76 @@
+schemaVersion: 1
+name: baby_girl
+entries:
+  - id: e_baby_girl_reveal
+    pattern: 133_baby_reveal_burst
+    label: Baby Girl - Reveal Explosion
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderFinalColor: 0
+      sliderLevel: 0.9
+      sliderSpatialDepth: 0.72
+      sliderSparkle: 0.58
+      sliderRestartReveal: 0
+    modulations: []
+    midiMappings: []
+    notes: 'Manual answer: push only after baby_tease reaches blackout. Holds a photo-safe pink rose.'
+  - id: e_baby_girl_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: Baby Girl - Family Orbit Rings
+    defaults: { sliderLocalSpeed: 0.74, sliderLevel: 0.71, sliderRingWidth: 0.82, sliderOrbitTilt: 0.58, sliderContrast: 0.62, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_welcome_tide
+    pattern: 119_bow_stern_tidal_push
+    label: Baby Girl - Welcome Tide
+    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.54, sliderWaveWidth: 0.56, sliderRecoil: 0.48, sliderContrast: 0.58, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: Baby Girl - Crossing Beacons
+    defaults: { sliderLocalSpeed: 0.35, sliderLevel: 0.64, sliderBeamWidth: 0.38, sliderCrossing: 0.5, sliderAfterglow: 0.45, sliderSafetyFloor: 0.55, sliderFlash: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_celebration_spiral
+    pattern: 121_spiral_wake
+    label: Baby Girl - Celebration Spiral
+    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.76, sliderSpiralWidth: 0.5, sliderTurns: 0.5, sliderWakeContrast: 0.58, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_new_horizon
+    pattern: 122_breathing_horizon
+    label: Baby Girl - New Horizon
+    defaults: { sliderLocalSpeed: 0.8, sliderLevel: 0.54, sliderHorizonWidth: 0.5, sliderBreathDepth: 0.5, sliderAfterglow: 0.58, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_broadside_joy
+    pattern: 123_mirrored_broadside_call
+    label: Baby Girl - Broadside Joy
+    defaults: { sliderLocalSpeed: 0.32, sliderLevel: 0.63, sliderWallWidth: 0.48, sliderExpansion: 0.72, sliderContrast: 0.62, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_aurora_crown
+    pattern: 124_aurora_crown
+    label: Baby Girl - Aurora Crown
+    defaults: { sliderLocalSpeed: 0.32, sliderLevel: 0.64, sliderCrownHeight: 0.55, sliderArcWidth: 0.5, sliderCurl: 0.45, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_gentle_eclipse
+    pattern: 125_eclipse_orbit
+    label: Baby Girl - Gentle Eclipse
+    defaults: { sliderLocalSpeed: 0.18, sliderLevel: 0.77, sliderEclipseSize: 0.52, sliderRimWidth: 0.52, sliderDepth: 0.58, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_family_cathedral
+    pattern: 126_cathedral_rib_wave
+    label: Baby Girl - Family Cathedral
+    defaults: { sliderLocalSpeed: 0.75, sliderLevel: 0.81, sliderRibCount: 0.31, sliderRibWidth: 0.23, sliderBow: 0.48, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []
+  - id: e_baby_girl_joyful_maelstrom
+    pattern: 127_grand_maelstrom
+    label: Baby Girl - Joyful Maelstrom
+    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.57, sliderArmWidth: 0.58, sliderArmCount: 0.32, sliderDepth: 0.56, sliderSafetyFloor: 0.55, sliderPulse: 0 }
+    modulations: []
+    midiMappings: []

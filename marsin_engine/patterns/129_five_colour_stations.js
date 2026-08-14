@@ -1,5 +1,5 @@
 /*
-  67_five_colour_stations.js — "Five Colour Stations"
+  129_five_colour_stations.js — "Five Colour Stations"
 
   IDENTITY: the ship is read as FIVE NAMED STATIONS — bow, stern, smokestacks,
   decks and the TE sign — and EVERY station carries ALL FIVE operator-chosen
@@ -7,7 +7,7 @@
   march along each station on their own clock, so all five colours flow through
   every part of the ship instead of one colour owning one area.
 
-  HOW IT DIFFERS FROM 66_five_colour_prism: 66 gives each zone ONE colour and
+  HOW IT DIFFERS FROM 128_five_colour_prism: 128 gives each zone ONE colour and
   rotates the five colours between zones, so a given area is a single colour at
   any instant. This pattern subdivides each station so all five are present
   INSIDE it — five colours per location rather than five locations per colour.
@@ -48,7 +48,7 @@
       over a non-zero BASE_RATE so it still creeps at localSpeed = 0.
     - DIRECTION is a guarded user sign (never 0, §0 rule 5) times an AUTONOMOUS
       drifting sign from two incommensurate sinusoids (SQRT3 and PHI, different
-      constants from 66 so the two patterns never flip in lockstep) (§0 rule 2).
+      constants from 128 so the two patterns never flip in lockstep) (§0 rule 2).
     - The block MARCH advances on its own slow clock, so the colours keep
       travelling through each station even when the crest is slow.
 
@@ -200,7 +200,7 @@ export function beforeRender(delta) {
 
   // Autonomous drifting direction sign — two incommensurate sinusoids so the
   // ship reverses organically and never re-locks (§0 rule 2). Different
-  // constants from 66 so the two patterns never flip together.
+  // constants from 128 so the two patterns never flip together.
   autoT = autoT + dt * AUTO_RATE;
   if (autoT >= PHASE_WRAP) autoT = autoT - PHASE_WRAP;
   var wv = 0.58 + 0.50 * sin(autoT * 6.2831853 * SQRT3)
@@ -261,7 +261,7 @@ export function render3D(index, xIn, yIn, zIn) {
   // Never dead-black: a small keep so the ship stays visible in silence
   // (§0 rule 4 — and the mission: the ship must read at night). Kept LOW so
   // audio retains real headroom to move total brightness; a high floor is what
-  // made 66's secondary modulators measure weak before it was lowered.
+  // made 128's secondary modulators measure weak before it was lowered.
   var keep = 0.02 + clamp(glow, 0.0, 1.0) * 0.22;
   var bri = keep + crest * (1.0 - keep);
 

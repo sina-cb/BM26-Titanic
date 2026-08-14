@@ -265,6 +265,22 @@ test('spatial seedPanel/expandPanel place every fixture and expand every pixel',
   }
 });
 
+test('Top orthographic orientation matches Aerial: world +Z runs down-screen', () => {
+  const list = [
+    entry('dmx', 0, 'Away', 'UkingPar', 'Test', 0, 0, -10),
+    entry('dmx', 1, 'Near', 'UkingPar', 'Test', 0, 0, 10),
+  ];
+  const clusters = buildClusters(list);
+  const panel = { layout: 'spatial', projection: 'top' };
+  const pixels = expandPanel(panel, clusters, list,
+    seedPanel(panel, clusters, list, CANVAS.w, CANVAS.h));
+  const away = pixels.find((pixel) => pixel.fixKey === 'Away');
+  const near = pixels.find((pixel) => pixel.fixKey === 'Near');
+  assert.ok(near.cy > away.cy,
+    'the +Z/front end seen nearest the Aerial camera belongs at screen bottom');
+  assert.equal(near.cx, away.cx, 'orthographic projection must not add perspective skew');
+});
+
 // ── rotate: quarter-turn of a TRUE projection ──────────────────────────────
 // The operator's TE-sign order (report 20260725_48): the sign hangs on a
 // vertical plane whose widest world axis is Y, so `planar`'s widest-first axis

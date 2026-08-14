@@ -9,8 +9,11 @@
     - Bars carry the broad moving sunset field.
     - Vintage rail lights are the jewelry. They alone emit matched W+A, giving
       them the bright golden-white signature and the beat flash.
-    - Every other light carries a calmer RGB-only contour so strands and signs
-      remain readable and pars feel like a warm interior glow.
+    - TE signs carry a calm, spatially graded palette treatment with a firm
+      RGB floor: the letterforms stay readable without borrowing the Jewelry's
+      iconic golden-white emitter treatment.
+    - Every other light carries a calmer RGB-only contour so strands remain
+      readable and pars feel like a warm interior glow.
 
   No direction control: this is an ambient drift, not a directional chase.
   Three ordinary controls are intentionally strong audio targets: level moves
@@ -21,7 +24,7 @@ AUDIO_MODULATION_V1:
   sliderLevel        <- micLow  range 0.42..0.92 curve ease  # whole-ship breathing
   sliderEmberSwell   <- micFlux range 0.08..0.95 curve ease  # broad warm expansion
   sliderJewelryFlash <- micKick range 0.00..1.00 curve pow2  # Vintage-only golden-white hit
-  # STATIC (omit from audio): localSpeed, grain, jewelryWhite, colorPalette1/2
+  # STATIC (omit from audio): localSpeed, grain, jewelryWhite, jewelrySpeed, colorPalette1/2
 */
 
 // Exported controls — declaration order is physical MIDI knob order.
@@ -30,6 +33,7 @@ export var level         = 0.62;
 export var grain         = 0.36;
 export var emberSwell    = 0.28;
 export var jewelryWhite  = 0.56;
+export var jewelrySpeed  = 0.50;
 export var jewelryFlash  = 0.0;
 
 export var cp1H = 0.0,   cp1S = 1.0, cp1V = 1.0;
@@ -42,9 +46,14 @@ export function sliderLevel(v)         { level = v; }
 export function sliderGrain(v)         { grain = v; }
 export function sliderEmberSwell(v)    { emberSwell = v; }
 export function sliderJewelryWhite(v)  { jewelryWhite = v; }
+export function sliderJewelrySpeed(v)  { jewelrySpeed = v; }
 export function sliderJewelryFlash(v)  { jewelryFlash = v; }
 
 var FULL_TURN = 6.283185307179586;
+// Optional accent role. Self-declaring the canonical append-only id keeps this
+// shared pattern portable on models with no TE signs; no load-bearing role is
+// hidden or substituted.
+var FIX_TE_SIGN = 7;
 // Every phase consumer below uses a coefficient whose product with 1000 is an
 // integer. A large 1000-turn wrap therefore preserves every wave/sin/cos value
 // exactly instead of injecting the visible jumps caused by the old 1-turn wrap.
@@ -115,9 +124,11 @@ export function beforeRender(delta) {
   phaseA += dt * rate;
   phaseB += dt * rate * 1.41421356237;
   phaseC += dt * rate * 0.61803398875;
-  // The jewelry swipe has its own gentler clock: movement speed can become
-  // energetic without turning the occasional Vintage signature into a strobe.
-  jewelryPhase += dt * (0.018 + 0.015 * localMult);
+  // The Vintage white crest intentionally travels faster than the broad wash.
+  // JewelrySpeed is its dedicated 1/4x..4x trim; midpoint preserves the
+  // operator-approved roughly ten-second cadence near localSpeed ~= 0.39.
+  var jewelryMult = pow(2.0, (jewelrySpeed - 0.5) * 4.0);
+  jewelryPhase += dt * (0.035 + 0.080 * localMult) * jewelryMult;
   if (phaseA >= PHASE_WRAP) phaseA -= PHASE_WRAP;
   if (phaseB >= PHASE_WRAP) phaseB -= PHASE_WRAP;
   if (phaseC >= PHASE_WRAP) phaseC -= PHASE_WRAP;
@@ -164,6 +175,28 @@ export function render3D(index, x, y, z) {
   // contour so silhouettes and letterforms stay readable while the wash moves.
   if (fixtureType == FIX_BAR_18) {
     body += emberAmount * field * 0.12;
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity treatment: a broad sunset horizon rises and falls through the
+    // XYZ letter volume, leaving a slower warm afterglow along each letter path.
+    // This reads as Golden Hour within seconds rather than as generic noise.
+    // The firm RGB-only floor preserves legibility; Vintage remains the only
+    // fixture family receiving the signature authored golden white below.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signSpace = clamp01(nx * 0.43 + ny * 0.34 + nz * 0.23);
+    var sunHeight = wave(phaseA * 2.0);
+    var sunEdge = 1.0 - clamp01(abs(signSpace - sunHeight) * 4.6);
+    sunEdge = sunEdge * sunEdge * (3.0 - 2.0 * sunEdge);
+    var sunLift = clamp01(0.50 + (sunHeight - signSpace) * 1.45);
+    var afterglow = wave(phaseC * 2.0 + signSpace * 0.38
+                       + signPath * 0.08);
+    var signBlend = clamp01(0.08 + signSpace * 0.45 + sunLift * 0.25
+                           + sunEdge * 0.22 + afterglow * 0.08);
+    r = pr1 + (pr2 - pr1) * signBlend;
+    g = pg1 + (pg2 - pg1) * signBlend;
+    b = pb1 + (pb2 - pb1) * signBlend;
+    body = 0.58 + sunLift * 0.14 + sunEdge * 0.22
+         + afterglow * 0.08 + field * 0.04
+         + emberAmount * (0.055 + emberWave * 0.055);
   } else if (fixtureType != FIX_VINTAGE_6) {
     var contour = wave(phaseC * 0.55 + pixelLocalIndex * 0.018 + nx * 0.13);
     body = 0.42 + field * 0.20 + contour * 0.07

@@ -420,11 +420,14 @@ function validateCueColorAutopilot(ca, label) {
   return { active: ca.active, palettes, delay_s: ca.delay_s, shuffle, transitionMs };
 }
 
-function validateAction(action, label, lookNames) {
+function validateAction(action, label, lookNames, depth = 0) {
   if (!isPlainObject(action)) throw new Error(`${label} must be an object`);
+  if (depth > 4) throw new Error(`${label} exceeds the maximum sequence nesting depth of 4`);
   switch (action.type) {
     case 'playlist': {
       const out = { type: 'playlist', name: assertSlug(action.name, `${label}.name`) };
+      if (action.entryId !== undefined) out.entryId = assertString(action.entryId, `${label}.entryId`);
+      if (action.palette !== undefined) out.palette = assertSlug(action.palette, `${label}.palette`);
       out.target = validateTarget(action.target, `${label}.target`);
       if (action.autopilot !== undefined) out.autopilot = validateAutopilot(action.autopilot, `${label}.autopilot`);
       // transition + overlays are DECK-ONLY knobs (docs/38 §16.9): they configure
@@ -482,6 +485,30 @@ function validateAction(action, label, lookNames) {
       }
       return out;
     }
+    case 'sequence': {
+      if (depth > 0) throw new Error(`${label}: nested sequence actions are not supported`);
+      if (!Array.isArray(action.steps) || action.steps.length === 0) {
+        throw new Error(`${label}.steps must be a non-empty array`);
+      }
+      let previousOffset = -1;
+      const steps = action.steps.map((step, index) => {
+        const stepLabel = `${label}.steps[${index}]`;
+        if (!isPlainObject(step)) throw new Error(`${stepLabel} must be an object { afterSec, action }`);
+        const afterSec = assertNumber(step.afterSec, `${stepLabel}.afterSec`);
+        if (!Number.isFinite(afterSec) || afterSec < 0) {
+          throw new Error(`${stepLabel}.afterSec must be a finite number >= 0, got ${JSON.stringify(step.afterSec)}`);
+        }
+        if (afterSec < previousOffset) {
+          throw new Error(`${stepLabel}.afterSec must be >= the previous offset ${previousOffset}, got ${afterSec}`);
+        }
+        previousOffset = afterSec;
+        return {
+          afterSec,
+          action: validateAction(step.action, `${stepLabel}.action`, lookNames, depth + 1),
+        };
+      });
+      return { type: 'sequence', steps };
+    }
     case 'look': {
       const look = assertSlug(action.look, `${label}.look`);
       if (!lookNames.has(look)) throw new Error(`${label}.look "${look}" is not a defined look`);
@@ -525,7 +552,7 @@ function validateAction(action, label, lookNames) {
       return out;
     }
     default:
-      throw new Error(`${label}.type must be one of playlist, look, scene, globals, tasks, effect, got ${JSON.stringify(action.type)}`);
+      throw new Error(`${label}.type must be one of playlist, sequence, look, scene, globals, tasks, effect, got ${JSON.stringify(action.type)}`);
   }
 }
 

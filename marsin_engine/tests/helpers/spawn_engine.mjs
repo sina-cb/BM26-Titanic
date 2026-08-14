@@ -97,10 +97,10 @@ export function createEngineHarness(options = {}) {
     throw new Error('Engine never became ready: ' + (lastErr?.message || 'timeout'));
   }
 
-  async function api(method, path_, body) {
+  async function api(method, path_, body, headers = {}) {
     const res = await fetch(base() + path_, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();

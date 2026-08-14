@@ -1,5 +1,5 @@
 /*
-  66_five_colour_prism.js — "Five Colour Prism"
+  128_five_colour_prism.js — "Five Colour Prism"
 
   IDENTITY: the rig is divided into FIVE colour zones that each hold a DIFFERENT
   operator-chosen colour at the same time, and those five colours slowly ROTATE

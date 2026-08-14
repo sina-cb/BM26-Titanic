@@ -177,6 +177,19 @@ test('applyGlobalsState: legacy numeric keys still apply verbatim (old snapshots
   assert.deepEqual(new Map(ic.calls), new Map([[5, 0.7], [18, 0.11]]));
 });
 
+test('applyGlobalsState preserves an intentional all-zero Dimmer Rack', () => {
+  const sm = new StateManager(tmpDir('all_zero_authority'));
+  const ic = fakeIntensity();
+  const state = { dimmers: { 'TE Sign': 0, 'Left Wall': 0, 'Right Wall': 0 } };
+  sm.applyGlobalsState(state, null, ic, null, GROUPS_B);
+  assert.deepEqual(
+    new Map(ic.calls),
+    new Map([[3, 0], [500, 0], [501, 0]]),
+    'rack zero is authoritative and must not be silently repaired',
+  );
+  assert.deepEqual(state.dimmers, { 'TE Sign': 0, 'Left Wall': 0, 'Right Wall': 0 });
+});
+
 test('applyGlobalsState: unknown group name warns and is skipped, never guessed', () => {
   const sm = new StateManager(tmpDir('unknown_name'));
   const ic = fakeIntensity();

@@ -1,10 +1,12 @@
 /*
   43_golden_hour_pulse.js — GOLDEN HOUR PULSE (HD, sound-reactive).
 
-  An HD, audio-reactive reinterpretation of 00_golden_hour_wash. The beloved
-  warm sunset wash is kept — a deep amber/red -> warm gold field drifting across
-  the whole rig — but sharpened so it has CRISP warm cores and DARKER troughs
-  (high-definition, not a flat glow), and wired to the music three ways.
+  An HD, audio-reactive companion to 00_golden_hour_wash. Pattern 00 remains
+  the iconic, continuous bread-and-butter Golden Hour look; this pattern is
+  its explicitly MUSICAL pulse variant. The beloved warm sunset palette is
+  kept — a deep amber/red -> warm gold field drifting across the whole rig —
+  but sharpened into crisp warm cores and darker troughs, with three handles
+  intended for modulation.
 
   THE LOOK
     - A warm wash drifts diagonally across the rig (x + y - z phase), strictly
@@ -15,18 +17,25 @@
       spatial axes are scaled by irrationals (sqrt2 on x, 1/phi on y, golden
       angle term on z), so no two passes ever align — an endless golden hour.
 
-  SIGNATURE FEATURE — VINTAGE BLINDERS
-    The vintage fixtures (fixtureId 5 and 6, the upper Y heads) act as audience
-    BLINDERS. On each kick, the W (white) channel on those two fixtures is driven
-    HARD via rgbwau so they POP bright white — exactly the 00_golden_hour
-    `if (y > 0.8) w = ...` idea, but FIRED BY THE BEAT. A persistent envelope
-    snaps to 1.0 on a kick and decays each frame so the pop is a crisp strobe-y
-    flash with a short warm afterglow, not a smear.
+  SIGNATURE FEATURE — VINTAGE GOLDEN PULSE
+    Every FIX_VINTAGE_6 rail — the Jewelry instrument on Titanic — acts as a
+    warm audience pulse. On each kick, matched W+A rises beneath an added RGB
+    gold bias, so the native-white Vintage heads pop golden rather than clinical.
+    Targeting is by portable fixture capability, never bench-only fixture IDs.
+    A persistent envelope snaps to 1.0 on a kick and decays into a short warm
+    afterglow.
+
+  IDENTITY INSTRUMENT
+    TE signs hold a readable warm RGB emblem, then contract and bloom in a
+    gentle double heartbeat driven by the engine/local-speed clock. XYZ and
+    pixelLocalIndex introduce a small phase across the physical letterforms so
+    the pulse has depth without becoming a chase. They emit no authored white:
+    Pattern 00's Vintage golden-white swipe remains the iconic signature.
 
   AUDIO MAP (modulators-only — NEVER read CPC audio globals natively, codex P0):
   AUDIO_MODULATION_V1:
     sliderSwell   <- micLow  range 0.00..1.00 curve linear   # PRIMARY brightness/swell
-    sliderBlinder <- micKick range 0.00..1.00 curve linear   # vintage white blinder pop
+    sliderBlinder <- micKick range 0.00..1.00 curve linear   # Vintage golden pulse
     sliderShimmer <- micHigh range 0.00..0.80 curve pow2     # fine warm shimmer/detail
   Static (unmapped) params: localSpeed, noiseScale, colorPalette1/2.
     Sliders use the IDENTITY convention (store v directly, scale in render). At
@@ -34,11 +43,11 @@
     visibility).
 
   CORE EQUATION (per pixel, sunset wash core):
-      v = (x*SQRT2*ns + y*INVPHI*ns*0.5 - z*GA*ns*0.35 + tPhase)
+      v = (x*SQRT2*ns + y*INVPHI*ns*0.5 - z*GA*ns*0.35 + washPhase)
       noise = wave(v); noise = noise^3            // HD warm cores / dark troughs
       bri   = noise * (FLOOR + swell*SWELL_GAIN)   // micLow swells the whole wash
     where SQRT2=1.41421, INVPHI=0.61803, GA=0.38197 (golden-angle frac), and
-    tPhase advances at an irrational rate (PHI-derived) so the wash never repeats.
+    independent wash/color phases advance at irrationally related rates.
 
   CONTROLS (UI order = declaration order)
     - localSpeed : wash drift rate.
@@ -65,7 +74,7 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderSwell(v) { swell = v; }      // micLow maps here (PRIMARY)
 export function sliderBlinder(v) { blinder = v; }  // micKick maps here
 export function sliderShimmer(v) { shimmer = v; }  // micHigh maps here
-export function sliderNoiseScale(v) { noiseScale = 0.1 + (v * 0.8); }
+export function sliderNoiseScale(v) { noiseScale = v; }
 
 // ── Tunables (irrational drift; no integer periods) ──────────────────────────
 var SQRT2 = 1.41421356;   // x-axis spatial scale
@@ -76,7 +85,7 @@ var FLOOR = 0.125;        // resting wash brightness. OPERATOR DIRECTION: MAX RE
                           //   the PRIMARY micLow->brightness corr collapses if the resting
                           //   base dominates total brightness, so the floor is pushed LOW.
                           //   A darker idle is accepted (the rig still ANIMATES at rest: the
-                          //   cubed wash drifts on tPhase and the warmFloor breathes with the
+                          //   cubed wash drifts on washPhase and the warmFloor breathes with the
                           //   wash phase). A loud swell drives the warm cores hard to 255.
 var SWELL_GAIN = 1.30;    // how hard micLow swells the wash. Tuned so the loud-swell cores
                           //   reach full but the field mostly stays in the LINEAR region
@@ -84,6 +93,9 @@ var SWELL_GAIN = 1.30;    // how hard micLow swells the wash. Tuned so the loud-
                           //   micLow->brightness correlation).
 var BLIND_DECAY = 7.0;    // blinder envelope decay (per second) — crisp flash
 var SHIM_HZ = 0.041666;   // shimmer churn time-scale (irrational-ish, fine grain)
+// Optional accent role. Self-declaring its canonical append-only id preserves
+// compilation and output on models with no TE signs.
+var FIX_TE_SIGN = 7;
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -124,7 +136,9 @@ function clamp01(v) {
 }
 
 // ── Persistent state ─────────────────────────────────────────────────────────
-var tPhase = 0.0;       // accumulated wash drift phase (irrational rate)
+var PHASE_WRAP = 10000.0; // integer-turn wrap; safe for every wave() consumer
+var washPhase = 0.0;    // brightness-field drift, in turns
+var colorPhase = 0.0;   // independent palette-field drift, in turns
 var tShim = 0.0;        // shimmer churn time term
 var blindEnv = 0.0;     // vintage blinder envelope (snaps to 1 on kick, decays)
 var lastKick = 0.0;     // previous-frame blinder level for rising-edge detect
@@ -141,9 +155,15 @@ export function beforeRender(delta) {
   // Local speed trim (00_golden_hour convention: v=0.5 -> 1x, exponential feel).
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  // Drift the wash at an IRRATIONAL rate so the sunset never loops.
-  tPhase = tPhase + (delta / 1310.72) * localMult * DRIFT;
-  tPhase = tPhase - floor(tPhase);
+  // Independent accumulators prevent the old 17-second seam: tPhase used to
+  // wrap at 1.0 and was then multiplied by 1.6180339 for colour, so every wrap
+  // jumped the entire palette field. Each consumer now advances at its own
+  // irrational rate and wraps only by an integer number of wave() turns.
+  var phaseStep = (delta / 1310.72) * localMult * DRIFT;
+  washPhase = washPhase + phaseStep;
+  colorPhase = colorPhase + phaseStep * 1.6180339;
+  if (washPhase >= PHASE_WRAP) washPhase = washPhase - PHASE_WRAP;
+  if (colorPhase >= PHASE_WRAP) colorPhase = colorPhase - PHASE_WRAP;
 
   // Shimmer churn (fine grain), modulated by localSpeed.
   tShim = time(SHIM_HZ / (0.25 + localSpeed));
@@ -153,8 +173,8 @@ export function beforeRender(delta) {
   // without clamping out the response.
   washGain = FLOOR + clamp01(swell) * SWELL_GAIN;
 
-  // VINTAGE BLINDER: rising edge of micKick (blinder slider) snaps the envelope
-  // to full; it then decays each frame -> a crisp white flash with short tail.
+  // VINTAGE GOLDEN PULSE: a rising edge snaps the envelope to full; it then
+  // decays each frame into a crisp warm flash with a short tail.
   if (blinder > 0.45 && lastKick <= 0.45) blindEnv = 1.0;
   lastKick = blinder;
   blindEnv = blindEnv - dt * BLIND_DECAY;
@@ -163,10 +183,11 @@ export function beforeRender(delta) {
 
 export function render3D(index, x, y, z) {
   // ── Sunset wash field (irrational spatial scales; HD warm cores) ──────────
-  var nx = x * SQRT2 * noiseScale;
-  var ny = y * INVPHI * noiseScale * 0.5;
-  var nz = z * GA * noiseScale * 0.35;
-  var v = nx + ny - nz + tPhase;
+  var liveNoiseScale = 0.1 + noiseScale * 0.8;
+  var nx = x * SQRT2 * liveNoiseScale;
+  var ny = y * INVPHI * liveNoiseScale * 0.5;
+  var nz = z * GA * liveNoiseScale * 0.35;
+  var v = nx + ny - nz + washPhase;
   var raw = wave(v);               // smooth 0..1 wash field (used for COLOR)
   // HD shaping: warm cores stay near-full, troughs still drop dark for contrast.
   // A gentle gamma (not a hard square) keeps the bright cores hot (peak>=200 at
@@ -180,7 +201,7 @@ export function render3D(index, x, y, z) {
   // noiseScale) so BOTH palette ends are always present across the rig even when
   // the wash is dim at rest -> keeps the measured hueSpread up at silence without
   // touching the brightness/reactivity path (colour-only).
-  var cphase = (x * SQRT2 - y * INVPHI + z * GA) * 1.7 + tPhase * 1.6180339;
+  var cphase = (x * SQRT2 - y * INVPHI + z * GA) * 1.7 + colorPhase;
   var craw = wave(cphase);
 
   // Fine warm shimmer (micHigh): a small deterministic per-pixel sparkle layered
@@ -202,6 +223,20 @@ export function render3D(index, x, y, z) {
   // barely dilutes the micLow->brightness correlation.
   var warmFloor = 0.018 + 0.022 * raw;
   bri = bri + warmFloor;
+
+  // The pattern's unmistakable identity is a ceremonial whole-ship double
+  // sunrise: one broad gold bloom, then a smaller answering beat. It remains
+  // elegant at rest and gives Swell/Blinder audio energy a composition to
+  // reinforce instead of leaving a generic drifting wash when modulators are
+  // absent. Integer phase multipliers preserve the very-late wrap exactly.
+  var ceremonyPhase = washPhase * 10.0;
+  var ceremonyA = pow(wave(ceremonyPhase), 12.0);
+  var ceremonyB = pow(wave(ceremonyPhase - 0.12), 16.0) * 0.58;
+  var ceremony = max(ceremonyA, ceremonyB);
+  var aureole = pow(wave(abs(x - 0.5) * 0.65 + y * 0.22 - z * 0.18
+                       - washPhase * 2.0), 3.0);
+  bri = bri * (0.82 + ceremony * 0.22)
+      + aureole * ceremony * (0.050 + swell * 0.080);
   bri = clamp01(bri);
 
   // Palette blend cp1 (deep red/amber) <-> cp2 (warm gold) along a decorrelated
@@ -214,12 +249,45 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  // ── VINTAGE BLINDERS: fixtureId 5 & 6 pop white on the kick (W channel) ────
-  // Exactly the 00_golden_hour `w = ...` idea, but fired by micKick. The blinder
-  // rides ON TOP of the warm wash so the heads still read warm between kicks.
+  // ── VINTAGE GOLDEN PULSE: portable fixture role, never bench-only IDs ─────
+  // The matched white pair supplies the luminous core. An RGB gold bias warms
+  // the Vintage rail's native W emitter; the Vintage profile has no amber lane,
+  // while RGBWAU fixtures would still receive byte-identical W and A.
   var w = 0.0;
-  if (fixtureId == 5 || fixtureId == 6) {
-    w = blindEnv * (0.80 + 0.20 * noise);   // hard white pop, slight wash texture
+  if (fixtureType == FIX_VINTAGE_6) {
+    var goldPulse = blindEnv * (0.82 + 0.18 * noise);
+    r = r + goldPulse * 0.72;
+    g = g + goldPulse * 0.38;
+    b = b + goldPulse * 0.05;
+    w = goldPulse * 0.78;
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity is a coherent warm emblem with a clear double heartbeat, not
+    // the continuous full-sign wash used by Pattern 00. Fixed XYZ/path relief
+    // gives the physical strokes depth without turning the pulse into a chase.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signSpace = clamp01(x * 0.43 + y * 0.34 + z * 0.23);
+    var signRelief = wave(signPath * 1.61803 + x * 1.17
+                        - y * 0.71 + z * 0.43);
+    var emblemPhase = ceremonyPhase
+                    + (signRelief - 0.5) * 0.018;
+
+    // A decisive primary contraction/bloom is followed by a smaller second
+    // beat about one tenth-cycle later. High smooth powers separate the beats
+    // cleanly while retaining several interpolation frames at the edges.
+    var pulseA = wave(emblemPhase);
+    pulseA = pow(pulseA, 18.0);
+    var pulseB = wave(emblemPhase - 0.10);
+    pulseB = pow(pulseB, 22.0) * 0.60;
+    var emblemPulse = max(pulseA, pulseB);
+    var signBody = clamp01(0.25 + swell * 0.24
+                         + emblemPulse * (0.27 + swell * 0.20)
+                           * (0.82 + signRelief * 0.18));
+    var signMix = clamp01(0.10 + signSpace * 0.55
+                        + signRelief * 0.08 + pulseA * 0.10
+                        + pulseB * 0.18);
+    r = (pr1 + (pr2 - pr1) * signMix) * signBody;
+    g = (pg1 + (pg2 - pg1) * signMix) * signBody;
+    b = (pb1 + (pb2 - pb1) * signMix) * signBody;
   }
 
   // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter

@@ -4,6 +4,7 @@ import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
+import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
@@ -20,7 +21,7 @@ import {
   getAutopilot, setAutopilot,
   setAutopilotProfile as apiSetAutopilotProfile,
   fetchDeckChannel, setDeckChannelControl,
-  setMixerView,
+  activateLayerSetting,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   fetchDeckColorAutopilot, setDeckColorAutopilot,
   fetchPlaylists,
@@ -32,8 +33,6 @@ import {
   type DeckColorAutopilotConfig,
   type PlaylistAssignment,
 } from '@/utils/api';
-import { engineEvents } from '@/utils/engineEvents';
-import { engineVizEvents } from '@/utils/engineVizEvents';
 import { setMidiActiveContext } from '@/hooks/useMidiControl';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
@@ -179,6 +178,7 @@ const OfflineBanner = ({ error }: { error: string }) => {
 export default function ControlDeckScreen() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
+  const { waitForHandoff } = useLiveTouchCoordinator();
   // ── 3-COLUMN layout responsiveness (operator request June 2026) ──────────
   // The deck splits into three side-by-side columns on wide surfaces (iPad
   // landscape / web): PATTERNS | PARAMETERS | AUTOPILOT & SETTINGS. On narrow
@@ -391,11 +391,20 @@ export default function ControlDeckScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      setMixerView('deck');
+      void waitForHandoff('deck').then((handoffResult) => {
+        if (handoffResult !== null) return;
+        return activateLayerSetting('deck', { reason: 'captainpad_deck_tab' }).then((result) => {
+          if (!result.ok) {
+            Alert.alert('Deck activation failed', result.error || 'The engine rejected the Deck layer setting.');
+          }
+        });
+      }).catch((error) => {
+        Alert.alert('Deck handoff failed', error instanceof Error ? error.message : String(error));
+      });
       // Switch the MIDI controller to its Deck mapping context.
       setMidiActiveContext('deck');
       // Tab unmount cleanup: any in-flight swap is finalized by the
-      // engine when we navigate away (the /mixer/view POST does that
+      // engine when we navigate away (the /layers/activate POST does that
       // server-side), so clear the local flag so the next mount starts
       // with the lock OFF instead of a stale in-flight assumption.
       return () => {
@@ -406,7 +415,7 @@ export default function ControlDeckScreen() {
         swapTransitionIdRef.current = null;
         setDeckSwapInFlight(false);
       };
-    }, [])
+    }, [waitForHandoff])
   );
 
   // Control plane: deck channel state, autopilot, deck-transition

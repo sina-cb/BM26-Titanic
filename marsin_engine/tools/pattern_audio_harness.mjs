@@ -88,6 +88,7 @@ import { buildMetaArray, loadModelForGauge } from '../lib/model_loader.js';
 import { buildViewCatalog } from '../lib/view_catalog.js';
 import { buildMaskConstants } from '../lib/view_mask_constants.js';
 import { createBitFreeViewPromoter } from '../lib/in_view_intrinsic.js';
+import { micSignalShortNames } from '../audio/postproc/audio_signals.js';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
@@ -119,7 +120,12 @@ let outFps = (A['out-fps'] !== undefined && A['out-fps'] !== 'true') ? parseFloa
 if (!(outFps > 0) || !isFinite(outFps)) { console.log('OUTFPS_FAIL: --out-fps must be > 0, got ' + A['out-fps']); process.exit(2); }
 const maxCells = (A['max-cells'] !== undefined && A['max-cells'] !== 'true') ? parseInt(A['max-cells'], 10) : 150000;
 if (!(maxCells > 0)) { console.log('MAXCELLS_FAIL: --max-cells must be > 0, got ' + A['max-cells']); process.exit(2); }
-const SIG_FIELD = { micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux' };
+// signal key -> the analyzer/synth field it reads. DERIVED from the
+// authoritative registry (audio/postproc/audio_signals.js) instead of
+// hand-listed, so this harness, audio_mod_spec.mjs's VALID_SIGNALS and the
+// Companion's curated outputs can never disagree about the family (the
+// disagreement that hid the missing FLUX publisher — report 20260806_184).
+const SIG_FIELD = micSignalShortNames();
 
 // ── --mod grammar (RANGE-AWARE) ───────────────────────────────────────────────
 // Token: `sig:slider[:min:max[:curve]]`. Bare `sig:slider` = range 0..1 linear
@@ -326,7 +332,21 @@ if (storedFrames * N > maxCells) {
 // Indices of the pixels we actually store (strided if downsampling).
 const keepIdx = []; for (let i = 0; i < N; i++) if (i % pixelStride === 0) keepIdx.push(i);
 
-const meta = keepIdx.map(i => { const p = px[i]; return { i: p.i, fId: p.fId || 0, sId: p.sId || 0, nx: p.nx, ny: p.ny, nz: p.nz }; });
+const meta = keepIdx.map(i => {
+  const p = px[i];
+  return {
+    i: p.i,
+    fId: p.fId || 0,
+    sId: p.sId || 0,
+    nx: p.nx,
+    ny: p.ny,
+    nz: p.nz,
+    fixtureType: p.fixtureType,
+    name: p.name,
+    group: p.group,
+    localIndex: p.localIndex,
+  };
+});
 
 // ── I4 GATE accounting (redteam _112 F7) ──────────────────────────────────────
 // The harness used to ALWAYS exit 0 with no failing bar: a 100%-black pattern

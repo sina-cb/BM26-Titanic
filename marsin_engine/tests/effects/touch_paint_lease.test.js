@@ -12,7 +12,8 @@
 //   1. LEASE expiry   — owner stops renewing  -> group auto-clears
 //   2. WS-CLOSE        — owner's socket closes -> group clears immediately
 //   3. NOT PERSISTED   — leased paint never reaches globals_state.yaml
-//   4. PERMANENT paint — no ownerId still persists and is NOT swept (no
+//   4. UNDERLAY restore — a leased overlay cannot destroy durable paint
+//   5. PERMANENT paint — no ownerId still persists and is NOT swept (no
 //                        regression for saved operator looks)
 //
 // The engine is spawned with `--dest 127.0.0.9` so its sACN can never reach the
@@ -195,6 +196,40 @@ test('touchControlHello rejects a missing ownerId loudly (no silent accept)', as
     assert.match(rej.reason, /ownerId/);
   } finally {
     ws.close();
+  }
+});
+
+test('leased overlay preserves and exactly restores a pre-existing permanent paint', async () => {
+  const durableColor = [0, 0.2, 0.8, 0, 0, 0];
+  const overlayColor = [0.9, 0, 0, 0, 0.1, 0];
+  await h.api('PUT', `/group-fixed-colors/${encodeURIComponent(GROUP_A)}`, {
+    color: durableColor, brightness: 0.37,
+  });
+  const diskBefore = globalsOnDisk();
+
+  const ws = await openControlWs();
+  try {
+    await rpc(ws, { type: 'touchControlHello', ownerId: 'underlay-owner' }, 'touchControlHelloAck');
+    await h.api('PUT', `/group-fixed-colors/${encodeURIComponent(GROUP_A)}`, {
+      color: overlayColor, brightness: 0.91, ownerId: 'underlay-owner',
+    });
+    assert.deepEqual((await overrides())[GROUP_A].color, overlayColor,
+      'leased overlay must be the live controller value');
+    assert.equal(globalsOnDisk(), diskBefore,
+      'leased overlay must not rewrite or delete the durable state file');
+
+    const rel = await rpc(ws, {
+      type: 'touchControlRelease', ownerId: 'underlay-owner',
+    }, 'touchControlReleased');
+    assert.deepEqual(rel.cleared, [GROUP_A]);
+    const restored = (await overrides())[GROUP_A];
+    assert.deepEqual(restored.color, durableColor);
+    assert.equal(restored.brightness, 0.37);
+    assert.equal(globalsOnDisk(), diskBefore,
+      'release must restore the exact durable bytes, not save a reconstruction');
+  } finally {
+    ws.close();
+    await h.api('DELETE', `/group-fixed-colors/${encodeURIComponent(GROUP_A)}`);
   }
 });
 

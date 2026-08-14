@@ -61,6 +61,15 @@ export const SMALL_SMOKESTACK_GROUPS = [
   'Right Small SmokeStack',
 ];
 
+// The high auditorium uplights belong in the main orthographic Top view. They
+// remain at their real x/z positions rather than being parked in an auxiliary
+// panel, so their relationship to the walls and strands matches the Aerial 3D
+// view and the Live Touch brush surface exactly.
+export const AUDITORIUM_GROUPS = [
+  'Left Auditorium',
+  'Right Auditorium',
+];
+
 // ─── The FRONT of the ship ─────────────────────────────────────────────────
 // Operator spec (his Front-view review, report 20260725_48 + the 2026-07-29
 // correction): the Front view is the front lights ONLY — the front LED bars, the
@@ -162,8 +171,8 @@ const TE_SIGN_EXCLUDE = TE_SIGN_TYPES.map((fixtureType) => ({ fixtureType }));
 
 // ─── The four default views ────────────────────────────────────────────────
 export const DEFAULT_VIEWS = [
-  // 1) TOP-DOWN — ONE true top-down projection of the bars, the strands, the two
-  //    chimney par rings AND the two small smoke stacks.
+  // 1) TOP-DOWN — ONE true top-down projection of the bars, strands, chimney
+  //    rings, small smoke stacks, and both auditorium rows.
   //
   //    Operator ruling (Sina): the par rings must read AT THE CENTRE of the LED
   //    cluster they crown, not parked in a side panel. Physically they already
@@ -199,12 +208,13 @@ export const DEFAULT_VIEWS = [
     panels: [
       {
         id: 'main',
-        label: 'Bars + Strands + Stacks',
+        label: 'Bars + Strands + Stacks + Auditoriums',
         select: [
           { fixtureType: 'ShehdsBar' },
           { kind: 'led' },
           ...CHIMNEY_GROUPS.map((group) => ({ group })),
           ...SMALL_SMOKESTACK_GROUPS.map((group) => ({ group })),
+          ...AUDITORIUM_GROUPS.map((group) => ({ group })),
         ],
         // The TE Sign V3 halves are LED-CLASS by ruling (kind: 'led') but belong
         // to the te_sign view, NOT here — exclude them so `{kind:'led'}` stays
@@ -212,18 +222,9 @@ export const DEFAULT_VIEWS = [
         exclude: [...TE_SIGN_EXCLUDE, ...ORPHAN_EXCLUDE],
         projection: 'top',
         layout: 'spatial',
-        // ⚠ OPERATOR-ORDERED DEPARTURE FROM THE TRUE PROJECTION, TOP-DOWN ONLY
-        // (Sina, 2026-07-30): "bring the 2 sides closer so they are seen easier
-        // together." 53 % of this view's width was empty — 26.5 units between
-        // the ship's two halves, plus 13.8 and 8.1 out to the small smoke
-        // stacks — and an aspect-preserving fit charges for that emptiness by
-        // shrinking every fixture. Each empty band wider than `minWorldGap`
-        // collapses to exactly `gapWorld`; it is a piecewise TRANSLATION, so
-        // within a side every distance, angle and ordering is exactly what it
-        // was. Only the inter-side spacing moves. Margin on the real scene:
-        // bands collapsed are 26.5/13.8/8.1, the largest gap that must NOT be
-        // touched is 1.5, so 5 sits with >3× headroom either way.
-        compress: { minWorldGap: 5, gapWorld: 4 },
+        // No offsets, pitch stretching, gap compression, or perspective. The
+        // artistic treatment comes from the glyph styles below; geometry stays
+        // an honest, uniformly scaled x/z orthographic projection.
       },
     ],
     // Per-VIEW type styles (the existing view.typeStyles affordance) — every
@@ -239,9 +240,9 @@ export const DEFAULT_VIEWS = [
     //     front view has" (2026-07-30). A bar's 18 LEDs span only 0.82 world
     //     units, so a bar draws as one blob whose length is (0.82 × scale) plus
     //     the glyph's end-caps; at the old 17 the blob nearly touched its
-    //     neighbour 3.0 units away. Trimming the glyph shortens the end-caps —
-    //     together with the gap compression's extra zoom that roughly triples
-    //     the gap between bars. 14 keeps them clearly beefier than the 13 they
+    //     neighbour 3.0 units away. Trimming the glyph shortens the end-caps
+    //     while the positions retain their honest orthographic spacing. 14
+    //     keeps them clearly beefier than the 13 they
     //     were before his earlier "a bit wider" ruling (report 20260725_40), and
     //     stays SQUARE so a bar reads the same at any rotation — the right-hand
     //     rows run diagonally.

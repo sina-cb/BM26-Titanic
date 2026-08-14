@@ -1,11 +1,10 @@
 # 44 — TOUCH CONTROL
 
-The operator surface for driving the ship **by hand**, live, without the deck or
-a plan. It is a **standalone browser panel** — `docs/ui/touch_control.html`
-(geometry + rendering) with `docs/ui/touch_control_wire.js` (the engine socket)
-— served by the sim's HTTP server and driven on an iPad. The CaptainPad tab
-this doc originally described is retired; its component tree was deleted from
-`CaptainPad/components/touch_control/`.
+The operator surface for driving the ship **by hand**, live. The tuned
+instrument remains `docs/ui/touch_control.html` (geometry + rendering) with
+`docs/ui/touch_control_wire.js` (engine transport), served by the sim and
+embedded in CaptainPad as **Layers → Live Touch**. CaptainPad owns navigation
+and theme chrome; the iframe keeps the instrument geometry and gestures.
 
 Everything here is a manual override of whatever the automatic system is
 doing, so the document is organised around the two questions that actually
@@ -30,30 +29,38 @@ The SPATIAL/XY panel, the one this doc mostly concerns:
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ SPATIAL / XY                        [XY MODE | SPATIAL MODE] │
+│  VIEW [TOP / FRONT / STRANDS / SIGN]              [PAN][FIT] │
 │  Y AXIS (WALK·STROBE) │ TAKE (REC·PLAY·LOOP·CLR)             │
 │  SIZE chips           │ POWER chips                          │
 │  FADE chips           │ STEP chips                           │
 │  ON TIME chips        │ SPEED chips                          │
 │ D ┌────────────────────────────────────────────────────┐ I   │
-│ R │            the pad — 150 charted fixtures,         │ N   │
-│ A │            de-rotated hull, mirrored X             │ K   │
+│ R │       generated canonical pixel view, centered FIT │ N   │
+│ A │       exact pixel identities, display-only PAN     │ K   │
 │ W └────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 DRAW (POOL·TRAIL·ERASE·IGNITE) and INK (ONE·MASTER·HUE·COMP·CLASH) run as
-vertical columns flanking the pad. **XY mode**: X drives the grand master,
-rescaled into **[0.05, 1]** — dim at the far left, never dark; Y drives the
+vertical columns flanking the pad. **XY mode**: X drives the transient Live
+Touch master factor, rescaled into **[0.05, 1]** — dim at the far left, never
+dark; the Dimmer Rack ceiling still wins. Y drives the
 strobe rate or the group walk (operator-selectable), both exponential, bottom
 4% = off. **SPATIAL mode**: the pad is a per-pixel paint surface driving the
-`/spatial-paint` global effect, which works on **every** pattern. TAKEs record
+lease-owned `/spatial-paint` stage, which works on **every** Live pattern. Up
+to ten fingers paint as one bounded request per frame, with an independent
+sweep origin per finger so touches never draw lines between each other. FULL
+expands the panel to the entire Live Touch viewport and is available only in
+SPATIAL mode; switching to XY or pressing Escape exits it. TAKEs record
 a gesture with its timing and replay/loop it; presets capture the whole panel
 (schema v3).
 
-Everything is gated behind a master **ARM** switch. Unarmed, the panel writes
-nothing to the rig (`write()` refuses; only reads and the arm chain itself use
-`req()`). Arming declares a **deadman lease** over `/ws/control` and will NOT
-proceed without the engine's ack — no socket, no takeover.
+Everything is gated behind a master **ARM** switch. Opening the tab is passive.
+Arming declares a **deadman lease** over `/ws/control`, stages the isolated
+Live pattern, atomically prepares its owner-local state through
+`POST /layers/live_touch/prepare`, then activates `live_touch` through the same
+100 ms Layers blend used by Deck and Mixer. `ARMED` appears only after the
+landing readback.
 
 ---
 
@@ -68,10 +75,10 @@ model, and each one closes off a design that looks obvious on paper.
 projected onto two engine slots, or onto something else entirely.
 
 - Slots 1–2 write the real CPC params and colour every pattern.
-- Slots 3–5 have **no engine home**. They reach a pattern only through
-  per-pattern local sliders (`sliderHue3/4/5`, `sliderVal3/4/5`), which only
-  `66_five_colour_prism` and `67_five_colour_stations` declare. On any other
-  pattern those three slots do nothing at all.
+- Slots 3–5 have **no shared engine home**. They reach a pattern only through
+  per-pattern local sliders (`sliderHue3/4/5`, `sliderVal3/4/5`), declared by
+  `128_five_colour_prism`, `129_five_colour_stations`, and
+  `130_spatial_paint`. On any other pattern those three slots do nothing.
 
 ### 2.2 Patterns INTERPOLATE between the two palette slots
 A pattern given cp1 = 116° and cp2 = 188° paints every hue in between across
@@ -88,10 +95,23 @@ This is the single most important trade-off on the surface: it is the only way
 to put different colours on different parts of the ship simultaneously, and it
 costs all motion on those parts.
 
-### 2.4 Section dimmers SCALE, they do not overwrite
-`POST /section-brightness` multiplies a group's output. The pattern keeps
-running underneath. This is why on/off and per-group brightness use dimmers,
-**not** group colour.
+### 2.4 Dimmer Rack is the brightness authority
+The Dimmer Rack's section value is a hard ceiling. Live Touch cannot write
+`/section-brightness` or Mixer master. Its master and group faders write
+revisioned, lease-owned factors through `/touch-control/brightness`; the engine
+applies `rack ceiling × Live master × Live group`. Thus a Live fader at 100%
+under a rack group at 30% produces at most 30%, and disarm drops the transient
+factors without changing the rack.
+
+The Groups profile selector is only a control projection over those same 24
+factors. **Individual groups** preserves the full bank. **Show instruments**
+uses the authored Hull Canvas, Silhouette, Jewelry, Organs, and Identity views.
+**Performance planes** uses the derived Front/Back views plus Organs and
+Identity. The engine publishes each view's exact full-group and partial-group
+memberships; the client accepts only non-overlapping, group-complete profiles
+that partition all 24 groups. A broader view displays `MIX` when its underlying
+groups differ, and moving it intentionally unifies those members at the new
+level. Switching profiles never changes a level by itself.
 
 ### 2.5 The ship has a 25% dead band on X, and it runs diagonally
 Measured on `models/titanic.js` (964 pixels):
@@ -106,35 +126,43 @@ A screen-aligned (nx, nz) pad is **73.6% dead** (38 of 144 cells contain any
 pixel), and "left to right" cuts diagonally across the hull rather than running
 bow-to-stern. Any spatial surface must rectify this or it will feel broken.
 
-The sim already solves it: its Top-Down pixel view compresses empty bands
-(`compress: {minWorldGap: 5, gapWorld: 4}`). SPATIAL reproduces that transform
-so the pad and the sim picture agree.
+The sim supplies the canonical fixture membership, styling, projection, and
+resolved design coordinates. Live Touch serializes those exact resolved glyphs
+without a second geometry pass, then uniformly fits the same design to 92% of
+the available pad. The shipped Top view has no per-fixture offsets, gap
+compression, pitch stretching, or perspective; runtime PAN remains display-only.
 
-### 2.6 The sim's 2D view has no inverse
-Screen → panel design space is analytically invertible; design space → **world**
-is not, anywhere in the repo. The projection drops an axis, the forward
-constants are function-local, and the compression band table is discarded by its
-caller. SPATIAL therefore rebuilds the compression and its inverse client-side.
+### 2.6 The sim's generated 2D view is canonical
+Live Touch loads `docs/ui/touch_control_pixel_views.json`, generated from the
+same YAML, camera source, and resolver as the main views. Schema 4 stores the
+simulator resolver's exact glyph coordinates. It verifies every source hash and
+compares each live engine pixel identity and coordinate before ARM. Top contains
+720 pixels, including all 16 auditorium uplights. Top and Strands address
+`(nx,nz)` with `Z+` ship-forward/down-screen as seen from Aerial, Front addresses
+`(nx,ny)`, and the rotated TE Sign addresses screen-horizontal `nz` plus
+screen-vertical `ny`. Front displays 396 Front glyphs but sends an exact
+792-identity Front+Back paint mask so the stroke mirrors onto the hidden face.
+Every mask is validated, unique, and in range. View or mask changes lift the
+brush and clear its owner-local heat so hidden-view paint cannot leak. PAN
+changes screen coordinates only; pixel identity and world coordinates are
+unchanged.
 
 ### 2.7 Live colour at full resolution is not on the wire
 The `vis` WS topic is subsampled to 100 px/strip at 5 Hz with no index→group
 mapping. A faithful animated mirror of the rig is **not possible** over the
 current API. A static map is.
 
-### 2.8 The effect slot table is SHARED
-Slots 1–8 are rendered by the Deck/Mixer grid and the VSN1 hardware. TOUCH
-CONTROL only ever provisions into slots ≥ 9, and only ever switches off effects
-it personally turned on.
+### 2.8 Live effect slots are session-local
+The engine seeds an in-memory Live creative context when the ARM lease lands.
+Owner-tagged effect-slot requests read and mutate that context, never the
+durable Deck/Mixer/global slot table. Touch Control still provisions slots ≥ 9
+to preserve the established panel layout and hardware numbering.
 
-### 2.9 Master brightness has two paths and they behave differently
-- `PATCH /mixer { master }` → `setMaster()`, whose first statement cancels any
-  in-flight fade. It can only SNAP.
-- `POST /mixer/master/fade { target, durationMs }` → ramps.
-
-The panel floors its own master writes at **10%** (`MIN_BRIGHTNESS`) — the
-mission is that the ship is visible at night, and a touch surface is the easiest
-place to drag a master to zero by accident. Deck and Mixer are unaffected and
-can still reach black.
+### 2.9 Live brightness has one isolated, revisioned path
+Direct changes use `PATCH /touch-control/brightness`; preset dips use
+`POST /touch-control/brightness/master/fade`. Both affect only the armed Live
+setting, are rejected without its owner lease, and remain subordinate to the
+Dimmer Rack. Deck/Mixer master state is untouched.
 
 ### 2.10 There is no "auto system" outside the festival window
 The timeline plan declares a festival window; outside it `_inFestivalWindow()`
@@ -150,20 +178,22 @@ no-op. "Revert to auto" only means something inside the window.
 | Colour wheel | `colorPalette1/2` (`POST /param-center`) | Or ONE group, when a group is focused (§4) |
 | Colour fade | `colorTransitionMs` | Engine-side perceptual (OKLab) crossfade |
 | Slots 1–2 | `colorPalette1/2` | Reach every pattern |
-| Slots 3–5 | `sliderHue3/4/5`, `sliderVal3/4/5` | Only on patterns 66/67 — silent elsewhere |
+| Slots 3–5 | `sliderHue3/4/5`, `sliderVal3/4/5` | Only on patterns 128/129/130 — silent elsewhere |
 | MASTER / HUE / COMP / CLASH | the five slots | Palette generators; ≥30° hue separation enforced |
-| XY pad · X | `PATCH /mixer {master}` | Rescaled into **[XY_MASTER_FLOOR, 1]** (page-exported 0.05) — never dark |
+| XY pad · X | `PATCH /touch-control/brightness {master}` | Live factor in **[XY_MASTER_FLOOR, 1]**; rack ceiling remains authoritative |
 | XY pad · Y (STROBE) | `POST /strobe-rate {hz, duty, intensity}` | 0.5–20 Hz exponential via the page's `xyStrobeHz`; bottom 4% = off |
 | XY pad · Y (WALK) | `POST /movement-rate {pixelsPerSecond, colors}` | 0.5–30 grp/s via `xyWalkPps`; painted in the operator's palette |
 | ON TIME chips | `duty` in the strobe body | Share of each flash cycle lit (id stays `strobeDuty`) |
 | SPEED chips | `speed` (`POST /param-center`) | Reads `zFader.dataset.value`; overwritten while BPM sync is on |
-| SPATIAL pad | `POST /spatial-paint` (global effect) | Per-pixel stroke on ANY pattern; per-axis world radii from `padBrushWorld` |
+| SPATIAL pad | owner-tagged `POST /spatial-paint` | Per-pixel stroke on any Live pattern; per-axis world radii from `padBrushWorld` |
+| FULL | local Spatial surface takeover | Spatial mode only; fills the Live Touch viewport and exits on XY mode or Escape |
 | DRAW modes | `mode` pool\|trail\|erase\|ignite | ERASE wipes to true black (operator ruling); POOL paints the opposite colour |
+| FADE chips | `fadeSeconds` in `POST /spatial-paint` | Exact linear time-to-zero: 0.1 s, 0.5 s, 1.0 s, or 1.5 s; pad, global stage, and pattern 130 share the contract |
 | INK schemes | stroke colour walk + `colorPalette1` | Painting IS how you change colour |
 | TAKE | replays via `spatialplay` events | Same code path as a live finger; pen-up unconditional |
 | EFFECTS | GEM slot toggle / patch | Catalog fetched from the engine at runtime |
-| GROUPS · bar / ⏻ | `POST /section-brightness` | Strict numeric 0..1 engine-side |
-| ARM | source lock (6-key lease) + autopilots off + disable-all + overlay silence + deadman WS lease | Fail-closed: no deadman ack ⇒ no takeover. NOT rig-wide exclusivity — see the audit (report 20260810_2 §0) |
+| GROUPS · bar / ⏻ | `PATCH /touch-control/brightness {groups}` | Transient factor; cannot write Dimmer Rack |
+| ARM | deadman lease → stage pattern → atomic `POST /layers/live_touch/prepare` → `POST /layers/activate {target:'live_touch',durationMs:100}` | Fail-closed; tab focus is inert; Deck/Mixer state is preserved |
 
 ---
 
@@ -171,10 +201,10 @@ no-op. "Revert to auto" only means something inside the window.
 
 Tapping a group **name** aims the colour pad at that group. While focused:
 
-- the pad writes `PUT /group-fixed-colors/<group>` and does **not** move the
-  global palette;
+- the pad writes owner-tagged `PUT /group-fixed-colors/<group>` and does **not** move the
+  Live palette;
 - each group keeps its own colour when focus moves elsewhere, because the
-  override is stored per group engine-side;
+  override is stored per group in the in-memory Live context;
 - the card shows a swatch and a `clear` action that hands the group back to the
   pattern;
 - **the focused group goes static** (§2.3), and the header says so.
@@ -199,22 +229,19 @@ Plus:
 - **Leased colours are never persisted**, so an engine restart cannot resurrect
   a frozen group. Unleased (operator-saved) colours still persist as before.
 - **The arm deadman** (`/ws/control` lease, `BM26_ARM_LEASE_MS`): a dead panel
-  triggers `revertToAutomaticShow`, which lights the ship, opens the lock,
-  resumes the autopilots — **and clears the panel-driven global effects**:
-  spatial paint (a dead panel's ERASE used to keep darking the ship every
-  frame, immune to every failsafe) and the slot-less XY strobe/walk.
+  initiates a canonical Live→Deck blend and destroys its owner-scoped creative
+  context, including spatial paint, slots, bindings and XY strobe/walk.
 - **Touch staleness**: a spatial `touch:true` nobody refreshes for 10 s
   (`spatialTouchStaleMs`; drawing refreshes every 33 ms) is lifted by the
   engine itself, loudly — a dead panel's finger, not a slow stroke.
-- **The panel hears the revert**: the `armRevert` broadcast forces the surface
-  to DISARMED with the reason on the pill, and a reconnect while armed
-  re-checks the lock instead of blindly re-arming — if the takeover is gone,
-  the panel says so and disarms rather than fighting the autopilot.
-- **Disarm** releases paint, stops the XY strobe/walk explicitly, switches off
-  the effects this panel lit, and hands back the automatic show — ramped, not
-  snapped, floored at `ARM_FADE_FLOOR` (0.12), never black.
-- **`pagehide`** does the same via keepalive posts (arm-fade up, lock open,
-  audio bindings clear, strobe/walk off). Best-effort: the browser can kill
+- **The panel hears the revert**: `armRevert` forces DISARMED, and reconnect
+  verifies `/layers/state` still reports this owner and Live participation. It
+  never infers ownership from a ParamCenter lock or automatically re-activates.
+- **Disarm / tab exit** posts the exact Deck or Mixer destination to the shared
+  router, waits for the blend to land, releases Live transient state, and only
+  then lets CaptainPad navigate.
+- **`pagehide`** starts the same Live→Deck activation via keepalive without
+  stripping the look mid-blend. Best-effort: the browser can kill
   the page mid-flight, which is exactly why the engine-side lease is the real
   guarantee.
 
@@ -228,30 +255,34 @@ release does.
 ## 6. Everything it touches
 
 **Engine REST**
-`/status` · `/param-center` · `/mixer` · `PATCH /mixer` ·
-`POST /mixer/master/fade` · `/dimmer-groups` · `/dimmers` ·
-`POST /section-brightness` · `/group-fixed-colors` (GET/PUT/DELETE) ·
-`/global-effect-slots/*` · `/deck/channel` · `POST /deck/channel/control` ·
-`POST /pattern` · `/timeline/takeover` · `/timeline/resume` ·
+`/status` · `/layers/state` · `/layers/activate` ·
+`/layers/live_touch/prepare|pattern|exports|control` · `/spatial-paint` ·
+`/touch-control/brightness*` ·
+`/param-center` · `/mixer` (tempo reads/writes only) · `/dimmer-groups` ·
+`/dimmers` (read only) · `/group-fixed-colors` (GET/PUT/DELETE) ·
+`/global-effect-slots/*` ·
 `/model/group-layout` · `/model/pixel-layout`
 
 **Engine WS** (`/ws/control`)
-`setSharedParam` · `paramRejected` · `globalEffectSlots` ·
-`touchControlHello` / `touchControlHeartbeat` / `touchControlRelease`
+`touchControlHello` · `touchControlArmed` · `touchControlArmedAck` ·
+`touchControlArmedRejected` · `touchControlBrightness` · `dimmerState` ·
+`armRevert`
 
 **Engine params** `colorPalette1/2` · `colorTransitionMs` ·
 `motionTransitionMs` · `size` · `rotate` · `speed` · `bpmSpeedSync`
 
-**Shared state** the GEM slot table (with Deck/Mixer/VSN1), section dimmers
-(with the Dimmer Rack), group fixed colours (with the Dimmer Rack), the rig
-master (with everything).
+**Lease-local state** includes the Live pattern controls, transient brightness,
+creative effects, ParamCenter palette/tempo, audio bindings and group fixed
+colours. The engine seeds and destroys this in-memory context with the ARM
+lease. Dimmer Rack and Deck/Mixer pattern/fader/durable creative state are not
+Live-owned.
 
 ---
 
 ## 7. Open design questions — the point of the second opinion
 
-1. **Five colours on a two-colour engine.** Slots 3–5 are silent on 68 of 70
-   patterns. Options: keep the fiction and label it; cut to two slots; or add
+1. **Five colours on a two-colour engine.** Slots 3–5 are silent outside Live
+   patterns 128, 129, and 130. Options: keep the fiction and label it; cut to two slots; or add
    three real CPC params and update every pattern's colour maths. Currently the
    fiction is kept and stated in the UI. Is that the right call?
 
@@ -263,19 +294,21 @@ master (with everything).
    card, so aiming the colour pad means reaching to the bottom of the screen.
    Should it instead be a target selector in the COLOUR panel header?
 
-4. **The GROUPS strip is 24 cards in a horizontal scroll.** That is a lot of
-   small targets, and it puts a horizontal drag (the brightness bar) inside a
-   horizontal scroll. A grid, a two-row strip, or a separate page may be better.
+4. **The Individual GROUPS profile is 24 cards in a horizontal scroll.** A pointer that
+   starts on a fader is captured by that vertical fader for the whole gesture.
+   Horizontal bank pan starts only from chrome/gaps after a horizontal-dominant
+   threshold, so the two gestures cannot oscillate. Two exact view profiles
+   reduce the active bank to five or four faders without replacing the stored
+   individual levels.
 
 5. **Should SPATIAL replace the XY pad or sit beside it?** They are different
    mental models (parameter space vs physical space) sharing one area.
 
-6. **The panel duplicates the Dimmer Rack.** Per-group brightness now exists in
-   both. Should the rack own it, or should this be the fast version?
+6. **Brightness authority is resolved.** The rack owns the ceiling; Live's
+   duplicate-looking faders are fast 0..100% factors within that ceiling.
 
-7. **ARM now writes to the rig** (the engage crossfade needs a destination).
-   Previously ARM was inert. Is a visible crossfade on arming correct, or should
-   arming stay silent until the operator touches something?
+7. **ARM transition is resolved.** Tab focus stays silent; explicit ARM blends
+   into Live Touch using the exact operation used by Deck↔Mixer.
 
 ---
 

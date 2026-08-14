@@ -148,6 +148,25 @@ export interface TimelineOperatorLease {
   expiresAtMs: number;
 }
 
+export interface TimelineActiveSequence {
+  cueId: string | null;
+  startedAtMs: number;
+  nextStepIndex: number;
+  totalSteps: number;
+  nextAtMs: number;
+  nextInSec: number;
+}
+
+export interface TimelineSequenceResult {
+  cueId: string | null;
+  status: 'completed' | 'cancelled' | 'failed';
+  reason: string | null;
+  startedAtMs: number;
+  endedAtMs: number;
+  completedSteps: number;
+  totalSteps: number;
+}
+
 export interface TimelineState {
   mode: TimelineMode;
   scene: string | null;
@@ -159,6 +178,8 @@ export interface TimelineState {
   // The event currently driving the deck (program or deck-window cue), or null
   // when only the autopilot baseline is driving. See TimelineActiveCue.
   activeCue: TimelineActiveCue | null;
+  activeSequence?: TimelineActiveSequence | null;
+  lastSequence?: TimelineSequenceResult | null;
   // The armed pending-program lease (docs/38 §16.5), or null when none is due.
   pendingProgram: TimelinePendingProgram | null;
   // True when the controller is autopilot/program AND the mode is not
@@ -386,6 +407,11 @@ export interface ActionColorAutopilot {
 export interface ActionPlaylist {
   type: 'playlist';
   name: string;
+  // Optional exact row. When authored, the engine must refuse a missing entry
+  // rather than silently selecting the first playlist row.
+  entryId?: string;
+  // Static global palette applied immediately before this playlist load.
+  palette?: string;
   target?: PlanTarget;
   autopilot?: PlanAutopilotInline;
   // Color-autopilot override (deck target only). Absent = no color cycling.
@@ -408,11 +434,13 @@ export interface ActionPlaylist {
   globals?: { speed?: number; size?: number; bpmSpeedSync?: number };
 }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
+export interface ActionSequenceStep { afterSec: number; action: ActionLook | ActionPlaylist | ActionGlobals }
+export interface ActionSequence { type: 'sequence'; steps: ActionSequenceStep[] }
 // NOTE: the engine also validates a `scene` action, but the maker deliberately
 // does NOT author it — a scene switch RESTARTS the engine, which is dangerous
 // and irrelevant inside the timeline maker. So `scene` is omitted from this
 // union (the maker never emits it; the engine still accepts hand-authored ones).
-export type CueAction = ActionLook | ActionPlaylist | ActionGlobals;
+export type CueAction = ActionLook | ActionPlaylist | ActionGlobals | ActionSequence;
 
 export interface PlanTarget { channel: 'deck' | 'mixer' | 'all'; id: string | null }
 export interface PlanAutopilotInline {

@@ -3,6 +3,11 @@ import path from 'path';
 
 import { PatternChannel } from './pattern_channel.js';
 import { buildMaskRegistry } from './mask_registry.js';
+import {
+  DEFAULT_LAYER_TRANSITION_DURATION_MS,
+  LAYER_SETTING_IDS,
+  LayerSurfaceRouter,
+} from './layer_surface_router.js';
 
 // ── View-selection masking ─────────────────────────────────────────────
 // See docs/27_[todo]_mixer_layer_view_selection.md §4.
@@ -266,6 +271,10 @@ export class PatternMixer {
     // become mixer channels) so internal callers don't break.
     this.deckChannel = null;
     this.mixerChannels = [];
+    // Live Touch is a real, independent render setting. It never borrows the
+    // Deck handle, so staging or performing a Live look cannot destroy the
+    // exact Deck pattern/local-control state the operator will return to.
+    this.liveTouchChannel = null;
     // ── Deck dynamic view overrides (deck overlays) ──────────────────────
     // Layered, view-scoped overlay decks composited OVER the main deck into
     // `deckBuffer` (NOT through `mixerChannels`). Each overlay IS a
@@ -409,6 +418,27 @@ export class PatternMixer {
     // the perceived ramp duration.
     this.viewFaderRampPerSec = 1.0;
     this._lastViewFaderTickMs = null;
+
+    // Canonical three-setting router. The legacy viewFader fields remain as a
+    // compatibility surface for older Deck/Mixer callers and focused tests;
+    // once activateLayerSetting() is used, this router is authoritative.
+    this.layerRouter = new LayerSurfaceRouter({
+      initialSetting: LAYER_SETTING_IDS.MIXER,
+      defaultDurationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+      onChange: change => {
+        if (!this.onLayerSettingsChange) return;
+        try {
+          this.onLayerSettingsChange(change);
+        } catch (error) {
+          console.error('[Mixer] onLayerSettingsChange threw:', error.message);
+        }
+      },
+    });
+    this._canonicalLayerRouting = false;
+    this.onLayerSettingsChange = null;
+    this.layerSettingOutputProcessors = new Map();
+    this.liveTouchPhaseSpeedProvider = null;
+    this.liveTouchOutputProcessor = null;
 
     // Buffer for compositing output
     this.outputBuffer = new Uint8Array(this.pixelCount * 6);
@@ -734,19 +764,26 @@ export class PatternMixer {
   // — only "should be lit but is fully black" trips.
   _isExpectingLight(soloActive) {
     if (!(this.master > 0)) return false;
-    // Deck side contributes unless the view is fully crossfaded to the mixer.
-    if (this.viewFader < 0.999 && this.deckChannel && this.deckChannel.enabled) {
+    if (this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.DECK) &&
+        this.deckChannel && this.deckChannel.enabled) {
       const fMax = (typeof this.deckChannel.faderMax === 'number' && Number.isFinite(this.deckChannel.faderMax))
         ? this.deckChannel.faderMax : 1.0;
       const f = Math.min(this.deckChannel.fader, fMax);
       if (f > 0) return true;
     }
-    // Mixer side contributes unless the view is fully crossfaded to the deck.
-    if (this.viewFader > 0.001) {
+    if (this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.MIXER)) {
       const solo = soloActive === undefined ? this.soloedChannelIds.size > 0 : soloActive;
       for (let i = 0; i < this.mixerChannels.length; i++) {
         if (this._effFader(this.mixerChannels[i], solo) > 0) return true;
       }
+    }
+    if (this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.LIVE_TOUCH) &&
+        this.liveTouchChannel && this.liveTouchChannel.enabled) {
+      const fMax = (typeof this.liveTouchChannel.faderMax === 'number' &&
+        Number.isFinite(this.liveTouchChannel.faderMax))
+        ? this.liveTouchChannel.faderMax
+        : 1.0;
+      return Math.min(this.liveTouchChannel.fader, fMax) > 0;
     }
     return false;
   }
@@ -980,6 +1017,247 @@ export class PatternMixer {
     return this.mixerChannels;
   }
 
+  /** Return the staged/performing Live Touch channel, or null. */
+  getLiveTouchChannel() {
+    return this.liveTouchChannel;
+  }
+
+  /**
+   * Install an independent Live Touch channel. Replacing it is explicit: the
+   * caller owns the old WASM handle and must destroy/unregister it first.
+   */
+  setLiveTouchChannel(channelConfig) {
+    const channel = new PatternChannel(channelConfig);
+    this.liveTouchChannel = channel;
+    this.recompileChannelMask(channel);
+    return channel;
+  }
+
+  removeLiveTouchChannel() {
+    const channel = this.liveTouchChannel;
+    this.liveTouchChannel = null;
+    return channel;
+  }
+
+  /**
+   * Register the setting-local creative/intensity stage for Live Touch.
+   * It runs on liveTouchBuffer before the shared surface crossfade. Shared
+   * rack/blackout authority remains downstream in engine.js.
+   */
+  setLiveTouchOutputProcessor(processor) {
+    if (processor !== null && typeof processor !== 'function') {
+      throw new TypeError('Live Touch output processor must be a function or null');
+    }
+    this.liveTouchOutputProcessor = processor;
+  }
+
+  /**
+   * Register a setting-local full-look processor. Each processor runs after
+   * that setting's pattern stack is composed and before the canonical pair
+   * blend. A transition can therefore blend two complete, isolated looks.
+   */
+  setLayerSettingOutputProcessor(setting, processor) {
+    if (!Object.values(LAYER_SETTING_IDS).includes(setting)) {
+      throw new RangeError(`Unknown layer setting '${setting}'`);
+    }
+    if (processor !== null && typeof processor !== 'function') {
+      throw new TypeError('Layer setting output processor must be a function or null');
+    }
+    if (processor === null) this.layerSettingOutputProcessors.delete(setting);
+    else this.layerSettingOutputProcessors.set(setting, processor);
+  }
+
+  _processLayerSettingOutput(setting, buffer) {
+    const processor = this.layerSettingOutputProcessors.get(setting);
+    if (processor) processor(buffer, setting);
+  }
+
+  setLiveTouchPhaseSpeedProvider(provider) {
+    if (provider !== null && typeof provider !== 'function') {
+      throw new TypeError('Live Touch phase speed provider must be a function or null');
+    }
+    this.liveTouchPhaseSpeedProvider = provider;
+  }
+
+  activateLayerSetting(target, options = {}) {
+    // Capture the physical legacy Deck/Mixer side before canonical routing
+    // takes ownership. This matters on a restored Deck boot: the router's
+    // constructor default is Mixer, but the persisted legacy fader can already
+    // be at Deck when the first canonical activation arrives.
+    if (!this._canonicalLayerRouting) this._syncLayerRouterFromLegacyView();
+    this._canonicalLayerRouting = true;
+    const result = this.layerRouter.activate(target, options);
+    this._syncLegacyViewFaderFromLayerRouter();
+    return result;
+  }
+
+  forceLayerSetting(target, reason = 'forced') {
+    this._canonicalLayerRouting = true;
+    const state = this.layerRouter.forceActive(target, reason);
+    this._syncLegacyViewFaderFromLayerRouter();
+    return state;
+  }
+
+  getLayerSettingsState() {
+    if (!this._canonicalLayerRouting) this._syncLayerRouterFromLegacyView();
+    return this.layerRouter.getState();
+  }
+
+  getLayerRenderParticipants() {
+    if (!this._canonicalLayerRouting) return this._legacyLayerParticipants();
+    return this.layerRouter.participants();
+  }
+
+  /**
+   * Validate that Mixer has a configured contributor before routing the live
+   * output to it. This deliberately inspects configuration, not rendered
+   * luminance: a pattern authored to be black is still a valid operator look.
+   * Group, solo, follow, mask and fader gates are included because each can
+   * make an apparently enabled channel contribute no pixels.
+   */
+  getMixerReadiness() {
+    const soloActive = this.soloedChannelIds.size > 0;
+    const groups = new Map(this.mixGroups.map(group => [group.id, group]));
+    const channels = new Map(this.mixerChannels.map(channel => [channel.id, channel]));
+    const resolving = new Set();
+    const memo = new Map();
+
+    const maskHasPixels = channel => {
+      const mask = channel.compiledPixelMask;
+      if (!mask) return true;
+      for (let i = 0; i < mask.length; i++) {
+        if (mask[i] === 1) return true;
+      }
+      return false;
+    };
+
+    const configuredLevel = channel => {
+      if (memo.has(channel.id)) return memo.get(channel.id);
+      if (resolving.has(channel.id)) return 0;
+      resolving.add(channel.id);
+
+      let level = 0;
+      if (channel.enabled && channel.handle && maskHasPixels(channel)) {
+        const faderMax = typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax)
+          ? channel.faderMax
+          : 1;
+        if (this._bumpedChannelIds.has(channel.id)) {
+          level = Math.max(0, Math.min(1, faderMax));
+        } else {
+          let input = channel.fader;
+          if (channel.followLeaderId) {
+            const leader = channels.get(channel.followLeaderId)
+              || (this.deckChannel && this.deckChannel.id === channel.followLeaderId
+                ? this.deckChannel
+                : null);
+            const followScale = typeof channel.followScale === 'number'
+              && Number.isFinite(channel.followScale)
+              ? channel.followScale
+              : 1;
+            if (leader === this.deckChannel) {
+              const leaderMax = typeof leader.faderMax === 'number'
+                && Number.isFinite(leader.faderMax)
+                ? leader.faderMax
+                : 1;
+              input = leader.enabled ? Math.max(0, Math.min(leader.fader, leaderMax)) : 0;
+            } else {
+              input = leader ? configuredLevel(leader) : 0;
+            }
+            input *= followScale;
+          }
+          level = Math.max(0, Math.min(input, faderMax));
+          if (channel.mixGroupId) {
+            const group = groups.get(channel.mixGroupId);
+            if (group) level *= group.muted ? 0 : Math.max(0, group.fader);
+          }
+          if (soloActive && !channel.soloSafe && !channel.faderLocked
+              && !this.soloedChannelIds.has(channel.id)) {
+            level = 0;
+          }
+        }
+      }
+
+      resolving.delete(channel.id);
+      memo.set(channel.id, level);
+      return level;
+    };
+
+    const contributors = this.mixerChannels
+      .filter(channel => configuredLevel(channel) > 0.001)
+      .map(channel => channel.id);
+    if (contributors.length > 0) {
+      return { ready: true, contributors, channelCount: this.mixerChannels.length };
+    }
+    return {
+      ready: false,
+      contributors: [],
+      channelCount: this.mixerChannels.length,
+      reason: this.mixerChannels.length === 0
+        ? 'Mixer has no channels'
+        : 'Mixer has no compiled, enabled channel with a non-zero effective fader '
+          + 'and selected pixels',
+    };
+  }
+
+  isLayerSettingRenderParticipant(setting) {
+    if (this._canonicalLayerRouting) return this.layerRouter.isParticipant(setting);
+    if (setting === LAYER_SETTING_IDS.LIVE_TOUCH) return false;
+    if (setting === LAYER_SETTING_IDS.DECK) {
+      return this.viewFader < 0.999 || this.targetViewFader < 0.999;
+    }
+    if (setting === LAYER_SETTING_IDS.MIXER) {
+      return this.viewFader > 0.001 || this.targetViewFader > 0.001;
+    }
+    throw new RangeError(`Unknown layer setting '${setting}'`);
+  }
+
+  _legacyLayerParticipants() {
+    const deckWeight = 1 - this.viewFader;
+    const mixerWeight = this.viewFader;
+    if (deckWeight > 0.001 && mixerWeight > 0.001) {
+      return [LAYER_SETTING_IDS.DECK, LAYER_SETTING_IDS.MIXER];
+    }
+    if (this.viewFader <= 0.001 && this.targetViewFader <= 0.001) {
+      return [LAYER_SETTING_IDS.DECK];
+    }
+    if (this.viewFader >= 0.999 && this.targetViewFader >= 0.999) {
+      return [LAYER_SETTING_IDS.MIXER];
+    }
+    return [LAYER_SETTING_IDS.DECK, LAYER_SETTING_IDS.MIXER];
+  }
+
+  _syncLayerRouterFromLegacyView() {
+    if (this.viewFader <= 0.001 && this.targetViewFader <= 0.001) {
+      if (this.layerRouter.active !== LAYER_SETTING_IDS.DECK || this.layerRouter.transition) {
+        this.layerRouter.forceActive(LAYER_SETTING_IDS.DECK, 'legacy_view_fader');
+      }
+    } else if (this.viewFader >= 0.999 && this.targetViewFader >= 0.999) {
+      if (this.layerRouter.active !== LAYER_SETTING_IDS.MIXER || this.layerRouter.transition) {
+        this.layerRouter.forceActive(LAYER_SETTING_IDS.MIXER, 'legacy_view_fader');
+      }
+    }
+  }
+
+  _syncLegacyViewFaderFromLayerRouter() {
+    const blend = this.layerRouter.blend();
+    const amount = blend.amount;
+    if (blend.from === LAYER_SETTING_IDS.DECK && blend.to === LAYER_SETTING_IDS.MIXER) {
+      this.viewFader = amount;
+      this.targetViewFader = 1;
+    } else if (blend.from === LAYER_SETTING_IDS.MIXER && blend.to === LAYER_SETTING_IDS.DECK) {
+      this.viewFader = 1 - amount;
+      this.targetViewFader = 0;
+    } else if (blend.from === blend.to) {
+      if (blend.to === LAYER_SETTING_IDS.DECK) {
+        this.viewFader = 0;
+        this.targetViewFader = 0;
+      } else if (blend.to === LAYER_SETTING_IDS.MIXER) {
+        this.viewFader = 1;
+        this.targetViewFader = 1;
+      }
+    }
+  }
+
   /** Get a mixer overlay by id. Rejects the deck channel id explicitly. */
   getMixerChannel(channelId) {
     if (this.deckChannel && channelId === this.deckChannel.id) return null;
@@ -1055,7 +1333,12 @@ export class PatternMixer {
       groupBits: this.groupBits,
       viewMasks: Array.isArray(viewMasks) ? viewMasks : [],
     });
-    for (const channel of [this.deckChannel, ...this.mixerChannels, ...this.deckOverlays]) {
+    for (const channel of [
+      this.deckChannel,
+      ...this.mixerChannels,
+      ...this.deckOverlays,
+      this.liveTouchChannel,
+    ]) {
       if (!channel) continue;
       try {
         this.recompileChannelMask(channel);
@@ -1410,13 +1693,16 @@ export class PatternMixer {
    *     the rig).
    *   - Un-MUTE every group (muted=false) WITHOUT deleting groups or resetting
    *     their faders — a muted group would otherwise gate its members dark.
-   *   - Restore the view crossfade target to the mixer side (targetViewFader
-   *     = 1.0) so the composed overlay output is what's shown.
+   *   - Transition to the Mixer layer setting through the same router used by
+   *     every operator surface transition.
    */
   panicToSafeDefault() {
     // Master: cancel any fade + go to FULL immediately (no animation).
     this.setMaster(1.0);
-    this.targetViewFader = 1.0;
+    this.activateLayerSetting(LAYER_SETTING_IDS.MIXER, {
+      durationMs: 1000,
+      reason: 'panic_safe_default',
+    });
 
     // Deck: cancel an in-flight swap WITHOUT committing to its target.
     this.cancelDeckPatternSwap();
@@ -1853,6 +2139,9 @@ export class PatternMixer {
   getChannelAnyRole(channelId) {
     const direct = this.getChannel(channelId);
     if (direct) return direct;
+    if (this.liveTouchChannel && this.liveTouchChannel.id === channelId) {
+      return this.liveTouchChannel;
+    }
     return this.deckOverlays.find(o => o.id === channelId);
   }
 
@@ -1875,6 +2164,7 @@ export class PatternMixer {
     if (this.deckChannel) out.push(this.deckChannel);
     for (const c of this.mixerChannels) out.push(c);
     for (const o of this.deckOverlays) out.push(o);
+    if (this.liveTouchChannel) out.push(this.liveTouchChannel);
     return out;
   }
 
@@ -2877,7 +3167,17 @@ export class PatternMixer {
   }
 
   beginFrame(elapsedSeconds) {
+    if (this._canonicalLayerRouting) {
+      this.layerRouter.tick();
+      this._syncLegacyViewFaderFromLayerRouter();
+    }
+    const renderDeck = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.DECK);
+    const renderMixer = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.MIXER);
+    const renderLiveTouch = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.LIVE_TOUCH);
     const now = performance.now();
+    // Administrative transitions keep settling on wall clock even while their
+    // setting is hidden. This preserves the pre-router behavior (a requested
+    // fade/morph still completes) without entering any inactive pattern WASM.
     this.updateTransitions(now);
     // Snapshot morph (round-2 #1): the group-fader ramps tick alongside the
     // per-channel transitions (above) and the grand-master fade (in
@@ -2890,17 +3190,22 @@ export class PatternMixer {
     // Deck-swap shadow runs on the same clock so its fader animation
     // visibly matches the existing overlay-fade animations.
     this.updateDeckSwapTransition(now);
-    // Tick both deck and mixer overlays — muted patterns still need to
-    // advance their internal time so vis previews stay live. Each channel
-    // accumulates its OWN phase from the shared `elapsedSeconds` delta,
-    // scaled by its effectiveSpeed (own speed × tempo-mult if it follows
-    // tempo). _effectiveSpeed is O(1) / allocation-free.
-    if (this.deckChannel) {
+    // Tick only participating settings. Inactive clocks are suspended: update
+    // their phase baseline without entering WASM so they resume without a
+    // catch-up jump. Muted channels inside an active setting still advance so
+    // that setting's vis previews remain live.
+    if (renderDeck && this.deckChannel) {
       this.deckChannel.beginFrame(
         this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(this.deckChannel));
+    } else if (this.deckChannel) {
+      this.deckChannel._lastPhaseElapsed = elapsedSeconds;
     }
     for (const channel of this.mixerChannels) {
-      channel.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(channel));
+      if (renderMixer) {
+        channel.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(channel));
+      } else {
+        channel._lastPhaseElapsed = elapsedSeconds;
+      }
     }
     // Deck overlays (deck dynamic view overrides) tick on the SAME shared
     // global clock + params as every other channel — they call beginFrame
@@ -2909,7 +3214,11 @@ export class PatternMixer {
     // overlays (operator refinement #2: shared globals). forceRender=true so a
     // muted overlay still advances its phase (vis + ping-pong smoothness).
     for (const overlay of this.deckOverlays) {
-      overlay.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(overlay));
+      if (renderDeck) {
+        overlay.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(overlay));
+      } else {
+        overlay._lastPhaseElapsed = elapsedSeconds;
+      }
     }
     // Tick the inactive deck sibling too so its pattern stays warm —
     // its time advances alongside the active channel even when its
@@ -2919,9 +3228,27 @@ export class PatternMixer {
     // at its first frame whenever it wasn't being faded in. It MUST share
     // the active DECK's effectiveSpeed (not its own) so the ping-pong
     // time-sync contract holds — a swap must not jump-cut the clock rate.
-    if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle) {
+    if (renderDeck && this._inactiveDeckChannel && this._inactiveDeckChannel.handle) {
       const deckSpeed = this.deckChannel ? this._effectiveSpeed(this.deckChannel) : 1;
       this._inactiveDeckChannel.beginFrame(this.wasmHost, elapsedSeconds, true, deckSpeed);
+    } else if (this._inactiveDeckChannel) {
+      this._inactiveDeckChannel._lastPhaseElapsed = elapsedSeconds;
+    }
+    if (renderLiveTouch && this.liveTouchChannel) {
+      const localSpeed = this.liveTouchPhaseSpeedProvider
+        ? this.liveTouchPhaseSpeedProvider(this.liveTouchChannel)
+        : 1;
+      if (typeof localSpeed !== 'number' || !Number.isFinite(localSpeed) || localSpeed <= 0) {
+        throw new Error(`Live Touch phase speed provider returned invalid speed '${localSpeed}'`);
+      }
+      this.liveTouchChannel.beginFrame(
+        this.wasmHost,
+        elapsedSeconds,
+        true,
+        this._effectiveSpeed(this.liveTouchChannel) * localSpeed,
+      );
+    } else if (this.liveTouchChannel) {
+      this.liveTouchChannel._lastPhaseElapsed = elapsedSeconds;
     }
   }
 
@@ -2931,15 +3258,24 @@ export class PatternMixer {
     }
   }
 
+  _bufferForLayerSetting(setting) {
+    if (setting === LAYER_SETTING_IDS.DECK) return this.deckBuffer;
+    if (setting === LAYER_SETTING_IDS.MIXER) return this.mixerBuffer;
+    if (setting === LAYER_SETTING_IDS.LIVE_TOUCH) return this.liveTouchBuffer;
+    throw new RangeError(`No render buffer for unknown layer setting '${setting}'`);
+  }
+
   renderAll6ch() {
     this._frameCounter++;
     if (!this.deckBuffer) {
       this.deckBuffer = new Uint8Array(this.pixelCount * 6);
       this.mixerBuffer = new Uint8Array(this.pixelCount * 6);
+      this.liveTouchBuffer = new Uint8Array(this.pixelCount * 6);
     }
 
     this.deckBuffer.fill(0);
     this.mixerBuffer.fill(0);
+    this.liveTouchBuffer.fill(0);
     this.outputBuffer.fill(0);
 
     // Per-channel vis data (RGBWAU, 6 bytes per pixel).
@@ -2980,7 +3316,7 @@ export class PatternMixer {
     // the perceived duration stays at viewFaderRampPerSec regardless
     // of the engine's render fps. dt is clamped so a frame stall
     // (GC pause, sACN backpressure) doesn't fast-forward the fade.
-    {
+    if (!this._canonicalLayerRouting) {
       const nowMs = Date.now();
       const last = this._lastViewFaderTickMs;
       this._lastViewFaderTickMs = nowMs;
@@ -2994,6 +3330,10 @@ export class PatternMixer {
         }
       }
     }
+
+    const renderDeck = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.DECK);
+    const renderMixer = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.MIXER);
+    const renderLiveTouch = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.LIVE_TOUCH);
 
     // WAVE 15 hot-path precompute (allocation-free): refresh the per-frame
     // group-scale cache (clear()+set() — no realloc) and the soloActive flag
@@ -3021,7 +3361,7 @@ export class PatternMixer {
     //    PFL (rendered at 100% downstream), so its meter uses only its OWN
     //    clamped fader + enabled gate (decks are never in groups / solos).
     if (wantVis) {
-      if (this.deckChannel) {
+      if (renderDeck && this.deckChannel) {
         this.channelBuffer.fill(0);
         this.deckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
         // Mirror the composite-loop hue shift so the vis meter/preview
@@ -3040,17 +3380,30 @@ export class PatternMixer {
         }
         this._visLevels[d.id] = this._bufferMeanLevel(this.channelBuffer) * deckEff;
       }
-      for (const channel of this.mixerChannels) {
-        this.channelBuffer.fill(0);
-        channel.renderInto(this.wasmHost, this.channelBuffer, true);
-        // Mirror the composite-loop hue shift so meter + vis match what
-        // actually blends into the mix (docs/39 §F-hue). Gated on non-zero.
-        if (channel.hue) {
-          applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
+      if (renderMixer) {
+        for (const channel of this.mixerChannels) {
+          this.channelBuffer.fill(0);
+          channel.renderInto(this.wasmHost, this.channelBuffer, true);
+          // Mirror the composite-loop hue shift so meter + vis match what
+          // actually blends into the mix (docs/39 §F-hue). Gated on non-zero.
+          if (channel.hue) {
+            applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
+          }
+          this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
+          this._visLevels[channel.id] =
+            this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
         }
-        this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
-        this._visLevels[channel.id] =
-          this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
+      }
+      if (renderLiveTouch && this.liveTouchChannel) {
+        const live = this.liveTouchChannel;
+        this.channelBuffer.fill(0);
+        live.renderInto(this.wasmHost, this.channelBuffer, true);
+        if (live.hue) applyHueShift6chU8(this.channelBuffer, this.pixelCount, live.hue);
+        if (live.compiledPixelMask) {
+          applyPreviewMaskBlackout(this.channelBuffer, live.compiledPixelMask, this.pixelCount);
+        }
+        this._visData[live.id] = this._extractVisInto(live.id, this.channelBuffer);
+        this._visLevels[live.id] = this._bufferMeanLevel(this.channelBuffer);
       }
     }
 
@@ -3058,7 +3411,7 @@ export class PatternMixer {
     //
     // The deck channel renders as PFL (Pre-Fade Listen, always 100%).
     const deck = this.deckChannel;
-    if (deck) {
+    if (renderDeck && deck) {
       this.channelBuffer.fill(0);
       deck.renderInto(this.wasmHost, this.deckBuffer, true);
 
@@ -3098,6 +3451,7 @@ export class PatternMixer {
     //     operator refinement #2). Reuses the existing scratch buffers
     //     (channelBuffer / blendedScratch) — no new per-frame allocation.
     for (const overlay of this.deckOverlays) {
+      if (!renderDeck) break;
       // Overlay-effective fader: enabled gate × per-overlay faderMax clamp.
       // Deck overlays are NOT subject to the mixer's solo/group/follow gates
       // (those are mixer-stack concepts) — they layer over the deck directly.
@@ -3156,7 +3510,8 @@ export class PatternMixer {
     // gate below prevents any render work. The mixer compositing loop
     // below does NOT see the inactive deck channel because it lives
     // outside `mixerChannels`.
-    if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle && this._inactiveDeckChannel.fader > 0.001) {
+    if (renderDeck && this._inactiveDeckChannel && this._inactiveDeckChannel.handle &&
+        this._inactiveDeckChannel.fader > 0.001) {
       this.channelBuffer.fill(0);
       this._inactiveDeckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
       // Operator review May 2026 #15 — TRANSITION END FLICKER.
@@ -3263,6 +3618,7 @@ export class PatternMixer {
     }
 
     for (const channel of renderOrder) {
+      if (!renderMixer) break;
       // Skip dark channels EXCEPT the scripted-transition target, whose
       // blend script must run on every frame (its progress arg is the
       // channel.fader, and at the very start of a fade the value can sit
@@ -3340,8 +3696,58 @@ export class PatternMixer {
       commitBlendedLayerWithMask(this.mixerBuffer, blended, channel.compiledPixelMask, this.pixelCount);
     }
 
-    // 3. Output: crossfade between deck and mixer based on viewFader
-    if (this.viewFader <= 0.001) {
+    // Compose the Deck/Mixer creative look before a transition involving Live
+    // Touch. Deck<->Mixer retains its established post-blend creative stage;
+    // Live pairs need complete setting-local looks so Live state can neither
+    // leak onto nor erase the outgoing setting.
+    if (renderLiveTouch && renderDeck) {
+      this._processLayerSettingOutput(LAYER_SETTING_IDS.DECK, this.deckBuffer);
+    }
+    if (renderLiveTouch && renderMixer) {
+      this._processLayerSettingOutput(LAYER_SETTING_IDS.MIXER, this.mixerBuffer);
+    }
+
+    // 4. Render Live Touch into its own setting-local buffer. Creative stages
+    // (including transient Live brightness) run here, before the shared blend;
+    // downstream rack/blackout authority therefore applies to the result once.
+    if (renderLiveTouch && this.liveTouchChannel) {
+      const live = this.liveTouchChannel;
+      live.renderInto(this.wasmHost, this.liveTouchBuffer, true);
+      if (live.hue) applyHueShift6chU8(this.liveTouchBuffer, this.pixelCount, live.hue);
+      if (live.compiledPixelMask) {
+        applyPreviewMaskBlackout(this.liveTouchBuffer, live.compiledPixelMask, this.pixelCount);
+      }
+      if (this.liveTouchOutputProcessor) {
+        this.liveTouchOutputProcessor(this.liveTouchBuffer);
+      }
+      this._processLayerSettingOutput(LAYER_SETTING_IDS.LIVE_TOUCH, this.liveTouchBuffer);
+      if (wantVis) {
+        this._visData[live.id] = this._extractVisInto(live.id, this.liveTouchBuffer);
+        this._visLevels[live.id] = this._bufferMeanLevel(this.liveTouchBuffer);
+      }
+    }
+
+    // 5. Every canonical pair uses this exact same blend operation. Steady
+    // state copies one setting. During transition only outgoing + incoming
+    // were rendered above; a queued third setting cannot enter this frame.
+    if (this._canonicalLayerRouting) {
+      const blend = this.layerRouter.blend();
+      const fromBuffer = this._bufferForLayerSetting(blend.from);
+      const toBuffer = this._bufferForLayerSetting(blend.to);
+      if (blend.from === blend.to || blend.amount >= 0.999) {
+        this.outputBuffer.set(toBuffer);
+      } else if (blend.amount <= 0.001) {
+        this.outputBuffer.set(fromBuffer);
+      } else {
+        const amount = blend.amount;
+        const inverse = 1 - amount;
+        for (let i = 0; i < this.outputBuffer.length; i++) {
+          this.outputBuffer[i] = Math.round(
+            fromBuffer[i] * inverse + toBuffer[i] * amount,
+          );
+        }
+      }
+    } else if (this.viewFader <= 0.001) {
       this.outputBuffer.set(this.deckBuffer);
     } else if (this.viewFader >= 0.999) {
       this.outputBuffer.set(this.mixerBuffer);
@@ -3496,6 +3902,7 @@ export class PatternMixer {
 
   destroy() {
     if (this.deckChannel) this.deckChannel.destroy(this.wasmHost);
+    if (this.liveTouchChannel) this.liveTouchChannel.destroy(this.wasmHost);
     for (const channel of this.mixerChannels) {
       channel.destroy(this.wasmHost);
     }
@@ -3519,6 +3926,10 @@ export class PatternMixer {
     this.blendHandles = {};
     this.deckChannel = null;
     this.mixerChannels = [];
+    this.liveTouchChannel = null;
+    this.layerSettingOutputProcessors.clear();
+    this.liveTouchPhaseSpeedProvider = null;
+    this.liveTouchOutputProcessor = null;
     // WAVE 15: drop group registry + transient solo on teardown so a
     // re-init doesn't inherit ghost groups / phantom solos.
     this.mixGroups = [];

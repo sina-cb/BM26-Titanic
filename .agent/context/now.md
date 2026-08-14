@@ -3,10 +3,26 @@
 > Updated by any agent, any time state changes. Keep it under a screen.
 > Absolute dates only.
 
-_Last touched: 2026-07-20 (show-server deployment tooling wave on `feat/auto_start` — docs/43)_
+_Last touched: 2026-08-13 (Live Touch + audio + Baby Reveal publish handoff)_
 
 ## Active branches
 
+- **`dev/live_touch_bm_readiness_rebase`** — completed integration worktree;
+  publish target `feat/mishas_live_control_panel_sina_changes_some`. Misha's
+  Live Touch is rebased onto `feat/bm_readiness` and production-hardened with
+  one 100 ms linear Layers transaction, ARM-owned private creative state,
+  Dimmer Rack final authority, canonical simulator projections, bounded
+  multitouch paint, fullscreen Spatial XY, optimized group profiles/faders,
+  and non-Layers ARM persistence. Timeline pongs now prove only desk liveness;
+  real owner mutations renew/reacquire takeover, so operator inactivity returns
+  the show to Timeline without losing the staged Live session. Latest audio
+  framework/Companion work and Baby Reveal patterns are integrated; Live owns
+  128-130 and Baby Reveal owns 131-133 with stable playlist IDs. Combined
+  Baby/Live/Timeline/audio-registry gate is 108/108; broader subsystem gates,
+  CaptainPad TypeScript/web export, pixel artifact/parity, engine list/dry-run,
+  and brush performance proof pass. Review servers are stopped at publish
+  handoff so the operator can launch a clean stack. Runtime state residue is
+  reported and excluded, never silently reverted.
 - **`main`** — integration branch. Push/merge is operator-gated.
 - **`feat/party_integration_20260711`** — party merge wave (studio model +
   LED fixtures + CaptainPad MIDI + autopilot deck) **+ `feat/led_integration`
@@ -321,3 +337,26 @@ OPEN (tracked in session task list):
   device configured), `osc_listener` (EACCES instead of EADDRINUSE), and
   `led_dmx_parity` fail identically on `main` — environmental/pre-existing,
   not regressions. Same set fails on the party integration branch.
+
+## 2026-08-13 Live Touch publish handoff
+
+- Integration worktree: `live_touch_bm_readiness_rebase`; publish target:
+  `feat/mishas_live_control_panel_sina_changes_some`.
+- The test stack is intentionally stopped after publish. Operator launch uses
+  CaptainPad `:6967`, engine `:6968`, sim `:6969`, save `:6970`, and sACN
+  bridges `:6971/:6972`.
+- Shared schema-4 pixel artifact is current. Simulator and Live Touch use the
+  same resolved geometry; Top is pure Aerial-oriented x/z orthographic, includes
+  both auditorium rows (720 pixels / 18 groups), and contains no saved offsets,
+  compression, pitch stretch, framing, or perspective.
+- Focused projection/default/layout gate: 110/110; artifact check and Titanic
+  scene-model parity pass. Full simulation suite remains red only in unrelated
+  bench-section expectations and known scene residue.
+- Live/Timeline takeover is activity-based: ARM heartbeats do not renew the
+  Timeline operator lease; real control changes do. On inactivity Timeline
+  returns to Deck, and the next real Live change reacquires Live through the
+  canonical blend. The healthy lease notice is compact/dismissible; an active
+  plan-lock warning remains non-dismissible.
+- Baby Reveal uses patterns 131-133 after collision-safe renumbering. The four
+  Titanic galleries are regenerated, including 132's 0/60/120/150/158 second
+  chapters and indefinite blackout. No old Baby 128-130 references remain.

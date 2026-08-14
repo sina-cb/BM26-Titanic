@@ -123,7 +123,7 @@ html, body {
 }
 
 .app-shell {
-  width: 100vw; height: 100vh;
+  width: 100vw; max-width: 100%; height: 100vh; min-width: 0;
   padding: 10px;
   display: grid;
   grid-template-rows: var(--header-h) 1fr;
@@ -238,7 +238,10 @@ header .readout { font-size: var(--hdr-fs); min-width: 62px; }
 
 /* ── Main grid ─────────────────────────────────────────────────────────── */
 /* WORKSPACE: the dock rail, then the working area. */
-.workspace { flex: 1; min-height: 0; display: flex; gap: 8px; }
+.workspace {
+  flex: 1; min-width: 0; min-height: 0; display: flex; gap: 8px;
+  overflow: hidden;
+}
 
 /* TWO HORIZONTAL ROWS, always. Panels flow into COLUMNS across those two rows,
    so the number of columns follows the number of OPEN panels and every open
@@ -427,6 +430,18 @@ header .readout { font-size: var(--hdr-fs); min-width: 62px; }
    fingers, and every pixel here comes straight out of it. */
 .spatial-panel .mode-toggle button { min-width: 76px; min-height: 28px; font-size: .64rem; letter-spacing: .03em; }
 .spatial-panel .panel-body { padding: 0 12px 8px; }
+body.spatial-fullscreen-active { overflow: hidden; }
+.spatial-panel.is-spatial-fullscreen {
+  position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh;
+  height: 100dvh; max-width: none; max-height: none; border: 0;
+  border-radius: 0; box-shadow: none;
+}
+.spatial-panel.is-spatial-fullscreen .panel-body,
+.spatial-panel.is-spatial-fullscreen .xy-frame { flex: 1 1 auto; min-height: 0; }
+.spatial-panel.is-spatial-fullscreen .xy-pad { min-height: 0; border-radius: 12px; }
+.spatial-panel.is-spatial-fullscreen #spatialFullscreen {
+  color: #04231d; background: var(--teal); border-color: var(--teal);
+}
 
 .panel {
   min-height: 0; display: flex; flex-direction: column;
@@ -470,7 +485,10 @@ header .readout { font-size: var(--hdr-fs); min-width: 62px; }
   content: "LOCKED"; font-size: .58rem; font-weight: 900; letter-spacing: .12em;
   color: var(--yellow); align-self: center;
 }
-.panel-body { padding: 0 12px 10px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panel-body {
+  padding: 0 12px 10px; flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
 
 /* Inline constraint notes — these carry real, measured limits. */
 .note {
@@ -733,17 +751,22 @@ header .readout { font-size: var(--hdr-fs); min-width: 62px; }
 }
 .xy-cross::before { left: 0; right: 0; top: 50%; height: 1px; }
 .xy-cross::after { top: 0; bottom: 0; left: 50%; width: 1px; }
-/* The REAL top-down pixel map, on a CANVAS rather than a scaled SVG.
-   The map is gap-COMPRESSED and then STRETCHED to fill the pad, so the fixtures
-   sit evenly across the whole surface instead of clustering with dead air
-   between them. A scaled SVG would have turned every dot into an ellipse doing
-   that; on a canvas the SPACE stretches and the DOTS stay round.
-   This is legitimate because the pad is a RECTIFIED aiming surface, not a scale
-   drawing - the same reason the sim compresses its own 2D pixel view. */
+/* The resolved simulation top view. Design-space positions and the saved
+   framing come from the generated pixel-view artifact; only its final,
+   identity-preserving viewport reprojection happens on this canvas. */
 .pixmap {
   position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px);
   pointer-events: none; opacity: .95;
 }
+.pixel-map-error {
+  position: absolute; inset: 8px; z-index: 8; display: grid; place-items: center;
+  padding: 14px; background: rgba(112, 16, 24, .94); color: #ffe4dc;
+  border: 1px solid #ff726d; border-radius: 11px; text-align: center;
+  font: 800 .66rem/1.35 var(--font-mono, monospace); letter-spacing: .035em;
+  pointer-events: none;
+}
+.pixel-map-error[hidden] { display: none; }
+.xy-pad.pixel-view-failed { cursor: not-allowed; }
 .ship {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   /* Sized by HEIGHT. The viewBox is 100x260, so sizing by WIDTH made it 91% of
@@ -865,6 +888,21 @@ header .readout { font-size: var(--hdr-fs); min-width: 62px; }
 /* THE PAD IS THE POINT: it takes the rest of the panel, with a floor so a long
    control block can never squeeze it back into a strip. */
 .spatial-panel .panel-body .xy-frame { flex: 1 1 auto; min-height: 0; }
+.pixel-view-toolbar {
+  display: flex; align-items: center; gap: 5px; margin: 0 62px 5px;
+  flex: 0 0 auto; min-width: 0;
+}
+.pixel-view-toolbar label {
+  color: var(--text-dim); font-size: .5rem; font-weight: 800; letter-spacing: .06em;
+}
+.pixel-view-toolbar .select { flex: 1 1 auto; min-width: 0; height: 26px; }
+.pixel-view-toolbar button {
+  min-height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--border);
+  color: var(--text-soft); background: rgba(255,255,255,.04);
+  font-family: inherit; font-size: .52rem; font-weight: 800;
+}
+.pixel-view-toolbar button.on { color: #04231d; background: var(--teal); }
+.pixel-view-toolbar button[hidden] { display: none; }
 /* THE PAD GETS THE BOTTOM TWO THIRDS. The panel was 584 px tall with the
    controls taking 377 of it — the pad hit its floor and then overflowed a
    143 px frame. Giving the PANEL a floor lets the pad have its share instead of
@@ -1173,8 +1211,15 @@ select option:checked { background-color: #2a2050; color: #fff; }
    faster than reading 24 horizontal bars. All 24 stay on screen, no scrolling. */
 /* A single flat row: filter, count, legend, the one-line hint that replaced the
    info box, then ALL OFF pinned right. */
-.groups-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex: 0 0 auto; }
+.groups-toolbar {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+  flex: 0 0 auto; min-width: 0; max-width: 100%; overflow: hidden;
+}
 .groups-toolbar .chip-sm { margin-left: auto; }
+.group-profile-label { font-size: .55rem; font-weight: 900; letter-spacing: .08em;
+  color: var(--text-dim); white-space: nowrap; }
+#groupProfileSelect { min-width: 154px; }
+.groups-panel.is-profile-mode .profile-individual-only { display: none !important; }
 .tb-stat { font-size: .62rem; font-weight: 700; letter-spacing: .06em; color: var(--text-dim); white-space: nowrap; }
 .tb-stat b { color: var(--green); font-size: .78rem; }
 .tb-sep { width: 1px; height: 16px; background: var(--border); flex: 0 0 auto; }
@@ -1201,9 +1246,26 @@ select option:checked { background-color: #2a2050; color: #fff; }
      WIDTH but halves the strip to 119px, and the enlarged controls need 241px -
      everything below the checkboxes was being cut off. One row keeps the full
      ~240px of height, which is the axis the buttons can actually grow on. */
-  display: grid; grid-template-columns: 34px repeat(24, minmax(0, 1fr)); gap: 2px;
-  flex: 1; min-height: 0; align-items: stretch; overflow: hidden;
+  display: grid; grid-template-columns: 44px repeat(24, 64px); gap: 2px;
+  flex: 1; min-height: 0; align-items: stretch; overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain; touch-action: none; scrollbar-width: thin;
 }
+.fader-bank[hidden] { display: none !important; }
+.fader-bank [data-role="fader"], .fader-bank [data-role="masterfader"] {
+  touch-action: none;
+}
+#groupProfileGrid {
+  grid-template-columns: 44px repeat(var(--profile-columns, 5), minmax(72px, 1fr));
+}
+#groupProfileGrid[hidden] { display: none; }
+.profile-view-strip .fader-checks { grid-auto-rows: 20px; }
+.profile-view-count {
+  display: grid; place-items: center; width: 100%; height: 20px; border-radius: 5px;
+  border: 1px solid var(--border); background: rgba(255,255,255,.05);
+  color: var(--text-dim); font-size: 8px; font-weight: 900;
+}
+.profile-view-strip.is-mixed { border-color: rgba(255,216,77,.62); }
+.profile-view-strip.is-mixed .fader-pct { color: var(--yellow); }
 .fader-strip {
   display: flex; flex-direction: column; align-items: center; gap: 3px; overflow: hidden;
   min-width: 0; padding: 2px 1px; border-radius: 8px;
@@ -1520,9 +1582,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
       <div class="pattern-pick">
         <span class="pp-cap">PATTERN</span>
         <select class="select" id="patternSel">
-          <option value="68" data-caps="5 colours · XY pad · touch · pulse">68 · Spatial Paint</option>
-          <option value="66" data-caps="5 colours only — no XY">66 · Five Colour Prism</option>
-          <option value="67" data-caps="5 colours only — no XY">67 · Five Colour Stations</option>
+          <option value="130" data-caps="5 colours · XY pad · touch · pulse">130 · Spatial Paint</option>
+          <option value="128" data-caps="5 colours only — no XY">128 · Five Colour Prism</option>
+          <option value="129" data-caps="5 colours only — no XY">129 · Five Colour Stations</option>
         </select>
         <span class="pp-caps" id="patternCaps">5 colours · XY pad · touch · pulse</span>
       </div>
@@ -1595,7 +1657,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
                  brightness now, and it drives the engine master directly. Two
                  controls for one thing is how a rig ends up at a level nobody
                  chose. -->
-            
+
             <div class="slider-col">
               <span class="cap">FADE</span>
               <div class="slider-vertical fade" data-v="46"><i></i></div>
@@ -1612,7 +1674,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
           <div class="color-slot" data-slot="4"><div class="swatch" style="background:#8be84d">4</div><span class="tag local">LOCAL</span></div>
           <div class="color-slot" data-slot="5"><div class="swatch" style="background:#ffd84d">5</div><span class="tag local">LOCAL</span></div>
         </div>
-            
+
           </div>
         </div>
 
@@ -1637,7 +1699,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
           <span class="nf-state" id="noteFollowState">off</span>
         </button>
 
-        
+
       </div>
     </section>
 
@@ -1667,13 +1729,13 @@ select option:checked { background-color: #2a2050; color: #fff; }
              The operator asked for this directly — the stroke was landing but
              reading as "really minute", and the engine's radius was a fixed
              default the panel never sent. -->
-        
+
         <!-- HOW HARD THE STROKE HITS. This was a fixed 0.9 in the engine with
              nothing on the panel to move it, so the only strength control the
              operator had was "draw more". It means something different in each
              mode — brightness, erase depth, hull lift — which is exactly why it
              belongs next to the mode buttons. -->
-        
+
         <!-- WHICH COLOURS THE STROKE WALKS THROUGH AS YOU PAINT. Same four
              schemes as the COLOUR panel, applied to the ink: the stroke steps
              through the five colours of the chosen scheme as the finger
@@ -1696,7 +1758,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
                     title="Whole rig flashes — Y sets the rate">STROBE</button>
           </div>
         </div>
-        
+
         <!-- RECORD A GESTURE AND LOOP IT. Drawing is the most expressive thing
              on this panel and it lasted exactly as long as a finger stayed
              down. Recording captures the stroke WITH ITS TIMING so it can be
@@ -1720,7 +1782,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
              instead, which frees the pad's full width, and the old vertical
              fader beside the pad is gone. #zVal is kept because the wire reads
              it as the value source. -->
-        
+
         <!-- WHAT THE SELECTED MODE ACTUALLY DOES, in the operator's own view.
              Four unlabelled behaviours with no explanation anywhere on the
              surface is how you end up with "i have no idea what they do". -->
@@ -1740,7 +1802,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
           <span class="draw-cap">FADE</span>
           <div class="slider-h" id="trailFade" data-value="0.5"
                title="How long the stroke lingers behind your finger"><i style="width:50%"></i></div>
-          <span class="readout" id="trailFadeVal">50%</span>
+          <span class="readout" id="trailFadeVal">0.5 s</span>
         </div>
 <div class="draw-row size-row" id="stepRow">
           <span class="draw-cap">STEP</span>
@@ -1769,9 +1831,17 @@ select option:checked { background-color: #2a2050; color: #fff; }
 
 
 
-        
+
         </div>
 
+        <div class="pixel-view-toolbar" aria-label="Pixel view controls">
+          <label for="pixelViewSelect">VIEW</label>
+          <select class="select" id="pixelViewSelect" aria-label="Pixel view"></select>
+          <button type="button" id="pixelPan" aria-pressed="false" title="Pan the chart; painting is paused while PAN is on">PAN</button>
+          <button type="button" id="pixelFit" title="Center and fit the selected model">FIT</button>
+          <button type="button" id="spatialFullscreen" hidden aria-pressed="false"
+                  title="Fill the Live Touch surface with Spatial XY">FULL</button>
+        </div>
         <div class="xy-frame">
           <!-- WHAT DRAWING DOES, down the LEFT edge. Only meaningful in SPATIAL
                mode (XY drives master + strobe, which have no stroke), so the
@@ -1805,6 +1875,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
               <div class="xy-grid"></div>
               <div class="xy-cross"></div>
               <canvas class="pixmap" id="pixMap" aria-hidden="true"></canvas>
+              <div class="pixel-map-error" id="pixelMapError" role="alert">
+                PIXEL VIEW UNAVAILABLE — waiting for source and engine verification
+              </div>
               <div class="xy-guide" id="guideH" style="left:0;right:0;height:1px;top:50%"></div>
               <div class="xy-guide" id="guideV" style="top:0;bottom:0;width:1px;left:50%"></div>
               <!-- THE STROKE, drawn on top of the pixel map so the operator can
@@ -1890,7 +1963,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
         </div>
         <div class="ownfx-note" id="palNote"></div>
         <div class="effects-grid" id="fxGrid"><!-- injected --></div>
-        
+
       </div>
     </section>
 
@@ -1905,27 +1978,33 @@ select option:checked { background-color: #2a2050; color: #fff; }
              all 24 groups on screen at once there is nothing to search FOR, and
              both were spending height the faders needed. -->
         <div class="groups-toolbar">
-          <select class="select"><option>Show all</option><option>On only</option><option>Off only</option><option>Holding colour</option></select>
-          <span class="tb-stat"><b id="tbOn">24</b> ON</span>
+          <label class="group-profile-label" for="groupProfileSelect">PROFILE</label>
+          <select class="select" id="groupProfileSelect" disabled>
+            <option>Loading canonical views…</option>
+          </select>
           <span class="tb-sep"></span>
-          <span class="checks-legend">
+          <select class="select profile-individual-only" id="groupVisibilityFilter"><option>Show all</option><option>On only</option><option>Off only</option><option>Holding colour</option></select>
+          <span class="tb-stat"><b id="tbOn">24</b> ON</span>
+          <span class="tb-sep profile-individual-only"></span>
+          <span class="checks-legend profile-individual-only">
             <span><i style="background:var(--cyan)"></i>GLOBAL</span>
             <span><i style="background:var(--yellow)"></i>FX</span>
             <span><i style="background:var(--purple)"></i>OWN</span>
             <span><i style="background:#fff"></i>LINK</span>
             <span><i style="background:linear-gradient(90deg,#ff5c8a,#ffd84d,#7ee0a0,#36d7ff)"></i>TAG</span>
           </span>
-          <span class="tb-sep"></span>
-          <span class="tb-stat"><b id="tbSel">0</b> SEL</span><span class="tb-stat" id="tagCount"></span>
-          <span class="tb-hint">tap a name to select &middot; drag moves the whole selection</span>
-          <button class="chip chip-sm" id="selClear">CLEAR SEL</button>
-          <button class="chip chip-sm" id="linkSel">LINK SEL</button>
-          <button class="chip chip-sm" id="linkAll">LINK ALL</button>
+          <span class="tb-sep profile-individual-only"></span>
+          <span class="tb-stat profile-individual-only"><b id="tbSel">0</b> SEL</span><span class="tb-stat profile-individual-only" id="tagCount"></span>
+          <span class="tb-hint profile-individual-only">tap a name to select &middot; drag moves the whole selection</span>
+          <button class="chip chip-sm profile-individual-only" id="selClear">CLEAR SEL</button>
+          <button class="chip chip-sm profile-individual-only" id="linkSel">LINK SEL</button>
+          <button class="chip chip-sm profile-individual-only" id="linkAll">LINK ALL</button>
           <button class="chip chip-sm" id="allToggle">ALL OFF</button>
-          <button class="chip chip-sm" id="orderToggle" title="Rearrange the faders. While on, the faders themselves are locked so nothing moves by accident.">ORDER</button>
+          <button class="chip chip-sm profile-individual-only" id="orderToggle" title="Rearrange the faders. While on, the faders themselves are locked so nothing moves by accident.">ORDER</button>
         </div>
         <div class="ownfx-note" id="ownFxNote"></div>
         <div class="fader-bank" id="groupsGrid"><!-- injected --></div>
+        <div class="fader-bank" id="groupProfileGrid" hidden><!-- canonical view faders injected --></div>
       </div>
     </section>
 
@@ -1941,6 +2020,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
   <!-- ── Footer ─────────────────────────────────────────────────────────── -->
 </div>
 
+<script src="touch_control_pixel_views.js"></script>
 <script>
 /* Prototype interactions only — nothing here talks to the engine.
    Enough behaviour to judge whether the layout FEELS right under a finger. */
@@ -1975,6 +2055,43 @@ select option:checked { background-color: #2a2050; color: #fff; }
   selectable('tracerSeg', 'button', 'is-active');
   selectable('slots', '.color-slot', 'is-selected');
 
+  /* Spatial-only fullscreen is a CSS surface takeover rather than the browser
+     Fullscreen API. That is deterministic in iPad WebViews, works offline,
+     and never depends on a vendor permission prompt. */
+  (function () {
+    var panel = document.querySelector('.spatial-panel');
+    var toggle = document.getElementById('modeToggle');
+    var button = document.getElementById('spatialFullscreen');
+    if (!panel || !toggle || !button) return;
+    function spatialModeActive() {
+      var modes = toggle.querySelectorAll('button');
+      return !!(modes[1] && modes[1].classList.contains('is-active'));
+    }
+    function setFullscreen(on) {
+      on = !!on && spatialModeActive();
+      panel.classList.toggle('is-spatial-fullscreen', on);
+      document.body.classList.toggle('spatial-fullscreen-active', on);
+      button.setAttribute('aria-pressed', String(on));
+      button.textContent = on ? 'EXIT' : 'FULL';
+      window.dispatchEvent(new Event('resize'));
+    }
+    function syncMode() {
+      var spatial = spatialModeActive();
+      button.hidden = !spatial;
+      if (!spatial) setFullscreen(false);
+    }
+    button.addEventListener('click', function () {
+      setFullscreen(!panel.classList.contains('is-spatial-fullscreen'));
+    });
+    toggle.addEventListener('click', function () { setTimeout(syncMode, 0); });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && panel.classList.contains('is-spatial-fullscreen')) {
+        setFullscreen(false);
+      }
+    });
+    syncMode();
+  })();
+
   /* Toggles. */
   document.querySelectorAll('.mini-switch').forEach(function (s) {
     s.addEventListener('click', function () { s.classList.toggle('is-on'); });
@@ -1995,44 +2112,73 @@ select option:checked { background-color: #2a2050; color: #fff; }
   var xyHandle = document.getElementById('xyHandle');
   var gh = document.getElementById('guideH');
   var gv = document.getElementById('guideV');
-  function moveXyHandle(e) {
+  /* MULTI-TOUCH WITHOUT TELEPORTS. Each pointer gets a stable visual handle;
+     the wire and engine carry the same pointer ids with independent sweep
+     origins, so no sample can synthesize a line between two fingers. */
+  var padPointers = new Map();
+  function handleForPointer(pointerId) {
+    var current = padPointers.get(pointerId);
+    if (current && current.handle) return current.handle;
+    var handle = padPointers.size === 0 ? xyHandle : xyHandle.cloneNode(false);
+    if (handle !== xyHandle) {
+      handle.removeAttribute('id');
+      handle.classList.add('is-secondary');
+      pad.appendChild(handle);
+    }
+    handle.hidden = false;
+    padPointers.set(pointerId, { handle: handle });
+    return handle;
+  }
+  function movePointerHandle(e) {
     var r = pad.getBoundingClientRect();
     var x = Math.min(Math.max(e.clientX - r.left, 0), r.width);
     var y = Math.min(Math.max(e.clientY - r.top, 0), r.height);
     var px = (x / r.width) * 100, py = (y / r.height) * 100;
-    xyHandle.style.left = px + '%'; xyHandle.style.top = py + '%';
+    var handle = handleForPointer(e.pointerId);
+    handle.style.left = px + '%'; handle.style.top = py + '%';
     gv.style.left = px + '%'; gh.style.top = py + '%';
   }
-  /* ONE FINGER OWNS THE STROKE (audit H13). Without a pin, a second finger's
-     events interleave into the first stroke and the brush teleports between
-     the two touch points, painting a line across the hull nobody drew. The
-     FIRST pointer down owns the pad until it lifts or is cancelled; everything
-     else is ignored. Shared by BOTH pad handler stacks below, and mirrored in
-     the wire — each script guards its own listeners. */
-  var padPointer = null;
   pad.addEventListener('pointerdown', function (e) {
-    if (padPointer !== null && e.pointerId !== padPointer) return;
-    padPointer = e.pointerId;
-    try { pad.setPointerCapture(e.pointerId); } catch (err) { /* capture is optional; the drag still works */ } moveXyHandle(e);
+    try { pad.setPointerCapture(e.pointerId); } catch (err) { /* capture is optional; the drag still works */ }
+    movePointerHandle(e);
   });
   pad.addEventListener('pointermove', function (e) {
-    if (padPointer !== null && e.pointerId !== padPointer) return;
-    if (e.pressure > 0 || e.buttons) moveXyHandle(e);
+    if (!padPointers.has(e.pointerId)) return;
+    if (e.pressure > 0 || e.buttons) movePointerHandle(e);
   });
+  function releasePointerHandle(e) {
+    var current = padPointers.get(e.pointerId);
+    if (!current) return;
+    padPointers.delete(e.pointerId);
+    if (current.handle !== xyHandle) current.handle.remove();
+  }
+  window.addEventListener('pointerup', releasePointerHandle);
+  window.addEventListener('pointercancel', releasePointerHandle);
 
   /* ── THE STROKE, DRAWN ON THE PAD ────────────────────────────────────────
      The ship remembers the stroke as per-pixel heat; this is the operator's
      side of the same idea, so what they see under their finger matches what
      the hull is doing. Points are kept with a timestamp and faded on the SAME
-     wall-clock half-life the pattern uses, so pad and ship agree as the trail
-     cools rather than drifting apart.
+     linear wall-clock time-to-zero the pattern uses, so pad and ship agree as
+     the trail clears rather than drifting apart.
      Capped at INK_MAX points: a long scribble must not grow without bound on a
      surface that has to stay at 40fps for a whole night. */
   var ink = document.getElementById('inkTrail');
   var inkCtx = ink ? ink.getContext('2d') : null;
-  var INK_MAX = 600;
+  var INK_MAX = 180;
+  var FADE_SECONDS = [0.1, 0.5, 1, 1.5];
   var inkPts = [];
+  var inkHead = 0;
   var inkRAF = null;
+  var inkInputs = new Map();
+  var inkInputRAF = null;
+  var inkDrawCount = 0;
+  var inkAcceptedPointCount = 0;
+  var inkLastInputs = new Map();
+  var inkLastStamps = new Map();
+  var inkStrokePointers = new Set();
+  var inkActiveRings = new Map();
+  var takePointerId = null;
 
   /* WHICH OF THE FIVE THE STROKE IS DRAWN IN. paint5() publishes the resolved
      palette onto #slots.dataset.palette, and the COLOURS panel marks one slot
@@ -2058,8 +2204,11 @@ select option:checked { background-color: #2a2050; color: #fff; }
     /* 0 -> a new colour every 4% of the pad (rapid banding)
        1 -> every 60% (basically one colour per stroke) */
     var el = document.getElementById('inkStep');
-    var v = el && el.dataset.value !== undefined ? parseFloat(el.dataset.value) : 0.35;
-    if (!isFinite(v)) v = 0.35;
+    var v = el && el.dataset.value !== undefined ? parseFloat(el.dataset.value) : NaN;
+    if (!isFinite(v)) {
+      panelError('the ink STEP control has no valid value; refusing to advance colours');
+      return null;
+    }
     return 0.04 + Math.min(Math.max(v, 0), 1) * 0.56;
   }
   window.inkWalkReset = function () { inkWalk.idx = 0; inkWalk.dist = 0; };
@@ -2067,6 +2216,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
     if (inkScheme() === 'one') return;
     inkWalk.dist += d;
     var step = inkStepDist();
+    if (step === null) return;
     while (inkWalk.dist >= step) { inkWalk.dist -= step; inkWalk.idx++; }
   };
 
@@ -2077,6 +2227,8 @@ select option:checked { background-color: #2a2050; color: #fff; }
       if (scheme !== 'one' && typeof GEN !== 'undefined' && GEN[scheme]) {
         var set = GEN[scheme]();
         if (set && set.length) return set[inkWalk.idx % set.length];
+        panelError('the selected ink scheme produced no colours; refusing to draw');
+        return null;
       }
       var host = document.getElementById('slots');
       /* Memoised on the raw string (audit low): this runs per pad SAMPLE
@@ -2093,18 +2245,32 @@ select option:checked { background-color: #2a2050; color: #fff; }
       var idx = sel ? (parseInt(sel.dataset.slot, 10) - 1) : 0;
       if (list[idx]) return list[idx];
       if (list[0]) return list[0];
-    } catch (e) { /* fall through to colour 1 */ }
-    return { h: BASE.h, s: BASE.s, v: BASE.v };
+    } catch (e) {
+      panelError('the ink palette is unreadable: ' + e.message);
+      return null;
+    }
+    panelError('the ink palette is empty; refusing to draw');
+    return null;
   };
   var inkColour = window.inkColour;
 
-  function inkHalfLifeMs() {
-    /* Mirrors 68_spatial_paint: 0.12s .. 8s across the FADE slider. */
-    var tf = 0.5;
+  function isFadeSeconds(value) {
+    return FADE_SECONDS.some(function (candidate) { return Math.abs(candidate - value) < 1e-9; });
+  }
+
+  function formatFadeSeconds(value) {
+    return value.toFixed(1) + ' s';
+  }
+
+  function inkClearMs() {
+    var tf = NaN;
     var el = document.getElementById('trailFade');
     if (el && el.dataset.value !== undefined) tf = parseFloat(el.dataset.value);
-    if (!isFinite(tf)) tf = 0.5;   /* a corrupt dataset must not make NaN ms */
-    return (0.12 + Math.min(Math.max(tf, 0), 1) * 7.88) * 1000;
+    if (!isFinite(tf) || !isFadeSeconds(tf)) {
+      panelError('the spatial FADE control must be 0.1, 0.5, 1.0, or 1.5 seconds');
+      return null;
+    }
+    return tf * 1000;
   }
 
   /* ── THE BRUSH, ON THE PAD ───────────────────────────────────────────────
@@ -2145,9 +2311,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
      pad: the same number of pad pixels is a different distance on the ship
      depending on direction. Send one radius and the brush would be a circle in
      SHIP space and an oval on the glass — the exact complaint from earlier. */
-  window.padBrushWorld = function () {
+  window.padBrushWorld = function (target) {
     var b = padBox();
-    var per = window.padWorldPerPx(b.w, b.h);
+    var per = window.padWorldPerPx(b.w, b.h, target);
     var rpx = brushPx(b.w);
     return {
       x: Math.max(0.01, Math.min(1, rpx * per.x)),
@@ -2267,7 +2433,14 @@ select option:checked { background-color: #2a2050; color: #fff; }
         { detail: { u: 0, v: 0, down: false, end: false } }));
     }
     var p = take.pts[take.idx];
-    if (p.d) { inkAdd(p.u, p.v); ringAt.held = true; } else { ringAt.held = false; }
+    if (p.d) {
+      inkAdd('take', p.u, p.v); ringAt.held = true;
+    } else {
+      ringAt.held = false;
+      inkActiveRings.delete('take');
+      inkLastInputs.delete('take');
+      inkLastStamps.delete('take');
+    }
     document.dispatchEvent(new CustomEvent('spatialplay',
       { detail: { u: p.u, v: p.v, down: p.d, end: false } }));
     var nxt = take.pts[take.idx + 1];
@@ -2312,22 +2485,84 @@ select option:checked { background-color: #2a2050; color: #fff; }
     takeStatus();
   })();
 
-  function inkAdd(u, v) {
+  function inkAdd(pointerId, u, v) {
     /* Advance the colour walk by how far the finger actually moved. */
-    var prev = inkPts.length ? inkPts[inkPts.length - 1] : null;
-    if (prev) {
-      var du = u - prev.u, dv = v - prev.v;
+    var lastInput = inkLastInputs.get(pointerId);
+    if (lastInput) {
+      var du = u - lastInput.u, dv = v - lastInput.v;
       window.inkWalkAdvance(Math.sqrt(du * du + dv * dv));
     }
+    inkLastInputs.set(pointerId, { u: u, v: v });
     ringAt.u = u; ringAt.v = v;
-    inkPts.push({ u: u, v: v, t: performance.now(), c: window.inkColour() });
-    if (inkPts.length > INK_MAX) inkPts.splice(0, inkPts.length - INK_MAX);
+    inkActiveRings.set(pointerId, { u: u, v: v });
+    var colour = window.inkColour();
+    if (!colour) return;
+    var now = performance.now();
+    var previousStamp = inkLastStamps.get(pointerId) || null;
+    /* The preview stamps a fat brush, not a one-pixel pen. Keeping points closer
+       than 12% of the brush radius is visually redundant and was the long-trail
+       hot path on iPad. Refresh the newest stamp while the finger dwells, then
+       add a new one only after meaningful travel; overlapping stamps still form
+       a continuous band and the colour walk continues from every raw distance. */
+    var storeStep = Math.max(0.003, brushWorldRadius() * 0.12);
+    if (previousStamp && Math.hypot(u - previousStamp.u, v - previousStamp.v) < storeStep) {
+      previousStamp.t = now;
+      previousStamp.c = colour;
+      if (!inkRAF) inkRAF = requestAnimationFrame(inkDraw);
+      return;
+    }
+    var point = { u: u, v: v, t: now, c: colour, pointerId: pointerId };
+    inkPts.push(point);
+    inkLastStamps.set(pointerId, point);
+    inkStrokePointers.add(pointerId);
+    inkAcceptedPointCount++;
+    if (inkPts.length - inkHead > INK_MAX) inkHead++;
+    if (inkHead > 64 && inkHead * 2 > inkPts.length) {
+      inkPts = inkPts.slice(inkHead);
+      inkHead = 0;
+    }
     if (!inkRAF) inkRAF = requestAnimationFrame(inkDraw);
+  }
+
+  function flushInkInput(pointerId) {
+    if (inkInputRAF !== null) {
+      cancelAnimationFrame(inkInputRAF);
+      inkInputRAF = null;
+    }
+    var entries = [];
+    if (pointerId !== undefined) {
+      var one = inkInputs.get(pointerId);
+      if (one) entries.push([pointerId, one]);
+      inkInputs.delete(pointerId);
+    } else {
+      entries = Array.from(inkInputs.entries());
+      inkInputs.clear();
+    }
+    entries.forEach(function (entry) {
+      inkAdd(entry[0], entry[1].u, entry[1].v);
+      if (entry[0] === takePointerId) window.takeRecordPoint(entry[1].u, entry[1].v, true);
+    });
+    if (inkInputs.size && inkInputRAF === null) {
+      inkInputRAF = requestAnimationFrame(function () {
+        inkInputRAF = null;
+        flushInkInput();
+      });
+    }
+  }
+
+  function queueInkInput(pointerId, u, v) {
+    inkInputs.set(pointerId, { u: u, v: v });
+    if (inkInputRAF !== null) return;
+    inkInputRAF = requestAnimationFrame(function () {
+      inkInputRAF = null;
+      flushInkInput();
+    });
   }
 
   function inkDraw() {
     inkRAF = null;
     if (!inkCtx) return;
+    inkDrawCount++;
     var w = ink.clientWidth, h = ink.clientHeight;
     if (!w || !h) return;
     var dpr = window.devicePixelRatio || 1;
@@ -2336,10 +2571,15 @@ select option:checked { background-color: #2a2050; color: #fff; }
     inkCtx.clearRect(0, 0, w, h);
 
     var now = performance.now();
-    var hl = inkHalfLifeMs();
+    var clearMs = inkClearMs();
+    if (clearMs === null) return;
     /* Drop points that have faded past visibility, so the array self-trims even
        if the operator never lifts. */
-    while (inkPts.length && Math.pow(0.5, (now - inkPts[0].t) / hl) < 0.02) inkPts.shift();
+    while (inkHead < inkPts.length && now - inkPts[inkHead].t >= clearMs) inkHead++;
+    if (inkHead > 64 && inkHead * 2 > inkPts.length) {
+      inkPts = inkPts.slice(inkHead);
+      inkHead = 0;
+    }
 
     /* The stroke wears COLOUR 1 — the same palette entry the pattern paints the
        pool with — so the ink is not a decorative colour of its own. */
@@ -2412,7 +2652,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
       inkCtx.ellipse(x, y, Math.max(rx, 0.5), Math.max(ry, 0.5), 0, 0, Math.PI * 2);
     };
     /* DECIMATE AND DE-SHADOW — this loop is on the finger's critical path.
-       Stamping all 600 points with a shadowed fill is ~1800 blurred ellipse
+       Stamping a full trail with shadowed fills multiplies the ellipse
        fills per frame, and canvas shadowBlur is one of the most expensive
        operations there is. That starves the main thread, which is felt as the
        pad being laggy and "not sensitive enough" — the input is fine, the
@@ -2421,14 +2661,16 @@ select option:checked { background-color: #2a2050; color: #fff; }
        previous one (with a fat brush, consecutive samples overlap almost
        entirely), and glow only the freshest part of the stroke. */
     var minStep = Math.max(2, rxB * 0.30);
-    var lastX = -1e9, lastY = -1e9;
-    for (var i = 0; i < inkPts.length; i++) {
+    var lastDrawn = new Map();
+    for (var i = inkHead; i < inkPts.length; i++) {
       var b = inkPts[i];
-      var age = Math.pow(0.5, (now - b.t) / hl);
+      var age = Math.max(0, 1 - (now - b.t) / clearMs);
       var x = b.u * w, y = b.v * h;
       var isLast = (i === inkPts.length - 1);
-      if (!isLast && Math.hypot(x - lastX, y - lastY) < minStep) continue;
-      lastX = x; lastY = y;
+      var drawKey = b.pointerId === undefined ? 'legacy' : b.pointerId;
+      var priorDraw = lastDrawn.get(drawKey);
+      if (!isLast && priorDraw && Math.hypot(x - priorDraw.x, y - priorDraw.y) < minStep) continue;
+      lastDrawn.set(drawKey, { x: x, y: y });
       var segCol = inkCss(b.c);
 
       /* Dark backing so a stroke in the pad's own blue is still legible. */
@@ -2463,34 +2705,49 @@ select option:checked { background-color: #2a2050; color: #fff; }
        the per-axis world radius the wire sends. Drawn while a finger is down,
        and for a beat after SIZE moves so the brush can be sized without
        drawing first. */
-    var ringOn = ringAt.held || now < ringAt.until;
+    var ringOn = inkActiveRings.size > 0 || ringAt.held || now < ringAt.until;
     if (ringOn) {
       var rx = brushWorldRadius() * w, ry = rx;   /* a real circle, not an oval */
-      var cx = ringAt.u * w, cy = ringAt.v * h;
-      var fadeMs = ringAt.held ? 1 : Math.min(1, (ringAt.until - now) / 400);
-      inkCtx.shadowBlur = 0;
-      inkCtx.globalAlpha = 0.9 * fadeMs;
-      inkCtx.lineWidth = 3;
-      inkCtx.strokeStyle = 'rgba(2,6,14,.95)';   /* dark backing, same reason as the ink */
-      inkCtx.beginPath(); inkCtx.ellipse(cx, cy, rx + 1.5, ry + 1.5, 0, 0, Math.PI * 2); inkCtx.stroke();
-      inkCtx.globalAlpha = 1 * fadeMs;
-      inkCtx.lineWidth = 2;
-      inkCtx.strokeStyle = '#ffffff';
-      inkCtx.beginPath(); inkCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); inkCtx.stroke();
-      /* Centre tick, so a very large ring still shows where the brush is. */
-      inkCtx.globalAlpha = 0.8 * fadeMs;
-      inkCtx.beginPath(); inkCtx.arc(cx, cy, 3, 0, Math.PI * 2);
-      inkCtx.fillStyle = '#ffffff'; inkCtx.fill();
+      var drawRing = function (point, fadeMs) {
+        var cx = point.u * w, cy = point.v * h;
+        inkCtx.shadowBlur = 0;
+        inkCtx.globalAlpha = 0.9 * fadeMs;
+        inkCtx.lineWidth = 3;
+        inkCtx.strokeStyle = 'rgba(2,6,14,.95)';
+        inkCtx.beginPath(); inkCtx.ellipse(cx, cy, rx + 1.5, ry + 1.5, 0, 0, Math.PI * 2); inkCtx.stroke();
+        inkCtx.globalAlpha = fadeMs;
+        inkCtx.lineWidth = 2;
+        inkCtx.strokeStyle = '#ffffff';
+        inkCtx.beginPath(); inkCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); inkCtx.stroke();
+        inkCtx.globalAlpha = 0.8 * fadeMs;
+        inkCtx.beginPath(); inkCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+        inkCtx.fillStyle = '#ffffff'; inkCtx.fill();
+      };
+      if (inkActiveRings.size) {
+        inkActiveRings.forEach(function (point) { drawRing(point, 1); });
+      } else {
+        drawRing(ringAt, ringAt.held ? 1 : Math.min(1, (ringAt.until - now) / 400));
+      }
     }
 
     inkCtx.globalAlpha = 1;
     /* Not while hidden: an app-switched iPad kept animating a fade nobody can
        see. visibilitychange kicks it back on so the trail resumes honestly. */
-    if ((inkPts.length || ringOn) && !document.hidden) inkRAF = requestAnimationFrame(inkDraw);
+    if ((inkPts.length > inkHead || ringOn) && !document.hidden) inkRAF = requestAnimationFrame(inkDraw);
   }
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) inkKick();
   });
+  window.TouchInkDiagnostics = function () {
+    return {
+      pointCount: inkPts.length - inkHead,
+      activePointers: inkActiveRings.size,
+      inkFramePending: inkRAF !== null,
+      inputFramePending: inkInputRAF !== null || inkInputs.size > 0,
+      drawCount: inkDrawCount,
+      acceptedPointCount: inkAcceptedPointCount,
+    };
+  };
 
   function padUV(e) {
     var r = pad.getBoundingClientRect();
@@ -2560,25 +2817,30 @@ select option:checked { background-color: #2a2050; color: #fff; }
   })();
 
   pad.addEventListener('pointerdown', function (e) {
-    if (e.pointerId !== padPointer) return;           /* pinned above */
+    if (!padPointers.has(e.pointerId)) return;
     var p = padUV(e);
     paintXyReadout(p.u, p.v);
     if (!padIsDrawing()) return;
     /* Every stroke starts at the top of the scheme, so the same gesture always
        lays down the same colours — a walk that carried over between strokes
        would make the pad unrepeatable. */
-    window.inkWalkReset();
-    ringAt.held = true; inkAdd(p.u, p.v);
-    window.takeRecordPoint(p.u, p.v, true);
+    if (inkActiveRings.size === 0) window.inkWalkReset();
+    inkLastInputs.delete(e.pointerId);
+    inkLastStamps.delete(e.pointerId);
+    inkStrokePointers.delete(e.pointerId);
+    if (takePointerId === null) takePointerId = e.pointerId;
+    ringAt.held = true;
+    inkActiveRings.set(e.pointerId, { u: p.u, v: p.v });
+    queueInkInput(e.pointerId, p.u, p.v);
   });
   pad.addEventListener('pointermove', function (e) {
-    if (e.pointerId !== padPointer) return;
+    if (!padPointers.has(e.pointerId)) return;
     if (!(e.pressure > 0 || e.buttons)) return;
     var p = padUV(e);
     paintXyReadout(p.u, p.v);
     if (!padIsDrawing()) return;
-    inkAdd(p.u, p.v);
-    window.takeRecordPoint(p.u, p.v, true);
+    inkActiveRings.set(e.pointerId, { u: p.u, v: p.v });
+    queueInkInput(e.pointerId, p.u, p.v);
   });
   /* Let the ring go on lift, but leave it up briefly so the last brush position
      is still readable. window, not pad: a finger released off the pad's edge
@@ -2588,22 +2850,33 @@ select option:checked { background-color: #2a2050; color: #fff; }
      brush 'down' with no pen-up recorded and the engine painting the last
      point until the staleness deadman caught it. A cancel IS a lift. */
   function padLift(e) {
-    if (e.pointerId !== undefined && padPointer !== null && e.pointerId !== padPointer) return;
-    padPointer = null;
-    if (!ringAt.held) return;
+    if (e.pointerId === undefined || !inkActiveRings.has(e.pointerId)) return;
+    flushInkInput(e.pointerId);
     /* The pen-up is part of the gesture: without it a replayed take would join
        two separate strokes into one line across the hull. */
-    window.takeRecordPoint(ringAt.u, ringAt.v, false);
-    ringAt.held = false;
+    if (e.pointerId === takePointerId) window.takeRecordPoint(ringAt.u, ringAt.v, false);
+    inkActiveRings.delete(e.pointerId);
+    inkLastInputs.delete(e.pointerId);
+    inkLastStamps.delete(e.pointerId);
+    inkStrokePointers.delete(e.pointerId);
+    ringAt.held = inkActiveRings.size > 0;
+    if (!ringAt.held) takePointerId = null;
     ringAt.until = performance.now() + 600;
     inkKick();
   }
   window.addEventListener('pointerup', padLift);
   window.addEventListener('pointercancel', padLift);
   /* Exposed so a preset can put a stroke back exactly as it was drawn. */
-  window.inkGet = function () { return inkPts.map(function (p) { return [+p.u.toFixed(4), +p.v.toFixed(4)]; }); };
+  window.inkGet = function () { return inkPts.slice(inkHead).map(function (p) { return [+p.u.toFixed(4), +p.v.toFixed(4)]; }); };
   window.inkSet = function (list) {
     inkPts = [];
+    inkHead = 0;
+    inkInputs.clear();
+    inkLastInputs.clear();
+    inkLastStamps.clear();
+    inkStrokePointers.clear();
+    inkActiveRings.clear();
+    takePointerId = null;
     if (!Array.isArray(list)) { inkDraw(); return; }
     var now = performance.now();
     list.slice(-INK_MAX).forEach(function (p) { inkPts.push({ u: p[0], v: p[1], t: now }); });
@@ -2648,7 +2921,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
   var CHIP_SPEC = [
     { id: 'brushSize',  vals: [['XS', 0.05], ['S', 0.18], ['M', 0.35], ['L', 0.62], ['XL', 1]] },
     { id: 'brushPower', vals: [['25', 0.125], ['50', 0.25], ['90', 0.45], ['150', 0.75], ['MAX', 1]] },
-    { id: 'trailFade',  vals: [['OFF', 0], ['S', 0.25], ['M', 0.5], ['L', 0.75], ['MAX', 1]] },
+    { id: 'trailFade',  vals: [['0.1 s', 0.1], ['0.5 s', 0.5], ['1.0 s', 1], ['1.5 s', 1.5]] },
     { id: 'inkStep',    vals: [['FINE', 0.06], ['S', 0.22], ['M', 0.35], ['L', 0.6], ['WIDE', 1]] },
     { id: 'strobeDuty', vals: [['10', 0.1], ['25', 0.25], ['50', 0.5], ['75', 0.75], ['90', 0.9]] },
     { id: 'zFader',     vals: [['¼×', 0.25], ['½×', 0.5], ['1×', 0.72], ['1½×', 0.86], ['2×', 1]] },
@@ -2679,7 +2952,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
            do it itself, and #brushPower has its own 0..200% formatter which
            listens on the same event, so fire the event and let it win. */
         var out = sl.nextElementSibling;
-        if (out && out.classList.contains('readout')) out.textContent = Math.round(v * 100) + '%';
+        if (out && out.classList.contains('readout')) {
+          out.textContent = spec.id === 'trailFade' ? formatFadeSeconds(v) : Math.round(v * 100) + '%';
+        }
         sl.dispatchEvent(new CustomEvent('sliderchange', { bubbles: true, detail: { value: v } }));
         paint(v);
       });
@@ -2771,7 +3046,7 @@ select option:checked { background-color: #2a2050; color: #fff; }
               '<b>POWER</b> its brightness. FADE does nothing here — POOL keeps no trail.',
       '0.33': '<b>TRAIL</b> — turns the lights ON to your colour where you draw, and lets them ' +
               'fall back off in step with the trail fading on this pad. <b>SIZE</b> = brush width, ' +
-              '<b>POWER</b> = how fully it takes over, <b>FADE</b> = how long (0.1 s to 8 s), ' +
+              '<b>POWER</b> = how fully it takes over, <b>FADE</b> = exact time to clear (0.1 / 0.5 / 1.0 / 1.5 s), ' +
               '<b>COLOUR</b> = the ink.',
       '0.66': '<b>ERASE</b> — wipes the lights fully OFF where you draw, and they come back as ' +
               'the wipe cools behind you. <b>POWER</b> = how deep it cuts (100% = right off), ' +
@@ -3079,272 +3354,20 @@ select option:checked { background-color: #2a2050; color: #fff; }
      they pick unless they ask for a scheme. */
   paint5(GEN.master());
 
-  /* TOP-DOWN PIXEL MAP - the REAL 964 pixels, projected the way the sim's 2D
-     pixel view projects them: u = world X, v = world Z with Z flipped, height
-     discarded. Fetched from the engine's /model/pixel-layout and embedded,
-     because the playa has no network and the pad must draw without one.
-
-     GAP-COMPRESSED with the sim's own rule (any empty span wider than 5 world
-     units collapses to 4). That removed 31.8 units of dead air on the X axis -
-     most of it the ship's 25.9-unit centre, which holds no lights at all - so
-     the fixtures sit close together instead of in two islands with a void
-     between them. Then stretched to fill the pad, which is why this draws on a
-     canvas: stretching a scaled SVG would have made every dot an ellipse.
-     Format: 'u,v,groupIndex' triples in compressed world units. */
-  var PIXMAP_W = 63.99, PIXMAP_H = 41.34;
-  var PIXMAP_GROUPS = ["Left Auditorium", "Left Back Rails", "Left Back Wall", "Left Front Rails", "Left Front Wall", "Left Small SmokeStack", "Left SmokeStack", "Left_Back_Left", "Left_Back_Right", "Left_Front_Left", "Left_Front_Right", "Right Auditorium", "Right Back Rails", "Right Back Wall", "Right Front Rails", "Right Front Wall", "Right Small SmokeStack", "Right SmokeStacks", "Right_Back_Left", "Right_Back_Right", "Right_Front_Left", "Right_Front_Right", "TE Sign", "TE Sign 2"];
-  /* Exported for the wire's chart-drift tripwire (audit medium): every dot on
-     this pad is plotted from tables BAKED from a model export. If the model is
-     regenerated, the chart silently mis-aims — the wire compares this list to
-     the ENGINE's live group list at boot and banners on mismatch. */
-  window.padChartGroups = PIXMAP_GROUPS.slice();
-  var PIXMAP = '28.0,7.9,22;28.0,7.9,22;28.0,8.1,22;28.0,8.0,22;28.0,7.8,22;28.0,7.9,22;28.0,8.2,22;28.0,8.0,22;28.0,8.2,22;28.0,8.1,22;28.0,8.4,22;28.0,8.3,22;28.0,8.2,22;28.0,8.3,22;28.0,8.5,22;28.0,8.4,22;28.0,8.3,22;28.0,7.7,22;28.0,7.8,22;28.0,7.9,22;28.0,8.1,22;28.0,8.2,22;28.0,8.0,22;28.0,7.9,22;28.0,8.0,22;28.0,7.9,22;28.0,7.8,22;28.0,7.6,22;28.0,7.7,22;28.0,7.5,22;28.0,7.4,22;28.0,7.5,22;28.0,7.6,22;28.0,7.4,22;28.0,7.5,22;28.0,7.9,22;28.0,7.8,22;28.0,7.6,22;28.0,7.7,22;28.0,7.8,22;28.0,7.6,22;28.0,7.6,22;28.0,7.7,22;28.0,7.5,22;28.0,7.4,22;28.0,7.6,22;28.0,7.7,22;28.0,7.8,22;28.0,7.7,22;28.0,7.5,22;28.0,7.3,22;28.0,7.4,22;28.0,7.6,22;28.0,7.8,22;28.0,7.5,22;28.0,7.3,22;28.0,7.2,22;28.0,7.4,22;28.0,7.5,22;28.0,7.3,22;28.0,7.4,22;28.0,7.5,22;28.0,7.1,22;28.0,7.1,22;28.0,7.2,22;28.0,7.3,22;28.0,7.2,22;28.0,7.0,22;28.0,6.9,22;28.0,7.1,22;28.0,7.3,22;28.0,7.4,22;28.0,7.1,22;28.0,7.3,22;39.2,20.7,23;39.3,20.6,23;39.1,20.8,23;39.2,20.7,23;39.3,20.5,23;39.3,20.6,23;39.1,20.9,23;39.2,20.7,23;39.1,20.8,23;39.2,20.7,23;39.0,21.0,23;39.1,20.9,23;39.1,20.8,23;39.0,20.9,23;38.9,21.1,23;39.0,21.0,23;39.1,20.9,23;39.4,20.4,23;39.4,20.5,23;39.3,20.6,23;39.2,20.7,23;39.1,20.8,23;39.2,20.7,23;39.3,20.5,23;39.3,20.6,23;39.3,20.5,23;39.4,20.5,23;39.5,20.3,23;39.4,20.4,23;39.6,20.2,23;39.6,20.1,23;39.5,20.3,23;39.5,20.3,23;39.6,20.2,23;39.5,20.3,23;39.3,20.6,23;39.4,20.5,23;39.5,20.3,23;39.4,20.4,23;39.3,20.5,23;39.4,20.5,23;39.4,20.4,23;39.4,20.5,23;39.5,20.3,23;39.5,20.3,23;39.4,20.4,23;39.3,20.5,23;39.3,20.6,23;39.4,20.5,23;39.5,20.3,23;39.6,20.2,23;39.5,20.3,23;39.4,20.4,23;39.3,20.5,23;39.5,20.3,23;39.6,20.1,23;39.7,20.1,23;39.6,20.2,23;39.5,20.3,23;39.6,20.1,23;39.6,20.2,23;39.5,20.3,23;39.7,20.0,23;39.7,19.9,23;39.7,20.1,23;39.6,20.1,23;39.7,20.0,23;39.8,19.8,23;39.8,19.8,23;39.7,19.9,23;39.7,20.1,23;39.6,20.2,23;39.7,19.9,23;39.7,20.1,23;46.4,16.6,15;46.4,16.5,15;46.4,16.5,15;46.3,16.5,15;46.3,16.5,15;46.3,16.4,15;46.2,16.4,15;46.2,16.4,15;46.1,16.3,15;46.1,16.3,15;46.1,16.3,15;46.0,16.2,15;46.0,16.2,15;46.0,16.2,15;45.9,16.2,15;45.9,16.1,15;45.8,16.1,15;45.8,16.1,15;44.1,14.7,15;44.1,14.7,15;44.0,14.7,15;44.0,14.6,15;43.9,14.6,15;43.9,14.6,15;43.9,14.5,15;43.8,14.5,15;43.8,14.5,15;43.8,14.5,15;43.7,14.4,15;43.7,14.4,15;43.6,14.4,15;43.6,14.3,15;43.6,14.3,15;43.5,14.3,15;43.5,14.2,15;43.5,14.2,15;48.8,18.4,15;48.8,18.4,15;48.7,18.4,15;48.7,18.3,15;48.7,18.3,15;48.6,18.3,15;48.6,18.2,15;48.5,18.2,15;48.5,18.2,15;48.5,18.2,15;48.4,18.1,15;48.4,18.1,15;48.4,18.1,15;48.3,18.0,15;48.3,18.0,15;48.2,18.0,15;48.2,17.9,15;48.2,17.9,15;51.2,20.3,15;51.1,20.2,15;51.1,20.2,15;51.0,20.2,15;51.0,20.2,15;51.0,20.1,15;50.9,20.1,15;50.9,20.1,15;50.9,20.0,15;50.8,20.0,15;50.8,20.0,15;50.7,20.0,15;50.7,19.9,15;50.7,19.9,15;50.6,19.9,15;50.6,19.8,15;50.6,19.8,15;50.5,19.8,15;53.5,22.1,15;53.5,22.1,15;53.4,22.1,15;53.4,22.0,15;53.4,22.0,15;53.3,22.0,15;53.3,22.0,15;53.2,21.9,15;53.2,21.9,15;53.2,21.9,15;53.1,21.8,15;53.1,21.8,15;53.1,21.8,15;53.0,21.7,15;53.0,21.7,15;52.9,21.7,15;52.9,21.7,15;52.9,21.6,15;42.1,24.9,17;42.4,26.9,17;44.1,27.8,17;46.1,27.1,17;43.4,23.0,17;45.5,22.3,17;47.1,23.2,17;47.4,25.2,17;44.5,18.2,14;44.5,18.2,14;44.6,18.2,14;44.6,18.2,14;44.7,18.2,14;44.7,18.2,14;46.9,20.1,14;46.9,20.0,14;47.0,20.0,14;47.0,20.0,14;47.0,20.0,14;47.1,20.0,14;49.2,21.9,14;49.3,21.9,14;49.3,21.9,14;49.4,21.9,14;49.4,21.9,14;49.5,21.9,14;51.6,23.8,14;51.6,23.8,14;51.7,23.8,14;51.7,23.8,14;51.8,23.8,14;51.8,23.7,14;34.9,22.9,11;35.7,21.9,11;36.6,20.9,11;37.4,19.8,11;40.7,15.7,11;39.9,16.7,11;39.0,17.8,11;38.2,18.8,11;30.2,12.2,0;30.2,10.8,0;30.2,9.5,0;30.2,8.1,0;30.1,2.7,0;30.1,4.1,0;30.2,5.4,0;30.2,6.8,0;25.2,15.0,2;25.2,15.0,2;25.3,15.0,2;25.3,15.0,2;25.4,15.0,2;25.4,15.0,2;25.5,15.0,2;25.5,15.0,2;25.6,15.0,2;25.6,15.0,2;25.7,15.0,2;25.7,15.0,2;25.8,15.0,2;25.8,15.0,2;25.9,15.0,2;25.9,15.0,2;26.0,15.0,2;26.0,15.0,2;28.2,15.0,2;28.3,15.0,2;28.3,15.0,2;28.4,15.0,2;28.4,15.0,2;28.5,15.0,2;28.5,15.0,2;28.6,15.0,2;28.6,15.0,2;28.6,15.0,2;28.7,15.0,2;28.7,15.0,2;28.8,15.0,2;28.8,15.0,2;28.9,15.0,2;28.9,15.0,2;29.0,15.0,2;29.0,15.0,2;22.2,15.0,2;22.2,15.0,2;22.3,15.0,2;22.3,15.0,2;22.4,15.0,2;22.4,15.0,2;22.4,15.0,2;22.5,15.0,2;22.5,15.0,2;22.6,15.0,2;22.6,15.0,2;22.7,15.0,2;22.7,15.0,2;22.8,15.0,2;22.8,15.0,2;22.9,15.0,2;22.9,15.0,2;23.0,15.0,2;19.1,15.0,2;19.2,15.0,2;19.2,15.0,2;19.3,15.0,2;19.3,15.0,2;19.4,15.0,2;19.4,15.0,2;19.5,15.0,2;19.5,15.0,2;19.6,15.0,2;19.6,15.0,2;19.7,15.0,2;19.7,15.0,2;19.8,15.0,2;19.8,15.0,2;19.9,15.0,2;19.9,15.0,2;20.0,15.0,2;16.1,15.0,2;16.2,15.0,2;16.2,15.0,2;16.3,15.0,2;16.3,15.0,2;16.3,15.0,2;16.4,15.0,2;16.4,15.0,2;16.5,15.0,2;16.5,15.0,2;16.6,15.0,2;16.6,15.0,2;16.7,15.0,2;16.7,15.0,2;16.8,15.0,2;16.8,15.0,2;16.9,15.0,2;16.9,15.0,2;37.2,28.4,13;37.1,28.4,13;37.1,28.4,13;37.1,28.3,13;37.0,28.3,13;37.0,28.3,13;37.0,28.2,13;36.9,28.2,13;36.9,28.2,13;36.8,28.2,13;36.8,28.1,13;36.8,28.1,13;36.7,28.1,13;36.7,28.0,13;36.7,28.0,13;36.6,28.0,13;36.6,27.9,13;36.5,27.9,13;34.8,26.6,13;34.8,26.5,13;34.7,26.5,13;34.7,26.5,13;34.7,26.4,13;34.6,26.4,13;34.6,26.4,13;34.5,26.4,13;34.5,26.3,13;34.5,26.3,13;34.4,26.3,13;34.4,26.2,13;34.4,26.2,13;34.3,26.2,13;34.3,26.1,13;34.2,26.1,13;34.2,26.1,13;34.2,26.1,13;39.6,30.3,13;39.5,30.3,13;39.5,30.2,13;39.4,30.2,13;39.4,30.2,13;39.4,30.1,13;39.3,30.1,13;39.3,30.1,13;39.3,30.0,13;39.2,30.0,13;39.2,30.0,13;39.1,30.0,13;39.1,29.9,13;39.1,29.9,13;39.0,29.9,13;39.0,29.8,13;39.0,29.8,13;38.9,29.8,13;41.9,32.1,13;41.9,32.1,13;41.9,32.1,13;41.8,32.1,13;41.8,32.0,13;41.7,32.0,13;41.7,32.0,13;41.7,31.9,13;41.6,31.9,13;41.6,31.9,13;41.6,31.9,13;41.5,31.8,13;41.5,31.8,13;41.4,31.8,13;41.4,31.7,13;41.4,31.7,13;41.3,31.7,13;41.3,31.6,13;44.3,34.0,13;44.3,34.0,13;44.2,33.9,13;44.2,33.9,13;44.2,33.9,13;44.1,33.9,13;44.1,33.8,13;44.0,33.8,13;44.0,33.8,13;44.0,33.7,13;43.9,33.7,13;43.9,33.7,13;43.9,33.7,13;43.8,33.6,13;43.8,33.6,13;43.7,33.6,13;43.7,33.5,13;43.7,33.5,13;25.0,0.0,4;25.1,0.0,4;25.1,0.0,4;25.2,0.0,4;25.2,0.0,4;25.3,0.0,4;25.3,0.0,4;25.4,0.0,4;25.4,0.0,4;25.5,0.0,4;25.5,0.0,4;25.6,0.0,4;25.6,0.0,4;25.7,0.0,4;25.7,0.0,4;25.8,0.0,4;25.8,0.0,4;25.9,0.0,4;28.2,0.0,4;28.3,0.0,4;28.3,0.0,4;28.4,0.0,4;28.4,0.0,4;28.4,0.0,4;28.5,0.0,4;28.5,0.0,4;28.6,0.0,4;28.6,0.0,4;28.7,0.0,4;28.7,0.0,4;28.8,0.0,4;28.8,0.0,4;28.9,0.0,4;28.9,0.0,4;29.0,0.0,4;29.0,0.0,4;21.9,0.0,4;21.9,0.0,4;22.0,0.0,4;22.0,0.0,4;22.1,0.0,4;22.1,0.0,4;22.2,0.0,4;22.2,0.0,4;22.3,0.0,4;22.3,0.0,4;22.4,0.0,4;22.4,0.0,4;22.5,0.0,4;22.5,0.0,4;22.6,0.0,4;22.6,0.0,4;22.7,0.0,4;22.7,0.0,4;18.7,0.0,4;18.8,0.0,4;18.8,0.0,4;18.9,0.0,4;18.9,0.0,4;19.0,0.0,4;19.0,0.0,4;19.1,0.0,4;19.1,0.0,4;19.2,0.0,4;19.2,0.0,4;19.3,0.0,4;19.3,0.0,4;19.4,0.0,4;19.4,0.0,4;19.5,0.0,4;19.5,0.0,4;19.6,0.0,4;15.6,0.0,4;15.6,0.0,4;15.7,0.0,4;15.7,0.0,4;15.8,0.0,4;15.8,0.0,4;15.9,0.0,4;15.9,0.0,4;16.0,0.0,4;16.0,0.0,4;16.1,0.0,4;16.1,0.0,4;16.2,0.0,4;16.2,0.0,4;16.3,0.0,4;16.3,0.0,4;16.3,0.0,4;16.4,0.0,4;23.7,6.5,6;22.4,4.8,6;20.4,4.7,6;18.9,6.2,6;23.6,8.8,6;22.1,10.3,6;20.1,10.2,6;18.8,8.5,6;26.1,2.4,3;26.1,2.5,3;26.1,2.5,3;26.1,2.5,3;26.2,2.6,3;26.2,2.6,3;22.9,2.4,3;22.9,2.5,3;22.9,2.5,3;23.0,2.5,3;23.0,2.6,3;23.0,2.6,3;19.7,2.4,3;19.7,2.4,3;19.8,2.5,3;19.8,2.5,3;19.8,2.5,3;19.8,2.6,3;16.5,2.4,3;16.5,2.4,3;16.6,2.4,3;16.6,2.5,3;16.6,2.5,3;16.7,2.5,3;37.7,25.8,12;37.7,25.7,12;37.7,25.7,12;37.7,25.6,12;37.7,25.6,12;37.7,25.5,12;40.1,27.7,12;40.1,27.6,12;40.1,27.6,12;40.2,27.5,12;40.2,27.5,12;40.2,27.4,12;42.6,29.6,12;42.6,29.5,12;42.6,29.5,12;42.6,29.4,12;42.6,29.4,12;42.6,29.3,12;45.1,31.5,12;45.1,31.4,12;45.1,31.4,12;45.1,31.3,12;45.1,31.3,12;45.1,31.2,12;26.3,12.7,1;26.4,12.7,1;26.4,12.7,1;26.5,12.7,1;26.5,12.7,1;26.6,12.7,1;23.2,12.7,1;23.2,12.7,1;23.3,12.7,1;23.3,12.7,1;23.4,12.7,1;23.4,12.7,1;20.1,12.7,1;20.1,12.7,1;20.1,12.7,1;20.2,12.7,1;20.2,12.7,1;20.3,12.7,1;16.9,12.7,1;17.0,12.7,1;17.0,12.7,1;17.0,12.7,1;17.1,12.7,1;17.1,12.7,1;8.0,7.5,5;4.0,3.5,5;0.0,7.5,5;4.0,11.5,5;63.6,41.3,16;64.0,36.9,16;59.6,36.5,16;59.1,40.9,16;12.0,2.7,9;12.1,2.7,9;12.2,2.8,9;12.2,2.9,9;12.3,3.0,9;12.4,3.1,9;12.5,3.2,9;12.6,3.3,9;12.7,3.4,9;12.7,3.5,9;12.8,3.5,9;12.9,3.6,9;13.0,3.7,9;13.1,3.8,9;13.1,3.9,9;13.2,4.0,9;13.3,4.1,9;13.4,4.2,9;13.5,4.3,9;13.6,4.3,9;13.6,4.4,9;13.7,4.5,9;13.8,4.6,9;13.9,4.7,9;14.0,4.8,9;14.1,4.9,9;14.1,5.0,9;14.2,5.1,9;14.3,5.1,9;14.4,5.2,9;14.5,5.3,9;14.5,5.4,9;14.6,5.5,9;14.7,5.6,9;14.8,5.7,9;14.9,5.8,9;15.0,5.8,9;15.0,5.9,9;15.1,6.0,9;15.2,6.1,9;12.0,12.2,7;12.1,12.1,7;12.2,12.0,7;12.3,11.9,7;12.4,11.8,7;12.4,11.7,7;12.5,11.6,7;12.6,11.5,7;12.7,11.4,7;12.8,11.3,7;12.9,11.3,7;13.0,11.2,7;13.1,11.1,7;13.2,11.0,7;13.3,10.9,7;13.3,10.8,7;13.4,10.7,7;13.5,10.6,7;13.6,10.5,7;13.7,10.5,7;13.8,10.4,7;13.9,10.3,7;14.0,10.2,7;14.1,10.1,7;14.2,10.0,7;14.2,9.9,7;14.3,9.8,7;14.4,9.7,7;14.5,9.6,7;14.6,9.6,7;14.7,9.5,7;14.8,9.4,7;14.9,9.3,7;15.0,9.2,7;15.1,9.1,7;15.1,9.0,7;15.2,8.9,7;15.3,8.8,7;15.4,8.7,7;15.5,8.7,7;29.8,12.4,8;29.5,12.3,8;29.2,12.2,8;28.9,12.1,8;28.6,12.0,8;28.3,11.9,8;28.0,11.8,8;27.7,11.8,8;27.4,11.7,8;27.1,11.6,8;26.8,11.5,8;26.5,11.4,8;26.2,11.3,8;25.9,11.3,8;25.6,11.2,8;25.3,11.1,8;25.0,11.0,8;24.7,10.9,8;24.4,10.8,8;24.1,10.7,8;23.8,10.7,8;23.5,10.6,8;23.2,10.5,8;22.9,10.4,8;22.6,10.3,8;22.3,10.2,8;22.0,10.2,8;21.7,10.1,8;21.4,10.0,8;21.1,9.9,8;20.8,9.8,8;20.5,9.7,8;20.2,9.6,8;19.9,9.6,8;19.6,9.5,8;19.3,9.4,8;19.0,9.3,8;18.7,9.2,8;18.4,9.1,8;18.1,9.1,8;30.0,2.8,10;29.7,2.8,10;29.4,2.9,10;29.1,3.0,10;28.8,3.1,10;28.5,3.2,10;28.2,3.3,10;27.8,3.3,10;27.5,3.4,10;27.2,3.5,10;26.9,3.6,10;26.6,3.7,10;26.3,3.8,10;26.0,3.9,10;25.7,3.9,10;25.4,4.0,10;25.1,4.1,10;24.8,4.2,10;24.5,4.3,10;24.2,4.4,10;23.8,4.4,10;23.5,4.5,10;23.2,4.6,10;22.9,4.7,10;22.6,4.8,10;22.3,4.9,10;22.0,5.0,10;21.7,5.0,10;21.4,5.1,10;21.1,5.2,10;20.8,5.3,10;20.5,5.4,10;20.2,5.5,10;19.8,5.5,10;19.5,5.6,10;19.2,5.7,10;18.9,5.8,10;18.6,5.9,10;18.3,6.0,10;18.0,6.1,10;35.0,23.3,18;35.3,23.4,18;35.6,23.5,18;35.9,23.6,18;36.2,23.7,18;36.5,23.9,18;36.8,24.0,18;37.1,24.1,18;37.4,24.2,18;37.6,24.4,18;37.9,24.5,18;38.2,24.6,18;38.5,24.7,18;38.8,24.9,18;39.1,25.0,18;39.4,25.1,18;39.7,25.2,18;40.0,25.3,18;40.3,25.5,18;40.6,25.6,18;40.9,25.7,18;41.2,25.8,18;41.4,26.0,18;41.7,26.1,18;42.0,26.2,18;42.3,26.3,18;42.6,26.5,18;42.9,26.6,18;43.2,26.7,18;43.5,26.8,18;43.8,26.9,18;44.1,27.1,18;44.4,27.2,18;44.7,27.3,18;45.0,27.4,18;45.2,27.6,18;45.5,27.7,18;45.8,27.8,18;46.1,27.9,18;46.4,28.1,18;49.1,34.3,19;49.1,34.1,19;49.1,34.0,19;49.1,33.9,19;49.1,33.8,19;49.1,33.6,19;49.0,33.5,19;49.0,33.4,19;49.0,33.3,19;49.0,33.1,19;49.0,33.0,19;49.0,32.9,19;49.0,32.7,19;49.0,32.6,19;49.0,32.5,19;49.0,32.4,19;48.9,32.2,19;48.9,32.1,19;48.9,32.0,19;48.9,31.9,19;48.9,31.7,19;48.9,31.6,19;48.9,31.5,19;48.9,31.4,19;48.9,31.2,19;48.9,31.1,19;48.8,31.0,19;48.8,30.9,19;48.8,30.7,19;48.8,30.6,19;48.8,30.5,19;48.8,30.4,19;48.8,30.2,19;48.8,30.1,19;48.8,30.0,19;48.8,29.9,19;48.7,29.7,19;48.7,29.6,19;48.7,29.5,19;48.7,29.4,19;55.1,26.8,21;55.0,26.8,21;54.9,26.8,21;54.7,26.8,21;54.6,26.8,21;54.5,26.8,21;54.3,26.9,21;54.2,26.9,21;54.1,26.9,21;54.0,26.9,21;53.8,26.9,21;53.7,27.0,21;53.6,27.0,21;53.4,27.0,21;53.3,27.0,21;53.2,27.0,21;53.1,27.0,21;52.9,27.1,21;52.8,27.1,21;52.7,27.1,21;52.5,27.1,21;52.4,27.1,21;52.3,27.2,21;52.2,27.2,21;52.0,27.2,21;51.9,27.2,21;51.8,27.2,21;51.7,27.2,21;51.5,27.3,21;51.4,27.3,21;51.3,27.3,21;51.1,27.3,21;51.0,27.3,21;50.9,27.3,21;50.8,27.4,21;50.6,27.4,21;50.5,27.4,21;50.4,27.4,21;50.2,27.4,21;50.1,27.5,21;41.0,15.8,20;41.2,16.0,20;41.4,16.3,20;41.6,16.5,20;41.8,16.8,20;42.0,17.0,20;42.2,17.3,20;42.3,17.6,20;42.5,17.8,20;42.7,18.1,20;42.9,18.3,20;43.1,18.6,20;43.3,18.8,20;43.5,19.1,20;43.7,19.3,20;43.9,19.6,20;44.0,19.9,20;44.2,20.1,20;44.4,20.4,20;44.6,20.6,20;44.8,20.9,20;45.0,21.1,20;45.2,21.4,20;45.4,21.7,20;45.6,21.9,20;45.8,22.2,20;45.9,22.4,20;46.1,22.7,20;46.3,22.9,20;46.5,23.2,20;46.7,23.4,20;46.9,23.7,20;47.1,24.0,20;47.3,24.2,20;47.5,24.5,20;47.7,24.7,20;47.8,25.0,20;48.0,25.2,20;48.2,25.5,20;48.4,25.8,20';
-  /* WORLD (nx,nz) FOR EVERY PIXMAP POINT, in the SAME order as PIXMAP.
-     This is what makes a touch on the pad mean a place on the SHIP. The pad
-     draws the sim's COMPRESSED top-down map (docs/44 S2.5 - a raw nx/nz pad is
-     73.6% dead on this hull and the ship runs diagonally), but the pattern is
-     fed WORLD nx/nz. docs/44 S2.6: that projection has no inverse anywhere in
-     the repo, so the surface has to carry one.
-     Generated from marsin_engine/models/titanic.js by pairing each PIXMAP point
-     with its model pixel by (group, order within group) - VERIFIED at 964
-     points / 24 groups / zero per-group count mismatches. If the model changes,
-     regenerate PIXMAP and this together. */
-  var PIXMAP_WORLD = '0.3636,0.8133;0.3636,0.8150;0.3636,0.8088;0.3636,0.8127;0.3636,0.8166;0.3636,0.8144;0.3636,0.8066;0.3636,0.8121;0.3636,0.8082;0.3636,0.8099;0.3636,0.8021;0.3636,0.8060;0.3636,0.8076;0.3636,0.8037;0.3636,0.7998;0.3636,0.8015;0.3636,0.8054;0.3636,0.8193;0.3636,0.8171;0.3636,0.8132;0.3636,0.8093;0.3636,0.8071;0.3636,0.8110;0.3636,0.8149;0.3636,0.8126;0.3636,0.8143;0.3636,0.8165;0.3636,0.8204;0.3636,0.8188;0.3636,0.8243;0.3636,0.8266;0.3636,0.8227;0.3636,0.8210;0.3636,0.8249;0.3636,0.8233;0.3636,0.8138;0.3636,0.8177;0.3636,0.8216;0.3636,0.8199;0.3636,0.8160;0.3636,0.8206;0.3636,0.8223;0.3636,0.8201;0.3636,0.8240;0.3636,0.8256;0.3636,0.8217;0.3636,0.8178;0.3636,0.8156;0.3636,0.8195;0.3636,0.8234;0.3636,0.8273;0.3636,0.8250;0.3636,0.8211;0.3636,0.8172;0.3636,0.8228;0.3636,0.8289;0.3636,0.8306;0.3636,0.8267;0.3636,0.8244;0.3636,0.8283;0.3636,0.8261;0.3636,0.8238;0.3636,0.8322;0.3636,0.8339;0.3636,0.8300;0.3636,0.8277;0.3636,0.8316;0.3636,0.8355;0.3636,0.8372;0.3636,0.8333;0.3636,0.8294;0.3636,0.8255;0.3636,0.8327;0.3636,0.8288;0.7104,0.5140;0.7109,0.5156;0.7094,0.5107;0.7104,0.5140;0.7114,0.5172;0.7109,0.5156;0.7089,0.5091;0.7104,0.5140;0.7094,0.5107;0.7099,0.5124;0.7079,0.5059;0.7089,0.5091;0.7094,0.5107;0.7084,0.5075;0.7074,0.5043;0.7079,0.5059;0.7089,0.5091;0.7123,0.5204;0.7119,0.5188;0.7109,0.5156;0.7099,0.5124;0.7094,0.5107;0.7104,0.5140;0.7114,0.5172;0.7109,0.5156;0.7114,0.5172;0.7119,0.5188;0.7128,0.5220;0.7123,0.5204;0.7138,0.5253;0.7143,0.5269;0.7133,0.5237;0.7128,0.5220;0.7138,0.5253;0.7133,0.5237;0.7109,0.5156;0.7119,0.5188;0.7128,0.5220;0.7123,0.5204;0.7114,0.5172;0.7119,0.5188;0.7123,0.5204;0.7119,0.5188;0.7128,0.5220;0.7133,0.5237;0.7123,0.5204;0.7114,0.5172;0.7109,0.5156;0.7119,0.5188;0.7128,0.5220;0.7138,0.5253;0.7133,0.5237;0.7123,0.5204;0.7114,0.5172;0.7128,0.5220;0.7143,0.5269;0.7148,0.5285;0.7138,0.5253;0.7133,0.5237;0.7143,0.5269;0.7138,0.5253;0.7133,0.5237;0.7153,0.5301;0.7158,0.5318;0.7148,0.5285;0.7143,0.5269;0.7153,0.5301;0.7163,0.5334;0.7168,0.5350;0.7158,0.5318;0.7148,0.5285;0.7138,0.5253;0.7158,0.5318;0.7148,0.5285;0.7858,0.6104;0.7854,0.6111;0.7850,0.6118;0.7846,0.6125;0.7842,0.6132;0.7838,0.6139;0.7834,0.6146;0.7830,0.6153;0.7826,0.6160;0.7822,0.6167;0.7818,0.6174;0.7814,0.6181;0.7811,0.6188;0.7807,0.6195;0.7803,0.6202;0.7799,0.6209;0.7795,0.6216;0.7791,0.6223;0.7612,0.6540;0.7608,0.6547;0.7604,0.6554;0.7600,0.6561;0.7596,0.6568;0.7592,0.6575;0.7588,0.6582;0.7584,0.6589;0.7580,0.6596;0.7576,0.6603;0.7573,0.6610;0.7569,0.6617;0.7565,0.6623;0.7561,0.6631;0.7557,0.6637;0.7553,0.6644;0.7549,0.6651;0.7545,0.6658;0.8103,0.5669;0.8099,0.5676;0.8096,0.5682;0.8092,0.5689;0.8088,0.5696;0.8084,0.5703;0.8080,0.5710;0.8076,0.5717;0.8072,0.5724;0.8068,0.5731;0.8064,0.5738;0.8060,0.5745;0.8056,0.5752;0.8052,0.5759;0.8048,0.5766;0.8045,0.5773;0.8041,0.5780;0.8037,0.5787;0.8349,0.5233;0.8345,0.5240;0.8341,0.5247;0.8338,0.5254;0.8334,0.5261;0.8330,0.5268;0.8326,0.5274;0.8322,0.5282;0.8318,0.5289;0.8314,0.5295;0.8310,0.5302;0.8306,0.5310;0.8302,0.5316;0.8298,0.5323;0.8294,0.5330;0.8290,0.5337;0.8286,0.5344;0.8283,0.5351;0.8595,0.4797;0.8591,0.4804;0.8587,0.4811;0.8583,0.4818;0.8579,0.4825;0.8575,0.4832;0.8572,0.4839;0.8568,0.4846;0.8564,0.4853;0.8560,0.4860;0.8556,0.4867;0.8552,0.4874;0.8548,0.4881;0.8544,0.4888;0.8540,0.4895;0.8536,0.4902;0.8532,0.4908;0.8528,0.4915;0.7407,0.4156;0.7435,0.3683;0.7608,0.3462;0.7823,0.3621;0.7539,0.4603;0.7755,0.4762;0.7927,0.4541;0.7955,0.4068;0.7653,0.5722;0.7658,0.5723;0.7663,0.5725;0.7668,0.5726;0.7673,0.5728;0.7678,0.5729;0.7900,0.5285;0.7905,0.5286;0.7910,0.5288;0.7915,0.5289;0.7920,0.5290;0.7925,0.5292;0.8148,0.4848;0.8153,0.4849;0.8158,0.4851;0.8163,0.4852;0.8168,0.4853;0.8173,0.4855;0.8396,0.4411;0.8401,0.4412;0.8406,0.4414;0.8411,0.4415;0.8416,0.4416;0.8421,0.4418;0.6654,0.4608;0.6740,0.4851;0.6826,0.5094;0.6912,0.5337;0.7255,0.6308;0.7169,0.6065;0.7083,0.5822;0.6998,0.5579;0.3861,0.7133;0.3861,0.7450;0.3861,0.7767;0.3861,0.8085;0.3860,0.9353;0.3860,0.9036;0.3860,0.8719;0.3860,0.8402;0.3342,0.6469;0.3347,0.6469;0.3352,0.6469;0.3357,0.6469;0.3362,0.6469;0.3367,0.6469;0.3372,0.6469;0.3377,0.6469;0.3382,0.6469;0.3387,0.6469;0.3392,0.6469;0.3397,0.6469;0.3402,0.6469;0.3407,0.6469;0.3412,0.6469;0.3417,0.6469;0.3423,0.6469;0.3428,0.6469;0.3658,0.6471;0.3663,0.6471;0.3668,0.6471;0.3673,0.6471;0.3678,0.6471;0.3683,0.6471;0.3688,0.6471;0.3693,0.6471;0.3698,0.6471;0.3703,0.6471;0.3708,0.6471;0.3713,0.6471;0.3718,0.6471;0.3723,0.6471;0.3728,0.6471;0.3734,0.6471;0.3739,0.6471;0.3744,0.6471;0.3026,0.6466;0.3031,0.6467;0.3036,0.6467;0.3041,0.6467;0.3046,0.6467;0.3051,0.6467;0.3056,0.6467;0.3061,0.6467;0.3066,0.6467;0.3071,0.6467;0.3076,0.6467;0.3081,0.6467;0.3086,0.6467;0.3091,0.6467;0.3096,0.6467;0.3102,0.6467;0.3107,0.6467;0.3112,0.6467;0.2710,0.6465;0.2715,0.6465;0.2720,0.6465;0.2725,0.6465;0.2730,0.6465;0.2735,0.6465;0.2740,0.6465;0.2745,0.6465;0.2750,0.6465;0.2755,0.6465;0.2760,0.6465;0.2765,0.6465;0.2770,0.6465;0.2775,0.6465;0.2780,0.6465;0.2786,0.6465;0.2791,0.6465;0.2796,0.6465;0.2394,0.6462;0.2399,0.6462;0.2404,0.6462;0.2409,0.6462;0.2414,0.6463;0.2419,0.6463;0.2424,0.6463;0.2429,0.6463;0.2434,0.6463;0.2439,0.6463;0.2444,0.6463;0.2449,0.6463;0.2454,0.6463;0.2459,0.6463;0.2464,0.6463;0.2470,0.6463;0.2475,0.6463;0.2480,0.6463;0.6890,0.3317;0.6886,0.3324;0.6882,0.3331;0.6878,0.3338;0.6874,0.3345;0.6870,0.3352;0.6867,0.3359;0.6863,0.3366;0.6859,0.3373;0.6855,0.3380;0.6851,0.3387;0.6847,0.3394;0.6843,0.3401;0.6839,0.3408;0.6835,0.3415;0.6831,0.3422;0.6827,0.3429;0.6823,0.3436;0.6642,0.3754;0.6638,0.3761;0.6634,0.3768;0.6630,0.3775;0.6626,0.3782;0.6622,0.3789;0.6618,0.3796;0.6614,0.3803;0.6610,0.3810;0.6606,0.3817;0.6602,0.3824;0.6598,0.3831;0.6595,0.3838;0.6590,0.3845;0.6587,0.3852;0.6583,0.3859;0.6579,0.3866;0.6575,0.3873;0.7139,0.2880;0.7135,0.2887;0.7131,0.2893;0.7127,0.2900;0.7123,0.2907;0.7119,0.2915;0.7115,0.2921;0.7111,0.2928;0.7107,0.2935;0.7103,0.2943;0.7099,0.2949;0.7095,0.2956;0.7091,0.2963;0.7087,0.2970;0.7083,0.2977;0.7079,0.2984;0.7075,0.2991;0.7071,0.2998;0.7387,0.2442;0.7383,0.2449;0.7379,0.2456;0.7375,0.2463;0.7371,0.2470;0.7367,0.2477;0.7363,0.2484;0.7359,0.2491;0.7355,0.2498;0.7351,0.2505;0.7347,0.2512;0.7343,0.2519;0.7339,0.2526;0.7335,0.2533;0.7331,0.2540;0.7327,0.2547;0.7323,0.2554;0.7319,0.2561;0.7635,0.2004;0.7631,0.2012;0.7627,0.2019;0.7623,0.2026;0.7619,0.2032;0.7615,0.2039;0.7611,0.2047;0.7607,0.2054;0.7603,0.2061;0.7599,0.2068;0.7595,0.2075;0.7591,0.2082;0.7587,0.2089;0.7583,0.2096;0.7579,0.2103;0.7575,0.2110;0.7572,0.2117;0.7568,0.2124;0.3327,0.9993;0.3332,0.9993;0.3337,0.9993;0.3342,0.9993;0.3347,0.9993;0.3352,0.9993;0.3357,0.9993;0.3363,0.9993;0.3368,0.9993;0.3373,0.9993;0.3378,0.9993;0.3383,0.9993;0.3388,0.9993;0.3393,0.9993;0.3398,0.9993;0.3403,0.9993;0.3408,0.9993;0.3413,0.9993;0.3657,0.9991;0.3662,0.9991;0.3667,0.9991;0.3672,0.9991;0.3677,0.9991;0.3682,0.9991;0.3687,0.9991;0.3692,0.9991;0.3697,0.9991;0.3702,0.9991;0.3707,0.9991;0.3712,0.9991;0.3717,0.9991;0.3722,0.9991;0.3727,0.9991;0.3733,0.9990;0.3738,0.9990;0.3743,0.9990;0.2998,0.9996;0.3003,0.9996;0.3008,0.9995;0.3013,0.9995;0.3018,0.9995;0.3023,0.9995;0.3028,0.9995;0.3033,0.9995;0.3038,0.9995;0.3043,0.9995;0.3048,0.9995;0.3053,0.9995;0.3058,0.9995;0.3063,0.9995;0.3068,0.9995;0.3073,0.9995;0.3078,0.9995;0.3083,0.9995;0.2668,0.9998;0.2673,0.9998;0.2678,0.9998;0.2683,0.9998;0.2688,0.9998;0.2693,0.9998;0.2698,0.9997;0.2703,0.9997;0.2708,0.9997;0.2713,0.9997;0.2718,0.9997;0.2723,0.9997;0.2728,0.9997;0.2733,0.9997;0.2738,0.9997;0.2744,0.9997;0.2749,0.9997;0.2754,0.9997;0.2338,1.0000;0.2343,1.0000;0.2348,1.0000;0.2353,1.0000;0.2358,1.0000;0.2363,1.0000;0.2368,1.0000;0.2374,1.0000;0.2379,1.0000;0.2384,1.0000;0.2389,1.0000;0.2394,1.0000;0.2399,1.0000;0.2404,1.0000;0.2409,1.0000;0.2414,1.0000;0.2419,1.0000;0.2424,0.9999;0.3184,0.8468;0.3046,0.8871;0.2839,0.8902;0.2683,0.8542;0.3171,0.7929;0.3015,0.7570;0.2808,0.7601;0.2671,0.8003;0.3432,0.9425;0.3435,0.9417;0.3439,0.9408;0.3442,0.9400;0.3446,0.9392;0.3449,0.9384;0.3100,0.9432;0.3103,0.9424;0.3106,0.9415;0.3110,0.9407;0.3113,0.9399;0.3117,0.9391;0.2767,0.9438;0.2771,0.9430;0.2774,0.9422;0.2778,0.9414;0.2781,0.9406;0.2784,0.9398;0.2435,0.9445;0.2438,0.9437;0.2442,0.9429;0.2445,0.9421;0.2449,0.9413;0.2452,0.9404;0.6942,0.3939;0.6943,0.3952;0.6943,0.3964;0.6944,0.3977;0.6944,0.3990;0.6944,0.4003;0.7199,0.3493;0.7199,0.3505;0.7200,0.3518;0.7200,0.3531;0.7201,0.3543;0.7201,0.3556;0.7456,0.3046;0.7456,0.3059;0.7457,0.3072;0.7457,0.3085;0.7457,0.3097;0.7458,0.3110;0.7712,0.2600;0.7713,0.2613;0.7713,0.2626;0.7714,0.2638;0.7714,0.2651;0.7714,0.2664;0.3463,0.7022;0.3467,0.7020;0.3472,0.7017;0.3476,0.7014;0.3481,0.7012;0.3485,0.7009;0.3135,0.7022;0.3139,0.7019;0.3144,0.7016;0.3148,0.7014;0.3152,0.7011;0.3157,0.7008;0.2807,0.7021;0.2811,0.7018;0.2815,0.7015;0.2820,0.7013;0.2824,0.7010;0.2829,0.7007;0.2478,0.7020;0.2483,0.7017;0.2487,0.7014;0.2492,0.7012;0.2496,0.7009;0.2500,0.7006;0.0835,0.8229;0.0418,0.9170;0.0000,0.8229;0.0418,0.7289;0.9954,0.0000;1.0000,0.1326;0.9411,0.1429;0.9365,0.0103;0.1965,0.9376;0.1973,0.9355;0.1982,0.9334;0.1991,0.9313;0.1999,0.9292;0.2008,0.9271;0.2016,0.9250;0.2025,0.9230;0.2033,0.9209;0.2042,0.9188;0.2051,0.9167;0.2059,0.9146;0.2068,0.9125;0.2076,0.9105;0.2085,0.9084;0.2093,0.9063;0.2102,0.9042;0.2111,0.9021;0.2119,0.9000;0.2128,0.8979;0.2136,0.8959;0.2145,0.8938;0.2153,0.8917;0.2162,0.8896;0.2171,0.8875;0.2179,0.8854;0.2188,0.8833;0.2196,0.8813;0.2205,0.8792;0.2213,0.8771;0.2222,0.8750;0.2231,0.8729;0.2239,0.8708;0.2248,0.8687;0.2256,0.8667;0.2265,0.8646;0.2273,0.8625;0.2282,0.8604;0.2291,0.8583;0.2299,0.8562;0.1965,0.7142;0.1974,0.7163;0.1984,0.7184;0.1993,0.7205;0.2002,0.7227;0.2012,0.7248;0.2021,0.7269;0.2030,0.7290;0.2040,0.7311;0.2049,0.7332;0.2059,0.7353;0.2068,0.7374;0.2077,0.7395;0.2087,0.7416;0.2096,0.7437;0.2105,0.7459;0.2115,0.7480;0.2124,0.7501;0.2134,0.7522;0.2143,0.7543;0.2152,0.7564;0.2162,0.7585;0.2171,0.7606;0.2180,0.7627;0.2190,0.7649;0.2199,0.7670;0.2208,0.7691;0.2218,0.7712;0.2227,0.7733;0.2237,0.7754;0.2246,0.7775;0.2255,0.7796;0.2265,0.7817;0.2274,0.7838;0.2283,0.7859;0.2293,0.7881;0.2302,0.7902;0.2312,0.7923;0.2321,0.7944;0.2330,0.7965;0.3823,0.7095;0.3792,0.7115;0.3761,0.7135;0.3729,0.7155;0.3698,0.7175;0.3667,0.7195;0.3636,0.7215;0.3604,0.7234;0.3573,0.7254;0.3542,0.7274;0.3510,0.7294;0.3479,0.7314;0.3448,0.7334;0.3416,0.7354;0.3385,0.7374;0.3354,0.7393;0.3322,0.7413;0.3291,0.7433;0.3260,0.7453;0.3228,0.7473;0.3197,0.7493;0.3166,0.7513;0.3134,0.7533;0.3103,0.7553;0.3072,0.7573;0.3040,0.7592;0.3009,0.7612;0.2978,0.7632;0.2946,0.7652;0.2915,0.7672;0.2884,0.7692;0.2852,0.7712;0.2821,0.7732;0.2790,0.7751;0.2758,0.7771;0.2727,0.7791;0.2696,0.7811;0.2664,0.7831;0.2633,0.7851;0.2602,0.7871;0.3844,0.9352;0.3812,0.9332;0.3780,0.9312;0.3748,0.9292;0.3716,0.9273;0.3684,0.9253;0.3652,0.9233;0.3619,0.9213;0.3587,0.9193;0.3555,0.9173;0.3523,0.9153;0.3491,0.9133;0.3459,0.9113;0.3427,0.9093;0.3395,0.9073;0.3362,0.9054;0.3330,0.9034;0.3298,0.9014;0.3266,0.8994;0.3234,0.8974;0.3202,0.8954;0.3170,0.8934;0.3138,0.8914;0.3105,0.8895;0.3073,0.8875;0.3041,0.8855;0.3009,0.8835;0.2977,0.8815;0.2945,0.8795;0.2913,0.8775;0.2880,0.8755;0.2848,0.8735;0.2816,0.8715;0.2784,0.8696;0.2752,0.8676;0.2720,0.8656;0.2688,0.8636;0.2656,0.8616;0.2624,0.8596;0.2591,0.8576;0.6664,0.4533;0.6694,0.4504;0.6725,0.4475;0.6755,0.4446;0.6786,0.4417;0.6816,0.4388;0.6847,0.4359;0.6877,0.4330;0.6908,0.4301;0.6938,0.4272;0.6969,0.4243;0.6999,0.4214;0.7030,0.4185;0.7060,0.4156;0.7091,0.4127;0.7121,0.4099;0.7152,0.4070;0.7182,0.4041;0.7213,0.4012;0.7243,0.3983;0.7274,0.3954;0.7304,0.3925;0.7335,0.3896;0.7366,0.3867;0.7396,0.3838;0.7427,0.3809;0.7457,0.3780;0.7488,0.3751;0.7518,0.3722;0.7549,0.3693;0.7579,0.3665;0.7610,0.3636;0.7640,0.3607;0.7671,0.3578;0.7701,0.3549;0.7732,0.3520;0.7762,0.3491;0.7793,0.3462;0.7823,0.3433;0.7854,0.3404;0.8136,0.1946;0.8135,0.1976;0.8134,0.2005;0.8133,0.2035;0.8131,0.2065;0.8130,0.2094;0.8129,0.2124;0.8128,0.2153;0.8127,0.2183;0.8126,0.2212;0.8125,0.2242;0.8124,0.2271;0.8123,0.2301;0.8122,0.2330;0.8121,0.2360;0.8120,0.2390;0.8119,0.2419;0.8118,0.2449;0.8116,0.2478;0.8115,0.2508;0.8114,0.2537;0.8113,0.2567;0.8112,0.2596;0.8111,0.2626;0.8110,0.2655;0.8109,0.2685;0.8108,0.2714;0.8107,0.2744;0.8106,0.2773;0.8105,0.2803;0.8104,0.2832;0.8103,0.2862;0.8102,0.2892;0.8100,0.2921;0.8099,0.2951;0.8098,0.2980;0.8097,0.3010;0.8096,0.3039;0.8095,0.3069;0.8094,0.3098;0.8762,0.3710;0.8749,0.3705;0.8736,0.3701;0.8722,0.3697;0.8709,0.3693;0.8695,0.3688;0.8682,0.3684;0.8669,0.3680;0.8655,0.3676;0.8642,0.3672;0.8628,0.3668;0.8615,0.3663;0.8602,0.3659;0.8588,0.3655;0.8575,0.3651;0.8561,0.3646;0.8548,0.3642;0.8535,0.3638;0.8521,0.3634;0.8508,0.3629;0.8495,0.3625;0.8481,0.3621;0.8468,0.3617;0.8454,0.3613;0.8441,0.3608;0.8428,0.3604;0.8414,0.3600;0.8401,0.3596;0.8387,0.3591;0.8374,0.3587;0.8361,0.3583;0.8347,0.3579;0.8334,0.3575;0.8320,0.3570;0.8307,0.3566;0.8294,0.3562;0.8280,0.3558;0.8267,0.3554;0.8254,0.3549;0.8240,0.3545;0.7290,0.6296;0.7310,0.6236;0.7330,0.6175;0.7349,0.6115;0.7369,0.6055;0.7389,0.5994;0.7409,0.5934;0.7429,0.5874;0.7449,0.5814;0.7468,0.5753;0.7488,0.5693;0.7508,0.5633;0.7528,0.5572;0.7548,0.5512;0.7567,0.5452;0.7587,0.5392;0.7607,0.5331;0.7627,0.5271;0.7647,0.5211;0.7666,0.5150;0.7686,0.5090;0.7706,0.5030;0.7726,0.4970;0.7746,0.4909;0.7766,0.4849;0.7785,0.4789;0.7805,0.4728;0.7825,0.4668;0.7845,0.4608;0.7865,0.4548;0.7884,0.4487;0.7904,0.4427;0.7924,0.4367;0.7944,0.4306;0.7964,0.4246;0.7983,0.4186;0.8003,0.4126;0.8023,0.4065;0.8043,0.4005;0.8063,0.3945';
-
-  (function drawPixMap() {
-    var cv = document.getElementById('pixMap');
-    var ctx = cv.getContext('2d');
-    var pts = PIXMAP.split(';').map(function (t) {
-      var a = t.split(',');
-      return [parseFloat(a[0]), parseFloat(a[1]), Number(a[2])];
-    });
-    /* HIGH-CONTRAST GROUP COLOURS. The old ramp walked the hue circle in index
-       order at one fixed lightness, so neighbouring groups — which are also
-       neighbours on the hull — came out in neighbouring hues and merged into
-       one smear. Two changes: step the hue by a large coprime stride so
-       consecutive groups land far apart on the wheel, and alternate lightness
-       so even a hue collision separates by brightness. */
-    var colours = PIXMAP_GROUPS.map(function (_, i) {
-      var hue = (i * 137) % 360;                 /* 137 deg: never repeats early */
-      var lit = (i % 2) ? 72 : 56;               /* alternate light/dark */
-      return 'hsl(' + hue + ' 95% ' + lit + '%)';
-    });
-
-    /* ── PAD → SHIP ────────────────────────────────────────────────────────
-       Turn a touch at (u,v) in 0..1 pad space into the WORLD nx/nz the pattern
-       expects, by finding the NEAREST pixel in the compressed map and handing
-       back that pixel's real position on the hull.
-       Nearest-point rather than an analytic inverse because the compression is
-       piecewise (it collapses empty bands) and the map is what the operator can
-       actually SEE — snapping to a real light guarantees that where they draw
-       is somewhere lights exist, which a continuous inverse cannot promise on a
-       hull that is 73.6% empty in this plane.
-       Exposed on window because the WIRE owns the engine and the PAGE owns the
-       geometry; this is the one number that has to cross. */
-    var WORLD = PIXMAP_WORLD.split(';').map(function (t) {
-      var a = t.split(',');
-      return [parseFloat(a[0]), parseFloat(a[1])];
-    });
-    /* SHIP-ALIGNED AXES: pad-X is PORT↔STARBOARD, pad-Y is FORE↔AFT.
-       The first version snapped to the nearest point in the sim's LAYOUT space,
-       and that was wrong for a spatial control: the layout arranges the hull
-       diagonally, so pad columns did not correspond to sides of the ship.
-       MEASURED — pad (0.35, 0.85), left of centre, landed on "Right Back Wall",
-       and pad-X correlated -0.61 with fore/aft, i.e. sliding left↔right also
-       swung the target bow↔stern.
-       So the pad is mapped to the ship's OWN axes instead: nx is port/starboard
-       (Left groups live at nx 0.04-0.39, Right at 0.69-0.97) and nz is fore/aft.
-       The 25% dead band on nx is compressed OUT per axis, so no part of the pad
-       is wasted, and the result is then snapped to the nearest REAL pixel so a
-       touch always has something to light on a hull that is mostly empty in
-       this plane. */
-    var AXIS_BINS = 96;
-    function occupancy(sel) {
-      /* Which slices of an axis actually contain pixels, as a 0..1 -> 0..1 map
-         that skips the empty ones. Built from the same world table the pad is
-         drawn from, so it cannot drift from the model. */
-      var seen = new Array(AXIS_BINS).fill(false);
-      for (var i = 0; i < WORLD.length; i++) {
-        var t = Math.min(AXIS_BINS - 1, Math.max(0, Math.floor(sel(WORLD[i]) * AXIS_BINS)));
-        seen[t] = true;
-      }
-      var live = [];
-      for (var k = 0; k < AXIS_BINS; k++) if (seen[k]) live.push((k + 0.5) / AXIS_BINS);
-      return live.length ? live : [0.5];
-    }
-    var NX_LIVE = occupancy(function (w) { return w[0]; });
-    var NZ_LIVE = occupancy(function (w) { return w[1]; });
-    function alongAxis(live, t) {
-      var i = Math.min(live.length - 1, Math.max(0, Math.round(t * (live.length - 1))));
-      return live[i];
-    }
-
-    /* ── PAD -> SHIP: A SQUARE-ON CHART OF A DIAGONAL SHIP ──────────────────
-       MEASURED from the baked map: the hull lies at 44.3 degrees across the
-       nx/nz plane and is 2.9x longer than it is wide. Plotting raw nx/nz
-       therefore draws the ship corner to corner, which is why the operator
-       reported the light addresses not feeling like they are in the right
-       places — port amidships and starboard amidships land at different
-       HEIGHTS on the pad, which is not how anyone reads a top-down view.
-       (The addresses themselves are correct: every one of the 24 groups was
-       checked against the engine's own model and matches to 0.0001. The data
-       was never wrong — the projection was.)
-
-       So the chart is de-rotated about the hull's centroid onto its own
-       principal axes. After that rotation the LONG axis separates PORT from
-       STARBOARD and the SHORT axis runs FORE/AFT — verified by projecting the
-       Left/Right and Front/Back groups — which is exactly what the pad's
-       existing X-PORT / Y+ FORWARD labels already promise.
-
-       UNIFORM SCALE, deliberately. Stretching each axis to fill the pad would
-       squash a circle into an oval again; with one scale factor a circle on the
-       pad is a circle on the ship, so the ring keeps meaning what it says. The
-       ship is width-limited here, so it fills the pad's width and leaves margin
-       above and below — that margin is water, and it is honest. */
-    var SHIP_ROT = 0.773869;                 /* radians to de-rotate the hull   */
-    var SHIP_CX = 0.5316, SHIP_CZ = 0.6245;  /* hull centroid in world nx/nz    */
-    var SHIP_A0 = -0.5547, SHIP_A1 = 0.7682; /* long axis span  (port<->stbd)   */
-    var SHIP_B0 = -0.2677, SHIP_B1 = 0.1853; /* short axis span (aft<->fwd)     */
-    var RC = Math.cos(SHIP_ROT), RS = Math.sin(SHIP_ROT);
-
-    /* Chart geometry: an INDEPENDENT scale per axis, so the hull fills the pad.
-       I previously kept one shared scale because a circle needs equal scaling
-       to stay a circle — but that was solving it in the wrong place. The hull is
-       2.9:1 inside a 1.79:1 pad, so a shared scale is width-limited and throws
-       away 44% of the height, which is exactly the space the operator wants the
-       fixtures spread into.
-       The brush stays ROUND ON THE PAD anyway, because the effect takes a
-       radius PER AXIS: a circle of R pad-pixels is sent as radiusX = R/kx and
-       radiusY = R/ky, i.e. an ellipse in ship space that is a circle here. That
-       per-axis path already exists and is unit-tested. */
-    function chartFit(w, h) {
-      var spanA = SHIP_A1 - SHIP_A0, spanB = SHIP_B1 - SHIP_B0;
-      var pad = 0.015;
-      return {
-        kx: w * (1 - pad * 2) / spanA,
-        ky: h * (1 - pad * 2) / spanB,
-        ox: w / 2, oy: h / 2,
-      };
-    }
-
-    /* world nx/nz -> pad pixels */
-    window.worldToPad = function (nx, nz, w, h) {
-      var dx = nx - SHIP_CX, dz = nz - SHIP_CZ;
-      var a = dx * RC - dz * RS;
-      var b = dx * RS + dz * RC;
-      var f = chartFit(w, h);
-      var midA = (SHIP_A0 + SHIP_A1) / 2, midB = (SHIP_B0 + SHIP_B1) / 2;
-      /* X IS MIRRORED — operator ruling: "the spaicial pad is backwards the side
-         to side needs to flip". Confirmed by eye against the sim, which is the
-         only authority that counts here: my own attempt to prove it from a
-         render was inconclusive and I was not going to flip an axis on a hunch.
-         The de-rotation puts the hull's principal axis along pad-X, but nothing
-         in that maths knows which END the operator is looking from — the sim's
-         camera views the ship from the side that reverses it. One sign. */
-      return { x: f.ox - (a - midA) * f.kx, y: f.oy - (b - midB) * f.ky };
-    };
-
-    /* pad pixels -> world nx/nz (the exact inverse) */
-    window.padPxToWorld = function (px, py, w, h) {
-      var f = chartFit(w, h);
-      var midA = (SHIP_A0 + SHIP_A1) / 2, midB = (SHIP_B0 + SHIP_B1) / 2;
-      var a = -(px - f.ox) / f.kx + midA;   /* mirrored, exactly as worldToPad */
-      var b = -(py - f.oy) / f.ky + midB;
-      var dx = a * RC + b * RS;
-      var dz = -a * RS + b * RC;
-      /* CLAMP THE OUTPUT, not just the input. The chart is a ROTATED box
-         stretched to fill the pad, so the pad's corners rotate back OUTSIDE the
-         unit world box — measured: all four corners, and 16.1% of the pad
-         surface, produced nx/nz beyond 0..1. setSpatialPaint validates and
-         throws on those (deliberately: a coerced coordinate is a stroke landing
-         where the operator did not point), so the engine answered 400 and the
-         touch silently did nothing. A sixth of the pad was dead.
-         Clamping puts those touches on the edge of the world box — the nearest
-         real place to where the finger is — which beats both a 400 and a
-         coordinate off the map. The operator can see there are no fixtures out
-         there anyway. */
-      var cl = function (v) { return v < 0 ? 0 : (v > 1 ? 1 : v); };
-      return { nx: cl(SHIP_CX + dx), nz: cl(SHIP_CZ + dz) };
-    };
-
-    /* How many WORLD units one pad pixel is worth, PER AXIS. They differ now
-       (the chart stretches to fill the pad), which is precisely why the brush
-       is sent as two radii. */
-    window.padWorldPerPx = function (w, h) {
-      var f = chartFit(w, h);
-      return { x: 1 / f.kx, y: 1 / f.ky };
-    };
-
-    window.padToWorld = function (u, v) {
-      u = Math.min(Math.max(u, 0), 1);
-      v = Math.min(Math.max(v, 0), 1);
-      var el = document.getElementById('xyPad');
-      var r = el ? el.getBoundingClientRect() : { width: 1, height: 1 };
-      return window.padPxToWorld(u * r.width, v * r.height, r.width, r.height);
-    };
-
-    function draw() {
-      var w = cv.clientWidth, h = cv.clientHeight;
-      if (!w || !h) return;
-      var dpr = window.devicePixelRatio || 1;
-      cv.width = Math.round(w * dpr);
-      cv.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      /* DOTS ARE DRAWN IN WORLD SPACE — the same space the brush works in.
-         They used to be drawn from the compressed LAYOUT table (PIXMAP, scaled
-         by PIXMAP_W/H) while padToWorld steered in WORLD space through an
-         occupancy-binned, per-slice, nearest-pixel mapping. Two different
-         spaces on one surface: the ring the operator saw had NO correspondence
-         to the LEDs the brush actually reached, which is exactly the reported
-         "erase does not go to black with everything the circle holds".
-         One space now. A circle on the pad IS a circle on the ship.
-         The cost is honest and visible: the hull's empty middle (nx 0.40-0.65
-         carries no pixels) is now empty pad, instead of being compressed away.
-         The operator can see there is nothing there. */
-      /* BIGGER, OUTLINED, AND NOT STACKED ON TOP OF EACH OTHER.
-         964 fixtures, and in the LED strips dozens sit within a pixel of each
-         other on this chart — drawn raw they overlap into a smear you cannot
-         pick a fixture out of. Three changes, none of which move a light:
-           · a dark ring around every dot, so touching dots still read as two
-           · a bigger radius, so one dot is a target rather than a speck
-           · skip a dot that would land essentially on top of one already drawn.
-             That is not hiding fixtures: at this scale those LEDs occupy the
-             same point, so the second dot only ever thickened the first. The
-             BRUSH still reaches every one of them — this is the map's
-             resolution, not the rig's. */
-      var r = Math.max(2.6, Math.min(w, h) * 0.018);
-      /* Dots may TOUCH — the dark ring is what separates them, so demanding
-         clear space between them only threw away fixtures for nothing. At the
-         live pad size this shows 150 distinct positions instead of 123. */
-      var minGap = r * 1.0, minGap2 = minGap * minGap;
-      var drawn = [];
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = Math.max(1, r * 0.42);
-      ctx.strokeStyle = 'rgba(3,8,18,.92)';
-      for (var i = 0; i < pts.length; i++) {
-        var wp = WORLD[i];
-        if (!wp) continue;
-        /* Same transform the touch handling uses — the dots and the brush have
-           to live in one space or the ring lies about what it covers. */
-        var pp = window.worldToPad(wp[0], wp[1], w, h);
-        var clash = false;
-        for (var d = 0; d < drawn.length; d++) {
-          var ddx = drawn[d][0] - pp.x, ddy = drawn[d][1] - pp.y;
-          if (ddx * ddx + ddy * ddy < minGap2) { clash = true; break; }
-        }
-        if (clash) continue;
-        drawn.push([pp.x, pp.y]);
-        ctx.beginPath();
-        ctx.arc(pp.x, pp.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = colours[pts[i][2]];
-        ctx.fill();
-        ctx.stroke();
-      }
-    }
-    draw();
-    new ResizeObserver(draw).observe(cv);
-  })();
+  /* CANONICAL PIXEL MAP - resolved by the simulation from the current
+     pixel_map_views.yaml, then verified against both that source and the
+     running engine model before this pad may ARM or accept a stroke. */
+  window.TouchPixelViews.mount({
+    canvas: document.getElementById('pixMap'),
+    pad: document.getElementById('xyPad'),
+    errorElement: document.getElementById('pixelMapError'),
+    viewSelect: document.getElementById('pixelViewSelect'),
+    panButton: document.getElementById('pixelPan'),
+    fitButton: document.getElementById('pixelFit'),
+    viewId: 'top_down',
+  }).catch(function (error) {
+    panelError('pixel map unavailable: ' + error.message);
+  });
 
   /* -- PER-PANEL LOCK ---------------------------------------------------
      Locking a panel makes its body inert (pointer-events: none) and dims it, so
@@ -3466,12 +3489,29 @@ select option:checked { background-color: #2a2050; color: #fff; }
      This replaced a fixed 24-cell wall where most cells could never be reached,
      because the engine only has so many slots. Sixteen re-pointable buttons use
      exactly the slots we own and put every one of the 42 pairs within reach. */
-  var FX_OPTS = [{"e":"movementTrace","p":"pulse_slow_fade","f":"move","c":1,"s":1,"l":"pulse - burst then long fade"},{"e":"beatPump","p":"soft","f":"dim","c":0,"s":1,"l":"beat duck - soft"},{"e":"beatPump","p":"deep","f":"dim","c":0,"s":1,"l":"beat duck - deep"},{"e":"beatPump","p":"halftime","f":"dim","c":0,"s":1,"l":"beat duck - halftime"},{"e":"breath","p":"calm","f":"dim","c":0,"s":1,"l":"slow swell - calm"},{"e":"breath","p":"deep","f":"dim","c":0,"s":1,"l":"slow swell - deep"},{"e":"breath","p":"sunrise","f":"dim","c":0,"s":1,"l":"slow swell - sunrise"},{"e":"crush","p":"hard_2","f":"frame","c":0,"s":1,"l":"posterise - hard 2"},{"e":"crush","p":"bold_4","f":"frame","c":0,"s":1,"l":"posterise - bold 4"},{"e":"crush","p":"soft_6","f":"frame","c":0,"s":1,"l":"posterise - soft 6"},{"e":"feedbackTrails","p":"soft_afterimage","f":"texture","c":0,"s":1,"l":"trails - soft afterimage"},{"e":"feedbackTrails","p":"ghost_ship","f":"texture","c":0,"s":1,"l":"trails - ghost ship"},{"e":"feedbackTrails","p":"long_afterimage","f":"texture","c":0,"s":1,"l":"trails - long afterimage"},{"e":"feedbackTrails","p":"cosmic_trails","f":"texture","c":0,"s":1,"l":"trails - cosmic trails"},{"e":"fogger","p":"default","f":"texture","c":0,"s":1,"l":"haze - default"},{"e":"freeze","p":"hold","f":"frame","c":0,"s":1,"l":"hold frame - hold"},{"e":"freeze","p":"fade_2s","f":"frame","c":0,"s":1,"l":"hold frame - fade 2s"},{"e":"freeze","p":"stutter","f":"frame","c":0,"s":1,"l":"hold frame - stutter"},{"e":"strobe","p":"pulse_2hz","f":"dim","c":0,"s":1,"l":"flash / gate - pulse 2hz"},{"e":"strobe","p":"sync_4hz","f":"dim","c":0,"s":1,"l":"flash / gate - sync 4hz"},{"e":"strobe","p":"punch_5hz","f":"dim","c":0,"s":1,"l":"flash / gate - punch 5hz"},{"e":"strobe","p":"hard_10hz","f":"dim","c":0,"s":1,"l":"flash / gate - hard 10hz"},{"e":"strobe","p":"max_20hz","f":"dim","c":0,"s":1,"l":"flash / gate - max 20hz"},{"e":"waterlineSweep","p":"shadow_pass","f":"dim","c":0,"s":1,"l":"shadow sweep - shadow pass"},{"e":"movementTrace","p":"every_other_repeat","f":"move","c":1,"s":1,"l":"every other - 2 colours walking"},{"e":"movementTrace","p":"every_other_reverse","f":"move","c":1,"s":1,"l":"every other - 2 colours, reverse"},{"e":"movementTrace","p":"every_other_two_tone","f":"move","c":1,"s":1,"l":"every other - 2 colours, no gaps"},{"e":"movementTrace","p":"one_per_color_repeat","f":"move","c":1,"s":1,"l":"all 5 colours at once - moving"},{"e":"movementTrace","p":"one_per_color_reverse","f":"move","c":1,"s":1,"l":"all 5 colours at once - reverse"},{"e":"movementTrace","p":"one_per_color_double","f":"move","c":1,"s":1,"l":"all 5 colours at once - double time"},{"e":"movementTrace","p":"whole_group_repeat","f":"move","c":1,"s":1,"l":"one colour at a time - group by group"},{"e":"movementTrace","p":"whole_group_reverse","f":"move","c":1,"s":1,"l":"one colour at a time - reverse"}];
+  var FX_OPTS = [];  /* populated only from GET /global-effect-library */
   /* The eight MOVEMENT patterns fill the first two rows, so every way of
      moving the palette is on the surface without opening a dropdown. The
      remaining eight keep one of each other family (strobe, beat duck, swell,
      trails, shadow, hold, haze) - every button is still re-pointable. */
-  var FX_DEFAULT = [0,24,25,26,27,28,29,30,31,19,1,4,10,11,23,15];
+  var FX_DEFAULT = [
+    'movementTrace|pulse_slow_fade',
+    'movementTrace|every_other_repeat',
+    'movementTrace|every_other_reverse',
+    'movementTrace|every_other_two_tone',
+    'movementTrace|one_per_color_repeat',
+    'movementTrace|one_per_color_reverse',
+    'movementTrace|one_per_color_double',
+    'movementTrace|whole_group_repeat',
+    'movementTrace|whole_group_reverse',
+    'strobe|sync_4hz',
+    'beatPump|soft',
+    'breath|calm',
+    'feedbackTrails|soft_afterimage',
+    'feedbackTrails|ghost_ship',
+    'waterlineSweep|shadow_pass',
+    'freeze|hold',
+  ];
   var FX_SLOTS = [9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24];
   var FX_CAPPED = { dim: 1, flash: 1, frame: 1, move: 1 };
   var FAM_HELP = {
@@ -3598,45 +3638,16 @@ select option:checked { background-color: #2a2050; color: #fff; }
     cell.className = 'fx-cell fam-' + o.f + (cell.classList.contains('is-on') ? ' is-on' : '');
     cell.title = FAM_HELP[o.f];
     var face = FX_SHORT[o.e + '|' + o.p];
-    if (!face) {
-      /* FAIL LOUD (codex P0). A missing entry must be impossible to miss -
-         both in the console and on the button, which will visibly show the
-         long unstyled wording instead of a tidy two-line face. */
-      console.error('[touch-control] FX_SHORT has no entry for "' + o.e + '|' + o.p
-        + '" - the button will show the raw label. Add it to FX_SHORT.');
-      face = [o.l, ''];
-    }
+    if (!face) throw new Error('FX_SHORT has no entry for "' + o.e + '|' + o.p + '"');
     cell.querySelector('.fx-name').textContent = face[0];
     cell.querySelector('.fx-preset').textContent = face[1];
     cell.dispatchEvent(new CustomEvent('fxassign', { bubbles: true }));
   }
 
-  FX_SLOTS.forEach(function (slotId, n) {
-    var cell = document.createElement('div');
-    cell.className = 'fx-cell';
-    cell.dataset.slot = String(slotId);
-    cell.innerHTML =
-      '<select class="fx-pick" data-role="fxpick">' + fxOptionsHtml(FX_DEFAULT[n]) + '</select>' +
-      '<div class="fx-face" data-role="fxface">' +
-        '<span class="fx-name"></span><span class="fx-preset"></span>' +
-      '</div>';
-    fxGrid.appendChild(cell);
-    assign(cell, FX_DEFAULT[n]);
-  });
-
-  /* ── THE ENGINE'S CATALOG, MERGED IN AT RUNTIME ──────────────────────────
-     FX_OPTS above is a hardcoded list covering 9 of the engine's 17 effects.
-     The wire fetches the real registry and hands it here, and anything the
-     built-in list is missing gets appended so it becomes selectable.
-
-     APPEND-ONLY, AND THAT IS LOAD-BEARING: FX_DEFAULT holds INDEXES into
-     FX_OPTS ([0,24,25,...]), and every cell stores its own index in
-     dataset.opt. Inserting or reordering would silently re-point every button
-     on the surface. Only pushing onto the end is safe.
-
-     A pair with no FX_SHORT entry still works — assign() falls back to the raw
-     label and logs — so a catalog that outruns the label table degrades to
-     long button text rather than breaking. */
+  /* THE ENGINE'S AUTHORITATIVE EFFECT CATALOG.
+     There is deliberately no built-in effect list. A pasted list can drift from
+     the registry and silently re-point fixed slots. The live catalog is fully
+     validated before a single usable effect button is created. */
   var FAM_BY_CATEGORY = {
     gate: 'dim', spatial: 'dim', ambient: 'dim',
     movement: 'move',
@@ -3650,43 +3661,60 @@ select option:checked { background-color: #2a2050; color: #fff; }
   };
 
   document.addEventListener('fxcatalog', function (ev) {
-    var effects = ev.detail && ev.detail.effects;
-    if (!effects) return;
+    var detail = ev.detail || {};
+    try {
+      var effects = detail.effects;
+      if (!effects || !Object.keys(effects).length) throw new Error('engine returned an empty effect catalog');
 
-    /* Prefer the family the built-in list already assigns to an effect — those
-       were chosen by hand and are known good (fogger is 'texture' despite
-       being category 'legacy'). Only fall back to the category map. */
-    var famByEffect = {}, have = {};
-    FX_OPTS.forEach(function (o) { famByEffect[o.e] = o.f; have[o.e + '|' + o.p] = 1; });
-
-    var added = 0;
-    Object.keys(effects).forEach(function (id) {
-      var eff = effects[id] || {};
-      var presets = eff.presets || {};
-      Object.keys(presets).forEach(function (p) {
-        if (have[id + '|' + p]) return;
-        FX_OPTS.push({
-          e: id,
-          p: p,
-          f: famByEffect[id] || FAM_BY_CATEGORY[eff.category] || 'texture',
-          /* The engine's own singleton flag, read by setCellOn to release
-             rivals of the same effect. */
-          s: eff.singleton ? 1 : 0,
-          l: (eff.name || id) + ' - ' + p,
+      var opts = [];
+      Object.keys(effects).forEach(function (id) {
+        var eff = effects[id] || {};
+        var presets = eff.presets || {};
+        Object.keys(presets).forEach(function (p) {
+          var preset = presets[p] || {};
+          var key = id + '|' + p;
+          if (!FX_SHORT[key]) throw new Error('FX_SHORT has no entry for "' + key + '"');
+          var family = FAM_BY_CATEGORY[eff.category];
+          if (!family) throw new Error('effect "' + id + '" has unsupported category "' + eff.category + '"');
+          if (id === 'fogger') family = 'texture';
+          opts.push({
+            e: id,
+            p: p,
+            f: family,
+            s: eff.singleton ? 1 : 0,
+            l: (eff.name || id) + ' - ' + (preset.label || p),
+          });
         });
-        added++;
       });
-    });
-    if (!added) return;
 
-    /* Re-render the option lists in place, keeping each cell on its current
-       selection (indices are unchanged because the merge is append-only). */
-    Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell'), function (cell) {
-      var sel = cell.querySelector('[data-role=fxpick]');
-      if (sel) sel.innerHTML = fxOptionsHtml(Number(cell.dataset.opt));
-    });
-    console.log('[touch-control] effect catalog: +' + added +
-      ' pair(s) from the engine (' + FX_OPTS.length + ' total)');
+      var defaultIndexes = FX_DEFAULT.map(function (key) {
+        for (var i = 0; i < opts.length; i++) {
+          if (opts[i].e + '|' + opts[i].p === key) return i;
+        }
+        throw new Error('required default effect is absent from the engine catalog: ' + key);
+      });
+
+      FX_OPTS = opts;
+      fxGrid.innerHTML = '';
+      FX_SLOTS.forEach(function (slotId, n) {
+        var cell = document.createElement('div');
+        cell.className = 'fx-cell';
+        cell.dataset.slot = String(slotId);
+        cell.innerHTML =
+          '<select class="fx-pick" data-role="fxpick">' + fxOptionsHtml(defaultIndexes[n]) + '</select>' +
+          '<div class="fx-face" data-role="fxface">' +
+            '<span class="fx-name"></span><span class="fx-preset"></span>' +
+          '</div>';
+        fxGrid.appendChild(cell);
+        assign(cell, defaultIndexes[n]);
+      });
+      detail.accepted = true;
+      console.log('[touch-control] effect catalog accepted: ' + FX_OPTS.length + ' pair(s)');
+    } catch (e) {
+      detail.error = e;
+      fxGrid.textContent = 'EFFECT CATALOG UNAVAILABLE - ARM REFUSED';
+      console.error('[touch-control] effect catalog rejected', e);
+    }
   });
 
   fxGrid.addEventListener('change', function (e) {
@@ -3866,6 +3894,59 @@ select option:checked { background-color: #2a2050; color: #fff; }
       '</div>';
     grid.appendChild(strip);
   });
+
+  /* Horizontal group-bank pan is deliberately owned only by chrome/gaps.
+     A touch that starts on a fader remains a vertical fader for its entire
+     lifetime; a chrome touch must cross a horizontal-dominant threshold before
+     the bank captures it, so there is no scroll/fader mode oscillation. */
+  (function installGroupBankPan() {
+    var gesture = null;
+    var suppressClickUntil = 0;
+    function isFaderOwned(target) {
+      return !!target.closest('[data-role="fader"], [data-role="masterfader"], ' +
+        '[data-role="power"], .fchk, button, select, input');
+    }
+    grid.addEventListener('pointerdown', function (event) {
+      if (gesture || isFaderOwned(event.target)) return;
+      gesture = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: grid.scrollLeft,
+        active: false,
+      };
+    }, true);
+    grid.addEventListener('pointermove', function (event) {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      var dx = event.clientX - gesture.startX;
+      var dy = event.clientY - gesture.startY;
+      if (!gesture.active) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+        if (Math.abs(dx) <= Math.abs(dy) * 1.25) { gesture = null; return; }
+        gesture.active = true;
+        grid.setPointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      grid.scrollLeft = gesture.scrollLeft - dx;
+    }, true);
+    function finish(event) {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (gesture.active) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressClickUntil = performance.now() + 350;
+      }
+      gesture = null;
+    }
+    grid.addEventListener('pointerup', finish, true);
+    grid.addEventListener('pointercancel', finish, true);
+    grid.addEventListener('click', function (event) {
+      if (performance.now() >= suppressClickUntil) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  })();
 
   /* Vertical fader drag, like a desk. Pointer events so touch and mouse behave
      identically. stopPropagation matters: a drag must never also re-aim the
@@ -4288,15 +4369,27 @@ select option:checked { background-color: #2a2050; color: #fff; }
 
   /* The wire cannot read CSS classes, so every group's mode and its own colour
      are published as data - the same contract the palette uses. */
+  function panelError(message) {
+    console.error('[touch-control]', message);
+    document.dispatchEvent(new CustomEvent('panelerror', { detail: { message: message } }));
+  }
+
   function publishGroups() {
     var list = [];
+    var invalidOwn = Array.prototype.some.call(grid.querySelectorAll('.fader-strip:not(.is-master)'), function (st) {
+      var dot = wheelEl.querySelector('.wheel-dot[data-g="' + st.dataset.idx + '"]');
+      if (!dot || !dot.dataset.hsv) return false;
+      var values = dot.dataset.hsv.split(',').map(Number);
+      return !(isFinite(values[0]) && isFinite(values[1]) && isFinite(values[2]));
+    });
+    if (invalidOwn) {
+      panelError('a group has an invalid OWN colour; refusing to publish any group state');
+      return;
+    }
     Array.prototype.forEach.call(grid.querySelectorAll('.fader-strip'), function (st) {
       if (st.classList.contains('is-master')) return;
       var dot = wheelEl.querySelector('.wheel-dot[data-g="' + st.dataset.idx + '"]');
       var hsv = dot && dot.dataset.hsv ? dot.dataset.hsv.split(',').map(Number) : null;
-      /* A corrupt dataset.hsv must degrade to "no own colour", not NaN h/s/v
-         handed to every listener (audit low). */
-      if (hsv && !(isFinite(hsv[0]) && isFinite(hsv[1]) && isFinite(hsv[2]))) hsv = null;
       var pw = st.querySelector('[data-role=power]');
       list.push({
         name: st.querySelector('.fader-name').textContent,
@@ -4507,6 +4600,80 @@ select option:checked { background-color: #2a2050; color: #fff; }
     document.getElementById('tbOn').textContent = String(on);
     document.getElementById('groupCount').textContent = '24 groups · ' + on + ' on';
   }
+
+  /* Canonical view profiles render a SMALL second fader bank, but the 24 real
+     group strips remain the single state/engine truth. This narrow bridge is
+     the only authority allowed to mutate those hidden strips. It validates
+     every group name, respects group locks, and returns the exact names that
+     changed so the wire can send only those brightness factors. */
+  function profileGroupStrips(names) {
+    if (!Array.isArray(names) || !names.length) throw new Error('group profile has no members');
+    var seen = {};
+    return names.map(function (name) {
+      if (typeof name !== 'string' || !name || seen[name]) {
+        throw new Error('group profile contains an invalid or duplicate group name');
+      }
+      seen[name] = true;
+      var strip = groupStripsInDom().find(function (candidate) { return stripName(candidate) === name; });
+      if (!strip) throw new Error('group profile names unknown group "' + name + '"');
+      return strip;
+    });
+  }
+
+  window.TouchGroupBank = Object.freeze({
+    groupNames: GROUPS.slice(),
+    readGroups: function (names) {
+      var strips = profileGroupStrips(names);
+      var levels = strips.map(function (strip) { return Number(strip.dataset.level || 0); });
+      var onCount = strips.filter(function (strip) {
+        var power = strip.querySelector('[data-role=power]');
+        return power && power.classList.contains('is-on');
+      }).length;
+      return {
+        level: levels.reduce(function (sum, level) { return sum + level; }, 0) / levels.length,
+        mixedLevel: levels.some(function (level) { return level !== levels[0]; }),
+        onCount: onCount,
+        count: strips.length,
+      };
+    },
+    setGroupsLevel: function (names, percent) {
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error('group profile level must be within 0..100');
+      }
+      var changed = [];
+      profileGroupStrips(names).forEach(function (strip) {
+        if (strip.classList.contains('is-locked')) return;
+        applyStripLevel(strip, Math.round(percent));
+        changed.push(stripName(strip));
+      });
+      return changed;
+    },
+    setGroupsPower: function (names, on) {
+      if (typeof on !== 'boolean') throw new Error('group profile power must be boolean');
+      var changed = [];
+      profileGroupStrips(names).forEach(function (strip) {
+        if (strip.classList.contains('is-locked')) return;
+        var power = strip.querySelector('[data-role=power]');
+        if (!power) throw new Error('group profile member has no power control');
+        power.classList.toggle('is-on', on);
+        strip.classList.toggle('is-off', !on);
+        changed.push(stripName(strip));
+      });
+      refreshOn();
+      publishGroups();
+      return changed;
+    },
+    readMaster: function () { return Number(master.dataset.level || 0); },
+    setMaster: function (percent) {
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error('group profile master must be within 0..100');
+      }
+      masterPct = Math.round(percent);
+      drawLevel(master, masterPct);
+      applyMaster();
+      return masterPct;
+    },
+  });
   document.querySelector('.groups-panel').addEventListener('click', function () { refreshOn(); });
 
   /* ALL ON / ALL OFF. */
@@ -4704,13 +4871,10 @@ select option:checked { background-color: #2a2050; color: #fff; }
     var fg = document.getElementById('fxGrid');
     if (fg) {
       Array.prototype.forEach.call(fg.querySelectorAll('.fx-cell'), function (c) {
-        /* Store the STABLE identity beside the index (audit medium): `opt` is
-           an index into a catalog whose tail is fetched from the engine at
-           runtime — a registry change between save and recall silently
-           re-pointed the button. (e, p) is the identity; opt is the fallback
-           for presets that predate it. */
+        /* Store only the STABLE identity. A numeric catalog index can re-point
+           after a registry change and must never substitute for a missing pair. */
         var oo = FX_OPTS[Number(c.dataset.opt)] || {};
-        fx.push({ slot: c.dataset.slot, opt: c.dataset.opt, e: oo.e, p: oo.p,
+        fx.push({ slot: c.dataset.slot, e: oo.e, p: oo.p,
                   on: c.classList.contains('is-on') });
       });
     }
@@ -4770,6 +4934,16 @@ select option:checked { background-color: #2a2050; color: #fff; }
      the events the wiring layer listens on. */
   function restoreState(s) {
     if (!s || !s.groups) return;
+    if (s.fx && s.fx.length) {
+      var badFx = s.fx.filter(function (saved) {
+        if (!saved.e || !saved.p) return true;
+        return !FX_OPTS.some(function (opt) { return opt.e === saved.e && opt.p === saved.p; });
+      });
+      if (badFx.length) {
+        panelError('preset effect identity is missing or absent from the engine catalog; refusing the entire recall');
+        return;
+      }
+    }
     BASE.h = s.base.h; BASE.s = s.base.s; BASE.v = s.base.v;
     wheel.dataset.hsv = BASE.h.toFixed(3) + ',' + BASE.s.toFixed(3) + ',' + BASE.v.toFixed(3);
     moveHandle({ h: BASE.h, s: BASE.s, v: BASE.v,
@@ -4814,7 +4988,6 @@ select option:checked { background-color: #2a2050; color: #fff; }
               if (FX_OPTS[oi].e === f.e && FX_OPTS[oi].p === f.p) { want = oi; break; }
             }
           }
-          if (want === -1 && f.opt !== undefined) want = Number(f.opt);
           if (want >= 0 && String(want) !== c.dataset.opt) assign(c, want);
           c.classList.toggle('is-on', !!f.on);
         });
@@ -4844,13 +5017,17 @@ select option:checked { background-color: #2a2050; color: #fff; }
     if (s.spatial) {
       var tfEl2 = document.getElementById('trailFade');
       if (tfEl2 && typeof s.spatial.trailFade === 'number') {
-        var tv = Math.min(Math.max(s.spatial.trailFade, 0), 1);
-        tfEl2.dataset.value = String(tv);
-        var tfill = tfEl2.querySelector('i');
-        if (tfill) tfill.style.width = (tv * 100) + '%';
-        var tout = document.getElementById('trailFadeVal');
-        if (tout) tout.textContent = Math.round(tv * 100) + '%';
-        tfEl2.dispatchEvent(new CustomEvent('sliderchange', { bubbles: true, detail: { value: tv } }));
+        var tv = s.spatial.trailFade;
+        if (!isFadeSeconds(tv)) {
+          panelError('preset FADE must be 0.1, 0.5, 1.0, or 1.5 seconds; preset was not applied');
+        } else {
+          tfEl2.dataset.value = String(tv);
+          var tfill = tfEl2.querySelector('i');
+          if (tfill) tfill.style.width = Math.min(100, tv / 1.5 * 100) + '%';
+          var tout = document.getElementById('trailFadeVal');
+          if (tout) tout.textContent = formatFadeSeconds(tv);
+          tfEl2.dispatchEvent(new CustomEvent('sliderchange', { bubbles: true, detail: { value: tv } }));
+        }
       }
       /* Brush size, the same way. Presets written before SIZE existed have no
          brushSize — those leave the slider where the operator put it rather
@@ -5485,6 +5662,9 @@ select option:checked { background-color: #2a2050; color: #fff; }
 
 <!-- Live engine wiring. Kept in its own file so the prototype stays readable
      and the wiring can be reviewed on its own. -->
+<script src="touch_control_theme.js"></script>
+<script src="touch_control_lifecycle.js"></script>
+<script src="touch_control_group_profiles.js"></script>
 <script>
 /* Load the wiring with a CACHE BUSTER.
    The panel runs inside an iframe in CaptainPad, and re-mounting that iframe

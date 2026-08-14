@@ -1,111 +1,70 @@
 /*
-  12_breathing.js
-  HD Synchronized Breathing — the whole rig inhales/exhales together with a
-  slow, organic swell. Exhale = cp1, inhale crest = cp2 (now blended in RGB
-  space so the breath never traverses off-palette hues). A spatial ripple lets
-  the breath travel across the rig instead of pulsing in lockstep.
+  12_breathing.js — "The Ship Breathes"
 
-  Identity kept: one shared breath wave, cp1->cp2 color shift over the cycle,
-  ripple + sharpness controls. Now HD, render3D, audio-reactive, never static.
-  Default palette is a calm warm-exhale -> cool-inhale meditative pair (both
-  picker-overridable) so the rig genuinely spans two hues (hueSpread gate).
+  The entire model inhales and exhales as one organism. Every pixel shares one
+  asymmetric breath envelope: a shorter inhale, a held crest, and a longer
+  exhale. Spatial structure never changes that shared timing. Bars reveal the
+  ribcage, Vintage rails carry golden matched-W+A lungs, and every other fixture
+  follows the same palette body through the generic portable path.
 
-  CORE NON-REPEATING MATH (skill 12 §3/§7):
-    The breath is the SUM of two wave() oscillators whose periods are in the
-    irrational ratio φ (1.61803), so the combined swell never re-locks. A third,
-    golden-angle ripple phase carries the breath spatially. All phases accumulate
-    against a large PHASE_WRAP to avoid wrapped-then-scaled seams.
+  There is no Direction or traveling phase. BreathDepth controls the luminance
+  swing, BreathShape moves from broad meditation to a tight held inhale,
+  Bloom controls cp1→cp2 transformation, Ribbing reveals static structural
+  light, and Sparkle adds slow directionless life. A sparse secondary-color
+  field occupies the exhale's negative space; FieldDetail transforms it from
+  broad islands into a five-axis quasicrystal of filaments, cells, and nodes.
+  The global breath rises over it without turning the ship into a flat wash.
+  TE signs carry a calmer two-axis filigree over a readable palette floor: the
+  same global breath remains unmistakable without the field voids erasing the
+  letterform during exhale.
+  Kick is an immediate whole-model heartbeat visible at every point in the breath.
 
-  SPEED / DIRECTION:
-    localSpeed scales every phase via rate = pow(2,(localSpeed-0.5)*4). At 0 the
-    breath still creeps; at 1 it is ~4x. `direction` (guarded off center) sets
-    which way the ripple travels; an autonomous incommensurate clock (~73s)
-    occasionally reverses it on its own so it feels alive.
-
-  AUDIO (modulators-only — never read CPC audio globals natively):
-  AUDIO_MODULATION_V1:
-    sliderLevel      <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
-    sliderKick       <- micKick range 0.00..1.00 curve pow2    # breath-peak brightness pop
-    sliderRadius     <- micFlux range 0.40..0.90 curve linear  # how far the breath swells/travels
-    sliderDepth      <- micMid  range 0.30..0.85 curve linear  # inhale depth (cp2 reach)
-    sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # white spark on inhale + vintage blinder
-    sliderWhiteLevel <- micLow  range 0.30..0.90 curve linear  # overall white amount / keep
-  # static (unmapped): direction, spatialOffset, sharpness, blinderBite, palette pickers
-  White is ADDITIVE over the strict cp1/cp2 breath: a crisp white SPARK rides the
-  inhale crest across the whole rig, and the vintage heads (sectionId==2) carry a
-  gentle, kick-gated white BLINDER that swells on the inhale. blinderBite shapes
-  how snappy that swell hits. White never washes the rig (hueSpread stays high).
+AUDIO_MODULATION_V1:
+  sliderLevel   <- micLow  range 0.20..0.72 curve linear # whole-model energy
+  sliderKick    <- micKick range 0.00..0.72 curve pow2   # immediate heartbeat
+  sliderSparkle <- micHigh range 0.04..0.72 curve ease   # high-frequency scintillation
+  # STATIC: localSpeed, breathDepth, breathShape, bloom, ribbing, fieldDetail, whiteGlow, palettes
 */
 
-// ── Exported controls (UI order = declaration order) ─────────────────────────
-export var localSpeed = 0.5;   // master motion rate
-export var direction = 0.5;    // ripple travel direction (0.5 = guarded center)
-export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
-export var kick = 0.0;         // AUDIO: breath-peak brightness pop
-export var radius = 0.5;       // AUDIO: breath swell / travel distance
-export var depth = 0.5;        // AUDIO: inhale depth (how far toward cp2)
-export var spatialOffset = 0.5;// breath ripple spread across the rig
-export var sharpness = 0.4;    // breath crest sharpness (lower = fuller, softer
-                               // breath = the calm meditative identity; high
-                               // values crush the crest, so default sits below 0.5)
-export var whiteLevel = 0.45;  // WHITE: overall white amount / keep (audio: micLow)
-export var whiteKick = 0.0;    // WHITE: white spark on inhale + blinder pop (audio: micKick)
-export var blinderBite = 0.6;  // WHITE: how snappy the vintage-head blinder swell hits
+// Optional accent role: the append-only canonical id keeps this shared pattern
+// compilable on models without TE signs while preserving a loud numeric target.
+var FIX_TE_SIGN = 7;
 
-export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Exhale (Red default — og)
-export var cp2H = 0.1, cp2S = 1.0, cp2V = 1.0; // Inhale (Orange default — og)
+// Exported controls — declaration order is physical MIDI knob order.
+export var localSpeed = 0.30;
+export var level = 0.45;
+export var kick = 0.00;
+export var breathDepth = 0.50;
+export var breathShape = 0.40;
+export var bloomAmount = 0.50;
+export var ribbing = 0.45;
+export var sparkle = 0.12;
+export var whiteGlow = 0.45;
+export var fieldDetail = 0.72;
+
+export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;
+export var cp2H = 0.1, cp2S = 1.0, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) { direction = v; }
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
-export function sliderRadius(v) { radius = v; }
-export function sliderDepth(v) { depth = v; }
-export function sliderRipple(v) { spatialOffset = v; }
-export function sliderSharpness(v) { sharpness = v; }
-export function sliderWhiteLevel(v) { whiteLevel = v; }
-export function sliderWhiteKick(v) { whiteKick = v; }
-export function sliderBlinderBite(v) { blinderBite = v; }
+export function sliderBreathDepth(v) { breathDepth = v; }
+export function sliderBreathShape(v) { breathShape = v; }
+export function sliderBloom(v) { bloomAmount = v; }
+export function sliderRibbing(v) { ribbing = v; }
+export function sliderSparkle(v) { sparkle = v; }
+export function sliderWhiteGlow(v) { whiteGlow = v; }
+export function sliderFieldDetail(v) { fieldDetail = v; }
 
-// ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 1.0;          // base breaths/sec at localSpeed = 1.0 (restored toward og time(0.05) cadence)
 var PHASE_WRAP = 10000.0;
-var AUTO_PERIOD = 73.0;      // seconds for autonomous direction oscillation
-var BASE_FLOOR = 0.06;       // small non-black floor
+var breathPhase = 0.0;
+var sparklePhase = 0.0;
+var fieldPhase = 0.0;
 
-// ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
-var pr1 = 1, pg1 = 0, pb1 = 0;
-var pr2 = 0, pg2 = 0, pb2 = 1;
-function _hsv2rgb1() {
-  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
-  var iv = floor(hv * 6) % 6;
-  var fv = hv * 6 - floor(hv * 6);
-  var pv = cp1V * (1 - cp1S);
-  var qv = cp1V * (1 - fv * cp1S);
-  var tv = cp1V * (1 - (1 - fv) * cp1S);
-  if      (iv == 0) { pr1 = cp1V; pg1 = tv;    pb1 = pv;    }
-  else if (iv == 1) { pr1 = qv;    pg1 = cp1V; pb1 = pv;    }
-  else if (iv == 2) { pr1 = pv;    pg1 = cp1V; pb1 = tv;    }
-  else if (iv == 3) { pr1 = pv;    pg1 = qv;    pb1 = cp1V; }
-  else if (iv == 4) { pr1 = tv;    pg1 = pv;    pb1 = cp1V; }
-  else             { pr1 = cp1V; pg1 = pv;    pb1 = qv;    }
-}
-function _hsv2rgb2() {
-  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
-  var iv = floor(hv * 6) % 6;
-  var fv = hv * 6 - floor(hv * 6);
-  var pv = cp2V * (1 - cp2S);
-  var qv = cp2V * (1 - fv * cp2S);
-  var tv = cp2V * (1 - (1 - fv) * cp2S);
-  if      (iv == 0) { pr2 = cp2V; pg2 = tv;    pb2 = pv;    }
-  else if (iv == 1) { pr2 = qv;    pg2 = cp2V; pb2 = pv;    }
-  else if (iv == 2) { pr2 = pv;    pg2 = cp2V; pb2 = tv;    }
-  else if (iv == 3) { pr2 = pv;    pg2 = qv;    pb2 = cp2V; }
-  else if (iv == 4) { pr2 = tv;    pg2 = pv;    pb2 = cp2V; }
-  else             { pr2 = cp2V; pg2 = pv;    pb2 = qv;    }
-}
+var pr1 = 1.0, pg1 = 0.0, pb1 = 0.0;
+var pr2 = 1.0, pg2 = 0.5, pb2 = 0.0;
 
 function clamp01(v) {
   if (v < 0.0) return 0.0;
@@ -113,113 +72,253 @@ function clamp01(v) {
   return v;
 }
 
-// ── Persistent state ─────────────────────────────────────────────────────────
-var breathA = 0.0;    // primary breath phase
-var breathB = 0.0;    // secondary breath phase (period in φ ratio)
-var ripple = 0.0;     // spatial ripple phase
-var autoClock = 0.0;
-var effDir = 1.0;
-var localMul = 1.0;
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0.0) hv += 1.0;
+  var iv = floor(hv * 6.0) % 6;
+  var fv = hv * 6.0 - floor(hv * 6.0);
+  var pv = cp1V * (1.0 - cp1S);
+  var qv = cp1V * (1.0 - fv * cp1S);
+  var tv = cp1V * (1.0 - (1.0 - fv) * cp1S);
+  if (iv == 0) { pr1 = cp1V; pg1 = tv; pb1 = pv; }
+  else if (iv == 1) { pr1 = qv; pg1 = cp1V; pb1 = pv; }
+  else if (iv == 2) { pr1 = pv; pg1 = cp1V; pb1 = tv; }
+  else if (iv == 3) { pr1 = pv; pg1 = qv; pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv; pg1 = pv; pb1 = cp1V; }
+  else { pr1 = cp1V; pg1 = pv; pb1 = qv; }
+}
+
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0.0) hv += 1.0;
+  var iv = floor(hv * 6.0) % 6;
+  var fv = hv * 6.0 - floor(hv * 6.0);
+  var pv = cp2V * (1.0 - cp2S);
+  var qv = cp2V * (1.0 - fv * cp2S);
+  var tv = cp2V * (1.0 - (1.0 - fv) * cp2S);
+  if (iv == 0) { pr2 = cp2V; pg2 = tv; pb2 = pv; }
+  else if (iv == 1) { pr2 = qv; pg2 = cp2V; pb2 = pv; }
+  else if (iv == 2) { pr2 = pv; pg2 = cp2V; pb2 = tv; }
+  else if (iv == 3) { pr2 = pv; pg2 = qv; pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv; pg2 = pv; pb2 = cp2V; }
+  else { pr2 = cp2V; pg2 = pv; pb2 = qv; }
+}
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
 
-  localMul = pow(2.0, (localSpeed - 0.5) * 4.0);
-
-  var manDir = (direction * 2.0) - 1.0;
-  if (manDir >= 0.0 && manDir < 0.06) manDir = 0.06;
-  else if (manDir < 0.0 && manDir > -0.06) manDir = -0.06;
-
-  autoClock = autoClock + dt;
-  if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  var autoSign = (sin(autoClock / AUTO_PERIOD * PI2) >= 0.0) ? 1.0 : -1.0;
-  effDir = manDir * autoSign;
-
-  breathA = breathA + dt * localMul * MAX_RATE;
-  breathB = breathB + dt * localMul * MAX_RATE * 1.61803;
-  ripple = ripple + dt * localMul * MAX_RATE * 0.41 * effDir;
-  if (breathA >= PHASE_WRAP) breathA = breathA - PHASE_WRAP;
-  if (breathB >= PHASE_WRAP) breathB = breathB - PHASE_WRAP;
-  if (ripple >= PHASE_WRAP) ripple = ripple - PHASE_WRAP;
-  else if (ripple <= -PHASE_WRAP) ripple = ripple + PHASE_WRAP;
-
   _hsv2rgb1();
   _hsv2rgb2();
+
+  // Calibrated scale: new .30 equals the former .65 breathing rate, while
+  // new 1.00 reaches the former extrapolated 1.40 rate.
+  var equivalentOldSpeed = 0.3285714 + localSpeed * 1.0714286;
+  var localMult = pow(2.0, (equivalentOldSpeed - 0.5) * 4.0);
+  breathPhase = breathPhase + dt * (0.035 + localMult * 0.16);
+  // Sparkles and the under-field are supporting textures, deliberately much
+  // slower than the calibrated breath clock.
+  sparklePhase = sparklePhase + dt * (0.020 + localMult * 0.065);
+  fieldPhase = fieldPhase + dt * (0.006 + localMult * 0.018);
+  if (breathPhase >= PHASE_WRAP) breathPhase = breathPhase - PHASE_WRAP;
+  if (sparklePhase >= PHASE_WRAP) sparklePhase = sparklePhase - PHASE_WRAP;
+  if (fieldPhase >= PHASE_WRAP) fieldPhase = fieldPhase - PHASE_WRAP;
 }
 
 export function render3D(index, x, y, z) {
-  var pct = clamp01(x);
-  var pcy = clamp01(y);
+  var nx = clamp01(x);
+  var ny = clamp01(y);
+  var nz = clamp01(z);
 
-  // Spatial ripple carries the breath across the rig (radius widens travel).
-  var spread = spatialOffset * 2.0 * (0.5 + radius);
-  var rip = pct * spread + pcy * spread * 0.4 + ripple * 0.3;
+  // One frame-global asymmetric envelope. Coordinates never enter this phase.
+  var p = breathPhase - floor(breathPhase);
+  var q = 0.0;
+  var rawBreath = 0.0;
+  if (p < 0.40) {
+    q = p / 0.40;
+    rawBreath = q * q * (3.0 - 2.0 * q);
+  } else {
+    q = (p - 0.40) / 0.60;
+    q = q * q * (3.0 - 2.0 * q);
+    rawBreath = 1.0 - q;
+  }
+  var shapedBreath = pow(rawBreath, 0.65 + breathShape * 3.0);
+  var depth = clamp01(breathDepth);
+  var breathBody = (1.0 - depth) + depth * (0.08 + shapedBreath * 0.92);
 
-  // Shared breath = sum of two φ-ratio oscillators (non-repeating swell). It is
-  // a TRAVELLING swell across the rig: as the crest moves, some pixels brighten
-  // while others dim, so the rig visibly "breathes/ripples" yet total brightness
-  // stays roughly constant — leaving the level gain (PRIMARY) as the dominant
-  // total-brightness driver (animation wobble in total kills corr, skill §5).
-  var bA = wave(breathA * 2.0 + rip);
-  var bB = wave(breathB * 2.0 + rip * 0.6);
-  var breath = bA * 0.6 + bB * 0.4;
+  // Static symmetric ribcage structure. It brightens and dims with the exact
+  // same global breath; it never travels or breaks synchronization.
+  var centerX = abs(nx - 0.5);
+  var ribWave = wave(centerX * 9.0 + ny * 2.0 + nz * 3.0);
+  var ribCore = pow(ribWave, 2.0 + ribbing * 7.0);
+  var ribs = ribCore * ribbing;
 
-  // Sharpen the travelling crest; sharpness slider controls definition.
-  var sharp = 1.0 + sharpness * 7.0;
-  var breathV = pow(breath, sharp);
+  // Five incommensurate axes form a 3D quasicrystal beneath the breath.
+  // FieldDetail redistributes one visual energy budget from broad cells into
+  // narrower ridges and intersection nodes. It changes complexity, not speed.
+  // The top frequency is intentionally bounded so detail 1 remains legible on
+  // sparse models instead of collapsing into single-pixel alias noise.
+  var detail = clamp01(fieldDetail);
+  var fieldFreq = 2.4 + detail * 5.6;
+  var q0 = wave((nx + ny * 0.19 + nz * 0.31) * fieldFreq
+    + fieldPhase);
+  var q1 = wave((nx * 0.309 + ny * 0.951 - nz * 0.47) * fieldFreq
+    - fieldPhase * 0.618);
+  var q2 = wave((nx * -0.809 + ny * 0.588 + nz * 0.73) * fieldFreq
+    + fieldPhase * 0.414);
+  var q3 = wave((nx * -0.809 - ny * 0.588 - nz * 0.27) * fieldFreq
+    - fieldPhase * 0.732);
+  var q4 = wave((nx * 0.309 - ny * 0.951 + nz * 0.61) * fieldFreq
+    + fieldPhase * 0.271);
+  var quasi = (q0 + q1 + q2 + q3 + q4) * 0.20;
 
-  // A high spatial-contrast crest (crisp lit core, dim troughs) that AVERAGES to
-  // a near-constant rig sum as it travels. Kick adds a per-pixel pop; the level
-  // gain (PRIMARY) scales the whole rig. Computed in ONE expression — repeated
-  // `v = v * ...` reassignment of a single-letter local mis-compiles on the VM.
-  // PRIMARY: level^2 gain (matching 16/17) makes micLow the DOMINANT total-
-  // brightness driver (corr>=0.5); the traveling breath is the spatial texture
-  // and kick only a small per-pixel pop, so neither swamps the bass correlation.
-  var crestBri = 0.40 + breathV * 0.62 + kick * 0.14;
-  if (crestBri > 1.0) crestBri = 1.0;
-  var levelGain = 0.12 + level * level * 2.2;
-  var bri = clamp01((BASE_FLOOR + crestBri * (1.0 - BASE_FLOOR)) * levelGain);
+  // Separate topology layers are important: halos describe the broad cell
+  // walls, cores make thin filaments, and nodes exist only at intersections.
+  // They are composed differently below instead of being summed into one wash.
+  var ridgeHalo = 1.0 - clamp01(abs(quasi - 0.50)
+    * (3.0 + detail * 5.0));
+  var ridgeCore = pow(ridgeHalo, 1.7 + detail * 3.0);
+  var crossHalo = 1.0 - clamp01(abs(q0 - q3)
+    * (1.9 + detail * 3.7));
+  var crossCore = pow(crossHalo, 1.8 + detail * 2.8);
+  var cellSeed = pow(clamp01(q1 * q2 * 1.28), 1.15 + detail * 2.0);
+  var intersection = clamp01(ridgeCore * crossCore * 2.0);
+  var fieldNode = pow(clamp01(intersection * 0.95 + cellSeed * 0.55 - 0.17),
+    1.15 + detail * 1.6);
+  var fieldHalo = clamp01(ridgeHalo * 0.58 + crossHalo * 0.36
+    + cellSeed * 0.28 - 0.24);
+  var fieldCore = clamp01(ridgeCore * 0.82 + crossCore * 0.45
+    + intersection * 0.48 - 0.34);
 
-  // Inhale pushes toward cp2; a mostly-standing spatial gradient guarantees both
-  // palette ends are present across the rig at once, kept nearly time-stable so
-  // total brightness tracks `level` (PRIMARY), not the cp1/cp2 luminance gap.
-  var grad = clamp01(pct * 0.6 + pcy * 0.4);
-  grad = grad + 0.08 * wave(pct * 1.1 + pcy * 0.6 + ripple * 0.15) - 0.04;
-  var tcol = clamp01(grad * 0.9 + depth * 0.1);
-  var r = (pr1 + (pr2 - pr1) * tcol) * bri;
-  var g = (pg1 + (pg2 - pg1) * tcol) * bri;
-  var b = (pb1 + (pb2 - pb1) * tcol) * bri;
+  // A slow broad gate chooses where the mathematical field is allowed to live.
+  // The untouched regions are real voids rather than a low red coating.
+  var regionWave = wave(nx * 1.37 - ny * 2.11 + nz * 1.73
+    + fieldPhase * 0.37);
+  var regionGate = clamp01((regionWave - 0.23) * 1.85);
+  fieldHalo = fieldHalo * regionGate;
+  fieldCore = fieldCore * regionGate;
+  fieldNode = fieldNode * regionGate;
 
-  // WHITE — additive over the cp1/cp2 breath, controllable via white_* sliders.
-  // A crisp white SPARK rides the inhale crest across the whole rig: it tracks
-  // breathV (so it appears at the breath peak), is scaled by whiteLevel (overall
-  // amount) and popped by whiteKick (the inhale white pop), and stays coupled to
-  // the PRIMARY level so it never lights up in silence-with-no-level.
-  var wAmt = clamp01(whiteLevel);
-  var wKick = clamp01(whiteKick);
-  var sparkCore = pow(breathV, 2.0);
-  var spark = sparkCore * (0.25 + 0.75 * wAmt) * (0.4 + wKick * 1.1) * (0.10 + level * level * 0.95);
+  // Directionless scintillation: per-pixel phase decorrelation with one shared
+  // clock. Sparkle energy is strongest during inhale and remains subtle at rest.
+  var sparkWave = wave(sparklePhase + pixelLocalIndex * 0.137
+    + nx * 0.31 + ny * 0.19 + nz * 0.23);
+  var sparkCore = pow(sparkWave, 8.0 + sparkle * 10.0);
+  var sparks = sparkCore * sparkle * (0.22 + shapedBreath * 0.78);
 
-  var w = spark;
+  // Kick transfer curve and fixture role weights are unchanged. It remains an
+  // immediate whole-model heartbeat; the exhale composition below carves the
+  // complete broad body so true negative space can exist between structures.
+  var kickPop = clamp01(kick);
+  var kickShape = kickPop * (2.0 - kickPop);
+  var kickRole = 0.72;
+  if (fixtureType == FIX_BAR_18) kickRole = 0.82;
+  else if (fixtureType == FIX_VINTAGE_6) kickRole = 1.0;
+  var heartbeat = kickShape * kickRole;
 
-  // VINTAGE BLINDER (sectionId == 2): the upper heads carry a gentle white swell
-  // that breathes WITH the inhale and bites on the kick. blinderBite shapes the
-  // attack — higher = snappier, kick-dominated punch; lower = soft swell.
-  if (sectionId == 2) {
-    var bite = clamp01(blinderBite);
-    var swell = breathV * (1.0 - bite * 0.6);          // soft inhale swell
-    var punch = wKick * (0.4 + 0.6 * bite) * (0.5 + 0.5 * breathV); // snappy kick bite
-    var blind = (swell * 0.5 + punch) * (0.3 + 0.7 * wAmt) * (0.25 + 0.75 * level * level);
-    w = w + blind;
-    // keep the heads glowing warm, not just blank white
-    r = r + wKick * 0.06 * bite;
+  // Build one broad synchronized breath, then multiplicatively reveal the
+  // mathematical surface only as the ship exhales. During inhale bodyCarve and
+  // underCut both converge continuously to 1.0, so the whole model rises as one.
+  var surfaceGain = 0.70 + fieldHalo * 0.10 + ridgeHalo * 0.06
+    + cellSeed * 0.04;
+  var rawBody = (0.002 + breathBody * 0.14 + shapedBreath * 0.33)
+    * surfaceGain
+    + ribs * 0.11 + sparks * 0.20 + heartbeat * 0.58
+    + bloomAmount * shapedBreath * 0.12;
+  var exhaleWeight = pow(1.0 - shapedBreath, 1.20);
+
+  // Cp1 survives as selected cell halos, not a full-model floor. Cp2 cores and
+  // nodes punch holes through that halo so the two palette endpoints separate
+  // spatially instead of mixing into orange everywhere.
+  var haloOnly = fieldHalo
+    * (1.0 - clamp01(fieldCore * 0.90 + fieldNode * 0.80));
+  var exhaleMask = clamp01(0.010 + haloOnly * 2.0 + fieldHalo * 0.035);
+  var bodyCarve = (1.0 - exhaleWeight) + exhaleWeight * exhaleMask;
+  var underCut = 1.0 - exhaleWeight
+    * clamp01(fieldCore * 0.66 + fieldNode * 0.78);
+  var body = rawBody * bodyCarve * underCut;
+
+  var fixtureGain = 0.88;
+  if (fixtureType == FIX_BAR_18) fixtureGain = 0.96;
+  else if (fixtureType == FIX_VINTAGE_6) fixtureGain = 0.82;
+
+  // Level is a final gain over every authored lane.
+  var levelGain = clamp01(level);
+  var bri = clamp01(body * levelGain * fixtureGain);
+
+  // The cp2 field has three luminance strata. As detail rises, broad halo energy
+  // is traded into thinner cores and nodes. fieldScale compensates the shrinking
+  // ridge occupancy so FieldDetail changes complexity far more than mean level.
+  var fieldHaloBri = fieldHalo
+    * (0.016 + (1.0 - shapedBreath) * 0.052)
+    * (1.0 - detail * 0.25);
+  var fieldCoreBri = fieldCore
+    * (0.050 + (1.0 - shapedBreath) * 0.340)
+    * (0.82 + detail * 0.18);
+  var fieldNodeBri = fieldNode
+    * (0.035 + (1.0 - shapedBreath) * 0.480)
+    * detail;
+  var fieldRaw = (fieldHaloBri + fieldCoreBri + fieldNodeBri)
+    * (1.02 - detail * 0.08) * levelGain * fixtureGain;
+  var fieldScale = 0.65 + detail * 2.60 + detail * detail * 1.50;
+  fieldRaw = fieldRaw * fieldScale;
+
+  // Soft compression protects rare multi-axis intersections without flattening
+  // their hierarchy or relying on the final channel clamp as a look.
+  var fieldBri = fieldRaw / (1.0 + fieldRaw * 0.60);
+
+  // Bloom alone owns the inhale's cp1→cp2 travel. Ribbing and Sparkle add
+  // small secondary-color structure without leaving the selected palette line.
+  var colorMix = bloomAmount * (0.06 + shapedBreath * 0.82)
+    + ribs * 0.12 + sparks * 0.18 + heartbeat * 0.18;
+  colorMix = clamp01(colorMix);
+
+  // Cp2 is explicit under-field light, not a tint on the cp1 body. At exhale,
+  // cp1 halos, cp2 filaments/nodes, and black voids occupy different regions.
+  var r = (pr1 + (pr2 - pr1) * colorMix) * bri + pr2 * fieldBri;
+  var g = (pg1 + (pg2 - pg1) * colorMix) * bri + pg2 * fieldBri;
+  var b = (pb1 + (pb2 - pb1) * colorMix) * bri + pb2 * fieldBri;
+
+  // Vintage-only golden matched-W+A lungs. The white lane now follows a much
+  // deeper exhale envelope so it does not erase the surrounding cp1/cp2 color.
+  // The W/A outputs remain byte-identical by construction.
+  var w = 0.0;
+  if (fixtureType == FIX_TE_SIGN) {
+    // Identity breath: three smooth XYZ contours interfere into moving ribbons
+    // and nodes. The local index follows the letter strokes; integer multiples
+    // of the large-wrap clocks keep every contour seam-safe and continuously
+    // live. The frame-global inhale/exhale remains the dominant luminance arc.
+    var signAxisA = wave(nx * 1.61803 + ny * 2.39996 + nz * 1.41421
+      + pixelLocalIndex * 0.013 + sparklePhase * 2.0 + fieldPhase * 5.0);
+    var signAxisB = wave(nx * 2.39996 - ny * 1.41421 + nz * 1.73205
+      - pixelLocalIndex * 0.008 - sparklePhase * 3.0 - fieldPhase * 7.0);
+    var signAxisC = wave(nx * -1.73205 + ny * 1.61803 + nz * 2.39996
+      + pixelLocalIndex * 0.005 + sparklePhase - fieldPhase * 11.0);
+    var signRibbon = 1.0 - clamp01(abs(signAxisA - signAxisB) * 2.35);
+    signRibbon = signRibbon * signRibbon * (3.0 - 2.0 * signRibbon);
+    var signNode = pow(clamp01(signAxisA * signAxisB * signAxisC * 1.35), 1.65);
+    var signRibbonGain = 0.38 + sparkle * 0.64865;
+    var signNodeGain = 0.28 + sparkle * 0.81081;
+    var signFiligree = clamp01(0.08 + signRibbon * signRibbonGain
+      + signNode * signNodeGain);
+    var signV = levelGain * (0.22
+      + (0.10 + shapedBreath * 0.40) * (0.68 + signFiligree * 0.32)
+      + signFiligree * (0.035 + (1.0 - shapedBreath) * 0.10)
+      + heartbeat * 0.28);
+    signV = clamp01(signV);
+    var signMix = bloomAmount * (0.08 + shapedBreath * 0.76)
+      + signFiligree * 0.32 + heartbeat * 0.12;
+    signMix = clamp01(signMix);
+    r = (pr1 + (pr2 - pr1) * signMix) * signV;
+    g = (pg1 + (pg2 - pg1) * signMix) * signV;
+    b = (pb1 + (pb2 - pb1) * signMix) * signV;
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    var whiteBody = 0.06 + shapedBreath * 0.62 + sparks * 0.40
+      + heartbeat * 0.78;
+    var whiteEnvelope = 0.14 + shapedBreath * 0.86;
+    w = clamp01(clamp01(whiteGlow) * levelGain * whiteBody * whiteEnvelope);
+    r = r + w * 0.14;
+    g = g + w * 0.055;
   }
 
-  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
-  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
-  // strands already render (they fold amber into RGB). Convention:
-  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(w), 0.0);
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), w, w, 0.0);
 }

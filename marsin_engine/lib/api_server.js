@@ -48,6 +48,17 @@ import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX, compileViewSelectionMask } from './pattern_mixer.js';
 import { SessionParamCache } from './session_param_cache.js';
+import {
+  DEFAULT_LAYER_TRANSITION_DURATION_MS,
+  LAYER_SETTING_ID_SET,
+  LAYER_SETTING_IDS,
+} from './layer_surface_router.js';
+import {
+  groupsByNameToSectionMap,
+  serializeTouchBrightness,
+  statusForTouchBrightnessError,
+  touchControlOwner,
+} from './touch_brightness_api.js';
 import { audioRegistryEntries } from '../audio/postproc/audio_signals.js';
 
 /**
@@ -116,6 +127,12 @@ export function validateViewSelection(vs) {
     default:
       return { ok: false, error: `Unknown viewSelection.type '${type}' (expected: all | group | section | fixture | viewMask)` };
   }
+}
+
+/** Map audio-config failures without misreporting durable-write faults as bad input. */
+export function audioConfigErrorStatus(error) {
+  if (error instanceof TypeError || error instanceof RangeError) return 400;
+  return 500;
 }
 
 // Range per Companion signal type. The Companion sends a `type`
@@ -895,6 +912,7 @@ function reachableUrls(port) {
 
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
   const { mixer, wasmHost, paramRouter, paramCenter, model } = engineCore;
+  const liveTouchSession = engineCore.liveTouchSession || null;
   const localControlKinds = new Set([1, 2, 3, 6]);
   // The operator's explicit boot `--pattern`, captured BEFORE the state
   // restore below mutates opts.pattern to whatever deck actually restored.
@@ -944,8 +962,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let channelIdCounter = 0;
 
   function onChannelCompiled(channel, source = null) {
-    if (paramCenter) {
-      paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
+    const channelParamCenter = channel && channel.id === 'live_touch' && liveTouchSession
+      ? liveTouchSession.paramCenter
+      : paramCenter;
+    if (channelParamCenter) {
+      channelParamCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
       // Force the VM to execute its top-level scope (export var defaults) so that
       // CPC values don't get clobbered by the first real beginFrame.
       wasmHost.beginFrame(channel.handle, 0);
@@ -957,7 +978,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     seedSliderCodeDefaults(channel, source);
     if (paramCenter) {
       // We also broadcast so clients know the new schema bindings
-      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+      if (channelParamCenter === paramCenter) {
+        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+      }
     } else {
       // Even without CPC we still need the top-level scope executed once so
       // the seed below sits on a properly-initialized VM.
@@ -1007,11 +1030,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     const { defaults, computed } = parsePatternDefaults(src);
     const sliderExports = wasmHost.getExports(channel.handle).filter(e => e.kind === 1);
+    const channelParamCenter = channel.id === 'live_touch' && liveTouchSession
+      ? liveTouchSession.paramCenter
+      : paramCenter;
     const noDefault = [];
     for (const exp of sliderExports) {
       // CPC owns these — never let a code default fight the global value.
-      if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
-      if (paramCenter && paramCenter.getBlockedIds(channel.id).has(exp.id)) continue;
+      if (channelParamCenter && channelParamCenter.isSharedExport(channel.id, exp.name)) continue;
+      if (channelParamCenter && channelParamCenter.getBlockedIds(channel.id).has(exp.id)) continue;
       if (!(exp.name in defaults)) {
         noDefault.push(exp.name);   // collected; summarized once below
         continue;
@@ -1073,8 +1099,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    * wins over any per-pattern state.
    */
   function finalizeCpcValues(channel) {
-    if (paramCenter) {
-      paramCenter.applyToChannel(wasmHost, channel.id);
+    const channelParamCenter = channel && channel.id === 'live_touch' && liveTouchSession
+      ? liveTouchSession.paramCenter
+      : paramCenter;
+    if (channelParamCenter) {
+      channelParamCenter.applyToChannel(wasmHost, channel.id);
     }
   }
 
@@ -2091,17 +2120,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // and the (infrequent) performanceMode broadcast/replay, never per render.
   function computeDirtyDeckState() {
     // Dedupe by (playlist, entryId) — the live entry may also already be pending.
-    const rows = new Map(); // `${playlist} ${entryId}` -> { playlist, entryId }
+    const rows = new Map(); // `${playlist}\\u0000${entryId}` -> { playlist, entryId }
     for (const [plName, entries] of pendingDeckFlush) {
       for (const entryId of entries.keys()) {
-        rows.set(`${plName} ${entryId}`, { playlist: plName, entryId });
+        rows.set(`${plName}\u0000${entryId}`, { playlist: plName, entryId });
       }
     }
     const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
     if (deckCh
         && deckCh._paramsTouchedSinceLoad
         && deckCh.playlist && deckCh.playlist.name && deckCh.playlist.activeEntryId) {
-      rows.set(`${deckCh.playlist.name} ${deckCh.playlist.activeEntryId}`, {
+      rows.set(`${deckCh.playlist.name}\u0000${deckCh.playlist.activeEntryId}`, {
         playlist: deckCh.playlist.name,
         entryId: deckCh.playlist.activeEntryId,
       });
@@ -2175,7 +2204,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // silently looping. Cleared when that entry later loads CLEANLY (operator
   // fixes the pattern and re-selects it).
   const brokenAutoEntries = new Set();
-  const brokenAutoKey = (plName, entryId) => `${plName} ${entryId}`;
+  const brokenAutoKey = (plName, entryId) => `${plName}\u0000${entryId}`;
   function markAutoEntryBroken(plName, entryId, reason) {
     const key = brokenAutoKey(plName, entryId);
     if (!brokenAutoEntries.has(key)) {
@@ -4136,11 +4165,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // stale saved mixer value that would black the rig out (bug 2026-07-02
         // round 2). The operator explicitly flips to mixer output afterward if
         // they want it. So force the deck view, ignoring savedTargetViewFader.
-        mixer.targetViewFader = 0.0;
+        activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+          durationMs: 1000,
+          reason: 'plan_override_release',
+        });
       } else if (savedTargetViewFader !== null) {
         // A PortWatch device pin restores whatever the operator had before the
         // device took over (unchanged device semantics).
-        mixer.targetViewFader = savedTargetViewFader;
+        activateLayerSettingInternal(
+          savedTargetViewFader < 0.5 ? LAYER_SETTING_IDS.DECK : LAYER_SETTING_IDS.MIXER,
+          { durationMs: 1000, reason: 'portwatch_override_release' },
+        );
       }
     }
     viewOverrideMode = null;
@@ -4328,7 +4363,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Sweep at a fraction of the lease so expiry is detected promptly even when
   // the lease is tuned very short (tests), without busy-polling a long one.
   const TOUCH_PAINT_SWEEP_MS = Math.max(50, Math.min(1_000, Math.floor(TOUCH_PAINT_LEASE_MS / 4)));
-  const touchPaintLease = new Map();   // group -> { expiresAt, ownerId }
+  const touchPaintLease = new Map();   // group -> { expiresAt, ownerId, priorOverride }
   let touchPaintSweepTimer = null;
 
   function armTouchPaintSweep() {
@@ -4345,8 +4380,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   /** Stamp/renew a leased paint on one group. */
-  function touchPaintLeaseSet(group, ownerId) {
-    touchPaintLease.set(group, { expiresAt: Date.now() + TOUCH_PAINT_LEASE_MS, ownerId });
+  function touchPaintLeaseSet(group, ownerId, priorOverride = null) {
+    const existing = touchPaintLease.get(group);
+    touchPaintLease.set(group, {
+      expiresAt: Date.now() + TOUCH_PAINT_LEASE_MS,
+      ownerId,
+      // A renewal or owner replacement keeps the ORIGINAL durable layer, not
+      // the currently-visible transient overlay. That exact layer is restored
+      // when the last lease disappears.
+      priorOverride: existing
+        ? existing.priorOverride
+        : (priorOverride ? JSON.parse(JSON.stringify(priorOverride)) : null),
+    });
     armTouchPaintSweep();
   }
 
@@ -4358,18 +4403,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   function releaseTouchPaintGroups(groups, why) {
     const cleared = [];
     for (const group of groups) {
+      const lease = touchPaintLease.get(group);
       touchPaintLease.delete(group);
-      if (globalEffectsController && globalEffectsController.clearGroupFixedColor(group)) {
+      if (!globalEffectsController || !lease) continue;
+      if (lease.priorOverride) {
+        globalEffectsController.setGroupFixedColor(
+          group,
+          lease.priorOverride.color,
+          lease.priorOverride.brightness,
+          lease.priorOverride.colors,
+        );
+        cleared.push(group);
+      } else if (globalEffectsController.clearGroupFixedColor(group)) {
         cleared.push(group);
       }
     }
     if (cleared.length > 0) {
-      // Leased paint is never written to globalsState, but clear defensively:
-      // a group could have been painted permanently first, then re-leased.
-      if (globalsState.groupFixedColors) {
-        for (const g of cleared) delete globalsState.groupFixedColors[g];
-        saveGlobals(false);
-      }
+      // The durable layer was never deleted or overwritten. Releasing a lease
+      // is memory-only and restores that exact layer; there is nothing to save.
       broadcastWs({
         type: 'groupFixedColors',
         overrides: globalEffectsController ? globalEffectsController.groupFixedColors : {},
@@ -4418,6 +4469,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // tick, and running the playlist load twice would fight the deck swap.
     if (revertInFlight) return false;
     revertInFlight = true;
+    try {
+      // If Live is still visible, keep its private full look intact for the
+      // outgoing canonical blend. Completion releases it below.
+      const keepLiveLookForHandback = !!(
+        ownerId
+        && liveTouchSession
+        && liveTouchSession.getState().active
+        && layerStateIncludesLiveTouch()
+      );
+      if (keepLiveLookForHandback) {
+        pendingLiveTouchDeadmanOwner = ownerId;
+      } else {
+        resetLiveBrightness(ownerId || null);
+        if (ownerId && liveTouchSession && liveTouchSession.getState().active) {
+          liveTouchSession.end(ownerId);
+        }
+      }
+      preArmSourceLock = null;
+      if (ownerId && liveTouchTimelineTakeoverOwner === ownerId) {
+        liveTouchTimelineTakeoverOwner = null;
+        if (timelineService && typeof timelineService.resume === 'function') {
+          Promise.resolve(timelineService.resume()).catch(error => {
+            console.warn(`  ⚠ [revert] timeline resume failed: ${error.message}`);
+          });
+        }
+      }
+    } catch (error) {
+      console.warn(`  ⚠ [revert] Live Touch brightness reset failed: ${error.message}`);
+    }
     const step = (label, fn) => {
       try {
         fn();
@@ -4437,35 +4517,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (intensityController) {
           intensityController.setBlackout(false);
           intensityController.startArmFade(1, 0);
-          // SECTION DIMMERS ARE THE FOURTH WAY TO BE DARK, and the one no
-          // failsafe used to cover. The panel's 24 group faders and its ALL OFF
-          // button drive them, they persist, and clearing the blackout while
-          // every group dimmer sits at 0 lights precisely nothing. Only raised
-          // when they are ALL down — a partial look is the operator's and is
-          // left alone.
-          const dim = globalsState.dimmers || {};
-          const keys = Object.keys(dim);
-          if (keys.length > 0 && keys.every(k => !(Number(dim[k]) > 0))) {
-            // Same name -> sectionId resolution POST /section-brightness uses,
-            // so the revert raises exactly the groups the panel lowered.
-            const dimmerGroups = modelDimmerGroups();
-            for (const k of keys) {
-              dim[k] = 1;
-              if (Object.prototype.hasOwnProperty.call(dimmerGroups, k)) {
-                intensityController.setSectionBrightness(dimmerGroups[k], 1);
-              } else if (/^\d+$/.test(k)) {
-                intensityController.setSectionBrightness(parseInt(k, 10), 1);
-              }
-            }
-            console.warn(`  ⚠ [revert] every group dimmer was at zero — raised all ${keys.length} ` +
-              'to full, or the ship would stay dark with the blackout already off');
-          }
+          // Dimmer Rack is authoritative, including an intentional all-zero
+          // table. Live Touch brightness is transient and was reset above, so
+          // recovery never rewrites the rack behind the operator's back.
         }
         globalsState.blackout = false;
         if (!(mixer.master > 0)) mixer.setMaster(1.0);
         saveGlobals(false);
         broadcastMixerState();
-        console.warn('  ⚠ [revert] 1/6 ship lit: blackout off, master up, dimmers checked, ' +
+        console.warn('  ⚠ [revert] 1/4 ship lit: blackout off, master up, dimmers checked, ' +
           'arm envelope released');
       });
 
@@ -4477,57 +4537,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!paramCenter) return;
         paramCenter.setSourceLock({ mode: 'open' });
         broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
-        console.warn('  ⚠ [revert] 2/6 param-centre source lock released (mode: open)');
+        console.warn('  ⚠ [revert] 2/4 param-centre source lock released (mode: open)');
       });
 
-      // 3. UNRESTRICT THE EFFECT SCOPE and unpark every group — both are things
-      //    the panel set and only the panel would have cleared.
-      step('scope', () => {
-        if (!globalEffectsController) return;
-        globalEffectsController.setEffectGroups(null);
-        globalEffectsController.setParkedGroups(null);
-        broadcastWs({ type: 'effectGroups', groups: null });
-        broadcastWs({ type: 'parkedGroups', groups: null });
-        console.warn('  ⚠ [revert] 3/6 effect scope unrestricted, all groups unparked');
-      });
-
-      // 4. DROP THE AUDIO BINDINGS. The engine applies them every frame, so a
-      //    binding left behind keeps the rig moving to the music with nobody
-      //    driving it.
-      step('audio-bindings', () => {
-        const ab = globalEffectsController && globalEffectsController.audioBindings;
-        if (!ab) return;
-        ab.clearAll();
-        console.warn('  ⚠ [revert] 4/6 audio bindings cleared');
-      });
-
-      // 5. RELEASE THE DEAD OWNER'S PAINT. A painted group is a flat overwrite
-      //    and would stay frozen through the automatic show.
-      step('paint', () => {
-        if (!ownerId) return;
-        releaseTouchPaintForOwner(ownerId, `revert to automatic show (${why})`);
-      });
-
-      // 5b. CLEAR THE PANEL-DRIVEN GLOBAL EFFECTS (audit C1/H5). These live in
-      //    controller memory, not in any slot, so neither disable-all nor the
-      //    paint release above touches them:
-      //    - spatial paint: a panel dying mid-ERASE leaves touch:true erasing
-      //      the same spot EVERY FRAME on top of the show this revert just
-      //      restored — a standing dark region no other failsafe clears.
-      //    - the XY strobe/walk run under presetId 'xy_pad' with no slot, so
-      //      the slot sweep cannot see them and the ship would come back
-      //      permanently strobing.
-      //    Unconditional (not owner-gated): only the armed panel drives these,
-      //    and a revert means that panel is gone.
-      step('panel-effects', () => {
-        if (!globalEffectsController) return;
-        globalEffectsController.setSpatialPaint({ enabled: false, touch: false, clear: true });
-        // No nowMs: stopStrobe defaults to performance.now(), the engine's
-        // frame clock. Passing Date.now() here would be the exact clock-domain
-        // bug the audit found in /strobe-rate (H18).
-        globalEffectsController.setStrobe(false);
-        globalEffectsController.setMovementTrace(false);
-        console.warn('  ⚠ [revert] panel-driven effects cleared: spatial paint, strobe, movement');
+      step('layer-setting', () => {
+        pendingLiveTouchReleaseOwner = null;
+        const state = mixer.getLayerSettingsState();
+        const options = {
+          durationMs: 1000,
+          reason: 'deadman_revert',
+        };
+        // A Mixer -> Live entry has Deck as a third setting. Reverse to Mixer
+        // first, then queue Deck so the dead surface never lands steady Live.
+        if (state.transition
+            && state.transition.to === LAYER_SETTING_IDS.LIVE_TOUCH
+            && state.transition.from === LAYER_SETTING_IDS.MIXER) {
+          activateLayerSettingInternal(LAYER_SETTING_IDS.MIXER, options);
+          activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, options);
+        } else {
+          activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, options);
+        }
       });
 
       // 6. FORCE THE DEFAULT AUTOMATIC SHOW. Deliberately NOT "restore whatever
@@ -4536,11 +4565,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       //    the default automatic playlist, so it is asserted.
       step('playlist', () => {
         timelineLoadPlaylistOnDeck(REVERT_PLAYLIST);
-        console.warn(`  ⚠ [revert] 5/6 playlist '${REVERT_PLAYLIST}' loaded on the deck`);
+        console.warn(`  ⚠ [revert] 3/4 playlist '${REVERT_PLAYLIST}' loaded on the deck`);
       });
       step('autopilot', () => {
         timelineSetAutopilotOnDeck({ active: true });
-        console.warn('  ⚠ [revert] 6/6 deck autopilot ACTIVE — the automatic show is running');
+        console.warn('  ⚠ [revert] 4/4 deck autopilot ACTIVE — the automatic show is running');
       });
 
       broadcastWs({ type: 'armRevert', why, ownerId: ownerId || null });
@@ -4591,11 +4620,155 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const ARM_CLOSE_GRACE_MS = Math.max(1000, Math.min(5000, Math.floor(ARM_LEASE_MS / 3)));
   const armLease = new Map();   // ownerId -> { expiresAt, ws }
   let armSweepTimer = null;
+  let pendingLiveTouchReleaseOwner = null;
+  let pendingLiveTouchDeadmanOwner = null;
+  let preArmSourceLock = null;
+  let liveTouchTimelineTakeoverOwner = null;
+  const liveTouchTimelineActivityAt = new Map();
+  let dimmerAuthorityRevision = 0;
+  let lastLayerSettingsBroadcastMs = 0;
   // Set before the server tears its sockets down. closeNow() terminate()s every
   // client, which fires 'close' on all of them — without this guard a clean
   // shutdown or a scene switch would look exactly like a dead panel and revert
   // the rig on its way out.
   let shuttingDown = false;
+
+  function currentArmLeaseOwner() {
+    if (armLease.size === 0) return null;
+    return armLease.keys().next().value;
+  }
+
+  function currentLayerSettingTarget() {
+    return mixer.getLayerSettingsState().target;
+  }
+
+  function legacyViewFaderForLayerSetting(setting) {
+    return setting === LAYER_SETTING_IDS.MIXER ? 1 : 0;
+  }
+
+  function layerStateIncludesLiveTouch(state = mixer.getLayerSettingsState()) {
+    return state.active === LAYER_SETTING_IDS.LIVE_TOUCH ||
+      !!(state.transition &&
+        (state.transition.from === LAYER_SETTING_IDS.LIVE_TOUCH ||
+         state.transition.to === LAYER_SETTING_IDS.LIVE_TOUCH));
+  }
+
+  /**
+   * Route every internal setting change through the same transaction as the
+   * public activation API. When Live Touch is outgoing, retain its ARM lease
+   * through the blend and release it only after the landing frame.
+   */
+  function activateLayerSettingInternal(target, options) {
+    const timelineInactivityHandback = options && options.reason === 'timeline_deck_pin';
+    if (target !== LAYER_SETTING_IDS.LIVE_TOUCH && layerStateIncludesLiveTouch()
+        && !timelineInactivityHandback) {
+      pendingLiveTouchReleaseOwner = currentArmLeaseOwner();
+    }
+    return mixer.activateLayerSetting(target, options);
+  }
+
+  function buildLayerSettingsPayload() {
+    const state = mixer.getLayerSettingsState();
+    const live = mixer.getLiveTouchChannel();
+    const ownerId = currentArmLeaseOwner();
+    return {
+      type: 'layerSettings',
+      ...state,
+      liveTouch: {
+        armed: ownerId !== null,
+        ownerId,
+        ready: !!(live && live.handle),
+        pattern: live ? live.pattern : null,
+      },
+    };
+  }
+
+  function rejectMixerActivationIfUnready(res) {
+    const readiness = mixer.getMixerReadiness();
+    if (readiness.ready) return false;
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: readiness.reason,
+      code: 'MIXER_NOT_READY',
+      mixer: readiness,
+    }));
+    return true;
+  }
+
+  function broadcastLayerSettings(force = false) {
+    const nowMs = Date.now();
+    if (!force && nowMs - lastLayerSettingsBroadcastMs < 100) return;
+    lastLayerSettingsBroadcastMs = nowMs;
+    broadcastWs(buildLayerSettingsPayload());
+  }
+
+  function installLiveTouchPattern(requestedPattern) {
+    const patternName = resolvePatternName(requestedPattern);
+    const source = loadPattern(patternsDir, patternName);
+    const compiled = wasmHost.compile(source);
+    if (!compiled.ok) {
+      throw new Error(`Live Touch pattern '${patternName}' failed to compile: ${compiled.error}`);
+    }
+
+    const current = mixer.getLiveTouchChannel();
+    const oldHandle = current ? current.handle : null;
+    let channel;
+    if (current) {
+      current.handle = compiled.handle;
+      current.pattern = patternName;
+      current.mode = 'blend_screen';
+      current.fader = 1;
+      current.enabled = true;
+      current.localControls = {};
+      channel = current;
+    } else {
+      channel = mixer.setLiveTouchChannel({
+        id: 'live_touch',
+        name: 'Live Touch',
+        pattern: patternName,
+        handle: compiled.handle,
+        mode: 'blend_screen',
+        fader: 1,
+        enabled: true,
+      });
+    }
+
+    onChannelCompiled(channel, source);
+    finalizeCpcValues(channel);
+    if (liveTouchSession) liveTouchSession.notePatternStaged();
+    if (oldHandle && oldHandle !== compiled.handle) wasmHost.destroy(oldHandle);
+    broadcastLayerSettings(true);
+    return channel;
+  }
+
+  mixer.onLayerSettingsChange = change => {
+    if (change.event === 'completed' && change.detail &&
+        change.detail.from === LAYER_SETTING_IDS.LIVE_TOUCH &&
+        change.detail.to !== LAYER_SETTING_IDS.LIVE_TOUCH) {
+      const deadmanOwner = pendingLiveTouchDeadmanOwner;
+      if (deadmanOwner) {
+        pendingLiveTouchDeadmanOwner = null;
+        try {
+          resetLiveBrightness(deadmanOwner);
+          if (liveTouchSession && liveTouchSession.getState().active) {
+            liveTouchSession.end(deadmanOwner);
+          }
+        } catch (error) {
+          console.warn(`[armLease] failed to release dead Live session '${deadmanOwner}' ` +
+            `after handback: ${error.message}`);
+        }
+      }
+      const ownerId = pendingLiveTouchReleaseOwner;
+      if (ownerId) {
+        // The surface still has owner-scoped cleanup to perform in its private
+        // Live context. Keep the lease after visual landing so those writes
+        // remain authorized. Explicit touchControlArmed:false discards the
+        // context and releases brightness + ARM atomically. Shared Deck/Mixer
+        // paint is never touched by this lifecycle.
+      }
+    }
+    broadcastLayerSettings(change.event !== 'progress');
+  };
 
   function armSweepArm() {
     if (armSweepTimer !== null) return;
@@ -4606,27 +4779,227 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (armSweepTimer !== null) { clearInterval(armSweepTimer); armSweepTimer = null; }
   }
 
+  function requireLiveBrightnessController() {
+    const controller = intensityController && intensityController.liveBrightness;
+    if (!controller) throw new Error('Live Touch brightness controller is unavailable');
+    return controller;
+  }
+
+  function liveBrightnessPayload() {
+    const controller = requireLiveBrightnessController();
+    return {
+      ...serializeTouchBrightness(
+      controller,
+      modelDimmerGroups(),
+      intensityController.sectionBrightness,
+      ),
+      rackRevision: dimmerAuthorityRevision,
+    };
+  }
+
+  function broadcastLiveBrightness() {
+    broadcastWs({ type: 'touchControlBrightness', ...liveBrightnessPayload() });
+  }
+
+  function broadcastDimmerAuthority() {
+    const groups = modelDimmerGroups();
+    const rackCeilings = {};
+    for (const [name, sectionId] of Object.entries(groups)) {
+      rackCeilings[name] = intensityController.sectionBrightness[sectionId] === undefined
+        ? 1
+        : intensityController.sectionBrightness[sectionId];
+    }
+    broadcastWs({
+      type: 'dimmerState',
+      revision: dimmerAuthorityRevision,
+      rackCeilings,
+    });
+  }
+
+  function activateLiveBrightness(ownerId) {
+    const controller = requireLiveBrightnessController();
+    const state = controller.getState();
+    if (state.active && state.ownerId === ownerId) return state;
+    if (state.active) {
+      throw new Error(`Live Touch brightness is already owned by '${state.ownerId}'`);
+    }
+    const sectionIds = [...new Set(Object.values(modelDimmerGroups()))];
+    const activated = controller.activate(ownerId, sectionIds);
+    broadcastLiveBrightness();
+    return activated;
+  }
+
+  function resetLiveBrightness(ownerId = null) {
+    const controller = requireLiveBrightnessController();
+    const state = controller.getState();
+    if (!state.active) return state;
+    const reset = controller.reset(ownerId);
+    broadcastLiveBrightness();
+    return reset;
+  }
+
   /** The panel says it is armed: start watching its socket. */
   function armLeaseSet(ownerId, ws) {
+    const renewing = armLease.has(ownerId);
+    activateLiveBrightness(ownerId);
+    if (liveTouchSession) {
+      try {
+        liveTouchSession.begin(ownerId, paramCenter);
+      } catch (error) {
+        resetLiveBrightness(ownerId);
+        throw error;
+      }
+    }
+    if (!renewing && paramCenter) {
+      preArmSourceLock = paramCenter.getSourceLock();
+      paramCenter.setSourceLock({ mode: 'global', source: 'api' });
+      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    }
     armLease.set(ownerId, { expiresAt: Date.now() + ARM_LEASE_MS, ws });
     armSweepArm();
     console.log(`[armLease] owner '${ownerId}' ARMED — watching its socket ` +
       `(lease ${ARM_LEASE_MS} ms, ping every ${ARM_PING_MS} ms)`);
+    broadcastLayerSettings(true);
   }
 
   /** Clean disarm, or an explicit release. No revert — the panel handled it. */
   function armLeaseClear(ownerId, why) {
     if (!armLease.has(ownerId)) return false;
+    resetLiveBrightness(ownerId);
+    if (liveTouchSession) liveTouchSession.end(ownerId);
     armLease.delete(ownerId);
+    if (armLease.size === 0 && paramCenter) {
+      paramCenter.setSourceLock(preArmSourceLock || { mode: 'open' });
+      preArmSourceLock = null;
+      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    }
+    if (liveTouchTimelineTakeoverOwner === ownerId) {
+      // Clean handback transfers ownership to the ordinary Deck/Mixer
+      // operator-takeover lease. Stop ARM-driven renewal, but do not call
+      // resume(): doing so after a Live -> Mixer landing would immediately
+      // let the plan re-pin Deck and contradict the requested destination.
+      // Normal Deck/Mixer activity may renew the existing Timeline lease; if
+      // the operator walks away it expires and catches up by itself. Deadman
+      // recovery remains different and resumes the plan immediately above.
+      liveTouchTimelineTakeoverOwner = null;
+    }
+    liveTouchTimelineActivityAt.delete(ownerId);
+    if (pendingLiveTouchReleaseOwner === ownerId) pendingLiveTouchReleaseOwner = null;
+    if (pendingLiveTouchDeadmanOwner === ownerId) pendingLiveTouchDeadmanOwner = null;
     if (armLease.size === 0) armSweepDisarm();
     console.log(`[armLease] owner '${ownerId}' released — ${why}`);
+    broadcastLayerSettings(true);
     return true;
   }
 
-  function armLeaseRenew(ownerId) {
+  function armLeaseRenew(ownerId, ws = null) {
     const l = armLease.get(ownerId);
     if (!l) return false;
+    // Only the socket currently bound to this owner may prove liveness. A
+    // replaced/stale socket must not keep a dead active connection alive.
+    if (ws && l.ws !== ws) return false;
     l.expiresAt = Date.now() + ARM_LEASE_MS;
+    return true;
+  }
+
+  /**
+   * Treat owner-tagged Live Touch mutations as operator activity.
+   *
+   * ARM heartbeats prove only that the desk is alive; they must never keep the
+   * Timeline takeover alive. The Timeline lease is renewed solely by real
+   * control changes, matching Deck/Mixer. If inactivity already handed the rig
+   * back to the plan, the next Live mutation performs the same explicit
+   * takeover gesture and returns the isolated Live surface to air.
+   */
+  function noteLiveTouchTimelineActivity(ownerId) {
+    if (!ownerId || liveTouchTimelineTakeoverOwner !== ownerId) return;
+    if (pendingLiveTouchReleaseOwner === ownerId || pendingLiveTouchDeadmanOwner === ownerId) return;
+    if (!timelineService || typeof timelineService.getState !== 'function') return;
+
+    const state = timelineService.getState();
+    const leaseWindowMs = Number.isFinite(state.operatorLeaseSec)
+      ? state.operatorLeaseSec * 1000
+      : 120_000;
+    const throttleMs = Math.max(100, Math.min(10_000, Math.floor(leaseWindowMs / 3)));
+    const now = Date.now();
+    const last = liveTouchTimelineActivityAt.get(ownerId) || 0;
+    if (now - last < throttleMs) return;
+
+    if (state.planActive === true && !state.operatorLease) {
+      const takeover = timelineService.takeover();
+      if (!takeover || takeover.ok !== true || !takeover.operatorLease) {
+        throw new Error('Live Touch could not reacquire the Timeline operator lease');
+      }
+      const layerState = mixer.getLayerSettingsState();
+      if (!layerStateIncludesLiveTouch(layerState)) {
+        activateLayerSettingInternal(LAYER_SETTING_IDS.LIVE_TOUCH, {
+          durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+          reason: 'live_touch_operator_activity',
+        });
+      }
+    } else if (state.operatorLease) {
+      timelineService.activity();
+    }
+    liveTouchTimelineActivityAt.set(ownerId, now);
+  }
+
+  const TOUCH_CONTROL_OWNER_HEADER = 'x-touch-control-owner';
+  const TOUCH_CONTROL_EMERGENCY_PATHS = new Set([
+    '/global-blackout',
+    '/global-effect-macros/panic-stop',
+    '/mixer/panic',
+    '/shutdown',
+  ]);
+
+  /**
+   * Enforce the arm lease for every mutating HTTP route.
+   *
+   * The param-centre source lock only distinguishes `api` from WS/MIDI/OSC;
+   * without this gate, any unrelated HTTP client can still overwrite an armed
+   * touch desk. Tagged writes are also rejected after their lease expires, so a
+   * panel whose control socket died cannot resume mutating the reverted show.
+   * Emergency stop routes remain reachable from every surface.
+   */
+  function rejectTouchControlLeaseConflict(req, res) {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return false;
+    if (TOUCH_CONTROL_EMERGENCY_PATHS.has(req.url)) return false;
+
+    const rawOwner = req.headers[TOUCH_CONTROL_OWNER_HEADER];
+    const claimedOwner = Array.isArray(rawOwner) ? rawOwner[0] : rawOwner;
+    // Dimmer Rack outranks the Live Touch lease and remains writable while the
+    // panel is armed. A tagged Touch write is rejected by the route itself;
+    // an untagged rack client must not be locked out by the lower authority.
+    if (req.url === '/section-brightness' && !claimedOwner) return false;
+    if (claimedOwner) {
+      if (armLease.has(claimedOwner)) {
+        try {
+          noteLiveTouchTimelineActivity(claimedOwner);
+        } catch (error) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: 'TIMELINE_TAKEOVER_FAILED',
+          }));
+          return true;
+        }
+        return false;
+      }
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `touch-control lease '${claimedOwner}' is not active`,
+        code: 'TOUCH_CONTROL_LEASE_INACTIVE',
+      }));
+      return true;
+    }
+
+    if (armLease.size === 0) return false;
+    const heldBy = armLease.keys().next().value;
+    res.writeHead(423, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: `touch control is armed by '${heldBy}'; mutating HTTP requests require its owner header`,
+      code: 'TOUCH_CONTROL_LEASE_HELD',
+      heldBy,
+    }));
     return true;
   }
 
@@ -4697,7 +5070,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
         ? CONTROL_LOCK_LEASE_MS
         : null,
-      currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+      currentView: currentLayerSettingTarget(),
       savedView: savedTargetViewFader === null
         ? null
         : (savedTargetViewFader < 0.5 ? 'deck' : 'mixer'),
@@ -5079,7 +5452,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
     broadcastMixerState();
   }
-  function timelineLoadPlaylistOnDeck(name) {
+  function timelineLoadPlaylistOnDeck(name, entryId = null) {
     const baseCh = mixer.getDeckChannel();
     if (!baseCh) throw new Error('no deck channel');
     const pl = playlistManager.load(name);
@@ -5088,7 +5461,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // whose entries are ALL missing pattern files must FAIL LOUD (codex P0) — the
     // deck must never silently load a broken `_missing` entry. The timeline's
     // per-cue try/catch surfaces this as a loud cueError.
-    const firstEntry = pl.entries.find(e => !e._missing);
+    const firstEntry = entryId
+      ? pl.entries.find(e => e.id === entryId)
+      : pl.entries.find(e => !e._missing);
+    if (entryId && !firstEntry) {
+      throw new Error(`entry "${entryId}" not found in playlist "${name}"`);
+    }
+    if (entryId && firstEntry._missing) {
+      throw new Error(`entry "${entryId}" in playlist "${name}" references missing pattern "${firstEntry.pattern}"`);
+    }
     if (!firstEntry) {
       if (pl.entries.length > 0) {
         throw new Error(`playlist "${name}" has no loadable entries`);
@@ -5131,7 +5512,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       loadPlaylistEntryWithTransition(baseCh, pl.name, firstEntry.id, deckTransitionConfig);
     }
   }
-  function timelineLoadPlaylistOnMixer(id, name) {
+  function timelineLoadPlaylistOnMixer(id, name, entryId = null) {
     const ch = mixer.getMixerChannel(id);
     if (!ch) throw new Error(`mixer channel not found: ${id}`);
     const pl = playlistManager.load(name);
@@ -5139,7 +5520,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // Same fail-loud contract as the deck loader: never silently load a broken
     // `_missing` entry. An all-missing playlist throws; a truly empty one is the
     // legitimate "nothing loaded" state.
-    const firstEntry = pl.entries.find(e => !e._missing);
+    const firstEntry = entryId
+      ? pl.entries.find(e => e.id === entryId)
+      : pl.entries.find(e => !e._missing);
+    if (entryId && !firstEntry) {
+      throw new Error(`entry "${entryId}" not found in playlist "${name}"`);
+    }
+    if (entryId && firstEntry._missing) {
+      throw new Error(`entry "${entryId}" in playlist "${name}" references missing pattern "${firstEntry.pattern}"`);
+    }
     if (!firstEntry) {
       if (pl.entries.length > 0) {
         throw new Error(`playlist "${name}" has no loadable entries`);
@@ -5209,13 +5598,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // live fader on the mixer while the pin is a plan soft-lock, snap it to
       // the deck so the locked output is the lit deck, never a black mixer
       // (bug 2026-07-02 round 2). Never touch a PortWatch-owned pin's fader.
-      if (controlLockSource === 'plan' && mixer.targetViewFader !== 0.0) {
-        mixer.targetViewFader = 0.0;
+      if (controlLockSource === 'plan' &&
+          currentLayerSettingTarget() !== LAYER_SETTING_IDS.DECK) {
+        activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+          durationMs: 1000,
+          reason: 'timeline_deck_pin',
+        });
       }
       return;
     }
-    savedTargetViewFader = mixer.targetViewFader;
-    mixer.targetViewFader = 0.0;
+    savedTargetViewFader = legacyViewFaderForLayerSetting(currentLayerSettingTarget());
+    activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+      durationMs: 1000,
+      reason: 'timeline_deck_pin',
+    });
     viewOverrideMode = 'deck';
     // SOFT lock: source 'plan'. We do NOT arm the PortWatch lease here — the
     // plan releases the pin itself via the timeline (resume/handback).
@@ -5298,9 +5694,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         return moodSource.read();
       },
       deps: {
-        loadPlaylist: ({ target, name }) => {
-          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name);
-          return timelineLoadPlaylistOnMixer(target.id, name);
+        loadPlaylist: ({ target, name, entryId }) => {
+          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name, entryId || null);
+          return timelineLoadPlaylistOnMixer(target.id, name, entryId || null);
         },
         setAutopilot: ({ target, state }) => {
           if (target.kind === 'deck') return timelineSetAutopilotOnDeck(state);
@@ -5403,12 +5799,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST, PATCH, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Touch-Control-Owner');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       return res.end();
     }
+
+    if (rejectTouchControlLeaseConflict(req, res)) return;
 
     // Body parsing helper
     // Cap request bodies at ~1 MB. An unbounded body (e.g. a 10k-cue timeline
@@ -5457,6 +5855,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     };
+
+    // Compatibility seam: owner-tagged Live Touch requests use the existing
+    // endpoint shapes but land in the in-memory setting context. Delegating
+    // before the durable handlers makes it structurally impossible for Live
+    // CPC/effects/paint/slot writes to touch Deck/Mixer state or state files.
+    if (liveTouchSession && liveTouchSession.routesRequest(req)) {
+      const handled = liveTouchSession.handleHttp({
+        req,
+        res,
+        readBody,
+        listModelGroups,
+        getFrameIndex: engineCore.getFrameIndex,
+        sharedGlobals: globalsState,
+        serializeMixerState,
+      });
+      if (handled) return;
+    }
 
     if (req.method === 'GET' && (req.url === '/patterns' || req.url === '/list-patterns')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -5507,13 +5922,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     } else if (req.method === 'GET' && req.url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ 
+      res.end(JSON.stringify({
         service: 'marsin-engine',
         name: 'MarsinEngine',
         version: '2.0',
         port: opts.port || 6968,
-        activeScene: opts.modelName || 'unknown', 
-        activeModel: opts.modelName || 'unknown', 
+        activeScene: opts.modelName || 'unknown',
+        activeModel: opts.modelName || 'unknown',
         activePattern: opts.pattern || 'unknown',
         unrealState: 'streaming',
         // True when a model hot reload was refused (pixel count changed)
@@ -5594,16 +6009,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         let safeName = path.basename(data.name);
         if (!safeName.endsWith('.js')) safeName += '.js';
         const filePath = path.join(patternsDir, safeName);
-        
+
         // Compile check (does not destroy existing running patterns because of WasmHost!)
         const comp = wasmHost.compile(data.code);
         if (!comp.ok) {
           res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
         }
         wasmHost.destroy(comp.handle); // Clean up validation handle
-        
+
         fs.writeFileSync(filePath, data.code, 'utf8');
-        
+
         const patternName = safeName.replace('.js', '');
         const allChannels = [
           ...(mixer.getDeckChannel() ? [mixer.getDeckChannel()] : []),
@@ -5629,7 +6044,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             }
           }
         });
-        
+
         saveAllState();
         broadcastMixerState();
 
@@ -5944,6 +6359,74 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(wire));
 
+    } else if (req.method === 'GET' && req.url === '/touch-control/brightness') {
+      try {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(liveBrightnessPayload()));
+      } catch (error) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error.message, code: 'TOUCH_BRIGHTNESS_UNAVAILABLE' }));
+      }
+    } else if (req.method === 'PUT' && req.url === '/touch-control/brightness') {
+      readBody(data => {
+        try {
+          const groups = groupsByNameToSectionMap(data.groups, modelDimmerGroups(), true);
+          requireLiveBrightnessController().replace(
+            touchControlOwner(req), data.expectedRevision, data.master, groups,
+          );
+          broadcastLiveBrightness();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(liveBrightnessPayload()));
+        } catch (error) {
+          res.writeHead(statusForTouchBrightnessError(error), { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: error.code || 'TOUCH_BRIGHTNESS_INVALID',
+          }));
+        }
+      });
+    } else if (req.method === 'PATCH' && req.url === '/touch-control/brightness') {
+      readBody(data => {
+        try {
+          const patch = {};
+          if (Object.prototype.hasOwnProperty.call(data, 'master')) patch.master = data.master;
+          if (Object.prototype.hasOwnProperty.call(data, 'groups')) {
+            patch.groupsBySectionId = groupsByNameToSectionMap(
+              data.groups, modelDimmerGroups(), false,
+            );
+          }
+          requireLiveBrightnessController().patch(
+            touchControlOwner(req), data.expectedRevision, patch,
+          );
+          broadcastLiveBrightness();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(liveBrightnessPayload()));
+        } catch (error) {
+          res.writeHead(statusForTouchBrightnessError(error), { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: error.code || 'TOUCH_BRIGHTNESS_INVALID',
+          }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/touch-control/brightness/master/fade') {
+      readBody(data => {
+        try {
+          requireLiveBrightnessController().startMasterFade(
+            touchControlOwner(req), data.expectedRevision, data.target, data.durationMs,
+          );
+          broadcastLiveBrightness();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(liveBrightnessPayload()));
+        } catch (error) {
+          res.writeHead(statusForTouchBrightnessError(error), { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: error.code || 'TOUCH_BRIGHTNESS_INVALID',
+          }));
+        }
+      });
+
     // ── Group fixed colors (docs/32) ─────────────────────────────────
     // Per-group color locks driven by the CaptainPad Dimmer Rack.
     // GET    /group-fixed-colors          → { groups, overrides }
@@ -6064,6 +6547,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400);
             return res.end(JSON.stringify({ error: `unknown group '${group}' (model groups: ${known.join(', ')})` }));
           }
+          const ownerId = typeof data.ownerId === 'string' && data.ownerId.length > 0
+            ? data.ownerId
+            : null;
+          // Capture the durable underlay before replacing the controller's
+          // visible value. A leased Live overlay is transient and must never
+          // overwrite or delete the saved Deck/Mixer paint beneath it.
+          const priorOverride = ownerId && globalsState.groupFixedColors?.[group]
+            ? JSON.parse(JSON.stringify(globalsState.groupFixedColors[group]))
+            : null;
+
           // `colors` (optional) lets ONE group carry a whole palette, spread
           // across its own pixels by per-group ordinal. `color` stays required
           // and is what every existing caller sends.
@@ -6075,18 +6568,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // Leased: held alive only while its owner keeps renewing, and NOT
           // written to globals_state.yaml — the owner is definitionally gone
           // after a restart, so persisting it would resurrect a frozen group
-          // that nothing is left to release. Any previously-persisted entry for
-          // this group is removed for the same reason.
+          // that nothing is left to release. A pre-existing permanent value is
+          // retained byte-for-byte and restored when the lease ends.
           //
           // Permanent (no ownerId): unchanged from before — applied, persisted,
           // survives restart. This is what saved operator looks rely on.
-          const ownerId = typeof data.ownerId === 'string' && data.ownerId.length > 0
-            ? data.ownerId
-            : null;
           if (ownerId) {
-            touchPaintLeaseSet(group, ownerId);
-            if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
-            saveGlobals(false);
+            touchPaintLeaseSet(group, ownerId, priorOverride);
           } else {
             // An unleased write takes the group back off the deadman.
             touchPaintLease.delete(group);
@@ -6113,6 +6601,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'POST' && req.url === '/section-brightness') {
       readBody(data => {
+        if (touchControlOwner(req)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch cannot overwrite the authoritative Dimmer Rack',
+            code: 'TOUCH_CANNOT_WRITE_DIMMER_RACK',
+          }));
+        }
         if (data.sectionId === undefined || data.brightness === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'sectionId and brightness required' }));
         }
@@ -6142,12 +6637,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           return res.end(JSON.stringify({
             error: `brightness must be a finite number in 0..1, got ${JSON.stringify(bVal)}` }));
         }
+        const previousBrightness = intensityController.sectionBrightness[sId] === undefined
+          ? 1
+          : intensityController.sectionBrightness[sId];
         if (intensityController) intensityController.setSectionBrightness(sId, bVal);
+        if (previousBrightness !== bVal) dimmerAuthorityRevision++;
         if (!globalsState.dimmers) globalsState.dimmers = {};
         globalsState.dimmers[groupName] = bVal;
         saveGlobals(false);
+        broadcastDimmerAuthority();
+        if (intensityController.liveBrightness.getState().active) broadcastLiveBrightness();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', sectionId: sId, group: groupName, brightness: data.brightness }));
+        res.end(JSON.stringify({
+          status: 'ok',
+          revision: dimmerAuthorityRevision,
+          sectionId: sId,
+          group: groupName,
+          brightness: data.brightness,
+        }));
       });
     } else if (req.method === 'POST' && req.url === '/global-blackout') {
       readBody(data => {
@@ -7667,14 +8174,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // picker can render them; the existing `viewMasks` array stays the
       // bit-backed subset for back-compat.
       const reg = mixer && mixer.maskRegistry;
+      const modelGroupCounts = new Map();
+      for (const px of pixels) {
+        if (px && typeof px.group === 'string' && px.group.length > 0) {
+          modelGroupCounts.set(px.group, (modelGroupCounts.get(px.group) || 0) + 1);
+        }
+      }
       const namedViews = reg
         ? reg.names().map(name => {
           const e = reg.get(name);
           let memberCount = 0;
+          const memberGroups = new Map();
           if (e && e.members) {
-            for (let k = 0; k < e.members.length; k++) memberCount += e.members[k];
+            for (let k = 0; k < e.members.length; k++) {
+              if (!e.members[k]) continue;
+              memberCount++;
+              const group = pixels[k] && pixels[k].group;
+              if (typeof group === 'string' && group.length > 0) {
+                memberGroups.set(group, (memberGroups.get(group) || 0) + 1);
+              }
+            }
           }
-          return { name, kind: e ? e.kind : 'group', bit: e ? e.bit : 0, memberCount };
+          const groupNames = [];
+          const partialGroupNames = [];
+          for (const [group, count] of memberGroups) {
+            if (count === modelGroupCounts.get(group)) groupNames.push(group);
+            else partialGroupNames.push(group);
+          }
+          groupNames.sort();
+          partialGroupNames.sort();
+          return {
+            name,
+            kind: e ? e.kind : 'group',
+            bit: e ? e.bit : 0,
+            memberCount,
+            groupNames,
+            partialGroupNames,
+          };
         })
         : [];
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -7832,6 +8368,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'PATCH' && req.url === '/mixer') {
       readBody(data => {
         if (data.master !== undefined) {
+          if (touchControlOwner(req)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch must use its transient master, not the Mixer master',
+              code: 'TOUCH_CANNOT_WRITE_MIXER_MASTER',
+            }));
+          }
           // Codex P0: master is a [0,1] fader. Reject non-finite with 400
           // (setMaster's Math.max/min would otherwise pass NaN straight
           // through to applyMaster and black the rig). Clamp finite.
@@ -7851,6 +8394,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // toward `target` over `durationMs` on the render tick. A timed
       // blackout is target=0; a restore is a fade to a non-zero value.
       readBody(data => {
+        if (touchControlOwner(req)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch must fade its transient master, not the Mixer master',
+            code: 'TOUCH_CANNOT_WRITE_MIXER_MASTER',
+          }));
+        }
         // Codex P0: reject non-finite / out-of-range BEFORE touching the
         // mixer. target reuses validateFader's finite-[0,1] contract (but
         // is NOT clamped silently here — validateFader clamps a finite
@@ -8746,7 +9296,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           globalsState.blackout = false;
           saveGlobals(true);
           mixer.setMaster(1.0);
-          mixer.targetViewFader = 1.0;
+          activateLayerSettingInternal(LAYER_SETTING_IDS.MIXER, {
+            durationMs: 1000,
+            reason: 'panic_lit_default',
+          });
         };
 
         // Try a home snapshot first when requested + present.
@@ -9145,11 +9698,401 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
+    } else if (req.method === 'GET' && req.url === '/layers/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(buildLayerSettingsPayload()));
+    } else if (req.method === 'POST' && req.url === '/layers/live_touch/prepare') {
+      readBody(data => {
+        const requestStartedAt = performance.now();
+        const ownerId = touchControlOwner(req);
+        try {
+          if (!liveTouchSession) {
+            const error = new Error('Live Touch session context is unavailable');
+            error.code = 'LIVE_TOUCH_SESSION_UNAVAILABLE';
+            throw error;
+          }
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('Live Touch prepare body must be an object');
+          }
+          if (!Number.isInteger(data.expectedSessionRevision)
+              || data.expectedSessionRevision < 0) {
+            throw new Error('expectedSessionRevision must be a non-negative integer');
+          }
+          const sessionState = liveTouchSession.getState();
+          if (!sessionState.active || sessionState.ownerId !== ownerId) {
+            const error = new Error(`Live Touch session is not owned by '${ownerId}'`);
+            error.code = 'LIVE_TOUCH_SESSION_INACTIVE';
+            throw error;
+          }
+          if (data.expectedSessionRevision !== sessionState.revision) {
+            const error = new Error(
+              `stale Live Touch session revision ${data.expectedSessionRevision}; `
+                + `current revision is ${sessionState.revision}`,
+            );
+            error.code = 'LIVE_TOUCH_PREPARE_STALE_REVISION';
+            throw error;
+          }
+
+          const validateStartedAt = performance.now();
+          const prepared = liveTouchSession.buildPreparedReplacement(
+            ownerId,
+            data.operations,
+            {
+              listModelGroups,
+              getFrameIndex: engineCore.getFrameIndex,
+              sharedGlobals: globalsState,
+              serializeMixerState,
+            },
+          );
+
+          let brightness = null;
+          let brightnessGroups = null;
+          if (data.brightness !== undefined) {
+            brightness = data.brightness;
+            if (!brightness || typeof brightness !== 'object' || Array.isArray(brightness)) {
+              throw new Error('brightness must be an object when supplied');
+            }
+            brightnessGroups = groupsByNameToSectionMap(
+              brightness.groups,
+              modelDimmerGroups(),
+              true,
+            );
+            requireLiveBrightnessController().validateReplacement(
+              ownerId,
+              brightness.expectedRevision,
+              brightness.master,
+              brightnessGroups,
+            );
+          }
+          const validateMs = performance.now() - validateStartedAt;
+
+          // Validation above is side-effect free. These synchronous commits
+          // share one event-loop turn, so no render frame or competing owner
+          // can observe a half-prepared Live look before the blend begins.
+          const commitStartedAt = performance.now();
+          const committedSession = liveTouchSession.commitPreparedReplacement(ownerId, prepared);
+          if (brightness) {
+            requireLiveBrightnessController().replace(
+              ownerId,
+              brightness.expectedRevision,
+              brightness.master,
+              brightnessGroups,
+            );
+            broadcastLiveBrightness();
+          }
+          const commitMs = performance.now() - commitStartedAt;
+          const totalMs = performance.now() - requestStartedAt;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok',
+            ownerId,
+            operationCount: prepared.operationCount,
+            sessionRevision: committedSession.revision,
+            brightnessRevision: brightness
+              ? requireLiveBrightnessController().getState().revision
+              : null,
+            timing: {
+              validateMs: Number(validateMs.toFixed(3)),
+              commitMs: Number(commitMs.toFixed(3)),
+              totalMs: Number(totalMs.toFixed(3)),
+            },
+          }));
+        } catch (error) {
+          let status = statusForTouchBrightnessError(error);
+          if (error && [
+            'LIVE_TOUCH_PREPARE_STALE_REVISION',
+            'LIVE_TOUCH_SESSION_INACTIVE',
+            'LIVE_TOUCH_NOT_READY',
+          ].includes(error.code)) status = 409;
+          if (error && error.code === 'LIVE_TOUCH_SESSION_UNAVAILABLE') status = 503;
+          if (error && [
+            'LIVE_TOUCH_PREPARE_COMMIT_FAILED',
+            'LIVE_TOUCH_PREPARE_ROLLBACK_FAILED',
+          ].includes(error.code)) status = 500;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: String(error && error.message ? error.message : error),
+            code: error && error.code ? error.code : 'LIVE_TOUCH_PREPARE_INVALID',
+            operationIndex: Number.isInteger(error && error.operationIndex)
+              ? error.operationIndex
+              : null,
+          }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/layers/activate') {
+      readBody(data => {
+        const requestStartedAt = performance.now();
+        if (!data || typeof data !== 'object' || Array.isArray(data) ||
+            !LAYER_SETTING_ID_SET.has(data.target)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'target must be deck, mixer, or live_touch',
+            code: 'INVALID_LAYER_SETTING',
+          }));
+        }
+        const durationMs = data.durationMs === undefined
+          ? DEFAULT_LAYER_TRANSITION_DURATION_MS
+          : data.durationMs;
+        if (!Number.isFinite(durationMs) || durationMs < 1 || durationMs > 30000) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'durationMs must be finite in [1, 30000]',
+            code: 'INVALID_TRANSITION_DURATION',
+          }));
+        }
+
+        if (currentControlLock() === 'portwatch' && data.target !== LAYER_SETTING_IDS.DECK) {
+          res.writeHead(423, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'PortWatch holds the rig on Deck',
+            code: 'LAYER_SETTING_LOCKED',
+          }));
+        }
+        if (currentControlLock() === 'plan'
+            && data.target === LAYER_SETTING_IDS.MIXER) {
+          res.writeHead(423, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Timeline plan holds the rig on Deck; take over before activating Mixer',
+            code: 'LAYER_SETTING_LOCKED',
+            heldBy: 'plan',
+          }));
+        }
+
+        // Never accept a transition to a configured-black Mixer surface. This
+        // is a preflight, before Deck-swap finalization, Live handback markers,
+        // or router mutation. Rendered luminance is deliberately not sampled:
+        // a black-authored pattern is valid, while an empty/fully-gated stack
+        // is a control configuration error the operator can fix.
+        if (data.target === LAYER_SETTING_IDS.MIXER
+            && rejectMixerActivationIfUnready(res)) {
+          return;
+        }
+
+        const rawHeader = req.headers[TOUCH_CONTROL_OWNER_HEADER];
+        const headerOwner = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+        const bodyOwner = typeof data.ownerId === 'string' && data.ownerId.length > 0
+          ? data.ownerId
+          : null;
+        if (headerOwner && bodyOwner && headerOwner !== bodyOwner) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'ownerId does not match X-Touch-Control-Owner',
+            code: 'LIVE_TOUCH_OWNER_MISMATCH',
+          }));
+        }
+        const claimedOwner = bodyOwner || headerOwner || null;
+        const heldBy = currentArmLeaseOwner();
+        const layerState = mixer.getLayerSettingsState();
+        const liveParticipates = layerStateIncludesLiveTouch(layerState);
+
+        if (data.target === LAYER_SETTING_IDS.LIVE_TOUCH) {
+          const live = mixer.getLiveTouchChannel();
+          if (!live || !live.handle) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch has no staged pattern',
+              code: 'LIVE_TOUCH_NOT_READY',
+            }));
+          }
+          if (!heldBy) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch activation requires an active ARM lease',
+              code: 'LIVE_TOUCH_ARM_REQUIRED',
+            }));
+          }
+          if (!claimedOwner || claimedOwner !== heldBy) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Live Touch ARM lease is held by '${heldBy}'`,
+              code: 'LIVE_TOUCH_OWNER_MISMATCH',
+              heldBy,
+            }));
+          }
+          if (currentControlLock() === 'portwatch') {
+            res.writeHead(423, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'PortWatch owns the rig; Live Touch cannot take over',
+              code: 'LAYER_SETTING_LOCKED',
+              heldBy: 'portwatch',
+            }));
+          }
+
+          // Explicit ARM is an operator takeover gesture. If the timeline owns
+          // the soft Deck pin, acquire the same operator takeover lease as the
+          // timeline endpoint and clear only the plan-owned pin before starting
+          // the canonical blend. Passive Live tab focus never reaches here.
+          if (currentControlLock() === 'plan') {
+            if (!timelineService) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: 'timeline plan pin is active but timeline takeover is unavailable',
+                code: 'LAYER_SETTING_LOCKED',
+                heldBy: 'plan',
+              }));
+            }
+            try {
+              timelineService.takeover();
+              liveTouchTimelineTakeoverOwner = heldBy;
+              viewOverrideMode = null;
+              savedTargetViewFader = null;
+              controlLockSource = null;
+              disarmControlLockLease();
+              syncControlLockToGlobals();
+              broadcastViewOverride();
+            } catch (error) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `Live Touch could not take over the timeline: ${error.message}`,
+                code: 'LAYER_SETTING_LOCKED',
+                heldBy: 'plan',
+              }));
+            }
+          }
+          const timelineState = timelineService && typeof timelineService.getState === 'function'
+            ? timelineService.getState()
+            : null;
+          if (timelineState && timelineState.operatorLease) {
+            liveTouchTimelineTakeoverOwner = heldBy;
+            liveTouchTimelineActivityAt.set(heldBy, Date.now());
+          }
+          pendingLiveTouchReleaseOwner = null;
+        } else if (liveParticipates && heldBy) {
+          if (!claimedOwner || claimedOwner !== heldBy) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Live Touch handback requires owner '${heldBy}'`,
+              code: 'LIVE_TOUCH_OWNER_MISMATCH',
+              heldBy,
+            }));
+          }
+          pendingLiveTouchReleaseOwner = heldBy;
+        }
+
+        // Canonical setting activation owns the same Deck-swap finalization as
+        // the legacy /mixer/view adapter. The hidden Deck must preserve its
+        // intended destination state without continuing to render or leaving a
+        // parked timer that jump-completes when Deck becomes visible again.
+        if (data.target !== LAYER_SETTING_IDS.DECK && deckSwapInFlightReason()) {
+          mixer.finishDeckSwapNow();
+        }
+
+        const result = activateLayerSettingInternal(data.target, {
+          durationMs,
+          reason: typeof data.reason === 'string' && data.reason.length > 0
+            ? data.reason
+            : 'operator',
+        });
+        const statusCode = result.status === 'queued' ? 202 : 200;
+        const payload = buildLayerSettingsPayload();
+        payload.timing = {
+          activationMs: Number((performance.now() - requestStartedAt).toFixed(3)),
+          blendDurationMs: durationMs,
+        };
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      });
+    } else if (req.method === 'PUT' && req.url === '/layers/live_touch/pattern') {
+      readBody(data => {
+        if (!data || typeof data.pattern !== 'string' || data.pattern.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'pattern must be a non-empty string',
+            code: 'LIVE_TOUCH_PATTERN_INVALID',
+          }));
+        }
+        try {
+          const stageStartedAt = performance.now();
+          const channel = installLiveTouchPattern(data.pattern);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok',
+            pattern: channel.pattern,
+            sessionRevision: liveTouchSession
+              ? liveTouchSession.getState().revision
+              : null,
+            timing: {
+              stageMs: Number((performance.now() - stageStartedAt).toFixed(3)),
+            },
+          }));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: String(error && error.message ? error.message : error),
+            code: 'LIVE_TOUCH_PATTERN_INVALID',
+          }));
+        }
+      });
+    } else if (req.method === 'GET' && req.url === '/layers/live_touch/exports') {
+      const live = mixer.getLiveTouchChannel();
+      if (!live || !live.handle) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          error: 'Live Touch has no staged pattern',
+          code: 'LIVE_TOUCH_NOT_READY',
+        }));
+      }
+      const exports = wasmHost.getExports(live.handle)
+        .filter(entry => !(liveTouchSession
+          && liveTouchSession.paramCenter.isSharedExport(live.id, entry.name)));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(annotateCodeDefaults(live, exports)));
+    } else if (req.method === 'POST' && req.url === '/layers/live_touch/control') {
+      readBody(data => {
+        const live = mixer.getLiveTouchChannel();
+        if (!live || !live.handle) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch has no staged pattern',
+            code: 'LIVE_TOUCH_NOT_READY',
+          }));
+        }
+        if (!data || data.id === undefined) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'id required', code: 'LIVE_TOUCH_CONTROL_INVALID' }));
+        }
+        const result = liveTouchSession
+          ? liveTouchSession.setLiveControl(
+            live,
+            data.id,
+            data.v0 || 0,
+            data.v1 || 0,
+            data.v2 || 0,
+          )
+          : paramRouter.setChannelControl(
+            live.id,
+            data.id,
+            data.v0 || 0,
+            data.v1 || 0,
+            data.v2 || 0,
+          );
+        if (!result || result.status !== 'ok') {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: result && result.reason ? result.reason : 'Live Touch control write failed',
+            code: 'LIVE_TOUCH_CONTROL_REJECTED',
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', id: data.id }));
+      });
     } else if (req.method === 'POST' && req.url === '/mixer/view') {
       // NOTE: this match must be exact-string, NOT a regex like
       // /\/mixer\/view/, otherwise it would also catch
       // /mixer/view-override and shadow the override handler below.
       readBody(data => {
+        if (!data || (data.view !== LAYER_SETTING_IDS.DECK &&
+            data.view !== LAYER_SETTING_IDS.MIXER)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'view must be deck or mixer',
+            code: 'INVALID_LAYER_SETTING',
+          }));
+        }
+        if (data.view === LAYER_SETTING_IDS.MIXER
+            && rejectMixerActivationIfUnready(res)) {
+          return;
+        }
         // View routing depends on WHO owns the deck-pin:
         //
         //   • HARD PortWatch lock ('portwatch'): the operator is locked out of
@@ -9179,8 +10122,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (data.view === 'deck') savedTargetViewFader = 0.0;
           else if (data.view === 'mixer') savedTargetViewFader = 1.0;
         } else {
-          if (data.view === 'deck') mixer.targetViewFader = 0.0;
-          else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
+          activateLayerSettingInternal(data.view, {
+            durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+            reason: 'legacy_mixer_view',
+          });
         }
         // ── Auto-finalize an in-flight deck swap on view → mixer ────
         // Per the operator's spec: navigating to the mixer tab while a
@@ -9193,7 +10138,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.view === 'mixer' && mixer.isDeckSwapInFlight && mixer.isDeckSwapInFlight()) {
           mixer.finishDeckSwapNow();
         }
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(buildLayerSettingsPayload()));
         broadcastViewOverride();
       });
     } else if (req.method === 'POST' && req.url === '/mixer/view-override') {
@@ -9205,8 +10151,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const requested = (data && data.override) || null;
         if (requested === 'deck') {
           if (viewOverrideMode !== 'deck') {
-            savedTargetViewFader = mixer.targetViewFader;
-            mixer.targetViewFader = 0.0;
+            savedTargetViewFader = legacyViewFaderForLayerSetting(currentLayerSettingTarget());
+            activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+              durationMs: 1000,
+              reason: 'portwatch_deck_pin',
+            });
             viewOverrideMode = 'deck';
           }
           // This is the REAL PortWatch-device deck-pin path (HARD lock). Mark the
@@ -9248,7 +10197,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
             ? CONTROL_LOCK_LEASE_MS
             : null,
-          currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+          currentView: currentLayerSettingTarget(),
         }));
         broadcastViewOverride();
       });
@@ -9262,7 +10211,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
-        currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+        currentView: currentLayerSettingTarget(),
         savedView: savedTargetViewFader === null
           ? null
           : (savedTargetViewFader < 0.5 ? 'deck' : 'mixer'),
@@ -9307,6 +10256,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'POST' && req.url === '/param-center/source-lock') {
       readBody(data => {
         if (!paramCenter) { res.writeHead(503); return res.end(JSON.stringify({ error: 'no param center' })); }
+        if (currentArmLeaseOwner()) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch ARM owns the ParamCenter source lock',
+            code: 'TOUCH_SOURCE_LOCK_OWNED',
+            heldBy: currentArmLeaseOwner(),
+          }));
+        }
         // STRICT SCHEMA (audit H16). This used to hand ANY body straight to
         // setSourceLock — a malformed lock (mode typo, garbage leases) could
         // wedge every param write engine-wide with nothing saying why. The
@@ -9608,8 +10565,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(next));
           } catch (err) {
-            // Analyzer.reconfigure throws RangeError on bad combos.
-            res.writeHead(400, { 'Content-Type': 'application/json' });
+            // Validation/reconfigure errors are client input (400); durable
+            // state read/write failures are server faults (500).
+            res.writeHead(audioConfigErrorStatus(err), { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
           }
         });
@@ -11609,13 +12567,32 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
-        currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+        currentView: currentLayerSettingTarget(),
         savedView: savedTargetViewFader === null
           ? null
           : (savedTargetViewFader < 0.5 ? 'deck' : 'mixer'),
       }));
     } catch (e) {
       // ignore
+    }
+    try {
+      ws.send(JSON.stringify(buildLayerSettingsPayload()));
+    } catch (e) {
+      // ignore — never break the handshake on a layer-setting replay
+    }
+    try {
+      ws.send(JSON.stringify({
+        type: 'touchControlBrightness',
+        ...liveBrightnessPayload(),
+      }));
+      const rackCeilings = liveBrightnessPayload().rackCeilings;
+      ws.send(JSON.stringify({
+        type: 'dimmerState',
+        revision: dimmerAuthorityRevision,
+        rackCeilings,
+      }));
+    } catch (e) {
+      // ignore — never break the handshake on a brightness-authority replay
     }
 
     // Replay cached telemetry so the pills paint immediately on
@@ -11977,6 +12954,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // ARM / DISARM declaration. `armed:true` starts the deadman watching
           // THIS socket; `armed:false` is a clean release with no revert,
           // because the panel is doing the handback itself.
+          const requestStartedAt = performance.now();
           const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
             ? d.ownerId
             : ws._touchControlOwnerId;
@@ -11987,6 +12965,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             return;
           }
           ws._touchControlOwnerId = ownerId;
+          let acknowledgedArmed = !!d.armed;
+          let landing = null;
+          let leaseMutationMs = 0;
           if (d.armed) {
             // ONE DESK AT A TIME. Two panels both believing they are armed is
             // strictly worse than one being told someone else has it: they
@@ -12011,7 +12992,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (holder && !holderAlive) {
               console.warn(`  ⚠ [armLease] evicting STALE holder '${holder}' (its socket is gone) — ` +
                 `'${ownerId}' takes the desk. A dead panel must never lock out a live one.`);
-              armLease.delete(holder);
+              // Release every transient authority owned by the dead session,
+              // including its Live Touch brightness state, before assigning
+              // the desk to the replacement. Deleting only the lease leaves
+              // brightness owned by `holder`, so armLeaseSet(ownerId) fails
+              // and the supposedly-evicted panel still locks out the rig.
+              armLeaseClear(holder, `stale holder evicted for '${ownerId}'`);
             }
             if (holder && holderAlive) {
               console.warn(`  ⚠ [armLease] REFUSED arm from '${ownerId}' — '${holder}' already ` +
@@ -12022,12 +13008,54 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               }));
               return;
             }
+            const leaseStartedAt = performance.now();
             armLeaseSet(ownerId, ws);
+            leaseMutationMs = performance.now() - leaseStartedAt;
           } else {
-            armLeaseClear(ownerId, 'clean disarm (touchControlArmed false)');
+            const layerState = mixer.getLayerSettingsState();
+            if (armLease.has(ownerId) && layerStateIncludesLiveTouch(layerState)) {
+              // ARM may not disappear underneath a performing Live surface.
+              // Reverse an in-flight entry back to its source, preserve an
+              // already-running handback destination, or land steady Live on
+              // the mission-safe Deck. The completion callback clears the
+              // lease through setting-local cleanup. The final explicit
+              // ARM-off releases it after the cleanup succeeds.
+              let landingTarget = LAYER_SETTING_IDS.DECK;
+              if (layerState.transition) {
+                if (layerState.transition.from === LAYER_SETTING_IDS.LIVE_TOUCH) {
+                  landingTarget = layerState.transition.to;
+                } else if (layerState.transition.to === LAYER_SETTING_IDS.LIVE_TOUCH) {
+                  landingTarget = layerState.transition.from;
+                }
+              }
+              pendingLiveTouchReleaseOwner = ownerId;
+              const result = activateLayerSettingInternal(landingTarget, {
+                durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+                reason: 'live_touch_disarm',
+              });
+              acknowledgedArmed = true;
+              landing = {
+                target: landingTarget,
+                transitionId: result.state.transition ? result.state.transition.id : null,
+              };
+            } else {
+              armLeaseClear(ownerId, 'clean disarm (touchControlArmed false)');
+            }
           }
           ws.send(JSON.stringify({
-            type: 'touchControlArmedAck', ownerId, armed: !!d.armed, leaseMs: ARM_LEASE_MS,
+            type: 'touchControlArmedAck',
+            ownerId,
+            armed: acknowledgedArmed,
+            requestedArmed: !!d.armed,
+            landing,
+            leaseMs: ARM_LEASE_MS,
+            sessionRevision: liveTouchSession
+              ? liveTouchSession.getState().revision
+              : null,
+            timing: {
+              leaseMutationMs: Number(leaseMutationMs.toFixed(3)),
+              serverMs: Number((performance.now() - requestStartedAt).toFixed(3)),
+            },
           }));
         } else if (d.type === 'touchControlHeartbeat') {
           // Renew every lease this owner holds. The panel sends this well
@@ -12088,7 +13116,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // the page. See the ARM LEASE block for why that distinction matters.
     ws.on('pong', () => {
       const ownerId = ws._touchControlOwnerId;
-      if (ownerId) armLeaseRenew(ownerId);
+      if (ownerId) armLeaseRenew(ownerId, ws);
     });
 
     ws.on('close', () => {

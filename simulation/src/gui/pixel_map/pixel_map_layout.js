@@ -76,6 +76,13 @@ export function styleFor(fixtureType, typeOverrides) {
   if (typeof ov.sizeY === 'number') out.sizeY = ov.sizeY;
   else if (typeof ov.size === 'number') out.sizeY = ov.size;
   if (typeof ov.gap === 'number') out.gap = ov.gap;
+  if (ov.effect !== undefined) {
+    if (ov.effect !== 'upwash') {
+      throw new Error(`[PixelMap] unsupported fixture effect '${ov.effect}' for ` +
+        `'${fixtureType}' (expected 'upwash')`);
+    }
+    out.effect = ov.effect;
+  }
   return out;
 }
 
@@ -275,6 +282,7 @@ export function clusterPixelPositions(cluster, placement, style) {
       sizeX: style.sizeX,
       sizeY: style.sizeY,
       shape: style.shape,
+      effect: style.effect,
       rot,
     });
   }
@@ -323,9 +331,12 @@ export function fixturesInGroup(clusters, groupName) {
 
 /** Projection plane → [horizontalWorldAxis, verticalWorldAxis]. */
 function planeAxes(projection) {
-  if (projection === 'front') return ['x', 'y'];
-  if (projection === 'side') return ['z', 'y'];
-  return ['x', 'z']; // top (default)
+  if (projection === 'front') return ['x', 'y', true];
+  if (projection === 'side') return ['z', 'y', true];
+  // The Titanic Aerial camera approaches from +Z, so its near/front end is at
+  // the BOTTOM of the screen. Keep that orientation in every orthographic Top
+  // view: +X runs right and +Z runs down. Front/Side still put world +Y up.
+  return ['x', 'z', false]; // top (default)
 }
 
 /** The two widest-spread world axes across a set of {x,y,z} points. */
@@ -666,9 +677,11 @@ function reportLayoutTweak(panelId, line) {
  *            un-normalized size) and center — for a self-contained grid/logo.
  * Positions come straight from world coords (no per-fixture centroid+line
  * abstraction, no collision relaxation), so nothing is distorted or pushed
- * off-canvas. Screen Y is flipped (world up → screen up).
+ * off-canvas. Front/Side put world up at screen-up; Top follows the Aerial
+ * camera convention, where +Z/front is screen-down.
  */
-function projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, canvasW, canvasH, scaleMode, rotate = 0, tweaks = {}) {
+function projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, canvasW, canvasH,
+  scaleMode, rotate = 0, tweaks = {}, invertV = true) {
   const P = [];
   let maxHalf = 1, pitch = 1;
   for (const c of byPaintOrder(clusters)) {
@@ -677,8 +690,21 @@ function projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, canv
     pitch = Math.max(pitch, style.sizeX + style.gap);
     for (const px of c.pixels) {
       const e = batchList[px.gi];
-      const [u, v] = rotateProjected(e[axAWorld(axA)] || 0, e[axAWorld(axB)] || 0, rotate);
-      P.push({ gi: px.gi, fixKey: c.fixKey, fixtureType: c.fixtureType, style, u, v });
+      // `rotate` is specified in SCREEN-space CCW degrees. A Top projection
+      // maps world +Z to screen-down (no vertical inversion), so its world-
+      // plane rotation needs the opposite sign to preserve that UI contract.
+      const screenSpaceRotation = invertV ? rotate : (360 - rotate) % 360;
+      const [u, v] = rotateProjected(e[axAWorld(axA)] || 0,
+        e[axAWorld(axB)] || 0, screenSpaceRotation);
+      P.push({
+        gi: px.gi,
+        fixKey: c.fixKey,
+        fixtureType: c.fixtureType,
+        group: c.group,
+        style,
+        u,
+        v,
+      });
     }
   }
   if (!P.length) return [];
@@ -728,13 +754,66 @@ function projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, canv
   // the whole panel while he drags. Post-fit, his move is exactly the distance
   // he dragged and nothing else on the panel shifts.
   const off = tweaks.offsets;
-  return P.map((p) => {
+  const base = P.map((p) => ({
+    p,
+    x: ox + (p.u - u0) * scale,
+    y: invertV ? oy + (v1 - p.v) * scale : oy + (p.v - v0) * scale,
+  }));
+
+  // A planar fixture group is one authored visual body. The Titanic TE sign is
+  // two fixture records (A/B) only because of its controller split; rotating
+  // either half must rotate the complete logo around their shared centroid.
+  // Each member persists the SAME offsets.rot value so offsets remains the one
+  // source of truth. A hand-edited mismatch is refused loudly instead of
+  // rendering a torn logo.
+  const groupRotations = new Map();
+  if (tweaks.atomicGroupRotation && off) {
+    const fixturesByGroup = new Map();
+    for (const p of P) {
+      if (!p.group) continue;
+      if (!fixturesByGroup.has(p.group)) fixturesByGroup.set(p.group, new Set());
+      fixturesByGroup.get(p.group).add(p.fixKey);
+    }
+    for (const [group, fixtures] of fixturesByGroup) {
+      if (fixtures.size < 2) continue;
+      const angles = [...fixtures].map((key) => (off[key] && off[key].rot) || 0);
+      if (angles.some((angle) => Math.abs(angle - angles[0]) > 1e-6)) {
+        throw new Error(`[PixelMap] projected group '${group}' has mismatched ` +
+          'offsets.rot values; grouped fixtures must rotate as one body');
+      }
+      if (Math.abs(angles[0]) > 1e-6) groupRotations.set(group, angles[0]);
+    }
+  }
+
+  const centers = new Map();
+  for (const group of groupRotations.keys()) {
+    const members = base.filter(({ p }) => p.group === group);
+    centers.set(group, {
+      x: members.reduce((sum, point) => sum + point.x, 0) / members.length,
+      y: members.reduce((sum, point) => sum + point.y, 0) / members.length,
+    });
+  }
+
+  return base.map(({ p, x, y }) => {
     const d = off && off[p.fixKey];
+    const groupAngle = groupRotations.get(p.group) || 0;
+    if (groupAngle) {
+      const center = centers.get(p.group);
+      const rad = groupAngle * Math.PI / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      const dx = x - center.x, dy = y - center.y;
+      x = center.x + dx * cos - dy * sin;
+      y = center.y + dx * sin + dy * cos;
+    }
+    const localAngle = d ? (d.rot || 0) : 0;
+    const washAngle = p.style.effect === 'upwash' ? (tweaks.washAngle || 0) : 0;
     return {
       gi: p.gi, fixKey: p.fixKey,
-      cx: ox + (p.u - u0) * scale + (d ? d.dx : 0),
-      cy: oy + (v1 - p.v) * scale + (d ? d.dy : 0), // flip: world up → screen up
-      sizeX: p.style.sizeX, sizeY: p.style.sizeY, shape: p.style.shape, rot: 0,
+      cx: x + (d ? d.dx : 0),
+      cy: y + (d ? d.dy : 0),
+      sizeX: p.style.sizeX, sizeY: p.style.sizeY, shape: p.style.shape,
+      effect: p.style.effect,
+      rot: p.style.effect === 'upwash' || groupAngle ? washAngle + localAngle : 0,
     };
   });
 }
@@ -757,7 +836,7 @@ export function expandPanel(panelDef, clusters, batchList, placements, typeOverr
   // elsewhere (pixel_map_views.validatePanelDef).
   const rotate = (panelDef && panelDef.rotate) || 0;
   if (layout === 'spatial') {
-    const [axA, axB] = planeAxes((panelDef && panelDef.projection) || 'top');
+    const [axA, axB, invertV] = planeAxes((panelDef && panelDef.projection) || 'top');
     // `compress` / `expandPitch` are the two operator-ordered departures from the
     // true projection (2026-07-30). They ride ONLY on `spatial`, where the axes
     // are real world axes and the change is explainable; the schema rejects them
@@ -766,14 +845,22 @@ export function expandPanel(panelDef, clusters, batchList, placements, typeOverr
       panelId: (panelDef && panelDef.id) || 'panel',
       compress: panelDef && panelDef.compress,
       expandPitch: panelDef && panelDef.expandPitch,
+      washAngle: panelDef && panelDef.washAngle,
       offsets,
     };
-    return projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, W, H, 'fit', rotate, tweaks);
+    return projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, W, H,
+      'fit', rotate, tweaks, invertV);
   }
   if (layout === 'planar') {
     const [axA, axB] = bestTwoAxes(panelPixelWorld(clusters, batchList));
-    return projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, W, H, 'cell', rotate,
-      { panelId: (panelDef && panelDef.id) || 'panel', offsets });
+    const scaleMode = panelDef && panelDef.fit ? 'fit' : 'cell';
+    return projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, W, H, scaleMode, rotate,
+      {
+        panelId: (panelDef && panelDef.id) || 'panel',
+        atomicGroupRotation: true,
+        washAngle: panelDef && panelDef.washAngle,
+        offsets,
+      });
   }
   // radial | lanes → per-fixture anchor + local-line expansion (editable).
   const out = [];

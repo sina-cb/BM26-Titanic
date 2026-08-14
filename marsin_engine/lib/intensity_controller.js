@@ -1,3 +1,5 @@
+import { LiveBrightnessController } from './live_brightness_controller.js';
+
 /**
  * IntensityController
  *
@@ -26,6 +28,7 @@ export class IntensityController {
     // When the envelope first went below full, for the hold watchdog in
     // tickArmFade. null whenever it is at full.
     this._armFadeHeldSinceMs = null;
+    this.liveBrightness = new LiveBrightnessController();
   }
 
   setSectionBrightness(sectionId, val) {
@@ -34,6 +37,19 @@ export class IntensityController {
 
   setBlackout(state) {
     this.blackoutActive = !!state;
+  }
+
+  /**
+   * Apply transient Live Touch factors to the Live Touch surface buffer only.
+   * The layer router calls this before its shared crossfade. The final apply()
+   * below remains the one post-blend Dimmer Rack/blackout authority stage.
+   */
+  applyLiveBrightness(pixels) {
+    this.liveBrightness.apply(pixels);
+  }
+
+  applyLiveBrightnessBuffer(buffer6ch, modelPixels) {
+    this.liveBrightness.applyBuffer(buffer6ch, modelPixels);
   }
 
   /**
@@ -141,6 +157,19 @@ export class IntensityController {
         pixels[i].u = 0;
       }
       return;
+    }
+
+    // Clamp the creative composite BEFORE authority scaling. Without this, an
+    // additive layer at 2.0 multiplied by a 30% rack setting would emit 60%,
+    // so the rack would be a multiplier rather than an absolute ceiling.
+    for (let i = 0; i < pixels.length; i++) {
+      const px = pixels[i];
+      px.r = Math.max(0, Math.min(1, px.r));
+      px.g = Math.max(0, Math.min(1, px.g));
+      px.b = Math.max(0, Math.min(1, px.b));
+      px.w = Math.max(0, Math.min(1, px.w));
+      px.a = Math.max(0, Math.min(1, px.a));
+      px.u = Math.max(0, Math.min(1, px.u));
     }
 
     // 2. THE ARM ENVELOPE.

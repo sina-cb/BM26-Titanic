@@ -207,7 +207,7 @@ export class TimelineService {
    *
    * `deps` covers everything the old actions.js / engine_link.js did, but as
    * direct in-engine calls (all may be async):
-   *   loadPlaylist({ target, name })        — load a playlist onto a target
+   *   loadPlaylist({ target, name, entryId? }) — load a playlist, optionally at one exact entry
    *   setAutopilot({ target, state })        — set autopilot on a target ({active, delay_s, shuffle})
    *   setParams(obj)                         — CPC write (numbers + {h,s,v} palette HSV)
    *   setMaster(value)                       — DECK GRAND MASTER write (the same
@@ -295,6 +295,10 @@ export class TimelineService {
     // tick, so a continuous suppression episode lands ONE wouldFire entry rather
     // than one per tick (a suppressed trigger now stays armed and re-asks).
     this._suppressionEpisode = new Map();
+    // Runtime-only relative-time cue sequence. Never persisted: an engine
+    // restart must not revive a stale delayed deck change.
+    this._activeSequence = null;
+    this._lastSequence = null;
     this.sunCache = { dayKey: null, events: null };
     this._tickHandle = null;
     this._ticking = false;      // re-entrancy guard for the async tick
@@ -388,6 +392,7 @@ export class TimelineService {
   }
 
   stop() {
+    this._cancelSequence('engine stopped');
     if (this._tickHandle) {
       clearInterval(this._tickHandle);
       this._tickHandle = null;
@@ -502,8 +507,8 @@ export class TimelineService {
     };
   }
 
-  async _loadPlaylistOnTarget(target, name, steps) {
-    await this.deps.loadPlaylist({ target, name });
+  async _loadPlaylistOnTarget(target, name, steps, entryId = null) {
+    await this.deps.loadPlaylist({ target, name, entryId });
     steps.push(target.kind === 'deck'
       ? `deck ← playlist "${name}"`
       : `mixer:${target.id} ← playlist "${name}"`);
@@ -718,19 +723,104 @@ export class TimelineService {
    * — the party cue is authored as a look, and a blanket override would silently
    * rewrite unrelated `playlist` cues.
    */
+  _cancelSequence(reason) {
+    if (!this._activeSequence) return false;
+    const active = this._activeSequence;
+    this._lastSequence = {
+      cueId: active.cueId,
+      status: 'cancelled',
+      reason,
+      startedAtMs: active.startedAtMs,
+      endedAtMs: this.nowFn(),
+      completedSteps: active.nextIndex,
+      totalSteps: active.steps.length,
+    };
+    this._activeSequence = null;
+    return true;
+  }
+
+  _startSequence(action, cueId, steps) {
+    this._cancelSequence('replaced by a newly fired sequence');
+    this._activeSequence = {
+      cueId,
+      startedAtMs: this.nowFn(),
+      steps: action.steps,
+      nextIndex: 0,
+    };
+    this._lastSequence = null;
+    steps.push(`sequence "${cueId || 'anonymous'}" started (${action.steps.length} steps)`);
+  }
+
+  async _advanceSequence(now, appliedSteps = []) {
+    while (this._activeSequence) {
+      const active = this._activeSequence;
+      const step = active.steps[active.nextIndex];
+      if (!step) {
+        this._lastSequence = {
+          cueId: active.cueId,
+          status: 'completed',
+          reason: null,
+          startedAtMs: active.startedAtMs,
+          endedAtMs: now,
+          completedSteps: active.steps.length,
+          totalSteps: active.steps.length,
+        };
+        this._activeSequence = null;
+        return;
+      }
+      const dueAtMs = active.startedAtMs + step.afterSec * 1000;
+      if (now < dueAtMs) return;
+      const stepIndex = active.nextIndex;
+      active.nextIndex += 1;
+      try {
+        const result = await this._applyAction(step.action, {
+          cueId: active.cueId,
+          sequenceStep: true,
+        });
+        appliedSteps.push(`sequence step ${stepIndex + 1}/${active.steps.length} @ ${step.afterSec}s`);
+        if (result && Array.isArray(result.steps)) appliedSteps.push(...result.steps);
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        this._lastSequence = {
+          cueId: active.cueId,
+          status: 'failed',
+          reason: message,
+          startedAtMs: active.startedAtMs,
+          endedAtMs: now,
+          completedSteps: stepIndex,
+          totalSteps: active.steps.length,
+        };
+        this._activeSequence = null;
+        if (active.cueId) this.cueErrors[active.cueId] = `sequence step ${stepIndex + 1}: ${message}`;
+        this.lastError = `sequence "${active.cueId || 'anonymous'}" step ${stepIndex + 1}: ${message}`;
+        throw error;
+      }
+    }
+  }
+
   async _applyAction(action, opts = {}) {
     if (!action || typeof action !== 'object') throw new Error('applyAction: action must be an object');
+    if (this._activeSequence && !opts.sequenceStep && action.type !== 'sequence'
+        && await this._actionDrivesDeck(action)) {
+      this._cancelSequence('superseded by another deck action');
+    }
     const steps = [];
     switch (action.type) {
       case 'playlist': {
         const targets = await this._resolveTargets(action.target);
         const onDeck = targets.some((t) => t.kind === 'deck');
+        if (action.palette) {
+          await this.deps.setParams(this._resolvePalette(action.palette));
+          steps.push(`cue palette "${action.palette}"`);
+        }
         // Deck transition + overlays are validated DECK-ONLY (show_plan.js), so
         // they only ever apply when a deck target is in play. Configure the
         // transition BEFORE the load so the swap that loads the playlist uses
         // the requested style/duration (docs/38 §16.9).
         if (action.transition && onDeck) await this._applyDeckTransition(action.transition, steps);
-        for (const target of targets) await this._loadPlaylistOnTarget(target, action.name, steps);
+        for (const target of targets) {
+          await this._loadPlaylistOnTarget(target, action.name, steps, action.entryId || null);
+        }
         if (action.overlays && onDeck) await this._applyDeckOverlays(action.overlays, steps);
         if (action.autopilot) {
           for (const target of targets) await this._setAutopilotOnTarget(target, action.autopilot, steps);
@@ -752,6 +842,14 @@ export class TimelineService {
         // The plan is driving the DECK → pin engine output to the deck (docs/38
         // §16.9). Reuses the existing viewOverride machinery via the injected dep.
         if (onDeck) await this._forceDeckView(steps);
+        break;
+      }
+      case 'sequence': {
+        if (opts.sequenceStep) {
+          throw new Error('nested sequence actions are not supported');
+        }
+        this._startSequence(action, opts.cueId || null, steps);
+        await this._advanceSequence(this.nowFn(), steps);
         break;
       }
       case 'look': {
@@ -793,6 +891,12 @@ export class TimelineService {
   // same way _resolveTargets does, including a 'look' action's own look.target.
   async _actionDrivesDeck(action) {
     if (!action || typeof action !== 'object') return false;
+    if (action.type === 'sequence') {
+      for (const step of action.steps || []) {
+        if (await this._actionDrivesDeck(step.action)) return true;
+      }
+      return false;
+    }
     if (action.type === 'look') {
       const look = this.plan && this.plan.looks ? this.plan.looks[action.look] : undefined;
       if (!look) return false;
@@ -1554,6 +1658,7 @@ export class TimelineService {
     const cue = this.plan.cues.find((c) => c.id === cueId);
     if (!cue) throw new Error(`cue "${cueId}" not in active plan`);
     const result = await this._applyAction(cue.action, {
+      cueId: cue.id,
       playlistOverride: this._partyPlaylistOverrideFor(cue),
     });
     // Open/clear the deck-ownership window for the default-cue fallback (§16.11).
@@ -1777,6 +1882,7 @@ export class TimelineService {
     const cue = this.plan.cues.find((c) => c.id === act.cueId);
     if (!cue) throw new Error(`cue "${act.cueId}" not in active plan`);
     const result = await this._applyAction(act.action, {
+      cueId: act.cueId,
       playlistOverride: this._partyPlaylistOverrideFor(cue),
     });
     // Open/clear the deck-ownership window for the default-cue fallback (§16.11).
@@ -2118,6 +2224,7 @@ export class TimelineService {
       // Nothing below runs, so no cue fires, no lock raises, no takeover arms —
       // only the timeline tab's inFestivalWindow=false note remains.
       if (!this._inFestivalWindow()) {
+        this._cancelSequence('timeline left the festival window');
         await this._goDormant();
         // A scene action inside a dep could have torn the service down.
         if (this._tickHandle === null) return;
@@ -2128,6 +2235,17 @@ export class TimelineService {
         }
         this._broadcastState();
         return;
+      }
+
+      // Relative-time event sequences run on the service's injected clock.
+      // Due steps execute before ordinary cue evaluation for this tick; a
+      // failure is surfaced and cancels all later steps.
+      if (this._activeSequence) {
+        try {
+          await this._advanceSequence(now);
+        } catch (e) {
+          console.warn(`  [timeline] sequence failed: ${e && e.message}`);
+        }
       }
 
       // Operator-takeover lease auto-release (docs/38 §16): if the operator
@@ -2430,6 +2548,7 @@ export class TimelineService {
         controller: 'autopilot', planActive: false, forcingDeckView: false,
         inFestivalWindow: this._inFestivalWindow(), festivalStartsInDays: festivalStartsInDays(this.plan, now),
         autopilotEnabled: true, activeProgram: null, activeCue: null,
+        activeSequence: null, lastSequence: null,
         pendingProgram: null, operatorLease: null, operatorLeaseSec: this.operatorLeaseSec,
         zoom: null,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
@@ -2537,6 +2656,23 @@ export class TimelineService {
       };
     }
 
+    let activeSequence = null;
+    if (this._activeSequence) {
+      const sequence = this._activeSequence;
+      const nextStep = sequence.steps[sequence.nextIndex] || null;
+      const nextAtMs = nextStep
+        ? sequence.startedAtMs + nextStep.afterSec * 1000
+        : now;
+      activeSequence = {
+        cueId: sequence.cueId,
+        startedAtMs: sequence.startedAtMs,
+        nextStepIndex: sequence.nextIndex,
+        totalSteps: sequence.steps.length,
+        nextAtMs,
+        nextInSec: Math.max(0, (nextAtMs - now) / 1000),
+      };
+    }
+
     // activeCue — the EVENT currently driving the deck, for the operator to see
     // at a glance on the timeline tab AND inside the deck/mixer lock banner
     // (operator request 2026-07-02: "when an event is active, clearly show it").
@@ -2581,6 +2717,8 @@ export class TimelineService {
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
       activeCue,
+      activeSequence,
+      lastSequence: this._lastSequence,
       pendingProgram,
       operatorLease,
       operatorLeaseSec: this.operatorLeaseSec,
@@ -2938,6 +3076,7 @@ export class TimelineService {
     // plan in place (the event ring is PRESERVED — unlike activatePlan) and
     // catchUp so cue windows / baseline re-derive from the new content.
     if (normalized.name === this.activePlan) {
+      this._cancelSequence('active plan was updated');
       this.plan = normalized;
       this._lintActivePlan();   // FIX 4 (_98): re-surface authoring findings on every save
       this._recordLifecycle(`Plan updated (live): ${normalized.name}`, 'save', { source: 'manual' });
@@ -2959,6 +3098,7 @@ export class TimelineService {
     this._assertPlanName(name);
     const planPath = this._planPath(name);
     if (!fs.existsSync(planPath)) throw new Error(`plan "${name}" not found in ${this.sceneDir}`);
+    this._cancelSequence('another plan was activated');
     this.plan = loadShowPlan(planPath);
     this.activePlan = name;
     this._lintActivePlan();     // FIX 4 (_98): authoring findings for the incoming plan
@@ -3062,6 +3202,7 @@ export class TimelineService {
     if (!this._inFestivalWindow()) {
       return { ok: true, operatorLease: null, zoom: null };
     }
+    this._cancelSequence('operator takeover');
     const expiresAtMs = this.nowFn() + this.operatorLeaseSec * 1000;
     // Event log (docs/38 §15.2): the ARM edge only — takeover() is idempotent
     // and CaptainPad re-calls it to refresh the lease; refreshes log nothing.

@@ -149,6 +149,13 @@ const COMPANIONS = {
     label: 'Audio Companion',
     waitMs: 60000,
     healthPath: '/',
+    // `--host 0.0.0.0` is EXPLICIT here on purpose. The Companion binds
+    // loopback by DEFAULT (its unauthenticated WS surface retunes the live
+    // show, so an open bind on every interface is not a safe default), and
+    // the show rig needs it reachable from the operator's iPad / laptop on
+    // the camp LAN. The production boot path states that intent instead of
+    // inheriting it from a permissive default. Behaviour here is unchanged.
+    extraArgs: (opts) => ['--model', opts.scene, '--host', '0.0.0.0'],
   },
 };
 

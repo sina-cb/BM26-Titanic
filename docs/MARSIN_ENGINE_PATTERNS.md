@@ -7,6 +7,9 @@ For the formal grammar, syntax rules, and standard functions of the programming
 language, see [`MARSIN_PB_LANG_SPEC.md`](MARSIN_PB_LANG_SPEC.md).
 For palette/surface guidance on the physical ship, see
 [`COLOR_THEORY.md`](COLOR_THEORY.md).
+For the current audio-signal catalog, temporal semantics, microphone
+calibration, and optimizer guidance, see
+[`AUDIO_SIGNALS.md`](AUDIO_SIGNALS.md).
 
 > **How to read this document.** Everything is sorted into three tiers, and the
 > tier is always stated. Do not promote one to another.

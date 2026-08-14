@@ -5,7 +5,7 @@
   pixels under that point light up, leaving a trail that cools behind them.
 
   WHY IT IS AN EFFECT AND NOT A PATTERN (this is the whole reason the file
-  exists). The same idea already exists as pattern 68_spatial_paint, riding that
+  exists). The same idea already exists as pattern 130_spatial_paint, riding that
   pattern's own local sliders — because, as its header says, "the engine exposes
   NO positional parameter; its spatial concept is view/group masks, not
   Cartesian space". That works, and it is dead on all 200+ other patterns, and
@@ -21,7 +21,7 @@
   not an altitude; including ny would make a deck light and the rail above it
   respond differently to the same touch, which reads as the surface being
   broken. Distance is measured in the nx/nz plane only — the same choice
-  68_spatial_paint made and for the same reason.
+  130_spatial_paint made and for the same reason.
 
   SQUARED DISTANCE, NO sqrt. Measured previously on this rig: the sqrt version
   never lit the pool at any radius. Compare d2 against r2 instead.
@@ -29,7 +29,7 @@
   ERASE GOES ALL THE WAY OFF (operator ruling) so the stroke can be used for
   wipes and swipes across the map. That is deliberately NOT a breach of the
   never-black invariant, which is about the ship going dark by ACCIDENT: this
-  darkening is local to the brush, decays back on the FADE half-life with no
+  darkening is local to the brush, clears on the selected FADE duration with no
   further input, and only exists while a panel is armed. See ERASE_FLOOR.
 
   THE STROKE CARRIES ITS OWN HOT CORE, and this is the difference between the
@@ -56,6 +56,8 @@
 
 /** Modes the stroke can drive. Kept as strings so the library presets read. */
 export const SPATIAL_MODES = Object.freeze(['pool', 'trail', 'erase', 'ignite']);
+export const SPATIAL_AXIS_PAIRS = Object.freeze(['nx:nz', 'nx:ny', 'ny:nz', 'nz:ny']);
+export const SPATIAL_FADE_SECONDS = Object.freeze([0.1, 0.5, 1, 1.5]);
 
 /**
  * Strength of the unsaturated core the stroke adds on the WHITE channel — the
@@ -78,7 +80,7 @@ const CORE_WHITE = 0.75;
  * envelope, a persisted zero master. This is none of those. It is safe because
  * it is all three of:
  *   LOCAL      — bounded by the brush radius; pixels outside it are untouched.
- *   TRANSIENT  — driven by heat, which decays on the FADE half-life, so the
+ *   TRANSIENT  — driven by heat, which reaches zero on the FADE duration, so the
  *                hull comes back on its own with no further input.
  *   OWNED      — it only runs while a panel is armed, and disarm clears the
  *                stroke and its heat (see releaseControl in the wire).
@@ -99,6 +101,10 @@ const ERASE_FLOOR = 0;
  * @param {number}      [args.prevX]    Previous centre nx — the brush paints the
  *                                      SEGMENT prev->target, not just the point.
  * @param {number}      [args.prevY]    Previous centre nz.
+ * @param {Array}       [args.strokes]  Active independent brush segments. Each
+ *                                      item carries targetX/targetY and optional
+ *                                      prevX/prevY/color/colorAlt. When present,
+ *                                      these replace the legacy single segment.
  * @param {number}       args.radius    Pool radius in normalised units, >0.
  * @param {number}       args.amount    0..1 overall strength.
  * @param {boolean}      args.touch     True while the finger is DOWN (painting).
@@ -110,13 +116,12 @@ const ERASE_FLOOR = 0;
  *                                      read against a hull already wearing the
  *                                      operator's own colour. Falls back to
  *                                      color6 when absent.
- * @param {number}       args.decay     Per-frame heat multiplier (0..1], from a
- *                                      wall-clock half-life computed by the caller.
+ * @param {number}       args.fadeStep  Linear heat removed this frame (dt / seconds).
  * @returns {number} mean heat this frame — the caller uses it for IGNITE.
  */
 export function applySpatialPaint({
   pixels, heat, ink, targetX, targetY, prevX, prevY, radius, radiusY, amount,
-  touch, mode, color6, colorAlt, decay,
+  touch, strokes, mode, color6, colorAlt, fadeStep, axisX, axisY, pixelMask,
 }) {
   if (!Array.isArray(pixels)) throw new Error('applySpatialPaint: pixels array is required');
   if (!(heat instanceof Float32Array)) throw new Error('applySpatialPaint: heat must be a Float32Array');
@@ -128,6 +133,13 @@ export function applySpatialPaint({
   }
   if (!Array.isArray(color6) || color6.length < 6) {
     throw new Error('applySpatialPaint: color6 must be a 6-element array');
+  }
+  if (SPATIAL_AXIS_PAIRS.indexOf(`${axisX}:${axisY}`) === -1) {
+    throw new Error(`applySpatialPaint: unsupported axis pair '${axisX}:${axisY}'`);
+  }
+  if (pixelMask !== undefined &&
+      (!(pixelMask instanceof Uint8Array) || pixelMask.length < pixels.length)) {
+    throw new Error('applySpatialPaint: pixelMask must cover every model pixel');
   }
   /* POWER CAN OVERDRIVE PAST 100% — operator ruling: "the effects dont hit hard
      enough". It was capped at 1, so the strongest stroke available could only
@@ -151,10 +163,13 @@ export function applySpatialPaint({
      radiusY absent this reduces exactly to the old circular brush. */
   const rx = radius > 0 ? radius : 0.0001;
   const ry = (typeof radiusY === 'number' && radiusY > 0) ? radiusY : rx;
-  const tx = targetX < 0 ? 0 : (targetX > 1 ? 1 : targetX);
-  const ty = targetY < 0 ? 0 : (targetY > 1 ? 1 : targetY);
-  const dec = decay < 0 ? 0 : (decay > 1 ? 1 : decay);
-  const painting = !!touch;
+  const fade = Number.isFinite(fadeStep) ? Math.max(0, fadeStep) : 0;
+  if (strokes !== undefined && !Array.isArray(strokes)) {
+    throw new Error('applySpatialPaint: strokes must be an array when supplied');
+  }
+  if (Array.isArray(strokes) && strokes.length > 10) {
+    throw new Error('applySpatialPaint: strokes supports at most 10 simultaneous touches');
+  }
 
   const isErase = mode === 'erase';
   const keepsTrail = mode !== 'pool';   // pool shows only the live brush
@@ -166,8 +181,7 @@ export function applySpatialPaint({
      itself and reading as nothing. The opposite hue is the one colour that is
      guaranteed to show against what the operator has already chosen.
      TRAIL and ERASE keep the ink (ERASE ignores colour entirely). */
-  const alt = (Array.isArray(colorAlt) && colorAlt.length >= 6) ? colorAlt : color6;
-  const paintCol = (mode === 'pool') ? alt : color6;
+  const defaultAlt = (Array.isArray(colorAlt) && colorAlt.length >= 6) ? colorAlt : color6;
 
   /* PER-PIXEL COLOUR MEMORY — what makes the trail COLOUR-RELATED.
      The operator wanted to change colour BY PAINTING, so the stroke walks the
@@ -185,7 +199,7 @@ export function applySpatialPaint({
      pad. Purely additive light can only ever brighten, so a cooling trail never
      read as switching anything off; it just stopped adding. Blending toward the
      colour by the same heat that drives the pad's ink means the ship follows the
-     pad's trail in lockstep — both use the identical half-life curve. */
+     pad's trail in lockstep — both use the identical linear time-to-zero curve. */
   const asserts = (mode === 'trail');
 
   // ── THE BRUSH IS A SEGMENT, NOT A POINT ─────────────────────────────────
@@ -196,36 +210,80 @@ export function applySpatialPaint({
   // instead of a stroke. Sweeping the disc along prev->target instead makes the
   // trail continuous at ANY sample rate, including one sample per stroke, and
   // costs one dot product per pixel rather than a loop of sub-steps.
-  const hasSeg = typeof prevX === 'number' && Number.isFinite(prevX)
-              && typeof prevY === 'number' && Number.isFinite(prevY);
-  const ax = hasSeg ? (prevX < 0 ? 0 : (prevX > 1 ? 1 : prevX)) : tx;
-  const ay = hasSeg ? (prevY < 0 ? 0 : (prevY > 1 ? 1 : prevY)) : ty;
-  /* Normalise BOTH the segment and the pixel offsets by the per-axis radius, so
-     "distance" below is measured in brush-radii rather than world units. That
-     makes the swept shape a true ellipse along its whole length, not a circle
-     that quietly stretches at the ends. */
-  const sx = (tx - ax) / rx;
-  const sy = (ty - ay) / ry;
-  const segLen2 = sx * sx + sy * sy;
+  const sourceStrokes = Array.isArray(strokes)
+    ? strokes
+    : [{ targetX, targetY, prevX, prevY, color: color6, colorAlt: defaultAlt }];
+  const painting = !!touch && sourceStrokes.length > 0;
+  const brushSegments = painting ? sourceStrokes.map((stroke, index) => {
+    if (!stroke || typeof stroke !== 'object') {
+      throw new Error(`applySpatialPaint: strokes[${index}] must be an object`);
+    }
+    const sxTarget = stroke.targetX;
+    const syTarget = stroke.targetY;
+    if (!Number.isFinite(sxTarget) || sxTarget < 0 || sxTarget > 1 ||
+        !Number.isFinite(syTarget) || syTarget < 0 || syTarget > 1) {
+      throw new Error(`applySpatialPaint: strokes[${index}] target must be within [0,1]`);
+    }
+    const hasPrevX = typeof stroke.prevX === 'number' && Number.isFinite(stroke.prevX);
+    const hasPrevY = typeof stroke.prevY === 'number' && Number.isFinite(stroke.prevY);
+    if (hasPrevX !== hasPrevY ||
+        (hasPrevX && (!Number.isFinite(stroke.prevX) || stroke.prevX < 0 || stroke.prevX > 1 ||
+                      !Number.isFinite(stroke.prevY) || stroke.prevY < 0 || stroke.prevY > 1))) {
+      throw new Error(`applySpatialPaint: strokes[${index}] previous target is invalid`);
+    }
+    const strokeColor = Array.isArray(stroke.color) && stroke.color.length >= 6
+      ? stroke.color : color6;
+    const strokeAlt = Array.isArray(stroke.colorAlt) && stroke.colorAlt.length >= 6
+      ? stroke.colorAlt : defaultAlt;
+    const tx = sxTarget;
+    const ty = syTarget;
+    const ax = hasPrevX ? stroke.prevX : tx;
+    const ay = hasPrevY ? stroke.prevY : ty;
+    /* Normalise BOTH the segment and the pixel offsets by the per-axis radius,
+       so distance is measured in brush-radii. Each finger owns one segment;
+       no segment is ever synthesized between two fingers. */
+    const sx = (tx - ax) / rx;
+    const sy = (ty - ay) / ry;
+    return {
+      ax, ay, sx, sy, segLen2: sx * sx + sy * sy,
+      paintCol: mode === 'pool' ? strokeAlt : strokeColor,
+    };
+  }) : [];
 
   let sum = 0;
   const n = pixels.length;
   for (let i = 0; i < n; i++) {
+    if (pixelMask && pixelMask[i] !== 1) {
+      heat[i] = 0;
+      continue;
+    }
     const px = pixels[i];
 
     // ── how strongly is this pixel under the brush RIGHT NOW ──────────────
     // Distance to the nearest point of the swept segment. With segLen2 == 0
     // this reduces exactly to the old point-distance, so a stationary finger
     // behaves as before.
-    const pxn = px.nx || 0;
-    const pzn = px.nz || 0;
-    let dx = (pxn - ax) / rx;
-    let dz = (pzn - ay) / ry;
-    if (segLen2 > 0) {
-      let t = (dx * sx + dz * sy) / segLen2;
-      if (t < 0) t = 0; else if (t > 1) t = 1;
-      dx -= sx * t;
-      dz -= sy * t;
+    const pxn = px[axisX] ?? 0;
+    const pyn = px[axisY] ?? 0;
+    let brush = 0;
+    let paintCol = color6;
+    for (let strokeIndex = 0; strokeIndex < brushSegments.length; strokeIndex++) {
+      const segment = brushSegments[strokeIndex];
+      let dx = (pxn - segment.ax) / rx;
+      let dy = (pyn - segment.ay) / ry;
+      if (segment.segLen2 > 0) {
+        let t = (dx * segment.sx + dy * segment.sy) / segment.segLen2;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        dx -= segment.sx * t;
+        dy -= segment.sy * t;
+      }
+      if (dx * dx + dy * dy < 1) {
+        brush = 1;
+        /* Last item wins only where heads overlap. Input order is stable, so
+           overlap colour is deterministic while disjoint fingers stay wholly
+           independent. */
+        paintCol = segment.paintCol;
+      }
     }
     // HARD EDGE, BY OPERATOR RULING: "the ring around the dot should affect any
     // led inside the ring". It used to fall off as f*f, so only the exact centre
@@ -233,15 +291,11 @@ export function applySpatialPaint({
     // rig did not keep — an erase inside the ring only half-erased, and a stroke
     // inside it only half-lit. Inside is inside.
     // Everything within one brush-radius on both axes: inside is inside.
-    const d2 = dx * dx + dz * dz;
-    const brush = d2 < 1 ? 1 : 0;
-
     // ── heat: decay first, then stamp, so a pixel under the finger is full
     //    even on the frame it is painted ────────────────────────────────────
-    let h = heat[i] * dec;
+    let h = Math.max(0, heat[i] - fade);
     const restamped = painting && brush > h;
     if (restamped) h = brush;
-    if (h < 0.002) h = 0;               // stop denormal crawl
     heat[i] = h;
     sum += h;
 

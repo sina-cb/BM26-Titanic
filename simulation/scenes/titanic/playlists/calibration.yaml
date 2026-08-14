@@ -91,3 +91,18 @@ entries:
     notes: >-
       Channel selects red, green, blue, matched W+A white, UV, then RGB white.
       Use this to verify emitter capability and channel order.
+  - id: e_calibration_8_74_calibration_bpm_ruler
+    pattern: 74_calibration_bpm_ruler
+    label: 09 — Global SPEED / BPM Ruler
+    defaults:
+      sliderPhaseOffset: 0.11
+      sliderWidth: 0.28
+      sliderLevel: 0.8
+      sliderBackground: 0.18
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Turn global Sync off. The cyan runner crosses one four-beat bar and the
+      warm-white flash marks beat one. At SPEED 0.50 it matches 120 BPM. Align
+      Phase Offset once, then adjust only global SPEED. Expected fader points:
+      60 BPM 0.250, 90 BPM 0.396, 120 BPM 0.500, 150 BPM 0.580, 180 BPM 0.646.

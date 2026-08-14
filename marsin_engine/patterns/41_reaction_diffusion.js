@@ -25,12 +25,10 @@
   toward cp2 (hot coral), so the rig always shows BOTH colours at once and the
   two-colour gate is met with room to spare (cp1/cp2 ~0.55 apart on the wheel).
 
-  HIGH-DEF + BRIGHT: reaction fronts are lifted hard so a musical peak burns a
-  channel well past 200 (mission-critical visibility); the resting substrate is
-  near-dark so fronts read as crisp coral filaments on near-black. A faint,
-  slow time-based shimmer on cp1 keeps the rig calm-but-alive in silence (codex
-  P0 — never fully black). The buffer is clamped every frame so the reaction can
-  neither blow up nor die to all-black.
+  FIXTURE COMPOSITION: bars carry the broad chemistry, raw strands trace its
+  contours, Vintage fixtures catch sparse matched-W/A nuclei, pars hold a warm
+  root pulse, and TE signs keep a stable substrate. Targeting uses portable
+  FIX_* capability only; unknown fixture roles retain the generic chemistry.
 
   IRRATIONAL RATIOS (no integer periods) — equation in one line:
     diffusion weights wU = 1/SQRT2 = 0.70711 , wV = 1/SQRT3 = 0.57735 ;
@@ -40,12 +38,11 @@
 
   CONTROLS (declaration order = UI order)
     - localSpeed : reaction step rate (how fast the chemistry crawls).
-    - level      : overall output brightness / gain. PRIMARY audio hook —
-                   MODULATE micLow -> bass lifts total brightness (corr>=0.5).
+    - level      : direct uniform final RGB/W/A gain. PRIMARY audio hook.
     - feed       : Gray-Scott feed rate — RESHAPES the pattern (spots<->stripes).
                    MODULATE micMid -> mids reshape the reaction (2nd dimension).
-    - seed       : kick injection amount — a beat drops fresh catalyst into the
-                   buffer. MODULATE micKick -> discrete seed events on the beat.
+    - seed       : rising-edge catalyst trigger. Holding it high never repeats
+                   injection; it must return below the hysteresis threshold.
     - base       : faint resting cp1 floor so still rig is never pure black.
     - colorPalette1/2 : cp1 deep teal (quiet substrate), cp2 hot coral (live
                    front). Reaction blends cp1<->cp2 by catalyst concentration.
@@ -59,6 +56,10 @@
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
+// Canonical append-only optional fixture roles; absent roles match no pixels.
+var FIX_RAW_LED = 1;
+var FIX_TE_SIGN = 7;
+
 export var localSpeed = 0.5;   // reaction step rate
 export var level = 0.5;        // overall brightness / gain (micLow — PRIMARY)
 export var feed = 0.5;         // Gray-Scott feed rate — reshapes (micMid)
@@ -73,7 +74,21 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderLevel(v) { level = v; }   // micLow maps here (PRIMARY)
 export function sliderFeed(v) { feed = v; }     // micMid maps here
-export function sliderSeed(v) { seed = v; }     // micKick maps here
+var seedArmed = 1.0;
+var seedPending = 0.0;
+export function sliderSeed(v) {
+  seed = v;
+  // Hysteresis turns micKick into an event source. One threshold crossing makes
+  // exactly one nucleus; the trigger must return low before it can fire again.
+  if (v >= 0.18) {
+    if (seedArmed > 0.5) {
+      seedPending = v;
+      seedArmed = 0.0;
+    }
+  } else if (v <= 0.08) {
+    seedArmed = 1.0;
+  }
+}
 export function sliderBase(v) { base = v; }     // faint resting cp1 floor
 
 // ── Tunables ────────────────────────────────────────────────────────────────
@@ -141,6 +156,8 @@ var seedPhase = 0.0;        // wandering seed-site phase (golden-angle advance)
 var faintPhase = 0.0;       // slow phase for the silent-base shimmer
 var stepClock = 0.0;        // accumulates time toward the next reaction sub-step
 var feedExp = 2.0;          // resolved coral-front concentration exponent this frame (micMid -> geometry)
+var seedFlash = 0.0;        // short visible life of the most recent edge event
+var seedSite = 0;           // guarded lane cell hit by the most recent event
 
 // Inject a small patch of catalyst (and deplete substrate) at a cell — this is
 // how a kick "drops" a fresh reaction into the buffer. Soft 3-cell footprint so
@@ -187,15 +204,19 @@ export function beforeRender(delta) {
   faintPhase = faintPhase + dt * 0.18 * localMult;
   faintPhase = faintPhase - floor(faintPhase);
 
-  // ── micKick -> seed: a beat drops a fresh catalyst nucleus at a wandering
-  //    site. Discrete event (the 2nd-but-distinct dimension): position chosen
-  //    by golden-angle + phi detune so successive drops never tile. ──
-  if (seed > 0.04) {
+  // micKick -> Seed is a rising-edge event, never continuous injection while
+  // held. The event chooses an irrationally wandering site, mutates the real
+  // reagent buffers once, and leaves a short nucleus flash at that exact cell.
+  if (seedPending > 0.0) {
     var gp = wave(seedPhase * GOLD) * 0.6
            + wave(seedPhase * PHI * SQRT2 + 0.31) * 0.4;
-    var site = floor(gp * (N - 1) + 0.5);
-    injectAt(site, 0.35 + seed * 0.6);
+    seedSite = floor(gp * (N - 1) + 0.5);
+    injectAt(seedSite, 0.28 + seedPending * 0.62);
+    seedFlash = 0.25 + seedPending * 0.75;
+    seedPending = 0.0;
   }
+  seedFlash = seedFlash - dt * 1.35;
+  if (seedFlash < 0.0) seedFlash = 0.0;
 
   // ── Gray-Scott feed rate from `feed` (micMid). Mids push the chemistry
   //    between spot- and stripe-forming regimes -> the pattern RESHAPES, a
@@ -248,49 +269,144 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // RIG-AGNOSTIC: sample the catalyst lane by this pixel's normalized X (0..1),
-  // so the reaction reads across the WHOLE rig on every model (52/970/266/216 px).
-  var li = floor(clamp01(x) * (N - 1) + 0.5);
+  var nx = clamp01(x);
+  var ny = clamp01(y);
+  var nz = clamp01(z);
+  // Rig-agnostic chemistry: every fixture samples the same guarded X lane.
+  var li = floor(nx * (N - 1) + 0.5);
   if (li < 0) li = 0;
   if (li > N - 1) li = N - 1;
-  var conc = bufV[li];       // catalyst concentration at this pixel's X (guarded)
+  var conc = bufV[li];
+  // Project the same living reagent lane through two additional XYZ axes. This
+  // keeps the real Gray-Scott state while turning the former vertical bands
+  // into a model-wide chemical skin with visible cells at playa distance.
+  var liY = floor(clamp01(ny * 0.73 + nz * 0.27) * (N - 1) + 0.5);
+  var liZ = floor(clamp01(nz * 0.61 + (1.0 - nx) * 0.39)
+                * (N - 1) + 0.5);
+  if (liY < 0) liY = 0;
+  if (liY > N - 1) liY = N - 1;
+  if (liZ < 0) liZ = 0;
+  if (liZ > N - 1) liZ = N - 1;
+  var fieldConc = max(conc, bufV[liY] * 0.82);
+  fieldConc = max(fieldConc, bufV[liZ] * 0.68);
+  var leftIndex = li - 1;
+  var rightIndex = li + 1;
+  if (leftIndex < 0) leftIndex = 0;
+  if (rightIndex > N - 1) rightIndex = N - 1;
+  var contour = abs(bufV[rightIndex] - bufV[leftIndex]);
 
-  // ── Faint resting cp1 wash so the still rig is never pure black (P0).
-  //    Slow, per-pixel-phased shimmer so it reads "alive" not "stuck". The
-  //    `level` (micLow) term lifts this teal floor the SAME frame the bass
-  //    changes (lag-free) on EVERY pixel — this uniform component is what makes
-  //    the rig's total brightness track micLow tightly (the PRIMARY corr). It
-  //    rides strictly on cp1 so it does not pollute the reaction's coral hue. ──
-  var faint = (base + level * 0.34) * (0.10 + 0.90 * wave(faintPhase + x * 1.7));
+  // Feed remains a chemistry/geometry control: it changes the actual equation
+  // and this lag-free concentration exponent, never the final gain.
+  var concShaped = pow(clamp01(fieldConc), feedExp);
+  var shimmer = 0.24 + wave(faintPhase + x * 1.7 + y * 0.13) * 0.76;
+  // A readable substrate keeps the complete ship visible even when the
+  // chemistry enters a quiet regime; Base still owns its strength.
+  var substrate = 0.040 + base * (0.55 + shimmer * 0.45);
+  // Two counter-evolving observation planes expose the 1D reagent as smooth
+  // cellular membranes across XYZ. The real concentration controls their
+  // energy, so this remains chemistry—not a decorative background wave.
+  var skinA = wave(nx * 1.73 + ny * 1.11 - nz * 0.67 + faintPhase);
+  var skinB = wave(-nx * 0.91 + ny * 1.57 + nz * 1.23 - faintPhase);
+  var chemicalSkin = pow(clamp01(1.0 - abs(skinA - skinB)), 3.1)
+                   * (0.10 + concShaped * 0.90);
+  var reaction = concShaped * 1.48 + chemicalSkin * 0.38;
 
-  // ── Reaction layer: catalyst concentration -> brightness, also gained by
-  //    `level` so a live front during loud bass burns a channel hot (peak>200)
-  //    and stays crisp on the dark substrate (high contrast / high def). The
-  //    GEOMETRY of the front (how broad vs tight the lit coral band reads) is
-  //    shaped by feedExp (micMid): pow(conc, feedExp) blooms the front at high
-  //    mids and pinches it to a tight filament at low mids — a lag-free
-  //    geometry dimension that does NOT recolour the rig. ──
-  var concShaped = pow(clamp01(conc), feedExp);
-  var reactBri = concShaped * (0.55 + level * 1.40);
+  // The most recent edge-triggered seed remains visible at the same lane site
+  // briefly, then decays. Holding Seed high cannot refresh this nucleus.
+  var eventDistance = abs(li - seedSite) / (N - 1);
+  var eventNucleus = clamp01(1.0 - eventDistance / 0.065) * seedFlash;
 
-  // Composite: brighter of faint-water vs reaction. Colour follows whichever
-  // dominates — cp1 for the quiet substrate, cp1->cp2 by concentration for the
-  // live front (snaps to coral for any meaningful reaction so fronts read hot).
-  // The hue mapping rides RAW concentration (not the feed-shaped brightness), so
-  // the strong two-colour split is independent of the mid-driven geometry.
-  var tcol = 0.0;
-  var bri = faint;
-  if (reactBri > faint) {
-    bri = reactBri;
-    tcol = clamp01(conc * 6.0);            // any front edge -> coral fast (two-colour)
+  var bri = substrate;
+  var tcol = clamp01(fieldConc * 5.5);
+  var matchedWhite = 0.0;
+  var warmAdd = 0.0;
+
+  if (fixtureType == FIX_BAR_18) {
+    // Bars are the broad main chemical canvas.
+    bri = substrate * 0.58 + reaction * 1.05 + eventNucleus * 0.34;
+  } else if (fixtureType == FIX_RAW_LED) {
+    // Strands trace chemical boundaries rather than duplicating the bar fill.
+    var edge = clamp01(contour * 13.0 + concShaped * 0.13);
+    bri = substrate * 0.46 + edge * 0.86 + eventNucleus * 0.44;
+    tcol = clamp01(0.10 + edge * 0.90);
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    // Sparse golden-white nuclei: deterministic per-pixel selection applied to
+    // real catalyst concentration and the one-shot seed event.
+    var nucleusSelect = pow(wave(index * 0.618034 + li * 0.071), 7.0);
+    var nucleus = nucleusSelect * (concShaped * 0.66 + eventNucleus * 1.25);
+    bri = substrate * 0.38 + reaction * 0.28 + nucleus * 0.48;
+    matchedWhite = nucleus * 0.78;
+    warmAdd = nucleus * 0.34;
+    tcol = clamp01(conc * 3.2);
+  } else if (fixtureType == FIX_PAR) {
+    // Pars hold the warm root pulse beneath the faster chemistry.
+    var rootPulse = concShaped
+      * (0.32 + wave(faintPhase * 0.381966 + x * 0.31) * 0.68);
+    bri = substrate * 0.52 + rootPulse * 0.72 + eventNucleus * 0.42;
+    warmAdd = rootPulse * 0.31 + eventNucleus * 0.24;
+    matchedWhite = rootPulse * 0.10 + eventNucleus * 0.16;
+    tcol = clamp01(0.16 + conc * 3.4);
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity is readable petri glass sampling the REAL reagent lane through
+    // an XYZ + letter-path coordinate. Catalyst nuclei and their concentration
+    // gradients crawl and split in place; nothing translates the texture or
+    // flat-breathes the whole sign.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signCoord = clamp01(nx * 0.47 + ny * 0.23 + nz * 0.17
+                          + signPath * 0.13);
+    var signIndex = floor(signCoord * (N - 1) + 0.5);
+    if (signIndex < 0) signIndex = 0;
+    if (signIndex > N - 1) signIndex = N - 1;
+    var signLeft = signIndex - 1;
+    var signRight = signIndex + 1;
+    if (signLeft < 0) signLeft = 0;
+    if (signRight > N - 1) signRight = N - 1;
+    var signConc = bufV[signIndex];
+    var signGradient = abs(bufV[signRight] - bufV[signLeft]);
+    // Three counter-evolving observation axes reveal the otherwise 1D reagent
+    // as cellular 3D petri geometry. Their composite morphs instead of sliding
+    // as one field; the real catalyst concentration biases where nuclei breed.
+    var signChemA = wave((nx * 0.71 + ny * 1.37 - nz * 0.59) * 2.7
+                       + signPath * 0.31 + faintPhase);
+    var signChemB = wave((nx * 1.19 - ny * 0.47 + nz * 0.83) * 3.1
+                       - signPath * 0.23 - faintPhase);
+    var signChemC = wave((nx * 0.43 + ny * 0.89 + nz * 1.41) * 2.3
+                       + signPath * 0.47 + faintPhase * 2.0);
+    var signPotential = (signChemA + signChemB + signChemC) / 3.0;
+    var signCellA = pow(clamp01(1.0 - abs(signChemA - signChemB)), 3.2);
+    var signCellB = pow(clamp01(1.0 - abs(signChemB - signChemC)), 4.1);
+    var signMembrane = signCellA * 0.58 + signCellB * 0.42;
+    var signNucleus = pow(clamp01((signPotential + signConc * 0.24 - 0.52)
+                                * 3.1), 1.35);
+    var signFront = 1.0 - clamp01(abs(signPotential
+                        - (0.48 + signConc * 0.10)) * 6.2);
+    signFront = signFront * signFront;
+    signNucleus = max(signNucleus,
+      pow(clamp01(signConc * 4.8), 0.78) * 0.46);
+    signFront = max(signFront,
+      pow(clamp01(signGradient * 18.0), 0.72) * 0.42);
+    bri = 0.46 + signMembrane * 0.36 + signNucleus * 0.42
+        + signFront * 0.30
+        + eventNucleus * 0.10;
+    tcol = clamp01(0.04 + signMembrane * 0.34
+                 + signNucleus * 0.52 + signFront * 0.24
+                 + eventNucleus * 0.18);
+  } else {
+    // Portable fallback for a fixture role added after this pattern.
+    bri = substrate * 0.58 + reaction * 0.82 + eventNucleus * 0.38;
   }
 
-  if (bri < BASE_FLOOR) bri = BASE_FLOOR;
   bri = clamp01(bri);
-
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
+  r += warmAdd;
+  g += warmAdd * 0.43;
+  b += warmAdd * 0.05;
 
-  rgb(clamp01(r), clamp01(g), clamp01(b));
+  // Level is deliberately last and uniform across RGB and emitter lanes.
+  var finalGain = clamp01(level);
+  var w = clamp01(matchedWhite) * finalGain;
+  rgbwau(clamp01(r) * finalGain, clamp01(g) * finalGain,
+    clamp01(b) * finalGain, w, w, 0.0);
 }

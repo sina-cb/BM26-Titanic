@@ -28,6 +28,11 @@ import { ChannelParamRouter } from './lib/channel_param_router.js';
 import { startApiServer } from './lib/api_server.js';
 import { ModulationController } from './lib/modulation_controller.js';
 import { IntensityController } from './lib/intensity_controller.js';
+import {
+  applyLayerSettingCreativeBuffer,
+  enforceLiveDimmerAuthority,
+} from './lib/live_touch_creative_processor.js';
+import { LiveTouchSessionContext } from './lib/live_touch_session_context.js';
 import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
 import { ParamCenter } from './lib/param_center.js';
@@ -38,8 +43,9 @@ import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
 import { TempoArbiter } from './lib/tempo_arbiter.js';
 import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
+import { validateAudioAnalysisConfig } from './audio/config/audio_analysis_config.js';
 import {
-  loadSceneAudio, saveSceneAudio,
+  loadSceneAudio, saveSceneAudio, sceneAudioPath,
 } from './audio/config/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
@@ -640,7 +646,8 @@ async function loadModel(modelName, bustCache = false) {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, paramCenter, statsCallback, visConfig, hooks = {}) {
+function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController,
+  globalEffectsController, paramCenter, statsCallback, visConfig, hooks = {}) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -649,6 +656,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   // BEFORE mixer.beginFrame (so modulated control writes participate
   // in this frame's render).
   const beforeFrameHook = typeof hooks.beforeFrame === 'function' ? hooks.beforeFrame : null;
+  const liveTouchSession = hooks.liveTouchSession || null;
   let windowFrames = 0;
   let startTime = 0;
   let lastStatsTime = 0;
@@ -666,6 +674,63 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   let fxMaskIdx = null;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
+  let liveTouchCreativeFrame = false;
+  let liveTouchParticipatedThisFrame = false;
+  let sharedCreativeSignals = {};
+  let liveCreativeSignals = {};
+  let creativeFrameIndex = 0;
+  let creativeNowMs = 0;
+
+  const processCreativeBuffer = (
+    buffer6ch,
+    controller,
+    signals,
+    brightnessController = null,
+  ) => {
+    applyLayerSettingCreativeBuffer({
+      buffer6ch,
+      modelPixels: model.pixels,
+      globalEffectsController: controller,
+      brightnessController,
+      master: mixer.master,
+      frameIndex: creativeFrameIndex,
+      nowMs: creativeNowMs,
+      signals,
+    });
+  };
+
+  mixer.setLayerSettingOutputProcessor('deck', buffer6ch => {
+    liveTouchCreativeFrame = true;
+    processCreativeBuffer(buffer6ch, globalEffectsController, sharedCreativeSignals);
+  });
+  mixer.setLayerSettingOutputProcessor('mixer', buffer6ch => {
+    liveTouchCreativeFrame = true;
+    processCreativeBuffer(buffer6ch, globalEffectsController, sharedCreativeSignals);
+  });
+  mixer.setLayerSettingOutputProcessor('live_touch', buffer6ch => {
+    liveTouchCreativeFrame = true;
+    liveTouchParticipatedThisFrame = true;
+    if (!liveTouchSession || !liveTouchSession.getState().active) {
+      throw new Error('Live Touch render participant has no active owner-scoped session');
+    }
+    processCreativeBuffer(
+      buffer6ch,
+      liveTouchSession.effectsController,
+      liveCreativeSignals,
+      intensityController.liveBrightness,
+    );
+  });
+  mixer.setLiveTouchPhaseSpeedProvider(channel => {
+    if (!liveTouchSession || !liveTouchSession.getState().active) return 1;
+    const speedRatio = liveTouchSession.speedMultiplier() / globalSpeedMultiplier();
+    if (!channel.followsTempo) return speedRatio;
+    const sharedTempoBpm = typeof mixer.tempoBpm === 'number'
+      && Number.isFinite(mixer.tempoBpm)
+      ? mixer.tempoBpm
+      : 120;
+    const sharedTempoMultiplier = Math.max(0.05, Math.min(8, sharedTempoBpm / 120));
+    return speedRatio * liveTouchSession.tempoMultiplier() / sharedTempoMultiplier;
+  });
 
   // ── Vis broadcast budget (config.yaml → `vis:`) ───────────────────────
   // The vis broadcast feeds CaptainPad's PixelStrip previews. It is
@@ -775,6 +840,40 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     return SIZE_MIN_MULT * Math.pow(SIZE_MAX_MULT / SIZE_MIN_MULT, clamped);
   }
 
+  function buildCreativeSignals(tempoBpm, nowMs) {
+    const beats = tempoBpm > 0 ? (nowMs / 1000) * (tempoBpm / 60) : 0;
+    return {
+      beatPhase: tempoBpm > 0 ? beats - Math.floor(beats) : 0,
+      barPhase: tempoBpm > 0 ? (beats / 4) - Math.floor(beats / 4) : 0,
+      bpm: tempoBpm,
+      audioPresent: false,
+      micHigh: 0,
+      kick: 0,
+      dropPulse: 0,
+    };
+  }
+
+  function updateCreativeAudioGains(controller, snapshot, tempoBpm, nowMs) {
+    const audioBindings = controller && controller.audioBindings;
+    if (!audioBindings || !controller.setAudioGains) return;
+    const audioTable = audioBindings.getAll();
+    const anyBound = Object.keys(audioTable.effects).length > 0
+      || Object.keys(audioTable.groups).length > 0;
+    if (!anyBound) {
+      controller.setAudioGains(null);
+      return;
+    }
+    const sourceValues = resolveModulationSources({ paramCenterSnapshot: snapshot });
+    if (tempoBpm > 0) {
+      const beats = (nowMs / 1000) * (tempoBpm / 60);
+      const fall = 1 - (beats - Math.floor(beats));
+      sourceValues.bpmPulse = fall * fall;
+    }
+    const dtMs = audioBindings._lastMs ? nowMs - audioBindings._lastMs : 0;
+    audioBindings._lastMs = nowMs;
+    controller.setAudioGains(audioBindings.evaluate(sourceValues, nowMs, dtMs));
+  }
+
   function tick() {
     if (!running) return;
 
@@ -803,6 +902,36 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
     // Flush pending shared parameters (CPC) to all active VMs before frame compute
     if (paramCenter) paramCenter.flushDirty(mixer.wasmHost);
+
+    // Output processors execute inside mixer.renderAll6ch(), so their frame
+    // inputs must be current before render starts. Assigning these afterward
+    // produced a one-frame delay and an empty signal bag on the first frame.
+    const tempoBpm = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0)
+      ? mixer.tempoBpm : 0;
+    const signals = buildCreativeSignals(tempoBpm, now);
+    sharedCreativeSignals = signals;
+    creativeFrameIndex = frameCount;
+    creativeNowMs = now;
+    updateCreativeAudioGains(
+      globalEffectsController,
+      paramCenter ? paramCenter.getAll() : {},
+      tempoBpm,
+      now,
+    );
+
+    if (liveTouchSession && liveTouchSession.getState().active) {
+      liveTouchSession.tickParams(now);
+      const liveTempoBpm = liveTouchSession.tempoBpm;
+      liveCreativeSignals = buildCreativeSignals(liveTempoBpm, now);
+      updateCreativeAudioGains(
+        liveTouchSession.effectsController,
+        liveTouchSession.paramCenter.getAll(),
+        liveTempoBpm,
+        now,
+      );
+    } else {
+      liveCreativeSignals = buildCreativeSignals(0, now);
+    }
 
     // ModulationController: evaluate per-playlist-item audio modulations
     // and write modulated control values to the deck channel's WASM.
@@ -833,6 +962,8 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // Call 6-channel function. 
     // Wait, the runtime needs metaPtr? We can just pass 0 if none.
     // In marsin_wasm_runtime.js, renderAll6ch() allocates internally if coords are set!
+    liveTouchCreativeFrame = false;
+    liveTouchParticipatedThisFrame = false;
     const outBuf = mixer.renderAll6ch();
 
     // Reattach results directly onto model pixels so they have `.r`, `.g`, etc for sacn_mapper
@@ -846,8 +977,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       model.pixels[i].u = outBuf[off + 5] / 255;
     }
 
-    // Apply global DMX-override level effects (Vintage .w boost, UV boost)
-    if (globalEffectsController) globalEffectsController.applyPixels(model.pixels);
+    // Global creative stages run here for Deck/Mixer. When Live Touch is a
+    // render participant they already ran on the isolated Live buffer before
+    // the canonical pair blend; applying them again here would let Live-owned
+    // effects/paint leak onto the outgoing Deck/Mixer surface.
+    if (!liveTouchCreativeFrame && globalEffectsController) {
+      globalEffectsController.applyPixels(model.pixels);
+    }
 
     // Assemble the per-frame audio/beat SIGNALS bag the macros read (B2 fix:
     // the bag was documented as "assembled in engine.js tick()" but never was,
@@ -860,28 +996,8 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // audioPresent:false until the OSC audio path is wired (follow-up: read
     // paramCenter 'micHigh'/'micKick' + Companion drop/beat when audio is live;
     // kick threshold also needs live calibration before the auto router fires).
-    const tempoBpm = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0)
-      ? mixer.tempoBpm : 0;
-    const beats = tempoBpm > 0 ? (now / 1000) * (tempoBpm / 60) : 0;
-    const signals = {
-      beatPhase: tempoBpm > 0 ? beats - Math.floor(beats) : 0,
-      barPhase: tempoBpm > 0 ? (beats / 4) - Math.floor(beats / 4) : 0,
-      // THE ARBITRATED TEMPO ITSELF. Consumers that need a RATE rather than a
-      // phase (movement_trace's pixelsPerBeat, ocean_breath's tempo-locked
-      // period) read signals.bpm — and it was never here, so every one of them
-      // silently took its `: 120` fallback and ran at a fixed 120 regardless of
-      // what the deck was actually doing. beatPhase/barPhase were derived from
-      // this same tempoBpm all along; only the scalar was missing.
-      bpm: tempoBpm,
-      // Still false: the audio-reactive channels below are NOT invented here
-      // (see the note above). Nothing that only needs TEMPO may gate on this —
-      // tempo comes from the arbiter and is available whether or not a live
-      // audio feed is. Gating a tempo lock on audioPresent makes it dead code.
-      audioPresent: false,
-      micHigh: 0,
-      kick: 0,
-      dropPulse: 0,
-    };
+    // `signals` was assembled before render so setting-local processors and
+    // the established post-render Deck/Mixer path consume the same frame.
 
     // NEW: Apply Global Effect Macros (color wash, feedback trails,
     // drop hit envelopes, software sync strobe). Runs before
@@ -895,41 +1011,17 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // The bindings table lives on the controller so this loop - a separate
     // function that never sees the engine's own locals - can reach it without
     // threading another parameter through the signature.
-    const audioBindings = globalEffectsController && globalEffectsController.audioBindings;
-    if (audioBindings && globalEffectsController.setAudioGains) {
-      const audioTable = audioBindings.getAll();
-      const anyBound = Object.keys(audioTable.effects).length > 0
-        || Object.keys(audioTable.groups).length > 0;
-      if (anyBound) {
-        const snap = paramCenter ? paramCenter.getAll() : {};
-        const srcVals = resolveModulationSources({ paramCenterSnapshot: snap });
-        // BPM PULSE - a synthetic source, not an audio one. It comes off the
-        // ARBITRATED tempo (whatever the mixer is running: tapped, or followed
-        // from the Companion), so it is the one source that always exists even
-        // with no audio at all. That is what makes it usable as the default.
-        // Shape: full on the beat, falling away across it - a pump, not a
-        // square wave, so a fader bound to it breathes rather than chops.
-        const bpmNow = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0) ? mixer.tempoBpm : 0;
-        if (bpmNow > 0) {
-          const beatsNow = (now / 1000) * (bpmNow / 60);
-          const phase = beatsNow - Math.floor(beatsNow);
-          const fall = 1 - phase;
-          srcVals.bpmPulse = fall * fall;
-        }
-        const dtMs = audioBindings._lastMs ? now - audioBindings._lastMs : 0;
-        audioBindings._lastMs = now;
-        globalEffectsController.setAudioGains(audioBindings.evaluate(srcVals, now, dtMs));
-      } else {
-        globalEffectsController.setAudioGains(null);
-      }
-    }
-
+    // Audio gains were evaluated before mixer.renderAll6ch() so isolated
+    // setting processors see this frame's values. Do not evaluate a second
+    // time here: hit envelopes and decay state must advance exactly once.
     // ── PRE-PAINT: the operator's colours for the groups effects PLAY ON ────
     // Laid down BEFORE the chain so the effects modulate the group's chosen
     // palette instead of being covered by it. Only groups inside the effect
     // scope; with no scope this is a no-op and the paint behaves exactly as it
     // always has (all of it after the chain, locked).
-    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels, 'pre');
+    if (!liveTouchCreativeFrame && globalEffectsController) {
+      globalEffectsController.applyGroupFixedColors(model.pixels, 'pre');
+    }
 
     // ── PER-GROUP EFFECT SCOPE — snapshot the pixels the chain may NOT touch ─
     //
@@ -942,7 +1034,9 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     //
     // Costs nothing when unrestricted (mask null), which is the default and
     // every pre-existing caller.
-    const fxMask = globalEffectsController ? globalEffectsController.effectGroupMask : null;
+    const fxMask = !liveTouchCreativeFrame && globalEffectsController
+      ? globalEffectsController.effectGroupMask
+      : null;
     let fxMaskCount = 0;
     if (fxMask) {
       if (!fxMaskBuf) fxMaskBuf = new Float64Array(pixelCount * 6);
@@ -958,7 +1052,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       }
     }
 
-    if (globalEffectsController && globalEffectsController.applyMacros) {
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applyMacros) {
       globalEffectsController.applyMacros({
         pixels: model.pixels,
         frameIndex: frameCount,
@@ -976,7 +1070,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // BEFORE group color-locks + intensity/blackout, so a locked group's
     // color and the e-stop safety always have the final say. Zero-cost when
     // off.
-    if (globalEffectsController && globalEffectsController.applyInvert) {
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applyInvert) {
       globalEffectsController.applyInvert(model.pixels);
     }
 
@@ -987,7 +1081,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // after applyInvert per the library design note ("postInvert runs right
     // after applyInvert so a crushed frame inverts crisply"). Zero-cost when
     // no postInvert-anchored effect is enabled.
-    if (globalEffectsController && globalEffectsController.applyPostInvert) {
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applyPostInvert) {
       globalEffectsController.applyPostInvert({
         pixels: model.pixels,
         frameIndex: frameCount,
@@ -1017,7 +1111,9 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
     // POST-PAINT: every OTHER painted group - the ones no effect may touch.
     // Still after the chain, still locked, exactly as docs/32 describes.
-    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels, 'post');
+    if (!liveTouchCreativeFrame && globalEffectsController) {
+      globalEffectsController.applyGroupFixedColors(model.pixels, 'post');
+    }
 
     // ── SPATIAL PAINT — the operator's live finger, after the paint ────────
     // The Touch Control SPATIAL pad draws a per-pixel stroke on the hull. It
@@ -1030,7 +1126,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // A live gesture outranks a colour the operator set earlier; it does NOT
     // outrank safety. Everything below — grand master, section dimmers,
     // blackout — still runs after this and still wins.
-    if (globalEffectsController && globalEffectsController.applySpatialStage) {
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applySpatialStage) {
       globalEffectsController.applySpatialStage({ pixels: model.pixels, nowMs: now });
     }
 
@@ -1060,7 +1156,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // BLACKOUT still kills a parked group - it runs later, in
     // IntensityController, and an e-stop must never be defeatable from a UI
     // toggle.
-    if (mixer.master < 1) {
+    if (!liveTouchCreativeFrame && mixer.master < 1) {
       const gm = mixer.master;
       const parked = globalEffectsController ? globalEffectsController.parkedGroupMask : null;
       for (let i = 0; i < pixelCount; i++) {
@@ -1070,6 +1166,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         px.w *= gm; px.a *= gm; px.u *= gm;
       }
     }
+
+    // A pair involving Live was composed into byte buffers. Per-setting
+    // bypass metadata cannot be represented in that linear blend, and Live is
+    // explicitly subordinate to the Dimmer Rack. Clear any scratch flags left
+    // by either creative processor so shared rack authority caps every lane of
+    // every blended Live frame.
+    enforceLiveDimmerAuthority(model.pixels, liveTouchParticipatedThisFrame);
 
     // Snapshot the PRE-DIMMER composite (after all global FX, before the
     // section dimmers + blackout) for the deck/mixer master preview. Only on
@@ -1115,6 +1218,22 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       globalEffectsController.applyDmx(dmxBuffers, {
         blackout: !!(intensityController && intensityController.blackoutActive),
       });
+    }
+    // DMX-only effects cannot be numerically blended. Keep the outgoing
+    // setting's hardware state until the canonical pixel blend lands, then
+    // switch at that same transaction boundary. Live's private controller
+    // overlays the shared DMX bytes only while Live is the steady setting or
+    // the outgoing side of a handback; staging can therefore never fire fog.
+    if (liveTouchSession && liveTouchSession.getState().active) {
+      const layerState = mixer.getLayerSettingsState();
+      const liveOwnsDmx = layerState.transition
+        ? layerState.transition.from === 'live_touch'
+        : layerState.active === 'live_touch';
+      if (liveOwnsDmx) {
+        liveTouchSession.effectsController.applyDmx(dmxBuffers, {
+          blackout: !!(intensityController && intensityController.blackoutActive),
+        });
+      }
     }
 
     // Send sACN using the _read buffers
@@ -1445,7 +1564,7 @@ async function main() {
   // exceeds the new max even if someone writes a tiny gainMax.
   const gainMax = Number((engineConfig.osc || {}).gainMax) || 2;
   const stemGainOverride = { range: [0, gainMax], default: Math.min(1, gainMax) };
-  const paramCenter = new ParamCenter(null, {
+  const paramCenterOptions = {
     registryOverrides: {
       stemsVocalsGain: stemGainOverride,
       stemsBassGain:   stemGainOverride,
@@ -1457,7 +1576,8 @@ async function main() {
       micHighGain: stemGainOverride,
       micKickGain: stemGainOverride,
     },
-  });
+  };
+  const paramCenter = new ParamCenter(null, paramCenterOptions);
 
   const mixer = new PatternMixer({
     wasmHost,
@@ -1587,6 +1707,7 @@ async function main() {
   // the engine's actual frame grid.
   const globalEffectsController = new GlobalEffectsController({
     engine: { fps: opts.fps },
+    modelPixelCount: model.pixels.length,
   });
   globalEffectsController.initFromModel(model.specialEffects || model.pixels);
   // Slot manager owns the 6 performance-slot bindings. Default config
@@ -1620,6 +1741,17 @@ async function main() {
   const audioBindings = new AudioBindings();
   if (globalEffectsController) globalEffectsController.audioBindings = audioBindings;
 
+  // Live Touch owns an in-memory creative/CPC context. Owner-tagged API
+  // writes are routed here instead of into the durable shared controllers, so
+  // staging or performing a Live look cannot alter Deck/Mixer state or files.
+  const liveTouchSession = new LiveTouchSessionContext({
+    mixer,
+    wasmHost,
+    model,
+    fps: opts.fps,
+    paramCenterOptions,
+  });
+
   const modulationController = new ModulationController({
     mixer,
     paramCenter,
@@ -1649,6 +1781,7 @@ async function main() {
     // say", which it must refuse on.
     sacnOut,
     globalEffectSlotManager,
+    liveTouchSession,
     modulationController,
     modulationBroadcastRef,
     signalPostProcessor,
@@ -1734,6 +1867,7 @@ async function main() {
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {
+    liveTouchSession,
     beforeFrame: (nowMs) => {
       modulationController.applyFrame(nowMs);
       // AUTO-CYCLE (round-2 #2): advance any mixer overlay whose playlist
@@ -1871,6 +2005,7 @@ async function main() {
           wasmHost.metaDirty = false;
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);
+          if (liveTouchSession) liveTouchSession.refreshModel(model);
 
           // The mixer snapshots the view-mask dictionary at construction
           // and bakes per-channel pixel masks — refresh both, or running
@@ -1972,7 +2107,16 @@ async function main() {
   // means re-running `--choose_mic --model <scene>` once on that rig.
   // The win: a single source of truth, no hidden machine-local file.
   const sceneStateDirPath = sceneStateDir(__dirname, opts.modelName);
-  const sceneAudioOv      = loadSceneAudio(sceneStateDirPath);
+  let sceneAudioOv;
+  try {
+    sceneAudioOv = loadSceneAudio(sceneStateDirPath);
+  } catch (err) {
+    // An unreadable state file is FATAL, not ignorable: booting past it
+    // would immediately boot-write defaults over the operator's saved mic
+    // and tuning (see audio_config_store.loadSceneAudio).
+    console.error(`  ❌ ${err.message}`);
+    process.exit(1);
+  }
   audioState.sceneDir     = sceneStateDirPath;
   // `defaults` is what the operator gets back when they hit "Reset to
   // defaults" in the Audio Analysis tab — the portable `config.yaml`
@@ -1980,6 +2124,51 @@ async function main() {
   // so the reset endpoint doesn't have to re-read disk on every call.
   audioState.defaults = baseAudioCfg;
   audioState.config = mergeAudioConfig(baseAudioCfg, sceneAudioOv);
+
+  // The MERGED boot config must satisfy exactly the contract every live
+  // PATCH is held to (applyLiveUpdate runs the same validator). Without
+  // this the only validated path was the PATCH: a hand-edited or stale
+  // audio_state.yaml could seed the analyzer, the Companion link and the
+  // boot-write with a config the engine would have rejected over REST —
+  // and the boot-write then made that invalid state the persisted truth.
+  // Codex P0: fail loudly at boot instead.
+  try {
+    validateAudioAnalysisConfig(audioState.config);
+  } catch (err) {
+    console.error(`  ❌ Invalid audio config: ${err.message}`);
+    console.error(`     Merged from the config.yaml \`audio:\` block (required) + ${sceneAudioPath(sceneStateDirPath)}`);
+    process.exit(1);
+  }
+
+  // derivedSignals groups LIVE-PATCHED during this runtime. Only these are
+  // written into the scene state (see pickLiveFields): persisting the whole
+  // derived tree on every knob turn used to freeze a copy of config.yaml
+  // into the scene file and shadow every later retune.
+  audioState.derivedDirtyGroups = new Set();
+
+  /**
+   * Persist the per-scene subset (enabled / fftSize / hopSize / bands /
+   * kick / sub / structureDetector / bpmTracker / capture mic-selection,
+   * plus any live-patched derivedSignals groups). MERGE on top of the
+   * existing file so orthogonal sections (`chains:`) survive, and merge
+   * derivedSignals group-wise so a group persisted by an EARLIER runtime
+   * isn't dropped by this one. THROWS on a failed write — the caller
+   * decides whether that is fatal (boot) or a 500 (REST).
+   */
+  function persistSceneAudioState(
+    config = audioState.config,
+    derivedDirtyGroups = audioState.derivedDirtyGroups,
+  ) {
+    const onDisk = loadSceneAudio(audioState.sceneDir);
+    const live = pickLiveFields(config, {
+      derivedSignalsGroups: derivedDirtyGroups,
+    });
+    const next = { ...onDisk, ...live };
+    if (live.derivedSignals) {
+      next.derivedSignals = { ...(onDisk.derivedSignals || {}), ...live.derivedSignals };
+    }
+    saveSceneAudio(audioState.sceneDir, next);
+  }
 
   // docs/29: load the per-scene `chains:` block, if any, on top of
   // the processor's compiled-in DEFAULT_CHAINS. Validation runs
@@ -2257,8 +2446,19 @@ async function main() {
   audioState.applyLiveUpdate = async function applyLiveUpdate(partial, opts = {}) {
     const prev = audioState.config;
     const next = mergeAudioConfig(prev, partial);
+    validateAudioAnalysisConfig(next);
     const captureRestart = !!opts.requiresCaptureRestart
       || (partial && (partial.enabled !== undefined || partial.capture));
+
+    const nextDirtyGroups = new Set(audioState.derivedDirtyGroups);
+    if (partial && partial.derivedSignals && typeof partial.derivedSignals === 'object') {
+      for (const group of Object.keys(partial.derivedSignals)) nextDirtyGroups.add(group);
+    }
+
+    // Commit the candidate to durable state before mutating any runtime truth.
+    // A failed write therefore leaves the analyzer, config and dirty-group set
+    // byte-for-byte unchanged instead of exposing an unsaved value over REST.
+    persistSceneAudioState(next, nextDirtyGroups);
 
     if (captureRestart) {
       // Stop the current capture cleanly before swapping config so we
@@ -2281,13 +2481,7 @@ async function main() {
       audioState.config = next;
     }
 
-    // Persist the per-scene subset (enabled / fftSize / hopSize /
-    // bands / kick / capture mic-selection fields). MERGE on top of
-    // the existing file so we don't wipe orthogonal sections.
-    try {
-      const onDisk = loadSceneAudio(audioState.sceneDir);
-      saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
-    } catch (e) { console.warn(`[audio] failed to persist scene audio state: ${e.message}`); }
+    audioState.derivedDirtyGroups = nextDirtyGroups;
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
     // Rebroadcast the new config to EVERY /ws/control subscriber so the
     // engine stays the single source of truth: CaptainPad mirrors its
@@ -2320,23 +2514,31 @@ async function main() {
       capture: audioState.config?.capture,
       enabled: audioState.config?.enabled,
     });
+    validateAudioAnalysisConfig(next);
+    // Persist first. If read/write fails, reset throws and every in-memory
+    // value remains unchanged; the API must return 5xx rather than success.
+    const onDisk = loadSceneAudio(audioState.sceneDir);
+    const stripped = { ...onDisk };
+    for (const key of [
+      'fftSize',
+      'hopSize',
+      'bands',
+      'kick',
+      'sub',
+      'structureDetector',
+      'bpmTracker',
+      'derivedSignals',
+    ]) {
+      delete stripped[key];
+    }
+    if (typeof stripped.enabled !== 'boolean') stripped.enabled = audioState.config.enabled;
+    saveSceneAudio(audioState.sceneDir, stripped);
+
     if (audioState.analyzer) {
       audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
     }
     audioState.config = next;
-    try {
-      // Strip the live-tunable subset off disk and keep capture.* and
-      // enabled. (See May 2026 #12 above — enabled is sticky across
-      // reset so the operator's mic stays whatever it was.) A future
-      // `audio.lowMaxHz = 222` change in config.yaml still wins next
-      // boot for the tunable analyzer settings.
-      const onDisk = loadSceneAudio(audioState.sceneDir);
-      const stripped = {};
-      if (onDisk?.capture) stripped.capture = onDisk.capture;
-      if (typeof onDisk?.enabled === 'boolean') stripped.enabled = onDisk.enabled;
-      else if (typeof audioState.config?.enabled === 'boolean') stripped.enabled = audioState.config.enabled;
-      saveSceneAudio(audioState.sceneDir, stripped);
-    } catch (e) { console.warn(`[audio] failed to reset scene audio state: ${e.message}`); }
+    audioState.derivedDirtyGroups = new Set();
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
     // Same single-source-of-truth rebroadcast as applyLiveUpdate so a
     // "Reset to defaults" snaps the Companion's live gain / smooth back
@@ -2358,11 +2560,13 @@ async function main() {
    //
    // Same merge pattern as applyLiveUpdate: load → merge → save. Any
    // future top-level sections (e.g. signal routing) are preserved.
+   // `derivedSignals` is NOT stamped here — nothing has been live-patched
+   // yet at boot, so the scene file keeps deferring to config.yaml.
    try {
-     const onDisk = loadSceneAudio(audioState.sceneDir);
-     saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
+     persistSceneAudioState();
    } catch (e) {
-     console.warn(`[audio] failed to boot-write scene audio state: ${e.message}`);
+     console.error(`[audio] fatal boot-write failure: ${e.message}`);
+     process.exit(1);
    }
 
    await buildAndStartAudio();

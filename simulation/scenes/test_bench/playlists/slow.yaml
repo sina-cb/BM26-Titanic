@@ -207,14 +207,13 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.6
-      sliderDirection: 0.5
       sliderLevel: 0.5
       sliderKick: 0.5
-      sliderRadius: 0.5
+      sliderCurrentWidth: 0.5
       sliderShimmer: 0.5
-      sliderDensity: 0.5
-      sliderWhiteLift: 0.5
-      sliderUvLift: 0.5
+      sliderDetail: 0.5
+      sliderJewelryWhite: 0.5
+      sliderUvUndertow: 0.5
     modulations: []
     midiMappings: []
     notes: null

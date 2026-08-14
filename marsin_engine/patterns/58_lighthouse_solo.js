@@ -10,7 +10,7 @@
   visibility), even in silence (a steady dim rotating beam, never fully black).
 
   HOW IT WORKS
-    - Each pixel's angle around the rig center (cx,cy = 0.5,0.5) is found with
+    - Each pixel's azimuth around the rig center (x,z = 0.5,0.5) is found with
       atan2 (radians → 0..1 turn). The beam is a sweeping target angle; a pixel
       lights when its angle is within the beam's angular half-width of the beam.
     - The beam BRIGHTNESS and WIDTH grow with `beam` (the level handle). A kick
@@ -37,6 +37,9 @@
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
+// Canonical append-only optional fixture role; absent roles match no pixels.
+var FIX_TE_SIGN = 7;
+
 export var localSpeed = 0.5;   // rotation rate (0 = slow drift .. 1 = fast sweep)
 export var beam = 0.5;         // PRIMARY: beam brightness + width (resting = visible)  <- micLow
 export var flash = 0.0;        // kick: bright flash / double-pulse  <- micKick
@@ -132,22 +135,30 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // Angle of this pixel around the rig center, as a 0..1 turn.
+  // Azimuth around the ship in the horizontal XZ plane. The former XY plane
+  // rotated vertically through decks instead of sweeping around the vessel.
   var dx = x - 0.5;
-  var dy = y - 0.5;
-  var ang = atan2(dy, dx) / PI2;   // -0.5..0.5
+  var dz = z - 0.5;
+  var ang = atan2(dz, dx) / PI2;   // -0.5..0.5
   ang = ang - floor(ang);          // 0..1
 
-  // Shortest angular distance to the beam, in turns (0..0.5).
+  // Shortest angular distance to the beam and its exact opposite. The mirrored
+  // fan prevents one physical side of the Titanic from remaining dark while
+  // preserving one coherent rotation phase and one Width control.
   var dd = ang - beamPhase;
   dd = dd - floor(dd + 0.5);       // wrap to -0.5..0.5
   var ad = abs(dd);
+  var ddOpp = ang - (beamPhase + 0.5);
+  ddOpp = ddOpp - floor(ddOpp + 0.5);
+  var adOpp = abs(ddOpp);
+  if (adOpp < ad) ad = adOpp;
 
   // Beam profile: bright crisp core, fading to the wedge edge.
   var bri = NIGHT_FLOOR;
   var tcol = 1.0;                  // 0 = core (cp1) ... 1 = night (cp2)
+  var prof = 0.0;
   if (ad < halfW) {
-    var prof = 1.0 - (ad / halfW); // 1 at core -> 0 at edge
+    prof = 1.0 - (ad / halfW); // 1 at core -> 0 at edge
     prof = prof * prof;            // tighten the core (high-def)
     // brightness scales with level, with a guaranteed dim base so it always reads.
     // The level maps with a >1 headroom so the beam CORE burns bright (peak >=200)
@@ -172,5 +183,38 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  rgb(clamp01(r), clamp01(g), clamp01(b));
+  // Instrument staging through portable fixture roles. Pars are the lighthouse
+  // source, Vintage rails hold a warm afterglow, signs stay readable, and the
+  // rotating fan remains strongest on the bar/strand canvas.
+  var w = prof * prof * (0.10 + beamLvl * 0.52 + flashAdd * 0.38);
+  if (fixtureType == FIX_VINTAGE_6) {
+    w = w + 0.045 + prof * 0.12;
+    r = r + 0.08 * (0.25 + prof);
+    g = g + 0.035 * (0.25 + prof);
+  } else if (fixtureType == FIX_PAR) {
+    var source = 0.035 + beamLvl * 0.075;
+    r = r + source;
+    g = g + source * 0.42;
+    w = w + source * 0.45;
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity remains a legible night-blue landmark between beam passes. A
+    // quiet XYZ sea texture prevents a flat panel; the real rotating profile
+    // then turns the letters into the lighthouse fan's deliberate punctuation.
+    var signSeaA = wave(x * 0.53 + y * 1.17 - z * 0.73
+                      + beamPhase * 3.0 + pixelLocalIndex * 0.008);
+    var signSeaB = wave(-x * 1.11 + y * 0.67 + z * 0.91
+                      - beamPhase * 5.0 + pixelLocalIndex * 0.0045);
+    var signLens = pow(clamp01(1.0 - abs(signSeaA - signSeaB)), 3.0);
+    var signBri = clamp01(0.45 + signSeaA * 0.07 + signSeaB * 0.06
+                        + signLens * 0.16 + prof * 0.48);
+    var signMix = clamp01(0.84 - prof * 0.72 + signSeaA * 0.04
+                        + signSeaB * 0.05 + signLens * 0.12);
+    r = (pr1 + (pr2 - pr1) * signMix) * signBri;
+    g = (pg1 + (pg2 - pg1) * signMix) * signBri;
+    b = (pb1 + (pb2 - pb1) * signMix) * signBri;
+    w = w * 0.45;
+  }
+
+  w = clamp01(w);
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), w, w, 0.0);
 }
