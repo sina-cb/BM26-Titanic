@@ -13,6 +13,10 @@ import yaml from 'js-yaml';
 
 import { audioRegistryEntries, isLiveAudioSharedFnName } from '../audio/postproc/audio_signals.js';
 import { makeHsvTransition } from './color_transition.js';
+import {
+  LOCKED_SIZE, SIZE_LOCK_KEY, SIZE_LOCK_REASON, SIZE_LOCK_MESSAGE,
+  isLockedSize, SizeLockReport,
+} from './size_lock.js';
 
 // ── Shared Parameter Registry ─────────────────────────────────────────────
 //
@@ -51,10 +55,15 @@ const PARAM_REGISTRY = [
   // pattern and they'll surface in the per-channel local controls.
   // See report .agent/reports/202605/20260508_1 §6 for context.
   {
-    // Engine-owned (see comment on `speed` above).
-    key: 'size', label: 'Size', type: 'float',
-    default: 0.5, range: [0, 1], clamp: true, persist: true,
-    engineOwned: true,
+    // Engine-owned (see comment on `speed` above) AND **LOCKED** since
+    // 2026-08-06: the operator ruled SIZE is pinned at LOCKED_SIZE (0.5 =
+    // coordinate identity) and no path may change it. `default` is the
+    // constant itself so the pin has exactly one source of truth; the
+    // refusal lives in `_setNoFire`, the boot pin in `_loadFromDisk`, and
+    // the rationale in lib/size_lock.js.
+    key: 'size', label: 'Size (LOCKED)', type: 'float',
+    default: LOCKED_SIZE, range: [0, 1], clamp: true, persist: true,
+    engineOwned: true, locked: true,
     oscAddress: '/marsin/param/size', sharedFnName: 'size',
   },
   {
@@ -314,6 +323,10 @@ export class ParamCenter {
     // Persistence: debounce timer
     this._saveTimer = null;
 
+    // SIZE lock bookkeeping (lib/size_lock.js). Built BEFORE _loadFromDisk so
+    // a persisted non-locked size is recorded by the very first read.
+    this._sizeLock = new SizeLockReport();
+
     // Restore from disk if file exists
     if (this._statePath) {
       this._loadFromDisk();
@@ -370,6 +383,30 @@ export class ParamCenter {
   _setNoFire(key, value, source, origin = null) {
     const entry = this._registryByKey[key];
     if (!entry) return { status: 'ignored', reason: 'unknown_key' };
+
+    // ── SIZE LOCK (operator ruling 2026-08-06, lib/size_lock.js) ────────
+    // This is the single choke point for EVERY size writer: REST
+    // POST /param-center, WS setSharedParam, OSC (setMany), timeline cue
+    // globals, colour autopilot, and the boot/snapshot state restore
+    // (state_manager.applyGlobalsState → set(..., 'init')) all land here.
+    // Refuse loudly, change nothing, never throw — a rejected write must
+    // not take the engine down mid-show.
+    //
+    // A write that ASKS for the locked value is still refused (nothing to
+    // do), but it is NOT a violation — a clean state file restoring
+    // `size: 0.5` must not raise an operator warning every boot. Only a
+    // write that would have CHANGED the size is recorded and logged.
+    if (key === SIZE_LOCK_KEY) {
+      const noop = isLockedSize(value);
+      if (!noop) this._sizeLock.noteRefusal(value, source, origin);
+      return {
+        status: 'ignored',
+        reason: SIZE_LOCK_REASON,
+        lockedValue: LOCKED_SIZE,
+        noop,
+        message: SIZE_LOCK_MESSAGE,
+      };
+    }
 
     const lockResult = this._checkSourceLock(key, source);
     if (lockResult) return lockResult;
@@ -525,7 +562,52 @@ export class ParamCenter {
     for (const key in this._store) {
       out[key] = deepCopy(this._store[key].value);
     }
+    out[SIZE_LOCK_KEY] = this._pinnedSize();
     return out;
+  }
+
+  /**
+   * The locked size, with a loud complaint if the store ever drifted off it.
+   * Every write path is pinned, so drift is unreachable — this exists so a
+   * future refactor that opens a new write path is caught at the READ side
+   * (render loop, broadcast, persistence) instead of silently rescaling the
+   * whole rig's coordinates. See lib/size_lock.js.
+   * @private
+   */
+  _pinnedSize() {
+    const slot = this._store[SIZE_LOCK_KEY];
+    if (slot && !isLockedSize(slot.value)) {
+      console.error(
+        `  ⛔ [size-lock] internal store drifted to ${JSON.stringify(slot.value)} — ` +
+        `serving ${LOCKED_SIZE}. ${SIZE_LOCK_MESSAGE}`);
+      this._sizeLock.noteRefusal(slot.value, 'internal-drift', 'param_center');
+      slot.value = LOCKED_SIZE;
+    }
+    return LOCKED_SIZE;
+  }
+
+  /**
+   * JSON-safe SIZE-lock report (boot overrides + refused writes). Surfaced on
+   * GET /status as `sizeLock`; `sizeLockWarning` carries `.warning`.
+   */
+  getSizeLockReport() {
+    return this._sizeLock.toJSON();
+  }
+
+  /** One-line operator warning, or null when nothing fought the lock. */
+  getSizeLockWarning() {
+    return this._sizeLock.warningLine();
+  }
+
+  /**
+   * Record that a named on-disk file carried a non-locked size. Called by
+   * StateManager.applyGlobalsState, which knows the file path the CPC does
+   * not (globals_state.yaml / a recalled snapshot).
+   * @param {string} file
+   * @param {*} value
+   */
+  noteSizeLockRestoreFile(file, value) {
+    this._sizeLock.noteRestoreOverride(file, value);
   }
 
   /**
@@ -536,7 +618,7 @@ export class ParamCenter {
     for (const key in this._store) {
       const s = this._store[key];
       params[key] = {
-        value: deepCopy(s.value),
+        value: key === SIZE_LOCK_KEY ? this._pinnedSize() : deepCopy(s.value),
         lastSource: s.lastSource,
         lastOrigin: s.lastOrigin,
         lastRevision: s.lastRevision,
@@ -570,6 +652,12 @@ export class ParamCenter {
       // CaptainPad can render them with a small "ENGINE" annotation
       // and patterns can stop trying to bind them as pattern vars.
       engineOwned: !!e.engineOwned,
+      // LOCKED params refuse every write (currently only `size`, pinned at
+      // LOCKED_SIZE by operator ruling 2026-08-06 — lib/size_lock.js). A UI
+      // that renders this key must render it read-only; the engine refuses
+      // the write regardless.
+      locked: !!e.locked,
+      lockedValue: e.locked ? LOCKED_SIZE : undefined,
       // Runtime keys registered from the Audio Companion's signal
       // manifest (registerDynamicLiveParam). CaptainPad surfaces them
       // identically to built-in live keys; the flag lets the UI tag
@@ -1032,7 +1120,9 @@ export class ParamCenter {
       const data = {};
       for (const entry of this._registry) {
         if (!entry.persist) continue;
-        data[entry.key] = deepCopy(this._store[entry.key].value);
+        data[entry.key] = entry.key === SIZE_LOCK_KEY
+          ? this._pinnedSize()
+          : deepCopy(this._store[entry.key].value);
       }
       fs.writeFileSync(this._statePath, yaml.dump(data));
     } catch (e) {
@@ -1049,6 +1139,16 @@ export class ParamCenter {
       for (const key in raw) {
         const entry = this._registryByKey[key];
         if (!entry) continue;
+        // SIZE LOCK: the persisted value is NEVER restored. If the file
+        // carried anything but LOCKED_SIZE, say so loudly (naming the file)
+        // and keep the pin — the store already holds LOCKED_SIZE.
+        if (key === SIZE_LOCK_KEY) {
+          if (!isLockedSize(raw[key])) {
+            this._sizeLock.noteRestoreOverride(this._statePath, raw[key]);
+          }
+          this._store[key].value = LOCKED_SIZE;
+          continue;
+        }
         const clamped = clampValue(raw[key], entry);
         this._store[key].value = deepCopy(clamped);
       }

@@ -175,18 +175,22 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   // /mixer.channels — so we ask for it directly here.
   //
   // The two slider names used below (`sliderLocalSpeed`,
-  // `sliderDensity`) match the actual exports declared by
+  // `sliderStarCount`) match the actual exports declared by
   // patterns/13_sparkle.js. An earlier version of this test looked
   // for `sliderBackgroundFade` + `sliderSparkleSpeed` and silently
   // failed once the pattern was refactored — the test was the bug,
-  // not the engine.
+  // not the engine. Updated again 2026-08-06 (report 20260806_184):
+  // the pattern's "First-Class Constellations" rewrite retired
+  // `sliderStarCount`, and the parameter rename then dropped the signal
+  // prefixes, so the second probe slider is now `sliderStarCount`
+  // (was `sliderFLUX_StarCount`, was `sliderStarCount`).
   const deckRes = await api('GET', '/deck/channel');
   const baseCh = deckRes.data.channel;
   assert.ok(baseCh && baseCh.id === 'ch_base', 'deck channel should be ch_base');
   const sliderA = baseCh.exports.find(e => e.name === 'sliderLocalSpeed');
-  const sliderB = baseCh.exports.find(e => e.name === 'sliderDensity');
+  const sliderB = baseCh.exports.find(e => e.name === 'sliderStarCount');
   assert.ok(sliderA && sliderB,
-    `sparkle pattern must expose sliderLocalSpeed + sliderDensity; ` +
+    `sparkle pattern must expose sliderLocalSpeed + sliderStarCount; ` +
     `got exports=${baseCh.exports.map(e => e.name).join(',')}`);
 
   // e_slow: low values. Writes go through the deck control route now
@@ -196,7 +200,7 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   r = await api('POST', '/deck/playlist/capture');
   assert.equal(r.status, 200);
   assert.equal(r.data.defaults.sliderLocalSpeed, 0.10);
-  assert.equal(r.data.defaults.sliderDensity, 0.15);
+  assert.equal(r.data.defaults.sliderStarCount, 0.15);
 
   // Switch to e_fast, set very different values, capture
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_fast' });
@@ -206,7 +210,7 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   r = await api('POST', '/deck/playlist/capture');
   assert.equal(r.status, 200);
   assert.equal(r.data.defaults.sliderLocalSpeed, 0.90);
-  assert.equal(r.data.defaults.sliderDensity, 0.95);
+  assert.equal(r.data.defaults.sliderStarCount, 0.95);
 
   // Switch back to e_slow on the live engine — defaults must reapply.
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_slow' });
@@ -215,7 +219,7 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   let post = await api('GET', '/deck/channel');
   let baseAfter = post.data.channel;
   let aAfter = baseAfter.exports.find(e => e.name === 'sliderLocalSpeed');
-  let bAfter = baseAfter.exports.find(e => e.name === 'sliderDensity');
+  let bAfter = baseAfter.exports.find(e => e.name === 'sliderStarCount');
   assert.equal(Number(aAfter.v0.toFixed(2)), 0.10);
   assert.equal(Number(bAfter.v0.toFixed(2)), 0.15);
 
@@ -229,9 +233,9 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   const restored = await api('GET', '/deck/channel');
   const restoredBase = restored.data.channel;
   const a1 = restoredBase.exports.find(e => e.name === 'sliderLocalSpeed');
-  const b1 = restoredBase.exports.find(e => e.name === 'sliderDensity');
+  const b1 = restoredBase.exports.find(e => e.name === 'sliderStarCount');
   assert.equal(Number(a1.v0.toFixed(2)), 0.10, `sliderLocalSpeed should be 0.10 after restart, got ${a1.v0}`);
-  assert.equal(Number(b1.v0.toFixed(2)), 0.15, `sliderDensity should be 0.15 after restart, got ${b1.v0}`);
+  assert.equal(Number(b1.v0.toFixed(2)), 0.15, `sliderStarCount should be 0.15 after restart, got ${b1.v0}`);
 
   // Switching to e_fast post-restart should yield the e_fast values.
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_fast' });
@@ -239,7 +243,7 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   const post2 = await api('GET', '/deck/channel');
   const base2 = post2.data.channel;
   const a2 = base2.exports.find(e => e.name === 'sliderLocalSpeed');
-  const b2 = base2.exports.find(e => e.name === 'sliderDensity');
+  const b2 = base2.exports.find(e => e.name === 'sliderStarCount');
   assert.equal(Number(a2.v0.toFixed(2)), 0.90);
   assert.equal(Number(b2.v0.toFixed(2)), 0.95);
 

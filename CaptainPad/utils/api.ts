@@ -125,6 +125,14 @@ export interface ConnectionResult {
     // `deckRestoreDegraded:null`).
     renderHealth?: RenderHealth | null;
     deckRestoreDegraded?: DeckRestoreDegraded | null;
+    // SIZE LOCK (engine: marsin_engine/lib/size_lock.js). The global SIZE
+    // fader is pinned at 0.5 (coordinate identity) by operator ruling
+    // 2026-08-06 and the engine refuses every write. There is no SIZE
+    // control left in this app, so this string is the ONLY way the operator
+    // learns that a saved state file carried a stale size, or that something
+    // is still trying to change it. A string (not an object) so the health
+    // snapshot stays reference-stable across probes. Null / absent = clean.
+    sizeLockWarning?: string | null;
   };
   error?: string;
   latencyMs?: number;
@@ -2815,6 +2823,33 @@ export function migrateModulationMode(mode: unknown): ModulationMode {
 }
 export type ModulationPolarity = 'unipolar' | 'bipolar';
 export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';
+
+/**
+ * The pattern author's RECOMMENDED audio binding for one parameter, as
+ * declared in the pattern source's `AUDIO_MODULATION_V1` header block and
+ * stamped onto the export by the engine (`annotateCodeDefaults` in
+ * api_server.js). See report 20260806_184.
+ *
+ * It is METADATA and nothing else:
+ *   - it never changes the parameter's name or value;
+ *   - it is never applied automatically — the operator's saved mapping is the
+ *     only truth, and a suggestion only ever PREFILLS the create flow when the
+ *     operator explicitly taps the suggestion badge;
+ *   - absent means absent. A parameter with no suggestion simply has no field,
+ *     and nothing infers one.
+ *
+ * `curve` is the token the header declared; `modulationCurve` is the same
+ * curve named in this app's `ModulationCurve` vocabulary, translated ONCE by
+ * the engine so no client keeps a private lookup table.
+ */
+export type AudioSuggestion = {
+  version: string;
+  signal: ModulationSourceKey;
+  range: [number, number];
+  curve: 'linear' | 'pow2' | 'ease';
+  modulationCurve: ModulationCurve;
+  note?: string;
+};
 
 export type ModulationMapping = {
   id: string;

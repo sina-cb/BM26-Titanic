@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 
+import { SIZE_LOCK_REASON } from './size_lock.js';
+
 // ── Channel serialization (additive de-dup helper) ──────────────────────
 // saveDeckState and saveMixerState both flatten a PatternChannel into the
 // on-disk shape. They diverge slightly (the mixer file carries overlay-only
@@ -397,8 +399,19 @@ export class StateManager {
     });
   }
 
+  /**
+   * @param {object} globalsState
+   * @param {object|null} paramCenter
+   * @param {object|null} intensityController
+   * @param {object|null} globalEffectsController
+   * @param {object|null} [groupToSectionId]
+   * @param {string} [restoreLabel] — what this restore came FROM, used only to
+   *   name the offender when a refused write is reported (today: the SIZE
+   *   lock). Defaults to the scene's globals_state.yaml, which is the boot
+   *   path; a snapshot / look recall passes its own name.
+   */
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController,
-                    groupToSectionId = null) {
+                    groupToSectionId = null, restoreLabel = null) {
     if (paramCenter && globalsState.params) {
       // The saved canonical state is { revision, sourceLock, params: { speed: { value }, ... } }
       //
@@ -421,11 +434,22 @@ export class StateManager {
           'autopilot and timeline can drive.');
       }
       const paramData = globalsState.params.params || globalsState.params;
+      const label = restoreLabel || path.join(this.stateDir, 'globals_state.yaml');
       for (const k in paramData) {
         const entry = paramData[k];
         // Extract the .value from canonical { value, lastSource, ... } wrappers
         const val = (entry && typeof entry === 'object' && entry.value !== undefined) ? entry.value : entry;
-        paramCenter.set(k, val, 'init');
+        const r = paramCenter.set(k, val, 'init');
+        // SIZE LOCK (lib/size_lock.js): the CPC refuses the write and logs
+        // it, but only WE know which file carried the stale value — record
+        // it by name so the operator sees WHERE to look. Codex P0: a
+        // discarded persisted value is never swallowed silently.
+        // `r.noop` marks a restore that asked for the locked value anyway —
+        // a clean file, nothing to report.
+        if (r && r.status === 'ignored' && r.reason === SIZE_LOCK_REASON && r.noop !== true
+            && typeof paramCenter.noteSizeLockRestoreFile === 'function') {
+          paramCenter.noteSizeLockRestoreFile(label, val);
+        }
       }
     }
     if (intensityController && globalsState.blackout !== undefined) {

@@ -8,7 +8,11 @@
 //   - renderHealth.ok === false  (a channel blend fell back to host-side
 //     linear interp), OR
 //   - deckRestoreDegraded != null (the saved deck pattern failed to restore
-//     and the engine fell back to the default to keep the exterior LIT).
+//     and the engine fell back to the default to keep the exterior LIT), OR
+//   - sizeLockWarning != null (something fought the engine's global SIZE pin
+//     at 0.5 — a saved state file carried another value, or a writer tried
+//     to change it. See marsin_engine/lib/size_lock.js; there is no SIZE
+//     control in this app, so this chip is the operator's only view of it).
 // The degrade predicate + reason are derived in useEngineHealth()
 // (hooks/useEngineState.ts) so this component is purely presentational.
 //

@@ -2822,14 +2822,21 @@ async function main() {
         effect:      fireSyncState.config.effect,
         triggerMask: fireSyncState.config.triggerMask,
         minOnMs:     fireSyncState.config.minOnMs,
+        releaseMs:   fireSyncState.config.releaseMs,
         apiHost:     fireSyncState.config.apiHost || '127.0.0.1',
         apiPort:     (engineConfig.server && engineConfig.server.port) || 6968,
+        // The RELEASE half is a pixel-value ramp, so it is rendered where pixel
+        // values are written. config.yaml is only the boot default — the Stoker
+        // panel pushes the operator's value (fire_cfg) and re-pushes every 10 s,
+        // which is what heals this engine after a restart.
+        applyRelease: (ms) => globalEffectsController.setVintageWhiteReleaseMs(ms),
         onStats:     (s) => broadcastStatsRef.publish(s),
       });
       await fsl.startAsync();
       fireSyncState.listener = fsl;
       console.log(`  🔥 fire-sync listening on ${fsl.host}:${fsl.port} → ` +
-        `${fsl.effect} (mask 0x${fsl.triggerMask.toString(16)}, min-ON ${fsl.minOnMs} ms)`);
+        `${fsl.effect} (mask 0x${fsl.triggerMask.toString(16)}, min-ON ${fsl.minOnMs} ms, ` +
+        `release ${fsl.releaseMs} ms)`);
     } catch (err) {
       // Loud and explicit — never a silent "the lights just don't flash tonight".
       console.error(`  ⚠️  fire-sync DISABLED: ${err && err.message}`);

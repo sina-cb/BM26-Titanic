@@ -33,6 +33,12 @@ import { installPixelMapPersistence } from '../pixel_map/pixel_map_persist.js';
 
 const PANEL_ID = 'pixel-map-panel';
 
+function rotateFocusedSelection(key) {
+  const canvas = document.querySelector('.pmv-pane.focused .pmv-canvas');
+  if (!canvas) return;
+  canvas.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+}
+
 // ── Top toolbar: mode, count, Views manager ────────────────────────────────
 function Toolbar() {
   const mode = store.mode.value;
@@ -50,6 +56,7 @@ function Toolbar() {
 
 function StatusStrip() {
   const hover = store.hover.value;
+  const hasSelection = store.mode.value === 'edit' && store.selection.value.size > 0;
   return html`
     <div class="pm-status">
       <span class="pm-swatch" style=${`background:${hover ? hover.hex : 'transparent'}`}></span>
@@ -59,6 +66,11 @@ function StatusStrip() {
             ? 'EDIT — click select · shift+click add · RIGHT-click selects the GROUP (shift adds) · drag to move · arrows nudge · Esc clears'
             : 'VIEW — drag to pan · wheel to zoom · \\ / - split · Tab focus · [ ] cycle view · z zoom pane')}</span>
       <span class="pm-status-right">
+        ${hasSelection && html`
+          <button class="pm-mini" title="Rotate selected fixture or visual group 15° left (Q)"
+                  onClick=${() => rotateFocusedSelection('q')}>↶ 15°</button>
+          <button class="pm-mini" title="Rotate selected fixture or visual group 15° right (E)"
+                  onClick=${() => rotateFocusedSelection('e')}>↷ 15°</button>`}
         <span class="pm-zoom">${store.mode.value.toUpperCase()}</span>
       </span>
     </div>
@@ -67,7 +79,7 @@ function StatusStrip() {
 
 // ── Per-view adjustment inspector (report 20260725_54) ─────────────────────
 // The shipped defaults are a STARTING POINT. This exposes the knobs the view
-// schema already validates — framing, panel rotate / gap compression / LED
+// schema already validates — framing, panel rotation, gap compression, LED
 // pitch, per-view glyph sizes — so the operator reshapes a view himself instead
 // of asking an agent for each tweak. Every control writes through a validated
 // store op; anything illegal throws and lands in the toast, never half-applied.
@@ -113,6 +125,16 @@ function PanelAdjust({ view, panel, guard }) {
               Number(e.target.value) === 0 ? undefined : Number(e.target.value)))}>
             ${[0, 90, 180, 270].map((d) => html`<option value=${d} selected=${d === rot}>${d}°</option>`)}
           </select>
+        <//>`}
+
+      ${spatial && html`
+        <${Row} label="Wash angle" hint="Base aim for every wash in this panel. EDIT-mode rotation adds a per-stack offset without changing this saved base angle.">
+          <input class="pm-adj-num" type="number" step="1" min="-180" max="180"
+                 value=${panel.washAngle === undefined ? '' : panel.washAngle}
+                 placeholder="0"
+                 onChange=${(e) => guard(() => setPanelOption(view.id, panel.id,
+                   'washAngle', e.target.value === '' ? undefined : Number(e.target.value)))} />
+          <span class="pm-adj-dim">degrees</span>
         <//>`}
 
       ${spatial && html`

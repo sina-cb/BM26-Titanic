@@ -69,6 +69,24 @@ export class GlobalEffectsController {
     this.horns = [];
     this.fires = [];
 
+    // ── vintageWhite RELEASE envelope (BM26 fire → lights sync) ─────
+    // Vintage filament heads do not go dark the instant the flame stops, and a
+    // hard cut reads as a glitch. When `vintageWhiteReleaseMs` > 0 the white
+    // boost ramps 1.0 → 0 linearly over that long after vintageWhite goes off,
+    // instead of disappearing on the next frame. 0 = the historical behavior
+    // (instant off), which is also what an engine with no fire-sync config gets
+    // — this feature is inert unless something sets it (the Stoker panel pushes
+    // the operator's value over the fire-sync channel; see fire_sync_listener).
+    //
+    // The ramp only ever RAISES a pixel's white above what the pattern already
+    // wrote (Math.max), so it decays the BOOST and never dims live content.
+    // A retrigger (vintageWhite back on) cancels the fade and snaps to full —
+    // standard envelope retrigger, and it keeps fast poof bursts reading as one
+    // solid stab of white.
+    this.vintageWhiteReleaseMs = 0;
+    this._vwFadeActive = false;
+    this._vwFadeStartMs = 0;
+
     // ── Macro runtime state (transient on boot per §8) ──────────────
     this.frameRate = (config && config.engine && config.engine.fps) || 40;
     this.modelPixelCount = Number.isInteger(config.modelPixelCount) && config.modelPixelCount > 0
@@ -531,7 +549,38 @@ export class GlobalEffectsController {
     if (!known) {
       throw new Error(`setEffect: unknown effect '${effectName}'`);
     }
-    this.effects[effectName] = !!state;
+    const next = !!state;
+    if (effectName === 'vintageWhite') {
+      const prev = !!this.effects.vintageWhite;
+      if (prev && !next && this.vintageWhiteReleaseMs > 0) {
+        // Falling edge → start the release ramp from full.
+        this._vwFadeActive = true;
+        this._vwFadeStartMs = Date.now();
+      } else if (next) {
+        // Retrigger (or a plain ON): snap back to full, cancel any ramp.
+        this._vwFadeActive = false;
+      } else {
+        // OFF with no release configured → historical instant-off.
+        this._vwFadeActive = false;
+      }
+    }
+    this.effects[effectName] = next;
+  }
+
+  /**
+   * Set the vintageWhite release time (ms). Bounds are the same 0..5000 the
+   * Stoker panel enforces before it ever puts a value on the wire.
+   *
+   * REFUSES an out-of-range or non-numeric value by throwing — it is never
+   * clamped and never silently ignored (BM26 codex P0: a rejected setting must
+   * say so; a clamped one applies a number nobody asked for).
+   */
+  setVintageWhiteReleaseMs(ms) {
+    if (!Number.isFinite(ms) || ms < 0 || ms > 5000) {
+      throw new Error(`vintageWhiteReleaseMs must be a number in [0, 5000], got ${ms}.`);
+    }
+    this.vintageWhiteReleaseMs = ms;
+    if (ms === 0) this._vwFadeActive = false;   // no ramp configured → nothing to run out
   }
 
   initFromModel(effectsArray) {
@@ -559,7 +608,28 @@ export class GlobalEffectsController {
     }
   }
 
-  applyPixels(pixels) {
+  /**
+   * @param {Array} pixels
+   * @param {number} [nowMs] wall-clock ms; injectable so the release ramp is
+   *   testable without sleeping. Defaults to Date.now() — the same clock the
+   *   fire-sync listener stamps its edges with.
+   */
+  applyPixels(pixels, nowMs = Date.now()) {
+    // vintageWhite release ramp: 1.0 → 0 over vintageWhiteReleaseMs after the
+    // effect goes off. Computed ONCE per frame (not per pixel) and retired the
+    // moment it reaches zero, so an idle rig pays nothing.
+    let vwFade = 0;
+    if (this._vwFadeActive && !this.effects.vintageWhite) {
+      const elapsed = nowMs - this._vwFadeStartMs;
+      if (elapsed >= this.vintageWhiteReleaseMs || this.vintageWhiteReleaseMs <= 0) {
+        this._vwFadeActive = false;
+      } else if (elapsed <= 0) {
+        vwFade = 1.0;
+      } else {
+        vwFade = 1.0 - (elapsed / this.vintageWhiteReleaseMs);
+      }
+    }
+
     for (let i = 0; i < pixels.length; i++) {
       const px = pixels[i];
       px.ignoreDimmerForRGB = false;
@@ -570,6 +640,14 @@ export class GlobalEffectsController {
       if (this.effects.vintageWhite) {
         if (px.fixtureType === 'VintageLed' && px.name && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
           px.w = 1.0;
+          if (this.effects.vintageWhiteBypassDimmer) px.ignoreDimmerForW = true;
+        }
+      } else if (vwFade > 0) {
+        // Releasing. Raise the head toward the decaying boost but NEVER pull it
+        // below what the pattern already wrote — this decays the effect, it
+        // does not take over the pixel.
+        if (px.fixtureType === 'VintageLed' && px.name && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
+          if (vwFade > px.w) px.w = vwFade;
           if (this.effects.vintageWhiteBypassDimmer) px.ignoreDimmerForW = true;
         }
       }
@@ -2325,6 +2403,9 @@ export class GlobalEffectsController {
   // ── Status snapshot ───────────────────────────────────────────────
   getStatus() {
     return {
+      // vintageWhite release envelope (BM26 fire → lights sync). 0 = instant off.
+      vintageWhiteReleaseMs: this.vintageWhiteReleaseMs,
+      vintageWhiteReleasing: this._vwFadeActive,
       strobe: {
         active: this.strobeActive,
         presetId: this.activeStrobePresetId,

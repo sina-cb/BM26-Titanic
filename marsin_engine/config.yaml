@@ -39,7 +39,17 @@ fire_sync:
   host: 0.0.0.0
   effect: vintageWhite
   triggerMask: 0x07
+  # Trigger envelope, LIGHTS ONLY (see lib/fire_sync_listener.js). These are the
+  # BOOT DEFAULTS: the BM26-Stoker control panel owns the operator-set values,
+  # persists them in its own NVS and pushes them here (fire_cfg) on save and
+  # every 10 s — so an engine restart is back on the panel's numbers within 10 s
+  # and this file is never written back.
+  #   minOnMs   hold the lights on at least this long past the last flame edge
+  #             (attack: vintage filaments need a moment to come up)
+  #   releaseMs ramp the white down over this long when the flame stops
+  #             (0 = instant off, the historical behavior). Bounds 0..5000.
   minOnMs: 150
+  releaseMs: 400
   apiHost: 127.0.0.1
 audio:
   enabled: false

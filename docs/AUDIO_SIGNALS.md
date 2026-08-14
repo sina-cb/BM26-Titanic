@@ -516,6 +516,13 @@ and apply its own dwell/cooldown policy. It must not repeat the action every
 frame while the key remains `1`. This gate is based on weighted band loudness;
 it is suitable for reversible visual behavior, not irreversible automation.
 
+The CaptainPad AUDIO page mirrors the received gate as **PARTY SIGNAL ON/OFF**
+beside its OSC and BPM-sync status. That pill is read-only and is the same
+`audioParty` value available to patterns and the optimizer. Detector thresholds
+belong to Audio Companion **DERIVED TUNE -> PARTY DETECTION**; CaptainPad does
+not maintain a second sensitivity setting. Any CaptainPad party-session or
+scheduling controls are downstream show policy, not audio classification.
+
 Use `audioGenre` only as a soft aesthetic bias, and only when
 `audioGenreConf` is adequate and music is active. Do not use inferred genre for
 blackout, hardware, deployment, irreversible, or safety-critical decisions.

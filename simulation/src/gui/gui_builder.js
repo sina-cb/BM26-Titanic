@@ -73,7 +73,19 @@ import {
   renameGroupInPixelMapViews, removeFixtureFromPixelMapViews, pixelMapViewsSource,
 } from "./pixel_map/pixel_map_store.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
-import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
+import {
+  MAX_SPOTLIGHT_POOL_SIZE,
+  clampPersistedSpotlightBudget,
+  getSpotlightSessionCeiling,
+  getSpotlightSliderMax,
+  isSpotlightSessionCeilingRaised,
+  showSpotlightCountWarning,
+} from "../core/light_pool.js";
+import {
+  DEFAULT_SPOTLIGHT_SAMPLING_MODE,
+  SPOTLIGHT_SAMPLING_MODES,
+  resolveSpotlightSamplingMode,
+} from "../core/spotlight_sampling.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
@@ -565,6 +577,12 @@ function setupGUI() {
     }
 
     reconstructYAML(configTree);
+    // reconstructYAML just copied params.maxSpotlights into the tree. If this
+    // session runs an operator-accepted over-cap budget, that number must not
+    // reach disk — an over-cap budget is granted per session, by an explicit
+    // prompt, and a saved copy would resurrect it on the next boot with no
+    // consent asked. Clamp before anything serializes the tree.
+    clampPersistedSpotlightBudget(configTree);
     syncCollapseState(configTree);
 
     // Persist camera state
@@ -700,6 +718,9 @@ function setupGUI() {
     try {
       if (!window._isRebuildingFixtures) {
         reconstructYAML(configTree);
+        // Same session-only clamp as exportConfig(): the unload beacon is a
+        // save, so it may not carry an accepted over-cap budget to disk either.
+        clampPersistedSpotlightBudget(configTree);
         window.__lastConfigYaml = yaml.dump(configTree, { lineWidth: -1, noCompatMode: true });
       }
       if (window.__lastConfigYaml && navigator.sendBeacon) {
@@ -1537,13 +1558,40 @@ function setupGUI() {
   function addControl(folder, key, meta) {
     const isSpotlightLimitControl = key === "maxSpotlights";
     const controlMin = isSpotlightLimitControl ? 1 : meta.min;
-    const controlMax = isSpotlightLimitControl ? MAX_SPOTLIGHT_POOL_SIZE : meta.max;
+    // The pool is allocated once, in setupLighting(), from the resolved boot
+    // value — and setupGUI() runs after it. So the honest top of this slider is
+    // the pool that actually exists this session, not the hard cap: above the
+    // pool length the per-frame limit is clamped and the extra range would do
+    // nothing. Raising the budget is a boot-time act (?spotlights=N, or save
+    // + reload), which is what the pre-allocation model means.
+    const controlMax = isSpotlightLimitControl ? getSpotlightSliderMax() : meta.max;
     if (isSpotlightLimitControl) {
+      // The YAML meta keeps the hard cap (that is the declared capability of
+      // the knob, and it must not ratchet down into every scene file on save);
+      // only the live control is bound to this session's pool.
       meta.max = MAX_SPOTLIGHT_POOL_SIZE;
       if (Number.isFinite(params[key])) {
-        params[key] = Math.min(params[key], MAX_SPOTLIGHT_POOL_SIZE);
+        params[key] = Math.min(params[key], controlMax);
       }
     }
+    if (key === "spotlightSamplingMode") {
+      // The strategy roster lives in code (spotlight_sampling.js), not in
+      // scenes/common.yaml — the same split as the Max Spotlights range above,
+      // and for the same reason: YAML is operator-owned data, and a strategy
+      // list that disagrees with the strategies that exist is a lie the
+      // operator can only discover by picking a dead option. Writing it back
+      // into `meta` means a save records the truthful list.
+      meta.options = SPOTLIGHT_SAMPLING_MODES.slice();
+    }
+    // A session running an operator-accepted over-cap budget (?spotlights=N
+    // above the hard cap, confirmed at boot) gets a persistent marker on the
+    // slider itself: the red GPU banner auto-hides after 30 s, and the operator
+    // needs to be able to tell — an hour later, and after a save — that this
+    // number is session-only and will not come back on the next boot.
+    const overCapSession = isSpotlightLimitControl && isSpotlightSessionCeilingRaised();
+    const controlLabel = overCapSession
+      ? `⚠ ${meta.label || key} (session ${getSpotlightSessionCeiling()})`
+      : (meta.label || key);
     const isColor =
       meta.type === "color" ||
       (typeof meta.value === "string" && String(meta.value).startsWith("#"));
@@ -1551,17 +1599,25 @@ function setupGUI() {
     let ctrl;
 
     if (isColor) {
-      ctrl = folder.addColor(params, key).name(meta.label || key);
+      ctrl = folder.addColor(params, key).name(controlLabel);
     } else if (isBool) {
-      ctrl = folder.add(params, key).name(meta.label || key);
+      ctrl = folder.add(params, key).name(controlLabel);
     } else if (meta.options) {
-      ctrl = folder.add(params, key, meta.options).name(meta.label || key);
+      ctrl = folder.add(params, key, meta.options).name(controlLabel);
     } else if (typeof params[key] === "number" && controlMin !== undefined) {
       ctrl = folder
         .add(params, key, controlMin, controlMax, meta.step)
-        .name(meta.label || key);
+        .name(controlLabel);
     } else {
-      ctrl = folder.add(params, key).name(meta.label || key);
+      ctrl = folder.add(params, key).name(controlLabel);
+    }
+
+    if (overCapSession && ctrl.domElement) {
+      ctrl.domElement.title =
+        `Over-cap session: ${getSpotlightSessionCeiling()} SpotLights, accepted at boot from ` +
+        `?spotlights=. The hard cap is ${MAX_SPOTLIGHT_POOL_SIZE} — saving writes ` +
+        `${MAX_SPOTLIGHT_POOL_SIZE}, and reloading returns to it unless you pass the URL ` +
+        'parameter and accept the prompt again.';
     }
 
     // Scope tooltips for controls whose NAME does not make their reach obvious.
@@ -1846,10 +1902,57 @@ function setupGUI() {
     return ctrl;
   }
 
+  /**
+   * Make sure ⚙️ Options carries a `spotlightSamplingMode` leaf.
+   *
+   * The shipped DEFAULT strategy lives in code (spotlight_sampling.js), the same
+   * split as the roster in addControl() and the "Max Spotlights" range in _187: YAML is
+   * operator-owned data that the save path rewrites, so a default parked there
+   * is whatever the last save left behind. A scene that records no value runs
+   * the code default — and without this seed it would also have NO DROPDOWN,
+   * because this section is built by walking the leaves that exist. That would
+   * leave an operator who deleted the key with no way to pick anything, and the
+   * next save would not record what he is looking at.
+   *
+   * `reconstructYAML()` only writes into leaves that ALREADY exist, so the leaf
+   * has to be created here for the value to persist — the same reason (and the
+   * same shape) as applySubscribedUniverses() in subscribed_universes_prompt.js.
+   * A leaf that is already there is left completely alone: the saved value wins.
+   */
+  function ensureSpotlightSamplingEntry(sectionNode) {
+    const entry = sectionNode.spotlightSamplingMode;
+    if (entry !== undefined) {
+      const isControlLeaf = entry
+        && typeof entry === "object"
+        && !Array.isArray(entry)
+        && Object.prototype.hasOwnProperty.call(entry, "value")
+        && entry.value !== undefined;
+      if (!isControlLeaf) {
+        throw new TypeError(
+          '[SpotlightSampling] options.spotlightSamplingMode is present but malformed; ' +
+          'expected a control leaf with a defined "value".'
+        );
+      }
+      return;
+    }
+    const mode = resolveSpotlightSamplingMode(
+      params.spotlightSamplingMode, 'params.spotlightSamplingMode'
+    );
+    sectionNode.spotlightSamplingMode = { value: mode, label: 'Sim Spotlight Sampling' };
+    params.spotlightSamplingMode = mode;
+    console.warn(
+      `[SpotlightSampling] ⚙️ Options carried no spotlightSamplingMode entry — one was created at the ` +
+      `shipped default "${DEFAULT_SPOTLIGHT_SAMPLING_MODE}" (running: "${mode}"). ` +
+      'It persists with the next save of scenes/common.yaml.'
+    );
+  }
+
   function buildOptionsSection(parentFolder, sectionNode) {
     const optionsFolder = parentFolder.addFolder(sectionNode._section.label);
     if (sectionNode._section.collapsed) optionsFolder.close();
     _sectionFolderMap.set(sectionNode._section, optionsFolder);
+
+    ensureSpotlightSamplingEntry(sectionNode);
 
     let insertedPreviewControls = false;
 

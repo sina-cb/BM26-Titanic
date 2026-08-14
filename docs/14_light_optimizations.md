@@ -45,8 +45,10 @@ Current fixture lighting behavior:
 
 - The current shipped profiles are `edit`, `pixel_mapping`, `emissive`, and `full`.
 - `simulation/src/fixtures/dmx_fixture_runtime.js` no longer owns fixture-level `THREE.SpotLight` objects. Analytic light allocation is centralized in `simulation/src/core/light_pool.js`.
-- `light_pool.js` preallocates a fixed global spotlight pool at boot. The current manual cap is `MAX_SPOTLIGHT_POOL_SIZE = 200`.
-- `?spotlights=N` is the boot-time override for pool allocation. Values above the cap clamp to the cap and show a toast in the simulation UI.
+- `light_pool.js` preallocates a fixed global spotlight pool at boot, sized from the resolved boot value of `params.maxSpotlights` (scene YAML, or the URL override below). The current manual cap is `MAX_SPOTLIGHT_POOL_SIZE = 200`.
+- `?spotlights=N` is the boot-time override for pool allocation, applied in `simulation/src/core/url_overrides.js` together with `?profile=` / `?lighting_mode=` / `?renderer=`. Values that are not an integer `0..ceiling` are refused loudly and the saved scene value is kept.
+- Above the cap the sim **asks before it allocates**: a blocking confirm at boot names the requested count, the cap and the white/black-screen risk. Accepting raises the ceiling for that page load only (pool `N`, slider to `N`, slider labelled `⚠ Max Spotlights (session N)`); declining, dismissing, or running somewhere with no dialog clamps to the cap with the usual toast. The answer is never persisted — `clampPersistedSpotlightBudget()` writes at most `MAX_SPOTLIGHT_POOL_SIZE` into `scene_config.yaml` on every save, so the next boot asks again. `SPOTLIGHT_ABSOLUTE_CEILING = 2000` bounds what may even be asked: at ~16 fragment-uniform vectors per SpotLight that is already ~10× any GPU's budget, so anything above it is a typo and is refused with no prompt.
+- Without the URL param the saved scene value is what gets allocated, and the `Max Spotlights` slider ranges over the pool that actually exists — the pool is fixed at boot, so a wider range would be dead travel.
 - The in-app `Max Spotlights` control is now a preview-only budget control under `⚙️ Options`, adjacent to `Lighting Profile`.
 - `Sim Exposure (Preview Only)` and `Sim Brightness (Preview Only)` are preview-only controls; they do not affect `sACN in` or `sACN out`.
 - The pooled spotlights are currently `castShadow = false`. The moon directional light is the main light still flagged `castShadow = true`.
@@ -833,7 +835,7 @@ Already landed in current code:
 
 - Global pooled spotlight allocator in `simulation/src/core/light_pool.js`
 - Manual preview pool cap constant (`MAX_SPOTLIGHT_POOL_SIZE`, currently `200`)
-- URL override `?spotlights=N` with clamp + toast on overflow
+- URL override `?spotlights=N` with a boot confirm on overflow: accept → session-only raise, decline → clamp + toast
 - Preview-only `Sim Exposure`, `Sim Brightness`, and `Max Spotlights` controls
 - `⚙️ Options` adjacency for spotlight preview controls
 

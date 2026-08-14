@@ -86,6 +86,27 @@ export function audioGenreName(value: number): string | null {
   return AUDIO_GENRE_NAMES[idx];
 }
 
+export type PartySignalDisplay = {
+  label: 'PARTY SIGNAL ON' | 'PARTY SIGNAL OFF' | 'PARTY SIGNAL …';
+  tone: 'on' | 'off';
+};
+
+/**
+ * Describe the engine's held `audioParty` gate for the operator UI.
+ *
+ * `audioParty` is published as a binary 0/1 signal, and engine consumers use
+ * 0.5 as the boundary. Keep the CaptainPad pill on that same contract. A
+ * missing or non-finite value is UNKNOWN, not OFF: during startup or a broken
+ * live-param link the UI must not claim that the detector has declared calm.
+ */
+export function describePartySignal(value: number | null | undefined): PartySignalDisplay {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return { label: 'PARTY SIGNAL …', tone: 'off' };
+  }
+  if (value >= 0.5) return { label: 'PARTY SIGNAL ON', tone: 'on' };
+  return { label: 'PARTY SIGNAL OFF', tone: 'off' };
+}
+
 // ── pulse signals (one-frame transients) ────────────────────────────
 //
 // A growing class of Companion CPC keys are NOT continuous [0,1] levels —
@@ -192,6 +213,30 @@ export function audioAccentHex(signal: AudioSignalDescriptor): string {
   if (/kick/i.test(signal.key)) return '#ff5d6c';
   if (signal.kind === 'frequency') return '#c084fc';
   return ACCENT_AUTO;
+}
+
+/**
+ * Accent for a bare CPC key, with no live descriptor in hand. Same band-token
+ * resolution as `audioAccentHex` — used by the AUDIO SUGGESTION badge, which
+ * describes a signal the pattern RECOMMENDS and which may not be live (or even
+ * published) at the moment the operator is looking at the parameter.
+ */
+export function audioAccentHexForKey(key: string): string {
+  for (const token of Object.keys(COMPANION_ACCENT)) {
+    if (keyHasBandToken(key, token)) return COMPANION_ACCENT[token];
+  }
+  if (/kick/i.test(key)) return '#ff5d6c';
+  return ACCENT_AUTO;
+}
+
+/**
+ * The short badge word for a CPC signal key: `micFlux` → "FLUX",
+ * `micLow` → "LOW". Strips the family prefix the engine namespaces with and
+ * upper-cases the rest; a key with no prefix keeps its whole name.
+ */
+export function shortSignalLabel(key: string): string {
+  const stripped = key.replace(/^(mic|audio|stems|dom)/, '');
+  return (stripped || key).toUpperCase();
 }
 
 // ── curated deck/mixer subset ───────────────────────────────────────

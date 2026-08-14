@@ -202,6 +202,28 @@ export function extractParams(node, parentKey = null) {
       continue;
     }
 
+    // This optional control is allowed to be absent so the code default can
+    // seed it. Once the key exists, however, it must be a real control leaf.
+    // Treating a malformed object as a subsection makes it disappear from
+    // `params`, which is indistinguishable from absence and silently replaces
+    // the operator's broken saved value with the default later in boot.
+    if (key === "spotlightSamplingMode") {
+      const entry = node[key];
+      const isControlLeaf = entry
+        && typeof entry === "object"
+        && !Array.isArray(entry)
+        && Object.prototype.hasOwnProperty.call(entry, "value")
+        && entry.value !== undefined;
+      if (!isControlLeaf) {
+        throw new TypeError(
+          '[Config] options.spotlightSamplingMode is present but malformed; ' +
+          'expected a control leaf with a defined "value".'
+        );
+      }
+      params.spotlightSamplingMode = entry.value;
+      continue;
+    }
+
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
       if (entry.value !== undefined) {

@@ -251,3 +251,98 @@ test('the constructor refuses bad config instead of running half-wired', () => {
   assert.throws(() => new FireSyncListener({ ...base, minOnMs: -1 }), /minOnMs/);
   assert.throws(() => new FireSyncListener({ port: 7703, effect: 'x' }), /API port/);
 });
+
+// ── Trigger envelope: fire_cfg / cfg_ack (LIGHTS ONLY) ─────────────────────
+//
+// The panel owns and persists MIN HOLD / RELEASE and pushes them here. These
+// tests pin the contract the panel's console renders against: bounds are
+// enforced (never clamped), the ack echoes what is IN FORCE, and nothing on
+// this path touches the effect state.
+
+test('parseFrame accepts a well-formed fire_cfg and refuses out-of-range values', () => {
+  const ok = parseFrame('{"t":"fire_cfg","v":1,"seq":9,"min_on":200,"release":800}');
+  assert.equal(ok.ok, true);
+  assert.deepEqual({ ...ok.frame }, { t: 'fire_cfg', seq: 9, minOn: 200, release: 800 });
+  // Out of range is MALFORMED — dropped whole. A clamped envelope would apply a
+  // number nobody asked for, which is exactly what the panel refuses to do too.
+  assert.equal(parseFrame('{"t":"fire_cfg","v":1,"seq":1,"min_on":5001,"release":0}').ok, false);
+  assert.equal(parseFrame('{"t":"fire_cfg","v":1,"seq":1,"min_on":0,"release":5001}').ok, false);
+  assert.equal(parseFrame('{"t":"fire_cfg","v":1,"seq":1,"min_on":-1,"release":0}').ok, false);
+  // Missing / non-integer fields are never silently defaulted.
+  assert.equal(parseFrame('{"t":"fire_cfg","v":1,"seq":1,"min_on":100}').ok, false);
+  assert.equal(parseFrame('{"t":"fire_cfg","v":1,"seq":1,"min_on":"100","release":0}').ok, false);
+  // Wrong protocol version is "not for us", like every other frame.
+  assert.deepEqual(
+    parseFrame('{"t":"fire_cfg","v":2,"seq":1,"min_on":100,"release":100}'),
+    { ok: false, reason: 'unsupported' },
+  );
+});
+
+test('a fire_cfg applies the envelope at runtime and is answered with cfg_ack', async () => {
+  const applied = [];
+  const h = await harness({ minOnMs: 150, releaseMs: 400, applyRelease: (ms) => applied.push(ms) });
+  try {
+    assert.deepEqual(applied, [400], 'the configured release goes in force at bind time');
+    await h.send({ t: 'fire_cfg', v: 1, seq: 7, min_on: 250, release: 900 });
+    await sleep(40);
+    assert.equal(h.listener.minOnMs, 250);
+    assert.equal(h.listener.releaseMs, 900);
+    assert.deepEqual(applied, [400, 900], 'the release half is handed to the renderer');
+    const ack = h.acks.find(a => a.t === 'cfg_ack');
+    assert.ok(ack, 'the panel gets a cfg_ack');
+    assert.deepEqual(
+      { t: ack.t, v: ack.v, seq: ack.seq, min_on: ack.min_on, release: ack.release },
+      { t: 'cfg_ack', v: 1, seq: 7, min_on: 250, release: 900 },
+      'the ack echoes the values NOW IN FORCE',
+    );
+    assert.deepEqual(h.calls, [], 'a cfg frame never touches the effect state');
+    const s = h.listener.getStatus();
+    assert.equal(s.releaseMs, 900);
+    assert.equal(s.releaseApplied, true);
+    assert.equal(s.cfgSeq, 7);
+  } finally { h.close(); }
+});
+
+test('an out-of-range fire_cfg changes nothing and is counted invalid', async () => {
+  const applied = [];
+  const h = await harness({ minOnMs: 150, releaseMs: 400, applyRelease: (ms) => applied.push(ms) });
+  try {
+    await h.send({ t: 'fire_cfg', v: 1, seq: 1, min_on: 99999, release: 400 });
+    await sleep(40);
+    assert.equal(h.listener.minOnMs, 150, 'the running envelope is untouched');
+    assert.equal(h.listener.releaseMs, 400);
+    assert.deepEqual(applied, [400], 'no second apply');
+    assert.equal(h.acks.filter(a => a.t === 'cfg_ack').length, 0, 'nothing is acked');
+    assert.equal(h.listener.getStatus().invalid, 1);
+  } finally { h.close(); }
+});
+
+test('a pushed min-ON takes effect on the very next burst', async () => {
+  const h = await harness({ minOnMs: 30, releaseMs: 0 });
+  try {
+    await h.send({ t: 'fire_cfg', v: 1, seq: 1, min_on: 300, release: 0 });
+    await sleep(20);
+    await h.send(evt('A', 1, 1, 0));      // rising edge
+    await h.send(evt('A', 0, 2, 1));      // immediate fall — a blip
+    await sleep(120);
+    assert.deepEqual(h.calls, [true], 'still held: the new 300 ms MIN HOLD is in force');
+    await sleep(260);
+    assert.deepEqual(h.calls, [true, false], 'released once the hold expires');
+  } finally { h.close(); }
+});
+
+test('a renderer that refuses a release is logged, not fatal, and the ack tells the truth', async () => {
+  const h = await harness({
+    releaseMs: 400,
+    applyRelease: (ms) => { if (ms > 1000) throw new Error('renderer bound 0..1000'); },
+  });
+  try {
+    await h.send({ t: 'fire_cfg', v: 1, seq: 3, min_on: 100, release: 2000 });
+    await sleep(40);
+    const ack = h.acks.find(a => a.t === 'cfg_ack');
+    assert.ok(ack);
+    assert.equal(ack.release, 400, 'the ack reports the release still IN FORCE, not the request');
+    assert.equal(ack.min_on, 100);
+    assert.match(h.listener.getStatus().lastError, /renderer bound/);
+  } finally { h.close(); }
+});

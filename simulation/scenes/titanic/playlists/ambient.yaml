@@ -90,9 +90,9 @@ entries:
     pattern: 13_sparkle
     label: null
     defaults:
-      sliderLocalSpeed: 0.21
-      sliderLevel: 0.68
-      sliderStarCount: 0.15
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
       sliderBrilliance: 0.59
       sliderTwinkleFocus: 0.88
       sliderAfterglow: 0.13

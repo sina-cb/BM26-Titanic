@@ -85,7 +85,12 @@ entries:
   - id: e_party_high_8_31_strobe_lattice
     pattern: 31_strobe_lattice
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderFlash: 0.08
+      sliderLevel: 0.5
+      sliderScale: 0.5
+      sliderSharp: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -121,9 +126,9 @@ entries:
     pattern: 50_phase_cathedral_hd
     label: null
     defaults:
-      sliderLocalSpeed: 0.66
+      sliderLocalSpeed: 0.14
       sliderNodeContrast: 0.75
-      sliderPhaseShift: 0.78
+      sliderPhaseShift: 0.11
       sliderKickLock: 0.13
       sliderSharpBase: 0.13
     modulations:
@@ -147,7 +152,12 @@ entries:
   - id: e_party_high_13_51_confetti_cyclone
     pattern: 51_confetti_cyclone
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLow: 0.16
+      sliderHigh: 0.5
+      sliderKick: 0.5
+      sliderSparkSize: 0.5
     modulations: []
     midiMappings: []
     notes: null

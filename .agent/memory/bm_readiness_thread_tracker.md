@@ -11552,3 +11552,624 @@ by this diff. Residual hypotheses if leak recurs (H2 frozen universe buffer in
 universe_router processFrame — per-source staleness only, one shared source id; H3 demap
 W/A/U-no-dimmer vs applyDmxFrame dimmer-RGB-only asymmetry) + 5-min live discrimination
 recipe in the report. No processes/ports touched; scenes/states untouched.
+
+## _182 — SIZE locked at 0.5
+
+**Date:** 2026-08-06 · **Agent:** Opus implementation · **Report:** .agent/reports/202608/20260806_182_size_lock.md
+
+Operator ruling on the _181 finding: "Set it to 0.5 and do not allow changing it. Add some
+warning in the engine UI if it's anything but 0.5."
+
+**Live fix first (authorized, API-only):** the running titanic engine was at `size: 0.773`
+(mult ≈ 2.13, coords compressed to 0→0.47). `POST /param-center {"size":0.5}` →
+`{status:ok, revision 195470315}`; readback `value 0.5, lastSource api`; the engine itself
+rewrote `states/titanic/globals_state.yaml` to 0.5. No restart, no port bound, no hand-edit.
+
+**The pin (new `marsin_engine/lib/size_lock.js`):** one constant `LOCKED_SIZE = 0.5` (the
+identity point of `0.25·16^size`) plus `SIZE_LOCK_KEY/REASON/MESSAGE`, `isLockedSize()`, and
+a per-ParamCenter `SizeLockReport`. No config option, no env override (codex P0). Unlock =
+delete the guards + the module; the header comment says so.
+
+**Every set path covered** — all CPC writes funnel through `_setNoFire`, where the guard sits
+BEFORE source arbitration: REST `POST /param-center` (409 via `sendJsonError`, other keys in
+the body still apply), WS `setSharedParam` (`paramRejected` now carries `message` +
+`lockedValue`), OSC `setMany` (size dropped from the batch), timeline cue/look globals
+(throws → cueError), colour autopilot, boot restore + snapshot recall via
+`state_manager.applyGlobalsState` (names the file), and CPC's own `_loadFromDisk` (pin +
+file-named warning). A write ASKING for 0.5 returns `noop:true` and is not a violation, so a
+clean state file never warns. `getAll`/`getCanonicalState`/`_writeToDisk` serve the pin
+through `_pinnedSize()`, which loudly reports + repairs hypothetical store drift, so the
+render loop, broadcasts, and persistence are pinned at the READ side too. `getSchema` gains
+`locked`/`lockedValue`. Refusal logging is aggregated after the first line (≤1 per 2 s, count
+folded in) so a stuck writer can't flood the console mid-show — nothing is dropped.
+
+**Where the operator sees it:** the engine serves no web UI of its own, so `GET /status` gains
+`sizeLockWarning` (ready-to-render one-liner, null when clean) + `sizeLock` (full record), and
+CaptainPad surfaces it in the EXISTING amber ⚠ DEGRADED header chip (`ui/HealthChip.tsx` via
+`useEngineState.deriveEngineHealth`, checked FIRST — it is the only degrade the operator can't
+diagnose from the UI). Sticky for the process lifetime. `docs/24` §4.1 flags the OSC address.
+
+**CaptainPad:** no SIZE control exists (removed 2026-07-27, `CPCControls.tsx:87-93`), no MFT
+binding (`midi_profiles/mft.yaml:153`), writes are single-key on user interaction — so nothing
+will spam refused size-sets. Only three additive changes (status type, health snapshot, chip
+doc); `tsc --noEmit` clean, vitest 45 files / 960 pass.
+
+**Suites:** new `tests/mixer/size_lock.test.js` 15/15 (boot pin + loud file-named warning,
+clean-file silence, refusal per source, noop semantics, setMany, source-lock bypass attempt,
+no WASM binding, applyGlobalsState, persistence, sticky warning, schema, drift repair) —
+temp state roots only, no ports, `states/**` untouched by the tests. Full engine suite
+**2829 / 2821 pass / 8 fail** = exactly the known baseline (5 audio_capture env, EADDRINUSE
+env, `effects_v2_mode_page_layout.test.js` node test-runner IPC flake, `calibration_patterns
+.test.js:86` pre-existing). No new failures. Note: the `spec` reporter truncates mid-run on
+this box (same IPC flake); `--test-reporter=tap` completes.
+
+**Operator action:** restart the engine when convenient — the live session is already at 0.5
+and the scene state is clean, but the PIN only arrives with the code at the next engine start.
+
+**Constraints:** no git ops; no process starts/stops (the authorized size-set API call + a few
+read-only GETs were the only live interaction); scenes/**, calibration patterns 66-73, and
+playlists untouched. `states/**` churn in the tree is engine/suite residue, reported not
+reverted. Scratch under ~/tmp/fix_182/.
+
+## _183 — audio metadata recon + FLUX root cause
+
+**Date:** 2026-08-06 · Opus investigation agent, READ-ONLY (no source edits, no git ops).
+Report: `.agent/reports/202608/20260806_183_audio_meta_recon.md`.
+
+**FLUX root cause — found, proven offline, one link.** The Audio Companion **never publishes
+`micFlux`**. The engine side is complete and correct: `micFlux` is a built-in CPC key
+(`audio/postproc/audio_signals.js:90`, `oscAddress /marsin/mic/flux`, `live:true`,
+`broadcastHz:15`), it is in `GET /param-center/schema` (verified by an offline `ParamCenter`
+probe against a temp state file), the OSC listener binds its canonical address, and CaptainPad
+lists it in the modulation picker (`deriveAudioSignals` → `useModulationSourceOptions`). What
+does not exist is the producer: `defaultCompanionConfig()`
+(`audio/companion/companion_config.js:237-250`) and the persisted `companion_config.yaml` both
+design only `micLow/Mid/High/Kick + dom1/2 freq+energy` — **no flux signal** — and
+`CURATED_OUTPUTS` (`:94-106`) omits `micFlux`, so even an operator adding one by hand in the
+designer gets `resolveOscOut("micFlux") → cpcKey "micflux", address /marsin/audio/micflux`
+(a NEW dynamic key), not the built-in. The analyzer's `r.flux` is published only into the
+Companion's OWN in-process ParamCenter as `micFluxRaw` (`companion_server.js:1295`), and raw
+mirrors carry no `oscAddress` — so it never reaches the wire. Nothing is broken in transport,
+serialization, CaptainPad filtering, type schema, memoization, labels, or runtime validation.
+
+**Worse than a dead meter.** `applyModulations` skips a mapping only when the source key is
+ABSENT; `micFlux` is PRESENT at its default 0, so a flux mapping fires every frame with
+signal 0 — and in `override` mode that **pins the target at `range[0]`**, overriding the
+operator's slider. Blast radius: **32 of 75 patterns** declare `<- micFlux`, and **11 saved
+playlist modulations** bind `key: micFlux` (`titanic/ambient.yaml` ×4,
+`ambient_sound_reactive.yaml` ×6, `titanic/default.yaml` ×1, plus `test_bench/default.yaml`).
+Example: `mod_sliderEmberSwell_micFlux` pins `sliderEmberSwell` at 0.08.
+
+**Minimal fix (no aliasing, no fallback keys):** add `micFlux: '/marsin/mic/flux'` to
+`CURATED_OUTPUTS`; add `intensity('flux', 'micFlux', 'rawFlux', <cutoffHz>)` to
+`defaultCompanionConfig()` (`rawFlux` already exists as a raw source at `companion_config.js:44`);
+add the matching signal to the persisted `companion_config.yaml` (the file overrides the
+default, so JS alone changes nothing live). **Decide explicitly** on the secondary gap:
+`gainByKeyForOsc()` (`audio_signals.js:453-461`) omits `micFlux`, so once flux flows the
+persisted `micFluxGain` knob is dead AND engine-side `micFluxRaw` stays 0 (raw mirrors are
+wired only for `GAIN_BY_KEY` entries, `osc_listener.js:338-353`) — either wire it or retire
+the knob; a half-wired gain is the exact failure mode that map exists to prevent. Verify via
+the `_173` seam (`tests/helpers/companion_isolation.mjs`), never against the live stack.
+
+**Canonical metadata extension point for the feature.**
+`AUDIO_MODULATION_V1` has exactly ONE parser — `tools/audio_mod_spec.mjs` (`parseAudioModSpec`,
+`:127`), offline tooling only; **the engine does not parse the block today**. It already parses
+the optional `# note` on every mapping line and then **STRIPS it at `:188-191`** — the "short
+explanation" the feature wants is already authored in every pattern header and thrown away one
+line before the return. The join key is free: the block's `slider<Name>` token IS the WASM
+export `name` IS `ModulationMapping.target.parameter` (`pattern_defaults.js:56-58`). The
+serialization seam is the existing `codeDefault` precedent: `codeDefaultsForPattern`
+(`api_server.js:997-1010`, per-pattern Map cache) + `annotateCodeDefaults` (`:1018-1024`,
+"additive, does not touch existing fields"), stamped onto `exports:` at `api_server.js:3561`
+and `:3718` — add a sibling `audioSuggestionsForPattern` there and both `/mixer` and `/deck`
+payloads carry it with zero new endpoints. `cpcOwned/cpcKey/cpcLabel` (`:3565-3572`) is the
+precedent for CaptainPad rendering additive per-export metadata as a badge.
+
+**Authoritative signal registry: `marsin_engine/audio/postproc/audio_signals.js`** — the CPC
+registry (`param_center.js:105`), `KNOWN_SIGNALS`, `GAIN_BY_KEY` (`osc_listener.js:23,46`) and
+CaptainPad's live-key set all derive from it. **Extend it, never duplicate.** Hard duplicates
+flagged: `audio_mod_spec.mjs:56 VALID_SIGNALS` (the ONLY place that rejects an unknown signal
+name — a hand-typed 5-element Set), `pattern_audio_harness.mjs:122 SIG_FIELD`,
+`companion_config.js:94-106 CURATED_OUTPUTS` (claims to mirror the descriptors' oscAddress
+fields; does not — this IS the FLUX bug). Softer/guarded: `processedSignalKeys` MIC_ORDER
+(`:401`, throws on drift), `GAIN_OP_ID` (`:432`), `gainByKeyForOsc` order (`:455`),
+`RAW_SOURCES` (`companion_config.js:39`), CaptainPad `COMPANION_ACCENT`.
+
+**Why the rename matters on screen, not just in source.** `prettySliderName`
+(`CaptainPad/components/Modulation.tsx:90-108`) turns `sliderLOW_Level` into
+`"L O W_ L EVEL"` — the hack renders as garbage on the operator's slider. Only **one** pattern
+uses it: `patterns/13_sparkle.js` (4 setters at `:49-58`). Every other pattern already uses
+clean names + a header block. Rename **in place** (declaration order = MFT knob order;
+`knob_order.ts` derives from export order), then re-run `white_amber_lane_match.test.js`.
+
+**Recommended order for _184:** (0) fix `audio_mod_spec.mjs` — keep `note`, derive
+`VALID_SIGNALS` — and add the first-ever test for it, asserting every header `slider` token
+resolves to a real kind-1 export repo-wide; (1) additive engine stamp + CaptainPad badge;
+(2) the `13_sparkle` rename last; (3) FLUX independently, can land first.
+
+**Top hazards flagged:** the live engine rewrites `simulation/scenes/*/playlists/*.yaml` on
+every modulation CRUD — never hand-edit playlists with the stack up, and the Phase-2 rename
+breaks saved `target.parameter` values which load **leniently** (`playlist_manager.js:171-183`),
+i.e. they vanish SILENTLY. CaptainPad hand-duplicates the engine's modulation math
+(`Modulation.tsx:587-641`). Three separate pretty-name implementations exist. Do not
+pre-select a suggested source (metadata must never rewrite the operator's saved mapping), and
+preserve the parser's `null`-for-absent / **throw**-for-malformed split (codex P0).
+
+**Method:** all probes offline and in-process (`node -e` importing `param_center.js` and
+`companion_config.js`, temp state file in the scratch dir). No ports bound, no
+engine/companion/CaptainPad process touched, no tracked file changed except this block and the
+report.
+
+---
+
+## _184 — audio suggestion metadata + FLUX fix
+
+**Date:** 2026-08-06 · Opus, primary implementer · branch `feat/bm_readiness` (post `9e8b23b8`)
+· report `.agent/reports/202608/20260806_184_audio_meta_impl.md` · **no git ops** · all
+verification offline / in-process (no operator port touched, no live engine or Companion call).
+
+**FLUX IS FIXED — and it needs ONE operator action: RESTART THE AUDIO COMPANION.** The design
+is read once at boot, so a running Companion is still on the old flux-less config no matter
+what the file says. After the restart, 11 saved `micFlux` mappings that were effectively frozen
+come alive at once — **check the sound-reactive playlists on a low master first.**
+
+**Root cause confirmed and killed at the source.** The Companion never published `micFlux`.
+Three defects, all the same shape (a hand-typed list drifted from the registry):
+(a) `CURATED_OUTPUTS` (`companion_config.js`) omitted it, so an operator-designed FLUX signal
+slugged into a NEW key `micflux` on `/marsin/audio/micflux`; (b) neither the built-in default
+design nor the persisted YAML had a flux signal at all; (c) `gainByKeyForOsc()` excluded
+`micFlux` with a comment that went stale when the engine stopped running its own analyzer —
+which left `micFluxGain` dead, the `micFlux` post-chain unrun, AND `micFluxRaw` pinned at 0,
+the value `audio_structure_detector.js:488` reads as its build-score flux input.
+All three now **derive** from `audio_signals.js`: CURATED_OUTPUTS from the descriptors'
+`/marsin/mic/*` + `/marsin/dom/*` addresses, `gainByKeyForOsc()` from `processedSignalKeys()`.
+Added an **import-time two-way parity guard** — every designable `RAW_SOURCES` entry must have
+a curated output and vice versa — so a future sixth band crashes the Companion at boot rather
+than silently orphaning itself. Flux LPF 22 Hz (deliberately ABOVE kick's 18: flux is a
+transient rise measure, over-smoothing rounds off the edges it exists to report) — the one
+number that wants an ear on a real track.
+
+**`companion_config.yaml` resolved: TRACKED config, not live state** (`git ls-files` clean +
+it still carries hand-written comments that `saveCompanionConfig`'s `yaml.dump` would strip).
+So I edited it. For a stale operator export the boot path now **names** the missing curated
+signals loudly (`missingCuratedOutputs()` — a pure report, never a repair, never blocks boot).
+
+**Metadata: block stays `AUDIO_MODULATION_V1`.** No syntax changed — `range` and `curve` were
+always in the grammar, and the `# note` was parsed then **thrown away one line before the
+return**. A bump would have been a lie and would have touched 62 patterns for nothing. The
+parser now returns `{ version, mappings(+note), modString, synth }`, refuses duplicate sliders,
+and **names the pattern in every throw** (the engine parses arbitrary patterns now).
+`audioSuggestionsBySlider()` keys by the RUNTIME parameter name and emits
+`{version, signal, range, curve, modulationCurve, note?}` — `modulationCurve` is the block's
+curve pre-translated into the engine vocabulary (`pow2`==`easeIn`, `ease`==`easeOut`) so
+CaptainPad never owns a second lookup table. `note` absent means absent.
+
+**Single-registry fold done:** `audio_mod_spec.mjs VALID_SIGNALS`,
+`pattern_audio_harness.mjs SIG_FIELD`, `companion_config.js CURATED_OUTPUTS` and
+`gainByKeyForOsc()` all derive from `audio_signals.js` (new `micSignalShortNames()`).
+
+**Engine surface = the codeDefault seam, zero new endpoints.** `audioSuggestionsForPattern()`
+beside `codeDefaultsForPattern` + a stamp in `annotateCodeDefaults` → reaches `/deck`,
+`/mixer` and legacy `/exports` for free. A malformed header logs
+`[AudioSuggest] REFUSED "<pattern>"` at error level and serves nothing — it must never 500 the
+hot broadcast path and darken the rig. **The hard refusal lives in the test suite**, which
+parses EVERY pattern and fails on any bad block. That split is deliberate.
+
+**CaptainPad:** `♪ FLUX` band-coloured badge beside the label + the author's note on a quiet
+secondary line; interactive on the deck, read-only on the mixer strip. **Prefill rule as
+adjudicated:** ONLY an explicit ♪-badge tap on an unmapped param seeds source/override-mode/
+range/curve; the plain ◎ add-modulation flow is byte-identical to before; an existing saved
+mapping always wins; nothing is auto-created; the suggested source chip is **flagged, never
+pre-selected**. Rules live in pure `components/audio_suggestion_logic.ts` so the shipped path
+is the tested path.
+
+**Pattern 13 migrated, values proven preserved.** `sliderLOW_Level→sliderLevel`,
+`sliderHIGH_Brilliance→sliderBrilliance`, `sliderFLUX_StarCount→sliderStarCount`,
+`sliderKICK_Burst→sliderBurst` — renamed IN PLACE (declaration order = MFT knob order
+untouched), W==A re-verified. Migrated the 13_sparkle entries in titanic
+`ambient.yaml` / `default.yaml` / `ambient_sound_reactive.yaml` (defaults + all four modulation
+targets/ids); every saved VALUE byte-identical, full old→new→value table in the report;
+re-read after each edit, no concurrent rewrite. `manifest.json` needed nothing (names only).
+On screen `F L U X_ STAR C` becomes `STAR COUNT` + a `♪ FLUX` badge.
+
+**Tests:** 5 new files, 45 new tests, all 11 brief points mapped (plus a 12th pinning the
+present-at-zero footgun as executable behaviour: absent source → untouched, present-at-0 →
+PINNED at range[0], real value → full sweep). New loud guards: every pattern's block parses and
+every header slider token resolves to a real export repo-wide; every saved 13_sparkle reference
+in the titanic scene resolves; the Companion publishes every curated output.
+**Engine** `npm test` 2874/2863/11 (baseline 2829/2821/8) → I fixed one, leaving **10**.
+Failing LIST: 7 baseline-known (5 audio_capture env, effects_v2 IPC flake, osc_listener
+EADDRINUSE); baseline's `calibration_patterns:86` now PASSES; 3 NEW and **none of them mine** —
+`fire_sync_listener:135` (the other AI's staged file + its own test) and `playlist_api` ×2,
+independently reproduced with a scratch harness touching none of my code: the uncommitted
+`08_ocean_liner` rewrite references `FIX_RAW_LED`/`FIX_TE_SIGN`, which `summer_camp_dome` does
+not define → `400 Compile error`. **CaptainPad** `tsc --noEmit` clean, vitest 981 pass / 6
+skipped / 0 fail (baseline 960).
+
+**Fixed in my blast radius:** `playlist_api.test.js` probed 13_sparkle for `sliderDensity`,
+retired by the pattern's foreign rewrite *before* this task — repointed to `sliderStarCount`
+per the test's own stated intent. Also replaced `GlobalParams.tsx`'s private inline pretty-namer
+with the shared `prettySliderName` it already imported (same param read two ways on one screen).
+
+**Flagged for follow-up (3 task chips filed):** (1) **137 saved playlist `defaults` keys + 3
+modulation targets across the scenes no longer resolve** against their patterns — that tuning
+is ALREADY being dropped silently on load (why my resolution test is scoped to titanic
+13_sparkle rather than repo-wide); (2) `tests/mixer/performance_mode.test.js` spawns engines on
+`portBase 6960, span 30` = 6960-6989, **overlapping the operator's pinned 6967-6972** — suggest
+`createEngineHarness` itself throw on a reserved window; (3) the `08_ocean_liner` FIX_ constant
+breakage above.
+
+**Also note:** `simulation/scenes/titanic/playlists/ambient_sound_reactive.yaml` is **untracked**
+— a new playlist someone created and has not committed. It carries part of this migration.
+
+## _185 — 08_ocean_liner portability
+
+**Date:** 2026-08-06 · Report: `.agent/reports/202608/20260806_185_ocean_liner_portability.md`
+· No git ops, no live processes, nothing bound an operator port.
+
+**The break (_184's follow-up 3), closed.** The uncommitted `08_ocean_liner`
+rewrite referenced `FIX_RAW_LED` / `FIX_TE_SIGN`; `summer_camp_dome` carries
+neither, so `POST /deck/playlist/entry` returned `400 Compile error` and two
+`playlist_api` tests failed. Not a test bug.
+
+**Mechanism.** `lib/fixture_type_constants.js` holds a global append-only registry
+(RAW_LED=1, PAR=2, VINTAGE_6=3, BAR_18=4, HAZE=5, FOG=6, TE_SIGN=7).
+`buildFixtureTypeIds()` emits **only the roles a model's pixels actually carry**;
+`wasm_host.js:134` injects them on every compile path and
+`name_id_registry.js:142` throws on any other `FIX_*` token. Per-model tables are
+DERIVED from geometry, not authored — so "establish the constants for every model"
+is not a thing the system supports, by design.
+
+**Idiom chosen (a).** Self-declare the canonical id for roles that are OPTIONAL
+accents, exactly as `14_lunar_current:56`, `21_pelagic_manta_rays:68` and
+`35_sparkle_rain:63` do — all three declare only `FIX_TE_SIGN`. Declaring the
+canonical id means the injected prelude and the pattern's own `var` agree on
+models that carry the role (verified: identical prelude on titanic/test_bench →
+behavior byte-identical), and match no pixel on models that don't. I deliberately
+did NOT also declare `FIX_PAR`/`FIX_VINTAGE_6`/`FIX_BAR_18`: bars and Vintage rails
+are this pattern's load-bearing instruments, and swallowing their absence would
+turn a loud compile failure into a flat untyped wash — a fallback (codex P0).
+
+**Shared-tree collision — my net edit to the pattern is ZERO bytes.** The
+operator's other AI session added the identical two-constant block (lines 22-25)
+to `08_ocean_liner.js` while I was mid-edit. I removed my own (five-constant)
+block and kept theirs untouched; the file now has exactly one such block, CRLF
+intact, every other byte of their rewrite preserved.
+
+**Tests (offline).** `playlist/playlist_api` **19/19**, incl. both named
+regressions green. `mixer/all_models_load_lint` **34/34**.
+`patterns/{calibration_patterns,param_truth_smoke,specialty_white_uv,white_amber_lane_match}`
++ `io/fixture_type_constants` **121/121**. Zero failures anywhere I ran. Note
+`node --test tests/patterns/` (dir form) dies with `ERR_UNSUPPORTED_DIR_IMPORT` on
+Node v24 — list the files.
+
+**Flag for follow-up:** there is NO repo-wide "compile every pattern on every
+model" test; I wrote one as scratch only. It shows this is catalog-wide, not an
+`08` bug — 91 pattern×model FIX_ failures before, 58 after. Still un-self-declared
+`FIX_TE_SIGN` (so they break on `studiodj` / `summer_camp_dome` /
+`summer_camp_logsville` the same way): `11_bioluminescence`, `41_reaction_diffusion`,
+`45_manta_drift`, `57_ink_diffuse`, `58_lighthouse_solo` — the last two also need
+`FIX_RAW_LED`. Recommend a card for those five plus a real compile-lint test.
+
+## _186 — spotlights URL precedence debug
+
+**Date:** 2026-08-06 · **Agent:** _186 (Fable debug, read-only) · **Report:** `.agent/reports/202608/20260806_186_spotlights_url_precedence.md`
+
+**Question:** does `?spotlights=644` beat the "Max Spotlights" UI/saved value (operator
+expectation: URL authoritative)?
+
+**Verdict: YES at boot, clamped loudly to 200.** `?spotlights=` sizes the SpotLight pool
+(`light_pool.js:36-39`) and, when present, overwrites `params.maxSpotlights`
+(`light_pool.js:349-350`) BEFORE the GUI builds (`environment.js:204→217`), so the slider
+shows the URL value and the saved 60 loses. 644 > `MAX_SPOTLIGHT_POOL_SIZE=200`
+(`light_pool.js:20`) → effective 200 with cap toast + console (not silent). Slider moves
+after boot are deliberate and well-defined (active limit ≤ pool, `:252-255`).
+`profile=full` carries no spotlight budget.
+
+**Deviations:** (D2) without the URL param the pool is fixed at 60, so saved/UI values
+61..200 are SILENTLY ineffective; (D3) the URL-session value persists into
+scene_config.yaml on save (no `transient` flag, `config.js:320-321`) — precedent-consistent
+(lightingMode/profile persist too) but the persisted 200 then squashes to 60 on plain boot
+(save lies, via D2); (D4) light_pool syncs `params` only, not `configTree`.
+
+**Fix spec (in report):** move `spotlights` into `applyBootUrlOverrides()` (both params +
+configTree, loud invalid/cap handling); size the pool at `initLightPool` from the resolved
+`params.maxSpotlights` instead of a module-load constant (fixes D2 + makes D3 round-trip
+truthful); keep persist-on-save per repo precedent (`transient: true` in 8 scene YAMLs +
+save-server template is the opt-out if the operator wants session-only). Read-only: no
+source touched.
+
+## _187 — spotlight pool sizing fix
+
+**Date:** 2026-08-06 · **Agent:** _187 (Opus impl) · **Report:** `.agent/reports/202608/20260806_187_spotlights_pool_fix.md`
+
+Implemented _186's fix spec. The chain is now: scene YAML → `applyBootUrlOverrides()`
+(`?spotlights=` handled here, beside profile/lighting_mode/renderer, writing **params +
+configTree**) → `initLightPool()` allocates exactly `params.maxSpotlights` → `setupGUI()`
+binds the slider over `1..poolSize`.
+
+**Files:** `simulation/src/core/url_overrides.js` (new `resolveSpotlightsUrlValue()` +
+`?spotlights=` block), `simulation/src/core/light_pool.js` (module-load URL read and the
+`DEFAULT_POOL_SIZE=60` constant deleted; new exported `resolveBootPoolSize()` /
+`getSpotlightSliderMax()` / `isPoolInitialized()`; `showSpotlightCapToast` exported +
+headless-safe), `simulation/src/gui/gui_builder.js` (slider max = pool, YAML `meta.max`
+still the hard cap), `simulation/README.md`, `docs/14_light_optimizations.md`, new
+`simulation/tests/spotlight_pool_budget.test.js`.
+
+**Now works:** saved `maxSpotlights: 150` with no URL param actually allocates 150 (D2);
+a `?spotlights=` session saved then rebooted plain reproduces the same pool (D3); slider
+range == pool so no dead travel. **Now refuses loudly:** negatives and non-integers
+(`-5`, `80px`, `1.5`) keep the scene value instead of coercing; a scene missing
+`parLights.maxSpotlights` fails pool init instead of defaulting to 60. `MAX_SPOTLIGHT_POOL_SIZE
+= 200` untouched; persist-on-save kept per the lightingMode/profile precedent.
+
+**Tests:** new suite 17/17. Full sim suite 2173 tests / 2165 pass / 7 fail / 1 todo —
+baseline failures identical (5× `bench_section_sync`, `pixel_map_view_defaults:487`,
+`scene_data_lint:109` todo), `pixel_order*` + `bench_mirror*` clean. **One extra failure is
+pre-existing, not mine:** `bench_mirror_state.test.js:212` asserts
+`scenes/test_bench/bench_mirror_state.yaml` does not exist, but that file was committed in
+`9e8b23b8` (_174–_181) — it fails on a clean checkout. Needs an operator ruling.
+
+## _188 — audio signal deep analysis
+
+**Date:** 2026-08-06 · **Agent:** _188 (Fable analysis, read-only) · **Report:** `.agent/reports/202608/20260806_188_audio_signal_analysis.md`
+
+Full census of all 44 picker-visible audio signals + companion internals, post-FLUX.
+Verdicts: **26 READY · 8 NEEDS-CONDITIONING · 6 MISLABELED (curate as readouts) ·
+4 DEAD-OR-BROKEN · 2 RETIRE.**
+
+**Headline finds (all file:line-cited in the report):**
+- **micFlux bug class ×4:** `micOnsetLow/Mid/High` + `audioChestHit` are DEAD —
+  `publishRawMirrors` (`companion_server.js:1312`) never publishes the 7 raw mirrors
+  the shapers read (`micOnset*Raw`, `micSubRaw`, 3 chroma raws), AND the companion's
+  analyzer is built without a `sub:` window. Present-at-zero on the wire (pins
+  override mappings at range[0]). Fix recipe = exactly _184's, one directory over.
+- Genre classifier's harmonic axis (chroma inputs) dead for the same reason.
+- `audioVocalsHot` permanently 0 (stems retired 2026-06-17) → RETIRE.
+- **Event-pulse wire loss:** one-hop pulses (downbeat, phraseBoundary, trackChange,
+  switch×2) are dropped ~30% of the time by the OSC rate gate (60 Hz sends vs 86 Hz
+  hops, `sendOsc` drops non-send hops); survivors are 16–33 ms ≈ 0–1 render frames.
+  Fix: rising-edge force-send + source-side decay envelopes.
+- Scaling: `audioKickRate` range [0,8] wastes 60% of modulator travel; `micDomFreq*`
+  linear /22050 norm puts bass roots at <1% — needs log norm or curation.
+- Playlist census: ~90 saved modulations, all but 4 bind the 5 mic bands — the READY
+  derived family (CLIMAX, LOUDNESS, SLOW ZONE, BAR/PHRASE PHASE, RISER…) is unused
+  because the picker is an uncurated 44-name wall.
+
+**Datasets (dev-time only, playa offline):** GiantSteps tempo/key (EDM, CC),
+HarmonixSet (912 tracks, beats/downbeats/segments, CC BY annotations, audio not
+distributed), FMA electronic + MTG-Jamendo (CC audio, unlabeled stability soaks),
+Ballroom (beat sanity). No usable public drop/build set → self-label ~25 tracks.
+Repo already has the chassis (`genre_eval`, `bpm_tune_eval --corpus`, mic_model playa
+tier, `playa_noise_eval`); one new `tools/signal_eval.mjs` closes the gap.
+
+**Plan (in report §4):** Stage 0 labels+tier metadata+retire (½ day) → Stage 1
+resurrect onsets/chesthit (1 day, biggest new show capability) → Stage 2 event
+hardening (1 day) → Stage 3 dataset tuning campaign (2–4 days, parallelizable) →
+Stage 4 operator golden recordings through the real mic chain + on-playa calibration.
+
+## _189 — spotlight over-cap session accept
+
+**Date:** 2026-08-06 · Opus implementer · Branch: feat/bm_readiness
+**Report:** `.agent/reports/202608/20260806_189_spotlight_cap_prompt.md`
+**Builds on:** _186 (audit) → _187 (the precedence chain / pool-sizing fix)
+
+Operator ask: "if the URL is above the max cap, ask the user to accept it or not,
+and when they do, raise the cap temporarily for that session."
+
+**Landed.** `?spotlights=N` above `MAX_SPOTLIGHT_POOL_SIZE` (200) now puts a
+**blocking confirm** at boot — inside `applyBootUrlOverrides()`, so the answer is
+known before `initLightPool()` allocates anything.
+- **Accept** → pool = N, slider ranges 1..N, slider labelled `⚠ Max Spotlights
+  (session N)` with an explanatory tooltip, one `console.warn`.
+- **Decline / dismissed / no dialog / prompt threw / non-boolean** → the old
+  behaviour byte for byte: clamp to 200, `console.error` + cap toast. Only a
+  literal `true` raises the cap; no timeout accepts, nothing is remembered.
+- **Session-only, enforced twice:** the ceiling lives on
+  `params.__spotlightSessionCeiling` (never the config tree, never localStorage)
+  and is deleted at the top of every `applyBootUrlOverrides()`; and new
+  `clampPersistedSpotlightBudget()` runs after **both** `reconstructYAML()` sites
+  in `gui_builder.js` (explicit save + auto-save via `exportConfig`, and the
+  unload beacon) so `scene_config.yaml` can never record more than 200. Persistence
+  decision = clamp-to-hard-cap (not restore-pre-raise): stronger invariant, and it
+  also catches hand-edited YAML. Live session is untouched by a save.
+- **Sanity ceiling `SPOTLIGHT_ABSOLUTE_CEILING = 2000`** — above it there is no
+  prompt at all, just a loud refusal (`?spotlights=999999`). ~16 fragment-uniform
+  vectors/light → 2000 wants ~32k, ~10× any GPU's budget and ~12× the 160 count
+  where Mac WebGPU already goes white/black; still only a few thousand small JS
+  objects, so a typo wedges a tab rather than OOM-ing the browser.
+- A **saved/hand-edited** value above 200 clamps and never prompts — consent is
+  asked for what the operator just typed, not for what was in a file.
+- Native `confirm()` deliberately: `scene_manager.js`'s themed `showModal()` is
+  Promise-based and its overlay doesn't exist that early in boot, so it cannot gate
+  a synchronous boot step. Dependency-injected (`deps.confirmSpotlightOverCap`) so
+  the gate is driven headless in tests; `buildSpotlightOverCapPrompt()` exported so
+  the consent wording is pinned.
+
+**Touched:** `simulation/src/core/light_pool.js`, `src/core/url_overrides.js`,
+`src/gui/gui_builder.js`, `tests/spotlight_pool_budget.test.js`,
+`simulation/README.md`, `docs/14_light_optimizations.md`. `environment.js` needed
+nothing — the existing boot order already puts the gate ahead of allocation.
+
+**Tests:** `spotlight_pool_budget.test.js` 17 → **33, all pass**. Full sim suite
+**2189 / 2181 pass / 7 fail / 1 todo** — the 7 are exactly the known baseline
+(`bench_section_sync` ×5, `pixel_map_view_defaults:487`, and the pre-existing
+`bench_mirror_state:212` tracked-file failure _187 flagged for an operator ruling);
+the todo is the `summer_camp_dome/patches.yaml.original` residue lint.
+
+**Try it:** `?scene=titanic&profile=full&spotlights=644` → OK gives 644 real
+SpotLights this session; 💾 then reload plain → back to ≤200 and the ⚠ label gone;
+reload with the URL → it asks again.
+
+## _190 — CaptainPad param row polish
+
+**Date:** 2026-08-06 · Report: `.agent/reports/202608/20260806_190_captainpad_param_row.md`
+
+Every Deck/Mixer parameter control is now **two lines instead of four**, and both
+surfaces render the **same component**, so they cannot drift.
+
+```
+[KNOB 8] CROSSING  [◎]  [♪ FLUX]  [⊞]                    0.50
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+```
+
+- **The bug it kills:** the deck's PARAMETERS column is **244 px** at iPad
+  landscape and **155 px** at 900 px wide (measured, not guessed). The name
+  `Text` had no `numberOfLines`, so it wrapped and the value printed *on top of*
+  the ⊞ chip. The header is now `flexWrap: 'nowrap'` with a one-line name that is
+  the only `flexShrink: 1` slot — the name ellipsizes, the chips never squeeze.
+- **New:** `components/param_row_layout.ts` (pure contract — slot order,
+  responsive metrics, width model, chip tones, WCAG ink; unit-testable in the
+  node vitest env that excludes `.tsx`), `components/ui/param_chips.tsx` (ONE
+  chip box + a metrics context so a chip passed in as an opaque node still gets
+  the compact variant), `components/ui/param_row.tsx`.
+- **Chip hierarchy:** ♪ SIGNAL filled with the band colour (loud) › ◎ ON / !
+  OVERRIDE filled green (live) › KNOB N / ⊞ MIDI outlined (quiet). Ink is
+  DERIVED from the fill — `#c084fc` FLUX as text on the light palette was 2.3:1;
+  every band now clears WCAG AA. Never colour-alone; abbreviated chips carry
+  spelled-out labels ("MIDI knob 7").
+- **Responsive:** the row measures ITSELF (the deck column and a mixer strip are
+  very different widths in the same window). Under 200 px a deliberate compact
+  variant: `K8`, `!`, tighter gaps, no live `→0.52` readout.
+- **Frozen and honoured:** the _184 audioSuggestion metadata contract and the ♪
+  tap-to-prefill rule — only the chip's paint moved. Runtime param names, knob
+  order, slider behaviour, modulation semantics, MIDI behaviour, patterns and
+  playlists all untouched. `prettySliderName` still exists byte-identical (it
+  delegates to the new uncapped `paramDisplayName` + the 15-char cap).
+
+**Touched:** `CaptainPad/components/{Modulation,GlobalParams,MidiMap}.tsx`,
+`CaptainPad/app/(tabs)/mixer.tsx`, `CaptainPad/components/ui/knob_pill.tsx`
+(now a thin alias of `KnobChip`), + the three new files and two test files.
+CaptainPad only; no git ops.
+
+**Tests:** `tsc --noEmit` clean; vitest **48 files / 1014 pass / 6 skipped / 0
+fail** (baseline 47 / 981 / 6 / 0 — the +33 are the new `param_row_layout.test.ts`
+and 3 added prefill-contract tests). eslint 0 errors on every touched file.
+
+**Look at:** `~/tmp/fix_190/compare_ipad_landscape_deck_params.png` (5½ params →
+all 7 in the same box) and `compare_narrow_tablet_deck_params.png` (the wrapping
++ overlapping value, caught before/after). Dark-theme set in `after_dark_*`.
+
+## _191 — spotlight sampling optimization
+
+**Date:** 2026-08-06 · **Report:** `.agent/reports/202608/20260806_191_spotlight_sampling.md`
+
+The "Sim Spotlight Sampling" dropdown decides which fixtures get one of the
+limited pooled THREE.SpotLights. Operator asked for the existing options to be
+optimized and for a best-practice option with no flicker (= no pool-reassignment
+churn as a pattern moves brightness around).
+
+**Census + the bug.** `closest` was **dead**: the resolver accepted only
+`closest_bucket`/`uniform` and silently returned `uniform` for everything else,
+so picking `closest` in the GUI — the operator's favourite for close work — ran
+`uniform`, and so did any typo in a scene file. Codex-P0 silent fallback, now a
+loud `RangeError` naming the value and the roster, validated once at boot.
+
+**Flicker root causes.** F1 rank-based selection over a list whose length
+changes every frame (the analytic gate drops dark pixels, so one entry appearing
+shifts every stride index); F2 `closest_bucket`'s window anchored on the nearest
+*emitting* pixel, so the anchor jumps and the window slides; F3 positional
+assignment with no incumbency and no ramp — every set change is a hard cut.
+Ties and the 1/255 gate were checked and ruled out.
+
+**Optimizations (semantics preserved, asserted against a verbatim copy of the
+old selector).** Squared-distance window test (693,100 → 300 `sqrt` calls per
+300 frames), contiguous-prefix bucket scan, a provably no-op sort deleted, the
+global distance sort now skipped for the stable modes, and a pooled/allocation-
+free collect path (**0.307 → 0.052 ms/frame** at 4800 px, GC churn 19.6 MB → ~0
+per 400 frames; 4 heap allocations per pixel per frame → 0).
+
+**New: `stable_importance`** — importance (brightness × proximity) ranks,
+a coverage grid spaces, incumbency + 1.35× / 12-frame hysteresis holds, ≤8
+fills and ≤2 handoffs per frame bound the change, and a 15-frame crossfade makes
+every appearance/handoff a dip instead of a cut. Deterministic, no `Math.random`.
+**Slot reassignments: 54.2/frame (`closest_bucket`) → 1.93/frame — 28× calmer**,
+worst frame 60-of-60 → 8.
+
+**New: `rotating_coverage` (experimental).** The operator's persistence-of-vision
+idea, evaluated honestly: at 60 Hz vsync a K-way time share gives 60/K Hz per
+light and CFF is ~50–60 Hz, so **no K both fuses and adds coverage** — the fast
+regime is refused in writing. The slow regime ships: a 6 s (0.17 Hz), staggered,
+0.5 s-crossfaded rotation; 160 distinct fixtures over 30 s on a pool of 60.
+
+Roster now lives in code (`SPOTLIGHT_SAMPLING_MODES`), written into the config
+tree by `addControl` so a save records the truthful list — same split as _187's
+slider range. **Default unchanged**; nothing under `scenes/**` was edited; the
+_186/_187/_189 pool-sizing chain is untouched.
+
+**Touched:** new `simulation/src/core/spotlight_sampling.js`, plus
+`simulation/src/core/light_pool.js`, `simulation/src/gui/gui_builder.js`, new
+`simulation/tests/spotlight_sampling.test.js` (27 tests), one harness line in
+`simulation/tests/spotlight_pool_budget.test.js` (33 pass).
+
+**Tests:** full sim suite **2217 / 2209 pass / 7 fail / 1 todo** — failing list
+identical to the known baseline (5× `bench_section_sync`,
+`pixel_map_view_defaults` "compression threshold" now at `:510`,
+`bench_mirror_state:212`, todo `scene_data_lint:109`). No live processes, no
+ports bound, no git ops.
+
+**Eyeball it:** reload, `?profile=full`, run `13_sparkle` or `01_cylon_sweep`,
+watch the wash on the deck/ground (not the dots), and flip the dropdown between
+`closest_bucket` and `stable_importance` live — the boil stops and changes fade.
+
+## _192 — rotating_coverage default + convergence
+
+**Date:** 2026-08-06 · **Branch:** feat/bm_readiness ·
+**Report:** `.agent/reports/202608/20260806_192_rotating_default_convergence.md`
+**Amends `_191`.** Operator: "make the rotating coverage default" + "is there a
+way to slightly speed up the convergence of the light changes?"
+
+**Default now lives in code.** Post-`_191` there was none — the value came only
+from `scenes/common.yaml → options.spotlightSamplingMode`, which the SAVE PATH
+rewrites, so a default parked there is just whatever the last 💾 left behind. New
+`DEFAULT_SPOTLIGHT_SAMPLING_MODE = 'rotating_coverage'` +
+`resolveSpotlightSamplingMode()`, seeded into the config tree by a new
+`gui_builder.ensureSpotlightSamplingEntry()` — the same code-owns-the-truth split
+as `_187`'s slider range and `_191`'s roster. **Precedence unchanged:** saved
+value > code default; only an ABSENT key reaches the default (loudly, in the
+console), and a present-but-unknown value still throws. **No scene file edited.**
+
+**Operator action required on the live scene:** `common.yaml` has a saved value
+(`uniform`), and a saved value always wins — reloading changes nothing. Flip
+⚙️ Options → Sim Spotlight Sampling → `rotating_coverage`, hit 💾, once. (Or, with
+the tab closed, delete the `spotlightSamplingMode:` block from `common.yaml` and
+reload — the seed rebuilds it at the default.)
+
+**Convergence: 2.0–3.1× faster, provably still in the slow regime.** Cycle
+**6 s → 3.5 s** (`ROTATION_PERIOD_FRAMES` 360 → 210), crossfade **0.5 s → 0.333 s**
+(30 → 20), and a new **`ROTATION_WARMUP_PERIOD_FRAMES` = 105**: the FIRST turn of
+each slot after boot / strategy switch / lighting-back-on is scheduled at half the
+period, then `_rotate` re-arms at the full period — a warmup, not a faster mode.
+Per-slot modulation **0.167 → 0.286 Hz**, ~52× below the 15 Hz visible-flicker
+floor and ~190× below CFF; the 0.333 s crossfade is still **gentler than the
+0.25 s one `stable_importance` already ships with**. Fast regime still refused in
+writing. Measured (static field): 75% fixture coverage at pool 24 **857 → 386
+frames (2.22×)**, 2× pool distinct at pool 12 **469 → 203 (2.31×)**, first
+rotation **391 → 125 frames (3.13×)**. Churn cost: 370 → 436 slot changes per 600
+frames at pool 24 — still calmer than `stable_importance` (466) and 16.5× calmer
+than `uniform` (7200); worst frame unmoved at 8. Ceiling is unchanged and is NOT
+the period: the candidate list is `3 × slotBudget` deep, so the mode tops out at
+3× the pool in distinct fixtures — `_192` reaches that ceiling twice as fast.
+
+**No knob.** `_191` fenced this constant off in writing precisely so nobody adds
+a fast-cycle dial; the ask was a one-time tuning question; and a seconds slider
+would need a new persisted key in an operator-owned file. Constants retuned with
+the frequency arithmetic documented in the code where the constraint lives. If a
+dial is ever wanted, the honest shape is Gentle/Normal/Quick over vetted triples,
+never free seconds.
+
+**Touched:** `simulation/src/core/spotlight_sampling.js`,
+`simulation/src/core/light_pool.js`, `simulation/src/gui/gui_builder.js`,
+`simulation/tests/spotlight_sampling.test.js` (**27 → 37 tests**).
+`spotlight_pool_budget.test.js` untouched (33 pass). **70/70 green.**
+
+**Tests:** full sim suite **2231 / 10 fail / 1 todo**. Seven are the known
+baseline (5× `bench_section_sync`, `pixel_map_view_defaults:510`,
+`bench_mirror_state:212`, todo `scene_data_lint:109`); the other three
+(`pixel_map_edit_move:147`, `pixel_map_layout_expansion:281`,
+`pixel_map_view_adjustability:104`) are **foreign and in flight** — the concurrent
+session is mid-edit on 7 `src/gui/pixel_map/*` sources and 5 `tests/pixel_map_*`
+files, and the count moved 7 → 10 between two runs minutes apart. Nothing here
+touches the pixel map. `gui_builder.js` + `light_pool.js` acorn-parsed OK. No live
+processes, no ports bound, no git ops, nothing under `scenes/**` / `states/**` /
+`marsin_engine/**`.

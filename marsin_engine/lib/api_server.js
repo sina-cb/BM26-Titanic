@@ -41,10 +41,14 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import { LOCKED_SIZE, SIZE_LOCK_KEY, SIZE_LOCK_REASON, SIZE_LOCK_MESSAGE } from './size_lock.js';
 import { TimelineService, buildOverview } from './timeline/timeline_service.js';
 import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
 import { MoodSource } from './timeline/mood_source.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
+// The ONE parser of the AUDIO_MODULATION_V1 header block (offline tooling +
+// the engine share it — never a second implementation). Pure, no I/O.
+import { parseAudioModSpec, audioSuggestionsBySlider } from '../tools/audio_mod_spec.mjs';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX, compileViewSelectionMask } from './pattern_mixer.js';
 import { SessionParamCache } from './session_param_cache.js';
@@ -1079,15 +1083,54 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return defaults;
   }
 
+  // Per-pattern cache of parsed AUDIO_MODULATION_V1 suggestions, keyed by
+  // pattern name. Same shape + invalidation posture as codeDefaultsCache above:
+  // the stamped field is an additive HINT, so a live-edit recompile that keeps
+  // the pattern name serving a stale suggestion changes no value anywhere.
+  //
+  // A pattern with NO block has no suggestions (`{}`) — that is the documented
+  // "no metadata" state, never an inferred one. A pattern with a MALFORMED
+  // block is REFUSED by name: parseAudioModSpec throws, we log the pattern +
+  // the offending line at error level and serve no suggestions for it. We do
+  // NOT let the throw escape: this runs inside the /mixer and /deck serializers
+  // on the hot broadcast path, and a header typo must never take the operator's
+  // control surface (or the exterior lighting it drives) down with it. The
+  // hard gate is `tests/tools/audio_mod_spec.test.mjs`, which parses EVERY
+  // pattern in the repo and fails the suite on any bad block.
+  const audioSuggestionsCache = new Map();
+  function audioSuggestionsForPattern(patternName) {
+    if (!patternName) return {};
+    if (audioSuggestionsCache.has(patternName)) return audioSuggestionsCache.get(patternName);
+    let suggestions = {};
+    try {
+      const src = loadPattern(patternsDir, patternName);
+      suggestions = audioSuggestionsBySlider(parseAudioModSpec(src, patternName));
+    } catch (err) {
+      console.error(`[AudioSuggest] REFUSED "${patternName}": ${err.message}`);
+    }
+    audioSuggestionsCache.set(patternName, suggestions);
+    return suggestions;
+  }
+
   /**
    * Additive: stamp each SLIDER export (kind 1) with `codeDefault` — the
    * pattern's declared `export var` default — so clients can show / reset to
-   * it. Does NOT touch existing fields; mutates and returns the same array.
+   * it, and with `audioSuggestion` — the AUDIO_MODULATION_V1 header's declared
+   * { version, signal, range, curve, note? } for that parameter, so CaptainPad
+   * can offer the pattern author's intended audio binding.
+   *
+   * Both are METADATA. Neither touches `name` or `v0/v1/v2` — the parameter's
+   * identity and value are unchanged by the presence or absence of a
+   * suggestion, and nothing here creates a modulation. Mutates and returns the
+   * same array.
    */
   function annotateCodeDefaults(channel, exportsArr) {
     const defaults = codeDefaultsForPattern(channel.pattern);
+    const suggestions = audioSuggestionsForPattern(channel.pattern);
     for (const e of exportsArr) {
-      if (e.kind === 1 && e.name in defaults) e.codeDefault = defaults[e.name];
+      if (e.kind !== 1) continue;
+      if (e.name in defaults) e.codeDefault = defaults[e.name];
+      if (e.name in suggestions) e.audioSuggestion = suggestions[e.name];
     }
     return exportsArr;
   }
@@ -5712,6 +5755,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // nothing. `source_lock` is NOT an authoring error — it's normal
             // runtime arbitration (another source holds the param) — so let it
             // pass silently, exactly as a live operator write would be arbitrated.
+            // SIZE LOCK (lib/size_lock.js): a hand-authored cue/look that still
+            // carries `size` is an AUTHORING error and surfaces as a cueError —
+            // unless it asked for the pinned value, which is a harmless no-op.
+            if (r && r.status === 'ignored' && r.reason === SIZE_LOCK_REASON) {
+              if (r.noop) continue;
+              throw new Error(`setParams: '${k}' rejected — ${r.message}`);
+            }
             if (r && r.status === 'ignored' && r.reason !== 'source_lock') {
               throw new Error(`setParams: '${k}' rejected (${r.reason})`);
             }
@@ -5977,6 +6027,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // there is no second writer the bridge cannot see.
         // Shape: { controllers: [] } — always, by construction.
         outputRouting: { controllers: [] },
+        // SIZE LOCK (operator ruling 2026-08-06, lib/size_lock.js). The
+        // global SIZE fader is pinned at LOCKED_SIZE (coordinate identity)
+        // and no path may change it. There is no SIZE control left in any
+        // UI, so THIS is where the operator learns something fought the
+        // lock: `sizeLockWarning` is a ready-to-render one-liner (null when
+        // clean) that CaptainPad shows in its header health chip;
+        // `sizeLock` carries the full record (which file carried a stale
+        // value, how many writes were refused, and from where).
+        sizeLockWarning: paramCenter ? paramCenter.getSizeLockWarning() : null,
+        sizeLock: paramCenter ? paramCenter.getSizeLockReport() : null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -10238,10 +10298,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // so would double-broadcast every write (docs/24 §7.2).
         let rev = 0;
         const ignored = [];
+        let sizeRefused = null;
         for (const k in data) {
           const r = paramCenter.set(k, data[k], 'api');
           if (r.status === 'ok') rev = r.revision;
-          else ignored.push({ key: k, reason: r.reason || r.status });
+          else {
+            ignored.push({ key: k, reason: r.reason || r.status });
+            if (r.reason === SIZE_LOCK_REASON && r.noop !== true) {
+              sizeRefused = { key: k, requested: data[k], ...r };
+            }
+          }
+        }
+        if (sizeRefused) {
+          return sendJsonError(res, 409, {
+            error: SIZE_LOCK_MESSAGE,
+            reason: SIZE_LOCK_REASON,
+            key: SIZE_LOCK_KEY,
+            requested: sizeRefused.requested,
+            lockedValue: LOCKED_SIZE,
+            revision: rev,
+            ignored,
+          }, { 'Content-Type': 'application/json' });
         }
         // SAY WHAT WAS REFUSED (audit medium/low). This returned a bare
         // {status:'ok'} even when the source lock rejected every write — the
@@ -13078,7 +13155,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
           if (res.status === 'ignored') {
-            ws.send(JSON.stringify({ type: 'paramRejected', key: d.key, reason: res.reason, lockedTo: res.lockedTo }));
+            // `message` / `lockedValue` are populated by the SIZE lock
+            // (lib/size_lock.js) so a client shows WHY, not just a reason code.
+            ws.send(JSON.stringify({
+              type: 'paramRejected', key: d.key, reason: res.reason,
+              lockedTo: res.lockedTo, lockedValue: res.lockedValue,
+              message: res.message,
+            }));
           }
           // Success path: paramCenter.onChange (wired at boot)
           // handles persistence + throttled WS broadcast + WASM

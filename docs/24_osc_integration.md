@@ -290,8 +290,18 @@ external tools can rely on them indefinitely.
 | `/marsin/param/speed`     | `speed`      | `[float]`    | `[0, 1]` | Clamped by CPC registry        |
 | `/marsin/param/direction` | `direction`  | `[float]`    | `[0, 1]` | Snapped to `{0, 0.5, 1.0}`     |
 | `/marsin/param/count`     | `count`      | `[float]`    | `[0, 1]` |                                |
-| `/marsin/param/size`      | `size`       | `[float]`    | `[0, 1]` |                                |
+| `/marsin/param/size`      | `size`       | `[float]`    | `[0, 1]` | **LOCKED at 0.5** — see below  |
 | `/marsin/param/rotate`    | `rotate`     | `[float]`    | `[0, 1]` |                                |
+
+> **`size` is LOCKED** (operator ruling 2026-08-06). The engine pins the global
+> SIZE fader at `0.5` — coordinate identity for `wasm_host.applySizeScale` —
+> and **every** write path refuses it: OSC, REST `POST /param-center` (409), WS
+> `setSharedParam` (`paramRejected`), timeline cue globals (cueError), and the
+> boot/snapshot state restore. A refusal is logged loudly and surfaced on
+> `GET /status` as `sizeLockWarning` / `sizeLock`, which CaptainPad renders in
+> its header ⚠ DEGRADED chip. The pin is one constant, `LOCKED_SIZE` in
+> `marsin_engine/lib/size_lock.js` — no config option, no env override. See
+> `.agent/reports/202608/20260806_182_size_lock.md`.
 
 ### 4.2 Global parameter colors (HSV sub-addresses)
 

@@ -3,7 +3,7 @@ name: bm26_show_readiness
 status: active
 owner: Sina (lead artist) — coordinator agent acts as readiness manager
 created: 2026-07-27
-updated: 2026-08-05
+updated: 2026-08-11
 ---
 
 # BM26 Show Readiness — Master Program
@@ -24,6 +24,21 @@ party moments, never stuck.
 Sub-project dossiers link from here; this doc tracks the PROGRAM. Ops
 detail per thread lives in `../memory/bm_readiness_thread_tracker.md`
 (**canonical, most-current state**).
+
+## Current curator campaign — pattern and playlist blessing (2026-08-11)
+
+The operator + curator are finishing the 34-entry Titanic Ambient pilot, then
+expanding it into 17 proposed themed ambient playlists of 16-18 entries each. A
+playlist is not show-ready until its exact saved values pass automated gates,
+gallery review, a full physical test-bench mirror run, and explicit operator
+blessing. The simulator/gallery smoke-stack representation and gallery rebuild
+are complete; operator gallery review and the 34-pattern bench-mirror blessing
+are next. After blessing, Claude/operator should checkpoint the pilot before
+the large playlist expansion. Party tuning follows the separate audio-analysis
+campaign.
+
+Focused dossier and live blessing ledger:
+[`pattern_curation_and_playlist_blessing.md`](pattern_curation_and_playlist_blessing.md).
 
 **Compacted end-of-day 2026-07-30 on operator order.** Everything removed —
 the long workstream row bodies, the slice-by-slice `_58` wave narrative, the

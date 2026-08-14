@@ -211,7 +211,12 @@ test('DEFAULT_CHAINS = Gain + tuned smoothing LPF per signal, sudden micKick tri
   assert.deepEqual(DEFAULT_CHAINS, expected);
 });
 
-test('GAIN_BY_KEY matches the pre-refactor osc_listener map (byte-identical, ordered)', () => {
+// micFlux JOINED this map on 2026-08-06 (report 20260806_184). It was
+// excluded while the engine ran its own analyzer ("flux gain applied in the
+// analyzer"); under the sole-analyzer contract flux arrives over OSC like
+// every other band, and the exclusion silently killed micFluxGain, the
+// micFlux post-chain, and the micFluxRaw mirror the structure detector reads.
+test('GAIN_BY_KEY covers every processed mic signal (ordered, gain partner named)', () => {
   const expected = {
     micLow: 'micLowGain',
     micMid: 'micMidGain',
@@ -222,6 +227,18 @@ test('GAIN_BY_KEY matches the pre-refactor osc_listener map (byte-identical, ord
   assert.deepEqual(GAIN_BY_KEY, expected);
   // Key order matters for deterministic boot-time iteration.
   assert.deepEqual(Object.keys(GAIN_BY_KEY), Object.keys(expected));
+  // The map is DERIVED from processedSignalKeys() — pin that so a new band
+  // can never be added to the family table without its gain wiring.
+  assert.deepEqual(Object.keys(GAIN_BY_KEY), processedSignalKeys());
+});
+
+test('micSignalShortNames derives the analyzer/synth field names from the OSC addresses', () => {
+  assert.deepEqual(micSignalShortNames(), {
+    micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux',
+  });
+  // Same key set + order as the processed family — this is the ONE list the
+  // audio-suggestion tooling derives its signal enum from.
+  assert.deepEqual(Object.keys(micSignalShortNames()), processedSignalKeys());
 });
 
 test('offline pattern tooling derives mic field names from the production OSC registry', () => {

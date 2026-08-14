@@ -21,6 +21,11 @@
 // `MixerChannelExport` plus the runtime-only cpc fields; the hook assigns its
 // real exports to it by structural typing.
 
+// TYPE-ONLY, RELATIVE import: erased at build time, so it never pulls
+// `utils/api.ts` (React-Native/fetch code) into this module's runtime graph and
+// the plain-node vitest env stays clean. Relative — vitest resolves no `@/`.
+import type { AudioSuggestion } from '../api';
+
 /** A pattern's local export as it arrives from the engine. Structurally a
  *  superset of `MixerChannelExport` (id/name/kind/v0/v1/v2) plus the runtime-only
  *  `cpcOwned` / `cpcLabel` fields the engine attaches when a local param is
@@ -38,6 +43,10 @@ export interface Export {
   cpcOwned?: boolean;
   /** Friendly CPC label (for the on-screen "MATCHED · LABEL" badge). */
   cpcLabel?: string;
+  /** The pattern author's RECOMMENDED audio binding for this param, from the
+   *  source's AUDIO_MODULATION_V1 block. Metadata only — it never affects the
+   *  knob derivation, the param's name, or its value. See `AudioSuggestion`. */
+  audioSuggestion?: AudioSuggestion;
 }
 
 /** MFT UX v2 layout facts — the ONE home of the bank-1 local-param geometry.

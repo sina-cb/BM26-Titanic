@@ -153,10 +153,24 @@ Single source of truth for all scene state:
 - Camera presets and render settings
 
 ### Spotlight Preview Pool Note
-- `src/core/light_pool.js` exports `MAX_SPOTLIGHT_POOL_SIZE` (default `200`). Change that constant if you want a different global cap for pooled analytic spotlights.
-- `?spotlights=N` is the boot-time URL override for the spotlight preview pool. Example: [http://localhost:6969/simulation/?scene=titanic&profile=full&renderer=webgl&spotlights=80](http://localhost:6969/simulation/?scene=titanic&profile=full&renderer=webgl&spotlights=80)
-- If `N` is above `MAX_SPOTLIGHT_POOL_SIZE`, the sim clamps to the cap and shows a toast warning.
-- The GUI `Max Spotlights` slider uses `1..MAX_SPOTLIGHT_POOL_SIZE`. `?spotlights=0` still disables the pooled spotlight preview from the URL.
+`Max Spotlights` is ONE number with one owner. It sets both how many
+`THREE.SpotLight`s are pre-allocated at boot and how many may be lit per frame.
+The chain is `scene_config.yaml` → `?spotlights=N` (URL wins) →
+`initLightPool()` allocates exactly that many → the GUI slider ranges over that
+pool.
+
+- `src/core/light_pool.js` exports `MAX_SPOTLIGHT_POOL_SIZE` (default `200`). Change that constant if you want a different global cap for pooled analytic spotlights. Above ~160 SpotLights, Mac WebGPU can render the scene entirely white or black — the cap is a GPU-safety decision, not a stylistic one.
+- `?spotlights=N` is the boot-time URL override, applied in `src/core/url_overrides.js` alongside `?profile=` / `?lighting_mode=` / `?renderer=`. Example: [http://localhost:6969/simulation/?scene=titanic&profile=full&renderer=webgl&spotlights=80](http://localhost:6969/simulation/?scene=titanic&profile=full&renderer=webgl&spotlights=80)
+- If `N` is above `MAX_SPOTLIGHT_POOL_SIZE`, the sim **asks** — a blocking confirm at boot, before the pool is allocated, naming the count, the cap and the white/black-screen risk.
+  - **Accept** → the pool is allocated at `N` **for that page load only**. The `Max Spotlights` slider ranges to `N`, and the slider is labelled `⚠ Max Spotlights (session N)`.
+  - **Decline / dismiss / no dialog available (headless)** → the old behaviour exactly: clamp to the cap, console + toast. Nothing but an explicit yes ever raises the cap.
+  - The yes is **never remembered**: no localStorage, and saving writes at most `MAX_SPOTLIGHT_POOL_SIZE` into `scene_config.yaml` (`clampPersistedSpotlightBudget`). Every over-cap boot asks again.
+  - Above `SPOTLIGHT_ABSOLUTE_CEILING` (`2000`) there is no prompt at all — `?spotlights=999999` is refused loudly, like any other malformed value.
+- A value that is not an integer `0..ceiling` (including negatives) is **refused** and the saved scene value is kept — no silent substitution.
+- Without `?spotlights=`, the saved scene value is what gets allocated: a scene saved at `150` boots 150 SpotLights. A saved value above the hard cap is clamped and never prompts — consent is asked for what you just typed, not for what was already in a file.
+- The GUI `Max Spotlights` slider ranges `1..poolSize` — the pool is fixed at boot, so travel above it would do nothing. To raise the budget, boot with `?spotlights=N` (or save the higher value and reload).
+- `?spotlights=0` still disables the pooled spotlight preview from the URL.
+- Regression coverage: `tests/spotlight_pool_budget.test.js`.
 
 ### `config.yaml`
 Server port assignments:

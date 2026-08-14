@@ -30,7 +30,10 @@ import { CPCControls } from '@/components/CPCControls';
 import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
-import { MiniFader } from '@/components/ui/MiniFader';
+// (MiniFader is no longer used for the LOCAL PARAMS rows — they render the
+// shared ParamRow, which owns the header line the MiniFader used to draw
+// itself. MiniFader still serves the GLOBALS SPEED fader and the deck's BASE
+// PARAMS strip.)
 import { HealthChip } from '@/components/ui/HealthChip';
 import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
@@ -58,8 +61,11 @@ import { useEngineLock } from '@/hooks/useEngineLock';
 import { PlanLockBanner } from '@/components/PlanLockBanner';
 import {
   ModulationReadonlyBadge, useEntryModulations, useModulationState,
-  GhostMarker, prettySliderName,
+  GhostMarker, prettySliderName, MOD_GREEN,
 } from '@/components/Modulation';
+import { ParamRow, ParamValueText } from '@/components/ui/param_row';
+import { MatchedChip, NotKnobMappedChip, useParamRowMetrics } from '@/components/ui/param_chips';
+import { paramDisplayName } from '@/components/param_row_layout';
 
 // HorizontalFader moved to shared ui
 
@@ -176,6 +182,23 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 //     frame. Frames only arrive for the deck-active pattern, so this
 //     overlay lights up when the mixer channel happens to be hosting
 //     the same pattern the deck is playing.
+// The mixer strip's right-aligned readout. Historically the MiniFader drew this
+// itself as a 0-100 integer; keeping that exact format (not the deck's 0.00)
+// means no operator has to re-learn a number. The live "→0.52" figure joins it
+// when a modulation is actually driving the target, and drops on a compact row
+// where the green ghost bar on the track already says it.
+function MixerValueReadout({ value, ghost }: { value: number; ghost: number | null }) {
+  const m = useParamRowMetrics();
+  return (
+    <>
+      {ghost !== null && m.showGhostReadout ? (
+        <ParamValueText color={MOD_GREEN}>{`→${ghost.toFixed(2)}`}</ParamValueText>
+      ) : null}
+      <ParamValueText>{Math.round(value * 100)}</ParamValueText>
+    </>
+  );
+}
+
 function MixerLocalParams({ channel, onControlChange, disabled }: {
   channel: { id: string; exports?: any[]; playlist?: { name?: string; activeEntryId?: string } | null };
   onControlChange: (channelId: string, controlId: number, value: number) => void;
@@ -238,7 +261,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
         // Render it non-interactive with a "—" marker like the deck does.
         const noV0 = badge.excludedReason === 'no-v0';
         const knobExcluded = matched || noV0;
-        const niceLabel = prettySliderName(exp.name);
+        const niceLabel = paramDisplayName(exp.name);
         const hasMapping = !matched && !!mappingByTarget[exp.name];
         // MIDI-map badge — only meaningful for learnable (non-CPC-matched)
         // sliders, matching useMidiControl's focused-export filter. Show the
@@ -264,72 +287,68 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           && Math.abs(live.modulated - base) >= 0.01
           ? live.modulated : null;
         return (
-          <View key={exp.id}>
-            {/* Badge row above the MiniFader — the green ◎ modulation pill
-                (read-only on the mixer) and the violet ⊞ MIDI pill sit side
-                by side so the slider row reads the same way on the deck and
-                mixer. CPC-matched sliders still use the MiniFader's own
-                `badge` prop because that's a different concept ("the global
-                owns this"). The ⊞ badge opens the MIDI-learn popover keyed to
-                THIS channel's active playlist entry (editable when the channel
-                has a playlist + entry). */}
-            {/* Badge row — always rendered so the physical-knob indicator is
-                visible on EVERY kind-1 row: a violet "KNOB N" pill on a mapped
-                slider (the encoder that drives it), or a "—" marker on a no-v0
-                row that consumes no knob. The green ◎ modulation pill + violet
-                ⊞ MIDI pill join it when present. (Matched rows carry their MATCH
-                tag on the MiniFader itself, so no knob badge there.) */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
-              {badge.mapped && badge.knobNumber !== null ? (
-                <KnobPill knobNumber={badge.knobNumber} />
-              ) : null}
-              {noV0 ? (
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary }}>—</Text>
-              ) : null}
-              {hasMapping ? (
-                <ModulationReadonlyBadge hasMapping={true} isOverride={mappingByTarget[exp.name]?.mode === 'override'} />
-              ) : null}
-              {hasMapping && ghost !== null ? (
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
-                  →{ghost.toFixed(2)}
-                </Text>
-              ) : null}
-              {showMidiBadge ? (
-                <MidiMapBadge
-                  mapping={midiMapping}
-                  editable={midiEditable}
-                  onEdit={() => setMidiPopoverTarget(exp.name)}
-                />
-              ) : null}
-            </View>
-            <View style={{ position: 'relative' }}>
-              <MiniFader
-                label={niceLabel}
-                value={base}
-                onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
-                disabled={knobExcluded}
-                badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
-                fillColor={hasMapping ? undefined : undefined}
+          // THE shared parameter row (components/ui/param_row.tsx) — the same
+          // component the deck renders, so the two surfaces cannot drift. One
+          // header line carrying, in this fixed order: the violet "KNOB N" chip
+          // (or the "—" marker on a no-v0 row that consumes no encoder), the
+          // parameter name, the MATCHED tag / read-only green ◎ modulation pill,
+          // the ♪ suggestion chip and the violet ⊞ MIDI chip; then the fader
+          // full width underneath.
+          //
+          // Unchanged semantics: the ◎ pill is READ-ONLY here (the mixer shows
+          // what a param wants; the DECK is where a mapping is created), and the
+          // ⊞ chip opens the MIDI-learn popover keyed to THIS channel's active
+          // playlist entry. The ♪ chip is likewise read-only — no `onPress`.
+          <ParamRow
+            key={exp.id}
+            dimmed={knobExcluded}
+            knobNumber={badge.mapped ? badge.knobNumber : null}
+            name={niceLabel}
+            status={(
+              <>
+                {noV0 ? <NotKnobMappedChip /> : null}
+                {matched ? (
+                  <MatchedChip cpcLabel={exp.cpcLabel} />
+                ) : null}
+                {hasMapping ? (
+                  <ModulationReadonlyBadge hasMapping={true} isOverride={mappingByTarget[exp.name]?.mode === 'override'} />
+                ) : null}
+              </>
+            )}
+            suggestion={exp.audioSuggestion ?? null}
+            midi={showMidiBadge ? (
+              <MidiMapBadge
+                mapping={midiMapping}
+                editable={midiEditable}
+                onEdit={() => setMidiPopoverTarget(exp.name)}
               />
-              {/* Live modulation overlay — only paints when the engine
-                  is currently writing a modulated value for this
-                  slider on the deck-active pattern. */}
-              {ghost !== null ? (
-                <View style={{
-                  position: 'absolute',
-                  left: 0, right: 0,
-                  // MiniFader track starts after the label row (~14 px
-                  // total of label + 2 px margin). The track is 16 px
-                  // tall, borderRadius 8. Position + size match so the
-                  // green ghost fill aligns to the underlying track.
-                  top: 14, height: 16,
-                  pointerEvents: 'none',
-                }}>
-                  <GhostMarker ghost={ghost} base={base} borderRadius={8} />
-                </View>
-              ) : null}
-            </View>
-          </View>
+            ) : null}
+            trailing={(
+              <MixerValueReadout
+                value={base}
+                ghost={hasMapping ? ghost : null}
+              />
+            )}
+          >
+            <HorizontalFader
+              value={base}
+              onChange={knobExcluded ? (() => {}) : ((v: number) => onControlChange(channel.id, exp.id, v))}
+              trackStyle={{ height: 16, backgroundColor: C.surfaceContainerHigh, borderRadius: 8, justifyContent: 'center' }}
+              fillStyle={{
+                position: 'absolute', left: 0, top: 0, bottom: 0,
+                backgroundColor: knobExcluded ? C.secondary : C.primaryFixedDim,
+                borderRadius: 8,
+              }}
+            />
+            {/* Live modulation overlay — only paints when the engine is
+                currently writing a modulated value for this slider on the
+                deck-active pattern. It sits inside ParamRow's slider box, so it
+                aligns to the TRACK by construction (this used to need a
+                hand-tuned `top: 14` that assumed the header's exact height). */}
+            {ghost !== null ? (
+              <GhostMarker ghost={ghost} base={base} borderRadius={8} />
+            ) : null}
+          </ParamRow>
         );
       })}
       {/* N4: non-kind-1 exports (toggles / triggers / hsvPickers) are NOT

@@ -18,7 +18,7 @@ function count(haystack, needle) {
 // CODE only (the file's prose mentions the very APIs we ban).
 const APP_CODE = APP.split('\n').filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
 
-test('DERIVED TUNE remains accessible alongside the PARTY panel', () => {
+test('DERIVED TUNE remains accessible alongside the newer PARTY panel', () => {
   assert.match(HTML, /id="nav-derived"[^>]*data-page="derived"[^>]*role="tab"/);
   assert.match(HTML, /id="page-derived"[^>]*role="tabpanel"[^>]*aria-labelledby="nav-derived"/);
   assert.match(APP, /const pages = \['design', 'mic', 'party', 'derived', 'osc'\]/);

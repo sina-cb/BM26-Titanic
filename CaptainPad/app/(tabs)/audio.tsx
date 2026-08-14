@@ -55,7 +55,7 @@ import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams
 import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { PulseFlash } from '@/components/audio/PulseFlash';
-import { audioAccentHex, audioGenreName, isGenreKey, isPulseKey } from '@/utils/audioSignals';
+import { audioAccentHex, audioGenreName, describePartySignal, isGenreKey, isPulseKey } from '@/utils/audioSignals';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
@@ -676,6 +676,14 @@ function LiveAudioMeters({
     syncOn && !(arbitratedBpm > 0) ? 'warn' :
     syncOn                         ? 'on'   :
                                      'off';
+  // Prominent read-only mirror of the exact held gate patterns and the
+  // optimizer receive. Detector sensitivity stays in Audio Companion ->
+  // DERIVED TUNE; CaptainPad observes engine truth and does not maintain a
+  // second threshold. Missing live data is shown as unknown, never as calm.
+  const partyEntry = liveDoc?.params?.audioParty;
+  const partySignal = describePartySignal(
+    partyEntry && typeof partyEntry.value === 'number' ? partyEntry.value : null,
+  );
 
   return (
     <View style={{ marginBottom: 24 }}>
@@ -685,6 +693,7 @@ function LiveAudioMeters({
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
+        <StatusPill label={partySignal.label} tone={partySignal.tone} />
         <View style={{ flex: 1 }} />
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,

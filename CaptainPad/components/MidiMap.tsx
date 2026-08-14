@@ -22,6 +22,7 @@ import {
   patchMidiMapping, putMidiMapping,
 } from '@/utils/api';
 import { SectionLabel, Chip, NumberInput } from '@/components/ui/PopoverKit';
+import { ParamChip, useParamRowMetrics } from '@/components/ui/param_chips';
 
 // Violet accent — distinct from modulation's green (◎) and the primary blue
 // (interactive control), so "this param is MIDI-mapped" scans at a glance.
@@ -96,40 +97,39 @@ export function MidiMapBadge({
   editable: boolean;
   onEdit?: () => void;
 }) {
-  const C = usePalette();
   // PERFORMANCE MODE: MIDI mappings live in the playlist file — creating or
   // editing one is a 409-gated route (PUT/PATCH .../midi-mappings/:id) while a
   // show is live. The violet mapped pill keeps reading as "mapped"; the edit
   // affordance goes inert. Shared component — gated by performance-mode state.
   const perfLocked = usePerfLock();
+  // Row metrics (hooks run on every path, before the early return below).
+  const m = useParamRowMetrics();
   const hasMapping = !!mapping;
   const effEditable = editable && !perfLocked;
   const canEdit = effEditable && !!onEdit;
-  const label = hasMapping ? describeControlRef(mapping!.control) : '⊞ MIDI';
-  const bg = hasMapping ? MIDI_VIOLET : 'transparent';
-  const border = hasMapping ? MIDI_VIOLET : C.ghostBorder;
-  const fg = hasMapping ? '#fff' : C.secondary;
   // On a read-only surface (mixer, or ANY surface while performance mode is
   // live) with no mapping there's nothing to show — hide the add affordance
   // rather than render an inert pill that doesn't read as locked. A MAPPED
   // pill stays visible (it's live status), just not editable.
   if (!hasMapping && !effEditable) return null;
+  // The UNMAPPED add-hint is the glyph alone. It used to read '⊞ MIDI', which
+  // cost ~25 px of a ~244 px deck row for a word that says nothing the glyph
+  // and the accessibility label don't — and the row's job is to leave that
+  // space to the parameter's NAME (_190).
+  const label = hasMapping ? `⊞ ${describeControlRef(mapping!.control)}` : '⊞';
   return (
-    <TouchableOpacity
+    <ParamChip
+      label={label}
+      accent={MIDI_VIOLET}
+      // A MAPPED chip is live status → filled violet. The add-hint stays quiet:
+      // it must not compete with the ♪ suggestion chip beside it.
+      tone={hasMapping ? 'live' : 'quiet'}
       onPress={canEdit ? onEdit : undefined}
-      disabled={!canEdit}
-      activeOpacity={canEdit ? 0.7 : 1}
-      style={{
-        paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6,
-        backgroundColor: bg, borderWidth: 1, borderColor: border,
-        transitionDuration: '0s',
-      } as any}
-      accessibilityLabel={hasMapping ? 'Edit MIDI mapping' : 'Add MIDI mapping'}
-    >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: fg, letterSpacing: 0.5 }}>
-        {hasMapping ? `⊞ ${label}` : '⊞ MIDI'}
-      </Text>
-    </TouchableOpacity>
+      accessibilityLabel={hasMapping
+        ? `Edit MIDI mapping — ${describeControlRef(mapping!.control)}`
+        : 'Add MIDI mapping'}
+      style={m.compact && hasMapping ? { maxWidth: 62 } : undefined}
+    />
   );
 }
 

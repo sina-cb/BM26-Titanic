@@ -45,6 +45,23 @@ export const WHISTLE_BIT = 0x08;   // bit 3 — steam whistle, NOT flame
 export const DEFAULT_TRIGGER_MASK = POOFER_MASK;
 export const DEFAULT_MIN_ON_MS = 150;
 
+// ── Trigger envelope (LIGHTS ONLY) ─────────────────────────────────────────
+// Vintage filament heads take a moment to come up and a moment to die, so a
+// 90 ms poof otherwise reads as a weak flicker and the end reads as a cut.
+//   minOnMs   ATTACK — hold the trigger ON at least this long past the last
+//             rising edge. A HOLD, not a ramp up: ramping up would make short
+//             poofs dimmer, the opposite of what the physics asks for.
+//   releaseMs RELEASE — ramp the white down over this long when the flame
+//             stops (applied by GlobalEffectsController, which owns pixel
+//             values). 0 = the historical instant off.
+// Both live at runtime: the Stoker control panel is the operator's console and
+// the persistent store, and it pushes a `fire_cfg` datagram (on save and every
+// 10 s). The engine's config.yaml values are only the BOOT DEFAULT until one
+// arrives; the engine deliberately writes no YAML back — the panel is the
+// authority and re-pushes, so there is exactly one place a value is kept.
+export const DEFAULT_RELEASE_MS = 400;
+export const ENVELOPE_MAX_MS = 5000;   // same bound the panel enforces
+
 // ── Pure helpers (exported for tests) ──────────────────────────────────────
 
 /**
@@ -72,6 +89,25 @@ export function parseFrame(buf) {
     // Reachability probe from the panel's SAVE & TEST button. Acked, never acted
     // on — it carries no mask and must not disturb the effect state.
     return { ok: true, frame: { t: 'fire_ping', seq: Number(msg.seq) || 0 } };
+  }
+  if (t === 'fire_cfg') {
+    // Trigger-envelope push from the panel (LIGHTS ONLY — this frame cannot
+    // start, extend or stop anything; it only changes how long the lights hold
+    // and how fast they die). Both fields are REQUIRED and bounds-checked here:
+    // an out-of-range value is 'malformed' and is dropped whole, never clamped
+    // and never half-applied.
+    if (msg.v !== PROTO_VERSION) return { ok: false, reason: 'unsupported' };
+    const seq = msg.seq;
+    const minOn = msg.min_on;
+    const release = msg.release;
+    if (!Number.isInteger(seq) || seq < 0) return { ok: false, reason: 'malformed' };
+    if (!Number.isInteger(minOn) || minOn < 0 || minOn > ENVELOPE_MAX_MS) {
+      return { ok: false, reason: 'malformed' };
+    }
+    if (!Number.isInteger(release) || release < 0 || release > ENVELOPE_MAX_MS) {
+      return { ok: false, reason: 'malformed' };
+    }
+    return { ok: true, frame: { t: 'fire_cfg', seq, minOn, release } };
   }
   if (t !== 'fire_evt') return { ok: false, reason: 'unsupported' };
   if (msg.v !== PROTO_VERSION) return { ok: false, reason: 'unsupported' };
@@ -129,10 +165,15 @@ export class FireSyncListener {
    * @param {string} opts.effect        — global-effect name, e.g. 'vintageWhite'
    * @param {number} [opts.triggerMask] — relay bits that count as fire (default 0x07)
    * @param {number} [opts.minOnMs]     — minimum visible ON time (default 150)
+   * @param {number} [opts.releaseMs]   — white release ramp (default 400, 0 = cut)
    * @param {string} [opts.apiHost]     — engine REST host, default 127.0.0.1
    * @param {number} opts.apiPort       — engine REST port (config server.port)
    * @param {(state:boolean)=>Promise<void>} [opts.setEffect] — injectable
    *   transport, used by tests. Defaults to the loopback REST call.
+   * @param {(ms:number)=>void} [opts.applyRelease] — hand the release time to
+   *   whatever renders it (engine wiring passes the GlobalEffectsController's
+   *   setVintageWhiteReleaseMs). Absent = the release half is inert and
+   *   getStatus() says so, rather than silently pretending it applied.
    * @param {(s:object)=>void} [opts.onStats]
    */
   constructor(opts = {}) {
@@ -141,9 +182,11 @@ export class FireSyncListener {
       effect,
       triggerMask = DEFAULT_TRIGGER_MASK,
       minOnMs = DEFAULT_MIN_ON_MS,
+      releaseMs = DEFAULT_RELEASE_MS,
       apiHost = '127.0.0.1',
       apiPort,
       setEffect = null,
+      applyRelease = null,
       onStats = null,
     } = opts;
 
@@ -160,6 +203,10 @@ export class FireSyncListener {
     if (!Number.isFinite(minOnMs) || minOnMs < 0 || minOnMs > 10000) {
       throw new Error(`fire_sync.minOnMs must be a number in [0, 10000], got ${minOnMs}.`);
     }
+    if (!Number.isFinite(releaseMs) || releaseMs < 0 || releaseMs > ENVELOPE_MAX_MS) {
+      throw new Error(
+        `fire_sync.releaseMs must be a number in [0, ${ENVELOPE_MAX_MS}], got ${releaseMs}.`);
+    }
     if (!setEffect && (!Number.isInteger(apiPort) || apiPort < 1 || apiPort > 65535)) {
       throw new Error(
         `fire_sync needs the engine API port (server.port) to post /global-effect, got ${apiPort}.`);
@@ -170,10 +217,16 @@ export class FireSyncListener {
     this.effect = effect.trim();
     this.triggerMask = triggerMask;
     this.minOnMs = minOnMs;
+    this.releaseMs = releaseMs;
     this.apiHost = apiHost;
     this.apiPort = apiPort;
     this.onStats = onStats;
     this._setEffect = setEffect || ((state) => this._postGlobalEffect(state));
+    this._applyRelease = applyRelease || null;
+    // Envelope provenance, so status/debug can tell a pushed value from the
+    // boot default instead of showing one number with no history.
+    this._cfgSeq = 0;         // last fire_cfg seq applied (0 = none yet)
+    this._cfgAppliedAt = 0;   // Date.now() of that apply
 
     this._socket = null;
     this._seenSeq = Object.create(null);   // side -> last seq
@@ -198,6 +251,9 @@ export class FireSyncListener {
   /** Bind the socket. Rejects on bind failure (e.g. EADDRINUSE). */
   async startAsync() {
     if (this._socket) return;
+    // Put the configured release time in force before the first frame can
+    // arrive, so the engine is never running an envelope nobody asked for.
+    if (this._applyRelease) this._applyRelease(this.releaseMs);
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
     socket.on('message', (buf, rinfo) => this._onPacket(buf, rinfo));
     await new Promise((resolve, reject) => {
@@ -236,6 +292,13 @@ export class FireSyncListener {
       effect: this.effect,
       triggerMask: this.triggerMask,
       minOnMs: this.minOnMs,
+      releaseMs: this.releaseMs,
+      // false = nothing is rendering the release ramp (no applyRelease wired),
+      // so releaseMs above is a stored number and NOT in force. Said out loud
+      // rather than implied.
+      releaseApplied: !!this._applyRelease,
+      cfgSeq: this._cfgSeq,
+      cfgAppliedAt: this._cfgAppliedAt,
       effectState: this._sent,
       sides: { ...this._masks },
       lastError: this._lastError,
@@ -254,6 +317,17 @@ export class FireSyncListener {
     }
     const frame = res.frame;
 
+    if (frame.t === 'fire_cfg') {
+      // Envelope push from the panel. Bounds were already checked in
+      // parseFrame, so reaching here means the values are legal. Applied at
+      // runtime and answered with the values NOW IN FORCE — the panel renders
+      // only what this ack says, so it can never claim an applied value we did
+      // not apply. Nothing about fire is touched.
+      this._applyCfg(frame);
+      this._cfgAck(frame.seq, rinfo);
+      return;
+    }
+
     // Ack EVERY understood frame back to whoever sent it. This is the panel's
     // only reachability signal, and it must be answered even for the
     // `fire_ping` probe (which deliberately carries no state).
@@ -271,6 +345,53 @@ export class FireSyncListener {
     this._counters.applied += 1;
     this._masks[frame.side] = frame.mask;
     this._evaluate();
+  }
+
+  /**
+   * Apply a validated envelope. `minOnMs` is this listener's own coalescing
+   * rule; `releaseMs` belongs to whoever renders pixel values, so it is handed
+   * over through the injected callback. A callback that throws (e.g. a future
+   * renderer with tighter bounds) must not take the socket down: it is logged
+   * on the transition, and the ack then reports what is really in force.
+   */
+  _applyCfg(frame) {
+    const changed = frame.minOn !== this.minOnMs || frame.release !== this.releaseMs;
+    this.minOnMs = frame.minOn;
+    if (this._applyRelease) {
+      try {
+        this._applyRelease(frame.release);
+        this.releaseMs = frame.release;
+      } catch (err) {
+        const msg = (err && err.message) || String(err);
+        if (this._lastError !== msg) {
+          this._lastError = msg;
+          console.warn(`[fire-sync] release ${frame.release} ms REFUSED by the renderer: ${msg}`);
+        }
+        this._counters.errors += 1;
+      }
+    } else {
+      // Nothing renders the ramp in this wiring; store it so getStatus() is
+      // honest (releaseApplied:false says it is not in force).
+      this.releaseMs = frame.release;
+    }
+    this._cfgSeq = frame.seq;
+    this._cfgAppliedAt = Date.now();
+    if (changed) {
+      console.log(`[fire-sync] envelope: min-ON ${this.minOnMs} ms, release ${this.releaseMs} ms` +
+        (this._applyRelease ? '' : ' (release NOT rendered — no renderer wired)'));
+    }
+  }
+
+  /** Echo the envelope values now IN FORCE (never the requested ones). */
+  _cfgAck(seq, rinfo) {
+    if (!this._socket) return;
+    const payload = Buffer.from(JSON.stringify({
+      t: 'cfg_ack', v: PROTO_VERSION, seq: seq | 0,
+      min_on: this.minOnMs, release: this.releaseMs,
+    }), 'utf8');
+    try {
+      this._socket.send(payload, rinfo.port, rinfo.address);
+    } catch { /* fire-and-forget; a lost ack costs a console status line only */ }
   }
 
   _ack(seq, rinfo) {

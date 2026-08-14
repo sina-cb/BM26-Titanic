@@ -47,7 +47,7 @@ import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
 import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel, testConnection } from '@/utils/api';
-import type { RenderHealth, DeckRestoreDegraded } from '@/utils/api';
+import type { RenderHealth, DeckRestoreDegraded, AudioSuggestion } from '@/utils/api';
 
 export interface SharedParamValue {
   // The engine emits HSV objects for color palettes and plain floats
@@ -71,6 +71,10 @@ export interface MixerChannelExport {
   v0?: number;
   v1?: number;
   v2?: number;
+  /** Additive engine metadata: the pattern author's recommended audio binding
+   *  for this parameter (AUDIO_MODULATION_V1 header → `annotateCodeDefaults`).
+   *  Absent when the pattern declares none — never inferred. */
+  audioSuggestion?: AudioSuggestion;
 }
 
 export interface MixerChannel {
@@ -237,6 +241,14 @@ export interface EngineLiveState {
   engineHealth: {
     renderHealth: RenderHealth | null;
     deckRestoreDegraded: DeckRestoreDegraded | null;
+    /**
+     * SIZE-lock warning line from /status (`sizeLockWarning`), or null when
+     * nothing fought the lock. The engine pins the global SIZE fader at 0.5
+     * (operator ruling 2026-08-06, marsin_engine/lib/size_lock.js) and this
+     * app no longer renders a SIZE control, so the header chip is the only
+     * place a stale persisted size / a refused write becomes visible.
+     */
+    sizeLockWarning: string | null;
   } | null;
 }
 
@@ -699,13 +711,17 @@ function _seedFromStatus() {
       // degrade explicitly; absence is therefore not a silent fallback).
       const renderHealth = r.data.renderHealth ?? null;
       const deckRestoreDegraded = r.data.deckRestoreDegraded ?? null;
+      // A plain string, so this comparison is by VALUE — a clean engine
+      // reports null on every probe and never churns the health snapshot.
+      const sizeLockWarning = r.data.sizeLockWarning ?? null;
       const prev = _cached.engineHealth;
       if (
         !prev ||
         prev.renderHealth !== renderHealth ||
-        prev.deckRestoreDegraded !== deckRestoreDegraded
+        prev.deckRestoreDegraded !== deckRestoreDegraded ||
+        prev.sizeLockWarning !== sizeLockWarning
       ) {
-        next.engineHealth = { renderHealth, deckRestoreDegraded };
+        next.engineHealth = { renderHealth, deckRestoreDegraded, sizeLockWarning };
         changed = true;
       }
 
@@ -1190,7 +1206,11 @@ export function useActiveModel(): string | null {
  * (Codex P0 operator visibility). Pure function of the two /status degrade
  * signals — kept separate from the hook so it's unit-testable.
  *
- * Degraded (the chip shows) iff EITHER:
+ * Degraded (the chip shows) iff ANY of:
+ *   - `sizeLockWarning` is a non-empty string (the engine's global SIZE pin
+ *     was fought — a saved file carried a non-0.5 size, or something tried
+ *     to write one. Checked FIRST: there is no SIZE control in this app, so
+ *     the chip is the operator's only view of it), OR
  *   - `renderHealth.ok === false` (one or more channel blends failed to
  *     compile — compositing is running on the host-side linear-interp
  *     fallback), OR
@@ -1215,7 +1235,14 @@ export function deriveEngineHealth(
   health: EngineLiveState['engineHealth'],
 ): EngineHealthDerived {
   if (!health) return HEALTH_OK;
-  const { renderHealth, deckRestoreDegraded } = health;
+  const { renderHealth, deckRestoreDegraded, sizeLockWarning } = health;
+  // SIZE lock first: the operator has NO SIZE control anywhere in this app,
+  // so if something is fighting the engine's pin (a stale persisted value, a
+  // rogue writer) this chip is the only place they can find out. Everything
+  // else is recoverable from the UI; this one is not.
+  if (typeof sizeLockWarning === 'string' && sizeLockWarning.length > 0) {
+    return { degraded: true, reason: sizeLockWarning };
+  }
   // Prefer the deck-restore degrade in the reason string — it's the
   // mission-critical exterior signal. Fall back to the blend error.
   if (deckRestoreDegraded != null) {
