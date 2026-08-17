@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   10_chart_lines.js — CHART LINES
 
@@ -200,7 +199,14 @@ export function render3D(index, x, y, z) {
     mapZ = floor(signIndex / 10.0) / 7.0;
   }
 
-  var height = terrainHeight(mapX, mapZ);
+  // Project the relief together with its port/starboard reflection. Max/min
+  // blending preserves closed families while giving both physical halves the
+  // same high-area budget; no side can dominate merely because more fixtures
+  // sampled one of the three moving hill centers.
+  var primaryHeight = terrainHeight(mapX, mapZ);
+  var reflectedHeight = terrainHeight(1.0 - mapX, mapZ);
+  var height = max(primaryHeight, reflectedHeight) * 0.88
+             + min(primaryHeight, reflectedHeight) * 0.12;
   // The phase offset keeps zero elevation between strokes without deleting
   // the low, broad outer contours that carry the map on sparse geometry.
   var contourCoordinate = 0.18 + height * liveLineCount;

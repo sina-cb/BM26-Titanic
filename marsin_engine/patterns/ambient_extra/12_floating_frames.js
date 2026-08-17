@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   12_floating_frames.js — FLOATING FRAMES
 

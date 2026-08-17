@@ -32,7 +32,7 @@ color: '#FF9EC4'
 # an unmapped SF name renders a blank 0x0 (report _206 §4). The picker card
 # identifies the show by its accent bar and name. Add `icon:` back the day the
 # tab maps one.
-description: Three playlists, one blackout, and a white flash that answers the question.
+description: Three playlists, a safe white hold, and a flash-bloom reveal.
 leaseDurationSec: 1800
 
 stages:
@@ -98,45 +98,33 @@ stages:
           - { type: effect, effectId: uvBlast, holdMs: 800, releaseMs: 800 }
 
   # ── 2. BLACKOUT ──────────────────────────────────────────────────────────
-  # A real stage, not a panic. The grand master rides down to 0 over 1.5 s —
-  # the same clean, transient, non-persisted ramp POST /mixer/master/fade uses,
-  # which the reveal simply rides back up. The e-stop blackout is deliberately
-  # NOT used here: it persists, it kills every macro on the way through, and it
-  # is the operator's emergency, not a dramatic pause.
-  #
-  # No quick effects: at master 0 nothing would be visible anyway.
+  # The historical blackout stage keeps its stable id, but never takes the rig
+  # black. blastWhite supplies a neutral full-rig source while the grand master
+  # rides to the 10 percent safety floor. The e-stop remains the operator's
+  # separate emergency and is never used as show choreography.
   - id: blackout
-    label: GO DARK
-    color: '#2A2F45'
-    hint: Drum roll. The ship holds dark until you call it.
+    label: HOLD WHITE 10%
+    color: '#FFF6E8'
+    hint: Drum roll. The ship holds at a safe white floor until you call it.
     advance: manual
     actions:
-      - { type: masterFade, target: 0.0, durationMs: 1500 }
+      - { type: effect, effectId: blastWhite, state: true }
+      - { type: masterFade, target: 0.1, durationMs: 1500 }
 
   # ── 3. THE REVEAL ────────────────────────────────────────────────────────
   # The ceremonial moment: two buttons, and the answer is chosen AT the button,
   # so the envelope stays sealed until this second.
   #
-  # THE FLASH-THEN-PLAYLIST ORDERING IS THE MOMENT, and it is authored here as
-  # absolute offsets from the tap:
-  #   t=0 ms    grand master snaps back up over 200 ms (the blackout is over)
-  #   t=0 ms    FLASH ALL WHITE — every channel slammed to 1.0 for 900 ms
-  #   t=700 ms  the answer playlist is activated UNDER the flash
-  #   t=900 ms  the flash starts its RELEASE — pink or blue is already there
-  #   t=1700 ms the release is out and the 1 s answer transition has landed
-  # Retune by moving these numbers; nothing in the engine assumes them.
+  # THE FLASH-BLOOM-THEN-PLAYLIST ORDERING is authored as offsets from the tap:
+  #   t=0 ms    release the 10 percent white hold and lift the master
+  #   t=0 ms    rapid full-rig white flashes begin for two seconds
+  #   t=2000 ms one full-rig white blast lands and holds for 700 ms
+  #   t=2700 ms Diamond Quilt activates under the blast's soft release
+  #   t=3700 ms the bloom is out and the selected color owns the ship
   #
-  # THE RELEASE (docs/57 §2). `releaseMs: 800, releaseTo: show` turns the hard
-  # cut at 900 ms into an 800 ms bloom: the white decays while the answer colour
-  # RISES THROUGH it, so the moment reads as the colour emerging from the flash
-  # rather than the flash being switched off in front of it.
-  #
-  # THE SWAP STAYS HIDDEN BY CONSTRUCTION. The release starts where the hold
-  # ends (900 ms), and the swap landed at 700 ms — 200 ms of 100 %-white still
-  # covers its start, and the release remains above the complete 1 s transition
-  # through t=1700 ms. The envelope only reveals the answer already underneath.
-  # The invariant the tests pin: `playlist.delayMs <= effect.delayMs + holdMs`.
-  # Keep it true if you retune.
+  # The landed release path lets Diamond Quilt rise through the white bloom.
+  # No fake white-tail pattern is involved; entryId pins the hero independently
+  # of playlist order or later operator curation.
   - id: reveal
     label: THE REVEAL
     color: '#FFF6E8'
@@ -165,13 +153,17 @@ stages:
         label: BABY PINK
         color: '#FF9EC4'
         actions:
+          - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
           - { type: masterFade, target: 1.0, durationMs: 200 }
-          - { type: effect, effectId: blastWhite, holdMs: 900, releaseMs: 800, releaseTo: show }
-          - { type: playlist, playlist: baby_girl, delayMs: 700 }
+          - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
+          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 700, releaseMs: 1000, releaseTo: show }
+          - { type: playlist, playlist: baby_girl, entryId: e_baby_girl_diamond_quilt, delayMs: 2700 }
       - id: boy
         label: BABY BLUE
         color: '#4FA8FF'
         actions:
+          - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
           - { type: masterFade, target: 1.0, durationMs: 200 }
-          - { type: effect, effectId: blastWhite, holdMs: 900, releaseMs: 800, releaseTo: show }
-          - { type: playlist, playlist: baby_boy, delayMs: 700 }
+          - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
+          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 700, releaseMs: 1000, releaseTo: show }
+          - { type: playlist, playlist: baby_boy, entryId: e_baby_boy_diamond_quilt, delayMs: 2700 }

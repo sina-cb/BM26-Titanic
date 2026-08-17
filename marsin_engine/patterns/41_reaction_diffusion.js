@@ -363,10 +363,14 @@ export function render3D(index, x, y, z) {
     bri = substrate * 0.46 + edge * 0.86 + eventNucleus * 0.44;
     tcol = clamp01(0.10 + edge * 0.90);
   } else if (fixtureType == FIX_VINTAGE_6) {
-    // Sparse golden-white nuclei: deterministic per-pixel selection applied to
-    // real catalyst concentration and the one-shot seed event.
+    // Sparse golden-white nuclei live on real reaction fronts. The deterministic
+    // address selection controls rarity; chemistry controls whether the chosen
+    // address is actually lit, so this is never an unrelated sparkle overlay.
     var nucleusSelect = pow(wave(index * 0.618034 + li * 0.071), 7.0);
-    var nucleus = nucleusSelect * (concShaped * 0.66 + eventNucleus * 1.25);
+    var frontEnergy = clamp01(contour * 22.0 + chemicalSkin * 0.18)
+                    * (0.24 + concShaped * 0.76);
+    var nucleus = nucleusSelect * (frontEnergy * 1.18
+                                  + eventNucleus * 1.25);
     bri = substrate * 0.38 + reaction * 0.28 + nucleus * 0.48;
     matchedWhite = nucleus * 0.78;
     warmAdd = nucleus * 0.34;
@@ -430,6 +434,7 @@ export function render3D(index, x, y, z) {
     tcol = clamp01(0.04 + signMembrane * 0.34
                  + signNucleus * 0.52 + signFront * 0.24
                  + signEventNucleus * 0.18);
+    matchedWhite = signFront * (0.025 + signNucleus * 0.075);
   } else {
     // Portable fallback for a fixture role added after this pattern.
     bri = substrate * 0.58 + reaction * 0.82 + eventNucleus * 0.38;

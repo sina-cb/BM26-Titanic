@@ -1235,18 +1235,16 @@ body.spatial-fullscreen-active { overflow: hidden; }
    modes (it is not in either mode-gate array in sync(), above) so it is a
    constant-reach control, not an occasional one. */
 .sp-controls #dutyRow, .sp-controls #speedRow {
-  grid-column: 1 / -1;
-  grid-template-columns: 56px 1fr auto;
+  grid-column: auto;
+  grid-template-columns: 40px 1fr auto;
 }
-/* The segments themselves: >=44pt row height, >=8px between neighbours
-   (docs/66 §2's finger-slop floor for controls with different consequences
-   — they sat 3px apart before). Scoped by id to just the two auto-generated
-   `.chips` wrappers `chipsFor()` builds for these sliders (named
-   `<sliderId>Chips`, see CHIP_SPEC below) so SIZE/POWER/FADE/STEP keep their
-   original compact pills — untouched, not named by docs/66 §3.2. */
-#strobeDutyChips, #zFaderChips { gap: 8px; }
+/* All six brush rows use one visual weight. SPEED used to span both columns
+   with 44px keys, making it dominate while SIZE/POWER/FADE/STEP were crushed.
+   The latest operator ruling is uniform controls: same grid share, gap and
+   chip dimensions for every row. */
+#strobeDutyChips, #zFaderChips { gap: 3px; }
 #strobeDutyChips button, #zFaderChips button {
-  min-height: 44px; padding: 4px 3px; font-size: .62rem; letter-spacing: .02em;
+  min-height: 26px; padding: 3px 2px; font-size: .54rem; letter-spacing: .01em;
 }
 .sp-controls .readout { min-width: 34px; font-size: .6rem; }
 .sp-controls .draw-cap { font-size: .48rem; text-align: right; line-height: 1.1; }
@@ -2981,6 +2979,200 @@ html.theme-pending { color-scheme: normal; }
 html.theme-pending,
 html.theme-pending body { background: transparent; }
 html.theme-pending body { visibility: hidden; }
+/* ── LIVE TOUCH OPERATOR SURFACE ──
+   The embedded panel is one professional instrument, not a second app shell.
+   ARM and pattern choice own the header; panel visibility uses the same
+   horizontal chip grammar as Deck/Mixer. These late rules intentionally
+   supersede the historical layout experiments above without changing any
+   engine-facing ids or panel mounts. */
+.app-shell {
+  grid-template-rows: 56px 54px minmax(0, 1fr);
+  gap: 8px;
+}
+.topbar {
+  grid-template-columns: auto minmax(260px, 1fr) auto auto;
+  grid-template-areas: "brand pattern note arm";
+  gap: 14px;
+  padding: 0 14px;
+}
+.brand { grid-area: brand; max-width: 190px; }
+.brand h1 { font-size: .92rem; }
+.pattern-pick {
+  grid-area: pattern;
+  width: 100%; height: 44px; min-height: 44px;
+  padding: 0 10px; overflow: visible;
+}
+.pattern-pick .select { min-width: 180px; }
+.meter-nums { grid-area: note; justify-self: end; }
+.arm-control {
+  grid-area: arm; justify-self: end;
+  min-width: 174px; min-height: 44px; height: 44px;
+  justify-content: center;
+}
+.top-actions { display: contents; }
+.top-actions > .bpm-global,
+.top-actions > .chip { display: none !important; }
+.pattern-pick .pp-caps { display: none !important; }
+.panel [data-lock],
+.panel [data-collapse] { display: none !important; }
+
+/* One horizontal visibility row. It is deliberately a sibling of the working
+   area, so visibility controls never take width from the Spatial canvas. */
+.workspace-bar {
+  min-width: 0; display: flex; align-items: center;
+  padding: 4px 10px; border: 1px solid var(--border);
+  border-radius: 14px; background: rgba(8, 15, 28, .72);
+}
+.workspace-scroll {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  white-space: nowrap; padding: 4px 8px;
+}
+.workspace-scroll::-webkit-scrollbar { display: none; }
+.workspace-chip {
+  min-height: 44px; flex: 0 0 auto; position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 10px; border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: rgba(255,255,255,.07); color: var(--text);
+  font: 800 10px/1 Inter, system-ui, sans-serif;
+  letter-spacing: .07em; text-transform: uppercase; cursor: pointer;
+}
+.workspace-chip::after { content: ''; position: absolute; inset: 0; }
+.workspace-chip.is-hidden {
+  border-color: var(--border); background: rgba(0,0,0,.16);
+  color: var(--text-dim); font-size: 9px;
+}
+.workspace-chip.is-floor { cursor: default; }
+.workspace-chip > i {
+  width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+  display: block; box-shadow: 0 0 6px currentColor;
+}
+.workspace-divider { width: 1px; height: 16px; flex: 0 0 auto; background: var(--border-strong); }
+.workspace-hidden-label {
+  flex: 0 0 auto; color: var(--text-dim);
+  font: 800 8px/1 Inter, system-ui, sans-serif;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.workspace-overflow {
+  display: none; flex: 0 0 auto; padding: 0 4px;
+  color: var(--text-dim); font-size: 16px; font-weight: 900;
+}
+.workspace-overflow.is-visible { display: block; }
+.workspace { gap: 0; }
+.panel-rail { display: none !important; }
+
+/* AUDIO is a fixed instrument row. Signal values are live paint, never layout:
+   wide frequency readouts must not grow a card, and the quiet-state overlay
+   must not join normal flow. The 54px size is the already-shipped resting
+   geometry (46px card + 6px padding + 2px border), now made invariant. */
+.content-grid > #meterStrip {
+  flex: 0 0 54px; height: 54px; min-height: 54px; max-height: 54px;
+  box-sizing: border-box; overflow: hidden;
+  transition: none !important; animation: none !important;
+}
+#meterStrip .meter-bars {
+  height: 46px; min-height: 46px; max-height: 46px;
+  align-items: stretch; transition: none !important; animation: none !important;
+}
+#meterStrip .sig-row {
+  height: 46px; min-height: 46px; max-height: 46px; box-sizing: border-box;
+  grid-template-columns: minmax(42px, 1fr) 48px;
+  grid-template-rows: 14px 20px; align-content: start;
+  overflow: hidden; transition: none !important; animation: none !important;
+}
+#meterStrip .sig-name,
+#meterStrip .sig-val {
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  line-height: 14px;
+}
+#meterStrip .meter-state {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: none !important; animation: none !important;
+}
+
+/* Spatial remains the primary performance surface. The canonical renderer
+   already fits every view to 92%; these constraints guarantee its viewport is
+   allowed to shrink inside the panel instead of clipping the fitted ship. */
+.prow.prow-spatial { flex: 1.8 1 0; }
+.prow.prow-bottom { flex: 1 1 0; }
+.spatial-panel .panel-body,
+.spatial-panel .xy-frame,
+.spatial-panel .xy-stack,
+.spatial-panel .xy-pad { min-height: 0; }
+.spatial-panel .xy-pad { height: 100%; }
+
+/* EFFECTS is a bank of actions. PLAY (the default) shows named keys and an
+   explicit state; EDIT reveals the existing assignment/audio controls without
+   changing their delegated handlers or slot safety rules. */
+.effects-panel:not(.is-editing) .fx-pick,
+.effects-panel:not(.is-editing) .aud-row { display: none; }
+.effects-panel:not(.is-editing) .effects-grid { gap: 8px; overflow: hidden; }
+.effects-panel.is-editing .effects-grid {
+  overflow-y: auto; grid-template-rows: repeat(4, minmax(148px, auto));
+}
+.effects-panel.is-editing .fx-pick { height: 44px; min-height: 44px; }
+.effects-panel.is-editing .aud-row { min-height: 44px; }
+.effects-panel.is-editing .aud-pick,
+.effects-panel.is-editing .aud-mode { min-height: 44px; }
+.fx-cell {
+  position: relative; border-width: 1px 1px 1px 4px;
+  background: rgba(5, 12, 24, .30);
+}
+.fx-face {
+  width: 100%; min-width: 0; min-height: 44px; position: relative;
+  border: 0; background: transparent; color: var(--text);
+  font-family: inherit;
+}
+.fx-name { color: var(--text); font-size: .78rem; }
+.fx-preset { color: var(--text-soft); font-size: .62rem; }
+.fx-state {
+  position: absolute; top: 5px; right: 6px;
+  padding: 2px 5px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim);
+  font: 900 7px/1 Inter, system-ui, sans-serif;
+  letter-spacing: .08em;
+}
+.fx-state::before { content: 'OFF'; }
+.fx-cell.is-on .fx-state {
+  border-color: rgba(7,26,20,.45); color: var(--live-ink);
+  background: rgba(255,255,255,.48);
+}
+.fx-cell.is-on .fx-state::before { content: 'ON'; }
+.fx-family {
+  position: absolute; left: 6px; top: 5px;
+  color: var(--text-dim); font: 900 7px/1 Inter, system-ui, sans-serif;
+  letter-spacing: .08em;
+}
+.fx-cell.is-on .fx-family { color: var(--live-ink); }
+.fx-edit-toggle {
+  min-height: 44px; position: relative; padding: 0 12px;
+  border-radius: 10px; border: 1px solid var(--border);
+  background: rgba(255,255,255,.05); color: var(--text-soft);
+  font: 800 9px/1 Inter, system-ui, sans-serif;
+  letter-spacing: .08em; cursor: pointer;
+}
+.fx-edit-toggle::after { content: ''; position: absolute; inset: 0; }
+.fx-edit-toggle.is-active { color: #04231d; background: var(--teal); border-color: var(--teal); }
+
+@media (max-width: 1120px) {
+  :root { --header-h: 56px; }
+  .topbar {
+    grid-template-columns: minmax(130px, auto) minmax(220px, 1fr) auto auto;
+    grid-template-rows: 1fr;
+    grid-template-areas: "brand pattern note arm";
+    padding: 0 10px;
+  }
+  .brand { max-width: 150px; }
+  .brand h1 { font-size: .82rem; }
+  .pattern-pick { min-width: 0; }
+}
+
+@media (min-width: 1400px) {
+  .app-shell { padding: 12px 16px; }
+  .topbar { grid-template-columns: auto minmax(420px, 1fr) auto auto; }
+  .workspace-bar { padding-left: 14px; padding-right: 14px; }
+}
 </style>
 <script>
 // Stamp the pending flag SYNCHRONOUSLY, before the body paints. Embed detection
@@ -3017,7 +3209,7 @@ if (window.parent !== window ||
     <div class="brand">
       <div class="mark">⚓</div>
       <div>
-        <h1>TOUCH CONTROL <span class="sub">#44</span></h1>
+        <h1>LIVE TOUCH <span class="sub">#44</span></h1>
       </div>
     </div>
 
@@ -3044,12 +3236,11 @@ if (window.parent !== window ||
           <optgroup label="BACKGROUNDS" id="patternBackgroundGroup">
           </optgroup>
           <optgroup label="INSTRUMENTS">
-            <option value="130" data-caps="5 colours · XY pad · touch · pulse">130 · Spatial Paint</option>
-            <option value="128" data-caps="5 colours only — no XY">128 · Five Colour Prism</option>
-            <option value="129" data-caps="5 colours only — no XY">129 · Five Colour Stations</option>
+            <option value="130">130 · Spatial Paint</option>
+            <option value="128">128 · Five Colour Prism</option>
+            <option value="129">129 · Five Colour Stations</option>
           </optgroup>
         </select>
-        <span class="pp-caps" id="patternCaps">5 colours · XY pad · touch · pulse</span>
       </div>
     <div class="top-actions">
       <!-- BPM is GLOBAL: tempo drives effects, patterns and the spatial pad
@@ -3075,12 +3266,6 @@ if (window.parent !== window ||
            silently un-theme these two without ever touching that frozen
            file). See `.bpm-global .bpm-step-minus/-plus` below for the
            per-button hit-overlay math. -->
-      <div class="bpm-global">
-        <button class="pill-btn is-on" id="bpmSync">SYNC</button>
-        <span class="stepper bpm-step-minus"><button aria-label="Decrease BPM">−</button></span>
-        <span class="readout" id="bpmVal">120 BPM</span>
-        <span class="stepper bpm-step-plus"><button aria-label="Increase BPM">+</button></span>
-      </div>
       <!-- Live tempo + key. They belong with the other global readouts, not
            inside the signal strip - that strip is per-signal, these are not. -->
       <!-- ONE BPM only. The tempo already has a home in the bpm-global block
@@ -3089,15 +3274,16 @@ if (window.parent !== window ||
       <div class="meter-nums">
         <div class="meter-note"><b id="mNote">--</b><span>NOTE</span></div>
       </div>
-      <button class="chip">STATUS <strong>OK</strong></button>
-      <button class="chip chip-ico" title="Help">?</button>
-      <button class="chip chip-ico" title="Settings">⚙</button>
       <!-- RELOAD lives in the header with the other global controls. It used to
            float over the bottom-right of the panel, where it sat on top of the
            groups bank and could be hit while reaching for a fader. -->
-      <button class="chip chip-ico" id="reloadPanel" title="Reload the panel">⟳</button>
     </div>
   </header>
+
+  <nav class="workspace-bar" id="workspaceBar" aria-label="Live Touch workspace panels">
+    <div class="workspace-scroll" id="workspaceScroll"><!-- chips injected --></div>
+    <span class="workspace-overflow" id="workspaceOverflow" aria-hidden="true">›</span>
+  </nav>
 
   <!-- ── Tabs ───────────────────────────────────────────────────────────── -->
 
@@ -3107,7 +3293,6 @@ if (window.parent !== window ||
        a tab on the rail, so the panels that remain get BOTH the width and the
        height that the hidden one was using. -->
   <div class="workspace">
-    <div class="panel-rail" id="panelRail"><!-- tabs injected --></div>
   <main class="content-grid">
     <!-- LIVE AUDIO. Reads the same signals the Audio Companion analyses, off
          the engine's /ws/signals socket, so this is the engine's own view of
@@ -3135,7 +3320,6 @@ if (window.parent !== window ||
            this section same as any other panel; it docks as a BAR TIER
            (AUDIO tab on the rail) rather than a `.prow` row citizen, and
            never counts toward the one-panel floor. Default open. -->
-      <button class="lock-btn collapse-btn" data-collapse title="Hide the audio strip">&#9662;</button>
     </section>
 
     <!-- COLOR -->
@@ -3155,7 +3339,7 @@ if (window.parent !== window ||
     <section class="panel color-panel is-docked">
       <div class="panel-header">
         <h2 class="panel-title"><span class="dot"></span> Legacy Color</h2>
-        <span class="panel-sub">Slot 1 selected</span><button class="lock-btn" data-lock title="Lock this panel">&#128275;</button><button class="lock-btn collapse-btn" data-collapse title="Show or hide this panel">&#9662;</button>
+        <span class="panel-sub">Slot 1 selected</span>
       </div>
       <div class="panel-body">
         <div class="color-layout">
@@ -3222,8 +3406,6 @@ if (window.parent !== window ||
     <section class="panel spatial-panel">
       <div class="panel-header">
         <h2 class="panel-title"><span class="dot" style="background:var(--teal);box-shadow:var(--glow-cyan)"></span> Spatial</h2>
-        <button class="lock-btn" data-lock title="Lock this panel">&#128275;</button>
-        <button class="lock-btn collapse-btn" data-collapse title="Show or hide this panel">&#9662;</button>
         <div class="mode-toggle" id="modeToggle">
           <button class="is-active" data-mode="spatial">SPATIAL</button>
           <button data-mode="effect">EFFECT CONTROL</button>
@@ -3318,15 +3500,15 @@ if (window.parent !== window ||
         </button>
 <div class="draw-row size-row is-brush-collapsed" id="sizeRow">
           <span class="draw-cap">SIZE</span>
-          <div class="slider-h" id="brushSize" data-value="0.35"
-               title="How much of the ship one touch covers — the dashed ring on the pad shows it"><i style="width:35%"></i></div>
-          <span class="readout" id="brushSizeVal">35%</span>
+          <div class="slider-h" id="brushSize" data-value="0.18"
+               title="How much of the ship one touch covers — the dashed ring on the pad shows it"><i style="width:18%"></i></div>
+          <span class="readout" id="brushSizeVal">18%</span>
         </div>
 <div class="draw-row size-row is-brush-collapsed" id="powerRow">
           <span class="draw-cap">POWER</span>
-          <div class="slider-h" id="brushPower" data-value="0.45"
-               title="How strongly the stroke acts. Past halfway is OVERDRIVE — see the line below for what it means in this mode"><i style="width:45%"></i></div>
-          <span class="readout" id="brushPowerVal">90%</span>
+          <div class="slider-h" id="brushPower" data-value="0.75"
+               title="How strongly the stroke acts. Past halfway is OVERDRIVE — see the line below for what it means in this mode"><i style="width:75%"></i></div>
+          <span class="readout" id="brushPowerVal">150%</span>
         </div>
 <div class="draw-row size-row is-brush-collapsed" id="fadeRow">
           <span class="draw-cap">FADE</span>
@@ -3494,7 +3676,6 @@ if (window.parent !== window ||
         <button class="chip chip-sm" id="presetBeats" title="How many beats between changes">8 bt</button>
         <span class="hdr-sep"></span>
         <button class="chip chip-sm preset-save-btn" id="presetSave" title="Snapshot the current look as a new preset, appended to the end of the playlist">+ SAVE</button>
-        <button class="lock-btn collapse-btn" data-collapse title="Show or hide this panel">&#9662;</button>
       </div>
       <div class="panel-body">
         <!-- One-time migration notice (D10) and the loud store-error banner
@@ -3523,8 +3704,6 @@ if (window.parent !== window ||
       <div class="panel-header">
         <h2 class="panel-title"><span class="dot" style="background:var(--purple);box-shadow:var(--glow-purple)"></span> Color</h2>
         <span class="panel-sub" id="chSub">parked</span>
-        <button class="lock-btn" data-lock title="Lock this panel">&#128275;</button>
-        <button class="lock-btn collapse-btn" data-collapse title="Show or hide this panel">&#9662;</button>
       </div>
       <div class="panel-body">
         <!-- docs/61 §4.1 — the DRIVING STRIP. 100% broadcast-derived: shown
@@ -3645,16 +3824,10 @@ if (window.parent !== window ||
     <section class="panel effects-panel">
       <div class="panel-header">
         <h2 class="panel-title"><span class="dot" style="background:var(--yellow);box-shadow:0 0 18px rgba(255,216,77,.3)"></span> Effects</h2>
-        <span class="panel-sub" id="fxCount">31 effects &middot; 0 active</span><button class="lock-btn" data-lock title="Lock this panel">&#128275;</button><button class="lock-btn collapse-btn" data-collapse title="Show or hide this panel">&#9662;</button>
+        <span class="panel-sub" id="fxCount">31 effects &middot; 0 active</span>
+        <button type="button" class="fx-edit-toggle" id="fxEditToggle" aria-pressed="false">EDIT</button>
       </div>
       <div class="panel-body">
-        <div class="fx-legend">
-          <span><i style="background:rgba(120,170,255,.85)"></i>DIM · one</span>
-          <span><i style="background:rgba(255,216,77,.85)"></i>FLASH · one</span>
-          <span><i style="background:rgba(255,120,180,.85)"></i>FRAME · one</span>
-          <span><i style="background:rgba(255,255,255,.3)"></i>TEXTURE · stack freely</span>
-          <span style="opacity:.7">movement only · colour from the wheel</span>
-        </div>
         <div class="ownfx-note" id="palNote"></div>
         <div class="effects-grid" id="fxGrid"><!-- injected --></div>
 
@@ -3665,7 +3838,7 @@ if (window.parent !== window ||
     <section class="panel groups-panel">
       <div class="panel-header">
         <h2 class="panel-title"><span class="dot" style="background:var(--green);box-shadow:var(--glow-green)"></span> Groups</h2>
-        <span class="panel-sub" id="groupCount">24 groups · 24 on</span><button class="lock-btn" data-lock title="Lock this panel">&#128275;</button><button class="lock-btn collapse-btn" data-collapse title="Show or hide this panel">&#9662;</button>
+        <span class="panel-sub" id="groupCount">24 groups · 24 on</span>
       </div>
       <div class="panel-body">
         <!-- ONE horizontal row of data. The search box went with the note: with
@@ -3894,8 +4067,6 @@ if (window.parent !== window ||
   document.querySelectorAll('.mini-switch').forEach(function (s) {
     s.addEventListener('click', function () { s.classList.toggle('is-on'); });
   });
-  var bpm = document.getElementById('bpmSync');
-  bpm.addEventListener('click', function () { bpm.classList.toggle('is-on'); });
 
   /* XY pad — pointer events so it works with touch and mouse alike. */
   /* NAMES ARE UNIQUE HERE ON PURPOSE — DO NOT REINTRODUCE `handle`/`moveHandle`.
@@ -5039,11 +5210,6 @@ if (window.parent !== window ||
   /* A hard reload: the query string defeats the browser's in-memory cache, which
      is what let a stale panel keep running old logic inside the CaptainPad
      iframe. */
-  var reloadBtn = document.getElementById('reloadPanel');
-  if (reloadBtn) reloadBtn.addEventListener('click', function () {
-    var u = location.pathname + '?r=' + Date.now();
-    location.replace(u);
-  });
 
   /* -- PALETTE GENERATORS ------------------------------------------------
      The SIX original buttons, wired to the ACTUAL algorithms from
@@ -5105,7 +5271,8 @@ if (window.parent !== window ||
     return 'rgb(' + B(r) + ' ' + B(g) + ' ' + B(b) + ')';
   }
 
-  function paint5(list) {
+  function paint5(list, sync) {
+    sync = sync || {};
     var sw = document.querySelectorAll('#slots .color-slot .swatch');
     list.forEach(function (c, i) { if (sw[i]) sw[i].style.background = css(c); });
     /* PUBLISH the five resolved colours. The wiring layer must send exactly
@@ -5117,7 +5284,16 @@ if (window.parent !== window ||
       host.dataset.palette = JSON.stringify(list.map(function (c) {
         return { h: c.h, s: c.s, v: c.v };
       }));
-      host.dispatchEvent(new CustomEvent('palettechange', { bubbles: true }));
+      host.dispatchEvent(new CustomEvent('palettechange', {
+        bubbles: true,
+        detail: {
+          source: sync.source || 'legacy-color',
+          skipPaletteWrite: !!sync.skipPaletteWrite,
+          palette: list.map(function (c) { return { h: c.h, s: c.s, v: c.v }; }),
+          base: { h: BASE.h, s: BASE.s, v: BASE.v },
+          scheme: lastGen || 'master',
+        },
+      }));
     }
   }
 
@@ -5417,7 +5593,10 @@ if (window.parent !== window ||
       }
     }
 
-    /* ── State (independent of the legacy panel's BASE/GEN/lastGen) ──────── */
+    /* ── State ────────────────────────────────────────────────────────────
+       The daemon transport state remains Color Hub-owned, but the five staged
+       colours are shared with LEGACY COLOR through #slots.palettechange.
+       There is one visible palette on this page, not two competing drafts. */
     var CH = {
       card: 'two',
       ring: chGenerateScheme('master', 0.6),
@@ -5440,6 +5619,50 @@ if (window.parent !== window ||
       var b = CH.broadcast;
       if (!b) return 'none';
       return chRotationKind(b.active, b.palettes, b.mode);
+    }
+
+    function chStampPaletteDriver() {
+      var host = document.getElementById('slots');
+      if (host) host.dataset.paletteDriver = chKind();
+    }
+
+    function chShareRingWithLegacy(source, skipPaletteWrite) {
+      if (!CH.ring.length) return;
+      var first = CH.ring[0];
+      BASE.h = first.h; BASE.s = first.s; BASE.v = first.v;
+      lastGen = CH.lastScheme || 'master';
+      if (wheel && handle) {
+        wheel.dataset.hsv = BASE.h.toFixed(3) + ',' + BASE.s.toFixed(3) + ',' + BASE.v.toFixed(3);
+        moveHandle({
+          h: BASE.h, s: BASE.s, v: BASE.v,
+          rad: radiusFor(BASE.s, BASE.v), ang: BASE.h * Math.PI * 2,
+        });
+      }
+      paint5(CH.ring, { source: source, skipPaletteWrite: !!skipPaletteWrite });
+    }
+
+    function chAdoptLegacyRing(event) {
+      var detail = event.detail || {};
+      if (detail.source === 'color-hub' || detail.source === 'color-hub-broadcast') return;
+      var incoming = Array.isArray(detail.palette) ? detail.palette : [];
+      if (incoming.length !== 5) return;
+      CH.ring = incoming.map(function (c) { return chAsHsv(c); });
+      CH.baseH = detail.base && Number.isFinite(detail.base.h)
+        ? chWrap01(detail.base.h) : CH.ring[0].h;
+      if (CH_SCHEME_IDS.indexOf(detail.scheme) !== -1) CH.lastScheme = detail.scheme;
+      CH_RING_UIS.forEach(function (ui) {
+        if (ui.hueHandle) ui.hueHandle.style.left = (CH.baseH * 100) + '%';
+      });
+      chRenderRing();
+      var kind = chKind();
+      /* This event continues to the wire after this listener. While any
+         daemon family owns colour, suppress the wire's static /param-center
+         write so a Legacy gesture cannot cut underneath that transport. */
+      if (kind !== 'none') detail.skipPaletteWrite = true;
+      if (kind === 'crossfade' || kind === 'turns') {
+        try { chWrite('PATCH', { palettes: kind === 'crossfade' ? chBuildCrossfadePatch().palettes : chBuildTurnsPatch().palettes }, 'Shared palette updated.'); }
+        catch (err) { chSetMsg(err.message); }
+      }
     }
 
     var elStrip = document.getElementById('chStrip');
@@ -5663,12 +5886,32 @@ if (window.parent !== window ||
     }
 
     function chRenderAll() {
+      chStampPaletteDriver();
       chRenderRing();
       chRenderTimingChips();
       chRenderStrip();
       chRenderTransport();
       chRenderFollowState();
       chRenderSub();
+    }
+
+    /* Adopt the engine-confirmed palette ring after a Color Hub write (or a
+       write from Deck/Timeline). Previously the transport/button state used
+       the broadcast but the swatches and A/B badges stayed on their old local
+       draft, so a successful crossfade looked like it did nothing in the UI.
+       Inline palette orbits contain the complete ring and spacing; named
+       curated palette ids do not, so those remain display-only until the
+       engine publishes a resolvable ring. */
+    function chAdoptBroadcastRing(payload) {
+      if (!payload || !payload.active || payload.mode === 'followNote') return;
+      var orbit = chTurnsOrbit(payload.palettes);
+      if (!orbit || !orbit.ring.length) return;
+      CH.ring = orbit.ring.map(function (c) { return chAsHsv(c); });
+      CH.sel = [0, orbit.distance];
+      CH.baseH = CH.ring[0].h;
+      CH_RING_UIS.forEach(function (ui) {
+        if (ui.hueHandle) ui.hueHandle.style.left = (CH.baseH * 100) + '%';
+      });
     }
 
     if (elTabs) {
@@ -5695,6 +5938,7 @@ if (window.parent !== window ||
           CH.baseH = chWrap01(Math.min(1, Math.max(0, frac)));
           CH_RING_UIS.forEach(function (u) { if (u.hueHandle) u.hueHandle.style.left = (CH.baseH * 100) + '%'; });
           CH.ring = chGenerateScheme(CH.lastScheme, CH.baseH);
+          chShareRingWithLegacy('color-hub', chKind() !== 'none');
           chRenderRing();
         });
       }
@@ -5719,12 +5963,14 @@ if (window.parent !== window ||
           });
           if (outcome.action === 'stage-only' || outcome.action === 'stage-and-write') {
             CH.ring = chGenerateScheme(id, CH.baseH);
+            chShareRingWithLegacy('color-hub', kind !== 'none');
             chRenderRing();
             chSetMsg(outcome.message);
             return;
           }
           if (outcome.action === 'restage') {
             CH.ring = chGenerateScheme(id, CH.baseH);
+            chShareRingWithLegacy('color-hub', true);
             chRenderRing();
             try { chWrite('PATCH', { palettes: chOrbitPairs(CH.ring, CH.sel) }, outcome.message); }
             catch (err) { chSetMsg(err.message); }
@@ -5739,10 +5985,12 @@ if (window.parent !== window ||
       if (ui.armA) ui.armA.addEventListener('click', function () {
         CH.armedChannel = 0;
         CH_RING_UIS.forEach(function (u) { if (u.armA) u.armA.classList.add('is-active'); if (u.armB) u.armB.classList.remove('is-active'); });
+        chSetMsg('COLOUR A is armed — tap a swatch above to assign it.');
       });
       if (ui.armB) ui.armB.addEventListener('click', function () {
         CH.armedChannel = 1;
         CH_RING_UIS.forEach(function (u) { if (u.armB) u.armB.classList.add('is-active'); if (u.armA) u.armA.classList.remove('is-active'); });
+        chSetMsg('COLOUR B is armed — tap a swatch above to assign it.');
       });
     });
 
@@ -5811,12 +6059,19 @@ if (window.parent !== window ||
        the rig's own account of what is running, never an optimistic guess. */
     document.addEventListener('colorautopilot', function (e) {
       CH.broadcast = e.detail || null;
+      chAdoptBroadcastRing(CH.broadcast);
+      if (CH.broadcast && CH.broadcast.active && CH.broadcast.mode !== 'followNote') {
+        chShareRingWithLegacy('color-hub-broadcast', true);
+      }
       chRenderStrip();
       chRenderTransport();
       chRenderFollowState();
       chRenderSub();
       chRenderRing();   // A/B badges depend on kind via the gate messages only, but re-painting is cheap and keeps this simple.
     });
+
+    var sharedPaletteHost = document.getElementById('slots');
+    if (sharedPaletteHost) sharedPaletteHost.addEventListener('palettechange', chAdoptLegacyRing);
 
     chRenderCardVisibility();
     chRenderAll();
@@ -5845,24 +6100,6 @@ if (window.parent !== window ||
      a setting you are happy with cannot be nudged. Deliberately NOT tied to ARM:
      ARM decides whether anything reaches the rig at all, a lock protects one
      panel's settings while the show keeps running. Two different jobs. */
-  var patSel = document.getElementById('patternSel');
-  patSel.addEventListener('change', function () {
-    document.getElementById('patternCaps').textContent =
-      patSel.options[patSel.selectedIndex].dataset.caps;
-  });
-
-  Array.prototype.forEach.call(document.querySelectorAll('[data-lock]'), function (btn) {
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var panel = btn.closest('.panel');
-      var locked = panel.classList.toggle('is-locked');
-      btn.classList.toggle('is-locked', locked);
-      /* Open padlock when unlocked, closed when locked. */
-      btn.innerHTML = locked ? '&#128274;' : '&#128275;';
-      btn.title = locked ? 'Unlock this panel' : 'Lock this panel';
-    });
-  });
-
   /* -- Z / MOTION SPEED, now a vertical fader --------------------------
      Same construction and same gesture as the group faders and the effect
      faders: one drag idiom across the whole surface, not three. */
@@ -5995,6 +6232,17 @@ if (window.parent !== window ||
 
   var fxGrid = document.getElementById('fxGrid');
   var fxCount = document.getElementById('fxCount');
+  var fxPanel = fxGrid.closest('.effects-panel');
+  var fxEditToggle = document.getElementById('fxEditToggle');
+
+  if (fxEditToggle) {
+    fxEditToggle.addEventListener('click', function () {
+      var editing = fxPanel.classList.toggle('is-editing');
+      fxEditToggle.classList.toggle('is-active', editing);
+      fxEditToggle.setAttribute('aria-pressed', String(editing));
+      fxEditToggle.textContent = editing ? 'DONE' : 'EDIT';
+    });
+  }
 
   function fxOptionsHtml(sel) {
     /* DERIVED from the options, never hardcoded. A hardcoded list silently
@@ -6112,6 +6360,9 @@ if (window.parent !== window ||
     if (!face) throw new Error('FX_SHORT has no entry for "' + o.e + '|' + o.p + '"');
     cell.querySelector('.fx-name').textContent = face[0];
     cell.querySelector('.fx-preset').textContent = face[1];
+    cell.querySelector('.fx-family').textContent = o.f === 'texture' ? 'TEX' : o.f.toUpperCase();
+    cell.querySelector('[data-role=fxface]').setAttribute(
+      'aria-label', face[0] + ' ' + face[1] + ', effect off');
     cell.dispatchEvent(new CustomEvent('fxassign', { bubbles: true }));
   }
 
@@ -6173,9 +6424,11 @@ if (window.parent !== window ||
         cell.dataset.slot = String(slotId);
         cell.innerHTML =
           '<select class="fx-pick" data-role="fxpick">' + fxOptionsHtml(defaultIndexes[n]) + '</select>' +
-          '<div class="fx-face" data-role="fxface">' +
+          '<button type="button" class="fx-face" data-role="fxface" aria-pressed="false">' +
+            '<span class="fx-family" aria-hidden="true"></span>' +
+            '<span class="fx-state" aria-hidden="true"></span>' +
             '<span class="fx-name"></span><span class="fx-preset"></span>' +
-          '</div>';
+          '</button>';
         fxGrid.appendChild(cell);
         assign(cell, defaultIndexes[n]);
       });
@@ -6259,11 +6512,23 @@ if (window.parent !== window ||
       }
     }
     cell.classList.toggle('is-on', on);
+    var face = cell.querySelector('[data-role=fxface]');
+    if (face) {
+      face.setAttribute('aria-pressed', String(on));
+      face.setAttribute('aria-label', cell.querySelector('.fx-name').textContent + ' ' +
+        cell.querySelector('.fx-preset').textContent + ', effect ' + (on ? 'on' : 'off'));
+    }
     refreshFxCount();
   }
 
   function releaseCell(o) {
     o.classList.remove('is-on');
+    var face = o.querySelector('[data-role=fxface]');
+    if (face) {
+      face.setAttribute('aria-pressed', 'false');
+      face.setAttribute('aria-label', o.querySelector('.fx-name').textContent + ' ' +
+        o.querySelector('.fx-preset').textContent + ', effect off');
+    }
     o.classList.add('was-released');
     setTimeout(function () { o.classList.remove('was-released'); }, 620);
   }
@@ -7480,8 +7745,8 @@ if (window.parent !== window ||
         trailFade: tfEl && tfEl.dataset.value !== undefined ? parseFloat(tfEl.dataset.value) : 0.5,
         /* Brush size is part of the look too — a preset recalled at the wrong
            size redraws the same path as a different gesture. */
-        brushSize: bsEl && bsEl.dataset.value !== undefined ? parseFloat(bsEl.dataset.value) : 0.35,
-        brushPower: bpEl && bpEl.dataset.value !== undefined ? parseFloat(bpEl.dataset.value) : 0.9,
+        brushSize: bsEl && bsEl.dataset.value !== undefined ? parseFloat(bsEl.dataset.value) : 0.18,
+        brushPower: bpEl && bpEl.dataset.value !== undefined ? parseFloat(bpEl.dataset.value) : 0.75,
         /* `ink` stays the DRAWN PATH — its v2 meaning. The scheme gets its own
            key; reusing `ink` would have broken every stored v2 preset. */
         inkScheme: inkBtn ? (inkBtn.dataset.ink || 'one') : 'one',
@@ -8266,7 +8531,9 @@ if (window.parent !== window ||
      workspace below the meters instead of preserving a vacant second row. */
   var LAYOUT_KEY = 'bm26_touch_layout_v2';
   var MIN_OPEN = 1;
-  var rail = document.getElementById('panelRail');
+  var workspaceScroll = document.getElementById('workspaceScroll');
+  var workspaceOverflow = document.getElementById('workspaceOverflow');
+  var hiddenOrder = [];
 
   /* DOCKABLE panels only - the row/floor logic below (openCount, MIN_OPEN,
      MAX_PER_ROW, makeRoomIn, reflowRows) is scoped to exactly this list.
@@ -8317,24 +8584,70 @@ if (window.parent !== window ||
     return allPanels().filter(function (p2) { return !p2.classList.contains('is-docked'); }).length;
   }
 
-  function buildRail() {
-    rail.innerHTML = '';
-    allPanels().concat(allBars()).forEach(function (panel) {
-      if (!panel.classList.contains('is-docked')) return;
-      var tab = document.createElement('button');
-      tab.className = 'rail-tab';
-      tab.dataset.for = panelKey(panel);
-      tab.title = 'Show ' + panelLabel(panel);
-      tab.innerHTML = '<i style="background:' + panelDot(panel) + '"></i>' + panelLabel(panel);
-      rail.appendChild(tab);
+  function orderedHiddenPanels() {
+    var hidden = allPanels().concat(allBars()).filter(function (panel) {
+      return panel.classList.contains('is-docked');
     });
+    hidden.sort(function (a, b) {
+      var ai = hiddenOrder.indexOf(panelKey(a));
+      var bi = hiddenOrder.indexOf(panelKey(b));
+      return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+    });
+    return hidden;
+  }
+
+  function updateWorkspaceOverflow() {
+    if (!workspaceScroll || !workspaceOverflow) return;
+    var overflowing = workspaceScroll.scrollWidth > workspaceScroll.clientWidth + 2;
+    var atEnd = workspaceScroll.scrollLeft + workspaceScroll.clientWidth >= workspaceScroll.scrollWidth - 2;
+    workspaceOverflow.classList.toggle('is-visible', overflowing && !atEnd);
+  }
+
+  function makeWorkspaceChip(panel, open) {
+    var isBar = allBars().indexOf(panel) !== -1;
+    var isFloor = open && !isBar && openCount() === MIN_OPEN;
+    var chip = document.createElement(isFloor ? 'span' : 'button');
+    chip.className = 'workspace-chip ' + (open ? 'is-open' : 'is-hidden') + (isFloor ? ' is-floor' : '');
+    chip.dataset.workspacePanel = panelKey(panel);
+    if (!isFloor) {
+      chip.type = 'button';
+      chip.setAttribute('aria-expanded', open ? 'true' : 'false');
+      chip.title = (open ? 'Hide ' : 'Show ') + panelLabel(panel);
+    }
+    chip.innerHTML = '<i style="background:' + panelDot(panel) + '"></i>'
+      + '<span>' + panelLabel(panel) + '</span>'
+      + (isFloor ? '' : '<b aria-hidden="true">' + (open ? '&#9662;' : '&#9656;') + '</b>');
+    return chip;
+  }
+
+  function renderWorkspaceBar() {
+    if (!workspaceScroll) return;
+    workspaceScroll.innerHTML = '';
+    allPanels().concat(allBars()).forEach(function (panel) {
+      if (!panel.classList.contains('is-docked')) {
+        workspaceScroll.appendChild(makeWorkspaceChip(panel, true));
+      }
+    });
+    var hidden = orderedHiddenPanels();
+    if (hidden.length) {
+      var divider = document.createElement('span');
+      divider.className = 'workspace-divider';
+      divider.setAttribute('aria-hidden', 'true');
+      workspaceScroll.appendChild(divider);
+      var label = document.createElement('span');
+      label.className = 'workspace-hidden-label';
+      label.textContent = 'HIDDEN';
+      workspaceScroll.appendChild(label);
+      hidden.forEach(function (panel) {
+        workspaceScroll.appendChild(makeWorkspaceChip(panel, false));
+      });
+    }
+    requestAnimationFrame(updateWorkspaceOverflow);
   }
 
   function saveLayout() {
     try {
-      var shut = allPanels().concat(allBars())
-        .filter(function (p2) { return p2.classList.contains('is-docked'); })
-        .map(panelKey).filter(Boolean);
+      var shut = orderedHiddenPanels().map(panelKey).filter(Boolean);
       localStorage.setItem(LAYOUT_KEY, JSON.stringify(shut));
     } catch (e) { console.error('[layout] could not save:', e.message); }
   }
@@ -8342,11 +8655,12 @@ if (window.parent !== window ||
   function loadLayout() {
     var shut;
     try { shut = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); }
-    catch (e) { console.error('[layout] could not read:', e.message); buildRail(); return; }
+    catch (e) { console.error('[layout] could not read:', e.message); renderWorkspaceBar(); return; }
     /* NO SAVED LAYOUT still needs the rail built: PRESETS ships docked, and
        without this it had no tab and was therefore unreachable - a panel you
        cannot open is worse than one that is simply always there. */
-    if (!Array.isArray(shut)) { reflowRows(); buildRail(); return; }
+    if (!Array.isArray(shut)) { reflowRows(); renderWorkspaceBar(); return; }
+    hiddenOrder = shut.slice();
     /* ADDITIVE (docs/65 §4.2): a v2 store written before the bar tier
        existed simply never has 'meter-strip' in `shut`, so indexOf is -1
        and the strip hydrates open - byte-identical to its pre-wave boot.
@@ -8369,7 +8683,7 @@ if (window.parent !== window ||
       docked[0].classList.remove('is-docked');
     }
     reflowRows();
-    buildRail();
+    renderWorkspaceBar();
   }
 
   /* MAX TWO OPEN PER ROW (operator ruling). The top row holds three panels and
@@ -8404,6 +8718,9 @@ if (window.parent !== window ||
     });
     var victim = open[0];
     victim.classList.add('is-docked');
+    hiddenOrder = [panelKey(victim)].concat(hiddenOrder.filter(function (key) {
+      return key !== panelKey(victim);
+    }));
     return victim;
   }
 
@@ -8421,38 +8738,42 @@ if (window.parent !== window ||
       return;
     }
     panel.classList.add('is-docked');
+    hiddenOrder = [panelKey(panel)].concat(hiddenOrder.filter(function (key) {
+      return key !== panelKey(panel);
+    }));
     reflowRows();
-    buildRail();
+    renderWorkspaceBar();
     saveLayout();
   }
 
-  document.addEventListener('click', function (e) {
-    var btn = e.target.closest && e.target.closest('[data-collapse]');
-    if (btn) {
-      e.stopPropagation();
-      var panel = btn.closest('.panel');
-      if (panel) dock(panel);
+  if (workspaceScroll) workspaceScroll.addEventListener('click', function (e) {
+    var chip = e.target.closest && e.target.closest('[data-workspace-panel]');
+    if (!chip || chip.classList.contains('is-floor')) return;
+    e.stopPropagation();
+    var target = allPanels().concat(allBars()).filter(function (panel) {
+      return panelKey(panel) === chip.dataset.workspacePanel;
+    })[0];
+    if (!target) return;
+    if (!target.classList.contains('is-docked')) {
+      dock(target);
       return;
     }
-    var tab = e.target.closest && e.target.closest('.rail-tab');
-    if (tab) {
-      e.stopPropagation();
-      var target = allPanels().concat(allBars())
-        .filter(function (p2) { return panelKey(p2) === tab.dataset.for; })[0];
-      if (target) {
-        makeRoomIn(rowOf(target));            // two per row, so something may go
-        // (no-op for a bar: rowOf() is null outside .prow, openInRow(null) is [])
-        target.classList.remove('is-docked');
-        stampOpen(target);
-        reflowRows(); buildRail(); saveLayout();
-      }
-    }
+    makeRoomIn(rowOf(target));
+    target.classList.remove('is-docked');
+    hiddenOrder = hiddenOrder.filter(function (key) { return key !== panelKey(target); });
+    stampOpen(target);
+    reflowRows();
+    renderWorkspaceBar();
+    saveLayout();
   }, true);
+  if (workspaceScroll) workspaceScroll.addEventListener('scroll', updateWorkspaceOverflow, { passive: true });
+  window.addEventListener('resize', updateWorkspaceOverflow);
 
   loadLayout();
   /* Stamp whatever is open at boot so the first displacement has real recency
      to work from rather than falling back to DOM order. */
   allPanels().forEach(function (p2) { if (!p2.classList.contains('is-docked')) stampOpen(p2); });
+  renderWorkspaceBar();
 })();
 </script>
 
@@ -8586,7 +8907,10 @@ if (window.parent !== window ||
   }
 
   bars.addEventListener('scroll', update, { passive: true });
-  new MutationObserver(update).observe(bars, { childList: true, attributes: true, subtree: true });
+  /* Card construction can change the hidden count; live values and canvas
+     width attributes cannot. Observing the whole subtree tied every audio
+     paint back to geometry measurement, so keep this lifecycle direct-only. */
+  new MutationObserver(update).observe(bars, { childList: true });
   new ResizeObserver(update).observe(strip);
   window.addEventListener('resize', update);
 

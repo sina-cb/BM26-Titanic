@@ -1,27 +1,6 @@
 schemaVersion: 1
 name: baby_boy
 entries:
-  - id: e_baby_boy_keel_breath
-    pattern: baby/51_boy_keel_breath
-    label: Baby Boy - Keel Breath
-    defaults:
-      sliderLocalSpeed: 0.3
-      sliderLevel: 0.86
-      sliderKeelWidth: 0.52
-      sliderBreathDepth: 0.46
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; a calm full-ship keel breath.
-  - id: e_baby_boy_sign_lantern
-    pattern: baby/56_boy_sign_lantern
-    label: Baby Boy - Sign Lantern
-    defaults:
-      sliderLocalSpeed: 0.28
-      sliderLevel: 0.94
-      sliderLanternDepth: 0.52
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; TE Identity leads as a paired lantern.
   - id: e_baby_boy_moonlit_ripples
     pattern: baby/23_boy_moonlit_ripples
     label: Baby Boy - Moonlit Ripples
@@ -32,7 +11,9 @@ entries:
       sliderOriginOffset: 0.58
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_cradle_waves
     pattern: baby/20_boy_cradle_waves
     label: Baby Boy - Cradle Waves
@@ -43,7 +24,9 @@ entries:
       sliderCradleDepth: 0.66
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_horizon_tides
     pattern: baby/19_boy_horizon_tides
     label: Baby Boy - Horizon Tides
@@ -54,18 +37,9 @@ entries:
       sliderVerticalReach: 0.62
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
-  - id: e_baby_boy_stack_halo
-    pattern: baby/54_boy_stack_halo
-    label: Baby Boy - Stack Halo
-    defaults:
-      sliderLocalSpeed: 0.3
-      sliderLevel: 0.92
-      sliderHaloWidth: 0.56
-      sliderHaloDepth: 0.52
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; smoke-stack halos over a complete ship floor.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_silhouette_tide
     pattern: baby/58_boy_silhouette_tide
     label: Baby Boy - Silhouette Tide
@@ -76,18 +50,9 @@ entries:
       sliderSilhouetteDepth: 0.58
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; the ship outline carries a tidal gesture.
-  - id: e_baby_boy_hull_constellations
-    pattern: baby/57_boy_hull_constellations
-    label: Baby Boy - Hull Constellations
-    defaults:
-      sliderLocalSpeed: 0.36
-      sliderLevel: 0.94
-      sliderStarSize: 0.54
-      sliderConnectorContrast: 0.46
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; connected constellations span the hull.
+    notes: >-
+      Hard-coded baby-blue family only; the ship outline carries a tidal
+      gesture.
   - id: e_baby_boy_constellation_flow
     pattern: baby/22_boy_constellation_flow
     label: Baby Boy - Constellation Flow
@@ -98,7 +63,9 @@ entries:
       sliderConstellationDensity: 0.48
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_orbit_rings
     pattern: baby/16_boy_orbit_glow
     label: Baby Boy - Orbit Glow
@@ -109,7 +76,9 @@ entries:
       sliderSpatialDepth: 0.68
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_orbital_pearls
     pattern: baby/60_boy_orbital_pearls
     label: Baby Boy - Orbital Pearls
@@ -131,7 +100,9 @@ entries:
       sliderSpatialDepth: 0.7
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_ribbon_braid
     pattern: baby/24_boy_ribbon_braid
     label: Baby Boy - Ribbon Braid
@@ -142,7 +113,9 @@ entries:
       sliderBraidAmount: 0.56
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_rail_cascade
     pattern: baby/55_boy_rail_cascade
     label: Baby Boy - Rail Cascade
@@ -154,28 +127,6 @@ entries:
     modulations: []
     midiMappings: []
     notes: Hard-coded baby-blue family only; a rail-length cascade.
-  - id: e_baby_boy_bow_wave
-    pattern: baby/52_boy_bow_wave
-    label: Baby Boy - Bow Wave
-    defaults:
-      sliderLocalSpeed: 0.34
-      sliderLevel: 0.96
-      sliderWaveWidth: 0.62
-      sliderWaveDepth: 0.5
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; a broad bow-led wave.
-  - id: e_baby_boy_stern_wake
-    pattern: baby/53_boy_stern_wake
-    label: Baby Boy - Stern Wake
-    defaults:
-      sliderLocalSpeed: 0.34
-      sliderLevel: 0.88
-      sliderWakeSpread: 0.56
-      sliderRippleDensity: 0.48
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; a spatial stern wake.
   - id: e_baby_boy_waterfall_veil
     pattern: baby/28_boy_waterfall_veil
     label: Baby Boy - Waterfall Veil
@@ -186,7 +137,9 @@ entries:
       sliderCascadeDensity: 0.54
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_lighthouse_fans
     pattern: baby/26_boy_lighthouse_fans
     label: Baby Boy - Lighthouse Fans
@@ -197,7 +150,9 @@ entries:
       sliderFanCount: 0.45
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_crossing_beacons
     pattern: baby/17_boy_crossing_glow
     label: Baby Boy - Crossing Glow
@@ -208,7 +163,9 @@ entries:
       sliderCrossingOffset: 0.5
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_crossing_beacons_61
     pattern: baby/61_boy_crossing_beacons
     label: Baby Boy - Crossing Beacons
@@ -219,7 +176,9 @@ entries:
       sliderCrossingDepth: 0.54
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; paired beacons cross over the whole ship.
+    notes: >-
+      Hard-coded baby-blue family only; paired beacons cross over the whole
+      ship.
   - id: e_baby_boy_bubble_chorus
     pattern: baby/25_boy_bubble_chorus
     label: Baby Boy - Bubble Chorus
@@ -230,7 +189,9 @@ entries:
       sliderCellDensity: 0.52
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_diamond_quilt
     pattern: baby/29_boy_diamond_quilt
     label: Baby Boy - Diamond Quilt
@@ -241,7 +202,9 @@ entries:
       sliderQuiltScale: 0.52
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_harbor_fireflies
     pattern: baby/64_boy_harbor_fireflies
     label: Baby Boy - Harbor Fireflies
@@ -252,7 +215,9 @@ entries:
       sliderDriftDepth: 0.58
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; detailed harbor lights drift over a visible ship.
+    notes: >-
+      Hard-coded baby-blue family only; detailed harbor lights drift over a
+      visible ship.
   - id: e_baby_boy_comet_lullaby
     pattern: baby/21_boy_comet_lullaby
     label: Baby Boy - Comet Lullaby
@@ -263,40 +228,9 @@ entries:
       sliderCometCount: 0.46
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
-  - id: e_baby_boy_cathedral_ribs
-    pattern: baby/59_boy_cathedral_ribs
-    label: Baby Boy - Cathedral Ribs
-    defaults:
-      sliderLocalSpeed: 0.42
-      sliderLevel: 0.96
-      sliderRibWidth: 0.54
-      sliderArchHeight: 0.58
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; broad architectural ribs cross the ship.
-  - id: e_baby_boy_aurora_veil
-    pattern: baby/63_boy_aurora_veil
-    label: Baby Boy - Aurora Veil
-    defaults:
-      sliderLocalSpeed: 0.58
-      sliderLevel: 0.91
-      sliderVeilWidth: 0.54
-      sliderAuroraDepth: 0.62
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; a smooth aurora veil.
-  - id: e_baby_boy_gentle_maelstrom
-    pattern: baby/62_boy_gentle_maelstrom
-    label: Baby Boy - Gentle Maelstrom
-    defaults:
-      sliderLocalSpeed: 0.58
-      sliderLevel: 0.94
-      sliderSpiralWidth: 0.68
-      sliderCurrentDepth: 0.48
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; a broad, photo-safe maelstrom.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_heartbeat_bloom
     pattern: baby/27_boy_heartbeat_bloom
     label: Baby Boy - Heartbeat Bloom
@@ -307,18 +241,9 @@ entries:
       sliderEchoDepth: 0.58
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
-  - id: e_baby_boy_celebration_bloom
-    pattern: baby/65_boy_celebration_bloom
-    label: Baby Boy - Celebration Bloom
-    defaults:
-      sliderLocalSpeed: 0.48
-      sliderLevel: 0.92
-      sliderPetalCount: 0.52
-      sliderBloomDepth: 0.58
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-blue family only; a sustained spatial celebration bloom.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.
   - id: e_baby_boy_celebration_burst
     pattern: baby/30_boy_celebration_burst
     label: Baby Boy - Celebration Burst
@@ -329,4 +254,6 @@ entries:
       sliderBurstReach: 0.64
     modulations: []
     midiMappings: []
-    notes: Hard-coded baby-blue family only; autonomous photo-hold glow, no palette binding.
+    notes: >-
+      Hard-coded baby-blue family only; autonomous photo-hold glow, no palette
+      binding.

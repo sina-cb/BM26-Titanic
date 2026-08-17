@@ -34,7 +34,7 @@ const path = require('path');
 // finished pattern being invisible. If the family turns out to be scratch, the
 // reversible call is to move the name into NON_MANIFEST_PATTERN_DIRS below with
 // its reason — nothing else changes.
-const MANIFEST_PATTERN_DIRS = ['ambient_extra', 'baby', 'party_dancers'];
+const MANIFEST_PATTERN_DIRS = ['ambient_extra', 'baby', 'crisp', 'party_dancers'];
 
 // Subdirectories that deliberately hold no operator-selectable pattern, each
 // with the reason it is excluded.

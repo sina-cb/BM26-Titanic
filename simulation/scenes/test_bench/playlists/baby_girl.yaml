@@ -1,27 +1,6 @@
 schemaVersion: 1
 name: baby_girl
 entries:
-  - id: e_baby_girl_keel_breath
-    pattern: baby/66_girl_keel_breath
-    label: Baby Girl - Keel Breath
-    defaults:
-      sliderLocalSpeed: 0.3
-      sliderLevel: 0.86
-      sliderKeelWidth: 0.52
-      sliderBreathDepth: 0.46
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; a calm full-ship keel breath.
-  - id: e_baby_girl_sign_lantern
-    pattern: baby/71_girl_sign_lantern
-    label: Baby Girl - Sign Lantern
-    defaults:
-      sliderLocalSpeed: 0.28
-      sliderLevel: 0.94
-      sliderLanternDepth: 0.52
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; TE Identity leads as a paired lantern.
   - id: e_baby_girl_moonlit_ripples
     pattern: baby/38_girl_moonlit_ripples
     label: Baby Girl - Moonlit Ripples
@@ -55,17 +34,6 @@ entries:
     modulations: []
     midiMappings: []
     notes: Hard-coded baby-pink family only; autonomous photo-hold glow, no palette binding.
-  - id: e_baby_girl_stack_halo
-    pattern: baby/69_girl_stack_halo
-    label: Baby Girl - Stack Halo
-    defaults:
-      sliderLocalSpeed: 0.3
-      sliderLevel: 0.92
-      sliderHaloWidth: 0.56
-      sliderHaloDepth: 0.52
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; smoke-stack halos over a complete ship floor.
   - id: e_baby_girl_silhouette_tide
     pattern: baby/73_girl_silhouette_tide
     label: Baby Girl - Silhouette Tide
@@ -77,17 +45,6 @@ entries:
     modulations: []
     midiMappings: []
     notes: Hard-coded baby-pink family only; the ship outline carries a tidal gesture.
-  - id: e_baby_girl_hull_constellations
-    pattern: baby/72_girl_hull_constellations
-    label: Baby Girl - Hull Constellations
-    defaults:
-      sliderLocalSpeed: 0.36
-      sliderLevel: 0.94
-      sliderStarSize: 0.54
-      sliderConnectorContrast: 0.46
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; connected constellations span the hull.
   - id: e_baby_girl_constellation_flow
     pattern: baby/37_girl_constellation_flow
     label: Baby Girl - Constellation Flow
@@ -154,28 +111,6 @@ entries:
     modulations: []
     midiMappings: []
     notes: Hard-coded baby-pink family only; a rail-length cascade.
-  - id: e_baby_girl_bow_wave
-    pattern: baby/67_girl_bow_wave
-    label: Baby Girl - Bow Wave
-    defaults:
-      sliderLocalSpeed: 0.34
-      sliderLevel: 0.96
-      sliderWaveWidth: 0.62
-      sliderWaveDepth: 0.5
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; a broad bow-led wave.
-  - id: e_baby_girl_stern_wake
-    pattern: baby/68_girl_stern_wake
-    label: Baby Girl - Stern Wake
-    defaults:
-      sliderLocalSpeed: 0.34
-      sliderLevel: 0.88
-      sliderWakeSpread: 0.56
-      sliderRippleDensity: 0.48
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; a spatial stern wake.
   - id: e_baby_girl_waterfall_veil
     pattern: baby/43_girl_waterfall_veil
     label: Baby Girl - Waterfall Veil
@@ -264,39 +199,6 @@ entries:
     modulations: []
     midiMappings: []
     notes: Hard-coded baby-pink family only; autonomous photo-hold glow, no palette binding.
-  - id: e_baby_girl_cathedral_ribs
-    pattern: baby/74_girl_cathedral_ribs
-    label: Baby Girl - Cathedral Ribs
-    defaults:
-      sliderLocalSpeed: 0.42
-      sliderLevel: 0.96
-      sliderRibWidth: 0.54
-      sliderArchHeight: 0.58
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; broad architectural ribs cross the ship.
-  - id: e_baby_girl_aurora_veil
-    pattern: baby/78_girl_aurora_veil
-    label: Baby Girl - Aurora Veil
-    defaults:
-      sliderLocalSpeed: 0.58
-      sliderLevel: 0.91
-      sliderVeilWidth: 0.54
-      sliderAuroraDepth: 0.62
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; a smooth aurora veil.
-  - id: e_baby_girl_gentle_maelstrom
-    pattern: baby/77_girl_gentle_maelstrom
-    label: Baby Girl - Gentle Maelstrom
-    defaults:
-      sliderLocalSpeed: 0.58
-      sliderLevel: 0.94
-      sliderSpiralWidth: 0.68
-      sliderCurrentDepth: 0.48
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; a broad, photo-safe maelstrom.
   - id: e_baby_girl_heartbeat_bloom
     pattern: baby/42_girl_heartbeat_bloom
     label: Baby Girl - Heartbeat Bloom
@@ -308,17 +210,6 @@ entries:
     modulations: []
     midiMappings: []
     notes: Hard-coded baby-pink family only; autonomous photo-hold glow, no palette binding.
-  - id: e_baby_girl_celebration_bloom
-    pattern: baby/80_girl_celebration_bloom
-    label: Baby Girl - Celebration Bloom
-    defaults:
-      sliderLocalSpeed: 0.48
-      sliderLevel: 0.92
-      sliderPetalCount: 0.52
-      sliderBloomDepth: 0.58
-    modulations: []
-    midiMappings: []
-    notes: Hard-coded baby-pink family only; a sustained spatial celebration bloom.
   - id: e_baby_girl_celebration_burst
     pattern: baby/45_girl_celebration_burst
     label: Baby Girl - Celebration Burst

@@ -15,7 +15,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Modal, Pressable, ScrollView, Text, TouchableOpacity, View,
+  Modal, Pressable, ScrollView, Text, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import Svg, { Path, Line, Circle } from 'react-native-svg';
 import { usePalette } from '@/hooks/use-theme';
@@ -38,6 +38,8 @@ import { ParamChip, useParamRowMetrics } from '@/components/ui/param_chips';
 import { ParamRow } from '@/components/ui/param_row';
 import { paramDisplayName, PARAM_NAME_LEGACY_CAP } from '@/components/param_row_layout';
 import { usePerfLock } from '@/hooks/usePerformanceMode';
+import { opError } from '@/utils/op_dialog';
+import { readableInk } from '@/styles/globalStyles';
 
 // ── modulationState frame subscription ──────────────────────────────
 //
@@ -166,7 +168,7 @@ function OverrideBadge() {
 }
 
 function ModulationBadges({
-  hasMapping, editable, showAddHint, isOverride, onEdit, onClear,
+  hasMapping, editable, showAddHint, isOverride, clearing = false, onEdit, onClear,
 }: {
   hasMapping: boolean;
   // `editable` means the operator can OPEN the popover (deck only).
@@ -181,6 +183,7 @@ function ModulationBadges({
   // Whether the mapping is in OVERRIDE mode — shows the `!` badge so the
   // operator reads "this param is driven by the signal, not the slider".
   isOverride?: boolean;
+  clearing?: boolean;
   onEdit?: () => void;
   onClear?: () => void;
 }) {
@@ -197,7 +200,7 @@ function ModulationBadges({
   // wouldn't read as locked); a mapped ◎ ON pill stays (live status), inert.
   if (!hasMapping && (!showAddHint || perfLocked)) return null;
   const canEdit = editable && !perfLocked && !!onEdit;
-  const canClear = hasMapping && editable && !perfLocked && !!onClear;
+  const canClear = hasMapping && editable && !perfLocked && !clearing && !!onClear;
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: m.gap, flexShrink: 0 }}>
       <ParamChip
@@ -211,14 +214,16 @@ function ModulationBadges({
         accessibilityLabel={hasMapping ? (canEdit ? 'Edit modulation' : 'Modulation active') : 'Add modulation'}
       />
       {hasMapping && isOverride ? <OverrideBadge /> : null}
-      {canClear ? (
+      {hasMapping && editable && !perfLocked ? (
         <ParamChip
           label="✕"
           // Outlined-green: "destructive but reversible" without screaming red.
           accent={MOD_GREEN}
           tone="quiet"
-          onPress={onClear}
-          accessibilityLabel="Clear modulation"
+          onPress={canClear ? onClear : undefined}
+          accessibilityLabel={clearing ? 'Removing modulation' : 'Clear modulation'}
+          style={{ minWidth: 28 }}
+          hitSlop={{ top: 8, bottom: 8, left: 2, right: 2 }}
         />
       ) : null}
     </View>
@@ -396,6 +401,7 @@ function ModulatedSliderImpl({
   // Nothing is ever created automatically in either case.
   const [popoverOpen, setPopoverOpen] = useState<null | SuggestionEntry>(null);
   const [midiOpen, setMidiOpen] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
   // The row header renders the FULL display name and lets the layout ellipsize
   // it; the popovers keep the capped form for their fixed-width titles.
   const fullName = paramDisplayName(exportItem.name);
@@ -428,10 +434,21 @@ function ModulatedSliderImpl({
   const enabled = !!(playlistName && entryId);
 
   const clearMapping = useCallback(async () => {
-    if (!mapping || !playlistName || !entryId) return;
-    const r = await deleteModulation(playlistName, entryId, mapping.id);
-    if (r.ok) onChanged();
-  }, [mapping, playlistName, entryId, onChanged]);
+    if (clearBusy || !mapping || !playlistName || !entryId) return;
+    setClearBusy(true);
+    try {
+      const r = await deleteModulation(playlistName, entryId, mapping.id);
+      if (!r.ok) {
+        opError('Modulation not removed', r.error || 'The engine rejected the delete.');
+        return;
+      }
+      onChanged();
+    } catch (error: unknown) {
+      opError('Modulation not removed', error instanceof Error ? error.message : String(error));
+    } finally {
+      setClearBusy(false);
+    }
+  }, [clearBusy, mapping, playlistName, entryId, onChanged]);
 
   // Delta from base — useful for the operator to read at a glance
   // ("LOCAL SPEED 0.30 → 0.52 (+0.22)" tells them how much audio
@@ -463,6 +480,7 @@ function ModulatedSliderImpl({
             editable={enabled}
             showAddHint={true}
             isOverride={mapping?.mode === 'override'}
+            clearing={clearBusy}
             onEdit={() => setPopoverOpen('plain')}
             onClear={clearMapping}
           />
@@ -824,6 +842,7 @@ export function ModulationPopover({
   suggestion = null, entry = 'plain', onClose, onChanged,
 }: PopoverProps) {
   const C = usePalette();
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   // The full live audio-signal descriptors — used both to seed a sensible
   // default source and to resolve the selected source's label / kind / max /
   // rawKey for its live trail + accent.
@@ -858,6 +877,15 @@ export function ModulationPopover({
     () => existing?.source.key ?? seed.source);
   // Dynamic source options from the live audio CPC keys (Companion-routed).
   const sourceOptions = useModulationSourceOptions(source);
+  const [showAllSources, setShowAllSources] = useState(false);
+  const visibleSourceOptions = useMemo(() => {
+    if (showAllSources) return sourceOptions;
+    const core = new Set([
+      'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
+      source, suggestion?.signal,
+    ].filter(Boolean));
+    return sourceOptions.filter((option) => core.has(option.key));
+  }, [showAllSources, sourceOptions, source, suggestion]);
   const sourceSignal = useMemo(
     () => audioSignals.find((s) => s.key === source) ?? null,
     [audioSignals, source],
@@ -907,6 +935,7 @@ export function ModulationPopover({
   const [curve, setCurve] = useState<ModulationCurve>(existing?.curve ?? seed.curve);
   const [enabled, setEnabled] = useState<boolean>(existing?.enabled ?? true);
   const [busy, setBusy] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Live (pre-save) range resolved the SAME way `save()` does, so the
@@ -1047,8 +1076,15 @@ export function ModulationPopover({
       // rest of this popover lifetime (subsequent saves use PATCH
       // against the same id).
       initialIdRef.current = mappingId;
-      onChanged();
+      // Close FIRST, then refresh the owning Deck/Mixer mapping surface.
+      // Refresh can synchronously rerender the active entry (or throw from a
+      // stale owner); when it ran first, a confirmed save could leave this
+      // modal mounted even though the mapping had already persisted.
+      // Own the dismissal locally as well as notifying the parent. Nested
+      // native modals can otherwise survive one parent reconciliation frame.
+      setDismissed(true);
       onClose();
+      onChanged();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1068,7 +1104,7 @@ export function ModulationPopover({
     // even if a prior SAVE failed — fall back to the captured id so
     // the operator can always recover from a half-edited state.
     const idToDelete = initialIdRef.current ?? existing?.id;
-    if (!idToDelete) { onClose(); return; }
+    if (!idToDelete) { setDismissed(true); onClose(); return; }
     setBusy(true); setError(null);
     try {
       const r = await deleteModulation(playlistName, entryId, idToDelete);
@@ -1080,14 +1116,22 @@ export function ModulationPopover({
       // modulationState frame on the >0 → 0 transition gate, which
       // clears the green ghost overlay automatically. No need to
       // poke modulationLive locally.
-      onChanged();
+      // Same close-before-refresh contract as SAVE: a successful mutation
+      // must dismiss the editor before its parent reconciles the mapping list.
+      setDismissed(true);
       onClose();
+      onChanged();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
   };
+
+  if (dismissed) return null;
+
+  const modalWidth = Math.min(720, Math.max(440, viewportWidth - 80));
+  const modalMaxHeight = Math.min(900, Math.max(520, viewportHeight - 48));
 
   return (
     <Modal transparent visible animationType="fade" onRequestClose={onClose}>
@@ -1098,27 +1142,89 @@ export function ModulationPopover({
         <Pressable
           onPress={(e) => e.stopPropagation()}
           style={{
-            width: 440, maxHeight: '92%',
+            width: modalWidth, maxHeight: modalMaxHeight,
             backgroundColor: C.surfaceContainerLowest,
-            borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
+            borderRadius: 18, borderWidth: 1, borderColor: sourceAccent,
+            overflow: 'hidden',
           }}
         >
           {/* Title bar — stays pinned above the scrolling body. */}
           <View style={{
-            paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10,
+            paddingHorizontal: 22, paddingTop: 18, paddingBottom: 14,
+            borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
+            backgroundColor: C.surfaceContainerHigh,
+            flexDirection: 'row', alignItems: 'center', gap: 14,
+          }}>
+            <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', color: sourceAccent, fontSize: 9,
+                textTransform: 'uppercase', letterSpacing: 1.8,
+              }}>
+                AUDIO MODULATOR
+              </Text>
+              <Text numberOfLines={1} style={{
+                fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 20,
+                textTransform: 'uppercase', letterSpacing: 0.6,
+              }}>
+                {paramName}
+              </Text>
+            </View>
+            <View style={{
+              paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
+              borderWidth: 1, borderColor: enabled ? MOD_GREEN : C.ghostBorder,
+              backgroundColor: enabled ? MOD_GREEN_SOFT : C.surfaceContainerLowest,
+            }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+                color: enabled ? MOD_GREEN : C.secondary, letterSpacing: 0.8,
+              }}>
+                {isExisting ? 'EDITING' : 'NEW'} · {enabled ? 'ON' : 'OFF'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={onClose}
+              disabled={busy}
+              accessibilityLabel="Close modulation editor"
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              style={{
+                width: 40, height: 40, borderRadius: 12,
+                borderWidth: 1, borderColor: C.ghostBorder,
+                alignItems: 'center', justifyContent: 'center',
+                opacity: busy ? 0.5 : 1,
+              }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 18 }}>×</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={{
+            minHeight: 48, paddingHorizontal: 22, paddingVertical: 10,
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            backgroundColor: C.surfaceContainerLowest,
             borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
           }}>
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14,
-              textTransform: 'uppercase', letterSpacing: 1,
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: sourceAccent }} />
+            <Text numberOfLines={1} style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: sourceAccent,
+              letterSpacing: 0.6, flexShrink: 1,
             }}>
-              MAP {paramName}
+              {sourceSignal?.label?.toUpperCase() || shortSignalLabel(source)}
+            </Text>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.icon }}>→</Text>
+            <Text numberOfLines={1} style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text,
+              letterSpacing: 0.6, flex: 1,
+            }}>
+              {paramName.toUpperCase()}
+            </Text>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: sourceAccent }}>
+              {liveSourceNorm === null ? 'NO SIGNAL' : `${Math.round(liveSourceNorm * 100)}% LIVE`}
             </Text>
           </View>
 
           <ScrollView
             style={{ flexGrow: 0 }}
-            contentContainerStyle={{ padding: 20, gap: 16 }}
+            contentContainerStyle={{ padding: 18, gap: 14 }}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
@@ -1131,7 +1237,7 @@ export function ModulationPopover({
                 N animated trails crowding the picker. The selected source then
                 gets the full live trail below. */}
             <PickerRow label="SIGNAL">
-              {sourceOptions.map((opt) => {
+              {visibleSourceOptions.map((opt) => {
                 const sig = audioSignals.find((s) => s.key === opt.key) ?? null;
                 const slot = liveDoc?.params?.[opt.key];
                 const raw = slot && typeof slot.value === 'number' ? slot.value : null;
@@ -1153,6 +1259,27 @@ export function ModulationPopover({
                 );
               })}
             </PickerRow>
+            {sourceOptions.length > visibleSourceOptions.length || showAllSources ? (
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                <TouchableOpacity
+                  onPress={() => setShowAllSources((value) => !value)}
+                  accessibilityLabel={showAllSources ? 'Show core audio signals' : 'Show all audio signals'}
+                  style={{
+                    minHeight: 36, paddingHorizontal: 12, borderRadius: 10,
+                    borderWidth: 1, borderColor: C.ghostBorder,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: C.surfaceContainerHigh,
+                  }}
+                >
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+                    color: C.secondary, letterSpacing: 0.6,
+                  }}>
+                    {showAllSources ? 'SHOW CORE SIGNALS' : `SHOW ALL ${sourceOptions.length} SIGNALS`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
             {suggestion ? (
               <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary }}>
                 {`♪ pattern suggests ${shortSignalLabel(suggestion.signal)}`}
@@ -1164,7 +1291,11 @@ export function ModulationPopover({
                 mapping. Reuses AudioTraceCanvas (self-animating, rAF-
                 interpolated, congestion-aware). RAW ghost shows when the
                 signal has a pre-gain mirror. */}
-            <View style={{ gap: 4 }}>
+            <View style={{
+              gap: 6, padding: 12, borderRadius: 12,
+              borderWidth: 1, borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+            }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
                 <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary }}>
                   {sourceSignal ? `${sourceSignal.label} · live` : 'source not live'}
@@ -1202,6 +1333,11 @@ export function ModulationPopover({
                 the current depth/range/curve. The live marker rides the
                 curve at the source's current value so the operator SEES
                 the effect of what they're dialing. */}
+            <View style={{
+              gap: 8, padding: 12, borderRadius: 12,
+              borderWidth: 1, borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+            }}>
             <ModulationCurvePlot
               base={targetBase}
               mode={mode}
@@ -1214,6 +1350,8 @@ export function ModulationPopover({
             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9, color: C.icon, textAlign: 'center' }}>
               X = source · Y = {paramName} value · dashed = base ({targetBase.toFixed(2)})
             </Text>
+
+            </View>
 
             <PickerRow label="MODE">
               <Chip accent={C.primary} active={mode === 'offset'} onPress={() => selectMode('offset')}>OFFSET</Chip>
@@ -1314,11 +1452,17 @@ export function ModulationPopover({
 
             {/* ── SECTION 3 · TARGET preview ──────────────────────────── */}
             <SectionLabel accent={C.primary}>TARGET</SectionLabel>
-            <TargetPreview
-              paramName={paramName}
-              base={targetBase}
-              modulated={liveModulated}
-            />
+            <View style={{
+              padding: 12, borderRadius: 12,
+              borderWidth: 1, borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+            }}>
+              <TargetPreview
+                paramName={paramName}
+                base={targetBase}
+                modulated={liveModulated}
+              />
+            </View>
 
             {error ? (
               <Text style={{ color: '#c44', fontFamily: 'Inter_400Regular', fontSize: 11 }}>
@@ -1329,29 +1473,33 @@ export function ModulationPopover({
 
           {/* Action bar — pinned below the scrolling body. */}
           <View style={{
-            flexDirection: 'row', justifyContent: 'flex-end', gap: 8,
-            paddingHorizontal: 20, paddingVertical: 14,
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            paddingHorizontal: 22, paddingVertical: 14,
             borderTopWidth: 1, borderTopColor: C.ghostBorder,
+            backgroundColor: C.surfaceContainerHigh,
           }}>
             {isExisting ? (
               <TouchableOpacity
                 onPress={remove}
                 disabled={busy}
                 style={{
-                  paddingHorizontal: 14, paddingVertical: 8,
-                  borderRadius: 8, borderWidth: 1, borderColor: '#c44',
+                  minHeight: 44, paddingHorizontal: 16,
+                  borderRadius: 12, borderWidth: 1, borderColor: C.error,
+                  alignItems: 'center', justifyContent: 'center',
                   opacity: busy ? 0.5 : 1,
                 }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#c44', fontSize: 11 }}>REMOVE</Text>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 11, letterSpacing: 0.6 }}>REMOVE</Text>
               </TouchableOpacity>
             ) : null}
+            <View style={{ flex: 1 }} />
             <TouchableOpacity
               onPress={onClose}
               disabled={busy}
-              style={{
-                paddingHorizontal: 14, paddingVertical: 8,
-                borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+                style={{
+                minHeight: 44, paddingHorizontal: 18,
+                borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
+                alignItems: 'center', justifyContent: 'center',
                 opacity: busy ? 0.5 : 1,
               }}
             >
@@ -1361,12 +1509,15 @@ export function ModulationPopover({
               onPress={save}
               disabled={busy}
               style={{
-                paddingHorizontal: 14, paddingVertical: 8,
-                borderRadius: 8, backgroundColor: C.primary,
+                minHeight: 44, minWidth: 150, paddingHorizontal: 22,
+                borderRadius: 12, backgroundColor: sourceAccent,
+                alignItems: 'center', justifyContent: 'center',
                 opacity: busy ? 0.5 : 1,
               }}
             >
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.surfaceContainerLowest, fontSize: 11 }}>SAVE</Text>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.surfaceContainerLowest, fontSize: 11, letterSpacing: 0.8 }}>
+                {busy ? 'SAVING...' : 'SAVE MAPPING'}
+              </Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -1378,8 +1529,13 @@ export function ModulationPopover({
 function PickerRow({ label, children }: { label: string; children: React.ReactNode }) {
   const C = usePalette();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>{label}</Text>
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary,
+        width: 78, letterSpacing: 0.8, paddingTop: 10,
+      }}>
+        {label}
+      </Text>
       <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', flex: 1 }}>
         {children}
       </View>
@@ -1453,16 +1609,18 @@ function SourceChip({ active, accent, liveNorm, onPress, children }: {
     <TouchableOpacity
       onPress={onPress}
       style={{
-        paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8,
-        borderRadius: 6,
-        backgroundColor: active ? C.primary : 'transparent',
-        borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+        minWidth: 92, minHeight: 38,
+        paddingHorizontal: 12, paddingTop: 7, paddingBottom: 9,
+        borderRadius: 10,
+        backgroundColor: active ? accent : C.surfaceContainerHigh,
+        borderWidth: 1, borderColor: active ? accent : C.ghostBorder,
+        alignItems: 'center', justifyContent: 'center',
         overflow: 'hidden',
       }}
     >
       <Text style={{
         fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-        color: active ? C.surfaceContainerLowest : C.text,
+        color: active ? readableInk(accent) : C.text,
         letterSpacing: 0.5,
       }}>
         {children}

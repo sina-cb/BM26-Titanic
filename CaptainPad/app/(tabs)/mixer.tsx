@@ -79,7 +79,7 @@ import { mixerChannelPerformanceState } from '@/components/mixer/mixer_channel_p
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
-import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
+import { duplicateMixerChannel, reorderMixerChannels } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
   postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
@@ -111,6 +111,7 @@ import {
 import { ParamRow, ParamValueText } from '@/components/ui/param_row';
 import { MatchedChip, NotKnobMappedChip, useParamRowMetrics } from '@/components/ui/param_chips';
 import { paramDisplayName } from '@/components/param_row_layout';
+import { ChannelSaveFeedback } from '@/components/channel_save_feedback';
 
 // HorizontalFader moved to shared ui
 
@@ -1354,6 +1355,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
                   numberOfLines={1}
                   adjustsFontSizeToFit
                 >LOCAL PARAMS</Text>
+                <ChannelSaveFeedback channelId={channel.id} compact />
                 <TouchableOpacity
                   onPress={toggleParamsSection}
                   hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
@@ -1526,7 +1528,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
         // dropdown, duration wheel) drives/tunes live-mix fades, so it's gated
         // as one section — pointerEvents 'none' stops every interactive child
         // (button, dropdown, and the TimerWheel's scroll), the dim marks it
-        // disabled. No PANIC/BLACKOUT lives here.
+        // disabled. No global safety controls live here.
         <View
           pointerEvents={activationsLocked ? 'none' : 'auto'}
           style={[styles.transitionBar, activationsLocked && { opacity: 0.45 }]}
@@ -2151,7 +2153,10 @@ export default function MixerScreen() {
     // switch took ~5× the slowest hop. The fetches are independent
     // (different endpoints, no shared state), so Promise.all collapses
     // the wall-clock cost to max(hop_i) instead of sum(hop_i).
-    const [bRes, tRes, vsRes, pLib, mRes] = await Promise.all([
+    // Start every read together, but paint the authoritative channel roster
+    // before slower picker/catalog metadata finishes on the iPad.
+    const mixerRequest = fetchMixerState();
+    const catalogRequest = Promise.all([
       fetchChannelBlends(),
       fetchTransitions(),
       // View-selection options. Failure is non-fatal: the strip
@@ -2165,8 +2170,11 @@ export default function MixerScreen() {
       // this, the library is kept in sync via the WS `playlistLibrary`
       // event the engine emits on every save/delete.
       fetchPlaylists(),
-      fetchMixerState(),
     ]);
+
+    const mRes = await mixerRequest;
+    applyMixerSeed();
+    const [bRes, tRes, vsRes, pLib] = await catalogRequest;
 
     if (bRes.ok && bRes.data) setBlends(bRes.data);
     if (tRes.ok && tRes.data) setTransitionsList(tRes.data);
@@ -2178,7 +2186,8 @@ export default function MixerScreen() {
     }
     if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
 
-    if (mRes.ok && mRes.data) {
+    function applyMixerSeed() {
+      if (mRes.ok && mRes.data) {
       setMaster(mRes.data.master);
       // Seed groups + solo display state (docs/39 §10). GET /mixer carries the
       // same top-level mixGroups[] + soloedChannelIds[] as the WS broadcast.
@@ -2203,7 +2212,8 @@ export default function MixerScreen() {
       // `mixer` broadcast above — commit here too so a reload/reconnect
       // prunes stale hidden-channel entries against the real roster instead
       // of waiting for the next broadcast.
-      workspace.commit((mRes.data.channels || []).map((ch: any) => ch.id), true);
+        workspace.commit((mRes.data.channels || []).map((ch: any) => ch.id), true);
+      }
     }
 
     // Same reasoning as `onControl` above: `workspace.commit` is stable,
@@ -2645,7 +2655,14 @@ export default function MixerScreen() {
       return { ...c, exports: (c.exports || []).map((e: any) => e.id === controlId ? { ...e, v0: val } : e) };
     }));
     if (!engineEvents.send({ type: 'setChannelControl', channelId, id: controlId, v0: val, v1: 0, v2: 0 })) {
-      setMixerChannelControl(channelId, controlId, val, 0, 0);
+      void setMixerChannelControl(channelId, controlId, val, 0, 0).then((result) => {
+        if (!result.ok) {
+          opError(
+            'Parameters not saved',
+            result.error || 'The engine rejected the mixer parameter update.',
+          );
+        }
+      });
     }
   }, [notifyInteraction]);
 
@@ -2878,44 +2895,10 @@ export default function MixerScreen() {
   const handleMoveUp = useCallback((channelId: string) => { void moveChannel(channelId, 1); }, [moveChannel]);
   const handleMoveDown = useCallback((channelId: string) => { void moveChannel(channelId, -1); }, [moveChannel]);
 
-  // #9 Panic / Home — mission-critical safe LIT reset, ConfirmSheet-gated
-  // (it cancels in-flight fades / transitions / swaps and clears blackout, so
-  // it must never fire on an accidental tap). Recalls the `home` snapshot when
-  // present, else a safe LIT default. The engine broadcasts fresh mixer/deck/
-  // globals — every strip + the master + the rig bar reconcile from those.
-  // Fail loud: a malformed/over-cap `home` is the ONE sanctioned loud fallback
-  // (400, but the rig is STILL lit). We Alert so the operator knows the home
-  // look couldn't load while reassuring them the rig is lit.
-  const [panicPrompt, setPanicPrompt] = useState(false);
-  const [panicBusy, setPanicBusy] = useState(false);
   // Channel-grouping UI now lives in a floating modal launched from the
   // GROUPS button on the GLOBALS row (2026-06-28 UI refactor) instead of an
   // always-on full-width rail — reclaims the vertical space.
   const [groupsModalOpen, setGroupsModalOpen] = useState(false);
-  const confirmPanic = useCallback(async () => {
-    setPanicPrompt(false);
-    setPanicBusy(true);
-    try {
-      const res = await panicMixer(true);
-      if (!res.ok) {
-        console.error('[Mixer] Panic reported a loud fallback:', res.error, res.data);
-        const rigLit = (res.data as any)?.rigLit === true;
-        opError(
-          'Panic — home look not loaded',
-          `${res.error || 'The "home" snapshot could not be recalled.'} `
-            + (rigLit
-              ? 'The rig is still LIT (blackout cleared, master up).'
-              : 'Check the engine and re-run panic.'),
-        );
-      }
-    } catch (err: any) {
-      console.error('[Mixer] Panic request failed:', err);
-      opError('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
-    } finally {
-      setPanicBusy(false);
-    }
-  }, []);
-
   const handleTransitionSettingsChange = useCallback(async (channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
     // Codex P0 — no silent swallow. The transition mode/time live in the
     // child ChannelStrip's local state (re-synced from the engine on the
@@ -3040,7 +3023,7 @@ export default function MixerScreen() {
           blankets every mutating mixer control with ONE tap-catching layer —
           future-proof, and a backstop for any control that doesn't wire its
           own `activationsLocked`. The floating PlanLockBanner (above) and the
-          bottom safety bar (PANIC/BLACKOUT, a sibling BELOW) stay OUTSIDE. */}
+          bottom global-effects bar (a sibling BELOW) stay OUTSIDE. */}
       <View style={{ flex: 1, ...MIXER_BOUNDED_SCROLL_AREA, position: 'relative' }}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
       <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
@@ -3541,22 +3524,6 @@ export default function MixerScreen() {
 
       {/* ── Global Rig Controls (Bottom) ───────────────────────────── */}
       <View style={styles.globalRigBar}>
-        {/* PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset.
-            Distinct AMBER so it reads as the rig's "get me back to safe" button,
-            visually separate from the GEM grid + the e-stop BLACKOUT inside it.
-            ConfirmSheet-gated (it cancels in-flight fades/transitions/swaps and
-            clears blackout). Reconciles from the engine's broadcasts. */}
-        <TouchableOpacity
-          style={[styles.panicBtn, panicBusy && { opacity: 0.5 }]}
-          onPress={() => setPanicPrompt(true)}
-          disabled={panicBusy}
-          accessibilityRole="button"
-          accessibilityLabel="Panic — reset rig to a safe lit state"
-          accessibilityState={{ disabled: panicBusy }}
-        >
-          <Text style={styles.panicBtnText}>{panicBusy ? 'PANIC…' : 'PANIC'}</Text>
-          <Text style={styles.panicBtnHint}>HOME / SAFE LIT</Text>
-        </TouchableOpacity>
         <RigGlobals variant="mixer" />
       </View>
 
@@ -3609,17 +3576,6 @@ export default function MixerScreen() {
         cancelLabel="CANCEL"
         onConfirm={confirmDeleteChannel}
         onCancel={() => setDeletePrompt(null)}
-      />
-
-      {/* ── Panic / Home confirmation (docs/39 §6b #9) ──────────────── */}
-      <ConfirmSheet
-        visible={panicPrompt}
-        title="Panic to safe state?"
-        message={'Resets the rig to a safe LIT state: cancels in-flight fades, transitions and deck swaps, clears solo, un-mutes groups, brings the master up, and clears blackout. Recalls the "home" look if one is saved, otherwise a safe default. The exterior stays lit throughout.'}
-        confirmLabel="PANIC"
-        cancelLabel="CANCEL"
-        onConfirm={confirmPanic}
-        onCancel={() => setPanicPrompt(false)}
       />
 
       {/* ── Unlock-dirty prompt ─────────────────────────────────────── */}
@@ -3742,39 +3698,6 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     minWidth: 100,
     alignItems: 'center',
     ...globalStyles.ambientShadow,
-  },
-  // PANIC / HOME (docs/39 §6b #9) — amber so it reads as the rig's
-  // mission-critical "back to safe" action, distinct from the teal GEM grid
-  // and the red BLACKOUT e-stop inside it. Pinned at the left of the global
-  // rig bar where the operator's thumb can find it without hunting. Min 44pt
-  // touch target (production-console safety floor).
-  panicBtn: {
-    minWidth: 96,
-    minHeight: 52,
-    paddingHorizontal: 14,
-    marginRight: 10,
-    borderRadius: 8,
-    backgroundColor: 'rgba(245,166,35,0.18)',
-    borderWidth: 1.5,
-    borderColor: '#F5A623',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'stretch',
-    ...globalStyles.ambientShadow,
-  },
-  panicBtnText: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 14,
-    letterSpacing: 1.2,
-    color: '#F5A623',
-  },
-  panicBtnHint: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 8,
-    letterSpacing: 0.6,
-    color: '#F5A623',
-    opacity: 0.8,
-    marginTop: 1,
   },
   brandText: {
     color: C.primary,

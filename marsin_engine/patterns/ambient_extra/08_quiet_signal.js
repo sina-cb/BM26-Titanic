@@ -3,11 +3,10 @@
   08_quiet_signal.js — QUIET SIGNAL
 
   CONCEPT
-    The resting ship holds a calm, legible night outline. Once every 17–29
-    scaled seconds, both TE signs raise one gracious full-surface signal; the
-    Organs answer a beat later, the Hull carries a soft expanding halo, and
-    Jewelry offers one warm-white courtesy glint. The active ceremony occupies
-    less than 10% of a cycle, so the punctuation remains rare.
+    The resting ship holds a calm, legible night outline. A long continuous
+    call-and-response travels from the paired TE signs through Hull, Organs,
+    Silhouette, and Jewelry. It rises and yields without a flash cut, so the
+    signal reads as a composed ceremony rather than a rare blink.
 
   INSTRUMENT STAGING
     FIX_BAR_18     — low palette resonance plus the broad signal halo.
@@ -18,11 +17,10 @@
                      byte-balanced because they use only pixelLocalIndex.
 
   MOTION / MATH
-    A delta clock selects a 17–29 second interval. A second clock advances at
-    sqrt(2)/phi against it, changing the low spatial resonance and halo texture
-    without changing the ceremony's readable timing. Piecewise cubic envelopes
-    give the sign a soft rise/hold/fall and the Organs a delayed response. Both
-    clocks wrap only at large seam-safe integer boundaries.
+    A delta clock selects a 17–29 second phrase. Cosine envelopes overlap the
+    sign call, expanding Hull ring, delayed Organ answer, and Jewelry glint for
+    most of the phrase. A second irrational clock animates the resting field;
+    both clocks meet their wrap without a brightness discontinuity.
 
   CONTROLS (declaration order = physical MIDI order)
     localSpeed   — cadence of the rare signal and all quiet drift.
@@ -172,15 +170,19 @@ export function beforeRender(delta) {
   // current cue is truncated.
   eventPhase = eventAge / eventPeriod;
 
-  // The longest sign envelope is 9.2% of its interval. The delayed Organ
-  // answer and courtesy glint also finish before the 10% active-duty mark.
-  var signRise = 0.012;
-  var signHoldTime = 0.008 + clamp01(liveSignHold) * 0.022;
-  var signFall = 0.025 + clamp01(liveSignHold) * 0.025;
-  signEnvelope = pulseEnvelope(eventPhase, signRise, signHoldTime, signFall);
-  organEnvelope = pulseEnvelope(eventPhase - 0.026, 0.014, 0.010, 0.032);
-  courtesyEnvelope = pulseEnvelope(eventPhase - 0.018, 0.006, 0.003, 0.010);
-  haloFront = clamp01(eventPhase / 0.082);
+  // Broad periodic phrases replace the old sub-10% flashes. Sign Hold shapes
+  // the central plateau; the Organ and Jewelry answers use phase offsets but
+  // remain cosine-continuous at the event wrap.
+  var signWave = 0.5 - 0.5 * cos(eventPhase * PI2);
+  var holdShape = 0.58 - clamp01(liveSignHold) * 0.28;
+  signEnvelope = smooth01(signWave / holdShape);
+  var organPhase = eventPhase - 0.14;
+  organPhase -= floor(organPhase);
+  organEnvelope = smooth01((0.5 - 0.5 * cos(organPhase * PI2)) / 0.68);
+  var courtesyPhase = eventPhase - 0.27;
+  courtesyPhase -= floor(courtesyPhase);
+  courtesyEnvelope = pow(0.5 - 0.5 * cos(courtesyPhase * PI2), 5.0);
+  haloFront = 1.0 - abs(eventPhase * 2.0 - 1.0);
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -228,11 +230,16 @@ export function render3D(index, x, y, z) {
   var whiteLevel = 0.0;
 
   if (fixtureType == FIX_BAR_18) {
-    // Hull: a quiet palette resonance carries the broad circular reply.
+    // Hull: a broad ring carries two fixture-local signal filaments so the
+    // call stays alive between its large-scale outward and inward passages.
+    var barU = ((pixelLocalIndex % 18.0) + 0.5) / 18.0;
+    var signalThread = pow(0.5 + 0.5
+                         * cos((barU * 2.0 - eventPhase * 2.0) * PI2), 6.0);
     brightness = floorLevel + 0.035 + resonance * 0.080
-               + responseHalo * (0.10 + liveHalo * 0.18);
+               + responseHalo * (0.18 + liveHalo * 0.30)
+               + signalThread * (0.035 + signEnvelope * 0.16);
     paletteMix = clamp01(0.66 + resonance * 0.25
-                       + responseHalo * 0.08);
+                       + responseHalo * 0.08 + signalThread * 0.10);
   } else if (fixtureType == FIX_RAW_LED) {
     // Silhouette: always readable, with only a restrained echo of the halo.
     brightness = floorLevel + 0.10 + resonance * 0.055
@@ -240,7 +247,7 @@ export function render3D(index, x, y, z) {
     paletteMix = clamp01(0.08 + resonance * 0.34
                        + responseHalo * 0.12);
   } else if (fixtureType == FIX_VINTAGE_6) {
-    // One courtesy head per Vintage fixture receives the brief native-white
+    // One courtesy head per Vintage fixture receives a smooth native-white
     // glint. The other five remain a restrained palette-derived Jewelry bed.
     var head = pixelLocalIndex % 6.0;
     var courtesyHead = 0.0;

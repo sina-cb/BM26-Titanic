@@ -12,20 +12,6 @@ const PLAYLIST_DIR = path.join(REPO_ROOT, 'simulation/scenes/titanic/playlists')
 const PATTERN_DIR = path.join(ENGINE_DIR, 'patterns');
 const MANIFEST = new Set(JSON.parse(fs.readFileSync(path.join(PATTERN_DIR, 'manifest.json'), 'utf8')));
 const AUDIO_SOURCES = new Set(['micLow', 'micMid', 'micHigh', 'micKick', 'micFlux']);
-const BACKUP_PATTERNS = [
-  '01_cylon_sweep',
-  '03_dual_axis_crush',
-  '04_beat_folded_helix',
-  '05_orbital_attractor_field',
-  '09_cyclone',
-  '15_silk_prism_ribbons',
-  '17_rolling_color_dunes',
-  '23_prismatic_strange_attractors',
-  '24_chromatic_murmuration',
-  '25_heartbeat',
-  'rainbow',
-];
-
 function loadPlaylist(name) {
   return yaml.load(fs.readFileSync(path.join(PLAYLIST_DIR, `${name}.yaml`), 'utf8'));
 }
@@ -56,7 +42,7 @@ function assertEntryResolves(entry, playlistName) {
 test('Ambient reactive is a same-order, exact-default, silence-safe twin of Ambient', () => {
   const ambient = loadPlaylist('ambient');
   const reactive = loadPlaylist('ambient_sound_reactive');
-  assert.equal(ambient.entries.length, 34);
+  assert.equal(ambient.entries.length, 47);
   assert.equal(reactive.entries.length, ambient.entries.length);
   assert.deepEqual(reactive.entries.map((entry) => entry.pattern),
     ambient.entries.map((entry) => entry.pattern));
@@ -84,26 +70,16 @@ test('Ambient reactive is a same-order, exact-default, silence-safe twin of Ambi
 
 test('Cleaned default contains only resolvable entries and the known dead 110 is absent', () => {
   const playlist = loadPlaylist('default');
-  assert.equal(playlist.entries.length, 27);
+  assert.equal(playlist.entries.length, 26);
   assert.ok(!playlist.entries.some((entry) => entry.pattern === '110_logsville_giant_pixel_chase'));
   for (const entry of playlist.entries) assertEntryResolves(entry, 'default');
 });
 
-test('Ambient default backup is an exact, ordered, non-Ambient review subset of default', () => {
-  const ambientPatterns = new Set(loadPlaylist('ambient').entries.map((entry) => entry.pattern));
-  const defaultEntries = loadPlaylist('default').entries;
-  const backup = loadPlaylist('ambient_default_bkup');
-  assert.deepEqual(backup.entries.map((entry) => entry.pattern), BACKUP_PATTERNS);
-
-  for (const entry of backup.entries) {
-    assert.ok(!ambientPatterns.has(entry.pattern), `${entry.pattern}: already represented in Ambient`);
-    const sourceEntry = defaultEntries.find((candidate) => candidate.pattern === entry.pattern);
-    assert.ok(sourceEntry, `${entry.pattern}: missing from default`);
-    assert.deepEqual(entry, sourceEntry, `${entry.pattern}: backup did not preserve the default entry`);
-    assertEntryResolves(entry, 'ambient_default_bkup');
+test('the retired Ambient default backup playlist stays absent from both scenes', () => {
+  for (const scene of ['titanic', 'test_bench']) {
+    const filename = path.join(
+      REPO_ROOT, 'simulation', 'scenes', scene, 'playlists', 'ambient_default_bkup.yaml');
+    assert.equal(fs.existsSync(filename), false,
+      `${scene}: retired ambient_default_bkup.yaml is back`);
   }
-
-  const positions = backup.entries.map((entry) =>
-    defaultEntries.findIndex((candidate) => candidate.pattern === entry.pattern));
-  assert.deepEqual(positions, [...positions].sort((left, right) => left - right));
 });

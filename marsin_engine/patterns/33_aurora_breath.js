@@ -312,7 +312,12 @@ export function render3D(index, x, y, z) {
 
   var ww = 0.0;
   if (fixtureType == FIX_VINTAGE_6) {
-    var auroraStar = clamp01(glint * 0.82 + intersection * shimmer * 0.18);
+    // Frost catches at the physical overlap of the two sails and intensifies
+    // near the open-breath crest. Fold-node glint remains a smaller secondary
+    // layer, preserving broad palette-coloured aurora between white events.
+    var overlapFrost = pow(intersection, 1.9)
+                     * (0.24 + breathSwell * 0.76) * shimmer;
+    var auroraStar = clamp01(glint * 0.54 + overlapFrost * 1.28);
     r = r + auroraStar * (pr2 * 0.22 + pr1 * 0.18);
     g = g + auroraStar * (pg2 * 0.22 + pg1 * 0.18);
     b = b + auroraStar * (pb2 * 0.22 + pb1 * 0.18);

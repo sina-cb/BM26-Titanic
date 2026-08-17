@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   PAINT_BUDGET_MS,
   PixelPaintScheduler,
+  createPixelPaintClock,
+  isReactNativePixelPaintRuntime,
   resetSharedPixelPaintScheduler,
   sharedPixelPaintScheduler,
   type PaintClock,
@@ -217,6 +219,53 @@ describe('PixelPaintScheduler', () => {
       if (had) g.requestAnimationFrame = prev;
       resetSharedPixelPaintScheduler();
     }
+  });
+
+  it('uses a next-JS-turn clock on React Native instead of waiting for rAF', () => {
+    const turns: (() => void)[] = [];
+    const runtime = {
+      navigator: { product: 'ReactNative' },
+      performance: { now: () => 42 },
+      requestAnimationFrame: () => { throw new Error('native must not touch rAF'); },
+      setImmediate: (cb: () => void) => { turns.push(cb); },
+    };
+    expect(isReactNativePixelPaintRuntime(runtime)).toBe(true);
+    const clock = createPixelPaintClock(runtime);
+    let painted = false;
+    clock.schedule(() => { painted = true; });
+    expect(painted).toBe(false);
+    expect(turns).toHaveLength(1);
+    turns.shift()?.();
+    expect(painted).toBe(true);
+    expect(clock.now()).toBe(42);
+  });
+
+  it('keeps requestAnimationFrame as the browser paint clock', () => {
+    const frames: (() => void)[] = [];
+    const runtime = {
+      navigator: { product: 'Gecko' },
+      performance: { now: () => 7 },
+      requestAnimationFrame: (cb: FrameRequestCallback) => {
+        frames.push(() => cb(0));
+        return 1;
+      },
+      setImmediate: () => { throw new Error('web must not touch setImmediate'); },
+    };
+    expect(isReactNativePixelPaintRuntime(runtime)).toBe(false);
+    const clock = createPixelPaintClock(runtime);
+    let painted = false;
+    clock.schedule(() => { painted = true; });
+    expect(frames).toHaveLength(1);
+    frames.shift()?.();
+    expect(painted).toBe(true);
+    expect(clock.now()).toBe(7);
+  });
+
+  it('fails loudly when React Native lacks its required next-turn clock', () => {
+    expect(() => createPixelPaintClock({
+      navigator: { product: 'ReactNative' },
+      performance: { now: () => 0 },
+    })).toThrow(/React Native has no setImmediate/);
   });
 
   it('hands every caller the SAME shared instance', () => {

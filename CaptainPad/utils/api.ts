@@ -1395,7 +1395,7 @@ export async function fetchColorPalettes(): Promise<ApiResult<Array<{ id: string
 // components/deck/colors_window_logic.ts). The wire stays untyped here on
 // purpose — this module moves the bytes; the deck module owns what they mean
 // and validates them loudly on the way in.
-type ColorPairWire = Record<string, unknown> & { c1: number; c2: number };
+export type ColorPairWire = Record<string, unknown> & { c1: number; c2: number };
 
 export async function fetchColorPairs(): Promise<ApiResult<ColorPairWire[]>> {
   try {
@@ -1424,6 +1424,46 @@ export async function saveColorPairs(pairs: ColorPairWire[]): Promise<ApiResult<
     return { ok: true, data: Array.isArray(data?.pairs) ? data.pairs : [] };
   } catch (err: any) {
     warnThrottled('color-pairs-save', 'Save colour pairs failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export type ColorPaletteVisibility = { hiddenPaletteIds: string[] };
+
+/** Scene-shared menu visibility for curated palettes. */
+export async function fetchColorPaletteVisibility(): Promise<ApiResult<ColorPaletteVisibility>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-palette-visibility`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    if (!data || !Array.isArray(data.hiddenPaletteIds)) {
+      return { ok: false, error: 'Engine returned malformed color palette visibility state' };
+    }
+    return { ok: true, data: { hiddenPaletteIds: data.hiddenPaletteIds } };
+  } catch (err: any) {
+    warnThrottled('color-palette-visibility', 'Fetch color palette visibility failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/** Replace the scene-shared hidden curated-palette id list. */
+export async function saveColorPaletteVisibility(
+  hiddenPaletteIds: string[],
+): Promise<ApiResult<ColorPaletteVisibility>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-palette-visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hiddenPaletteIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    if (!data || !Array.isArray(data.hiddenPaletteIds)) {
+      return { ok: false, error: 'Engine returned malformed color palette visibility state' };
+    }
+    return { ok: true, data: { hiddenPaletteIds: data.hiddenPaletteIds } };
+  } catch (err: any) {
+    warnThrottled('color-palette-visibility-save', 'Save color palette visibility failed:', err);
     return { ok: false, error: err.message };
   }
 }

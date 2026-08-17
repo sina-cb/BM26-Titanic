@@ -2,7 +2,13 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, useWindowDimensions, Modal, ScrollView, Pressable } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
-import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
+import {
+  fetchColorPairs,
+  fetchColorPaletteVisibility,
+  getCachedColorPalettes,
+  updateParamCenter,
+  warmColorPalettesCache,
+} from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useSharedParamValues, useLiveParamValues, useLiveParams, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import {
@@ -13,7 +19,10 @@ import {
 } from '@/hooks/use_tempo_tap';
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
+import { buildColorPresetLibrary } from '@/components/color_preset_library';
+import { normalizeColorPairs } from '@/components/deck/colors_window_logic';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { opError } from '@/utils/op_dialog';
 import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
@@ -180,19 +189,45 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optim
   // sending. The armed pair is a FROZEN snapshot: editing the main
   // colour never changes it. Cue is local + ephemeral to this pad — only
   // firing writes the shared params.
-  const [palettes, setPalettes] = useState<ColorPalettePreset[]>(() => getCachedColorPalettes());
+  const [palettes, setPalettes] = useState<ColorPalettePreset[]>(() => (
+    buildColorPresetLibrary(getCachedColorPalettes(), [], [])
+  ));
   const [queued, setQueued] = useState<ColorPalettePreset | null>(null);
   const [queuePickerOpen, setQueuePickerOpen] = useState(false);
+  const refreshQueuePalettes = useCallback(async (loud = true) => {
+    await warmColorPalettesCache({ force: getCachedColorPalettes().length === 0 });
+    const [savedResult, visibilityResult] = await Promise.all([
+      fetchColorPairs(),
+      fetchColorPaletteVisibility(),
+    ]);
+    if (!savedResult.ok || !visibilityResult.ok) {
+      const reason = savedResult.ok ? visibilityResult.error : savedResult.error;
+      // App boot can briefly precede the engine. Keep that background warmup
+      // quiet; opening the chooser is the operator action that must fail loud.
+      if (loud) opError('Colour presets unavailable', reason || 'engine unreachable');
+      return;
+    }
+    try {
+      setPalettes(buildColorPresetLibrary(
+        getCachedColorPalettes(),
+        normalizeColorPairs(savedResult.data),
+        visibilityResult.data?.hiddenPaletteIds ?? [],
+      ));
+    } catch (error: any) {
+      opError('Colour presets unavailable', error?.message || String(error));
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const next = await warmColorPalettesCache({ force: palettes.length === 0 });
-      if (!cancelled && Array.isArray(next) && next.length > 0) setPalettes(next);
+      if (!cancelled) await refreshQueuePalettes(false);
     })();
     return () => { cancelled = true; };
-    // Load once on mount; the picker modal handles config.yaml live edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshQueuePalettes]);
+  useEffect(() => {
+    if (queuePickerOpen) void refreshQueuePalettes(true);
+  }, [queuePickerOpen, refreshQueuePalettes]);
   // Tap the slot: armed → send live then clear the cue (back to empty);
   // empty → open the chooser.
   const onSlotTap = useCallback(() => {
@@ -1249,4 +1284,3 @@ function CollapsedReadout({ label, value, unit, accent, badge }: { label: string
     </View>
   );
 }
-

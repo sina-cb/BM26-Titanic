@@ -414,32 +414,49 @@
   /* THE CHART MUST MATCH THE SHIP. The page SHA-256 verifies its generated
      geometry against pixel_map_views.yaml. This second gate verifies every
      live engine pixel identity + coordinate before ARM can take control. */
-  var chartDriftChecked = false;
+  var chartDriftVerified = false;
+  var chartDriftInFlight = null;
   function chartDriftCheck() {
-    if (chartDriftChecked) return Promise.resolve(true);
-    chartDriftChecked = true;
+    if (chartDriftVerified) return Promise.resolve(true);
+    if (chartDriftInFlight) return chartDriftInFlight;
     if (!window.TouchPixelViews) {
-      chartDriftChecked = false;
       fail('chart', 'PIXEL VIEW UNAVAILABLE: canonical view reader did not load');
       return Promise.resolve(false);
     }
-    return Promise.all([
+    /* Verification hashes the generated view plus the engine's complete
+       964-pixel topology. On an iPad that can still be running when the
+       operator taps ARM. The old boolean was set BEFORE this work finished,
+       so the ARM caller skipped the in-flight check, observed canArm=false,
+       and aborted with "pixel view has not verified" even though verification
+       completed moments later. Share the real promise; verified means done. */
+    chartDriftInFlight = Promise.all([
       window.TouchPixelViews.ready(),
       req('GET', '/model/pixel-layout'),
     ]).then(function (results) {
       return window.TouchPixelViews.verifyEngineLayout(results[1]);
     }).then(function () {
+      chartDriftVerified = true;
       return true;
     }).catch(function (error) {
-      chartDriftChecked = false;
       fail('chart', error);
       return false;
+    }).then(function (verified) {
+      chartDriftInFlight = null;
+      return verified;
     });
+    return chartDriftInFlight;
   }
 
   /* ── boot: learn the model and Live Touch's isolated channel ────────── */
+  var refreshInFlight = null;
   function refresh() {
-    return Promise.all([
+    /* Native WebViews can pause timers/network work while the app is briefly
+       backgrounded. The 2 s poll used to start another four-request refresh
+       even when the previous one was still pending, eventually piling up
+       duplicate slot reads until an old request hit the 6 s deadline. One
+       authoritative refresh at a time; callers join it rather than overlap. */
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = Promise.all([
       req('GET', '/status'),
       req('GET', '/dimmer-groups'),
       req('GET', '/dimmers'),
@@ -457,13 +474,19 @@
         state.exports = {};
       }
       chartDriftCheck();
-      loadSlots();
-      setStatus();
-      return status;
+      return loadSlots(false).then(function () {
+        setStatus();
+        return status;
+      });
     }).catch(function (e) {
       state.online = false;
       fail('refresh', e);
     });
+    refreshInFlight = refreshInFlight.then(
+      function (value) { refreshInFlight = null; return value; },
+      function (error) { refreshInFlight = null; throw error; }
+    );
+    return refreshInFlight;
   }
 
   function refreshLiveExports() {
@@ -657,7 +680,15 @@
          for a background — hiding is free and total. A background swap
          mid-ARM is a hard cut; no live-channel transition exists for it,
          same as for an instrument. */
-      if (staged.isBackground) return null;
+      if (staged.isBackground) {
+        /* A background deliberately has no pattern-local parameter surface.
+           Clear the prior instrument's export ids as part of the same stage:
+           leaving them resident makes pushPalette(true) queue stale local
+           controls into ARM prepare, where the new background correctly
+           rejects them as not_local_control. */
+        state.exports = {};
+        return null;
+      }
       return refreshLiveExports();
     });
   }
@@ -1246,7 +1277,6 @@
      degrades to colorPalette1/2) or targetX/targetY (SPATIAL painting still
      reaches them through the coordinate-blind /spatial-paint global-effect
      path, not the pattern's own exports). One constant covers all 34. */
-  var BACKGROUND_PATTERN_CAPS = 'palette (2 colours) · SPATIAL via global paint · no local params';
 
   /* FALLBACK RULE (docs/70 W2 correction — verified against all 34 entries
      in ambient.yaml): docs/70 §3.2 says list entries "by label", but every
@@ -1292,7 +1322,6 @@
         option.dataset.pattern = entry.pattern;
         option.dataset.playlist = BACKGROUND_PLAYLIST_NAME;
         option.dataset.entryId = entry.id;
-        option.dataset.caps = BACKGROUND_PATTERN_CAPS;
         group.appendChild(option);
       });
     }).catch(function (error) {
@@ -1333,7 +1362,10 @@
            §3.2): the panel learns local controls ONLY from
            GET /layers/live_touch/exports, so a background selection simply
            never makes that call — hiding is free and total. */
-        if (staged.isBackground) return null;
+        if (staged.isBackground) {
+          state.exports = {};
+          return null;
+        }
         /* Export IDs belong to one WASM instance. Reusing the previous map
            after a live pattern swap can drive an unrelated setter by number. */
         return refreshLiveExports().then(function () {
@@ -1550,8 +1582,12 @@
 
   /* Fires for the wheel AND for every preset button, because both go through
      paint5() — so MASTER, HUE, COMPLEMENT and CONTRAST all reach the rig. */
-  if (slotsEl) slotsEl.addEventListener('palettechange', function () {
-    pushPalette();
+  if (slotsEl) slotsEl.addEventListener('palettechange', function (event) {
+    /* Color Hub and Legacy Color share #slots as their canonical five-colour
+       bus. A daemon-owned palette update must still recolour Live Touch's
+       effects and movement brushes, but must not issue a competing static
+       /param-center write underneath the running crossfade/turns transport. */
+    if (!(event.detail && event.detail.skipPaletteWrite)) pushPalette();
     pushEffectColours();
     pushMovementColours();
     /* IN SPATIAL MODE THE WHEEL PICKS THE INK, IT DOES NOT REPAINT THE SHIP.
@@ -2326,51 +2362,6 @@
 
      Tempo source is part of the owner-scoped Live context and is writable only
      while armed. Owner-tagged GET /mixer overlays the local tempo readback. */
-  var bpmVal = document.getElementById('bpmVal');
-  var bpmSync = document.getElementById('bpmSync');
-  var bpmEcho = false;      /* set while WE repaint the readout */
-
-  if (bpmVal) {
-    new MutationObserver(function () {
-      /* Without this guard, showing the engine's tempo would immediately post
-         it BACK as a manual tempo and knock the rig off sync - the display
-         would fight the thing it is displaying. */
-      if (bpmEcho) return;
-      var bpm = parseFloat(bpmVal.textContent);
-      if (!isFinite(bpm) || bpm < 20 || bpm > 400) return;
-      send('bpm', function () { write('POST', '/mixer/tempo', { bpm: bpm }); });
-    }).observe(bpmVal, { childList: true, characterData: true, subtree: true });
-  }
-
-  function paintTempo(m) {
-    if (!m) return;
-    if (bpmVal && typeof m.tempoBpm === 'number') {
-      var txt = Math.round(m.tempoBpm) + ' BPM';
-      if (bpmVal.textContent !== txt) {
-        bpmEcho = true;
-        bpmVal.textContent = txt;
-        setTimeout(function () { bpmEcho = false; }, 0);
-      }
-    }
-    if (!bpmSync) return;
-    var pref = m.tempoSourcePref;
-    var liveSrc = m.tempoSource;
-    var label = pref !== 'osc' ? 'TAP' : (liveSrc === 'osc' ? 'SYNC' : 'HELD');
-    bpmSync.textContent = label;
-    bpmSync.classList.toggle('is-on', label === 'SYNC');
-    bpmSync.classList.toggle('is-held', label === 'HELD');
-    bpmSync.title = label === 'SYNC'
-      ? 'Following the Audio Companion (' + Math.round(m.oscTempoBpm || m.tempoBpm) + ' BPM). Tap for manual.'
-      : (label === 'HELD'
-        ? 'Companion selected but sending nothing - holding the last tempo. Tap for manual.'
-        : 'Manual tempo. Tap to follow the Audio Companion.');
-  }
-
-  function refreshTempo() {
-    return req('GET', '/mixer').then(paintTempo)
-      .catch(function (e) { fail('tempo', e); });
-  }
-
   /* Re-state every fader's audio choice on ARM. The bindings are cleared on
      disarm, so this is what puts them back - and it means what the engine is
      doing always matches what the surface shows, rather than whatever was last
@@ -2396,16 +2387,6 @@
      another. The dedupe key is reset first or the re-assert would be swallowed
      as "no change". */
   armAsserts.push(function (strict) { lastFxGroups = null; return pushEffectGroups(strict); });
-  if (bpmSync) {
-    bpmSync.addEventListener('click', function () {
-      var next = bpmSync.textContent === 'TAP' ? 'osc' : 'tap';
-      write('POST', '/mixer/tempo/source', { source: next })
-        .then(paintTempo)
-        .catch(function (e) { fail('tempo source', e); });
-    });
-  }
-  refreshTempo();
-
   /* ── LIVE BRIGHTNESS FACTORS ──────────────────────────────────────────
      These are transient multipliers, never Dimmer Rack or Mixer authority.
      The engine applies rack ceiling × Live master × Live group. All mutations
@@ -2798,8 +2779,14 @@
   var presetOverride = {};      /* slotId -> its ORIGINAL override, captured once */
   var liveOverride = {};        /* slotId -> its current override */
 
+  var loadSlotsInFlight = null;
   function loadSlots(strict) {
-    return req('GET', '/global-effect-slots').then(function (r) {
+    /* Share the physical GET while preserving each caller's error contract:
+       passive refresh reports and resolves; atomic ARM verification reports
+       and rethrows. The raw shared promise stays rejecting so a passive caller
+       cannot accidentally turn a concurrent strict verification into success. */
+    if (!loadSlotsInFlight) {
+      loadSlotsInFlight = req('GET', '/global-effect-slots').then(function (r) {
       slotOf = {};
       (r.slots || []).forEach(function (sl) {
         if (sl.effectId) slotOf[sl.effectId + '|' + sl.presetId] = sl.slotId;
@@ -2813,8 +2800,14 @@
           presetOverride[sl.slotId] = JSON.parse(JSON.stringify(sl.paramsOverride || {}));
         }
       });
-      markCells();
-    }).catch(function (e) {
+        markCells();
+      });
+      loadSlotsInFlight = loadSlotsInFlight.then(
+        function (value) { loadSlotsInFlight = null; return value; },
+        function (error) { loadSlotsInFlight = null; throw error; }
+      );
+    }
+    return loadSlotsInFlight.catch(function (e) {
       fail('slots', e);
       if (strict) throw e;
     });
@@ -4204,20 +4197,23 @@
   openControlSocket();
 
   /* ── COLOR HUB write path (docs/70 W3) ───────────────────────────────────
-     /deck/color-autopilot is a public, unauthenticated Deck-level route
-     (docs/61 §4.1: "Unauthenticated, unscoped: Live Touch may legally drive
-     it today"), not a live_touch LAYER write — so it goes through
-     unownedReq(), same as every other public Deck/Mixer operation this file
-     can reach: no X-Touch-Control-Owner header, and never queued into the
-     ARM prepare-batch (req()'s special-case for mid-takeover sequencing does
-     not apply to a route this file does not own the lease on). Nothing here
-     writes until the page decides to — this file only relays. Every failure
-     is surfaced (never silent, codex P0 rule 1 at the top of this file):
-     both to the existing status pill via fail(), and back to the page so
-     the COLOR HUB's own message line can show what specifically failed. */
+     The route is Deck-level, but the global HTTP lease guard still protects
+     EVERY mutating route while Live Touch is armed. Therefore an armed Color
+     Hub write must carry this surface's owner header; an idle page must remain
+     unowned because no lease exists to authenticate it. Do not use req() here:
+     a colour tap during the atomic ARM prepare must never splice a Deck daemon
+     operation into the private Live prepare transaction. */
+  function colorHubRequest(method, path, body) {
+    if (state.phase === 'armed') return requestJson(method, path, body, true);
+    if (state.phase === 'arming' || state.phase === 'disarming') {
+      return Promise.reject(new Error('finish the ARM transition before changing Color Hub'));
+    }
+    return unownedReq(method, path, body);
+  }
+
   document.addEventListener('colorautopilotwrite', function (event) {
     var detail = event.detail || {};
-    unownedReq(detail.method, detail.path || '/deck/color-autopilot', detail.body).then(function (out) {
+    colorHubRequest(detail.method, detail.path || '/deck/color-autopilot', detail.body).then(function (out) {
       document.dispatchEvent(new CustomEvent('colorautopilotwriteok', { detail: { label: detail.label, state: out } }));
     }).catch(function (error) {
       fail('color', error);
@@ -4329,7 +4325,6 @@
 
   setInterval(function () {
     refresh();
-    refreshTempo();
     /* Hold the rule while armed: if anything lights an effect from outside
        this panel — the VSN1, the Deck, a restored state — the next tick puts
        the rig back to what the grid shows. Costs one GET when nothing differs. */

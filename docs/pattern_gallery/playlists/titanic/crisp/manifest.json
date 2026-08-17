@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "crisp",
+  "seconds": 10,
+  "fps": 8,
+  "globalSpeed": 0.3,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/crisp.yaml",
+  "playlistDigest": "5ffd0b9a5698001b19927f1244094f21444a16f550efed03bee9f7cd16d13d70",
+  "goalsDigest": "e6b1aaee3ba6b7eda9d2b567f019e46ed5dd638a7e4f033ab49c1b30329d293f",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "crisp/01_orbiting_circle",
+      "title": "Crisp - Orbiting Circle",
+      "goal": "Solid endpoint-colored fireflies circle through the X/Z plane on wobbly deterministic orbits, leaving crisp finite echoes separated by black.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "Solid endpoint-colored fireflies circle through the X/Z plane on wobbly deterministic orbits, leaving crisp finite echoes separated by black.",
+        "design_intent": "Build a deliberately non-blended visual language from solid circular bodies, exact palette endpoints, sharp antialiased edges, and strong black negative space.",
+        "why_exists": "This prototype tests whether large readable orbital motion can remain chromatically discrete: no RGB interpolation, no feedback blur, and no incidental white or specialty channels.",
+        "visual_goal_titanic": "At playa distance the Hull should read as several large moving colored discs cut from black, while the outline, stacks, pearls, and paired signs make the complete vessel legible.",
+        "unique_topology": "Five finite circular bodies use incommensurate cosine and sine wobble on normalized X/Z; each head may cast two smaller geometric echoes with explicit black gaps.",
+        "distance_silhouette": "Raw-LED strands emphasize narrow body rims and intersections so orbital geometry sharpens the recognizable ship outline instead of washing it into a field.",
+        "close_detail": "Antialiasing changes only the intensity of the winning endpoint color; overlaps use deterministic winner selection, and Jewelry contributes sparse exact-color pearls.",
+        "motion_grammar": "Every body advances smoothly along a deterministic orbit with irrationally related wobble frequencies; spacing fans their phases and trail adds finite earlier-phase echoes.",
+        "xyz_use": "Hull and Silhouette use normalized X/Z directly; Organs use local distance anchors, while Identity folds index modulo 74 into a complete paired 10x8 local sign surface.",
+        "te_sign_treatment": "Both physical TE signs render the same balanced 74-pixel local orbit plaque using index modulo 74; addresses 40 through 73 continue the surface rather than repeating 0 through 33.",
+        "jewelry_white": "Jewelry uses sparse exact Color 1 or Color 2 pearls only; native white is deliberately absent and W=A=U remain zero.",
+        "palette_white_material": "Every lit RGB pixel is a scalar multiple of exactly Color 1 or exactly Color 2. Endpoints are never mixed with each other; black is the default material and W=A=U are always zero.",
+        "safety_floor": "The saved floor is zero for strong black negative space. Raising sliderSafetyFloor adds only a low exact-endpoint visibility bed, never gray or an interpolated hue.",
+        "anti_duplication_notes": "Keep the solid endpoint-only bodies, hard black gaps, and finite echoes distinct from 36_orbital_pulse, 118_grand_orbit_rings, and party_dancers/01; do not soften this into gradients, waves, or a continuous ring field.",
+        "fixture_roles": {
+          "Hull Canvas": "Large filled X/Z circular bodies and finite separated echoes carry the primary composition.",
+          "Silhouette": "Narrow exact-color rims and deterministic intersection accents sharpen boundaries and the ship outline.",
+          "Jewelry": "Sparse moving exact-color pearls add nearby detail without white or generalized sparkle.",
+          "Organs": "Low steady endpoint anchors keep stacks and structural fixtures present beneath passing bodies.",
+          "Identity": "Both TE signs receive the same complete balanced 74-pixel local 2D orbit composition."
+        },
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets the smooth orbital cadence of every body and finite echo.",
+            "code_default_value": 0.3
+          },
+          {
+            "exported_name": "sliderBodyRadius",
+            "behavior": "Changes the radius of all solid antialiased circular bodies.",
+            "code_default_value": 0.56
+          },
+          {
+            "exported_name": "sliderCount",
+            "behavior": "Selects one through five active circular bodies.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderSpacing",
+            "behavior": "Changes inter-body phase separation and the radial fan of the orbits.",
+            "code_default_value": 0.58
+          },
+          {
+            "exported_name": "sliderTrail",
+            "behavior": "Changes the number, separation, and size of finite geometric echoes.",
+            "code_default_value": 0.46
+          },
+          {
+            "exported_name": "sliderSafetyFloor",
+            "behavior": "Raises a low endpoint-colored visibility bed from the saved black default.",
+            "code_default_value": 0
+          }
+        ],
+        "audio_handles": [],
+        "review_state": "READY FOR OPERATOR",
+        "evidence_notes": "Source, paired byte-identical playlists, offline model gates, focused exact-channel tests, parameter-truth probes, and the Global Speed 0.30 gallery provide the review evidence.",
+        "uniqueness_review": {
+          "decision": "keep_refine",
+          "duplicated_grammar": "Orbital motion exists elsewhere, but no nearby pattern commits to filled endpoint-only fireflies with winner-take-all overlaps and discrete finite echoes.",
+          "underexplored_opportunity": "Hard-edged color bodies and designed black gaps offer a readable non-blended material language that is otherwise rare in the catalog.",
+          "nearest_neighbors": [
+            {
+              "id": "36_orbital_pulse",
+              "reason": "Shares orbiting motion, but centers a pulsing orbit rather than multiple discrete filled bodies and finite echoes.",
+              "severity": "medium"
+            },
+            {
+              "id": "118_grand_orbit_rings",
+              "reason": "Shares monumental orbital geometry, but uses ring architecture rather than solid endpoint-only fireflies.",
+              "severity": "medium"
+            },
+            {
+              "id": "party_dancers/01_dom_ball_dancers",
+              "reason": "Shares paired color authority, but uses broad audio-driven bands instead of autonomous circular bodies.",
+              "severity": "low"
+            }
+          ],
+          "refinement_directive": "Preserve the exact endpoint contract, large filled circles, hard negative space, and paired sign plaque while tuning only scale, staging, and motion readability."
+        }
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Sets the smooth orbital cadence of every body and finite echo.",
+          "audio": null
+        },
+        {
+          "name": "sliderBodyRadius",
+          "label": "Body Radius",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Changes the radius of all solid antialiased circular bodies.",
+          "audio": null
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Selects one through five active circular bodies.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpacing",
+          "label": "Spacing",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Changes inter-body phase separation and the radial fan of the orbits.",
+          "audio": null
+        },
+        {
+          "name": "sliderTrail",
+          "label": "Trail",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Changes the number, separation, and size of finite geometric echoes.",
+          "audio": null
+        },
+        {
+          "name": "sliderSafetyFloor",
+          "label": "Safety Floor",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "Raises a low endpoint-colored visibility bed from the saved black default.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderBodyRadius": 0.56,
+        "sliderCount": 0.5,
+        "sliderSpacing": 0.58,
+        "sliderTrail": 0.46,
+        "sliderSafetyFloor": 0
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderBodyRadius": 0.56,
+        "sliderCount": 0.5,
+        "sliderSpacing": 0.58,
+        "sliderTrail": 0.46,
+        "sliderSafetyFloor": 0
+      },
+      "gif": "001_crisp__01_orbiting_circle.gif",
+      "video": "001_crisp__01_orbiting_circle.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "195f83a392052f4b054be4205fd56b1860ec70d0f9b22642bda8733bd67da003"
+    }
+  ]
+}

@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   17_frost_branch.js — FROST BRANCH
 
@@ -72,6 +71,11 @@ var cycleClock = 0.31;
 var cycleStage = 0.72;
 var crystalReach = 0.72;
 var thawSoftness = 0.10;
+var crystalGeneration = -1.0;
+var crystalCos = 1.0;
+var crystalSin = 0.0;
+var branchLengthScale = 1.0;
+var tierOffset = 0.0;
 
 var liveBranchCount = 0.52;
 var liveGrowth = 0.58;
@@ -92,6 +96,11 @@ function clamp01(v) {
 function smooth01(v) {
   var sv = clamp01(v);
   return sv * sv * (3.0 - 2.0 * sv);
+}
+
+function hash11(v) {
+  var h = sin(v * 12.9898 + 78.233) * 43758.5453;
+  return h - floor(h);
 }
 
 function segmentDistance2(spx, spy, sax, say, sbx, sby) {
@@ -155,6 +164,22 @@ export function beforeRender(delta) {
   cycleClock += dt * 0.030 * localMultiplier;
   if (cycleClock >= PHASE_WRAP) cycleClock -= PHASE_WRAP;
 
+  // Choose a new deterministic crystal only when a growth cycle changes.
+  // The swap occurs while the previous crystal is melted to its tiny nucleus,
+  // so rotation and tier proportions change without a visible frame pop.
+  var nextGeneration = floor(cycleClock);
+  if (nextGeneration != crystalGeneration) {
+    crystalGeneration = nextGeneration;
+    var seedA = hash11(nextGeneration + 0.37);
+    var seedB = hash11(nextGeneration * 1.61803399 + 4.21);
+    var seedC = hash11(nextGeneration * 2.23606798 + 9.17);
+    var crystalAngle = seedA * PI2;
+    crystalCos = cos(crystalAngle);
+    crystalSin = sin(crystalAngle);
+    branchLengthScale = 0.82 + seedB * 0.36;
+    tierOffset = (seedC - 0.5) * 0.065;
+  }
+
   var cyclePhase = cycleClock - floor(cycleClock);
   var holdPart = 0.08 + clamp01(liveHold) * 0.30;
   var meltPart = 0.13 + clamp01(liveMelt) * 0.27;
@@ -203,8 +228,10 @@ export function render3D(index, x, y, z) {
     uy = 0.50;
   }
 
-  var qx = (ux - 0.50) * 1.50;
-  var qz = (uz - 0.50) * 1.50;
+  var baseX = (ux - 0.50) * 1.50;
+  var baseZ = (uz - 0.50) * 1.50;
+  var qx = baseX * crystalCos - baseZ * crystalSin;
+  var qz = baseX * crystalSin + baseZ * crystalCos;
   var qy = uy - 0.50;
   var radial = sqrt(qx * qx + qz * qz);
 
@@ -256,8 +283,8 @@ export function render3D(index, x, y, z) {
   var tierIndex = floor((armAlong - 0.115) / 0.155);
   if (tierIndex < 0.0) tierIndex = 0.0;
   if (tierIndex > 4.0) tierIndex = 4.0;
-  var tierJoin = 0.19 + tierIndex * 0.155;
-  var tierLength = 0.19 + tierIndex * 0.006;
+  var tierJoin = 0.19 + tierOffset + tierIndex * 0.155;
+  var tierLength = (0.19 + tierIndex * 0.006) * branchLengthScale;
   var tierGate = smooth01((crystalReach - tierJoin + 0.050) / 0.10);
   var tierActive = smooth01(branchDensity - tierIndex);
   var tierDistance = segmentDistance2(armAlong, armAcross, tierJoin, 0.0,

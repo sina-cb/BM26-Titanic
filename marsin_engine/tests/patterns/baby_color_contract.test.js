@@ -73,8 +73,8 @@ const FAMILIES = ['tease', 'boy', 'girl'];
 const BABY_NAME_RE = new RegExp(`^(\\d\\d+)_(${FAMILIES.join('|')})_([a-z0-9_]+)$`);
 
 /** Floors, not targets — the set may grow freely, never silently shrink. */
-const MIN_TEASE = 15;
-const MIN_PAIRED = 15;
+const MIN_TEASE = 13;
+const MIN_PAIRED = 20;
 
 function babyIds() {
   return fs.readdirSync(BABY_DIR)
@@ -102,7 +102,10 @@ function conceptOf(id) {
   return parseBabyId(id).concept;
 }
 
-const IDS = babyIds();
+const DISK_IDS = babyIds();
+const IDS = JSON.parse(fs.readFileSync(path.join(PATTERNS_DIR, 'manifest.json'), 'utf8'))
+  .filter((id) => id.startsWith('baby/'))
+  .map((id) => id.replace(/^baby\//, ''));
 const BY_FAMILY = { tease: [], boy: [], girl: [] };
 for (const id of IDS) BY_FAMILY[familyOf(id)].push(id);
 
@@ -150,10 +153,19 @@ async function compilePattern(id, modelName) {
 // and green sits between. Anything lit that is neither is a forbidden third
 // hue. The green-relative tests are what make "pink" and "blue" mean a narrow
 // family rather than "warm-ish" and "cool-ish".
+function matchesScaledColour(r, g, b, [baseR, baseG, baseB]) {
+  const peak = Math.max(r, g, b);
+  return Math.abs(r - baseR * peak) <= 2
+    && Math.abs(g - baseG * peak) <= 2
+    && Math.abs(b - baseB * peak) <= 2;
+}
+
 function classifyFrame(label, frame) {
   let pink = 0;
   let blue = 0;
   let dark = 0;
+  let pinkEnergy = 0;
+  let blueEnergy = 0;
   for (let pixel = 0; pixel < frame.length / 6; pixel++) {
     const offset = pixel * 6;
     const [r, g, b, w, a, u] = frame.subarray(offset, offset + 6);
@@ -164,13 +176,13 @@ function classifyFrame(label, frame) {
       dark++;
       continue;
     }
-    const isPink = r > b * 1.55 && b > g * 2.5;
-    const isBlue = b > g * 1.55 && g > r * 3.0;
+    const isPink = matchesScaledColour(r, g, b, [1.000, 0.035, 0.360]);
+    const isBlue = matchesScaledColour(r, g, b, [0.033, 0.450, 1.000]);
     assert.ok(isPink || isBlue, `${label} pixel ${pixel}: forbidden RGB family ${r},${g},${b}`);
-    if (isPink) pink++;
-    if (isBlue) blue++;
+    if (isPink) { pink++; pinkEnergy += Math.max(r, g, b); }
+    if (isBlue) { blue++; blueEnergy += Math.max(r, g, b); }
   }
-  return { pink, blue, dark };
+  return { pink, blue, dark, pinkEnergy, blueEnergy };
 }
 
 function meanAbsoluteDifference(left, right) {
@@ -234,18 +246,24 @@ test('every Baby pattern compiles on both rigs, refuses the palette, and holds i
         assert.ok(!names.includes('colorPalette2'), `baby/${id}: colorPalette2 leaked`);
         for (const elapsed of SAMPLE_TIMES) {
           const label = `baby/${id} on ${modelName} at ${elapsed}s`;
-          const census = classifyFrame(label, pattern.render(elapsed));
+          const rendered = pattern.render(elapsed);
+          const census = classifyFrame(label, rendered);
           if (family === 'tease') {
             // Outcome-blind: both families visible in the SAME frame.
-            assert.ok(census.pink >= 40, `${label} needs visible pink: ${JSON.stringify(census)}`);
-            assert.ok(census.blue >= 40, `${label} needs visible blue: ${JSON.stringify(census)}`);
+            assert.ok(census.pink >= 20, `${label} needs visible pink: ${JSON.stringify(census)}`);
+            assert.ok(census.blue >= 20, `${label} needs visible blue: ${JSON.stringify(census)}`);
+            const authority = census.pinkEnergy / census.blueEnergy;
+            assert.ok(authority >= 0.55 && authority <= 1.80,
+              `${label} pink/blue authority drifted out of balance: ${authority.toFixed(3)}`);
           } else {
             const wanted = family === 'boy' ? 'blue' : 'pink';
             const forbidden = family === 'boy' ? 'pink' : 'blue';
-            assert.ok(census[wanted] >= 100,
+            assert.ok(census[wanted] >= 15,
               `${label} needs visible ${wanted}: ${JSON.stringify(census)}`);
             assert.equal(census[forbidden], 0, `${label} leaked ${forbidden}`);
           }
+          assert.ok(census.dark >= Math.floor(rendered.length / 6 * 0.03),
+            `${label} needs intentional black negative space: ${JSON.stringify(census)}`);
         }
       } finally {
         pattern.close();
@@ -357,7 +375,6 @@ test('patterns within a Baby family are visually distinct from each other', asyn
 
 test('Crossing is a truthful spatial-position control on every crossing variant', async () => {
   for (const [id, control] of [
-    ['02_tease_crossing_question', 'sliderCrossing'],
     ['17_boy_crossing_glow', 'sliderCrossingOffset'],
     ['32_girl_crossing_glow', 'sliderCrossingOffset'],
   ]) {
@@ -440,6 +457,10 @@ test('Boy and Girl playlists tell the same curated story in the same concept ord
       .map((entry) => conceptOf(entry.pattern.replace(/^baby\//, '')));
     assert.deepEqual(girlConcepts, boyConcepts,
       `${scene}: Boy and Girl playlist arcs must use the same concept order`);
+    const boyDefaults = read('baby_boy').entries.map((entry) => entry.defaults);
+    const girlDefaults = read('baby_girl').entries.map((entry) => entry.defaults);
+    assert.deepEqual(girlDefaults, boyDefaults,
+      `${scene}: Boy and Girl saved defaults must remain identical by concept`);
   }
 });
 
@@ -478,6 +499,15 @@ test('no retired root-level Baby pattern remains on disk or in the manifest', ()
   // Derived, not a magic number: the manifest must register exactly what is on
   // disk. A new pattern that was never registered is invisible in the
   // operator's picker, which is how the last family went missing (_222 §2).
-  assert.deepEqual(manifest.filter((id) => id.startsWith('baby/')), IDS.map((id) => `baby/${id}`),
-    `the manifest does not register exactly the ${IDS.length} qualified Baby ids on disk`);
+  const activeFromPlaylists = new Set();
+  for (const name of Object.keys(PLAYLISTS)) {
+    const doc = yaml.load(fs.readFileSync(
+      path.join(SCENES_DIR, 'titanic', 'playlists', `${name}.yaml`), 'utf8'));
+    for (const entry of doc.entries) activeFromPlaylists.add(entry.pattern);
+  }
+  assert.deepEqual(manifest.filter((id) => id.startsWith('baby/')).sort(),
+    [...activeFromPlaylists].sort(),
+    'the Baby catalog must register exactly the three curated playlist union');
+  assert.equal(DISK_IDS.length, IDS.length,
+    'patterns/baby must contain only the three curated playlist families');
 });

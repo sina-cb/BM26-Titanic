@@ -154,6 +154,11 @@ export function render3D(index, x, y, z) {
   var microStar = pow(starSeed, 14.0 - detail * 9.0) * detail;
   var nodeMicro = pow(gridX * gridY, 2.4) * detail;
   var micro = max(microStar, nodeMicro * 0.72);
+  // A rare three-axis conjunction is the lattice's white/color counterpoint:
+  // color owns every line, while matched white appears only where both grids
+  // and the diagonal weave physically agree.
+  var conjunction = pow(gridX * gridY * diagonal, 3.2 - detail * 1.2)
+                  * detail;
 
   // Colour depth blends cp1<->cp2 in RGB space (no hsv() hue traversal).
   var depth = wave(nx * 0.6 + ny * 0.9 + phaseDepth);
@@ -173,10 +178,12 @@ export function render3D(index, x, y, z) {
       pow(gridY, liveSoft * 0.78));
     bri = 0.010 + opposingEdges * 0.62 + micro * 0.18;
   } else if (fixtureType == FIX_VINTAGE_6) {
-    // Sparse golden-white stars are the Jewelry layer.
-    bri = 0.010 + lattice * 0.20 + microStar * 0.68;
-    matchedWhite = microStar * (0.22 + detail * 0.66);
-    warmAdd = microStar * 0.24;
+    // Jewelry catches the rare multi-axis conjunctions. The less structured
+    // index stars stay palette-coloured, so white never becomes a generic
+    // sparkle wash.
+    bri = 0.010 + lattice * 0.20 + microStar * 0.42 + conjunction * 0.58;
+    matchedWhite = conjunction * (0.26 + detail * 0.74);
+    warmAdd = conjunction * 0.24;
   } else if (fixtureType == FIX_PAR) {
     // Pars pulse warmly only at lattice nodes.
     var nodePulse = nodeMicro * (0.34 + wave(phaseDepth * 0.381966) * 0.66);
@@ -211,6 +218,8 @@ export function render3D(index, x, y, z) {
     // moving lattice intersections and fixed stars provide the cosmic depth.
     bri = 0.30 + signLattice * 0.22 + signStars * 0.31;
     depth = 0.08 + signLattice * 0.31 + signStars * 0.45;
+    var signConjunction = pow(signCross * signDiagonal, 1.8) * detail;
+    matchedWhite = signConjunction * 0.10;
   } else {
     bri = 0.014 + lattice * 0.78 + micro * 0.28;
   }

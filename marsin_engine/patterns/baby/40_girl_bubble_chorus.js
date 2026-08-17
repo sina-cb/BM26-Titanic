@@ -1,11 +1,11 @@
 // DRAFT - pending operator review
 /* Baby-pink breathing bubble field. COLOR_* constants are the only girl/boy delta. */
 
-var COLOR_R_DARK = 0.620;
-var COLOR_G_DARK = 0.008;
-var COLOR_B_DARK = 0.140;
+var COLOR_R_DARK = 1.000;
+var COLOR_G_DARK = 0.035;
+var COLOR_B_DARK = 0.360;
 var COLOR_R_LIGHT = 1.000;
-var COLOR_G_LIGHT = 0.040;
+var COLOR_G_LIGHT = 0.035;
 var COLOR_B_LIGHT = 0.360;
 
 export var localSpeed = 0.49;
@@ -24,12 +24,19 @@ var liveSize = 0.50;
 var liveDensity = 0.52;
 
 function clamp01(v) { if (v < 0.0) return 0.0; if (v > 1.0) return 1.0; return v; }
-function emitColor(shade, bri) {
-  var s = clamp01(shade);
-  rgbwau((COLOR_R_DARK + (COLOR_R_LIGHT - COLOR_R_DARK) * s) * bri,
-         (COLOR_G_DARK + (COLOR_G_LIGHT - COLOR_G_DARK) * s) * bri,
-         (COLOR_B_DARK + (COLOR_B_LIGHT - COLOR_B_DARK) * s) * bri,
-         0.0, 0.0, 0.0);
+function emitColor(px, py, pz, shade, bri) {
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  var gate = geometry * 0.72 + energy * 0.28;
+  if (gate < 0.24 || (fixtureType != FIX_TE_SIGN && wave(px * 1.7 + py * 1.3 + pz * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.62 + energy * 0.38);
+  var r = (COLOR_R_DARK + COLOR_R_LIGHT) * 0.5;
+  var g = (COLOR_G_DARK + COLOR_G_LIGHT) * 0.5;
+  var b = (COLOR_B_DARK + COLOR_B_LIGHT) * 0.5;
+  rgbwau(r * intensity, g * intensity, b * intensity, 0.0, 0.0, 0.0);
 }
 
 export function beforeRender(delta) {
@@ -54,6 +61,6 @@ export function render3D(index, x, y, z) {
   var rims = pow(1.0 - abs(bubbleA - 0.52) * 1.92, 4.0) * bubbleA;
   var field = max(bubbleA, bubbleB * 0.84);
   var bri = clamp01((0.18 + field * 0.62 + rims * 0.25) * liveLevel);
-  emitColor(0.16 + field * 0.63 + rims * 0.36, bri);
+  emitColor(x, y, z, 0.16 + field * 0.63 + rims * 0.36, bri);
 }
 

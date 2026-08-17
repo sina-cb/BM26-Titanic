@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   22_balance_beam.js — BALANCE BEAM
 

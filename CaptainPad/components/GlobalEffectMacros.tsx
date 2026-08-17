@@ -66,7 +66,7 @@ import {
   GlobalEffectSlotStatus,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
-import { usePerfLock } from '@/hooks/usePerformanceMode';
+import { usePerfLock, usePerformanceMode } from '@/hooks/usePerformanceMode';
 import {
   VISIBLE_SLOT_COUNT,
   EFFECTS_PAGE_COUNT,
@@ -83,8 +83,8 @@ import {
   isEffectBanksMessage,
   bankBadgeLabel,
   ModeBadge as ModeBadgeInfo,
-  type EffectBanksState,
   chunkStripPages,
+  effectSurfacePolicy,
 } from './global_effect_macros_logic';
 import { useEffectBanks } from '@/hooks/useEffectBanks';
 import {
@@ -189,7 +189,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // Performance mode (live-show structural lock) dims the ⋯ swap / "+" bind
   // affordances and drives the LOCKED mode badge. Read live so the badge clears
   // the moment performance mode is exited. This is SEPARATE from the profile.
-  const performanceActive = usePerfLock();
+  const performanceModeActive = usePerformanceMode().active;
+  const surfacePolicy = effectSurfacePolicy(performanceModeActive);
   // Named effect banks (ordered, >= 1). This drives ONLY the neutral BANK badge
   // (informational — names the active bank + its position) and the minimal
   // add/delete controls. It must NEVER touch chrome/sizing/affordances — the
@@ -213,6 +214,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [page, setPage] = useState(0);
   // Swap sheet target: slotId of the slot being edited, or null.
   const [swapTargetId, setSwapTargetId] = useState<number | null>(null);
+  useEffect(() => {
+    if (!surfacePolicy.configurationVisible) setSwapTargetId(null);
+  }, [surfacePolicy.configurationVisible]);
   // Per-slot optimistic active override. Set immediately on tap; cleared
   // by either (a) a server-confirmed status update that already matches
   // our optimistic value, or (b) a fail-safe 800 ms timeout if the server
@@ -722,7 +726,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // Unlocked → no badge (the grid looks exactly as always). The controller
   // profile is NOT an input — it never changes this grid. Derived purely so the
   // state (locked vs no-badge) is unit-tested.
-  const badge = modeBadge(performanceActive);
+  const badge = modeBadge(performanceModeActive);
   // The DECK GRID keeps the inline badge in its own header line (it has a full
   // header row to spend and no width pressure). The STRIP does NOT render it
   // any more — see the locked-tap toast above. `modeBadge()` stays the single
@@ -762,9 +766,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     return (
       <View style={{ paddingTop: 8 }}>
         {/* Strip: header line removed (label rides in-row once loaded). */}
-        {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} />}
+        {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} configurationVisible={surfacePolicy.configurationVisible} />}
         {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
-        {SHOW_EFFECT_PAGES ? (
+        {SHOW_EFFECT_PAGES && surfacePolicy.configurationVisible ? (
           <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
         ) : null}
         <View style={{ flexDirection: 'row', gap }}>
@@ -813,10 +817,10 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       {/* party 2026-07-11 — in the STRIP the header line is gone: the label
           rides IN the chip row (StripLabel below) to save a full line of
           vertical space in the bottom bar. The deck grid keeps its header. */}
-      {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} />}
+      {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} configurationVisible={surfacePolicy.configurationVisible} />}
       {/* party 2026-07-11 — the 4-page switcher is HIDDEN (single-page layout;
           VSN1 side buttons no longer page). Flip SHOW_EFFECT_PAGES to restore. */}
-      {SHOW_EFFECT_PAGES ? (
+      {SHOW_EFFECT_PAGES && surfacePolicy.configurationVisible ? (
         <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
       ) : null}
       {/* (The global hue shifter row that used to sit here was REMOVED
@@ -858,6 +862,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                 slotId={slotId}
                 height={btnHeight}
                 minWidth={minWidth}
+                configurationVisible={surfacePolicy.configurationVisible}
                 onPress={() => onPressEmpty(slotId)}
                 onLockedTap={onLockedTap}
               />
@@ -874,6 +879,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               fontSize={btnFont}
               minWidth={minWidth}
               labelLines={labelLines}
+              configurationVisible={surfacePolicy.configurationVisible}
               onPress={() => onPressSlot(slot)}
               onEdit={() => onPressEdit(slotId)}
               onLockedTap={onLockedTap}
@@ -993,7 +999,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                 {/* Minimal add/delete bank controls (D5) — ride next to the badge
                     on the always-visible strip. Perf-lock-dimmed, delete confirm +
                     last-bank disabled are handled inside BankControls. */}
-                <BankControls />
+                {surfacePolicy.configurationVisible ? <BankControls /> : null}
                 {pagerArrow(-1)}
                 {/* The visible half. flex:1 chips, no scroll, no minWidth — four
                     across a portrait bar is ~fits a single-line effect name. */}
@@ -1022,7 +1028,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               {/* Minimal add/delete bank controls (D5) — ride next to the badge on
                   the always-visible strip. Perf-lock-dimmed, delete confirm +
                   last-bank disabled are handled inside BankControls. */}
-              <BankControls />
+              {surfacePolicy.configurationVisible ? <BankControls /> : null}
               {slotChips}
               {Divider}
               {blackoutCell}
@@ -1061,7 +1067,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       })()}
 
       <SwapSheet
-        slotId={swapTargetId}
+        slotId={surfacePolicy.configurationVisible ? swapTargetId : null}
         slot={swapTargetId !== null ? visibleSlots.find(s => s.slotId === swapTargetId) ?? null : null}
         library={library}
         onClose={() => setSwapTargetId(null)}
@@ -1156,7 +1162,7 @@ const PageSwitcher: React.FC<{
 // (2026-07 visual polish: the title now renders at 10px in BOTH variants —
 // the 9px strip size was below the app's smallest legible caption step —
 // so `variant` stays in the prop contract but is not consumed here.)
-const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: React.ReactNode; bankBadge?: React.ReactNode }> = ({ page, badge, bankBadge }) => {
+const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: React.ReactNode; bankBadge?: React.ReactNode; configurationVisible: boolean }> = ({ page, badge, bankBadge, configurationVisible }) => {
   const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -1175,7 +1181,7 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: 
         {/* Minimal add/delete bank controls (D5) — deck grid only (the roomy
             authoring surface). Perf-lock-dimmed, delete confirm + last-bank
             disabled are handled inside BankControls. */}
-        <BankControls />
+        {configurationVisible ? <BankControls /> : null}
         {/* Always-visible LOCKED status badge rides next to the label — the
             non-strip twin of the strip's in-row badge. */}
         {badge}
@@ -1419,6 +1425,8 @@ const SlotButton: React.FC<{
   // How many lines the label may occupy. 2 in the deck grid (narrow columns,
   // tall chips); 1 in the strip — a stable single-line bar (2026-07-27).
   labelLines?: number;
+  /** False in raw Performance mode: the chip is trigger-only. */
+  configurationVisible: boolean;
   onPress: () => void;
   onEdit: () => void;
   /** Raised when a PERF-LOCKED affordance is tapped, so the parent can flash
@@ -1429,13 +1437,12 @@ const SlotButton: React.FC<{
   onResetIntensity: () => void;
   onCycleMode: () => void;
   onSetMode: (value: string | number | boolean) => void;
-}> = ({ slot, isOn, height, fontSize, minWidth, labelLines = 2, onPress, onEdit, onLockedTap, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
+}> = ({ slot, isOn, height, fontSize, minWidth, labelLines = 2, configurationVisible, onPress, onEdit, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
   const C = usePalette();
   // PERFORMANCE MODE: rebinding/clearing a slot (the ⋯ swap sheet →
   // PATCH /global-effect-slots/:id) is a LAYOUT edit, 409-gated while a show
   // is live. Firing the effect (cell body), intensity and mode stay live —
   // those are runtime routes the engine deliberately allows.
-  const perfLocked = usePerfLock();
   const isMomentary = slot.behavior === 'trigger' || slot.behavior === 'burst';
   // Favorite (⭐) marker — the operator's party picks (effect_picker_logic).
   const isFav = isFavoritePreset(slot.effectId, slot.presetId);
@@ -1498,7 +1505,7 @@ const SlotButton: React.FC<{
           // Uniform on every chip so labels sit on one shared baseline
           // across the strip instead of jumping per-chip with badge
           // presence.
-          paddingTop: 14,
+          paddingTop: configurationVisible ? 14 : 0,
           // RN-Web only: kills the auto bg-color transition. Ignored
           // by native React Native (no-op there).
           ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
@@ -1528,13 +1535,13 @@ const SlotButton: React.FC<{
         // happen?" the removed inline banner used to answer. It stays visually
         // dimmed + a11y-disabled and the swap NEVER opens — the tap only
         // flashes the transient toast.
-        onPress={perfLocked ? onLockedTap : onEdit}
+        onPress={configurationVisible ? onEdit : undefined}
+        disabled={!configurationVisible}
         activeOpacity={0.6}
         hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
         accessibilityLabel={`Edit slot ${slot.slotId}`}
-        accessibilityState={{ disabled: perfLocked }}
         style={{
-          opacity: perfLocked ? 0.45 : 1,
+          display: configurationVisible ? 'flex' : 'none',
           // 2026-07 visual polish: back to the TOP-right corner — the chip
           // now reserves its whole top band for meta (paddingTop on the
           // body pushes the label below), so the corner is guaranteed clear
@@ -1577,7 +1584,7 @@ const SlotButton: React.FC<{
           cycle/picker). Only rendered when the engine threads intensity/mode —
           a pre-field slot shows nothing here rather than a fabricated 0. Always
           present (invariant across controller profiles). */}
-      {(hasIntensity || hasMode) ? (
+      {configurationVisible && (hasIntensity || hasMode) ? (
         <TouchableOpacity
           onPress={() => setDetailOpen(true)}
           activeOpacity={0.6}
@@ -1605,7 +1612,7 @@ const SlotButton: React.FC<{
       ) : null}
 
       <SlotDetailSheet
-        open={detailOpen}
+        open={configurationVisible && detailOpen}
         slot={slot}
         onClose={() => setDetailOpen(false)}
         onSetIntensity={onSetIntensity}
@@ -1822,27 +1829,28 @@ const EmptySlotButton: React.FC<{
   // Fixed minWidth for the portrait scroll strip (matches SlotButton);
   // flex:1 otherwise so the cell shares the bar width.
   minWidth?: number;
+  configurationVisible: boolean;
   onPress: () => void;
   /** Raised when tapped while perf-locked (see SlotButton.onLockedTap). */
   onLockedTap?: () => void;
-}> = ({ slotId, height, minWidth, onPress, onLockedTap }) => {
+}> = ({ slotId, height, minWidth, configurationVisible, onPress }) => {
   const C = usePalette();
   // PERFORMANCE MODE: binding an effect into an empty slot is a layout edit
   // (PATCH /global-effect-slots/:id — 409-gated while a show is live).
-  const perfLocked = usePerfLock();
   const sizing = minWidth !== undefined
     ? { width: minWidth, minWidth, flexGrow: 0, flexShrink: 0 }
     : { flex: 1 };
+  if (!configurationVisible) {
+    return <View pointerEvents="none" style={{ ...sizing, height }} />;
+  }
   return (
     <TouchableOpacity
       // See SlotButton's ⋯ affordance: perf-locked taps are NOT swallowed by
       // `disabled`; they flash the toast instead. Binding still never happens.
-      onPress={perfLocked ? onLockedTap : onPress}
+      onPress={onPress}
       activeOpacity={1}
       accessibilityLabel={`Add effect to slot ${slotId}`}
-      accessibilityState={{ disabled: perfLocked }}
       style={{
-        opacity: perfLocked ? 0.45 : 1,
         ...sizing, height, borderRadius: 8,
         backgroundColor: C.surfaceDim,
         borderWidth: 1,

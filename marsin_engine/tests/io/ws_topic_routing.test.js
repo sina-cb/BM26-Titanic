@@ -105,6 +105,9 @@ test('UI/state events ride /ws/control', () => {
     'playlistDeleted',
     'channelPlaylistData',
     'playlistEntryCaptured',
+    'deckParamsSaved',
+    'channelParamsSaved',
+    'channelParamsSaveFailed',
     // round-2 #10: mixer undo ring depth/top broadcast.
     'undoState',
     'paramRejected',

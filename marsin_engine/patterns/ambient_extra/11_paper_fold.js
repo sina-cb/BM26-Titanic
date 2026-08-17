@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   11_paper_fold.js — PAPER FOLD
 

@@ -1,6 +1,12 @@
 // DRAFT - pending operator review
 /* Tidal Ribbons: slow opposing water ribbons braid along the ship. */
 
+var BABY_BLUE_R = 0.033;
+var BABY_BLUE_G = 0.450;
+var BABY_BLUE_B = 1.000;
+var BABY_PINK_R = 1.000;
+var BABY_PINK_G = 0.035;
+var BABY_PINK_B = 0.360;
 export var localSpeed = 0.42;
 export var level = 0.84;
 export var ribbonWidth = 0.56;
@@ -35,6 +41,37 @@ export function render3D(index, x, y, z) {
   var dominance = 0.78 + 0.22 * wave(teasePhase + familyBlue * 0.5);
   var shade = clamp01(0.18 + field * 0.70 + foam * 0.16);
   var bri = clamp01((0.18 + field * 0.72 + foam * 0.12) * clamp01(level) * dominance);
-  if (familyBlue) rgbwau((0.010 + shade * 0.025) * bri, (0.16 + shade * 0.30) * bri, (0.64 + shade * 0.36) * bri, 0.0, 0.0, 0.0);
-  else rgbwau((0.64 + shade * 0.36) * bri, (0.010 + shade * 0.025) * bri, (0.18 + shade * 0.18) * bri, 0.0, 0.0, 0.0);
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  if (fixtureType == FIX_TE_SIGN) {
+    var signAddress = index % 74.0;
+    if (signAddress % 9.0 < 1.0) {
+      rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+      return;
+    }
+    var signIntensity = clamp01(0.68 + energy * 0.28
+                                + wave(signAddress * 0.37) * 0.04);
+    familyBlue = signAddress % 2.0;
+    if (familyBlue) {
+      rgbwau(BABY_BLUE_R * signIntensity, BABY_BLUE_G * signIntensity,
+             BABY_BLUE_B * signIntensity, 0.0, 0.0, 0.0);
+    } else {
+      rgbwau(BABY_PINK_R * signIntensity, BABY_PINK_G * signIntensity,
+             BABY_PINK_B * signIntensity, 0.0, 0.0, 0.0);
+    }
+    return;
+  }
+  var gate = geometry * 0.70 + energy * 0.30;
+  if (gate < 0.16 || (fixtureType != FIX_TE_SIGN && wave(x * 1.7 + y * 1.3 + z * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.65 + energy * 0.35);
+  if (familyBlue) {
+    rgbwau(BABY_BLUE_R * intensity, BABY_BLUE_G * intensity,
+           BABY_BLUE_B * intensity, 0.0, 0.0, 0.0);
+  } else {
+    rgbwau(BABY_PINK_R * intensity, BABY_PINK_G * intensity,
+           BABY_PINK_B * intensity, 0.0, 0.0, 0.0);
+  }
 }

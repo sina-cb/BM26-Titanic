@@ -55,6 +55,27 @@ export const EFFECTS_PAGE_COUNT = 4;
 export const SHOW_EFFECT_PAGES = false;
 
 /**
+ * Operator surface policy for global effects.
+ *
+ * Performance mode is intentionally stricter than the edit-authority lock:
+ * even an authenticated edit principal must see trigger buttons only while
+ * the Performance face is active. Configuration affordances are removed from
+ * layout instead of being dimmed, so a live-show tap cannot open a slot,
+ * intensity, mode, or binding editor.
+ */
+export function effectSurfacePolicy(performanceModeActive: boolean): {
+  configurationVisible: boolean;
+  boundEffectsTriggerable: true;
+  emptySlotsInteractive: boolean;
+} {
+  return {
+    configurationVisible: !performanceModeActive,
+    boundEffectsTriggerable: true,
+    emptySlotsInteractive: !performanceModeActive,
+  };
+}
+
+/**
  * The page the strip should actually RENDER. When the pager UI is hidden
  * (SHOW_EFFECT_PAGES=false, the party single-page layout) we pin page 0
  * regardless of the engine's active `effectsPage`; when it's shown we honour the

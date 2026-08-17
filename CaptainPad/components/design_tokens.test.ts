@@ -294,28 +294,13 @@ describe('identity colours (constants/identity.ts)', () => {
     expectIdentityAnchor('./timeline/PlanIndicatorPill.tsx', 'PLAN_CYAN', PLAN_ACCENT);
   });
 
-  // R1 MOVED THIS ANCHOR. Before the restyle, PlanLockBanner was the file
-  // that spelled the loud amber out ('#F5A623'), so it was the anchor. R1
-  // split the two amber jobs the way constants/identity.ts describes:
-  //
-  //   • the plan-lock BANNER is a caution surface → the theme-aware
-  //     `warning` family, with `readableInk()` ink. It must NOT carry a
-  //     fixed amber any more (the loud hex is ~2:1 on the light palette).
-  //   • the PANIC bar is the ONE frozen control (docs/54 row 17) → the
-  //     named `PANIC_AMBER` identity constant, imported, never re-spelled.
-  //
-  // So the anchor now lives on the deck screen, and the banner gets an
-  // inverse guard proving the literals did not simply move house.
-  it('panic amber is the deck PANIC bar, imported by name', () => {
-    const src = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../app/(tabs)/index.tsx'),
-      'utf8',
-    );
-    expect(/from ['"]@\/constants\/identity['"]/.test(src), 'deck screen imports the identity module').toBe(true);
-    expect(/\bPANIC_AMBER\b/.test(src), 'deck screen uses PANIC_AMBER').toBe(true);
-    expect(src, 'the deck screen must not re-spell the panic hex').not.toMatch(
-      new RegExp(PANIC_AMBER.replace('#', '#'), 'i'),
-    );
+  it('keeps panic amber reserved without exposing a Deck or Mixer PANIC control', () => {
+    const root = dirname(fileURLToPath(import.meta.url));
+    const deck = readFileSync(join(root, '../app/(tabs)/index.tsx'), 'utf8');
+    const mixer = readFileSync(join(root, '../app/(tabs)/mixer.tsx'), 'utf8');
+    expect(PANIC_AMBER).toMatch(/^#[0-9A-F]{6}$/i);
+    expect(deck).not.toContain('PANIC_AMBER');
+    expect(mixer).not.toContain('PANIC_AMBER');
   });
 
   it('the plan-lock banner is on the theme-aware warning family, not a fixed amber', () => {

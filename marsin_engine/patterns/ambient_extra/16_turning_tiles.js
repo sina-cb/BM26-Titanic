@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   16_turning_tiles.js — TURNING TILES
 

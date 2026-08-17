@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   09_shadow_slats.js — SHADOW SLATS
 

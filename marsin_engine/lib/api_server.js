@@ -76,6 +76,7 @@ import {
 } from './touch_brightness_api.js';
 import { audioRegistryEntries } from '../audio/postproc/audio_signals.js';
 import { createCaptainPadAuth } from './captainpad_auth.js';
+import { persistChannelParamState } from './channel_param_persistence.js';
 import {
   DECK_TRANSITION_MODES,
   isDeckTransitionMode,
@@ -2148,6 +2149,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
+  function currentDeckStateExtras() {
+    return {
+      transitionConfig: { ...deckTransitionConfig },
+      overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannelForState),
+      overlayAutopilot: {
+        active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+        delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+          ? mixer.deckOverlayAutopilot.delay_s : 30,
+        shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+        ...autoGroupFields(mixer.deckOverlayAutopilot),
+      },
+      playlistSlots: {
+        primary: deckPlaylistSlots.primary,
+        secondary: deckPlaylistSlots.secondary,
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
+    };
+  }
+
   // `strict` (L5, report _120) is FALSE for every auto-save caller (the ~80
   // render-adjacent triggers) — those stay best-effort: a transient write
   // failure is warn-only in StateManager.save() and never crashes the engine.
@@ -2163,45 +2183,60 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // own files directly, so they keep working when auto-save is OFF.
     if (!effectiveAutoSave()) return;
     stateManager.saveMixerState(mixer, { strict });
-    stateManager.saveDeckState(mixer, {
-      transitionConfig: { ...deckTransitionConfig },
-      // Deck dynamic view overrides: persist the overlay stack + the SHARED
-      // overlay autopilot cadence so they survive an engine restart (operator
-      // ruling #5). Each overlay is serialized with the same channel shape the
-      // mixer overlays use (serializeChannelForState) so the restore path can
-      // rebuild them via buildChannelFromSaved + loadPlaylistEntry. order is
-      // array order (bottom→top). The transient shared anchor is not persisted.
-      overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannelForState),
-      overlayAutopilot: {
-        active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
-        delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
-          ? mixer.deckOverlayAutopilot.delay_s : 30,
-        shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
-        ...autoGroupFields(mixer.deckOverlayAutopilot),
-      },
-      // Split-playlist SLOTS: persist the two name bindings + the divider ratio
-      // per-scene so the panes + split survive an engine restart. Plain scalars
-      // (name strings / null / a number) — restored + validated at boot.
-      playlistSlots: {
-        primary: deckPlaylistSlots.primary,
-        secondary: deckPlaylistSlots.secondary,
-        splitRatio: deckPlaylistSlots.splitRatio,
-      },
-    }, { strict });
+    stateManager.saveDeckState(mixer, currentDeckStateExtras(), { strict });
   }
 
-  // Confirm a DECK LOCAL-PARAM write was PERSISTED, so the deck's "✓ SAVED"
-  // flash fires honestly. Emitted ONLY when auto-save actually wrote to disk
-  // (engineSettings.autoSave) — with auto-save OFF a deck tweak is NOT persisted,
-  // so we must never claim it was (codex P0 — no false confirmation; the badge
-  // simply stays hidden). Scoped to the deck param-write paths (NOT saveAllState,
-  // which fires on ~80 unrelated triggers) so the flash means exactly "your deck
-  // tuning was saved". Call AFTER saveAllState().
+  // Confirm a playlist capture that already reached disk. Direct deck
+  // local-parameter writes use persistDeckChannelParams() below so their flash
+  // is coupled to a strict deck_state write instead of broad best-effort save.
   function broadcastDeckParamsSaved() {
     if (!effectiveAutoSave()) return;
     const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
     if (!deckCh) return;
     broadcastWs({ type: 'deckParamsSaved', channelId: deckCh.id });
+  }
+
+  function persistDeckChannelParams() {
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (!deckCh) {
+      return { attempted: false, saved: false, error: 'No deck channel is active.' };
+    }
+    return persistChannelParamState({
+      enabled: effectiveAutoSave(),
+      channelId: deckCh.id,
+      save: () => stateManager.saveDeckState(
+        mixer, currentDeckStateExtras(), { strict: true },
+      ),
+      emit: broadcastWs,
+      successType: 'deckParamsSaved',
+      failureMessage: 'The live value was applied, but deck state could not be saved to disk.',
+      logFailure: (err) => {
+        const detail = String(err && err.message ? err.message : err);
+        console.error(`[Deck] parameter state save failed for '${deckCh.id}': ${detail}`);
+      },
+    });
+  }
+
+  /**
+   * Persist one mixer channel's LOCAL-PARAM write without touching shared
+   * playlist defaults. The strict write is deliberate: an acknowledgement is
+   * useful only when the bytes actually reached mixer_state.yaml. Automatic
+   * persistence gates return `attempted:false` and emit nothing, preserving
+   * Performance mode / auto-save OFF / non-owner session honesty.
+   */
+  function persistMixerChannelParams(channelId) {
+    return persistChannelParamState({
+      enabled: effectiveAutoSave(),
+      channelId,
+      save: () => stateManager.saveMixerState(mixer, { strict: true }),
+      emit: broadcastWs,
+      successType: 'channelParamsSaved',
+      failureMessage: 'The live value was applied, but mixer state could not be saved to disk.',
+      logFailure: (err) => {
+        const detail = String(err && err.message ? err.message : err);
+        console.error(`[Mixer] parameter state save failed for '${channelId}': ${detail}`);
+      },
+    });
   }
 
   function getReplayableLocalExport(channel, controlId) {
@@ -3243,17 +3278,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (entry && !entry._missing) {
       playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
     }
-    // CHANNEL-LOCAL params survive a restart for the DECK + deck overlays:
-    // their own saved localControls (live values at the last state save)
-    // replay ON TOP of the shared playlist entry defaults so the deck's look
-    // is exactly what the operator left. MIXER channels are the exception
-    // (operator ruling, 2026-07 auto-save wave): their parameters are never
-    // persisted (saveMixerState emits `localControls: {}`), so on restore we
-    // SKIP the replay entirely — a mixer channel restores to its playlist
-    // entry defaults only. An OLD state file that still carries mixer
-    // localControls is read tolerantly and simply ignored here (never
-    // crashes) rather than replayed.
-    if (saved.localControls && role !== 'mixer') {
+    // CHANNEL-LOCAL params survive a restart for every channel role. Replay
+    // them ON TOP of shared playlist-entry defaults so a mixer layer restores
+    // its own saved live tuning without rewriting the shared preset. Old state
+    // files with an empty localControls map remain backward-compatible.
+    if (saved.localControls) {
       for (const [idStr, cv] of Object.entries(saved.localControls)) {
         const controlId = parseInt(idStr, 10);
         if (!getReplayableLocalExport(ch, controlId)) continue;
@@ -6088,6 +6117,42 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return out.slice(0, COLOR_PAIRS_MAX);
   }
 
+  // Scene-owned visibility choices for the operator palette menu. Curated
+  // palettes still remain in config.yaml for Timeline/special-event lookups;
+  // this list only removes unwanted entries from CaptainPad's human-facing
+  // chooser. Starred house palettes are protected and can never be hidden.
+  function validateHiddenColorPaletteIds(value, where) {
+    if (!Array.isArray(value)) {
+      throw new Error(`${where} must be an array of curated palette ids`);
+    }
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    const byId = new Map(palettes.filter(Boolean).map((p) => [p.id, p]));
+    const out = [];
+    const seen = new Set();
+    for (let i = 0; i < value.length; i++) {
+      const id = value[i];
+      if (typeof id !== 'string' || id.trim() === '') {
+        throw new Error(`${where}[${i}] must be a non-empty string`);
+      }
+      const palette = byId.get(id);
+      if (!palette) throw new Error(`${where}[${i}] references unknown palette "${id}"`);
+      if (String(palette.name || '').includes('\u2605')) {
+        throw new Error(`palette "${id}" is starred and cannot be removed from the operator menu`);
+      }
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    return out;
+  }
+
+  function readColorPaletteVisibility() {
+    const raw = stateManager.load('color_palette_visibility_state.yaml', { hiddenPaletteIds: [] });
+    const ids = raw && raw.hiddenPaletteIds !== undefined ? raw.hiddenPaletteIds : [];
+    return validateHiddenColorPaletteIds(ids, 'color_palette_visibility_state.yaml.hiddenPaletteIds');
+  }
+
   // E1 (docs/53 §5.3): an entry is EITHER a library id OR an INLINE {c1,c2} hue
   // pair posted by the COLORS window's PALETTE TURNS (five ad-hoc colours, no
   // library id). Both forms produce the SAME params shape, so the crossfade
@@ -7681,13 +7746,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         markChannelDirtyIfLocked(mixer.baseChannelId);
         markDeckParamsTouched();
         if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, data.id);
-        saveAllState();
-        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
+        const saveResult = persistDeckChannelParams();
         broadcastMixerState();
         broadcastDeckState();
 
+        if (saveResult.attempted && !saveResult.saved) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: 'applied_not_saved',
+            saved: false,
+            error: saveResult.error,
+          }));
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', id: data.id }));
+        res.end(JSON.stringify({
+          status: 'ok',
+          id: data.id,
+          saved: saveResult.saved,
+          persistence: saveResult.attempted ? 'saved' : 'suppressed',
+        }));
       });
     } else if (req.method === 'GET' && req.url === '/dimmer-groups') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -11219,14 +11297,34 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // localControls. No playlist auto-capture, no cross-channel mirroring
         // (operator ruling 2026-07-07 — parameter isolation).
         const ctlRes = paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        if (!ctlRes || ctlRes.status !== 'ok') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: ctlRes && ctlRes.status ? ctlRes.status : 'rejected',
+            error: ctlRes && ctlRes.reason ? ctlRes.reason : 'Mixer control write was rejected.',
+          }));
+        }
         markChannelDirtyIfLocked(id);
         // Session-cache continuity: record the operator-touched control so the
         // mixer layer's tuning is retained across in-playlist pattern switches.
         if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(id, data.id);
-        saveAllState();
+        const saveResult = persistMixerChannelParams(id);
         broadcastMixerState();
         broadcastDeckState();
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+        if (saveResult.attempted && !saveResult.saved) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: 'applied_not_saved',
+            saved: false,
+            error: saveResult.error,
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          saved: saveResult.saved,
+          persistence: saveResult.attempted ? 'saved' : 'suppressed',
+        }));
       });
     } else if (req.method === 'GET' && req.url === '/layers/state') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -11913,6 +12011,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // response — the picker just hides the Presets tab.
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : []));
+    } else if (req.method === 'GET' && req.url === '/color-palette-visibility') {
+      try {
+        const hiddenPaletteIds = readColorPaletteVisibility();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ hiddenPaletteIds }));
+      } catch (e) {
+        sendJsonError(res, 500, { error: e && e.message ? e.message : String(e) });
+      }
+    } else if (req.method === 'POST' && req.url === '/color-palette-visibility') {
+      readBody(data => {
+        try {
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('color-palette-visibility body must be { hiddenPaletteIds: string[] }');
+          }
+          const hiddenPaletteIds = validateHiddenColorPaletteIds(
+            data.hiddenPaletteIds,
+            'color-palette-visibility.hiddenPaletteIds',
+          );
+          stateManager.save(
+            'color_palette_visibility_state.yaml',
+            { hiddenPaletteIds },
+            { strict: true },
+          );
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ hiddenPaletteIds }));
+        } catch (e) {
+          sendJsonError(res, 400, { error: e && e.message ? e.message : String(e) });
+        }
+      });
     } else if (req.method === 'GET' && req.url === '/color-pairs') {
       // OPERATOR-SAVED colour pairs (docs/53 §4 "SAVE PAIR"). The Deck COLORS
       // window's gallery. SCENE-OWNED, not per-tablet: the operator ruled these
@@ -13260,14 +13387,33 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // means the NEXT entry switch auto-captures this tuning into the
         // outgoing entry (auto-save wave) so it survives the pattern change.
         const ctlRes = paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        if (!ctlRes || ctlRes.status !== 'ok') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: ctlRes && ctlRes.status ? ctlRes.status : 'rejected',
+            error: ctlRes && ctlRes.reason ? ctlRes.reason : 'Deck control write was rejected.',
+          }));
+        }
         markChannelDirtyIfLocked(channel.id);
         markDeckParamsTouched();
         if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(channel.id, data.id);
-        saveAllState();
-        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
+        const saveResult = persistDeckChannelParams();
         broadcastMixerState();
         broadcastDeckState();
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+        if (saveResult.attempted && !saveResult.saved) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: 'applied_not_saved',
+            saved: false,
+            error: saveResult.error,
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          saved: saveResult.saved,
+          persistence: saveResult.attempted ? 'saved' : 'suppressed',
+        }));
       });
     }
     // ── DECK PLAYLIST ASSIGNMENT ─────────────────────────────────────────
@@ -14684,11 +14830,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // touched so the next entry switch auto-captures this tuning into the
           // outgoing entry (auto-save wave — survives the pattern change).
           const ctlRes = paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (!ctlRes || ctlRes.status !== 'ok') {
+            ws.send(JSON.stringify({
+              type: 'paramRejected',
+              channelId: mixer.baseChannelId,
+              id: d.id,
+              reason: ctlRes && ctlRes.reason ? ctlRes.reason : 'Deck control write was rejected.',
+            }));
+            return;
+          }
           markChannelDirtyIfLocked(mixer.baseChannelId);
           markDeckParamsTouched();
           if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, d.id);
-          saveAllState();
-          broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
+          persistDeckChannelParams();
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
@@ -14697,9 +14851,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // localControls. No playlist auto-capture, no cross-channel
           // mirroring (operator ruling 2026-07-07 — parameter isolation).
           const ctlRes = paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (!ctlRes || ctlRes.status !== 'ok') {
+            ws.send(JSON.stringify({
+              type: 'paramRejected',
+              channelId: d.channelId,
+              id: d.id,
+              reason: ctlRes && ctlRes.reason ? ctlRes.reason : 'Mixer control write was rejected.',
+            }));
+            return;
+          }
           markChannelDirtyIfLocked(d.channelId);
           if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(d.channelId, d.id);
-          saveAllState();
+          persistMixerChannelParams(d.channelId);
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {

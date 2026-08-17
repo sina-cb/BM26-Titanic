@@ -187,6 +187,7 @@ export function render3D(index, x, y, z) {
   // ── Sum the manta school. Each is a separable Gaussian-ish wing. ──
   var mGlow = 0.0;     // accumulated manta glow brightness (cp2-leaning)
   var mTip = 0.0;      // accumulated wing-tip foam weight (for sparkle + W)
+  var mTurn = 0.0;     // wing-tip weight at the crest of a flap
   for (var kk = 0; kk < MAX_MANTA; kk++) {
     if (kk < actN) {
       // Distance from this pixel to the manta center along each axis.
@@ -217,6 +218,9 @@ export function render3D(index, x, y, z) {
       tipBand = tipBand * tipBand;       // crisp ridge
       var tip = tipBand * wx;
       if (tip > mTip) mTip = tip;
+      var flapCrest = abs(flap[kk] - 0.5) * 2.0;
+      var turningTip = tip * flapCrest;
+      if (turningTip > mTurn) mTurn = turningTip;
     }
   }
 
@@ -286,13 +290,16 @@ export function render3D(index, x, y, z) {
   }
 
   // Wing-tip foam glints add a crisp phosphorescent core on the W channel.
-  var ww = clamp01(foamGlint * 0.32);
+  var ww = clamp01(foamGlint * 0.24 + mTurn * foam * 0.08);
   if (fixtureType == FIX_TE_SIGN) {
     // Sign foam follows the continuous wing-pressure edge above; never use the
     // frame-quantized general sparkle, which would flicker across the letters.
     ww = clamp01(signWingFoam * foam * 0.12);
   } else if (fixtureType == FIX_VINTAGE_6) {
-    ww = clamp01(foamGlint * 1.15 + mTip * foam * 0.30);
+    // Jewelry flashes at the graceful wing turnaround, while smaller foam
+    // grains remain subordinate. The manta body and water retain their color.
+    ww = clamp01(foamGlint * 0.72
+      + mTurn * (0.22 + foam * 0.68));
     r = r + ww * 0.16;
     g = g + ww * 0.07;
   }

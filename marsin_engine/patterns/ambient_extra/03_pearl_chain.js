@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   03_pearl_chain.js — connected pearl strings carrying a traveling focus.
 

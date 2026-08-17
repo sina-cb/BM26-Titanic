@@ -2,75 +2,17 @@
   "schemaVersion": 3,
   "scene": "titanic",
   "playlist": "baby_tease",
-  "seconds": 20,
+  "seconds": 10,
   "fps": 8,
+  "globalSpeed": 1,
   "variation": "saved",
   "palette": null,
   "source": "simulation/scenes/titanic/playlists/baby_tease.yaml",
-  "playlistDigest": "542e4ceb48e6ca5a8a11dca75b346477443f5d275b2d4f47712cee7ea3478325",
-  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "playlistDigest": "5ba95e33e8509eb016db92cb195ba89d404fc03af5b19a371af492c6e4dccb6b",
+  "goalsDigest": "e6b1aaee3ba6b7eda9d2b567f019e46ed5dd638a7e4f033ab49c1b30329d293f",
   "items": [
     {
       "index": 0,
-      "pattern": "baby/47_tease_twin_lantern_tides",
-      "title": "Baby Tease - Twin Lantern Tides",
-      "goal": "Twin Lantern Tides: paired pink and blue lantern fields rise and fall together across the whole ship.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.43,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.96,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderLanternFocus",
-          "label": "Lantern Focus",
-          "value": 0.58,
-          "valueSource": "playlist saved value",
-          "description": "Fine structure and visual definition.",
-          "audio": null
-        },
-        {
-          "name": "sliderTideDepth",
-          "label": "Tide Depth",
-          "value": 0.52,
-          "valueSource": "playlist saved value",
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.43,
-        "sliderLevel": 0.96,
-        "sliderLanternFocus": 0.58,
-        "sliderTideDepth": 0.52
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.43,
-        "sliderLevel": 0.96,
-        "sliderLanternFocus": 0.58,
-        "sliderTideDepth": 0.52
-      },
-      "gif": "001_baby__47_tease_twin_lantern_tides.gif",
-      "video": "001_baby__47_tease_twin_lantern_tides.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "d8136736e63960db09e564c8491a16af18600b085e89a69be8fe67e550476f26"
-    },
-    {
-      "index": 1,
       "pattern": "baby/50_tease_constellation_duet",
       "title": "Baby Tease - Constellation Duet",
       "goal": "Constellation Duet: linked pink and blue star fields dance as equal partners with no implied outcome.",
@@ -121,15 +63,15 @@
         "sliderStarFocus": 0.58,
         "sliderDuetDepth": 0.6
       },
-      "gif": "002_baby__50_tease_constellation_duet.gif",
-      "video": "002_baby__50_tease_constellation_duet.mp4",
-      "seconds": 20,
+      "gif": "001_baby__50_tease_constellation_duet.gif",
+      "video": "001_baby__50_tease_constellation_duet.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "c816d68b57f8fd68060d36a7a53fa683fa72ef522f48f6d1d168699e8d030ef0"
+      "sourceDigest": "ab79eb3cedca406f5563d8481518b68619967322224f4741f8acd2459c5d15f3"
     },
     {
-      "index": 2,
+      "index": 1,
       "pattern": "baby/01_tease_orbit_question",
       "title": "Baby Tease - Orbit Question",
       "goal": "Orbit Question: interlocking 3D shells carry a persistent pink/blue question. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -180,15 +122,15 @@
         "sliderRingWidth": 0.54,
         "sliderSpatialDepth": 0.68
       },
-      "gif": "003_baby__01_tease_orbit_question.gif",
-      "video": "003_baby__01_tease_orbit_question.mp4",
-      "seconds": 20,
+      "gif": "002_baby__01_tease_orbit_question.gif",
+      "video": "002_baby__01_tease_orbit_question.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "9801688b459d503d49cf65310eb3462f0accf8042e7b8760f2da2185e30acc79"
+      "sourceDigest": "192a1a0c479818f7d3aea19c7326c507821c0d12e6212aaf5e16582bf1e76a14"
     },
     {
-      "index": 3,
+      "index": 2,
       "pattern": "baby/03_tease_rose_question",
       "title": "Baby Tease - Rose Question",
       "goal": "Rose Question: counter-wound petals and spherical shells bloom in 3D. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -239,15 +181,15 @@
         "sliderPetalWidth": 0.52,
         "sliderSpatialDepth": 0.7
       },
-      "gif": "004_baby__03_tease_rose_question.gif",
-      "video": "004_baby__03_tease_rose_question.mp4",
-      "seconds": 20,
+      "gif": "003_baby__03_tease_rose_question.gif",
+      "video": "003_baby__03_tease_rose_question.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "bf6b363ef7dad14e2a0495899f06aac9f5fe2472618eb1391dd31630cf6eaba3"
+      "sourceDigest": "9e45c1d920e2b3a09f743240b184717c8144fb2c29f80ab8f51f95b4e54730a8"
     },
     {
-      "index": 4,
+      "index": 3,
       "pattern": "baby/10_tease_constellation_tides",
       "title": "Baby Tease - Constellation Tides",
       "goal": "Constellation Tides: drifting star knots ride over a smooth spatial sea. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -298,74 +240,15 @@
         "sliderStarFocus": 0.62,
         "sliderTideDepth": 0.54
       },
-      "gif": "005_baby__10_tease_constellation_tides.gif",
-      "video": "005_baby__10_tease_constellation_tides.mp4",
-      "seconds": 20,
+      "gif": "004_baby__10_tease_constellation_tides.gif",
+      "video": "004_baby__10_tease_constellation_tides.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "a1244f23bfe89169cd99958cfd749d42e15b4a29f8f84c2b60a66797a3f46c20"
+      "sourceDigest": "45437b0b7ee6870933e8e3388f6a68e637772f9f56fe58070a7cbafaef19c9e5"
     },
     {
-      "index": 5,
-      "pattern": "baby/49_tease_horizon_seesaw",
-      "title": "Baby Tease - Horizon Seesaw",
-      "goal": "Horizon Seesaw: broad pink and blue horizons exchange emphasis while both remain visible in every frame.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.48,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.88,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderHorizonWidth",
-          "label": "Horizon Width",
-          "value": 0.56,
-          "valueSource": "playlist saved value",
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderSeesawDepth",
-          "label": "Seesaw Depth",
-          "value": 0.54,
-          "valueSource": "playlist saved value",
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.48,
-        "sliderLevel": 0.88,
-        "sliderHorizonWidth": 0.56,
-        "sliderSeesawDepth": 0.54
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.48,
-        "sliderLevel": 0.88,
-        "sliderHorizonWidth": 0.56,
-        "sliderSeesawDepth": 0.54
-      },
-      "gif": "006_baby__49_tease_horizon_seesaw.gif",
-      "video": "006_baby__49_tease_horizon_seesaw.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "51c1f295a970d2ae34660846fbf5c7d94e8ebce48e4ca54f8e55a560886ea040"
-    },
-    {
-      "index": 6,
+      "index": 4,
       "pattern": "baby/04_tease_tidal_ribbons",
       "title": "Baby Tease - Tidal Ribbons",
       "goal": "Tidal Ribbons: slow opposing water ribbons braid along the ship. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -416,310 +299,15 @@
         "sliderRibbonWidth": 0.56,
         "sliderTurbulence": 0.48
       },
-      "gif": "007_baby__04_tease_tidal_ribbons.gif",
-      "video": "007_baby__04_tease_tidal_ribbons.mp4",
-      "seconds": 20,
+      "gif": "005_baby__04_tease_tidal_ribbons.gif",
+      "video": "005_baby__04_tease_tidal_ribbons.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "7ae4db59e690d094d81dad96746ff96389e30fffc4a890d65d99a360ff36756d"
+      "sourceDigest": "3c1e5d877fa4cd060794c2f857dae47a6c29688bf134ceda4cb2bb6b4d15dd6f"
     },
     {
-      "index": 7,
-      "pattern": "baby/48_tease_parallax_ribbons",
-      "title": "Baby Tease - Parallax Ribbons",
-      "goal": "Parallax Ribbons: layered pink and blue ribbons cross at different depths while keeping the question unresolved.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.38,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.86,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderRibbonWidth",
-          "label": "Ribbon Width",
-          "value": 0.58,
-          "valueSource": "playlist saved value",
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderParallaxDepth",
-          "label": "Parallax Depth",
-          "value": 0.66,
-          "valueSource": "playlist saved value",
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.38,
-        "sliderLevel": 0.86,
-        "sliderRibbonWidth": 0.58,
-        "sliderParallaxDepth": 0.66
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.38,
-        "sliderLevel": 0.86,
-        "sliderRibbonWidth": 0.58,
-        "sliderParallaxDepth": 0.66
-      },
-      "gif": "008_baby__48_tease_parallax_ribbons.gif",
-      "video": "008_baby__48_tease_parallax_ribbons.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "d7d2e834dcc9a20dfa7bc4e3dc79bbbc4d999bb6b2b01fac1bd25e7eec441800"
-    },
-    {
-      "index": 8,
-      "pattern": "baby/05_tease_diamond_echo",
-      "title": "Baby Tease - Diamond Echo",
-      "goal": "Diamond Echo: faceted shells expand through XYZ like a cut-gem sonar. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.44,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.85,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderFacetWidth",
-          "label": "Facet Width",
-          "value": 0.52,
-          "valueSource": "playlist saved value",
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderEchoDepth",
-          "label": "Echo Depth",
-          "value": 0.58,
-          "valueSource": "playlist saved value",
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.44,
-        "sliderLevel": 0.85,
-        "sliderFacetWidth": 0.52,
-        "sliderEchoDepth": 0.58
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.44,
-        "sliderLevel": 0.85,
-        "sliderFacetWidth": 0.52,
-        "sliderEchoDepth": 0.58
-      },
-      "gif": "009_baby__05_tease_diamond_echo.gif",
-      "video": "009_baby__05_tease_diamond_echo.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "7934abaf6163b24aea4cef250072b1bd4056194752ee17fab88ba7f29d4c9b8f"
-    },
-    {
-      "index": 9,
-      "pattern": "baby/02_tease_crossing_question",
-      "title": "Baby Tease - Crossing Question",
-      "goal": "Crossing Question: oblique pink/blue fans cross through the whole model. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.38,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.84,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderBeamWidth",
-          "label": "Beam Width",
-          "value": 0.46,
-          "valueSource": "playlist saved value",
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderCrossing",
-          "label": "Crossing",
-          "value": 0.5,
-          "valueSource": "playlist saved value",
-          "description": "Crossing character control.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.38,
-        "sliderLevel": 0.84,
-        "sliderBeamWidth": 0.46,
-        "sliderCrossing": 0.5
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.38,
-        "sliderLevel": 0.84,
-        "sliderBeamWidth": 0.46,
-        "sliderCrossing": 0.5
-      },
-      "gif": "010_baby__02_tease_crossing_question.gif",
-      "video": "010_baby__02_tease_crossing_question.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "3130c681aee8cf51861a5fc589116afdbcd4e4ee91cc61417828bc39e6ebcfd6"
-    },
-    {
-      "index": 10,
-      "pattern": "baby/07_tease_lattice_bloom",
-      "title": "Baby Tease - Lattice Bloom",
-      "goal": "Lattice Bloom: a breathing 3D interference lattice opens like a flower. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.5,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.86,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderLatticeScale",
-          "label": "Lattice Scale",
-          "value": 0.46,
-          "valueSource": "playlist saved value",
-          "description": "Lattice Scale character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderBloom",
-          "label": "Bloom",
-          "value": 0.64,
-          "valueSource": "playlist saved value",
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.5,
-        "sliderLevel": 0.86,
-        "sliderLatticeScale": 0.46,
-        "sliderBloom": 0.64
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.5,
-        "sliderLevel": 0.86,
-        "sliderLatticeScale": 0.46,
-        "sliderBloom": 0.64
-      },
-      "gif": "011_baby__07_tease_lattice_bloom.gif",
-      "video": "011_baby__07_tease_lattice_bloom.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "7d45c4a7e9bf701ecd32a686cb33265fc66f422e9c32027e21680c5cc75f5b01"
-    },
-    {
-      "index": 11,
-      "pattern": "baby/08_tease_moire_gates",
-      "title": "Baby Tease - Moire Gates",
-      "goal": "Moire Gates: opposing slanted line fields form moving portal bands. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.53,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.88,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderLineWidth",
-          "label": "Line Width",
-          "value": 0.5,
-          "valueSource": "playlist saved value",
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderInterference",
-          "label": "Interference",
-          "value": 0.6,
-          "valueSource": "playlist saved value",
-          "description": "Interference character control.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.53,
-        "sliderLevel": 0.88,
-        "sliderLineWidth": 0.5,
-        "sliderInterference": 0.6
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.53,
-        "sliderLevel": 0.88,
-        "sliderLineWidth": 0.5,
-        "sliderInterference": 0.6
-      },
-      "gif": "012_baby__08_tease_moire_gates.gif",
-      "video": "012_baby__08_tease_moire_gates.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "09356d34d0655f7d33679252fa653be69e7b4a7c307634de4d5e2a174f45ac13"
-    },
-    {
-      "index": 12,
+      "index": 5,
       "pattern": "baby/09_tease_helix_exchange",
       "title": "Baby Tease - Helix Exchange",
       "goal": "Helix Exchange: two counter-wound helices trade emphasis bow-to-stern. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -770,15 +358,15 @@
         "sliderHelixWidth": 0.48,
         "sliderTurns": 0.55
       },
-      "gif": "013_baby__09_tease_helix_exchange.gif",
-      "video": "013_baby__09_tease_helix_exchange.mp4",
-      "seconds": 20,
+      "gif": "006_baby__09_tease_helix_exchange.gif",
+      "video": "006_baby__09_tease_helix_exchange.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "9c7ca25d15f4363f9a671745c7da98784941033d281a31df1c7b2afac89b78f1"
+      "sourceDigest": "5dc9561f8b933337b869b0f5eade251aa8e278a1058742d45e104823354346f0"
     },
     {
-      "index": 13,
+      "index": 6,
       "pattern": "baby/11_tease_prismatic_fans",
       "title": "Baby Tease - Prismatic Fans",
       "goal": "Prismatic Fans: rotating fan wedges open from opposing corners in XYZ. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -829,15 +417,15 @@
         "sliderFanWidth": 0.5,
         "sliderFanCount": 0.52
       },
-      "gif": "014_baby__11_tease_prismatic_fans.gif",
-      "video": "014_baby__11_tease_prismatic_fans.mp4",
-      "seconds": 20,
+      "gif": "007_baby__11_tease_prismatic_fans.gif",
+      "video": "007_baby__11_tease_prismatic_fans.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "a04fc0b8bf2c6c7bae64e0419b7d2c35df12eaa8a9154ae2d3cd82c181c22786"
+      "sourceDigest": "37f75a11d9318be57f240833c4e06b4bec35a72db7d73db672f565b09aae4431"
     },
     {
-      "index": 14,
+      "index": 7,
       "pattern": "baby/06_tease_bow_stern_comets",
       "title": "Baby Tease - Bow Stern Comets",
       "goal": "Bow-Stern Comets: mirrored heads and long tails exchange along X. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -888,74 +476,15 @@
         "sliderTailLength": 0.55,
         "sliderCometFocus": 0.62
       },
-      "gif": "015_baby__06_tease_bow_stern_comets.gif",
-      "video": "015_baby__06_tease_bow_stern_comets.mp4",
-      "seconds": 20,
+      "gif": "008_baby__06_tease_bow_stern_comets.gif",
+      "video": "008_baby__06_tease_bow_stern_comets.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "e4451158427d10017a973f9d01b262d080f027810b6fcbf0bf8125d3fbd764c5"
+      "sourceDigest": "2320b8f531dbd5e5db1dcce1f0b13dd31141f39faebdae9ae80f89ee0db30830"
     },
     {
-      "index": 15,
-      "pattern": "baby/46_tease_checkerboard_morph",
-      "title": "Baby Tease - Checkerboard Morph",
-      "goal": "Checkerboard Morph: pink and blue cells trade shape without either family disappearing or implying the answer.",
-      "intent": null,
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.42,
-          "valueSource": "playlist saved value",
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.88,
-          "valueSource": "playlist saved value",
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderCellScale",
-          "label": "Cell Scale",
-          "value": 0.46,
-          "valueSource": "playlist saved value",
-          "description": "Cell Scale character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderMorphDepth",
-          "label": "Morph Depth",
-          "value": 0.58,
-          "valueSource": "playlist saved value",
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        }
-      ],
-      "savedValues": {
-        "sliderLocalSpeed": 0.42,
-        "sliderLevel": 0.88,
-        "sliderCellScale": 0.46,
-        "sliderMorphDepth": 0.58
-      },
-      "effectiveValues": {
-        "sliderLocalSpeed": 0.42,
-        "sliderLevel": 0.88,
-        "sliderCellScale": 0.46,
-        "sliderMorphDepth": 0.58
-      },
-      "gif": "016_baby__46_tease_checkerboard_morph.gif",
-      "video": "016_baby__46_tease_checkerboard_morph.mp4",
-      "seconds": 20,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "56070809b728672eea2ac4a966beee9fcad8af4e7c689ec5c2cd5d172e982c7a"
-    },
-    {
-      "index": 16,
+      "index": 8,
       "pattern": "baby/13_tease_wave_collision",
       "title": "Baby Tease - Wave Collision",
       "goal": "Wave Collision: fast bow and stern wavefronts meet in a bright central seam. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -1006,15 +535,15 @@
         "sliderFrontWidth": 0.48,
         "sliderCollisionEnergy": 0.66
       },
-      "gif": "017_baby__13_tease_wave_collision.gif",
-      "video": "017_baby__13_tease_wave_collision.mp4",
-      "seconds": 20,
+      "gif": "009_baby__13_tease_wave_collision.gif",
+      "video": "009_baby__13_tease_wave_collision.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "1399ef206796015b04d833ce1913205e7ad51f49699e620cdf5d012031b207ff"
+      "sourceDigest": "b1e57f025155df32f17cabb34a3dffb0136db992d7d45ba38829f52e5b57ffac"
     },
     {
-      "index": 17,
+      "index": 9,
       "pattern": "baby/12_tease_kaleidoscope",
       "title": "Baby Tease - Kaleidoscope",
       "goal": "Kaleidoscope: folded angular geometry rotates through three model planes. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -1065,15 +594,15 @@
         "sliderFoldCount": 0.58,
         "sliderEdgeFocus": 0.62
       },
-      "gif": "018_baby__12_tease_kaleidoscope.gif",
-      "video": "018_baby__12_tease_kaleidoscope.mp4",
-      "seconds": 20,
+      "gif": "010_baby__12_tease_kaleidoscope.gif",
+      "video": "010_baby__12_tease_kaleidoscope.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "b17f6fa8b7237743b5f27b51f0786e9b0a4db258fa454407ff8780b888f1f69d"
+      "sourceDigest": "06bb27ff9093e2143f3051100598037cccdc056210b48401d71a3da1d0ff0bc9"
     },
     {
-      "index": 18,
+      "index": 10,
       "pattern": "baby/14_tease_spiral_race",
       "title": "Baby Tease - Spiral Race",
       "goal": "Spiral Race: fast counter-rotating spiral crests race around the ship axis. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -1124,15 +653,15 @@
         "sliderSpiralWidth": 0.46,
         "sliderSpiralArms": 0.62
       },
-      "gif": "019_baby__14_tease_spiral_race.gif",
-      "video": "019_baby__14_tease_spiral_race.mp4",
-      "seconds": 20,
+      "gif": "011_baby__14_tease_spiral_race.gif",
+      "video": "011_baby__14_tease_spiral_race.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "bd65c49484f45748c473d115cad13f4226bd7d83a87f08227ce276169576648e"
+      "sourceDigest": "750d16b364147273ee4b0dd5b4553c828690e6c170d5f3c12b6151fc83c50ec5"
     },
     {
-      "index": 19,
+      "index": 11,
       "pattern": "baby/15_tease_velocity_weave",
       "title": "Baby Tease - Velocity Weave",
       "goal": "Velocity Weave: the fastest tease, with smooth woven crests and swaps. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -1183,12 +712,95 @@
         "sliderStrandWidth": 0.48,
         "sliderWeaveDepth": 0.68
       },
-      "gif": "020_baby__15_tease_velocity_weave.gif",
-      "video": "020_baby__15_tease_velocity_weave.mp4",
-      "seconds": 20,
+      "gif": "012_baby__15_tease_velocity_weave.gif",
+      "video": "012_baby__15_tease_velocity_weave.mp4",
+      "seconds": 10,
       "chapters": [],
       "featureLabel": "IDENTITY · TE SIGNS",
-      "sourceDigest": "3e608e4f56decc559d9f20d3c9bb3a0c9afc492ba18fbd6e4ef2cf60a39336bf"
+      "sourceDigest": "600e920da9743ffa4eec822b7714d93326df5144a152023f8160ec3bf9bdc12f"
+    },
+    {
+      "index": 12,
+      "pattern": "baby/81_tease_balance_beam",
+      "title": "Baby Tease - Balance Beam",
+      "goal": "Balance Beam: exact Baby Blue and Baby Pink occupy complementary spatial bowls separated by a crisp black transfer boundary, preserving equal authority without RGB interpolation.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderBalance",
+          "label": "Balance",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Balance character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderTransferWidth",
+          "label": "Transfer Width",
+          "value": 0.38,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": {
+            "slider": "sliderTransferWidth",
+            "signal": "micFlux",
+            "min": 0.24,
+            "max": 0.58,
+            "curve": "ease",
+            "note": ""
+          }
+        },
+        {
+          "name": "sliderCounterweight",
+          "label": "Counterweight",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": {
+            "slider": "sliderCounterweight",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.52,
+            "curve": "linear",
+            "note": ""
+          }
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderBalance": 0.5,
+        "sliderTransferWidth": 0.38,
+        "sliderCounterweight": 0.36,
+        "sliderLevel": 0.9
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderBalance": 0.5,
+        "sliderTransferWidth": 0.38,
+        "sliderCounterweight": 0.36,
+        "sliderLevel": 0.9
+      },
+      "gif": "013_baby__81_tease_balance_beam.gif",
+      "video": "013_baby__81_tease_balance_beam.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "6df4baf22d770a9f7b54fdd2d8f2e442c69280e58d22cf024fbbe79497ca1716"
     }
   ]
 }

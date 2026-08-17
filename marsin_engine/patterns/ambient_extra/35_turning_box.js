@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   35_turning_box.js — TURNING BOX
 
@@ -23,7 +22,6 @@
 
   CONTROLS (declaration order = physical MIDI order)
     localSpeed  — speed of the continuous rigid-body rotation.
-    direction   — genuine signed angular velocity; endpoints reverse travel.
     boxSize     — half-extent of the rotating polyhedron.
     edgeWidth   — thickness of all twelve finite wireframe edges.
     perspective — depth shear and secondary-axis tilt of the 3D projection.
@@ -33,7 +31,7 @@
   AUDIO_MODULATION_V1:
     sliderPerspective <- micFlux range 0.20..0.55 curve ease # flux opens the depth projection
     sliderCornerGlow  <- micHigh range 0.04..0.28 curve pow2 # highs illuminate the eight vertices
-  Static (unmapped) params: localSpeed, direction, boxSize, edgeWidth,
+  Static (unmapped) params: localSpeed, boxSize, edgeWidth,
     safetyFloor, colorPalette1/2.
 
   COLOR / OUTPUT
@@ -48,7 +46,6 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export var localSpeed = 0.30;
-export var direction = 0.75;
 export var boxSize = 0.54;
 export var edgeWidth = 0.42;
 export var perspective = 0.34;
@@ -56,13 +53,6 @@ export var cornerGlow = 0.20;
 export var safetyFloor = 0.27;
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) {
-  direction = v;
-  var dv = v * 2.0 - 1.0;
-  if (dv >= 0.0 && dv < 0.06) dv = 0.06;
-  else if (dv < 0.0 && dv > -0.06) dv = -0.06;
-  signedDirection = dv;
-}
 export function sliderBoxSize(v) { boxSize = v; }
 export function sliderEdgeWidth(v) { edgeWidth = v; }
 export function sliderPerspective(v) { perspective = v; }
@@ -76,7 +66,8 @@ var GOLDEN_ANGLE = 2.39996323;
 var GOLDEN_FRACTION = 0.61803399;
 
 var rotationPhase = 0.083;
-var signedDirection = 0.50;
+// Operator-locked equivalent of the former Direction control at 0.55.
+var signedDirection = 0.10;
 var cosineYaw = 1.0;
 var sineYaw = 0.0;
 var cosinePitch = 1.0;

@@ -417,3 +417,53 @@ test('an EMPTY list is a legitimate save (deleting the last pair)', async () => 
   const back = await api('GET', '/color-pairs');
   assert.deepEqual(back.data.pairs, []);
 });
+
+test('curated palette visibility is scene-owned and preserves the curated engine catalog', async () => {
+  const catalogBefore = await api('GET', '/color-palettes');
+  assert.equal(catalogBefore.status, 200);
+  const removable = catalogBefore.data.find((p) => !String(p.name || '').includes('★'));
+  assert.ok(removable, 'fixture has at least one non-starred curated palette');
+
+  const empty = await api('GET', '/color-palette-visibility');
+  assert.equal(empty.status, 200);
+  assert.deepEqual(empty.data, { hiddenPaletteIds: [] });
+
+  const saved = await api('POST', '/color-palette-visibility', {
+    hiddenPaletteIds: [removable.id],
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+  assert.deepEqual(saved.data, { hiddenPaletteIds: [removable.id] });
+
+  const back = await api('GET', '/color-palette-visibility');
+  assert.deepEqual(back.data, { hiddenPaletteIds: [removable.id] });
+  const file = path.join(stateDir, 'color_palette_visibility_state.yaml');
+  assert.deepEqual(yaml.load(fs.readFileSync(file, 'utf8')), {
+    hiddenPaletteIds: [removable.id],
+  });
+
+  const catalogAfter = await api('GET', '/color-palettes');
+  assert.deepEqual(catalogAfter.data, catalogBefore.data,
+    'hiding from the operator menu must not delete show/timeline palette ids');
+});
+
+test('curated palette visibility refuses starred, unknown and malformed ids', async () => {
+  const catalog = await api('GET', '/color-palettes');
+  const starred = catalog.data.find((p) => String(p.name || '').includes('★'));
+  assert.ok(starred, 'fixture has at least one starred palette');
+  const before = await api('GET', '/color-palette-visibility');
+
+  for (const body of [
+    { hiddenPaletteIds: [starred.id] },
+    { hiddenPaletteIds: ['definitely_missing'] },
+    { hiddenPaletteIds: [7] },
+    { hiddenPaletteIds: 'sunset_coral' },
+    {},
+  ]) {
+    const res = await api('POST', '/color-palette-visibility', body);
+    assert.equal(res.status, 400, `expected refusal for ${JSON.stringify(body)}`);
+    assert.ok(res.data.error);
+  }
+
+  const after = await api('GET', '/color-palette-visibility');
+  assert.deepEqual(after.data, before.data, 'a rejected write leaves visibility unchanged');
+});

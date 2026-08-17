@@ -667,15 +667,11 @@ export class StateManager {
           faderLocked: core.faderLocked,
           transitionMode: c.transitionMode || 'trans_crossfade',
           transitionTime: c.transitionTime || 1.0,
-          // Mixer channel PARAMETERS are NEVER persisted (operator ruling,
-          // 2026-07 auto-save wave): mixer overlays are ephemeral live
-          // tweaks, not saved show state. We emit an EMPTY localControls map
-          // (not core.localControls) so a restart restores the channel's
-          // playlist-entry defaults only — the on-disk key + its position are
-          // preserved for byte-shape compatibility, just always `{}`. The
-          // restore path (buildChannelFromSaved) mirrors this by skipping the
-          // localControls replay for the mixer role.
-          localControls: {},
+          // Mixer parameters are channel-owned show state. Persist this
+          // channel's live controls so a restart restores the saved look.
+          // Shared playlist-entry defaults remain untouched; only the explicit
+          // playlist capture route can rewrite those presets.
+          localControls: core.localControls,
           playlist: core.playlist,
           viewSelection: core.viewSelection,
           // Additive (channel_features wave): persisted AFTER the existing

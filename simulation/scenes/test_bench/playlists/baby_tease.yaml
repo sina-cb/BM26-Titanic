@@ -1,17 +1,6 @@
 schemaVersion: 1
 name: baby_tease
 entries:
-  - id: e_baby_tease_twin_lantern_tides
-    pattern: baby/47_tease_twin_lantern_tides
-    label: Baby Tease - Twin Lantern Tides
-    defaults:
-      sliderLocalSpeed: 0.43
-      sliderLevel: 0.96
-      sliderLanternFocus: 0.58
-      sliderTideDepth: 0.52
-    modulations: []
-    midiMappings: []
-    notes: Autonomous paired lantern tides; pink and blue stay equally possible.
   - id: e_baby_tease_constellation_duet
     pattern: baby/50_tease_constellation_duet
     label: Baby Tease - Constellation Duet
@@ -62,17 +51,6 @@ entries:
     notes: >-
       Autonomous pink-and-blue question; both families on the ship at once, no answer and no
       timeline.
-  - id: e_baby_tease_horizon_seesaw
-    pattern: baby/49_tease_horizon_seesaw
-    label: Baby Tease - Horizon Seesaw
-    defaults:
-      sliderLocalSpeed: 0.48
-      sliderLevel: 0.88
-      sliderHorizonWidth: 0.56
-      sliderSeesawDepth: 0.54
-    modulations: []
-    midiMappings: []
-    notes: Autonomous horizon exchange; neither family disappears or wins.
   - id: e_baby_tease_tidal_ribbons
     pattern: baby/04_tease_tidal_ribbons
     label: Baby Tease - Tidal Ribbons
@@ -81,69 +59,6 @@ entries:
       sliderLevel: 0.84
       sliderRibbonWidth: 0.56
       sliderTurbulence: 0.48
-    modulations: []
-    midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_parallax_ribbons
-    pattern: baby/48_tease_parallax_ribbons
-    label: Baby Tease - Parallax Ribbons
-    defaults:
-      sliderLocalSpeed: 0.38
-      sliderLevel: 0.86
-      sliderRibbonWidth: 0.58
-      sliderParallaxDepth: 0.66
-    modulations: []
-    midiMappings: []
-    notes: Autonomous depth-layered pink-and-blue ribbons with no implied answer.
-  - id: e_baby_tease_diamond_echo
-    pattern: baby/05_tease_diamond_echo
-    label: Baby Tease - Diamond Echo
-    defaults:
-      sliderLocalSpeed: 0.44
-      sliderLevel: 0.85
-      sliderFacetWidth: 0.52
-      sliderEchoDepth: 0.58
-    modulations: []
-    midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_reveal_crossing_question
-    pattern: baby/02_tease_crossing_question
-    label: Baby Tease - Crossing Question
-    defaults:
-      sliderLocalSpeed: 0.38
-      sliderLevel: 0.84
-      sliderBeamWidth: 0.46
-      sliderCrossing: 0.5
-    modulations: []
-    midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_lattice_bloom
-    pattern: baby/07_tease_lattice_bloom
-    label: Baby Tease - Lattice Bloom
-    defaults:
-      sliderLocalSpeed: 0.5
-      sliderLevel: 0.86
-      sliderLatticeScale: 0.46
-      sliderBloom: 0.64
-    modulations: []
-    midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_moire_gates
-    pattern: baby/08_tease_moire_gates
-    label: Baby Tease - Moire Gates
-    defaults:
-      sliderLocalSpeed: 0.53
-      sliderLevel: 0.88
-      sliderLineWidth: 0.5
-      sliderInterference: 0.6
     modulations: []
     midiMappings: []
     notes: >-
@@ -188,17 +103,6 @@ entries:
     notes: >-
       Autonomous pink-and-blue question; both families on the ship at once, no answer and no
       timeline.
-  - id: e_baby_tease_checkerboard_morph
-    pattern: baby/46_tease_checkerboard_morph
-    label: Baby Tease - Checkerboard Morph
-    defaults:
-      sliderLocalSpeed: 0.42
-      sliderLevel: 0.88
-      sliderCellScale: 0.46
-      sliderMorphDepth: 0.58
-    modulations: []
-    midiMappings: []
-    notes: Autonomous pink-and-blue question; both families remain visible together through the morph.
   - id: e_baby_tease_wave_collision
     pattern: baby/13_tease_wave_collision
     label: Baby Tease - Wave Collision
@@ -251,3 +155,17 @@ entries:
     notes: >-
       Autonomous pink-and-blue question; both families on the ship at once, no answer and no
       timeline.
+  - id: e_baby_tease_balance_beam
+    pattern: baby/81_tease_balance_beam
+    label: Baby Tease - Balance Beam
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBalance: 0.5
+      sliderTransferWidth: 0.38
+      sliderCounterweight: 0.36
+      sliderLevel: 0.9
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Exact Baby Blue and Baby Pink balance bowls share conserved energy across a crisp black
+      transfer boundary.

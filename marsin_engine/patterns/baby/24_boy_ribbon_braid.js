@@ -1,9 +1,9 @@
 // DRAFT - pending operator review
 /* Baby-blue three-strand ribbon braid. COLOR_* constants are the only girl/boy delta. */
 
-var COLOR_R_DARK = 0.008;
-var COLOR_G_DARK = 0.130;
-var COLOR_B_DARK = 0.620;
+var COLOR_R_DARK = 0.033;
+var COLOR_G_DARK = 0.450;
+var COLOR_B_DARK = 1.000;
 var COLOR_R_LIGHT = 0.033;
 var COLOR_G_LIGHT = 0.450;
 var COLOR_B_LIGHT = 1.000;
@@ -24,12 +24,19 @@ var liveWidth = 0.54;
 var liveTension = 0.56;
 
 function clamp01(v) { if (v < 0.0) return 0.0; if (v > 1.0) return 1.0; return v; }
-function emitColor(shade, bri) {
-  var s = clamp01(shade);
-  rgbwau((COLOR_R_DARK + (COLOR_R_LIGHT - COLOR_R_DARK) * s) * bri,
-         (COLOR_G_DARK + (COLOR_G_LIGHT - COLOR_G_DARK) * s) * bri,
-         (COLOR_B_DARK + (COLOR_B_LIGHT - COLOR_B_DARK) * s) * bri,
-         0.0, 0.0, 0.0);
+function emitColor(px, py, pz, shade, bri) {
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  var gate = geometry * 0.72 + energy * 0.28;
+  if (gate < 0.24 || (fixtureType != FIX_TE_SIGN && wave(px * 1.7 + py * 1.3 + pz * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.62 + energy * 0.38);
+  var r = (COLOR_R_DARK + COLOR_R_LIGHT) * 0.5;
+  var g = (COLOR_G_DARK + COLOR_G_LIGHT) * 0.5;
+  var b = (COLOR_B_DARK + COLOR_B_LIGHT) * 0.5;
+  rgbwau(r * intensity, g * intensity, b * intensity, 0.0, 0.0, 0.0);
 }
 
 export function beforeRender(delta) {
@@ -56,5 +63,5 @@ export function render3D(index, x, y, z) {
   var field = max(ribbonA, max(ribbonB, ribbonC));
   var crossing = min(1.0, ribbonA + ribbonB + ribbonC) * field;
   var bri = clamp01((0.17 + field * 0.66 + crossing * 0.15) * liveLevel);
-  emitColor(0.15 + ribbonA * 0.48 + ribbonB * 0.62 + ribbonC * 0.72, bri);
+  emitColor(x, y, z, 0.15 + ribbonA * 0.48 + ribbonB * 0.62 + ribbonC * 0.72, bri);
 }

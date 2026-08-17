@@ -35,6 +35,88 @@
   "127_grand_maelstrom": "A broad two-to-three-arm ocean mass rotates around a calm eye while the full ship remains safely visible.",
   "party_dancers/01_dom_ball_dancers": "Two dominant-frequency colors paint broad mirrored bands through both hull halves; Spin turns their shared local frame so the dancers travel through front/back depth while LOW and KICK animate only nearby Organs.",
   "party_dancers/02_dom_eq_rise": "A bottom-to-top dual-lane EQ: dominant frequency sets each luminous rise height, matching energy sets brush width and strength, and paired antipodal columns Spin smoothly around the whole ship over a living safety field.",
+  "crisp/01_orbiting_circle": {
+    "schema_version": 1,
+    "concept": "Solid endpoint-colored fireflies circle through the X/Z plane on wobbly deterministic orbits, leaving crisp finite echoes separated by black.",
+    "design_intent": "Build a deliberately non-blended visual language from solid circular bodies, exact palette endpoints, sharp antialiased edges, and strong black negative space.",
+    "why_exists": "This prototype tests whether large readable orbital motion can remain chromatically discrete: no RGB interpolation, no feedback blur, and no incidental white or specialty channels.",
+    "visual_goal_titanic": "At playa distance the Hull should read as several large moving colored discs cut from black, while the outline, stacks, pearls, and paired signs make the complete vessel legible.",
+    "unique_topology": "Five finite circular bodies use incommensurate cosine and sine wobble on normalized X/Z; each head may cast two smaller geometric echoes with explicit black gaps.",
+    "distance_silhouette": "Raw-LED strands emphasize narrow body rims and intersections so orbital geometry sharpens the recognizable ship outline instead of washing it into a field.",
+    "close_detail": "Antialiasing changes only the intensity of the winning endpoint color; overlaps use deterministic winner selection, and Jewelry contributes sparse exact-color pearls.",
+    "motion_grammar": "Every body advances smoothly along a deterministic orbit with irrationally related wobble frequencies; spacing fans their phases and trail adds finite earlier-phase echoes.",
+    "xyz_use": "Hull and Silhouette use normalized X/Z directly; Organs use local distance anchors, while Identity folds index modulo 74 into a complete paired 10x8 local sign surface.",
+    "te_sign_treatment": "Both physical TE signs render the same balanced 74-pixel local orbit plaque using index modulo 74; addresses 40 through 73 continue the surface rather than repeating 0 through 33.",
+    "jewelry_white": "Jewelry uses sparse exact Color 1 or Color 2 pearls only; native white is deliberately absent and W=A=U remain zero.",
+    "palette_white_material": "Every lit RGB pixel is a scalar multiple of exactly Color 1 or exactly Color 2. Endpoints are never mixed with each other; black is the default material and W=A=U are always zero.",
+    "safety_floor": "The saved floor is zero for strong black negative space. Raising sliderSafetyFloor adds only a low exact-endpoint visibility bed, never gray or an interpolated hue.",
+    "anti_duplication_notes": "Keep the solid endpoint-only bodies, hard black gaps, and finite echoes distinct from 36_orbital_pulse, 118_grand_orbit_rings, and party_dancers/01; do not soften this into gradients, waves, or a continuous ring field.",
+    "fixture_roles": {
+      "Hull Canvas": "Large filled X/Z circular bodies and finite separated echoes carry the primary composition.",
+      "Silhouette": "Narrow exact-color rims and deterministic intersection accents sharpen boundaries and the ship outline.",
+      "Jewelry": "Sparse moving exact-color pearls add nearby detail without white or generalized sparkle.",
+      "Organs": "Low steady endpoint anchors keep stacks and structural fixtures present beneath passing bodies.",
+      "Identity": "Both TE signs receive the same complete balanced 74-pixel local 2D orbit composition."
+    },
+    "controls": [
+      {
+        "exported_name": "sliderLocalSpeed",
+        "behavior": "Sets the smooth orbital cadence of every body and finite echo.",
+        "code_default_value": 0.3
+      },
+      {
+        "exported_name": "sliderBodyRadius",
+        "behavior": "Changes the radius of all solid antialiased circular bodies.",
+        "code_default_value": 0.56
+      },
+      {
+        "exported_name": "sliderCount",
+        "behavior": "Selects one through five active circular bodies.",
+        "code_default_value": 0.5
+      },
+      {
+        "exported_name": "sliderSpacing",
+        "behavior": "Changes inter-body phase separation and the radial fan of the orbits.",
+        "code_default_value": 0.58
+      },
+      {
+        "exported_name": "sliderTrail",
+        "behavior": "Changes the number, separation, and size of finite geometric echoes.",
+        "code_default_value": 0.46
+      },
+      {
+        "exported_name": "sliderSafetyFloor",
+        "behavior": "Raises a low endpoint-colored visibility bed from the saved black default.",
+        "code_default_value": 0
+      }
+    ],
+    "audio_handles": [],
+    "review_state": "READY FOR OPERATOR",
+    "evidence_notes": "Source, paired byte-identical playlists, offline model gates, focused exact-channel tests, parameter-truth probes, and the Global Speed 0.30 gallery provide the review evidence.",
+    "uniqueness_review": {
+      "decision": "keep_refine",
+      "duplicated_grammar": "Orbital motion exists elsewhere, but no nearby pattern commits to filled endpoint-only fireflies with winner-take-all overlaps and discrete finite echoes.",
+      "underexplored_opportunity": "Hard-edged color bodies and designed black gaps offer a readable non-blended material language that is otherwise rare in the catalog.",
+      "nearest_neighbors": [
+        {
+          "id": "36_orbital_pulse",
+          "reason": "Shares orbiting motion, but centers a pulsing orbit rather than multiple discrete filled bodies and finite echoes.",
+          "severity": "medium"
+        },
+        {
+          "id": "118_grand_orbit_rings",
+          "reason": "Shares monumental orbital geometry, but uses ring architecture rather than solid endpoint-only fireflies.",
+          "severity": "medium"
+        },
+        {
+          "id": "party_dancers/01_dom_ball_dancers",
+          "reason": "Shares paired color authority, but uses broad audio-driven bands instead of autonomous circular bodies.",
+          "severity": "low"
+        }
+      ],
+      "refinement_directive": "Preserve the exact endpoint contract, large filled circles, hard negative space, and paired sign plaque while tuning only scale, staging, and motion readability."
+    }
+  },
   "baby/01_tease_orbit_question": "Orbit Question: interlocking 3D shells carry a persistent pink/blue question. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
   "baby/02_tease_crossing_question": "Crossing Question: oblique pink/blue fans cross through the whole model. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
   "baby/03_tease_rose_question": "Rose Question: counter-wound petals and spherical shells bloom in 3D. Outcome-blind: both families share every frame, so the answer stays sealed until the operator calls it.",
@@ -115,6 +197,7 @@
   "baby/78_girl_aurora_veil": "Baby-pink aurora veil: smooth curtains fold across the hull and Identity.",
   "baby/79_girl_harbor_fireflies": "Baby-pink harbor fireflies: detailed lights drift over a dependable full-ship floor.",
   "baby/80_girl_celebration_bloom": "Baby-pink celebration bloom: sustained spatial petals create a joyful photo-hold finale.",
+  "baby/81_tease_balance_beam": "Balance Beam: exact Baby Blue and Baby Pink occupy complementary spatial bowls separated by a crisp black transfer boundary, preserving equal authority without RGB interpolation.",
   "ambient_extra/01_harbor_glass": {
     "concept": "Large slowly rearranging stained-glass cells, hairline seams, and close Jewelry refractions.",
     "design_intent": "Hold the ship inside five immense stained-glass panes whose Voronoi borders migrate almost imperceptibly, with broad colored material on the Hull, a crisp seam drawing on the Silhouette, and only rare optical catches in Jewelry.",
@@ -3975,7 +4058,7 @@
     "unique_topology": "Three finite-segment distance families cover the four X-, four Y-, and four Z-parallel edges of one cuboid, with a separate nearest-corner field for all eight signed vertices.",
     "distance_silhouette": "Several connected orthogonal edges should remain traceable as one rotating box on the Raw LED outline, including at least one readable corner junction at any moment.",
     "close_detail": "Translucent face panes, finite edge endpoints, eight palette corner gems, restrained Vintage W=A glints, and paired local cubes disclose the polyhedron.",
-    "motion_grammar": "One rigid body rotates continuously with signed direction and an irrational pitch relationship; geometry slews through edits and never multiplies or pulses in place.",
+    "motion_grammar": "One rigid body rotates continuously in the operator-fixed direction formerly selected at 0.55, with an irrational pitch relationship; geometry slews through edits and never multiplies or pulses in place.",
     "xyz_use": "Centered XYZ is depth-sheared and inverse-rotated around Y and X before face, edge, and corner distances. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
     "fixture_roles": {
       "Hull Canvas": "Broad translucent face panes crossed by box edges.",
@@ -3992,11 +4075,6 @@
         "exported_name": "sliderLocalSpeed",
         "behavior": "Sets continuous rigid-body rotation speed.",
         "code_default_value": 0.3
-      },
-      {
-        "exported_name": "sliderDirection",
-        "behavior": "Sets genuine signed angular velocity; endpoints reverse travel.",
-        "code_default_value": 0.75
       },
       {
         "exported_name": "sliderBoxSize",

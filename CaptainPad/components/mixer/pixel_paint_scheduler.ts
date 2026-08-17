@@ -202,6 +202,53 @@ function emptyStats(): PaintSchedulerStats {
 
 let _shared: PixelPaintScheduler | null = null;
 
+type PixelPaintRuntime = {
+  navigator?: { product?: string };
+  requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+  setImmediate?: (cb: () => void) => unknown;
+  performance?: { now?: () => number };
+};
+
+/** React Native exposes navigator.product = 'ReactNative' on Hermes/JSC. */
+export function isReactNativePixelPaintRuntime(runtime: PixelPaintRuntime): boolean {
+  return runtime.navigator?.product === 'ReactNative';
+}
+
+/**
+ * Build the platform's real scheduling clock. Web paints on the display frame.
+ * React Native deliberately uses the next JS turn: Expo's native rAF is tied
+ * to the UI frame loop and can defer these paints until unrelated UI work,
+ * even while fresh visualization buffers keep arriving.
+ */
+export function createPixelPaintClock(runtime: PixelPaintRuntime): PaintClock {
+  const now = runtime.performance?.now
+    ? runtime.performance.now.bind(runtime.performance)
+    : null;
+  if (now === null) {
+    throw new Error('[PixelPaintScheduler] this platform has no performance.now');
+  }
+
+  if (isReactNativePixelPaintRuntime(runtime)) {
+    const immediate = runtime.setImmediate;
+    if (typeof immediate !== 'function') {
+      throw new Error(
+        '[PixelPaintScheduler] React Native has no setImmediate — native pixel '
+        + 'views require a next-turn JS clock',
+      );
+    }
+    return { now, schedule: (cb) => { immediate(cb); } };
+  }
+
+  const raf = runtime.requestAnimationFrame;
+  if (typeof raf !== 'function') {
+    throw new Error(
+      '[PixelPaintScheduler] this browser has no requestAnimationFrame — web '
+      + 'pixel views require the display frame clock',
+    );
+  }
+  return { now, schedule: (cb) => { raf(cb); } };
+}
+
 /**
  * The ONE scheduler every band shares — sharing is the whole point, since a
  * per-band scheduler would give each canvas its own 8 ms and reinstate the
@@ -209,22 +256,7 @@ let _shared: PixelPaintScheduler | null = null;
  */
 export function sharedPixelPaintScheduler(): PixelPaintScheduler {
   if (_shared) return _shared;
-  const g = globalThis as {
-    requestAnimationFrame?: (cb: FrameRequestCallback) => number;
-    performance?: { now?: () => number };
-  };
-  const raf = g.requestAnimationFrame;
-  const now = g.performance && g.performance.now
-    ? g.performance.now.bind(g.performance)
-    : null;
-  if (typeof raf !== 'function' || now === null) {
-    throw new Error(
-      '[PixelPaintScheduler] this platform has no requestAnimationFrame / '
-      + 'performance.now — the pixel-view surfaces need a real frame clock and '
-      + 'must not paint on a substitute timer',
-    );
-  }
-  _shared = new PixelPaintScheduler({ now, schedule: (cb) => { raf(cb); } });
+  _shared = new PixelPaintScheduler(createPixelPaintClock(globalThis as PixelPaintRuntime));
   return _shared;
 }
 

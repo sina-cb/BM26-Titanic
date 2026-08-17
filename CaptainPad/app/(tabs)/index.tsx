@@ -1,14 +1,14 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, Modal, Platform, StyleSheet, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { opError, opInfo } from '@/utils/op_dialog';
-import { accentWash, useGlobalStyles, withAlpha } from '@/styles/globalStyles';
+import { accentWash, useGlobalStyles } from '@/styles/globalStyles';
 import { Radius, Space, Type } from '@/constants/theme';
-import { PANIC_AMBER } from '@/constants/identity';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
 import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
-import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
+import { GlobalParams } from '@/components/GlobalParams';
+import { ChannelSaveFeedback } from '@/components/channel_save_feedback';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
 import { DeckHueRow } from '@/components/deck_hue_row';
@@ -38,8 +38,6 @@ import {
 } from '@/utils/api';
 import { setMidiActiveContext } from '@/hooks/useMidiControl';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
-import { panicMixer } from '@/utils/channelOpsApi';
-import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { DeckOverlayStack } from '@/components/DeckOverlayStack';
 import type { DeckOverlay, DeckOverlayAutopilot } from '@/utils/deckOverlaysApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
@@ -1186,42 +1184,6 @@ export default function ControlDeckScreen() {
     }
   }, [deckChannel?.hue, deckChannelId, planGate]);
 
-  // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
-  // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
-  // gating). Previously the deck had NO panic, so recovery forced an
-  // operator to switch to the mixer tab mid-emergency. It cancels in-flight
-  // fades / transitions / deck swaps, clears blackout, brings the master up,
-  // and recalls the `home` look (or a safe LIT default). The engine
-  // broadcasts fresh state — every control on this tab reconciles from those.
-  // Fail loud: a malformed/over-cap `home` is the ONE sanctioned loud
-  // fallback (400, but the rig is STILL lit) and we Alert so the operator
-  // knows while reassuring them the exterior stays lit.
-  const [panicPrompt, setPanicPrompt] = useState(false);
-  const [panicBusy, setPanicBusy] = useState(false);
-  const confirmPanic = useCallback(async () => {
-    setPanicPrompt(false);
-    setPanicBusy(true);
-    try {
-      const res = await panicMixer(true);
-      if (!res.ok) {
-        console.error('[Deck] Panic reported a loud fallback:', res.error, res.data);
-        const rigLit = (res.data as any)?.rigLit === true;
-        opError(
-          'Panic — home look not loaded',
-          `${res.error || 'The "home" snapshot could not be recalled.'} `
-            + (rigLit
-              ? 'The rig is still LIT (blackout cleared, master up).'
-              : 'Check the engine and re-run panic.'),
-        );
-      }
-    } catch (err: any) {
-      console.error('[Deck] Panic request failed:', err);
-      opError('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
-    } finally {
-      setPanicBusy(false);
-    }
-  }, []);
-
   const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
     // Deck tab only ever writes to the deck channel — there's a single
     // dedicated route for that now. We ignore the channelId arg (kept
@@ -1251,9 +1213,8 @@ export default function ControlDeckScreen() {
           it with ONE tap-catching layer — bulletproof against any control
           (present or future) that doesn't wire its own `disabled`, which is
           exactly how the deck overlay controls slipped through before. The
-          floating PlanLockBanner (above, zIndex 1000) and the bottom safety
-          bar (PANIC/BLACKOUT, a sibling BELOW this wrapper) stay OUTSIDE the
-          scrim so emergency recovery is never locked behind a takeover. */}
+          floating PlanLockBanner (above, zIndex 1000) and the bottom global
+          effects bar (a sibling BELOW this wrapper) stay OUTSIDE the scrim. */}
       <View style={{ flex: 1, position: 'relative' }}>
       <DeckTopBar isConnected={isConnected} disabled={planGate} />
       {/* ── docs/63 W3 — the view optimizer moves under GLOBALS ─────────────
@@ -1659,7 +1620,7 @@ export default function ControlDeckScreen() {
                           so it never reflows the slider stack. The component
                           always reserves the same width/height — the inner
                           pill only fades in/out. */}
-                      <DeckSavedFlash deckChannelId={channel.id} />
+                      <ChannelSaveFeedback channelId={channel.id} />
                       {/* Color swatch (docs/39 §8.4) — taps open the accent
                           picker. The swatch fill IS the deck's current color
                           (or a hollow "no color" ring when null). Pure
@@ -1959,47 +1920,12 @@ export default function ControlDeckScreen() {
           into the narrow left playlist column (QA round2 deck fix). The
           two-pane `container` above is flex:1 so it fills the space above
           this bar and its right pane scrolls independently; this bar is
-          intrinsic-height so it never overlaps or gets cut off. The PANIC
-          (safe-lit recovery) tile mirrors the mixer's bottom-bar PANIC so an
-          operator never has to switch tabs mid-emergency (QA round8 #2). The
-          HUE shifter is omitted by the strip variant itself (it has its
+          intrinsic-height so it never overlaps or gets cut off. The HUE
+          shifter is omitted by the strip variant itself (it has its
           own deck-grid placement) — see GlobalEffectMacros `mixer-strip`. */}
       <View style={[styles.globalRigBar, { backgroundColor: C.surfaceContainerLow, borderTopColor: C.ghostBorder }]}>
-        {/* PANIC / HOME (docs/39 §6b #9) — same panicMixer handler + ConfirmSheet
-            gating as the mixer tab. Distinct AMBER so it reads as the rig's "get
-            me back to safe" button, visually separate from the GEM grid + the
-            e-stop BLACKOUT inside it. */}
-        <TouchableOpacity
-          // party 2026-07-11 — PANIC pins to the effect-chip row height (the
-          // GEM strip btnHeight: 48 landscape / 60 portrait) and bottom-aligns
-          // with the chips, instead of alignSelf:'stretch' towering over the
-          // row now that the strip's header label rides in-row.
-          style={[
-            styles.panicBtn,
-            { height: isWide ? 48 : 60, minHeight: 0, alignSelf: 'flex-end' },
-            panicBusy && { opacity: 0.5 },
-          ]}
-          onPress={() => setPanicPrompt(true)}
-          disabled={panicBusy}
-          accessibilityRole="button"
-          accessibilityLabel="Panic — reset rig to a safe lit state"
-          accessibilityState={{ disabled: panicBusy }}
-        >
-          <Text style={styles.panicBtnText}>{panicBusy ? 'PANIC…' : 'PANIC'}</Text>
-          <Text style={styles.panicBtnHint}>HOME / SAFE LIT</Text>
-        </TouchableOpacity>
         <RigGlobals variant="mixer" />
       </View>
-      {/* ── Panic / Home confirmation (docs/39 §6b #9) ──────────────── */}
-      <ConfirmSheet
-        visible={panicPrompt}
-        title="Panic to safe state?"
-        message={'Resets the rig to a safe LIT state: cancels in-flight fades, transitions and deck swaps, clears solo, un-mutes groups, brings the master up, and clears blackout. Recalls the "home" look if one is saved, otherwise a safe default. The exterior stays lit throughout.'}
-        confirmLabel="PANIC"
-        cancelLabel="CANCEL"
-        onConfirm={confirmPanic}
-        onCancel={() => setPanicPrompt(false)}
-      />
       {/* D6: floating ALL MODULATIONS overlay — rendered at the screen
           level so it draws above every card. */}
       <AllModulationsPanel
@@ -2071,42 +1997,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     flexDirection: 'row',
     alignItems: 'stretch',
-  },
-  // PANIC / HOME (docs/39 §6b #9) — deck mirror of the mixer tab's panicBtn.
-  //
-  // docs/54 row 17 FREEZES this control's colour: "the deliberate loud-amber
-  // identity is PRESERVED — this button must read identically forever". The
-  // operator finds PANIC by colour, in the dark, under pressure. So the amber
-  // does NOT become the theme-aware `warning` token like the caution chips
-  // did; it becomes the one named identity constant, `PANIC_AMBER`
-  // (constants/identity.ts) — the same hex the literals spelled, now with a
-  // name and a reason. Only the radius moves onto the scale.
-  panicBtn: {
-    minWidth: 96,
-    minHeight: 52,
-    paddingHorizontal: 14,
-    marginRight: 10,
-    borderRadius: Radius.control,
-    backgroundColor: withAlpha(PANIC_AMBER, 0.18),
-    borderWidth: 1.5,
-    borderColor: PANIC_AMBER,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'stretch',
-  },
-  panicBtnText: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 14,
-    letterSpacing: 1.2,
-    color: PANIC_AMBER,
-  },
-  panicBtnHint: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 8,
-    letterSpacing: 0.6,
-    color: PANIC_AMBER,
-    opacity: 0.8,
-    marginTop: 1,
   },
   deckSwatchBtn: {
     width: 44, height: 44, borderRadius: Radius.control,

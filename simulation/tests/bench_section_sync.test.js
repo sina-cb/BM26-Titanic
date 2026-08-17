@@ -117,14 +117,13 @@ test('derived/volatile state is STRIPPED — no bench ids or push receipts cross
 });
 
 test('fixtures are docked beside the ship, not left inside the hull', () => {
-  const dock = { x: 45, y: 0, z: 0 };
-  const { block } = deriveBenchSection({ source: realBench(), dock });
+  const { block } = deriveBenchSection({ source: realBench() });
   const bench = realBench();
   const srcPar1 = bench.sceneConfig.parLights.fixtures.find((f) => f.name === 'Par 1');
   const outPar1 = block.fixtures.find((f) => f.name === 'TB Par 1');
-  assert.equal(outPar1.x, srcPar1.x + dock.x);
+  assert.equal(outPar1.x, srcPar1.x + block.dock.x);
   assert.equal(outPar1.y, srcPar1.y);
-  // Titanic's own fixtures top out at x ≈ 33.7 — the dock must clear them.
+  // The default dock must clear the current authoritative hull extent.
   const titanicMaxX = Math.max(...realTitanic().sceneConfig.parLights.fixtures.map((f) => f.x));
   assert.ok(Math.min(...block.fixtures.map((f) => f.x)) > titanicMaxX,
     'docked bench overlaps the ship');
@@ -220,7 +219,9 @@ test('REFUSES: controllers.yaml IP disagrees with patches.yaml', () => {
 
 test('REFUSES: a patched fixture no chain reaches (orphan patch record)', () => {
   const src = clone(realBench());
-  src.patches.patches['TE Sign V3 A'].dmxUniverse = 4;
+  const parPort = src.controllers.controllers[0].ports.find((port) =>
+    port.chain.some((entry) => entry.fixture === 'Par 1'));
+  parPort.chain = parPort.chain.filter((entry) => entry.fixture !== 'Par 1');
   assert.ok(codes(checkSourceIntegrity(src)).includes('SRC_ORPHAN_PATCH'));
 });
 
@@ -268,10 +269,21 @@ test('placeholder sentinel WARNS but does not block sim-side derivation', () => 
 
 // ── 4. Target compatibility ─────────────────────────────────────────────────
 
-test('the real titanic scene can accept the block today (no collisions)', () => {
+test('the real titanic scene loudly refuses the current U10/U12 bench-block collisions', () => {
   const { block } = deriveBenchSection({ source: realBench() });
   const findings = checkTargetCompatibility({ block, target: realTitanic() });
-  assert.deepEqual(refusals(findings), []);
+  const reserved = refusals(findings).filter((finding) =>
+    finding.code === 'TGT_UNIVERSE_RESERVED');
+  assert.deepEqual(reserved.map((finding) => finding.scope), [
+    'Left Back Wall 3',
+    'Left Back Wall 4',
+    'Left SmokeStack 1',
+    'Left SmokeStack 2',
+    'Left SmokeStack 3',
+    'Left SmokeStack 4',
+  ]);
+  assert.equal(refusals(findings).length, reserved.length,
+    'the current target should be blocked only by the known universe plan');
 });
 
 // The budget is PER WORD (report _137 §2). `viewMask` (word 0) and
@@ -448,19 +460,24 @@ test('a re-push updating device.lastPush in the bench does NOT trip parity', () 
 
 // ── 6. CLI contract ─────────────────────────────────────────────────────────
 
-test('CLI: default emit against the real scenes exits 0 and reports parity=absent', () => {
+test('CLI: default check refuses the current target universe collisions', () => {
   const { code, stdout } = runTool(['--check', '--json', '--quiet']);
-  assert.equal(code, 0);
+  assert.equal(code, 4);
   const report = JSON.parse(stdout);
-  assert.equal(report.ok, true);
-  assert.equal(report.parity, 'absent');
+  assert.equal(report.ok, false);
+  assert.equal(report.headline, "target scene 'titanic' cannot accept the block as derived");
+  assert.deepEqual(report.findings.filter((finding) =>
+    finding.severity === SEVERITY_REFUSE).map((finding) => finding.code),
+  Array(6).fill('TGT_UNIVERSE_RESERVED'));
   assert.deepEqual(report.summary.universes, [1, 2, 10, 12]);
 });
 
-test('CLI: --require-applied fails (exit 3) while Phase B has not applied the block', () => {
+test('CLI: --require-applied cannot bypass target compatibility (exit 4)', () => {
   const { code, stdout } = runTool(['--check', '--require-applied', '--json', '--quiet']);
-  assert.equal(code, 3);
-  assert.equal(JSON.parse(stdout).ok, false);
+  assert.equal(code, 4);
+  const report = JSON.parse(stdout);
+  assert.equal(report.ok, false);
+  assert.equal(report.headline, "target scene 'titanic' cannot accept the block as derived");
 });
 
 test('CLI: --apply refuses — applying is Phase B, not this tool\'s job yet', () => {

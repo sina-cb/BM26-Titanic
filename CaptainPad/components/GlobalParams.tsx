@@ -1,15 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { setDeckChannelControl, sendControl } from '@/utils/api';
+import { opError } from '@/utils/op_dialog';
+import { engineEvents } from '@/utils/engineEvents';
 import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/useEngineState';
 import { ModulatedSlider, useEntryModulations, useModulationState, prettySliderName } from '@/components/Modulation';
 import { useEntryMidiMappings } from '@/components/MidiMap';
-import { engineEvents } from '@/utils/engineEvents';
-import { isDeckSaveConfirmation } from '@/components/deck_saved_logic';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { ParamRow, ParamValueText } from '@/components/ui/param_row';
@@ -100,7 +100,16 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   // much an operator tuned a slider. See `rejectIfWrongRole` in
   // api_server.js.
   const writeLocal = (controlId: number, v0: number, v1?: number, v2?: number) => {
-    setDeckChannelControl(controlId, v0, v1, v2);
+    if (!engineEvents.send({ type: 'setControl', id: controlId, v0, v1, v2 })) {
+      void setDeckChannelControl(controlId, v0, v1, v2).then((result) => {
+        if (!result.ok) {
+          opError(
+            'Parameters not saved',
+            result.error || 'The engine rejected the deck parameter update.',
+          );
+        }
+      });
+    }
   };
 
   if (exps.length === 0) return (
@@ -117,8 +126,8 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           operator request — no duplicate speed/hue UI.) */}
       {/* Saved indicator moved to the deck channel card header (next
           to the ◎ ALL pill) in `app/(tabs)/index.tsx` so it never
-          reflows the slider stack when it appears/disappears. The
-          `DeckSavedFlash` component is exported from this file. */}
+          reflows the slider stack when it appears/disappears. Deck and Mixer
+          now share `ChannelSaveFeedback`. */}
       {sliderRows.map((row) => {
         const e = row.export as any;
         const badge = knobBadgeFor(row);
@@ -250,70 +259,6 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 // call sites reading as they did.
 const NotKnobMappedBadge = NotKnobMappedChip;
 const MatchedBadge = MatchedChip;
-
-// ── Saved flash (deck-only) ─────────────────────────────────────────
-//
-// Tiny ✓ SAVED pill that briefly appears whenever the deck's params are
-// PERSISTED. Two engine events mean that (see isDeckSaveConfirmation):
-//   - `deckParamsSaved` — a deck LOCAL-PARAM write hit deck_state.yaml. Emitted
-//     by the deck control-write paths ONLY when auto-save is ON, so with
-//     auto-save OFF the flash honestly never fires (nothing was saved). This is
-//     the signal for the operator's day-to-day "I moved a slider" confirmation
-//     (the debounced auto-capture that used to drive it was retired 2026-07-07;
-//     the honest persistence signal is now the deck save itself).
-//   - `playlistEntryCaptured` — an explicit / on-switch capture wrote the deck's
-//     params into the active playlist entry's defaults.
-// Mirrors the "✓ SAVED" badge in PlaylistPanel so operators get the same signal
-// no matter which pane they were watching.
-
-export function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (!deckChannelId) return;
-    return engineEvents.subscribe((m) => {
-      if (isDeckSaveConfirmation(m, deckChannelId)) {
-        setSavedAt(Date.now());
-      }
-    });
-  }, [deckChannelId]);
-  useEffect(() => {
-    if (savedAt === null) return;
-    const t = setTimeout(() => setSavedAt(null), 1400);
-    return () => clearTimeout(t);
-  }, [savedAt]);
-  // Always render the same outer shape so siblings (EntryLabelEditor,
-  // ◎ ALL pill) never re-flow when the flash toggles. The inner pill
-  // is hidden via opacity rather than conditional render — same DOM,
-  // same measured width/height regardless of state.
-  const visible = savedAt !== null;
-  return (
-    <View
-      style={{
-        minWidth: 70,
-        minHeight: 22,
-        justifyContent: 'center',
-        alignItems: 'flex-start',
-      }}
-    >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 4,
-          paddingHorizontal: 8,
-          paddingVertical: 2,
-          borderRadius: 4,
-          backgroundColor: 'rgba(0,168,107,0.15)',
-          opacity: visible ? 1 : 0,
-        }}
-      >
-        <Text style={{ color: '#00a86b', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6 }}>
-          ✓ SAVED
-        </Text>
-      </View>
-    </View>
-  );
-}
 
 function MatchedButton({ name, cpcLabel }: { name: string; cpcLabel?: string }) {
   const C = usePalette();

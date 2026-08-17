@@ -32,10 +32,29 @@ import {
   BANKS_UI_ENABLED,
   type EffectBanksState,
   chunkStripPages,
+  effectSurfacePolicy,
 } from './global_effect_macros_logic';
 
 const empty = (slotId: number): SlotBindingLike & { slotId: number } => ({
   slotId, effectId: '', enabled: false, active: false,
+});
+
+describe('effectSurfacePolicy — Performance is trigger-only', () => {
+  it('removes every configuration path while keeping bound effects live', () => {
+    expect(effectSurfacePolicy(true)).toEqual({
+      configurationVisible: false,
+      boundEffectsTriggerable: true,
+      emptySlotsInteractive: false,
+    });
+  });
+
+  it('restores the complete authoring surface in Edit mode', () => {
+    expect(effectSurfacePolicy(false)).toEqual({
+      configurationVisible: true,
+      boundEffectsTriggerable: true,
+      emptySlotsInteractive: true,
+    });
+  });
 });
 
 // ── Multi-bank effects UX — SHELVED (BANKS_UI_ENABLED) ───────────────────────

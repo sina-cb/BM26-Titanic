@@ -54,7 +54,13 @@ export function sliderTipGlow(v) { tipGlow = v; }
 export function sliderBaseDarkness(v) { baseDarkness = v; }
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
-var CURRENT_RATE = 0.16;   // current turns/sec at localSpeed = 1
+var CURRENT_RATE = 0.16;   // current turns/sec before the composed-rate limiter
+// Global Speed already scales delta by 0.25x..4x. Local Speed then spans
+// 0.125x..8x, so their legal product can reach 32x. Smooth phase budgets keep
+// that composition expressive without allowing the current or phosphorescent
+// tips to alias into a strobe at the top-right corner of both controls.
+var MAX_CURRENT_STEP = 0.00275;  // <= 0.11 current turns/sec at 40 fps
+var MAX_FLICKER_STEP = 0.00900;  // <= 0.36 tip cycles/sec at 40 fps
 var PHASE_WRAP = 10000.0;
 
 // Optional accent role: canonical append-only id from
@@ -117,11 +123,17 @@ export function beforeRender(delta) {
   // Radius owns reach only; the current advances forward at a fixed heading.
   swayAmp = 0.10 + radius * 0.62;
 
-  current = current + dt * localMultiplier * CURRENT_RATE;
+  var rawCurrentStep = dt * localMultiplier * CURRENT_RATE;
+  var currentRatio = rawCurrentStep / MAX_CURRENT_STEP;
+  var currentStep = rawCurrentStep / sqrt(1.0 + currentRatio * currentRatio);
+  current = current + currentStep;
   if (current >= PHASE_WRAP) current = current - PHASE_WRAP;
-  flicker = flicker + dt * localMultiplier * CURRENT_RATE * 5.3;
+  var rawFlickerStep = currentStep * 5.3;
+  var flickerRatio = rawFlickerStep / MAX_FLICKER_STEP;
+  var flickerStep = rawFlickerStep / sqrt(1.0 + flickerRatio * flickerRatio);
+  flicker = flicker + flickerStep;
   if (flicker >= PHASE_WRAP) flicker = flicker - PHASE_WRAP;
-  tide = tide + dt * localMultiplier * CURRENT_RATE * 0.073;
+  tide = tide + currentStep * 0.073;
   if (tide >= PHASE_WRAP) tide = tide - PHASE_WRAP;
 
   tCurrent = current * 6.2831853;

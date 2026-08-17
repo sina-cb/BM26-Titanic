@@ -82,8 +82,7 @@ export function toggledEngineSettings(prev: EngineSettingsState): EngineSettings
  */
 export function autoSaveHint(autoSave: boolean): string {
   return autoSave
-    ? 'All deck tuning, playlists, and mixer/global state persist automatically ' +
-      '(mixer channel parameters are never saved).'
+    ? 'Deck tuning, mixer channel tuning, playlists, and global state persist automatically.'
     : 'Nothing persists until you save explicitly — a restart reverts to the last save.';
 }
 

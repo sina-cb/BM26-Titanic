@@ -475,3 +475,185 @@ entries:
     modulations: []
     midiMappings: []
     notes: null
+  - id: e_ambient_extra_01_harbor_glass
+    pattern: ambient_extra/01_harbor_glass
+    label: Harbor Glass
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCellSize: 0.5
+      sliderBorderWidth: 0.28
+      sliderDrift: 0.35
+      sliderRefraction: 0.42
+      sliderJewelryGlint: 0.22
+      sliderSafetyFloor: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_02_brass_compass
+    pattern: ambient_extra/02_brass_compass
+    label: Brass Compass
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderDialRadius: 0.6
+      sliderNeedleWidth: 0.28
+      sliderTickGlow: 0.3
+      sliderLevel: 0.58
+      sliderSafetyFloor: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_03_pearl_chain
+    pattern: ambient_extra/03_pearl_chain
+    label: Pearl Chain
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderPearlCount: 0.48
+      sliderPearlSize: 0.32
+      sliderLinkGlow: 0.24
+      sliderFocusTravel: 0.72
+      sliderJewelryWhite: 0.76
+      sliderSafetyFloor: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_05_open_gate
+    pattern: ambient_extra/05_open_gate
+    label: Open Gate
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderAperture: 0.58
+      sliderEdgeWidth: 0.24
+      sliderHold: 0.46
+      sliderDepth: 0.56
+      sliderLevel: 0.66
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_07_keel_glow
+    pattern: ambient_extra/07_keel_glow
+    label: Keel Glow
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderKeelWidth: 0.38
+      sliderLift: 0.34
+      sliderTraceLength: 0.54
+      sliderOrganGlow: 0.38
+      sliderLevel: 0.62
+      sliderSafetyFloor: 0.32
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_09_shadow_slats
+    pattern: ambient_extra/09_shadow_slats
+    label: Shadow Slats
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.74
+      sliderSlatCount: 0.48
+      sliderOpen: 0.47
+      sliderTilt: 0.58
+      sliderRimGlow: 0.24
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_10_chart_lines
+    pattern: ambient_extra/10_chart_lines
+    label: Chart Lines
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLineCount: 0.48
+      sliderLineWidth: 0.36
+      sliderRelief: 0.42
+      sliderDrift: 0.38
+      sliderJewelryMark: 0.2
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_11_paper_fold
+    pattern: ambient_extra/11_paper_fold
+    label: Paper Fold
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCreaseCount: 0.48
+      sliderFoldAngle: 0.42
+      sliderCreaseWidth: 0.18
+      sliderFacetDepth: 0.58
+      sliderLevel: 0.68
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_12_floating_frames
+    pattern: ambient_extra/12_floating_frames
+    label: Floating Frames
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.76
+      sliderFrameCount: 0.46
+      sliderFrameWidth: 0.19
+      sliderDepth: 0.48
+      sliderTwist: 0.44
+      sliderLevel: 0.7
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_16_turning_tiles
+    pattern: ambient_extra/16_turning_tiles
+    label: Turning Tiles
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderTileSize: 0.56
+      sliderFaceDepth: 0.4
+      sliderFaceHold: 0.64
+      sliderGrout: 0.46
+      sliderJewelryCatch: 0.26
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_17_frost_branch
+    pattern: ambient_extra/17_frost_branch
+    label: Frost Branch
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBranchCount: 0.52
+      sliderGrowth: 0.58
+      sliderHold: 0.46
+      sliderMelt: 0.34
+      sliderJewelryIce: 0.18
+      sliderSafetyFloor: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_22_balance_beam
+    pattern: ambient_extra/22_balance_beam
+    label: Balance Beam
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBalance: 0.5
+      sliderTransferWidth: 0.38
+      sliderSettle: 0.62
+      sliderCounterweight: 0.36
+      sliderLevel: 0.64
+      sliderSafetyFloor: 0.34
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_35_turning_box
+    pattern: ambient_extra/35_turning_box
+    label: Turning Box
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBoxSize: 0.54
+      sliderEdgeWidth: 0.42
+      sliderPerspective: 0.34
+      sliderCornerGlow: 0.2
+      sliderSafetyFloor: 0.27
+    modulations: []
+    midiMappings: []
+    notes: null

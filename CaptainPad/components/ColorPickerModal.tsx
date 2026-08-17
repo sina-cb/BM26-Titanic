@@ -23,7 +23,29 @@ import { View, Text, TextInput, TouchableOpacity, Pressable, Modal, ScrollView }
 import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { useSharedParamValues } from '@/hooks/useEngineState';
-import { getCachedColorPalettes, updateParamCenter, warmColorPalettesCache } from '@/utils/api';
+import {
+  fetchColorPairs,
+  fetchColorPaletteVisibility,
+  getCachedColorPalettes,
+  saveColorPairs,
+  saveColorPaletteVisibility,
+  updateParamCenter,
+  warmColorPalettesCache,
+} from '@/utils/api';
+import { opConfirm, opError, opInfo, opPrompt } from '@/utils/op_dialog';
+import {
+  addPalettePreset,
+  buildPalettePreset,
+  normalizeColorPairs,
+  PRESET_NAME_MAX,
+  type PalettePreset,
+} from '@/components/deck/colors_window_logic';
+import {
+  buildColorPresetLibrary,
+  canRemoveColorPalette,
+  type ColorPalettePreset,
+  type MenuColorPalettePreset,
+} from '@/components/color_preset_library';
 
 // Picker policy: hue-only. Every write pins S=V=1.0.
 const FULL_S = 1;
@@ -46,12 +68,7 @@ const TRANSITION_MAX_S = 10;
 // tap-to-dismiss after the operator has stopped dragging.
 const DRAG_DISMISS_GUARD_MS = 300;
 
-export type ColorPalettePreset = {
-  id: string;
-  name: string;
-  c1: number;
-  c2: number;
-};
+export type { ColorPalettePreset } from '@/components/color_preset_library';
 
 type Tab = 'presets' | 'manual';
 
@@ -72,7 +89,13 @@ export function ColorPickerModal({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [h1, setH1] = useState(initialH1);
   const [h2, setH2] = useState(initialH2);
-  const [presets, setPresets] = useState<ColorPalettePreset[]>(() => getCachedColorPalettes());
+  const [presets, setPresets] = useState<MenuColorPalettePreset[]>(() => (
+    buildColorPresetLibrary(getCachedColorPalettes(), [], [])
+  ));
+  const [savedPresets, setSavedPresets] = useState<PalettePreset[]>([]);
+  const [hiddenPaletteIds, setHiddenPaletteIds] = useState<string[]>([]);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [editingPresets, setEditingPresets] = useState(false);
 
   // Baseline captured on open — what tap-outside / CANCEL reverts to,
   // since the Manual tab writes live while you drag.
@@ -110,33 +133,50 @@ export function ColorPickerModal({
       setH1(initialH1Ref.current);
       setH2(initialH2Ref.current);
       setTab(initialTabRef.current);
+      setEditingPresets(false);
       baselineRef.current = { h1: initialH1Ref.current, h2: initialH2Ref.current };
       setTransText(formatSeconds(colorTransitionMsRef.current));
     }
     // Initial* and colorTransitionMs are read via refs (latest value at the
     // moment the modal opens) so they are intentionally NOT dependencies —
     // we seed only when `visible` flips, never on a live broadcast.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  // Cache-first preset load (warmed at app boot in _layout.tsx); also
-  // kick a background refresh on open so a transient empty cache
-  // self-heals and operator edits to config.yaml's colorPalettes show
-  // up without an app restart.
+  const rebuildPresetMenu = useCallback((saved: PalettePreset[], hidden: string[]) => {
+    setSavedPresets(saved);
+    setHiddenPaletteIds(hidden);
+    setPresets(buildColorPresetLibrary(getCachedColorPalettes(), saved, hidden));
+  }, []);
+
+  // The preset chooser is the union of the curated show catalog and the
+  // scene-owned palettes saved from the COLORS workspace. Both are refreshed
+  // on every open so a save/delete made anywhere appears here immediately.
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      const cached = getCachedColorPalettes();
-      if (cached.length > 0 && presets.length === 0 && !cancelled) setPresets(cached);
-      const next = await warmColorPalettesCache({ force: presets.length === 0 && cached.length === 0 });
+      await warmColorPalettesCache({ force: getCachedColorPalettes().length === 0 });
+      const [savedResult, visibilityResult] = await Promise.all([
+        fetchColorPairs(),
+        fetchColorPaletteVisibility(),
+      ]);
       if (cancelled) return;
-      if (Array.isArray(next) && next.length > 0 && (presets.length === 0 || next !== presets)) {
-        setPresets(next);
+      if (!savedResult.ok || !visibilityResult.ok) {
+        const reason = savedResult.ok ? visibilityResult.error : savedResult.error;
+        setPresetError(reason || 'engine unreachable');
+        return;
+      }
+      try {
+        const saved = normalizeColorPairs(savedResult.data);
+        const hidden = visibilityResult.data?.hiddenPaletteIds ?? [];
+        rebuildPresetMenu(saved, hidden);
+        setPresetError(null);
+      } catch (error: any) {
+        setPresetError(error?.message || String(error));
       }
     })();
     return () => { cancelled = true; };
-  }, [visible, presets]);
+  }, [visible, rebuildPresetMenu]);
 
   // ── Live writers ────────────────────────────────────────────────────
   // Atomic dual-write so the engine broadcasts one sharedParams update
@@ -180,6 +220,102 @@ export function ColorPickerModal({
     writeColors(p.c1, p.c2);
     onClose();
   }, [writeColors, onClose, cancelLiveWrite]);
+
+  const saveCurrentPreset = useCallback(async () => {
+    const draft = buildPalettePreset({ c1: h1, c2: h2, name: '' });
+    const probe = addPalettePreset(savedPresets, draft);
+    if (!probe.ok) {
+      opError('Palette not saved', probe.reason);
+      return;
+    }
+    let name: string | null;
+    try {
+      name = await opPrompt({
+        title: 'Save colour preset',
+        message: 'This saves the current A/B pair into the shared COLORS preset menu on every iPad.',
+        placeholder: 'unnamed',
+        maxLength: PRESET_NAME_MAX,
+        submitLabel: 'SAVE PRESET',
+        swatches: [`hsl(${Math.round(h1 * 360)}, 100%, 50%)`, `hsl(${Math.round(h2 * 360)}, 100%, 50%)`],
+      });
+    } catch (error: any) {
+      opError('Could not ask for a palette name', error?.message || String(error));
+      return;
+    }
+    if (name === null) return;
+    const next = addPalettePreset(savedPresets, {
+      ...draft,
+      ...(name.trim() ? { name: name.trim() } : {}),
+    });
+    if (!next.ok) {
+      opError('Palette not saved', next.reason);
+      return;
+    }
+    const result = await saveColorPairs(next.presets);
+    if (!result.ok) {
+      opError('Palette not saved', result.error || 'engine unreachable');
+      return;
+    }
+    try {
+      const saved = normalizeColorPairs(result.data);
+      rebuildPresetMenu(saved, hiddenPaletteIds);
+      setPresetError(null);
+      setEditingPresets(false);
+      setTab('presets');
+      opInfo('Palette saved', 'It is now available in the shared COLORS preset menu.');
+    } catch (error: any) {
+      setPresetError(error?.message || String(error));
+      opError('Palette saved but could not be displayed', error?.message || String(error));
+    }
+  }, [h1, h2, savedPresets, hiddenPaletteIds, rebuildPresetMenu]);
+
+  const removePreset = useCallback(async (preset: MenuColorPalettePreset) => {
+    if (!canRemoveColorPalette(preset)) return;
+    let confirmed = false;
+    try {
+      confirmed = await opConfirm({
+        title: 'Remove colour preset?',
+        message: preset.source === 'saved'
+          ? `Delete "${preset.name}" from the shared preset menu on every iPad?`
+          : `Hide "${preset.name}" from the shared operator menu? The engine keeps it available for authored shows.`,
+        confirmLabel: 'REMOVE',
+      });
+    } catch (error: any) {
+      opError('Could not confirm palette removal', error?.message || String(error));
+      return;
+    }
+    if (!confirmed) return;
+
+    if (preset.source === 'saved') {
+      if (preset.savedIndex === null || !savedPresets[preset.savedIndex]) {
+        opError('Palette not removed', 'The saved palette list changed. Reopen COLORS and try again.');
+        return;
+      }
+      const next = savedPresets.filter((_, index) => index !== preset.savedIndex);
+      const result = await saveColorPairs(next);
+      if (!result.ok) {
+        opError('Palette not removed', result.error || 'engine unreachable');
+        return;
+      }
+      try {
+        rebuildPresetMenu(normalizeColorPairs(result.data), hiddenPaletteIds);
+        opInfo('Palette removed', `Deleted "${preset.name}" from every iPad.`);
+      } catch (error: any) {
+        setPresetError(error?.message || String(error));
+      }
+      return;
+    }
+
+    const nextHidden = [...hiddenPaletteIds, preset.id];
+    const result = await saveColorPaletteVisibility(nextHidden);
+    if (!result.ok) {
+      opError('Palette not removed', result.error || 'engine unreachable');
+      return;
+    }
+    const hidden = result.data?.hiddenPaletteIds ?? nextHidden;
+    rebuildPresetMenu(savedPresets, hidden);
+    opInfo('Palette removed', `Hidden "${preset.name}" from the shared operator menu.`);
+  }, [savedPresets, hiddenPaletteIds, rebuildPresetMenu]);
 
   // Commit the TRANSITION field to the engine (parse seconds → ms). On
   // non-numeric input, restore the field from the live engine value and
@@ -243,8 +379,41 @@ export function ColorPickerModal({
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14, textTransform: 'uppercase' }}>
               Colours
             </Text>
-            <DualSwatch h1={h1} h2={h2} size={44} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              {tab === 'presets' && hasPresets ? (
+                <TouchableOpacity
+                  onPress={() => setEditingPresets((value) => !value)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: editingPresets }}
+                  accessibilityLabel={editingPresets ? 'Finish editing color presets' : 'Edit color presets'}
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 7,
+                    borderRadius: 7,
+                    borderWidth: 1,
+                    borderColor: editingPresets ? C.primary : C.ghostBorder,
+                    backgroundColor: editingPresets ? C.primaryContainer : C.surface,
+                  }}
+                >
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold',
+                    color: editingPresets ? C.primary : C.secondary,
+                    fontSize: 10,
+                    letterSpacing: 0.6,
+                  }}>
+                    {editingPresets ? 'DONE' : 'EDIT'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              <DualSwatch h1={h1} h2={h2} size={44} />
+            </View>
           </View>
+
+          {presetError ? (
+            <Text style={{ color: C.error, fontFamily: 'Inter_400Regular', fontSize: 10, marginBottom: 10 }}>
+              {`Saved presets unavailable: ${presetError}`}
+            </Text>
+          ) : null}
 
           {/* ── Tab bar (only shown if we actually have presets) ───── */}
           {hasPresets ? (
@@ -256,7 +425,12 @@ export function ColorPickerModal({
 
           {/* ── Tab body ───────────────────────────────────────────── */}
           {tab === 'presets' && hasPresets ? (
-            <PresetsTab presets={presets} onPick={pickPreset} />
+            <PresetsTab
+              presets={presets}
+              editing={editingPresets}
+              onPick={pickPreset}
+              onRemove={(preset) => { void removePreset(preset); }}
+            />
           ) : (
             <ManualTab
               h1={h1}
@@ -277,9 +451,27 @@ export function ColorPickerModal({
 
           {/* ── Footer (Manual-only — presets apply on tap) ───────── */}
           {tab === 'manual' || !hasPresets ? (
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, alignItems: 'center', gap: 8 }}>
               <TouchableOpacity onPress={cancel} style={{ padding: 12 }}>
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary }}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { void saveCurrentPreset(); }}
+                disabled={presetError !== null}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: presetError !== null }}
+                style={{
+                  borderWidth: 1,
+                  borderColor: C.primary,
+                  paddingHorizontal: 12,
+                  paddingVertical: 12,
+                  borderRadius: 8,
+                  opacity: presetError !== null ? 0.45 : 1,
+                }}
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 11 }}>
+                  SAVE PRESET
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={apply}
@@ -364,34 +556,65 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
  * curated name. Tap applies BOTH hues and dismisses — one tap is the
  * whole interaction (the engine fades to the new pair).
  */
-function PresetsTab({ presets, onPick }: { presets: ColorPalettePreset[]; onPick: (p: ColorPalettePreset) => void }) {
+function PresetsTab({ presets, editing = false, onPick, onRemove }: {
+  presets: ColorPalettePreset[];
+  editing?: boolean;
+  onPick: (p: ColorPalettePreset) => void;
+  onRemove?: (p: MenuColorPalettePreset) => void;
+}) {
   const C = usePalette();
   return (
     <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
-      {presets.map((p) => (
-        <TouchableOpacity
-          key={p.id}
-          onPress={() => onPick(p)}
-          style={{
-            width: '47%',
-            paddingVertical: 12, paddingHorizontal: 10,
-            borderRadius: 10, borderWidth: 1, borderColor: C.ghostBorder,
-            backgroundColor: C.surface,
-            alignItems: 'center', gap: 8,
-          }}
-          accessibilityLabel={`Apply ${p.name} palette`}
-          accessibilityRole="button"
-        >
-          <DualSwatch h1={p.c1} h2={p.c2} size={48} />
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: C.text, textTransform: 'uppercase', letterSpacing: 0.5,
-            textAlign: 'center',
-          }} numberOfLines={1}>
-            {p.name}
-          </Text>
-        </TouchableOpacity>
-      ))}
+      {presets.map((p) => {
+        const menuPreset = 'source' in p ? p as MenuColorPalettePreset : null;
+        const removable = menuPreset ? canRemoveColorPalette(menuPreset) : false;
+        return (
+          <TouchableOpacity
+            key={p.id}
+            onPress={() => {
+              if (editing) {
+                if (menuPreset && removable) onRemove?.(menuPreset);
+                return;
+              }
+              onPick(p);
+            }}
+            disabled={editing && !removable}
+            style={{
+              width: '47%',
+              paddingVertical: 12, paddingHorizontal: 10,
+              borderRadius: 10, borderWidth: 1,
+              borderColor: editing && removable ? C.error : C.ghostBorder,
+              backgroundColor: C.surface,
+              alignItems: 'center', gap: 8,
+              opacity: editing && !removable ? 0.58 : 1,
+            }}
+            accessibilityLabel={editing
+              ? removable ? `Remove ${p.name} palette` : `${p.name} palette is protected`
+              : `Apply ${p.name} palette`}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: editing && !removable }}
+          >
+            <DualSwatch h1={p.c1} h2={p.c2} size={48} />
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+              color: C.text, textTransform: 'uppercase', letterSpacing: 0.5,
+              textAlign: 'center',
+            }} numberOfLines={1}>
+              {p.name}
+            </Text>
+            {editing ? (
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 9,
+                color: removable ? C.error : C.secondary,
+                letterSpacing: 0.6,
+              }}>
+                {removable ? 'REMOVE' : '\u2605 LOCKED'}
+              </Text>
+            ) : null}
+          </TouchableOpacity>
+        );
+      })}
     </ScrollView>
   );
 }

@@ -132,8 +132,12 @@ export function beforeRender(delta) {
   liveAlignment += (alignment - liveAlignment) * geometryFollow;
   liveSafetyFloor += (safetyFloor - liveSafetyFloor) * lightFollow;
 
-  var localMultiplier = 0.25 + clamp01(localSpeed)
-    * (32.824 - 16.412 * clamp01(localSpeed));
+  // Recalibrated after operator review: Local Speed 0.30 now equals the old
+  // 0.10 motion, and the upper third is capped so the filing field can never
+  // become an unreadably fast spin.
+  var speedControl = min(clamp01(localSpeed) / 3.0, 0.24);
+  var localMultiplier = 0.25 + speedControl
+    * (32.824 - 16.412 * speedControl);
   fieldClock += dt * (0.010 + localMultiplier * 0.031);
   if (fieldClock >= PHASE_WRAP) fieldClock -= PHASE_WRAP;
 

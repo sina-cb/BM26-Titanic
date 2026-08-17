@@ -57,8 +57,8 @@ const crypto = require('crypto');
 /** Namespace prefix: keeps bench groups/sections/views distinct in the target. */
 const BENCH_PREFIX = 'TB ';
 
-/** Default dock: beside the ship's hull (titanic spans x -31.5..33.6). */
-const DEFAULT_DOCK = { x: 45, y: 0, z: 0 };
+/** Default dock: beside the current ship hull (titanic fixtures reach x=45.4541). */
+const DEFAULT_DOCK = { x: 50, y: 0, z: 0 };
 
 /** Placeholder controller sentinel (report §2, "fail-loud placeholder rules"). */
 const SENTINEL_IP = '0.0.0.0';

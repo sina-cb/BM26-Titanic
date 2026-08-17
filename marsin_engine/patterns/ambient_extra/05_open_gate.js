@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   05_open_gate.js — OPEN GATE
 

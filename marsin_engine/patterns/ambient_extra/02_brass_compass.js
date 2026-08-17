@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   02_brass_compass.js — "Brass Compass"
 

@@ -217,6 +217,13 @@ export function render3D(index, x, y, z) {
   var ce = cloudAtShaped(nx, ny, nz, eCx, eCy, eCz, ePulse, 1.34, 0.42);
   var cloud = ca + cb * 0.92 + cc * 0.86 + cd * 0.78 + ce * 0.74;
   var density = clamp01(cloud * ink * 3.90);
+  // A white wet edge exists only where two independent dye-cloud boundaries
+  // meet. The colored interiors stay saturated and the empty water stays dark.
+  var rimA = clamp01(1.0 - abs(ca - 0.28) * 5.2);
+  var rimB = clamp01(1.0 - abs(cb - 0.28) * 5.2);
+  var rimC = clamp01(1.0 - abs(cc - 0.28) * 5.2);
+  var wetCollision = max(min(rimA, rimB), max(min(rimB, rimC), min(rimC, rimA)));
+  wetCollision = pow(wetCollision, 2.6);
 
   var wet = wave(waterT + nx * 0.19 + ny * 0.11 - nz * 0.13);
   var waterBri = 0.020 + base * (0.35 + 0.65 * wet)
@@ -255,6 +262,7 @@ export function render3D(index, x, y, z) {
   // Both TE signs contain the same two-fixture pixelLocalIndex topology. This
   // makes the dye motion exactly symmetric between signs while retaining the
   // letter geometry and giving every cell a reliable illuminated floor.
+  var signWetEdge = 0.0;
   if (fixtureType == FIX_TE_SIGN) {
     var signPos = pixelLocalIndex / 39.0;
     var signBloomA = wave(signT * 0.29 + signPos * 0.83 + 0.07);
@@ -263,6 +271,7 @@ export function render3D(index, x, y, z) {
                       + signBloomA * 0.18);
     var signDye = clamp01(signBloomA * 0.58 + signBloomB * 0.42);
     signDye = clamp01(signDye * (0.78 + signVein * 0.38));
+    signWetEdge = pow(clamp01(1.0 - abs(signBloomA - signBloomB) * 4.2), 3.0);
 
     bri = 0.24 + base * 0.55 + flow * 0.13
         + ink * (0.10 + signDye * 0.43);
@@ -276,13 +285,14 @@ export function render3D(index, x, y, z) {
 
   // Vintage rails receive palette-derived droplets. W and A are always
   // driven together; no third authored RGB tint is introduced.
-  var ww = 0.0;
+  var ww = signWetEdge * ink * 0.075;
   if (fixtureType == FIX_VINTAGE_6) {
     var sparkle = wave(vintageT + pixelLocalIndex * 0.381966
                      + nx * 0.17 + ny * 0.11);
     sparkle = sparkle * sparkle;
     sparkle = sparkle * sparkle;
-    var droplet = density * sparkle * (0.22 + ink * 0.78);
+    var droplet = density * sparkle * (0.16 + ink * 0.56)
+                + wetCollision * (0.18 + ink * 0.82);
     var dropBlend = clamp01(0.22 + cloudFamily * 0.66);
     r = r + (pr1 + (pr2 - pr1) * dropBlend) * droplet * 0.62;
     g = g + (pg1 + (pg2 - pg1) * dropBlend) * droplet * 0.62;

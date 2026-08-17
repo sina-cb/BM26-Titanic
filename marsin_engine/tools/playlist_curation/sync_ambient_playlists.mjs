@@ -9,58 +9,10 @@ const REPO_ROOT = path.resolve(ENGINE_DIR, '..');
 const SCENES = ['titanic', 'test_bench'];
 const DIAGNOSTIC_PLAYLISTS = new Set(['calibration.yaml', 'dirty_probe.yaml', 'mix_show.yaml']);
 
-export const THEMES = Object.freeze({
-  ambient_sea: [
-    '00_golden_hour_wash', '08_ocean_liner', '122_breathing_horizon',
-    '32_caustic_shimmer', '14_lunar_current', '16_ghost_tide_uv',
-    '21_pelagic_manta_rays', '45_manta_drift', '11_bioluminescence',
-    '44_biolume_swell', '22_abyssal_sway_garden', '46_abyssal_fronds',
-    '57_ink_diffuse', '127_grand_maelstrom', '121_spiral_wake',
-    '120_crossing_beacons', '58_lighthouse_solo', '43_golden_hour_pulse',
-  ],
-  ambient_shore: [
-    '00_golden_hour_wash', '07_shimmer', '32_caustic_shimmer',
-    '14_lunar_current', '119_bow_stern_tidal_push',
-    '123_mirrored_broadside_call', '16_ghost_tide_uv', '35_sparkle_rain',
-    '122_breathing_horizon', '13_sparkle', '33_aurora_breath',
-    '124_aurora_crown', '120_crossing_beacons', '58_lighthouse_solo',
-    '08_ocean_liner', '43_golden_hour_pulse',
-  ],
-  ambient_stars: [
-    '13_sparkle', '35_sparkle_rain', '18_deep_space_lattice',
-    '20_parametric_sway_field', '118_grand_orbit_rings',
-    '125_eclipse_orbit', '14_lunar_current', '33_aurora_breath',
-    '124_aurora_crown', '120_crossing_beacons', '58_lighthouse_solo',
-    '121_spiral_wake', '127_grand_maelstrom', '57_ink_diffuse',
-    '12_breathing', '00_golden_hour_wash',
-  ],
-  ambient_burn: [
-    '00_golden_hour_wash', '43_golden_hour_pulse', '07_shimmer',
-    '13_sparkle', '35_sparkle_rain', '41_reaction_diffusion',
-    '124_aurora_crown', '123_mirrored_broadside_call',
-    '119_bow_stern_tidal_push', '12_breathing',
-    '126_cathedral_rib_wave', '57_ink_diffuse', '125_eclipse_orbit',
-    '44_biolume_swell', '33_aurora_breath', '122_breathing_horizon',
-  ],
-  ambient_titanic: [
-    '00_golden_hour_wash', '08_ocean_liner', '58_lighthouse_solo',
-    '120_crossing_beacons', '123_mirrored_broadside_call',
-    '119_bow_stern_tidal_push', '126_cathedral_rib_wave',
-    '02_phase_cathedral', '118_grand_orbit_rings', '121_spiral_wake',
-    '127_grand_maelstrom', '14_lunar_current', '21_pelagic_manta_rays',
-    '44_biolume_swell', '125_eclipse_orbit', '13_sparkle', '07_shimmer',
-    '43_golden_hour_pulse',
-  ],
-  ambient_tidal_architecture: [
-    '119_bow_stern_tidal_push', '123_mirrored_broadside_call',
-    '122_breathing_horizon', '126_cathedral_rib_wave', '02_phase_cathedral',
-    '19_swaying_lattice_ballet', '41_reaction_diffusion',
-    '32_caustic_shimmer', '14_lunar_current', '16_ghost_tide_uv',
-    '57_ink_diffuse', '12_breathing', '118_grand_orbit_rings',
-    '121_spiral_wake', '20_parametric_sway_field',
-    '120_crossing_beacons', '58_lighthouse_solo', '127_grand_maelstrom',
-  ],
-});
+// Canonical Ambient is the only curated static nighttime playlist. The former
+// sea/shore/stars/burn/Titanic/tidal subsets duplicated it without creating a
+// distinct operator experience, so the synchronizer must never recreate them.
+export const THEMES = Object.freeze({});
 
 function playlistDir(scene) {
   return path.join(REPO_ROOT, 'simulation', 'scenes', scene, 'playlists');

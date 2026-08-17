@@ -38,6 +38,7 @@ import {
 } from '@/components/Modulation';
 import { Radius } from '@/constants/theme';
 import { readableInk, useGlobalStyles } from '@/styles/globalStyles';
+import { opError } from '@/utils/op_dialog';
 
 // Ink for anything FILLED with MOD_GREEN. Derived once (docs/54 §1.1: a
 // fixed accent never hardcodes its ink) instead of the '#fff' literals this
@@ -107,6 +108,8 @@ export const AllModulationsPanel: React.FC<Props> = ({
   // panel stays viewable but CLEAR ALL / per-row edit/toggle/delete go inert.
   const perfLocked = usePerfLock();
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const modulationLive = useModulationState();
@@ -116,23 +119,43 @@ export const AllModulationsPanel: React.FC<Props> = ({
 
   // Initial / on-tick fetch.
   useEffect(() => {
-    if (!visible || !playlistName) { setEntries([]); return; }
+    if (!visible || !playlistName) {
+      setEntries([]);
+      setLoading(false);
+      setLoadError(null);
+      return;
+    }
     let cancelled = false;
-    fetchPlaylistByName(playlistName).then((r) => {
-      if (cancelled) return;
-      if (!r.ok || !r.data) { setEntries([]); return; }
-      const raw = (r.data.entries || []) as any[];
-      setEntries(raw.map((e) => ({
-        id: e.id,
-        pattern: e.pattern,
-        label: e.label ?? null,
-        // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
-        // engine + the deck popover) so the readout never shows a dead mode.
-        modulations: Array.isArray(e.modulations)
-          ? e.modulations.map((m: ModulationMapping) => ({ ...m, mode: migrateModulationMode(m.mode) }))
-          : [],
-      })));
-    });
+    setLoading(true);
+    setLoadError(null);
+    fetchPlaylistByName(playlistName)
+      .then((r) => {
+        if (cancelled) return;
+        if (!r.ok || !r.data) {
+          setEntries([]);
+          setLoadError(r.error || `Could not load ${playlistName}`);
+          setLoading(false);
+          return;
+        }
+        const raw = (r.data.entries || []) as any[];
+        setEntries(raw.map((e) => ({
+          id: e.id,
+          pattern: e.pattern,
+          label: e.label ?? null,
+          // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
+          // engine + the deck popover) so the readout never shows a dead mode.
+          modulations: Array.isArray(e.modulations)
+            ? e.modulations.map((m: ModulationMapping) => ({ ...m, mode: migrateModulationMode(m.mode) }))
+            : [],
+        })));
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setEntries([]);
+        setLoadError(error instanceof Error ? error.message : `Could not load ${playlistName}`);
+        setLoading(false);
+      });
     return () => { cancelled = true; };
   }, [visible, playlistName, tick]);
 
@@ -186,7 +209,11 @@ export const AllModulationsPanel: React.FC<Props> = ({
 
   const handleToggle = useCallback(async (entryId: string, m: ModulationMapping) => {
     if (!playlistName) return;
-    await patchModulation(playlistName, entryId, m.id, { enabled: !m.enabled });
+    const result = await patchModulation(playlistName, entryId, m.id, { enabled: !m.enabled });
+    if (!result.ok) {
+      opError('Modulation not updated', result.error || 'The engine rejected the modulation change.');
+      return;
+    }
     refresh();
   }, [playlistName, refresh]);
 
@@ -195,7 +222,11 @@ export const AllModulationsPanel: React.FC<Props> = ({
   // recreate; the friction of a modal dialog was not worth the safety.
   const handleDelete = useCallback(async (entryId: string, m: ModulationMapping) => {
     if (!playlistName) return;
-    await deleteModulation(playlistName, entryId, m.id);
+    const result = await deleteModulation(playlistName, entryId, m.id);
+    if (!result.ok) {
+      opError('Modulation not removed', result.error || 'The engine rejected the modulation removal.');
+      return;
+    }
     refresh();
   }, [playlistName, refresh]);
 
@@ -206,9 +237,15 @@ export const AllModulationsPanel: React.FC<Props> = ({
   // is recoverable by tapping the per-slider ◎ to recreate.
   const handleClearAll = useCallback(async (entryId: string, mappings: ModulationMapping[]) => {
     if (!playlistName || mappings.length === 0) return;
-    await Promise.all(
+    const results = await Promise.all(
       mappings.map((m) => deleteModulation(playlistName, entryId, m.id)),
     );
+    const failed = results.find((result) => !result.ok);
+    if (failed) {
+      opError('Modulations not cleared', failed.error || 'The engine rejected at least one modulation removal.');
+      refresh();
+      return;
+    }
     refresh();
   }, [playlistName, refresh]);
 
@@ -282,7 +319,20 @@ export const AllModulationsPanel: React.FC<Props> = ({
         ))}
       </View>
     );
-  }, [activeEntryId, liveActive, handleRowTap, handleToggle, handleDelete, handleClearAll, perfLocked]);
+  }, [
+    activeEntryId,
+    liveActive,
+    handleRowTap,
+    handleToggle,
+    handleDelete,
+    handleClearAll,
+    perfLocked,
+    C.error,
+    C.ghostBorder,
+    C.secondary,
+    C.surfaceContainerHigh,
+    C.text,
+  ]);
 
   if (!visible) return null;
 
@@ -353,6 +403,30 @@ export const AllModulationsPanel: React.FC<Props> = ({
                 No playlist loaded on the deck.
               </Text>
             </View>
+          ) : loading ? (
+            <View style={{ padding: 32, alignItems: 'center' }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.secondary,
+                textAlign: 'center', letterSpacing: 0.6,
+              }}>
+                LOADING ALL MODULATIONS...
+              </Text>
+            </View>
+          ) : loadError ? (
+            <View style={{ padding: 32, alignItems: 'center', gap: 8 }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.error,
+                textAlign: 'center',
+              }}>
+                MODULATIONS UNAVAILABLE
+              </Text>
+              <Text style={{
+                fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary,
+                textAlign: 'center',
+              }}>
+                {loadError}
+              </Text>
+            </View>
           ) : totals.mappings === 0 ? (
             <View style={{ padding: 32, alignItems: 'center', gap: 8 }}>
               <Text style={{
@@ -383,7 +457,10 @@ export const AllModulationsPanel: React.FC<Props> = ({
               initialNumToRender={12}
               maxToRenderPerBatch={12}
               windowSize={7}
-              removeClippedSubviews
+              // Entry cards have different heights because each pattern owns
+              // a different number of mappings. Native iPad clipping guesses
+              // those offsets incorrectly and silently drops later rows.
+              removeClippedSubviews={false}
               nestedScrollEnabled
             />
           )}

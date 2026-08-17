@@ -178,6 +178,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // deck/mixer state it confirms. Never emitted while auto-save is OFF (nothing
   // hits disk, so there is nothing to confirm).
   deckParamsSaved:             TOPICS.CONTROL,
+  // Mixer LOCAL-PARAM persistence result. These are channel-scoped and only
+  // emitted after a strict mixer_state write was attempted. Performance mode,
+  // auto-save OFF, and non-owner edit sessions emit neither event because no
+  // persistence was attempted.
+  channelParamsSaved:          TOPICS.CONTROL,
+  channelParamsSaveFailed:     TOPICS.CONTROL,
   // F-A: named mixer snapshots / look recall. Broadcast on save / delete /
   // recall so every CaptainPad mirrors the snapshot library + a recalled
   // look. Operator-driven, low volume → /ws/control next to mixer/deck.

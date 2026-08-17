@@ -97,6 +97,9 @@ const EXPECTED_TOPIC_BY_TYPE = {
   playlistDeleted:             'control',
   channelPlaylistData:         'control',
   playlistEntryCaptured:       'control',
+  deckParamsSaved:             'control',
+  channelParamsSaved:          'control',
+  channelParamsSaveFailed:     'control',
   // round-2 #10: mixer undo ring depth/top broadcast.
   undoState:                   'control',
   paramRejected:               'control',

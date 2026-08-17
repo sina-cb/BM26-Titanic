@@ -59,7 +59,7 @@ import {
 } from '@/components/deck/colors_window_layout';
 import {
   getCachedColorPalettes, warmColorPalettesCache,
-  updateParamCenter, fetchColorPairs, saveColorPairs,
+  updateParamCenter, fetchColorPairs, fetchColorPaletteVisibility, saveColorPairs,
 } from '@/utils/api';
 import type { DeckColorAutopilotConfig } from '@/utils/api';
 import { opError, opPrompt } from '@/utils/op_dialog';
@@ -89,6 +89,7 @@ import {
   type RetuneField,
 } from '@/components/deck/colors_window_logic';
 import { accentWash } from '@/styles/globalStyles';
+import { filterCuratedColorPaletteMenu } from '@/components/color_preset_library';
 
 // Live-apply throttle — the SAME 33 ms the COLORS picker modal uses, matched to
 // the engine's sharedParams broadcast debounce.
@@ -758,13 +759,24 @@ export function ColorsWindow({
 
   // ── Show palette (the curated config.yaml library) ────────────────────
   const [showLibrary, setShowLibrary] = useState(false);
+  const [hiddenLibraryIds, setHiddenLibraryIds] = useState<string[]>([]);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
   const [, setLibVersion] = useState(0);
   useEffect(() => {
     let alive = true;
-    void warmColorPalettesCache().then(() => { if (alive) setLibVersion((v) => v + 1); });
+    void Promise.all([warmColorPalettesCache(), fetchColorPaletteVisibility()]).then(([, visibility]) => {
+      if (!alive) return;
+      if (!visibility.ok) {
+        setLibraryError(visibility.error || 'palette visibility unavailable');
+        return;
+      }
+      setHiddenLibraryIds(visibility.data?.hiddenPaletteIds ?? []);
+      setLibraryError(null);
+      setLibVersion((v) => v + 1);
+    });
     return () => { alive = false; };
   }, []);
-  const library = getCachedColorPalettes();
+  const library = filterCuratedColorPaletteMenu(getCachedColorPalettes(), hiddenLibraryIds);
 
   // ── SCHEME GENERATORS (docs/55 §2.1) ──────────────────────────────────
   // A tap is MOMENTARY: it paints the five colours, flashes for 260 ms and
@@ -1656,7 +1668,7 @@ export function ColorsWindow({
       }}>
         {/* 1. Live Touch samples — badges are DERIVED from the live slots. */}
         <View style={{ gap: 6 }}>
-          {label('Live touch samples')}
+          {label('Colour samples · build A/B')}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
             {LIVE_TOUCH_SWATCHES.map((sw) => {
               // The badge asks "is this chip's HUE, pinned, one of the slots?" —
@@ -1675,7 +1687,7 @@ export function ColorsWindow({
             })}
           </View>
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.icon }}>
-            {`Tap loads into slot ${wheelLabels[armed]}. S+V are pinned, so a chip lands as its HUE at full brightness — the chip keeps its true Live Touch colour and the badge tracks the hue.`}
+            {`COLOUR ${wheelLabels[armed]} is armed. Tap a sample to put it there, arm the other slot, choose its sample, then SAVE PALETTE. The saved pair appears in the main COLORS preset menu on every iPad.`}
           </Text>
         </View>
 
@@ -1780,9 +1792,11 @@ export function ColorsWindow({
             </View>
           ) : null}
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.icon }}>
-            {pairSurface
-              ? 'A tap loads BOTH hues — c1 into A, c2 into B.'
-              : 'A tap drops c1 into the armed slot and c2 into the next one, then moves on. Three taps fill all five.'}
+            {libraryError
+              ? `Show palette unavailable — ${libraryError}.`
+              : pairSurface
+                ? 'A tap loads BOTH hues — c1 into A, c2 into B.'
+                : 'A tap drops c1 into the armed slot and c2 into the next one, then moves on. Three taps fill all five.'}
           </Text>
         </View>
       </View>

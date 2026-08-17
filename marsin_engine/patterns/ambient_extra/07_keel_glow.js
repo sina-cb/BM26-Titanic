@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   07_keel_glow.js — KEEL GLOW
 
@@ -150,7 +149,10 @@ export function render3D(index, x, y, z) {
   // Shallow parabolic underbody: low amidships, lifting at bow and stern.
   var centeredX = nx * 2.0 - 1.0;
   var keelHeight = 0.105 + centeredX * centeredX * 0.185;
-  var width = 0.035 + liveKeelWidth * 0.155;
+  // The high end reaches a genuinely broad underbody wash while the low end
+  // remains a fine keel line. This is intentionally wider than the original
+  // 0.19 maximum so the operator has useful full-range control at distance.
+  var width = 0.035 + liveKeelWidth * 0.210;
   var keelDistance = abs(ny - keelHeight);
   var keelCore = smooth01(1.0 - keelDistance / width);
   var keelHalo = smooth01(1.0 - keelDistance / (width * 2.65));
@@ -232,7 +234,7 @@ export function render3D(index, x, y, z) {
     var signCenteredX = signX * 2.0 - 1.0;
     var signKeelHeight = 0.18 + signCenteredX * signCenteredX * 0.17;
     var signLine = smooth01(1.0 - abs(signY - signKeelHeight)
-                                  / (0.075 + liveKeelWidth * 0.10));
+                                  / (0.075 + liveKeelWidth * 0.14));
     var signTraceDistance = abs(signX - windowCenter);
     var signTrace = smooth01(1.0 - signTraceDistance / traceRadius);
     var signRelief = wave(signY * 0.37 + signX * 0.29

@@ -155,18 +155,39 @@ function correlation(a, b) {
   return numerator / Math.sqrt(varianceA * varianceB);
 }
 
-test('Live display orientation is a pure projection of authoritative 3D coordinates', () => {
+test('Live display orientation preserves authoritative 3D axes beneath authored offsets', () => {
   const artifact = buildArtifact();
-  const top = findView(artifact, 'top_down').panels[0].glyphs;
+  const authoredViews = yaml.load(fs.readFileSync(PIXEL_MAP_PATH, 'utf8')).views;
+  const removeOffsets = (glyphs, viewId) => {
+    const view = authoredViews.find((candidate) => candidate.id === viewId);
+    assert.ok(view, `authored view '${viewId}' must exist`);
+    return glyphs.map((glyph) => {
+      const offset = view.offsets?.[glyph.fixtureKey];
+      return {
+        ...glyph,
+        x: glyph.x - (offset?.dx ?? 0),
+        y: glyph.y - (offset?.dy ?? 0),
+      };
+    });
+  };
+
+  const topGlyphs = findView(artifact, 'top_down').panels[0].glyphs;
+  assert.ok(topGlyphs.some((glyph) => {
+    const offset = authoredViews.find((view) => view.id === 'top_down')
+      .offsets?.[glyph.fixtureKey];
+    return (offset?.dx ?? 0) !== 0 || (offset?.dy ?? 0) !== 0;
+  }), 'the test must exercise the operator-authored offset feature');
+  const top = removeOffsets(topGlyphs, 'top_down');
   assert.ok(correlation(top.map((glyph) => glyph.x), top.map((glyph) => glyph.world.nx)) > 0.999);
   assert.ok(correlation(top.map((glyph) => glyph.y), top.map((glyph) => glyph.world.nz)) > 0.999,
     'Aerial-facing +Z/front must be consistently down-screen on both hulls');
 
   for (const panel of findView(artifact, 'front').panels) {
-    assert.ok(correlation(panel.glyphs.map((glyph) => glyph.x),
-      panel.glyphs.map((glyph) => glyph.world.nx)) > 0.998);
-    assert.ok(correlation(panel.glyphs.map((glyph) => glyph.y),
-      panel.glyphs.map((glyph) => glyph.world.ny)) < -0.995);
+    const glyphs = removeOffsets(panel.glyphs, 'front');
+    assert.ok(correlation(glyphs.map((glyph) => glyph.x),
+      glyphs.map((glyph) => glyph.world.nx)) > 0.998);
+    assert.ok(correlation(glyphs.map((glyph) => glyph.y),
+      glyphs.map((glyph) => glyph.world.ny)) < -0.995);
   }
 
   for (const panel of findView(artifact, 'te_sign').panels) {

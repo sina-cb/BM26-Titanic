@@ -23,7 +23,7 @@
  *   --source <scene>   source scene, read-only          (default: test_bench)
  *   --target <scene>   scene the block is destined for  (default: titanic)
  *   --prefix <str>     namespace prefix                 (default: "TB ")
- *   --dock <x,y,z>     dock offset beside the ship      (default: 45,0,0)
+ *   --dock <x,y,z>     dock offset beside the ship      (default: 50,0,0)
  *   --out <path>       write the block YAML here        (default: stdout)
  *   --check            compare-only: no output file; report target parity state
  *   --require-applied  under --check, an ABSENT block is a failure (Phase B gate)

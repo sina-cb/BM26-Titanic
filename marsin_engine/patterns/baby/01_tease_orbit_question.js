@@ -5,6 +5,12 @@
   W=A=U=0. Handles: speed, level, ring thickness, spatial depth.
 */
 
+var BABY_BLUE_R = 0.033;
+var BABY_BLUE_G = 0.450;
+var BABY_BLUE_B = 1.000;
+var BABY_PINK_R = 1.000;
+var BABY_PINK_G = 0.035;
+var BABY_PINK_B = 0.360;
 export var localSpeed = 0.34;
 export var level = 0.82;
 export var ringWidth = 0.54;
@@ -23,8 +29,8 @@ function clamp01(v) { return min(1.0, max(0.0, v)); }
 export function beforeRender(delta) {
   var dt = min(0.1, max(0.0, delta / 1000.0));
   var localMult = pow(2.0, (clamp01(localSpeed) - 0.5) * 4.0);
-  orbitPhase = orbitPhase + dt * 0.19 * localMult;
-  questionPhase = questionPhase + dt * 0.11 * localMult;
+  orbitPhase = orbitPhase + dt * 0.22 * localMult;
+  questionPhase = questionPhase + dt * 0.13 * localMult;
   if (orbitPhase >= 10000.0) orbitPhase = orbitPhase - 10000.0;
   if (questionPhase >= 10000.0) questionPhase = questionPhase - 10000.0;
 }
@@ -48,9 +54,37 @@ export function render3D(index, x, y, z) {
   var dominance = 0.82 + 0.18 * wave(questionPhase + familyBlue * 0.5);
   var shade = clamp01(0.22 + field * 0.65 + detail * 0.18);
   var bri = clamp01((0.16 + field * (0.62 + depth * 0.24) + detail * 0.14) * clamp01(level) * dominance);
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  if (fixtureType == FIX_TE_SIGN) {
+    var signAddress = index % 74.0;
+    if (signAddress % 9.0 < 1.0) {
+      rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+      return;
+    }
+    var signIntensity = clamp01(0.56 + energy * 0.38
+                                + wave(signAddress * 0.37) * 0.06);
+    familyBlue = signAddress % 2.0;
+    if (familyBlue) {
+      rgbwau(BABY_BLUE_R * signIntensity, BABY_BLUE_G * signIntensity,
+             BABY_BLUE_B * signIntensity, 0.0, 0.0, 0.0);
+    } else {
+      rgbwau(BABY_PINK_R * signIntensity, BABY_PINK_G * signIntensity,
+             BABY_PINK_B * signIntensity, 0.0, 0.0, 0.0);
+    }
+    return;
+  }
+  var gate = geometry * 0.70 + energy * 0.30;
+  if (gate < 0.16 || (fixtureType != FIX_TE_SIGN && wave(x * 1.7 + y * 1.3 + z * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.55 + energy * 0.45);
   if (familyBlue) {
-    rgbwau((0.010 + shade * 0.025) * bri, (0.16 + shade * 0.30) * bri, (0.64 + shade * 0.36) * bri, 0.0, 0.0, 0.0);
+    rgbwau(BABY_BLUE_R * intensity, BABY_BLUE_G * intensity,
+           BABY_BLUE_B * intensity, 0.0, 0.0, 0.0);
   } else {
-    rgbwau((0.64 + shade * 0.36) * bri, (0.010 + shade * 0.025) * bri, (0.18 + shade * 0.18) * bri, 0.0, 0.0, 0.0);
+    rgbwau(BABY_PINK_R * intensity, BABY_PINK_G * intensity,
+           BABY_PINK_B * intensity, 0.0, 0.0, 0.0);
   }
 }

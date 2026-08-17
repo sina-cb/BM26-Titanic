@@ -1,4 +1,3 @@
-// DRAFT — pending operator review
 /*
   01_harbor_glass.js — HARBOR GLASS
 

@@ -227,12 +227,19 @@ export function render3D(index, x, y, z) {
 
   if (fixtureType == FIX_BAR_18) {
     rolePulse = lantern1;
-    // Large beveled panes keep Hull breathing broad rather than flat.
+    // Large beveled panes carry three fixture-local wick ribbons. The broad
+    // role handoff remains the main grammar, while each 18-pixel bar now has
+    // enough counter-moving internal life to read as glass rather than a flat
+    // block. pixelLocalIndex makes the detail repeat intentionally per bar.
     var hullFacet = 0.5 + 0.5 * cos((x * 1.7 + y * 0.8 - z * 1.2) * PI2
                                   + phase1 * 0.35);
     hullFacet = smooth01(hullFacet);
-    material = 0.70 + hullFacet * 0.30 + materialBias;
-    colorMix = 0.30 + hullFacet * 0.14;
+    var barU = ((pixelLocalIndex % 18.0) + 0.5) / 18.0;
+    var wickA = pow(0.5 + 0.5 * cos((barU * 2.0 - phase1 * 0.82) * PI2), 5.0);
+    var wickB = pow(0.5 + 0.5 * cos((barU * 3.0 + phase2 * 0.47) * PI2), 7.0);
+    var glassRib = smooth01(0.58 * wickA + 0.42 * wickB);
+    material = 0.48 + hullFacet * 0.24 + glassRib * 0.38 + materialBias;
+    colorMix = 0.22 + hullFacet * 0.12 + glassRib * 0.24;
   } else if (fixtureType == FIX_RAW_LED) {
     rolePulse = lantern2;
     // A cool edge sheen travels along the direct-view outline without

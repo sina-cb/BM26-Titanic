@@ -68,6 +68,7 @@ export interface ParamChipProps {
   accessibilityLabel?: string;
   accessibilityHint?: string;
   style?: StyleProp<ViewStyle>;
+  hitSlop?: { top: number; bottom: number; left: number; right: number };
 }
 
 // A tapped chip is a small target inside a dense stack; hitSlop lifts the
@@ -76,7 +77,7 @@ export interface ParamChipProps {
 const CHIP_HIT_SLOP = { top: 14, bottom: 14, left: 8, right: 8 } as const;
 
 export function ParamChip({
-  label, accent, tone, neutral, onPress, disabled, accessibilityLabel, accessibilityHint, style,
+  label, accent, tone, neutral, onPress, disabled, accessibilityLabel, accessibilityHint, style, hitSlop,
 }: ParamChipProps) {
   const m = useParamRowMetrics();
   const colors = paramChipColors(tone, accent, neutral);
@@ -125,7 +126,7 @@ export function ParamChip({
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.7}
-      hitSlop={CHIP_HIT_SLOP}
+      hitSlop={hitSlop ?? CHIP_HIT_SLOP}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}

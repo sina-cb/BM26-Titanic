@@ -180,9 +180,9 @@ export function beforeRender(delta) {
 
   var localMultiplier = 0.25 + clamp01(localSpeed)
     * (32.824 - 16.412 * clamp01(localSpeed));
-  // At the saved ambient speed, a 40-second review now reveals three held
-  // signals and two folds while every state still receives a long calm dwell.
-  poseClock += dt * 0.092 * localMultiplier;
+  // The saved 0.30 tune now crosses multiple heraldic poses during a short
+  // review while retaining a calm golden-ratio dwell between each fold.
+  poseClock += dt * 0.145 * localMultiplier;
   if (poseClock >= PHASE_WRAP) poseClock -= PHASE_WRAP;
 
   var poseStep = floor(poseClock);
@@ -309,7 +309,19 @@ export function render3D(index, x, y, z) {
   var brightness = floorLevel + (1.0 - floorLevel)
                  * clamp01(faceEnergy + edgeEnergy);
 
-  if (fixtureType == FIX_RAW_LED) {
+  if (fixtureType == FIX_BAR_18) {
+    // Each physical 18-pixel bar becomes a small woven flag: two narrow
+    // counter-moving threads travel inside the broad face without changing
+    // the finite panel/glyph identity. This makes close-range Hull activity
+    // legible even during the held part of a pose.
+    var barU = ((pixelLocalIndex % 18.0) + 0.5) / 18.0;
+    var warp = pow(0.5 + 0.5 * cos((barU * 2.0 - poseClock * 0.73) * PI2), 7.0);
+    var weft = pow(0.5 + 0.5 * cos((barU * 3.0 + poseClock * SQRT2) * PI2), 9.0);
+    var wovenEdge = max(warp, weft) * flagBody;
+    brightness = clamp01(brightness + wovenEdge
+                         * (0.10 + liveEdgeGlow * 0.24));
+    paletteMix = clamp01(paletteMix + (warp - weft) * 0.16);
+  } else if (fixtureType == FIX_RAW_LED) {
     // The Silhouette is the outer signal frame: bright borders and creases,
     // with a lit bed between them so the vessel outline never disappears.
     brightness = floorLevel + (1.0 - floorLevel)

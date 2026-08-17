@@ -507,13 +507,22 @@ test('the shipped titanic Baby Reveal show validates and has the operator flow',
   // The three canonical playlists, and nothing else.
   assert.deepEqual(showPlaylistNames(show), ['baby_tease', 'baby_girl', 'baby_boy']);
 
-  // BLACKOUT is a real stage that rides the grand master down — never the
-  // e-stop blackout.
+  // The historically named BLACKOUT stage now holds a neutral full-rig white
+  // source at the 10% master safety floor — never the e-stop blackout and
+  // never pitch black show choreography.
   const blackout = show.stages[1];
-  assert.equal(blackout.actions.length, 1);
+  assert.equal(blackout.actions.length, 2);
   assert.deepEqual(
-    { type: blackout.actions[0].type, target: blackout.actions[0].target },
-    { type: 'masterFade', target: 0 });
+    blackout.actions.map(action => ({
+      type: action.type,
+      effectId: action.effectId,
+      state: action.state,
+      target: action.target,
+    })),
+    [
+      { type: 'effect', effectId: 'blastWhite', state: true, target: undefined },
+      { type: 'masterFade', effectId: undefined, state: undefined, target: 0.1 },
+    ]);
 
   // REVEAL is a two-variant choice, and each variant flashes BEFORE its
   // playlist lands — the ordering is authored data, so assert it as data.
@@ -522,18 +531,19 @@ test('the shipped titanic Baby Reveal show validates and has the operator flow',
   assert.equal(reveal.ceremonial, true);
   assert.deepEqual(reveal.choices.map(c => c.id), ['girl', 'boy']);
   for (const choice of reveal.choices) {
-    const flash = choice.actions.find(a => a.type === 'effect' && a.effectId === 'blastWhite');
+    const flash = choice.actions.find(a => a.type === 'effect'
+      && a.effectId === 'blastWhite' && Number.isFinite(a.holdMs));
     const playlist = choice.actions.find(a => a.type === 'playlist');
     assert.ok(flash, `${choice.id} has no white flash`);
     assert.ok(playlist, `${choice.id} activates no playlist`);
     assert.ok(flash.delayMs < playlist.delayMs,
       `${choice.id}: the flash must start BEFORE the playlist swap`);
-    assert.ok(flash.delayMs + flash.holdMs > playlist.delayMs,
+    assert.ok(flash.delayMs + flash.holdMs >= playlist.delayMs,
       `${choice.id}: the flash must still be up when the playlist lands, so the swap hides under it`);
 
     // THE SOFT EXIT: the answer colour BLOOMS out of white through the full
     // 1 s playlist transition instead of exposing a half-landed swap.
-    assert.equal(flash.releaseMs, 800, `${choice.id}: the reveal flash must bloom out`);
+    assert.equal(flash.releaseMs, 1000, `${choice.id}: the reveal flash must bloom out`);
     assert.equal(flash.releaseTo, 'show',
       `${choice.id}: 'dark' would decay to black over the answer colour`);
 

@@ -66,9 +66,9 @@ test('the pattern picker offers BACKGROUNDS (ambient playlist) and INSTRUMENTS, 
   // handler and the ARM stage step skip refreshLiveExports() when the
   // staged selection is a background (the ONLY way local controls are
   // learned), so hiding is free and total — never a suppression flag.
-  const skipGuards = [...wire.matchAll(/if \(staged\.isBackground\) return null;/g)];
+  const skipGuards = [...wire.matchAll(/if \(staged\.isBackground\) \{[\s\S]*?state\.exports = \{\};[\s\S]*?return null;[\s\S]*?\}/g)];
   assert.equal(skipGuards.length, 2,
-    'both the change handler and the ARM stage step must skip refreshLiveExports() for a background');
+    'both background paths must clear stale exports before skipping refreshLiveExports()');
   assert.doesNotMatch(wire, /hideParams|suppressParams|paramsHidden/i,
     'hiding must fall out of never fetching exports, not a dedicated hide flag');
 
@@ -120,7 +120,27 @@ test('the COLOR HUB panel is the one explicitly authorized non-layer route (docs
   // Writes are relayed, never issued with the live_touch owner header or
   // queued into the ARM prepare-batch — /deck/color-autopilot is a public
   // Deck-level route, not a live_touch layer write.
-  assert.match(wire, /unownedReq\(detail\.method, detail\.path \|\| '\/deck\/color-autopilot', detail\.body\)/);
+  assert.match(wire, /function colorHubRequest\(method, path, body\)/);
+  assert.match(wire, /state\.phase === 'armed'\) return requestJson\(method, path, body, true\)/);
+  assert.match(wire, /return unownedReq\(method, path, body\)/);
+  assert.match(wire, /colorHubRequest\(detail\.method, detail\.path \|\| '\/deck\/color-autopilot', detail\.body\)/);
+});
+
+test('Live Touch brush boots at S / 150 and every brush option row has uniform weight', () => {
+  assert.match(panel, /id="brushSize" data-value="0\.18"/);
+  assert.match(panel, /id="brushPower" data-value="0\.75"/);
+  assert.match(panel, /id="brushSizeVal">18%<\/span>/);
+  assert.match(panel, /id="brushPowerVal">150%<\/span>/);
+  assert.match(panel, /\.sp-controls #dutyRow, \.sp-controls #speedRow \{[\s\S]*?grid-column: auto;/);
+  assert.match(panel, /#strobeDutyChips button, #zFaderChips button \{\s*min-height: 26px;/);
+});
+
+test('Color Hub adopts the engine-confirmed inline ring before repainting A/B', () => {
+  assert.match(panel, /function chAdoptBroadcastRing\(payload\)/);
+  const broadcast = panel.match(/document\.addEventListener\('colorautopilot',[\s\S]*?\n    \}\);/);
+  assert.ok(broadcast, 'Color Hub broadcast handler is missing');
+  assert.match(broadcast[0], /chAdoptBroadcastRing\(CH\.broadcast\)/);
+  assert.match(broadcast[0], /chRenderRing\(\)/);
 });
 
 test('initial ARM batches its complete Live look through atomic prepare', () => {

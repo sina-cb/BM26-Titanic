@@ -1,9 +1,9 @@
 // DRAFT - pending operator review
 /* Baby-blue silhouette tides trace the ship's spatial edges over a calm wash. */
 
-var COLOR_R_DARK = 0.008;
-var COLOR_G_DARK = 0.130;
-var COLOR_B_DARK = 0.620;
+var COLOR_R_DARK = 0.033;
+var COLOR_G_DARK = 0.450;
+var COLOR_B_DARK = 1.000;
 var COLOR_R_LIGHT = 0.033;
 var COLOR_G_LIGHT = 0.450;
 var COLOR_B_LIGHT = 1.000;
@@ -29,12 +29,19 @@ function clamp01(v) {
   return v;
 }
 
-function emitColor(shade, bri) {
-  var s = clamp01(shade);
-  rgbwau((COLOR_R_DARK + (COLOR_R_LIGHT - COLOR_R_DARK) * s) * bri,
-         (COLOR_G_DARK + (COLOR_G_LIGHT - COLOR_G_DARK) * s) * bri,
-         (COLOR_B_DARK + (COLOR_B_LIGHT - COLOR_B_DARK) * s) * bri,
-         0.0, 0.0, 0.0);
+function emitColor(px, py, pz, shade, bri) {
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  var gate = geometry * 0.72 + energy * 0.28;
+  if (gate < 0.24 || (fixtureType != FIX_TE_SIGN && wave(px * 1.7 + py * 1.3 + pz * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.62 + energy * 0.38);
+  var r = (COLOR_R_DARK + COLOR_R_LIGHT) * 0.5;
+  var g = (COLOR_G_DARK + COLOR_G_LIGHT) * 0.5;
+  var b = (COLOR_B_DARK + COLOR_B_LIGHT) * 0.5;
+  rgbwau(r * intensity, g * intensity, b * intensity, 0.0, 0.0, 0.0);
 }
 
 export function beforeRender(delta) {
@@ -57,5 +64,5 @@ export function render3D(index, x, y, z) {
   var field = clamp01(outline * 0.78 + tide * (0.16 + outline * 0.20));
   var breath = 0.84 + wave(phase * 0.41 + x * 0.13) * 0.16;
   var bri = clamp01((0.30 + field * 0.66) * liveLevel * breath);
-  emitColor(0.15 + field * 0.85, bri);
+  emitColor(x, y, z, 0.15 + field * 0.85, bri);
 }

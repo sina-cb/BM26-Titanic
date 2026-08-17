@@ -222,6 +222,16 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * mixVal) * bval;
   var b = (pb1 + (pb2 - pb1) * mixVal) * bval;
 
+  // White is reserved for a true three-body event. It rises only when two
+  // attractor centers approach one another and this pixel is inside their
+  // shared glow, leaving the continuously moving trails fully palette-coloured.
+  var nearAB = max(0.0, 1.0 - hypot(ax - bx, ay - by) * 3.4);
+  var nearBC = max(0.0, 1.0 - hypot(bx - cx, by - cy) * 3.4);
+  var nearCA = max(0.0, 1.0 - hypot(cx - ax, cy - ay) * 3.4);
+  var collision = pow(max(nearAB, max(nearBC, nearCA)), 2.4);
+  var collisionGlint = collision * pow(glow, 1.7)
+                     * (0.18 + detail * 0.82);
+
   // Portable five-instrument staging. Bars carry the nodes, raw LEDs carry
   // orbit traces, pars pulse warmly near cores, signs hold a readable substrate,
   // and Vintage rails receive sparse golden-white pinpricks.
@@ -303,8 +313,10 @@ export function render3D(index, x, y, z) {
     r = (pr1 + (pr2 - pr1) * signMix) * signBri;
     g = (pg1 + (pg2 - pg1) * signMix) * signBri;
     b = (pb1 + (pb2 - pb1) * signMix) * signBri;
+    white = collision * pow(signNode, 1.8) * detail * 0.10;
   } else if (fixtureType == FIX_VINTAGE_6) {
-    white = min(1.0, pow(glow, 2.4) * 0.72 + trail * 0.28);
+    white = min(1.0, pow(glow, 2.4) * 0.28 + trail * 0.12
+      + collisionGlint * 1.25);
     r = r + white * 0.16;
     g = g + white * 0.07;
   }

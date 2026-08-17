@@ -1,9 +1,9 @@
 // DRAFT - pending operator review
 /* Baby-blue orbital pearls drift in linked strands above a steady photo wash. */
 
-var COLOR_R_DARK = 0.008;
-var COLOR_G_DARK = 0.130;
-var COLOR_B_DARK = 0.620;
+var COLOR_R_DARK = 0.033;
+var COLOR_G_DARK = 0.450;
+var COLOR_B_DARK = 1.000;
 var COLOR_R_LIGHT = 0.033;
 var COLOR_G_LIGHT = 0.450;
 var COLOR_B_LIGHT = 1.000;
@@ -29,12 +29,19 @@ function clamp01(v) {
   return v;
 }
 
-function emitColor(shade, bri) {
-  var s = clamp01(shade);
-  rgbwau((COLOR_R_DARK + (COLOR_R_LIGHT - COLOR_R_DARK) * s) * bri,
-         (COLOR_G_DARK + (COLOR_G_LIGHT - COLOR_G_DARK) * s) * bri,
-         (COLOR_B_DARK + (COLOR_B_LIGHT - COLOR_B_DARK) * s) * bri,
-         0.0, 0.0, 0.0);
+function emitColor(px, py, pz, shade, bri) {
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  var gate = geometry * 0.72 + energy * 0.28;
+  if (gate < 0.24 || (fixtureType != FIX_TE_SIGN && wave(px * 1.7 + py * 1.3 + pz * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.62 + energy * 0.38);
+  var r = (COLOR_R_DARK + COLOR_R_LIGHT) * 0.5;
+  var g = (COLOR_G_DARK + COLOR_G_LIGHT) * 0.5;
+  var b = (COLOR_B_DARK + COLOR_B_LIGHT) * 0.5;
+  rgbwau(r * intensity, g * intensity, b * intensity, 0.0, 0.0, 0.0);
 }
 
 export function beforeRender(delta) {
@@ -57,5 +64,5 @@ export function render3D(index, x, y, z) {
   var counter = pow(wave((1.0 - x) * 7.0 - phase * 1.1 + y * 0.4), 3.0 + liveSize * 2.0);
   var field = clamp01(strand * (0.56 + beads * 0.42) + counter * 0.24);
   var bri = clamp01((0.28 + field * 0.69) * liveLevel);
-  emitColor(0.13 + field * 0.87, bri);
+  emitColor(x, y, z, 0.13 + field * 0.87, bri);
 }

@@ -118,10 +118,10 @@ describe('withBootMode', () => {
 });
 
 describe('autoSaveHint', () => {
-  it('describes automatic persistence + the mixer-never-saved caveat when ON', () => {
+  it('describes deck and mixer parameter persistence when ON', () => {
     const hint = autoSaveHint(true);
     expect(hint).toMatch(/persist automatically/i);
-    expect(hint).toMatch(/mixer channel parameters are never saved/i);
+    expect(hint).toMatch(/mixer channel tuning/i);
   });
 
   it('warns that a restart reverts to the last save when OFF', () => {

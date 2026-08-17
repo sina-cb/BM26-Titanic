@@ -1,5 +1,5 @@
-// ambient_extra_contract.test.js — registration, portability, and lane safety
-// for the 50 operator-unblessed Ambient Extra candidates.
+// ambient_extra_contract.test.js — registration, promotion state, portability,
+// and lane safety for the 50-pattern Ambient factory family.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,8 +22,23 @@ const FAMILY_DIR = path.join(PATTERNS_DIR, 'ambient_extra');
 const MANIFEST_PATH = path.join(PATTERNS_DIR, 'manifest.json');
 const GOALS_PATH = path.join(ENGINE_DIR, 'tools', 'playlist_gallery', 'pattern_goals.json');
 const SCENES_DIR = path.resolve(ENGINE_DIR, '..', 'simulation', 'scenes');
-const SCENES = ['titanic', 'test_bench'];
 const DRAFT_LINE = '// DRAFT — pending operator review';
+const PROMOTED_IDS = [
+  '01_harbor_glass',
+  '02_brass_compass',
+  '03_pearl_chain',
+  '05_open_gate',
+  '07_keel_glow',
+  '09_shadow_slats',
+  '10_chart_lines',
+  '11_paper_fold',
+  '12_floating_frames',
+  '16_turning_tiles',
+  '17_frost_branch',
+  '22_balance_beam',
+  '35_turning_box',
+];
+const PROMOTED_QUALIFIED_IDS = PROMOTED_IDS.map((id) => `ambient_extra/${id}`);
 
 function patternIds() {
   return fs.readdirSync(FAMILY_DIR)
@@ -32,8 +47,8 @@ function patternIds() {
     .sort((left, right) => Number.parseInt(left, 10) - Number.parseInt(right, 10));
 }
 
-function loadPlaylist(scene) {
-  const filename = path.join(SCENES_DIR, scene, 'playlists', 'ambient_extra.yaml');
+function loadPlaylist(scene, name) {
+  const filename = path.join(SCENES_DIR, scene, 'playlists', `${name}.yaml`);
   return yaml.load(fs.readFileSync(filename, 'utf8'));
 }
 
@@ -134,25 +149,44 @@ test('Ambient Extra design intents fail loudly on missing or stale contracts', (
   );
 });
 
-test('Titanic and test_bench carry the same unmodulated blessing playlist', () => {
-  const playlists = SCENES.map(loadPlaylist);
-  assert.deepEqual(playlists[0], playlists[1]);
-  const playlist = playlists[0];
-  assert.equal(playlist.schemaVersion, 1);
-  assert.equal(playlist.name, 'ambient_extra');
-  assert.deepEqual(playlist.entries.map((entry) => entry.pattern), QUALIFIED_IDS);
-  assert.equal(new Set(playlist.entries.map((entry) => entry.id)).size, 50);
-  for (const entry of playlist.entries) {
-    assert.deepEqual(entry.defaults, { sliderLocalSpeed: 0.3 });
+test('approved factory patterns are locked in canonical Ambient and the review playlist is retired', () => {
+  const titanic = loadPlaylist('titanic', 'ambient');
+  const bench = loadPlaylist('test_bench', 'ambient');
+  assert.deepEqual(titanic, bench);
+  assert.deepEqual(
+    titanic.entries.slice(-PROMOTED_QUALIFIED_IDS.length).map((entry) => entry.pattern),
+    PROMOTED_QUALIFIED_IDS,
+  );
+  assert.equal(fs.existsSync(path.join(
+    SCENES_DIR, 'titanic', 'playlists', 'ambient_extra.yaml')),
+  false);
+  assert.equal(fs.existsSync(path.join(
+    SCENES_DIR, 'test_bench', 'playlists', 'ambient_extra.yaml')),
+  false);
+
+  for (const pattern of PROMOTED_QUALIFIED_IDS) {
+    const entry = titanic.entries.find((candidate) => candidate.pattern === pattern);
+    assert.ok(entry, `${pattern}: missing canonical Ambient entry`);
+    assert.equal(entry.defaults.sliderLocalSpeed, 0.3);
+    const source = fs.readFileSync(path.join(
+      PATTERNS_DIR, `${pattern}.js`), 'utf8');
+    const controls = [...source.matchAll(/export\s+function\s+(slider[A-Za-z0-9_]+)\s*\(/g)]
+      .map((match) => match[1]);
+    assert.deepEqual(Object.keys(entry.defaults), controls,
+      `${pattern}: every control must be explicitly locked in declaration order`);
     assert.deepEqual(entry.modulations, []);
     assert.deepEqual(entry.midiMappings, []);
   }
 });
 
-test('every Ambient Extra source stays draft-marked and has valid audio suggestions', () => {
+test('only unpromoted factory sources stay draft-marked and every source has valid audio suggestions', () => {
   for (const id of IDS) {
     const source = fs.readFileSync(path.join(FAMILY_DIR, `${id}.js`), 'utf8');
-    assert.equal(source.split(/\r?\n/, 1)[0], DRAFT_LINE, `ambient_extra/${id}`);
+    if (PROMOTED_IDS.includes(id)) {
+      assert.notEqual(source.split(/\r?\n/, 1)[0], DRAFT_LINE, `ambient_extra/${id}`);
+    } else {
+      assert.equal(source.split(/\r?\n/, 1)[0], DRAFT_LINE, `ambient_extra/${id}`);
+    }
     assert.doesNotMatch(
       source,
       /\bvar\s+FIX_[A-Z0-9_]+\s*=/,

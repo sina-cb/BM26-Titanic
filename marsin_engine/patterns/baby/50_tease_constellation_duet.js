@@ -1,6 +1,12 @@
 // DRAFT - pending operator review
 /* Constellation Duet: pink and blue star paths orbit together without resolving. */
 
+var BABY_BLUE_R = 0.033;
+var BABY_BLUE_G = 0.450;
+var BABY_BLUE_B = 1.000;
+var BABY_PINK_R = 1.000;
+var BABY_PINK_G = 0.035;
+var BABY_PINK_B = 0.360;
 export var localSpeed = 0.52;
 export var level = 0.90;
 export var starFocus = 0.58;
@@ -51,15 +57,19 @@ export function render3D(index, x, y, z) {
   var bri = clamp01((0.22 + field * 0.74) * liveLevel * dominance);
   var shade = clamp01(0.16 + halo * 0.50 + stars * 0.42);
 
+  var geometry = clamp01(shade);
+  var energy = clamp01(bri);
+  var gate = geometry * 0.70 + energy * 0.30;
+  if (gate < 0.16 || (fixtureType != FIX_TE_SIGN && wave(x * 1.7 + y * 1.3 + z * 1.1) < 0.12)) {
+    rgbwau(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+  var intensity = clamp01(0.65 + energy * 0.35);
   if (familyBlue) {
-    rgbwau((0.008 + shade * 0.025) * bri,
-           (0.13 + shade * 0.32) * bri,
-           (0.62 + shade * 0.38) * bri,
-           0.0, 0.0, 0.0);
+    rgbwau(BABY_BLUE_R * intensity, BABY_BLUE_G * intensity,
+           BABY_BLUE_B * intensity, 0.0, 0.0, 0.0);
   } else {
-    rgbwau((0.62 + shade * 0.38) * bri,
-           (0.008 + shade * 0.027) * bri,
-           (0.17 + shade * 0.19) * bri,
-           0.0, 0.0, 0.0);
+    rgbwau(BABY_PINK_R * intensity, BABY_PINK_G * intensity,
+           BABY_PINK_B * intensity, 0.0, 0.0, 0.0);
   }
 }
