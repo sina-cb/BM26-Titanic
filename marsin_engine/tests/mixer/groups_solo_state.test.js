@@ -19,6 +19,13 @@ function makeFakeWasmHost() {
 }
 function makeMixer() {
   const mixer = new PatternMixer({ wasmHost: makeFakeWasmHost(), pixelCount: 2 });
+  // No `patternsDir` here, so nothing precompiles — and both the render hot
+  // path and triggerMixerTransition now REFUSE a mode with no compiled
+  // handle instead of substituting a host-side lerp/crossfade (codex P0).
+  // Prime the steady blend + the default transition script so the fixtures
+  // exercise the real code path rather than the refusal.
+  mixer.blendHandles['blend_screen'] = { fake: true };
+  mixer.blendHandles['trans_crossfade'] = { fake: true };
   return mixer;
 }
 

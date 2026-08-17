@@ -20,21 +20,19 @@
 // hover / screen readers). The Pressable hit target is >= 44pt tall to stay
 // comfortably tappable in the header.
 //
-// The amber accent is hardcoded (no amber token exists in the Palette and
-// this is an additive feature) — same precedent as the header's hardcoded
-// MOD_GREEN connected color. AMBER reads as a warning on both light and dark
-// surfaces.
+// The amber accent USED to be hardcoded here because the Palette had no amber
+// token. It does now: docs/54 §1.1 added the `warning` / `warningContainer` /
+// `warningContainerBorder` family to all five palettes, each value contrast-
+// picked against that theme's surfaces (the old fixed '#d98300' measured
+// ~3.2:1 on the light header). This chip is the canonical caution chip, so it
+// wears the caution tokens.
 
 import React, { useMemo } from 'react';
-import { Pressable, Text, Alert, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { opWarn } from '@/utils/op_dialog';
 import { useEngineHealth } from '@/hooks/useEngineState';
-
-// Warning amber — readable on both the light (#f3f4f5-ish) and dark header
-// surfaces. Mirrors the hardcoded '#00a86b' connected-green precedent in
-// DeckTopBar / mixer.tsx (intentionally theme-agnostic accents).
-const AMBER = '#d98300';
-const AMBER_FILL = 'rgba(217, 131, 0, 0.16)';
-const AMBER_BORDER = 'rgba(217, 131, 0, 0.55)';
+import { usePalette } from '@/hooks/use-theme';
+import { Radius, Type } from '@/constants/theme';
 
 interface Props {
   /** Optional override for hidden-on-portrait behaviour, matching the
@@ -45,6 +43,7 @@ interface Props {
 
 export function HealthChip({ compact = false }: Props) {
   const { degraded, reason } = useEngineHealth();
+  const C = usePalette();
 
   const styles = useMemo(
     () => ({
@@ -55,27 +54,25 @@ export function HealthChip({ compact = false }: Props) {
         gap: 6,
         paddingHorizontal: compact ? 8 : 10,
         paddingVertical: 6,
-        borderRadius: 8,
+        borderRadius: Radius.control,
         borderWidth: 1,
-        backgroundColor: AMBER_FILL,
-        borderColor: AMBER_BORDER,
+        backgroundColor: C.warningContainer,
+        borderColor: C.warningContainerBorder,
       },
       label: {
-        fontFamily: 'SpaceGrotesk_700Bold',
-        fontSize: 10,
-        letterSpacing: 1.2,
-        color: AMBER,
-        textTransform: 'uppercase' as const,
+        ...Type.labelCaps,
+        textTransform: Type.labelCaps.textTransform as 'uppercase',
+        color: C.warning,
       },
       reason: {
         fontFamily: 'SpaceGrotesk_700Bold',
         fontSize: 11,
         letterSpacing: 0.4,
-        color: AMBER,
+        color: C.warning,
         maxWidth: 180,
       },
     }),
-    [compact],
+    [compact, C],
   );
 
   // Healthy engine ⇒ render NOTHING (no chrome, no layout shift). This is
@@ -87,7 +84,7 @@ export function HealthChip({ compact = false }: Props) {
 
   return (
     <Pressable
-      onPress={() => Alert.alert('Engine Health Degraded', reason)}
+      onPress={() => opWarn('Engine Health Degraded', reason)}
       accessibilityRole="button"
       accessibilityLabel={full}
       style={styles.chip}

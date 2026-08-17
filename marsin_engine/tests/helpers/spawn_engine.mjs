@@ -14,9 +14,12 @@
 // `http://127.0.0.1:<port>`). Each spawned engine gets
 // `BM26_DISABLE_TIMELINE=1` plus the isolation env; pass `extraEnv` for
 // suite-specific overrides (e.g. `MARSIN_VSN1_DEPLOY: '0'`) and `extraArgs`
-// for extra CLI flags (e.g. `['--dest', '127.0.0.9']` to black-hole the
+// for extra CLI flags (e.g. `['--dest', '192.0.2.9']` to black-hole the
 // spawned engine's sACN output so it can never reach the operator's live sim
-// bridge on 127.0.0.1:5568).
+// bridge on UDP 5568). Use `192.0.2.x` — TEST-NET-1 (RFC 5737), reserved for
+// documentation and never routed. A LOOPBACK dest is NOT a black hole: the
+// sim's sACN receiver binds every local interface, so it RECEIVES
+// loopback-destined frames and relays them on to the live rig.
 //
 // This file is NOT a `*.test.*` module, so no test runner picks it up.
 import { spawn } from 'node:child_process';
@@ -61,7 +64,11 @@ export function createEngineHarness(options = {}) {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
-          BM26_DISABLE_TIMELINE: '1',
+            BM26_DISABLE_TIMELINE: '1',
+            // Every test harness chooses auth mode explicitly. Production
+            // launcher sets 1; isolated engine tests do not need operator
+            // credentials and must never inherit/guess a private source.
+            BM26_CAPTAINPAD_AUTH_REQUIRED: '0',
           // This harness stops engines with proc.kill('SIGTERM'), which on
           // Windows terminates outright WITHOUT running the shutdown handler —
           // so the engine's crash marker survives and every restart here looks

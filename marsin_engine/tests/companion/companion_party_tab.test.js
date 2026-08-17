@@ -25,17 +25,17 @@ import {
 import {
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
 import { PARTY_MODE_STRONG_DEFAULTS, PartyModeStrong } from '../../audio/signals/party_mode_strong.js';
 import { ParamCenter } from '../../lib/param_center.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const ENGINE_DIR = path.resolve(import.meta.dirname, '..', '..');
-const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+// HERMETIC: tracked config.yaml only — the party tunables under test are
+// derived-signals config, and the scene state persists live-patched derived
+// groups. See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 
 // A config.yaml shaped like the real one but DENSE with comments — inline,
 // full-line, blank lines, a trailing comment on a key we edit, and neighbouring

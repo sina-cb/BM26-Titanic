@@ -18,27 +18,48 @@
 // measured; thresholds are aggregate/quantile policy, never floors chosen from
 // the worst explored run. This makes a green run regression evidence rather
 // than a lucky draw or an overfit per-seed allowlist.
+//
+// ░░ HERMETIC BY CONSTRUCTION — DO NOT REINTRODUCE THE SCENE OVERLAY ░░
+// This file used to build its analyzer from
+// `loadEffectiveAudioAnalysisConfig({modelName:'titanic'})`, which merges
+// `states/titanic/audio_state.yaml` OVER config.yaml. That is exactly right for
+// the SHOW and exactly wrong for a GATE: `bands.inputGain` is a knob the
+// operator turns live, and the whole holdout moves with it. Measured on one box
+// on 2026-08-14, same code, same 24 seeds, only the effective gain differing:
+//
+//   gain 1     (tracked config.yaml, no overlay) → 93.43% settled, 18/24 clean
+//   gain 1.48  (states/titanic at HEAD)          → 94.07% settled, 18/24 clean
+//   gain 9.1   (operator's live working tree)    → 98.27% settled, 22/24 clean
+//
+// A gate a gain knob can lift five points is not a gate — a real tracker
+// regression would hide behind a louder mic — and the figures published in
+// docs/AUDIO_SIGNALS.md and config.yaml would be unreproducible on any other
+// machine. So the corpus is scored against the TRACKED config.yaml audio block
+// ONLY. Those published figures are locked to this file's policy by
+// tests/audio/note_evidence_docs_parity.test.mjs.
 
+import fs from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import yaml from 'js-yaml';
+
 import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
 import {
   buildAudioAnalyzerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
+  validateAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
+import { mergeAudioConfig } from '../../audio/config/audio_config.js';
 import { NoteEstimator } from '../../audio/signals/note_estimator.js';
 import { SYNTHS } from '../../audio/synth/test_synths.js';
 import { applyMicModel } from '../integration/mic_model.mjs';
 
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+const ROOT_CONFIG = yaml.load(fs.readFileSync(path.join(ENGINE_DIR, 'config.yaml'), 'utf8'));
+const AUDIO_CONFIG = validateAudioAnalysisConfig(mergeAudioConfig(ROOT_CONFIG.audio));
 const NOTE_CONFIG = buildDerivedSignalsOptions(AUDIO_CONFIG).noteTracking;
 const SAMPLE_RATE = AUDIO_CONFIG.capture.sampleRate;
 const HOP_SIZE = AUDIO_CONFIG.hopSize;

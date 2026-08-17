@@ -283,11 +283,14 @@ Write-Log '------------------------------------------------------------------'
 # --- Desktop auto-open URLs (only used when open_browser is true) ----------
 # Standard port stack (docs/43: every server runs the ONE 6966-6972 stack) -
 # sim HTTP is 6969, audio companion is 6966. The sim OPEN url is the exact
-# string launcher.js builds for the 'prod' profile (edit profile, 0 spotlights,
-# sacn_in), with this machine's scene substituted; the sim PROBE url is the
-# query-less path launcher.js itself waits on for readiness.
+# string launcher.js builds for the 'prod' profile (2d_pixels profile,
+# 0 spotlights, sacn_in), with this machine's scene substituted; the sim PROBE
+# url is the query-less path launcher.js itself waits on for readiness.
+# KEEP IN SYNC with PROFILES.prod.simParams in launcher.js - a mismatch means
+# the console tab renders in a DIFFERENT mode than the profile intends (the
+# 2d_pixels profile is what keeps a show box off the per-frame GPU 3D passes).
 $simProbeUrl = 'http://localhost:6969/simulation/'
-$simOpenUrl = "http://localhost:6969/simulation/?scene=$scene&lighting_mode=sacn_in&profile=edit&spotlights=0"
+$simOpenUrl = "http://localhost:6969/simulation/?scene=$scene&lighting_mode=sacn_in&profile=2d_pixels&spotlights=0"
 $audioUrl = 'http://localhost:6966'
 if ($openBrowser) {
     Write-Log 'open_browser: TRUE - will auto-open sim + audio on the console after the first launch.'

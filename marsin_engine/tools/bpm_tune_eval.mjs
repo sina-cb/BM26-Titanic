@@ -18,6 +18,12 @@
  *   node tools/bpm_tune_eval.mjs                       # steady + step, default tracker
  *   node tools/bpm_tune_eval.mjs --opts '{"unlockVoteHops":24}'
  *   node tools/bpm_tune_eval.mjs --corpus              # also real-corpus stability
+ *   node tools/bpm_tune_eval.mjs --effective titanic   # EXPLORE the live overlay
+ *
+ * ANALYZER CONFIG — TRACKED BY DEFAULT (reports _207 / _214). See the block
+ * around `TRACKED_AUDIO` below: the gate path reads `config.yaml` only, and the
+ * scene-state overlay is reachable exclusively through the explicit
+ * `--effective <scene>` flag, which announces itself and every overlaid key.
  *
  * REGRESSION GATES (exit code 1, with the failing gate named):
  *   clean     — ≥10/14 steady tempos within 1%, AND each of 124/128/150/174
@@ -47,18 +53,96 @@ import { BpmSmoother } from '../lib/bpm_smoother.js';
 import { SYNTHS } from '../audio/synth/test_synths.js';
 import { applyMicModel, MIC_TIERS } from '../tests/integration/mic_model.mjs';
 import { readWavMono } from '../tests/integration/wav_io.mjs';
+import { loadTrackedAudioAnalysisConfig } from '../tests/helpers/tracked_audio_config.mjs';
 import { isMainModule } from './cli_entrypoint.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(__dirname, '..');
-const PRODUCTION_AUDIO = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
-const SR = PRODUCTION_AUDIO.capture.sampleRate;
-const HOP = PRODUCTION_AUDIO.hopSize;
-const HOP_MS = (HOP / SR) * 1000;
-const PRODUCTION_TRACKER_OPTIONS = buildBpmTrackerOptions(PRODUCTION_AUDIO);
+
+// ░░ THE GATE READS TRACKED CONFIG ONLY (reports _207 / _214) ░░
+//
+// This module used to resolve `loadEffectiveAudioAnalysisConfig({modelName:
+// 'titanic'})` at import time — config.yaml with `states/titanic/
+// audio_state.yaml` merged OVER it. That state file is rewritten by the engine
+// on every `PATCH /audio/config`, i.e. every knob the operator turns, so the
+// evaluator's checked-in gate thresholds AND the A/B figures published in
+// `config.yaml`'s `bpmTracker.minBpm` comment were being scored against
+// whatever the operator's mic gain and FFT size happened to be at that moment.
+// `_207` measured the same leak turning three drop-detector tests red and
+// octave-halving two fast tempos in `bpm_tracker_octave` under a plausible
+// live overlay. `tests/audio/bpm_tune_eval.test.mjs` imports this module, so
+// the leak reached a gate transitively even though it only calls the pure
+// functions.
+//
+// So: TRACKED is the default and the only thing the gate verdict may be read
+// from. `--effective <scene>` still exists — an operator tuning against the
+// mic actually in the room is a real workflow — but it is opt-in, it names the
+// overlay file and every key the overlay moved, and it labels its verdict as
+// exploration. There is no silent overlay path.
+const TRACKED_AUDIO = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
+
+// Reassigned exactly once, by `useEffectiveAudioConfig()` from `main()`, before
+// any case runs. Everything downstream reads these bindings.
+let evalAudio = TRACKED_AUDIO;
+let evalConfigMode = 'tracked';
+let SR = evalAudio.capture.sampleRate;
+let HOP = evalAudio.hopSize;
+let HOP_MS = (HOP / SR) * 1000;
+let evalTrackerOptions = buildBpmTrackerOptions(evalAudio);
+
+/**
+ * The analyzer config THIS run is scored on. Exported so the hermeticity gate
+ * (`tests/audio/bpm_tune_eval.test.mjs`) can import this module under a planted
+ * scene-state overlay and prove the overlay was ignored.
+ *
+ * @returns {object} the validated `audio` block currently in force
+ */
+export function evalAudioConfig() {
+  return evalAudio;
+}
+
+/** Flatten a config object to `dotted.path → primitive` for drift reporting. */
+function flattenConfig(value, prefix = '', out = new Map()) {
+  for (const [key, entry] of Object.entries(value)) {
+    const dotted = prefix ? `${prefix}.${key}` : key;
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) flattenConfig(entry, dotted, out);
+    else out.set(dotted, JSON.stringify(entry));
+  }
+  return out;
+}
+
+/** Every key on which `effective` differs from `tracked`, as printable lines. */
+function describeConfigDrift(tracked, effective) {
+  const a = flattenConfig(tracked);
+  const b = flattenConfig(effective);
+  const lines = [];
+  for (const key of new Set([...a.keys(), ...b.keys()].sort())) {
+    const before = a.has(key) ? a.get(key) : '(absent)';
+    const after = b.has(key) ? b.get(key) : '(absent)';
+    if (before !== after) lines.push(`${key}: tracked ${before} → effective ${after}`);
+  }
+  return lines;
+}
+
+/**
+ * Swap the analyzer config to the SHOW config for `modelName` (config.yaml with
+ * `states/<modelName>/audio_state.yaml` merged over it). Exploration only —
+ * `main()` announces the swap and disclaims the gate verdict.
+ *
+ * @param {string} modelName — scene whose state overlay to apply
+ * @returns {object} the full `loadEffectiveAudioAnalysisConfig` result
+ */
+function useEffectiveAudioConfig(modelName) {
+  const resolved = loadEffectiveAudioAnalysisConfig({ engineDir: ENGINE_DIR, modelName });
+  evalAudio = resolved.audioConfig;
+  evalConfigMode = `effective:${modelName}`;
+  SR = evalAudio.capture.sampleRate;
+  HOP = evalAudio.hopSize;
+  HOP_MS = (HOP / SR) * 1000;
+  evalTrackerOptions = buildBpmTrackerOptions(evalAudio);
+  return resolved;
+}
+
 // The grid deliberately includes the four tempos the tracker is most likely to
 // HALVE (124/128 house-techno, 150 psytrance, 174 DnB) — Burning Man runs fast,
 // so a halving there is the worst failure this tool can miss.
@@ -117,7 +201,7 @@ function runSynth(synthName, bpm1, {
   const sm = new BpmSmoother({ enabled: lpf, tauMs });
   let clockMs = 0, lastMs = 0;
   const rows = [];
-  const an = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO, {
+  const an = new AudioAnalyzer(buildAudioAnalyzerOptions(evalAudio, {
     nowFn: () => clockMs,
     onAnalysis: ({ flux, kick, low, mid, high }) => {
       const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
@@ -285,7 +369,7 @@ function evalCorpus(opts) {
     }
     const tracker = new BpmTracker(opts);
     let clockMs = 0, lastMs = 0; const bpms = [];
-    const an = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO, {
+    const an = new AudioAnalyzer(buildAudioAnalyzerOptions(evalAudio, {
       nowFn: () => clockMs,
       onAnalysis: ({ flux, kick, low, mid, high }) => {
         const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000;
@@ -315,11 +399,34 @@ function main() {
     else if (a === '--tau') args.tau = Number(process.argv[++i]);
     else if (a === '--tiers') args.tiers = process.argv[++i].split(',').map((tier) => tier.trim());
     else if (a === '--out') args.out = process.argv[++i];
+    // The scene is REQUIRED, never defaulted: which overlay you are exploring
+    // is the whole point of asking for one. `effectiveRequested` is tracked
+    // separately so a bare `--effective` FAILS instead of quietly running the
+    // tracked config the caller explicitly asked not to use.
+    else if (a === '--effective') { args.effectiveRequested = true; args.effective = process.argv[++i]; }
     else throw new Error(`bpm_tune_eval: unknown argument ${a}`);
+  }
+  if (args.effectiveRequested
+      && (typeof args.effective !== 'string' || args.effective.length === 0
+          || args.effective.startsWith('--'))) {
+    throw new Error('bpm_tune_eval: --effective requires a scene name, e.g. --effective titanic');
   }
   for (const tier of args.tiers) if (!MIC_TIERS[tier]) throw new Error(`bpm_tune_eval: unknown tier ${tier}`);
   validateTierSelection(args.tiers);
-  const opts = { ...PRODUCTION_TRACKER_OPTIONS, ...(args.opts || {}) };
+  if (!args.effectiveRequested) {
+    console.log(`analyzer config: TRACKED ${path.join(ENGINE_DIR, 'config.yaml')} `
+      + '(no states/<scene>/audio_state.yaml overlay — this is the gate config)');
+  } else {
+    const resolved = useEffectiveAudioConfig(args.effective);
+    console.log(`analyzer config: EFFECTIVE — tracked ${resolved.configPath} `
+      + `WITH the scene overlay ${resolved.statePath} merged over it`);
+    const drift = describeConfigDrift(TRACKED_AUDIO, evalAudio);
+    if (drift.length === 0) console.log('  overlay moved NOTHING (it agrees with config.yaml today)');
+    else for (const line of drift) console.log(`  overlay moved ${line}`);
+    console.log('  EXPLORATION ONLY — the regression gate is the tracked config; '
+      + 're-run with no --effective before believing a verdict.');
+  }
+  const opts = { ...evalTrackerOptions, ...(args.opts || {}) };
   const tauMs = Number.isFinite(args.tau) ? args.tau : 250;
   console.log(`BPM tune eval — tracker opts=${JSON.stringify(opts)} · LPF tau=${tauMs}ms`);
   const results = {};
@@ -356,19 +463,25 @@ function main() {
   };
   if (args.out) {
     fs.mkdirSync(path.dirname(path.resolve(args.out)), { recursive: true });
-    fs.writeFileSync(args.out, `${JSON.stringify({ processedCases, opts, tauMs, summary, results }, null, 2)}\n`);
+    fs.writeFileSync(args.out, `${JSON.stringify(
+      { configMode: evalConfigMode, processedCases, opts, tauMs, summary, results }, null, 2)}\n`);
   }
   console.log(`\naccuracy ±1%=${(summary.within1Pct * 100).toFixed(1)}% ±2%=${(summary.within2Pct * 100).toFixed(1)}% ` +
     `octave errors=${(summary.octaveErrorRate * 100).toFixed(1)}% metric aliases=${(summary.aliasErrorRate * 100).toFixed(1)}% ` +
     `mean lock=${summary.meanLockTimeS.toFixed(1)}s`);
   console.log(`\nprocessed ${processedCases} cases`);
   // Heavy/adversarial are report-only by design; only clean+moderate gate.
+  // Under --effective the whole run is report-only: a verdict scored on one
+  // machine's live knob positions is not a regression verdict.
+  const exploring = args.effectiveRequested === true;
+  const suffix = exploring ? ` [EXPLORATION, ${evalConfigMode} — NOT the gate]` : '';
   if (gateFailures.length > 0) {
-    console.log('\nGATE FAILED:');
+    console.log(`\nGATE FAILED${suffix}:`);
     for (const failure of gateFailures) console.log(`  - ${failure}`);
+    // Still non-zero under --effective: a printed failure must never exit 0.
     process.exitCode = 1;
   } else {
-    console.log('\nGATES PASSED (clean ±1% ≥10/14 + fast four ±2%; '
+    console.log(`\nGATES PASSED${suffix} (clean ±1% ≥10/14 + fast four ±2%; `
       + 'moderate ±2% ≥12/14 + fast four ±2%)');
   }
 }

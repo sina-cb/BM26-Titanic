@@ -16,6 +16,7 @@ import { wheelToHorizontalDelta } from '@/utils/wheel_scroll_logic';
 import {
   uniqueSectionIds, masterLevel, applyMasterLevel, createCoalescedSender,
 } from '@/utils/master_dimmer_logic';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
 
 const BypassCheckbox = ({ effectId, label }: { effectId: string, label: string }) => {
   const C = usePalette();
@@ -202,6 +203,14 @@ function GroupFixedColorModal({ group, override, onClose }: {
 }
 
 export default function DimmerRackScreen() {
+  return (
+    <PerformanceRouteGuard routeName="dimmer_rack">
+      <DimmerRackScreenContent />
+    </PerformanceRouteGuard>
+  );
+}
+
+function DimmerRackScreenContent() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   // Same orientation idiom as CPCControls / the mixer: portrait when the

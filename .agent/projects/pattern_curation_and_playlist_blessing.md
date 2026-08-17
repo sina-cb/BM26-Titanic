@@ -3,7 +3,7 @@ name: pattern_curation_and_playlist_blessing
 status: active
 owner: operator + curator
 created: 2026-08-11
-updated: 2026-08-13
+updated: 2026-08-15
 ---
 
 # Pattern Curation and Playlist Blessing
@@ -17,8 +17,11 @@ playlist is eligible for the playa schedule.
 
 ## Current state
 
-- The Titanic `ambient` playlist is the pilot collection. It currently has 34
-  gallery entries, including ten new large-scale spatial drafts (`118`–`127`).
+- The Titanic `ambient` playlist is the canonical 34-pattern source of truth.
+  Its locked static tune is mirrored byte-for-byte into test_bench and inherited
+  by every non-diagnostic playlist reuse. `ambient_sound_reactive` is the party
+  stash: the same order and defaults with 95 restrained audio mappings, mirrored
+  byte-for-byte across both scenes.
 - The permanent offline gallery and its generator exist. The display-only
   smoke-stack representation is complete in the simulator 2D views and
   gallery: all eight PARs per stack are prominent in Top, and the four
@@ -28,21 +31,39 @@ playlist is eligible for the playa schedule.
 - Every currently rendered gallery now uses a seekable MP4 player with visible
   Play/Pause, Restart, Repeat, and scrub controls, while retaining downloadable
   GIFs. Event patterns may additionally publish named chapter jump points.
-- The Baby Reveal event package is authored and mechanically verified: one
-  outcome-blind six-act pattern, explicit pink and blue entries, matching
-  photo-hold playlists/palettes, manual timeline cues, and long-form galleries.
-  It is **not event-blessed** until the operator rehearses both complete paths.
+- Baby is pattern-based rather than one time-coded reveal. The only playlists
+  are `baby_tease` (20 autonomous pink+blue looks), `baby_boy` (30 hardcoded
+  blue looks), and `baby_girl` (30 matching hardcoded pink looks). The operator
+  performs the blackout and answer selection manually.
 - Pattern tuning and automated offline gates are substantially complete, but
   **the playlist is not blessed yet**. A code/test pass is evidence, not the
   operator's artistic acceptance.
 - Ambient tuning is evaluated without modulation. The separate
   `ambient_sound_reactive` playlist preserves the authored audio mappings for a
   later sound-reactive pass.
-- Three read-only curator passes produced a 17-playlist family matrix under
-  `~/tmp/`: sea/shore, playa/Titanic/burn, and stars/emotional/playful. No YAML
-  will be created until the Ambient pilot is blessed and checkpointed.
+- The first six static thematic arcs are materialized in both scenes from the
+  locked Ambient entries: `ambient_sea`, `ambient_shore`, `ambient_stars`,
+  `ambient_burn`, `ambient_titanic`, and `ambient_tidal_architecture`. They add
+  no modulation or alternate tuning and remain unblessed until physical review.
+- `marsin_engine/tools/playlist_curation/sync_ambient_playlists.mjs` permanently
+  enforces the hierarchy. It mirrors Ambient and its reactive party stash,
+  rebuilds the six themes, and removes stale alternate defaults/modulation from
+  every non-diagnostic Ambient reuse while preserving playlist entry IDs.
 - Party tuning starts after the separate audio-analysis work lands; it does not
   block completing the ambient blessing campaign.
+- `party_dancers` has been cut back to one prototype,
+  `party_dancers/01_dom_ball_dancers`. It mirrors two dominant-frequency bands
+  across the ship halves, uses their energies for width, and reserves LOW/KICK
+  for the Organs. It remains an audition seed.
+- `ambient_extra` is a 50-pattern DRAFT candidate family calibrated for the
+  operator's Ambient review point: Global Speed 0.30 and Local Speed 0.30.
+  Every source has a complete visibility floor, two valid audio suggestions,
+  portable Titanic/test-bench behavior, paired TE treatment, W=A, and UV off.
+  A quantitative 40-second motion contract protects both the whole model and
+  the complete 74-pixel TE surfaces; none of the 50 is blessed yet.
+- Titanic `default` has been cleaned from 72 entries to 27 live references.
+  Eleven plausible ambient omissions are preserved in `ambient_default_bkup`
+  for separate review instead of being silently folded into the locked pilot.
 
 ## Work completed in this campaign
 
@@ -76,29 +97,105 @@ playlist is eligible for the playa schedule.
   shows Top, Front, and Identity motion at the exact saved playlist values. The
   player supports play/pause, restart, repeat, timeline scrubbing, and keeps a
   downloadable GIF beside the seekable MP4.
+- Repaired `14_lunar_current` so Kick produces a broad whole-current crest
+  response while retaining the operator's saved tune. Reworked
+  `21_pelagic_manta_rays` Detail into attached manta anatomy (spines, leading
+  edges, curved wing veins) plus fine pelagic filaments without changing its
+  saved Ambient values.
 
-## Baby Reveal event package
+### Ambient curator archival closeout
 
-- `131_baby_reveal` is a palette-independent 100-second event composition. Its
-  authored chapters are: Pink Prophecy (0 s), Blue Answer (14 s), Spatial
-  Duality (28 s), Cellular Chase (46 s), Helix Duel (64 s), Speed-up (78 s),
-  Flash Barrage (88 s), exact blackout (90-92 s), and Reveal Explosion (92 s).
-- Every active RGB pixel is discretely inside the approved baby-pink or
-  baby-blue family. Mixed chapters put the two families on different pixels;
-  they never interpolate through purple, green, or orange. UV is always zero.
-  Native white is restricted to Vintage Jewelry and remains W == A.
-- `sliderFinalColor` is intentionally outcome-blind before 92 seconds. The
-  dedicated long test proves that pink and blue runs are byte-identical before
-  reveal, then diverge only into the selected answer after blackout.
-- Titanic and test_bench each have explicit pink and blue entries in
-  `baby_reveal`. Titanic also has `baby_pink` and `baby_blue` photo-hold
-  playlists with ten far-field looks and empty modulation.
-- Two manual Titanic cues start the exact selected entry at time zero with BPM
-  speed sync disabled. At 992 seconds they hand off to the matching single-
-  family photo playlist: 90-second tease + 2-second blackout + 900-second hold.
-- The permanent Baby Reveal gallery records both complete outcomes at 100
-  seconds and 2 fps. Nine chapter buttons make the full show directly seekable;
-  the pink and blue follow-on galleries are also generated with the same player.
+- The dedicated Ambient curation task is closed and archived after completing
+  its bounded contract. It repaired the review queue for model-wide motion,
+  TE-sign balance, W=A, portability, live-edit safety, and exact saved-tune
+  behavior while freezing operator-approved patterns.
+- `ambient_sound_reactive` is a strict 34/34 mirror of `ambient`: identical
+  identity order, saved defaults, and stable matching entry IDs, with 95
+  restrained mappings. Every entry has an ambient-safe primary intensity
+  response (normally `micLow`) plus no more than two truthful detail,
+  breadth, shimmer, or soft-pulse accents from `micHigh`, `micFlux`,
+  `micMid`, or `micKick`. Silence resolves to the saved Ambient tune rather
+  than darkness.
+- The reactive matrix passed 204/204 offline cases across Titanic and
+  `test_bench`, covering silence, full track, kicks, and hats. Full-track
+  movement was deliberately restrained (0.29%-4.24%); W=A passed 60/60. Its
+  permanent review gallery contains 34 resolved rows, 34 GIFs, and 34 MP4s.
+- Titanic `default` was mechanically cleaned from 72 to 27 loadable entries
+  by removing 45 manifest/source-proven stale references. All 27 survivors
+  compile. `06_neon_elevator` remains an acknowledged dark look and
+  `10_chasers` remains marginally over budget because both are loadable and
+  aesthetic/performance judgment was outside the dead-reference cleanup.
+- `ambient_default_bkup` preserves 11 viable non-Ambient review candidates in
+  original order with complete entry data. All 11 pass Titanic and
+  `test_bench`; its gallery contains 11 rows and 22 media files. The final
+  stale-reference scan covered 25/25 Titanic playlists and 313 entries clean.
+- Honest remaining operator gates: `126_cathedral_rib_wave` still needs an
+  explicit visual blessing; `57_ink_diffuse` remains a replacement candidate;
+  reactive gallery media show exact silent defaults while audio response is
+  proven separately offline; final hardware/show-site judgment remains human.
+
+## Party Dancers pilot
+
+- Playlist: `simulation/scenes/titanic/playlists/party_dancers.yaml`.
+- Pattern: `party_dancers/01_dom_ball_dancers`; one DRAFT prototype only.
+- The two canonical DOM frequency/energy pairs paint two smooth high-contrast
+  bands inside mirrored ship halves. Frequency owns local 1D position and
+  energy owns band width; LOW and KICK support the Organ treatment.
+- The canonical frequency sliders carry the modulation engine's normalized
+  Hertz transport and the pattern spring-smooths positions instead of chasing
+  raw detector jitter. All 964 Titanic pixels retain a visible background.
+- Permanent review gallery:
+  `docs/pattern_gallery/playlists/titanic/party_dancers/index.html`.
+- Human state: **DRAFT / UNBLESSED**. Review with real music and Bench Mirror;
+  tune this baseline before commissioning more dancers.
+
+## Baby ceremony playlists
+
+- `baby_tease` contains 20 independent patterns. Every representative frame
+  carries both approved pink and blue families and never implies the outcome.
+- `baby_boy` and `baby_girl` contain 30 patterns each. Their choreographies are
+  paired concept-for-concept; only six hardcoded color constants differ.
+- Baby sources live under `marsin_engine/patterns/baby/` as qualified IDs
+  `baby/01_...` through `baby/80_...`. They do not use global palettes, audio,
+  fixture/view branches, native white, amber, or UV.
+- The three playlists are identical between Titanic and test bench. There is
+  no `baby_reveal`, `baby_pink`, `baby_blue`, celebration, burst, or timed
+  handoff playlist. `baby_reveal` remains only the special-event/show name.
+- The operator runs Tease, performs a manual blackout, then selects Boy or
+  Girl. This manual choice is the ceremony contract.
+- Permanent galleries:
+  `docs/pattern_gallery/playlists/titanic/baby_tease/index.html`,
+  `baby_boy/index.html`, and `baby_girl/index.html`.
+
+## Ambient Extra candidate family
+
+- Playlist: `ambient_extra`, synchronized byte-for-byte between Titanic and
+  test bench, 50 entries in numeric order, empty saved modulations/MIDI maps.
+- Sources: `marsin_engine/patterns/ambient_extra/01_harbor_glass.js` through
+  `50_last_lantern.js`. All remain explicitly DRAFT pending operator review.
+- The family deliberately spans finite glass cells, compass geometry, pearls,
+  lantern materials, gates, flags, keel light, signals, louvers, chart lines,
+  folds, frames, mechanical structures, instruments, celestial bodies, living
+  forms, paired Identity seals, instrument echoes, convergence, and the final
+  Vintage lantern. Neighboring patterns do not reuse one generic field.
+- Mechanical acceptance: all 50 compile on Titanic and test bench. The current
+  cross-model parameter-truth sweep is recorded honestly as 242 TRUE,
+  90 UNKNOWN_CLAIM, 12 WRONG, 5 WEAK, and 2 controls unreachable on Titanic but
+  alive on test_bench. Every pattern retains a complete visibility floor, two
+  parseable audio suggestions, W=A, UV off, and paired TE treatment. Permanent
+  tests pin registration, playlist parity, exact Local Speed 0.30, portability,
+  lanes, sign equality, and visible motion at Global 0.30 / Local 0.30.
+- The distance-motion refinement introduces simple broad ship-scale gestures
+  over close-range mathematical material: Brass Compass, Healing Cracks,
+  Side by Side, and Last Lantern carry left-to-right passages; Leaf Turn carries
+  a top-to-bottom canopy passage; Pearl Chain carries a broad rolling focus.
+  Sparse patterns received identity-specific full-surface TE animation without
+  changing palette or native-white lane ownership.
+- Gallery: `docs/pattern_gallery/playlists/titanic/ambient_extra/index.html`,
+  rendered from exact playlist values for 40 seconds per pattern at 8 fps with
+  an explicit 0.30 global pattern clock recorded in the manifest/header.
+- Human state: **DRAFT / UNBLESSED**. Gallery review comes first; survivors are
+  then tuned and run through Bench Mirror one by one.
 
 ## Ambient pilot pattern ledger
 
@@ -121,8 +218,8 @@ not waive the final physical mirror blessing after later code/Identity changes.
 | 11 | `19_swaying_lattice_ballet` | Two counterphase woven lattice families that bow and cross like a corps | AUTOMATED READY; bench pending |
 | 12 | `20_parametric_sway_field` | Three-body attractor field with real XYZ orbits, lagged trails, and gravitational Identity contours | AUTOMATED READY; bench pending |
 | 13 | `21_pelagic_manta_rays` | Two coherent manta silhouettes over dark pelagic negative space | RECHECK brightness and sign motion |
-| 14 | `22_abyssal_sway_garden` | Rooted fronds and phosphorescent crowns; repaired inverse Base Darkness behavior | AUTOMATED READY; bench pending |
-| 15 | `32_caustic_shimmer` | Refracted pool-glass cells, evolving walls, lenses, and focal nodes | AUTOMATED READY; bench pending |
+| 14 | `22_abyssal_sway_garden` | Rooted fronds and phosphorescent crowns; repaired inverse Base Darkness behavior | TUNE LOCKED; preserve current Ambient defaults; mirror blessing pending |
+| 15 | `32_caustic_shimmer` | Refracted pool-glass cells, evolving walls, lenses, and focal nodes | TUNE LOCKED; preserve current Ambient defaults; mirror blessing pending |
 | 16 | `33_aurora_breath` | Breath-modulated folded aurora volume with curling ribbons rather than translated waves | AUTOMATED READY; bench pending |
 | 17 | `35_sparkle_rain` | Continuous descending droplets and thicker traces; visually distinct from fixed chandelier stars | RECHECK rain weight and distance readability |
 | 18 | `41_reaction_diffusion` | Real Gray-Scott chemistry with morphing nuclei and crawling fronts | RECHECK whole-model brightness/activity |
@@ -263,11 +360,14 @@ carry the requested chapter:
 | Playlist family | Content | Gallery | Bench mirror | Operator blessing | State |
 | --- | --- | --- | --- | --- | --- |
 | `ambient` | 34 entries; code/gallery ready | 34/34 regenerated; operator accepted pattern direction | IN PROGRESS | Required | IN REVIEW |
-| `ambient_sound_reactive` | Modulation backup | Later audio pass | Required later | Required later | PARKED |
-| New ambient subcategories | 17 proposals, 16-18 entries each | Not generated | Required per playlist | Required per playlist | DRAFT DESIGN |
-| `baby_reveal` pink path | 6-act event + 15-minute hold path | 100 s seekable clip ready | Full-sequence rehearsal required | Required | IN REVIEW |
-| `baby_reveal` blue path | 6-act event + 15-minute hold path | 100 s seekable clip ready | Full-sequence rehearsal required | Required | IN REVIEW |
-| `baby_pink` / `baby_blue` | 10 photo-hold looks each | Both galleries ready | Required after reveal rehearsal | Required | IN REVIEW |
+| `ambient_sound_reactive` | Same 34 identities; 95 restrained mappings | Regenerated | Required | Required | IN REVIEW |
+| `ambient_default_bkup` | 11 former-default ambient candidates | Regenerated | Required if promoted | Required if promoted | DRAFT REVIEW |
+| `ambient_extra` | 50 DRAFT candidates at Global/Local 0.30 | 50/50 at 40 s, 8 fps, 0.30 clock | Required per survivor | Required per survivor | DRAFT REVIEW |
+| `party_dancers` | One DOM-frequency prototype | Regenerated | Required with music | Required | DRAFT REVIEW |
+| Ambient subcategories | 6 materialized arcs, 16-18 entries each; all exact Ambient tunes | Not generated | Mirrored YAML ready; physical pass required | Required per playlist | DRAFT REVIEW |
+| `baby_tease` | 20 outcome-blind pink+blue patterns | 20/20 regenerated | Required | Required | IN REVIEW |
+| `baby_boy` | 30 blue-only patterns | 30/30 regenerated | Required | Required | IN REVIEW |
+| `baby_girl` | 30 pink-only patterns | 30/30 regenerated | Required | Required | IN REVIEW |
 
 ### Per-pattern mirror review record
 
@@ -307,12 +407,19 @@ art direction, but it is not the physical blessing.
   new patterns fill real artistic gaps rather than satisfying a quota.
 - **2026-08-11** — Ambient blessing runs without modulation; audio-reactive and
   party tuning are separate passes.
-- **2026-08-13** — Baby Reveal is one outcome-blind authored pattern with two
-  explicit final entries. Its gallery must show the entire sequence and permit
-  chapter jumps and arbitrary scrubbing; a short looping excerpt is not valid
-  event-review evidence.
+- **2026-08-15** — Baby ceremony content is autonomous-pattern based: Tease,
+  manual blackout, then the operator selects Boy or Girl. Retire the timed
+  reveal/celebration pattern and every extra Baby playlist alias.
+- **2026-08-15** — `ambient_extra` is a 50-pattern DRAFT audition family. It
+  remains unmodulated for blessing even though each source declares two audio
+  suggestions for a later reactive pass.
 - **2026-08-13** — Permanent gallery playback uses seekable MP4 as the review
   surface and retains GIF only as the downloadable/shareable loop format.
+- **2026-08-15** — Ambient Extra and White review galleries use schema 3,
+  exact source/playlist/goal fingerprints, and 40-second 8-fps MP4+GIF media.
+  Ambient Extra review states are 30 READY FOR OPERATOR, 24 TUNE, and one
+  REJECT (`45_moss_islands`); these are content-review states, not playlist
+  blessing or show-scheduling approval.
 
 ## Next steps
 
@@ -341,14 +448,23 @@ art direction, but it is not the physical blessing.
   placement across the week.
 - [ ] Begin party tuning after the audio-analysis thread reports its accepted
   signal contracts.
-- [x] Author and mechanically verify both Baby Reveal paths, their matched
-  photo-hold playlists, and the 100-second chaptered gallery.
-- [ ] Review both complete Baby Reveal outcomes in the gallery, including every
-  named chapter, blackout timing, explosion, and family purity.
-- [ ] Rehearse pink and blue paths through the physical test-bench mirror from
-  cue time zero through reveal; then separately rehearse the 992-second handoff.
-- [ ] Record explicit operator blessing for each outcome path and both photo-
-  hold playlists before scheduling the event.
+- [x] Author, integrate, and mechanically verify the 50-pattern
+  `ambient_extra` candidate family on Titanic and test bench.
+- [x] Generate the 40-second schema-3 `ambient_extra` review gallery and
+  permanent contract tests.
+- [x] Review all 50 Ambient Extra rows and mark READY FOR OPERATOR / TUNE /
+  REJECT before any physical pass.
+- [x] Tune the current gallery survivors and regenerate exact-current rows.
+- [ ] Run READY/TUNE survivors through Bench Mirror before blessing
+  `ambient_extra`; `45_moss_islands` stays rejected unless materially
+  reauthored and re-proven under the render budget.
+- [x] Author and mechanically verify 20 Tease, 30 Boy, and 30 Girl Baby
+  patterns with synchronized Titanic/test-bench playlists and galleries.
+- [ ] Review the three Baby galleries for legibility, photo-safe cadence, and
+  family purity; then rehearse Tease → manual blackout → chosen answer through
+  Bench Mirror.
+- [ ] Record explicit operator blessing for `baby_tease`, `baby_boy`, and
+  `baby_girl` before scheduling the ceremony.
 
 ## Links
 
@@ -363,9 +479,19 @@ art direction, but it is not the physical blessing.
   `../../simulation/scenes/titanic/playlists/ambient.yaml`
 - **Sound-reactive backup:**
   `../../simulation/scenes/titanic/playlists/ambient_sound_reactive.yaml`
-- **Baby Reveal gallery:**
-  `../../docs/pattern_gallery/playlists/titanic/baby_reveal/index.html`
-- **Baby pink gallery:**
-  `../../docs/pattern_gallery/playlists/titanic/baby_pink/index.html`
-- **Baby blue gallery:**
-  `../../docs/pattern_gallery/playlists/titanic/baby_blue/index.html`
+- **Ambient Extra gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/ambient_extra/index.html`
+- **White review gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/white_only/index.html`
+- **Ambient Sound Reactive gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/ambient_sound_reactive/index.html`
+- **Ambient Default Backup gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/ambient_default_bkup/index.html`
+- **Party Dancers gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/party_dancers/index.html`
+- **Baby Tease gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/baby_tease/index.html`
+- **Baby Boy gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/baby_boy/index.html`
+- **Baby Girl gallery:**
+  `../../docs/pattern_gallery/playlists/titanic/baby_girl/index.html`

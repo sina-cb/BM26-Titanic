@@ -16,7 +16,8 @@ const h = createEngineHarness({
   portBase: 7900,
   portSpan: 200,
   extraEnv: { MARSIN_VSN1_DEPLOY: '0' },
-  extraArgs: ['--dest', '127.0.0.9'],
+  // TEST-NET-1 (RFC 5737) black hole — loopback is not one.
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 before(async () => { h.spawnEngine(); await h.waitForReady(); });

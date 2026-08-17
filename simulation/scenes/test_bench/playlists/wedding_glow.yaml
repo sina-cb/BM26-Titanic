@@ -1,0 +1,67 @@
+schemaVersion: 1
+name: wedding_glow
+entries:
+  - id: e_wedding_glow_0_62_white_shimmer
+    pattern: 62_white_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: Champagne shimmer — the flattering hold for photographs.
+  - id: e_wedding_glow_1_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: Tungsten warmth on skin; the kindest light the rig has.
+  - id: e_wedding_glow_2_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
+    midiMappings: []
+    notes: Golden hour, held still.
+  - id: e_wedding_glow_3_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
+      sliderBrilliance: 0.59
+      sliderTwinkleFocus: 0.88
+      sliderAfterglow: 0.13
+      sliderStarChorus: 0.63
+      sliderBurst: 0.15
+      sliderJewelryWhite: 0.81
+      sliderUvStars: 0.78
+    modulations: []
+    midiMappings: []
+    notes: Golden diamonds behind the couple.
+  - id: e_wedding_glow_4_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: Plain, even white when the photographer asks for light, not art.
+  - id: e_wedding_glow_5_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.26
+      sliderLevel: 0.68
+      sliderDetail: 0.9
+      sliderKick: 0.86
+      sliderJewelryWhite: 0.82
+    modulations: []
+    midiMappings: []
+    notes: Candlelight to close on.

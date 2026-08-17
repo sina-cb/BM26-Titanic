@@ -1,0 +1,405 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "calibration",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/calibration.yaml",
+  "playlistDigest": "4d975b2b3d59b6c1e1fa5a6c11863fb3bdedb9fb1bf1c8446aec12356cdfbc8f",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "66_calibration_x_plane",
+      "title": "01 — X Plane (left/right)",
+      "goal": "A saved Calibration X Plane look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderPosition",
+          "label": "Position",
+          "value": 0.41,
+          "valueSource": "playlist saved value",
+          "description": "Position character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWidth",
+          "label": "Width",
+          "value": 0.01,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackground",
+          "label": "Background",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "Background character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderPosition": 0.41,
+        "sliderWidth": 0.01,
+        "sliderBackground": 0
+      },
+      "effectiveValues": {
+        "sliderPosition": 0.41,
+        "sliderWidth": 0.01,
+        "sliderBackground": 0
+      },
+      "gif": "001_66_calibration_x_plane.gif",
+      "video": "001_66_calibration_x_plane.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d37c61bda4fba389cc3078ce526a3fda60f1969290f75c7a88ba283d84bfe102"
+    },
+    {
+      "index": 1,
+      "pattern": "67_calibration_y_plane",
+      "title": "02 — Y Plane (low/high)",
+      "goal": "A saved Calibration Y Plane look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderPosition",
+          "label": "Position",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "Position character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWidth",
+          "label": "Width",
+          "value": 0.01,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackground",
+          "label": "Background",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "Background character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderPosition": 0,
+        "sliderWidth": 0.01,
+        "sliderBackground": 0.2
+      },
+      "effectiveValues": {
+        "sliderPosition": 0,
+        "sliderWidth": 0.01,
+        "sliderBackground": 0.2
+      },
+      "gif": "002_67_calibration_y_plane.gif",
+      "video": "002_67_calibration_y_plane.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "17fb0440bacf3d65b48c239891a6f0054f17069e12be013efff745a67bb08a31"
+    },
+    {
+      "index": 2,
+      "pattern": "68_calibration_z_plane",
+      "title": "03 — Z Plane (depth)",
+      "goal": "A saved Calibration Z Plane look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderPosition",
+          "label": "Position",
+          "value": 0.69,
+          "valueSource": "playlist saved value",
+          "description": "Position character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWidth",
+          "label": "Width",
+          "value": 0.27,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackground",
+          "label": "Background",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "Background character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderPosition": 0.69,
+        "sliderWidth": 0.27,
+        "sliderBackground": 0.2
+      },
+      "effectiveValues": {
+        "sliderPosition": 0.69,
+        "sliderWidth": 0.27,
+        "sliderBackground": 0.2
+      },
+      "gif": "003_68_calibration_z_plane.gif",
+      "video": "003_68_calibration_z_plane.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4c99b77e1c4ad27dbb18067eb45917892e9d94fedb039649199ecfe4e4f0f69f"
+    },
+    {
+      "index": 3,
+      "pattern": "69_calibration_coordinate_rgb",
+      "title": "04 — XYZ Coordinate RGB",
+      "goal": "A saved Calibration Coordinate Rgb look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.8,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloor",
+          "label": "Floor",
+          "value": 0.05,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLevel": 0.8,
+        "sliderFloor": 0.05
+      },
+      "effectiveValues": {
+        "sliderLevel": 0.8,
+        "sliderFloor": 0.05
+      },
+      "gif": "004_69_calibration_coordinate_rgb.gif",
+      "video": "004_69_calibration_coordinate_rgb.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "70faf05db4103d8cd7f10303baeacd3957ca1384a5c91cced8be36456b77b386"
+    },
+    {
+      "index": 4,
+      "pattern": "70_calibration_fixture_types",
+      "title": "05 — Fixture Types",
+      "goal": "A saved Calibration Fixture Types look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLevel": 0.3
+      },
+      "effectiveValues": {
+        "sliderLevel": 0.3
+      },
+      "gif": "005_70_calibration_fixture_types.gif",
+      "video": "005_70_calibration_fixture_types.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c14d5947093880a66c995e6060fd7373b518962ccb0ce5c969792abb65f7989a"
+    },
+    {
+      "index": 5,
+      "pattern": "71_calibration_fixture_pixel_order",
+      "title": "06 — Fixture Pixel Order",
+      "goal": "A saved Calibration Fixture Pixel Order look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderPosition",
+          "label": "Position",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "Position character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackground",
+          "label": "Background",
+          "value": 0.07,
+          "valueSource": "playlist saved value",
+          "description": "Background character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderPosition": 0,
+        "sliderBackground": 0.07
+      },
+      "effectiveValues": {
+        "sliderPosition": 0,
+        "sliderBackground": 0.07
+      },
+      "gif": "006_71_calibration_fixture_pixel_order.gif",
+      "video": "006_71_calibration_fixture_pixel_order.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "50fb8c9a341afb30c58b1afa8ad98b5c79f57b8c705bc3f14fe36ea79d275bd8"
+    },
+    {
+      "index": 6,
+      "pattern": "72_calibration_controller_focus",
+      "title": "07 — Controller Focus",
+      "goal": "A saved Calibration Controller Focus look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderController",
+          "label": "Controller",
+          "value": 0.09,
+          "valueSource": "playlist saved value",
+          "description": "Controller character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackground",
+          "label": "Background",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "Background character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderController": 0.09,
+        "sliderBackground": 0
+      },
+      "effectiveValues": {
+        "sliderController": 0.09,
+        "sliderBackground": 0
+      },
+      "gif": "007_72_calibration_controller_focus.gif",
+      "video": "007_72_calibration_controller_focus.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "067a26b9e62ebd30b9fb8d8b3f48a16a7cf1bc5b2b827aaba44f9c2548fd12f8"
+    },
+    {
+      "index": 7,
+      "pattern": "73_calibration_emitter_channels",
+      "title": "08 — Emitter Channels",
+      "goal": "A saved Calibration Emitter Channels look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderChannel",
+          "label": "Channel",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "Channel character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.8,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderChannel": 0,
+        "sliderLevel": 0.8
+      },
+      "effectiveValues": {
+        "sliderChannel": 0,
+        "sliderLevel": 0.8
+      },
+      "gif": "008_73_calibration_emitter_channels.gif",
+      "video": "008_73_calibration_emitter_channels.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "43c8178c075896e800f0955ceeb288945819d22f40660e95dd7039e9c3ae0c9e"
+    },
+    {
+      "index": 8,
+      "pattern": "74_calibration_bpm_ruler",
+      "title": "09 — Global SPEED / BPM Ruler",
+      "goal": "A saved Calibration Bpm Ruler look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderPhaseOffset",
+          "label": "Phase Offset",
+          "value": 0.11,
+          "valueSource": "playlist saved value",
+          "description": "Phase Offset character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWidth",
+          "label": "Width",
+          "value": 0.28,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.8,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackground",
+          "label": "Background",
+          "value": 0.18,
+          "valueSource": "playlist saved value",
+          "description": "Background character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderPhaseOffset": 0.11,
+        "sliderWidth": 0.28,
+        "sliderLevel": 0.8,
+        "sliderBackground": 0.18
+      },
+      "effectiveValues": {
+        "sliderPhaseOffset": 0.11,
+        "sliderWidth": 0.28,
+        "sliderLevel": 0.8,
+        "sliderBackground": 0.18
+      },
+      "gif": "009_74_calibration_bpm_ruler.gif",
+      "video": "009_74_calibration_bpm_ruler.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "12c5f8f2a7fdae11f54dedb130ffcc3a6a791975c18ffc030c99c734b95d5c2c"
+    }
+  ]
+}

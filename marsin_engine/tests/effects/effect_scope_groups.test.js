@@ -13,7 +13,9 @@
  * that actually matters — each must CLEAR back to unrestricted on null, because
  * that is what disarm and the deadman revert rely on.
  *
- * Spawned with `--dest 127.0.0.9` so sACN cannot reach the live sim bridge.
+ * Spawned with `--dest 192.0.2.9` — TEST-NET-1 (RFC 5737), never routed — so
+ * sACN cannot reach the live sim bridge. Loopback is NOT a black hole: the
+ * sim's sACN receiver binds every local interface.
  *
  * Run: node --import ./tests/helpers/setup_config_guard.mjs \
  *        --test marsin_engine/tests/effects/effect_scope_groups.test.js
@@ -30,7 +32,7 @@ const h = createEngineHarness({
   portBase: 7900,
   portSpan: 200,
   extraEnv: { MARSIN_VSN1_DEPLOY: '0' },
-  extraArgs: ['--dest', '127.0.0.9'],
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 /** Real group names from the loaded model — never hard-code one. */

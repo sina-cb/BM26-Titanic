@@ -621,12 +621,13 @@
           </div>
         </div>
         <div class="note-color-editor">
-          <div class="note-color-selected"><span>EDIT NOTE</span><b id="note-color-selected-note">C</b><i id="note-color-selected-swatch"></i><button id="note-color-reset-all" type="button" aria-describedby="note-color-reset-help">RESET ALL</button></div>
+          <div class="note-color-selected"><span>EDIT NOTE</span><b id="note-color-selected-note">C</b><i id="note-color-selected-swatch"></i><button id="note-color-scriabin" type="button" aria-describedby="note-color-scriabin-help">SCRIABIN</button><button id="note-color-reset-all" type="button" aria-describedby="note-color-reset-help">RESET ALL</button></div>
           <label for="note-color-hue">Hue</label>
           <input id="note-color-hue" type="range" min="0" max="359" step="1" aria-describedby="note-color-help" />
           <div class="note-color-number"><input id="note-color-hue-num" type="number" min="0" max="359" step="1" aria-label="Selected note hue in degrees" /><span>°</span></div>
           <p id="note-color-help">Hue is the only editable component. The wheel and swatches preview HSV at full saturation and full value.</p>
           <p id="note-color-reset-help">RESET ALL restores all 12 hues to the supplied reference wheel. Tap it once to arm, then tap CONFIRM RESET within 3 seconds.</p>
+          <p id="note-color-scriabin-help">SCRIABIN loads Scriabin&rsquo;s published note&rarr;colour table (hues only &mdash; this wheel never sets saturation or value). It is the mapping Live Touch&rsquo;s FOLLOW NOTE uses, so loading it makes the rig and the touch panel agree about what colour a note is. RESET ALL brings back the reference wheel.</p>
         </div>
       </div>
     </section>

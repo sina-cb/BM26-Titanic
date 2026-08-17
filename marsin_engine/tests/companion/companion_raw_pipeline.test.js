@@ -13,15 +13,22 @@ import {
   buildAudioAnalyzerOptions,
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
 import { SYNTHS } from '../../audio/synth/test_synths.js';
 import { ParamCenter } from '../../lib/param_center.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(__dirname, '..', '..');
+// HERMETIC: tracked config.yaml only. The publication test below drives the
+// REAL analyzer, and the operator's live overlay moves what it measures — on
+// one box the full_track maxima came out micOnsetLowRaw 0.955 vs 0.699 tracked,
+// micSubRaw 0.897 vs 0.489, audioGenreConf 0.007 vs 0.036. The `> 0` assertions
+// survived that, but the pipeline being scored was not the shipped one.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 
 test('production raw publication includes every derived-signal analyzer input', () => {
   const fields = Object.fromEntries(
@@ -73,10 +80,7 @@ test('raw publication fails loudly instead of replacing a missing analyzer field
 test('the Companion can retune the published-BPM slew live, and rejects bad input', () => {
   // The tracker runs in the COMPANION process, so a PATCH /audio/config echo
   // lands here — on DerivedSignals — rather than on the engine's analyzer.
-  const audioConfig = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  }).audioConfig;
+  const audioConfig = AUDIO_CONFIG;
   const derived = new DerivedSignals({
     paramCenter: new ParamCenter(null),
     bpmTracker: buildBpmTrackerOptions(audioConfig),
@@ -98,10 +102,7 @@ test('the Companion can retune the published-BPM slew live, and rejects bad inpu
 });
 
 test('real Companion analyzer publication makes onset, chest-hit, chroma, and genre inputs live', () => {
-  const audioConfig = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  }).audioConfig;
+  const audioConfig = AUDIO_CONFIG;
   const paramCenter = new ParamCenter(null);
   const detector = new AudioStructureDetector({
     paramCenter,

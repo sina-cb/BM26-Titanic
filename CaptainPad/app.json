@@ -3,7 +3,7 @@
     "name": "CaptainPad",
     "slug": "CaptainPad",
     "version": "1.0.0",
-    "orientation": "default",
+    "orientation": "landscape",
     "icon": "./assets/images/icon.png",
     "scheme": "captainpad",
     "splash": {
@@ -15,6 +15,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "requireFullScreen": true,
       "bundleIdentifier": "com.titanicrig.captainpad",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,

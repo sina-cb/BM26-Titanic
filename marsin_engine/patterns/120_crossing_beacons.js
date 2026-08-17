@@ -6,13 +6,17 @@
   The axes rotate against one another and repeatedly open into a grand X around
   the ship. This is not 58's single lighthouse wedge or mirrored phase: two
   independently clocked fans, their crossing angle, and their trailing light
-  remain visible at once.
+  remain visible at once. Slow incommensurate rotations in the beacon glass
+  throw wandering Fresnel facets through the main rays and across the safety
+  bed, so the monumental X keeps changing without becoming busy or periodic.
 
   A palette-derived safety floor is always present. sliderSafetyFloor maps only
   to 0.10..0.20 brightness, so no control setting can erase the installation.
   All colour is a strict cp1<->cp2 RGB interpolation; native emitters stay off.
-  Geometry uses normalized XYZ only. The optional TE-sign branch refracts the
-  same two fans into a smooth Identity prism without relying on authored views.
+  Geometry uses normalized XYZ and fixture-local sign topology. On Identity,
+  both physical signs receive the exact same pixelLocalIndex composition: two
+  opposed beacon scans cross each complete letter trace above a reliable floor.
+  This makes their output framewise symmetric while preserving readability.
 
   CONTROLS (declaration order = physical MIDI order)
     localSpeed  — counter-rotation rate; 0 still creeps.
@@ -58,6 +62,8 @@ export function sliderFlash(v) { flash = v; }
 var PHASE_WRAP = 10000.0;
 var phaseA = 0.125;
 var phaseB = 0.375;
+var glassPhaseA = 0.083;
+var glassPhaseB = 0.617;
 
 var liveSpeed = 0.35;
 var liveLevel = 0.65;
@@ -148,8 +154,12 @@ export function beforeRender(delta) {
   var rate = 0.018 + 0.22 * pow(2.0, (liveSpeed - 0.5) * 4.0);
   phaseA = phaseA + dt * rate;
   phaseB = phaseB - dt * rate * 0.78615;
+  glassPhaseA = glassPhaseA + dt * rate * 0.61803;
+  glassPhaseB = glassPhaseB - dt * rate * 0.41421;
   if (phaseA >= PHASE_WRAP) phaseA = phaseA - PHASE_WRAP;
   if (phaseB < 0.0) phaseB = phaseB + PHASE_WRAP;
+  if (glassPhaseA >= PHASE_WRAP) glassPhaseA = glassPhaseA - PHASE_WRAP;
+  if (glassPhaseB < 0.0) glassPhaseB = glassPhaseB + PHASE_WRAP;
 
   resolvedHalfWidth = 0.025 + liveWidth * 0.135;
   resolvedTrailLag = 0.018 + liveAfterglow * 0.115;
@@ -165,12 +175,26 @@ export function render3D(index, x, y, z) {
   var angle = atan2(dz, dx) / PI2;
   angle = angle - floor(angle);
 
-  // Crossing shifts the second fan by +/-22.5 degrees. The smoothed control
-  // opens and closes the X without ever reversing or teleporting either clock.
-  var axisA = phaseA;
-  var axisB = phaseB + (liveCrossing - 0.5) * 0.125;
+  // Crossing shifts the second fan by +/-22.5 degrees. Independent slow glass
+  // rotations bend both axes by a few degrees, preventing a mechanical repeat
+  // without stealing the monumental X silhouette.
+  var axisA = phaseA + (wave(glassPhaseA) - 0.5) * 0.035;
+  var axisB = phaseB + (liveCrossing - 0.5) * 0.125
+            + (wave(glassPhaseB) - 0.5) * 0.029;
   var fanA = fanProfile(axisDistance(angle, axisA), resolvedHalfWidth);
   var fanB = fanProfile(axisDistance(angle, axisB), resolvedHalfWidth);
+
+  // Two incommensurate Fresnel walks articulate the rays along all three ship
+  // axes. Their broad modulation keeps each fan coherent at distance while
+  // continually changing its internal texture across the full model.
+  var facetA = wave(nx * 1.41421 + ny * 1.73205 - nz * 2.39996
+                  + glassPhaseA);
+  var facetB = wave(nx * 2.39996 - ny * 1.61803 + nz * 1.41421
+                  + glassPhaseB);
+  var fanGlassA = 0.76 + facetA * 0.24;
+  var fanGlassB = 0.76 + facetB * 0.24;
+  fanA = fanA * fanGlassA;
+  fanB = fanB * fanGlassB;
 
   // Each afterglow trails its own direction of travel. Both use the same live
   // length control, but their offsets point opposite ways by construction.
@@ -189,7 +213,15 @@ export function render3D(index, x, y, z) {
   var beamGain = 0.16 + liveLevel * 1.12;
   var flashPunch = liveFlash * (primaryFan * 0.72 + overlap * 0.48);
   var authored = clamp01(beamSignal * beamGain + flashPunch);
-  var bri = resolvedFloor + (1.0 - resolvedFloor) * authored;
+
+  // Refracted secondary light walks continuously through the safety bed. It
+  // stays subordinate to the fans, but gives every ship surface slow spatial
+  // activity even while neither primary ray is directly crossing it.
+  var glassMeet = facetA * facetB;
+  var glassRidge = glassMeet * glassMeet;
+  var secondary = glassRidge * (0.045 + liveAfterglow * 0.105);
+  var bri = resolvedFloor + (1.0 - resolvedFloor)
+          * clamp01(authored + secondary);
 
   // The safety bed is also palette-derived. Above it, fan A pulls toward cp1,
   // fan B toward cp2, and their crossing forms a genuine mixed-light centre.
@@ -198,23 +230,29 @@ export function render3D(index, x, y, z) {
   var energyB = fanB + tailB * 0.62;
   var mixValue = (energyB + bedMix * 0.20)
                / (energyA + energyB + 0.20);
+  mixValue = mixValue + (facetB - facetA) * secondary * 0.38;
   mixValue = clamp01(mixValue);
 
   if (fixtureType == FIX_TE_SIGN) {
-    // Identity prism: when both counter-fans meet, a folded XYZ refraction
-    // articulates the letters. It is continuous, palette-only, and subordinate
-    // to the two large fan axes so the sign still reads from far away.
-    var signFold = wave(dx * 1.73 + (ny - 0.5) * 2.39 - dz * 1.41
-                      + phaseA - phaseB);
-    var signPrism = sqrt(max(0.0, fanA * fanB))
-                  + (fanA + fanB) * signFold * 0.22;
-    signPrism = clamp01(signPrism);
-    var signKeep = resolvedFloor + 0.06;
+    // Both signs contain the same 40-pixel and 34-pixel letter traces, with
+    // matching pixelLocalIndex sequences. Depending only on that topology and
+    // global phases proves exact left/right output symmetry at every frame.
+    // Counter-moving scans make the beacon crossing travel across the entire
+    // letters instead of shrinking to whichever sign happens to face a ray.
+    var signTrack = pixelLocalIndex * 0.061803;
+    var signScanA = wave(signTrack + phaseA * 0.72 + glassPhaseA * 0.31);
+    var signScanB = wave(-signTrack + phaseB * 0.72 + glassPhaseB * 0.31);
+    signScanA = signScanA * signScanA;
+    signScanB = signScanB * signScanB;
+    var signCross = max(signScanA, signScanB)
+                  + min(signScanA, signScanB) * (0.35 + liveCrossing * 0.45);
+    signCross = clamp01(signCross);
+    var signKeep = 0.24 + resolvedFloor * 0.55;
     var signBri = signKeep + (1.0 - signKeep)
-                * clamp01(authored * 0.82 + signPrism * 0.46);
-    if (signBri > bri) bri = signBri;
-    mixValue = clamp01(0.50 + (fanB - fanA) * 0.42
-                     + signFold * 0.12 + (ny - 0.5) * 0.16);
+                * clamp01(signCross * (0.34 + liveLevel * 0.38)
+                        + liveFlash * signCross * 0.32);
+    bri = signBri;
+    mixValue = clamp01(0.50 + (signScanB - signScanA) * 0.34);
   }
 
   var r = (pr1 + (pr2 - pr1) * mixValue) * bri;

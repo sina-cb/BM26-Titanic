@@ -3,6 +3,14 @@ import type { ResolvedScheme, ThemeMode } from '../hooks/use-theme';
 
 export const LIVE_TOUCH_BRIDGE_VERSION = 1 as const;
 export const LIVE_TOUCH_PARENT_ORIGIN_PARAM = 'captainpad_origin';
+/** Marks the panel URL as loaded inside CaptainPad's iPad build (report _252).
+ *  A react-native-webview makes the page the TOP frame, so the page's own
+ *  `window.parent !== window` iframe test cannot see the host — this param is
+ *  the only synchronous signal, which is why the first-paint gate reads it too. */
+export const LIVE_TOUCH_EMBED_PARAM = 'captainpad_embed';
+export const LIVE_TOUCH_NATIVE_EMBED = 'native' as const;
+
+export type LiveTouchEmbedMode = typeof LIVE_TOUCH_NATIVE_EMBED;
 
 export const LIVE_TOUCH_THEME_KEYS = [
   'text',
@@ -52,6 +60,13 @@ export type CaptainPadSurfaceMessage =
   | CaptainPadSurfaceFocusMessage
   | CaptainPadSurfaceBlurMessage;
 
+export type CaptainPadSpatialFullscreenAppliedMessage = {
+  type: 'captainpad-spatial-fullscreen-applied';
+  version: typeof LIVE_TOUCH_BRIDGE_VERSION;
+  requestId: string;
+  active: boolean;
+};
+
 export type TouchControlThemeReadyMessage = {
   type: 'touch-control-theme-ready';
   version: typeof LIVE_TOUCH_BRIDGE_VERSION;
@@ -70,10 +85,18 @@ export type TouchControlSurfaceReleasedMessage = {
   target: 'deck' | 'mixer';
 };
 
+export type TouchControlSpatialFullscreenMessage = {
+  type: 'touch-control-spatial-fullscreen';
+  version: typeof LIVE_TOUCH_BRIDGE_VERSION;
+  requestId: string;
+  active: boolean;
+};
+
 export type TouchControlBridgeMessage =
   | TouchControlThemeReadyMessage
   | TouchControlThemeAppliedMessage
-  | TouchControlSurfaceReleasedMessage;
+  | TouchControlSurfaceReleasedMessage
+  | TouchControlSpatialFullscreenMessage;
 
 const THEME_IDS = new Set<ThemeId>(['light', 'dark', 'midnight', 'sunset', 'gruvbox']);
 
@@ -101,6 +124,57 @@ export function shouldSendLiveTouchThemeOnReady(
   pendingRequestId: string | null,
 ): boolean {
   return frameLoaded && pendingRequestId === null;
+}
+
+/**
+ * Does THIS release deserve the full-pad "HANDING BACK TO …" curtain?
+ *
+ * The curtain covers a blend the operator is WATCHING: docs/47 defines it as
+ * part of the navigation handshake ("acknowledge the CaptainPad navigation
+ * request and remove its curtain"), raised when Deck/Mixer is selected and
+ * dropped when the panel acknowledges the release.
+ *
+ * A `background` release has no viewer by construction — the app is leaving the
+ * screen — and on the iPad it is also the ONE release whose acknowledgement can
+ * never come back in time: iOS suspends both the app's JS and the WebView's the
+ * moment the app resigns active, so the panel cannot answer until the operator
+ * returns (report _261). Raising a full-pad, opaque, touch-swallowing curtain
+ * for it meant the operator came back from a home-swipe or an auto-lock to a
+ * Live Touch tab that was covered by "HANDING BACK TO DECK" and took no touches.
+ *
+ * The release itself is unchanged — still requested, still acknowledged, still
+ * loudly timed out. Only the curtain is navigation-only.
+ */
+export function handoffCurtainTarget(
+  target: CaptainPadSurfaceBlurMessage['target'],
+  reason: CaptainPadSurfaceBlurMessage['reason'],
+): CaptainPadSurfaceBlurMessage['target'] | null {
+  if (reason === 'navigation') return target;
+  if (reason === 'background') return null;
+  throw new Error(`Live Touch handoff has an unsupported reason ${String(reason)}`);
+}
+
+/**
+ * Can the NATIVE surface actually hand a message to the panel right now?
+ *
+ * The iframe transport gets a delivery answer for free — no `contentWindow`,
+ * no post. `injectJavaScript` gives none: it is fire-and-forget, and a call to
+ * `window.__captainpadDeliver` inside a page that has not installed it yet (or
+ * has just been reloaded — by the panel's own RELOAD button, by a `retry`, or
+ * by iOS reclaiming a backgrounded WebView's content process) throws inside the
+ * WebView where nobody is listening. Reporting `true` for that made the
+ * coordinator believe an undeliverable release was on the wire and hang its
+ * pending request — and its curtain — for the full 30 s timeout.
+ *
+ * `panelReady` is the panel's own `touch-control-theme-ready`, which it posts
+ * only AFTER installing the inbound hook, and which the surface clears again on
+ * every `onLoadStart`. So this is the truthful answer to "does the hook exist".
+ */
+export function canDeliverToNativePanel(
+  webViewMounted: boolean,
+  panelReady: boolean,
+): boolean {
+  return webViewMounted && panelReady;
 }
 
 export function buildLiveTouchThemeMessage(
@@ -170,15 +244,44 @@ export function parseTouchControlBridgeMessage(value: unknown): TouchControlBrid
     };
   }
 
+  if (value.type === 'touch-control-spatial-fullscreen') {
+    if (typeof value.requestId !== 'string' || value.requestId.length === 0) {
+      throw new Error('Live Touch fullscreen request is missing requestId');
+    }
+    if (typeof value.active !== 'boolean') {
+      throw new Error('Live Touch fullscreen request has an invalid active state');
+    }
+    return {
+      type: 'touch-control-spatial-fullscreen',
+      version: LIVE_TOUCH_BRIDGE_VERSION,
+      requestId: value.requestId,
+      active: value.active,
+    };
+  }
+
   throw new Error(`Live Touch sent unknown bridge message ${String(value.type)}`);
 }
 
+/**
+ * Where the Live Touch panel is served from, and which host is embedding it.
+ *
+ * `pageOrigin` (web) and `embed` (native) are mutually exclusive by
+ * construction, and that is the point: on native there is NO web origin to
+ * declare, and inventing one would be a lie the page's own origin check would
+ * then bless. The hostname comes from `apiBase` there instead, which on native
+ * is already metro-host-derived (report _246).
+ */
 export function resolveLiveTouchPanelUrl(
   apiBase: string,
   panelPath: string,
   simulationPort: string,
   pageOrigin?: string | null,
+  embed?: LiveTouchEmbedMode | null,
 ): string {
+  if (pageOrigin && embed) {
+    throw new Error('Live Touch cannot declare both a parent origin and a native embed');
+  }
+
   const panelUrl = new URL(apiBase);
   panelUrl.port = simulationPort;
   panelUrl.pathname = panelPath;
@@ -190,6 +293,8 @@ export function resolveLiveTouchPanelUrl(
     panelUrl.hostname = parentUrl.hostname;
     panelUrl.searchParams.set(LIVE_TOUCH_PARENT_ORIGIN_PARAM, parentUrl.origin);
   }
+
+  if (embed) panelUrl.searchParams.set(LIVE_TOUCH_EMBED_PARAM, embed);
 
   return panelUrl.toString();
 }

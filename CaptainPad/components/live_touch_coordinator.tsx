@@ -13,6 +13,7 @@ import { usePalette } from '@/hooks/use-theme';
 import { fetchLayerSettingsState } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 import {
+  handoffCurtainTarget,
   LIVE_TOUCH_BRIDGE_VERSION,
 } from '@/utils/live_touch_bridge';
 import type { CaptainPadSurfaceBlurMessage } from '@/utils/live_touch_bridge';
@@ -128,7 +129,13 @@ export function LiveTouchCoordinatorProvider({ children }: { children: React.Rea
     reason: CaptainPadSurfaceBlurMessage['reason'] = 'navigation',
   ): Promise<boolean> => {
     const sender = hostRef.current;
-    if (!sender) return Promise.reject(new Error('LIVE TOUCH HANDOFF UNAVAILABLE - iframe is not ready'));
+    /* Transport-neutral wording: the surface is an iframe on web and a WebView
+       on the iPad, and the operator reads these words on both. */
+    if (!sender) {
+      return Promise.reject(new Error(
+        'LIVE TOUCH HANDOFF UNAVAILABLE - the panel surface is not mounted',
+      ));
+    }
 
     if (pendingRef.current) {
       if (pendingRef.current.target === target && pendingPromiseRef.current) {
@@ -151,7 +158,11 @@ export function LiveTouchCoordinatorProvider({ children }: { children: React.Rea
       reason,
     };
 
-    setHandoffTarget(target);
+    /* NAVIGATION ONLY (report _261). The curtain covers the blend the operator
+       is watching; a background release happens on a screen nobody is looking
+       at, and on the iPad its acknowledgement cannot arrive until the app is
+       active again — which used to leave the whole pad curtained on return. */
+    setHandoffTarget(handoffCurtainTarget(target, reason));
     const promise = new Promise<boolean>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (pendingRef.current?.requestId !== requestId) return;
@@ -167,7 +178,9 @@ export function LiveTouchCoordinatorProvider({ children }: { children: React.Rea
         pendingRef.current = null;
         pendingPromiseRef.current = null;
         setHandoffTarget(null);
-        reject(new Error('LIVE TOUCH HANDOFF UNAVAILABLE - iframe rejected the request'));
+        reject(new Error(
+          'LIVE TOUCH HANDOFF UNAVAILABLE - the panel cannot receive messages yet',
+        ));
       }
     });
     pendingPromiseRef.current = promise;

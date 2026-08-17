@@ -964,12 +964,14 @@ test('_153 §10: a STALLED source is reported by name, never papered over with a
     // Either shape is correct and both name the culprit: "source stalled" when
     // that universe has never arrived for this destination, "frame NOT WHOLE"
     // when it HAS arrived before and is now lagging behind its siblings. The
-    // second is the one a mid-session stall produces, and it is the louder of
-    // the two (immediate, not after a settling window).
+    // second is the one a mid-session stall produces. Both now settle first —
+    // this stall runs 400 ms, well past either window (report 20260815_233 F4
+    // gave the torn read the same 250 ms grace the missing source always had,
+    // because they are the same situation one frame apart).
     const stall = logs.find(l => /BENCH MIRROR source stalled|BENCH MIRROR frame NOT WHOLE/.test(l));
     assert.ok(stall, 'the stall must be shouted');
     assert.match(stall, new RegExp(`U${missing}`), 'and must NAME the lagging universe');
-    assert.match(stall, /NOT being sent|was NOT sent/);
+    assert.match(stall, /NOT being sent|w(as|ere) NOT sent/);
     // Recovery: the next WHOLE engine frame resumes emission. (Feeding only the
     // missing source would leave its region on a NEWER sequence than the rest —
     // still not one frame, which is D-158-3.)

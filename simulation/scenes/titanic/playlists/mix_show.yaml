@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: mix_show
+entries:
+  - id: m1
+    pattern: 13_sparkle
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: m2
+    pattern: 13_sparkle
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

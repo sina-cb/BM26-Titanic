@@ -27,16 +27,23 @@
 import React, { useMemo, useRef } from 'react';
 import { View, Text, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
-import { Palette } from '@/constants/theme';
+import { Palette, Radius, Type } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { MidiStatusChip } from '@/components/MidiStatusChip';
 import { HealthChip } from '@/components/ui/HealthChip';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
-import { PerformanceModeControl } from '@/components/PerformanceModeControl';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { updateMixerMaster } from '@/utils/api';
-import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
+import {
+  HEADER_COMPACT_MAX_WIDTH,
+  HEADER_MASTER_FADER_COMPACT_WIDTH,
+  HEADER_MASTER_FADER_WIDE_WIDTH,
+  HEADER_MIN_HEIGHT,
+  HEADER_MODEL_MAX_WIDTH,
+  HEADER_MODEL_MIN_WIDTH,
+  HEADER_PADDING_VERTICAL,
+} from '@/constants/header_layout';
 
 interface Props {
   /** Connection state passed in from the deck screen. */
@@ -56,6 +63,7 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
+  const compactHeader = isPortrait || width <= HEADER_COMPACT_MAX_WIDTH;
   const master = useMaster();
   const masterFade = useMasterFade();
   const fading = masterFade?.active === true;
@@ -93,7 +101,7 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
   };
 
   return (
-    <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
+    <View style={[styles.header, compactHeader && styles.headerCompact]}>
       {/* LEFT cluster — identity + status. THIS is the side that yields when
           the bar runs out of width (2026-07-27 fix): it was a rigid row, so at
           iPad-10 landscape (1180pt) the right cluster ran to x=1327 and the
@@ -103,20 +111,27 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
           hidden` keeps the squeezed chips inside their box; the MODEL chip
           truncates first (it already tail-truncates its name). Nothing is
           dropped — only the least load-bearing text narrows. */}
-      <View style={{ flex: 1, minWidth: 0, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 12 }}>
+      <View style={[styles.identityCluster, compactHeader && styles.identityClusterCompact]}>
         {/* The brand never wraps or shrinks — a 2-line "Marsin
 Deck" makes the
             whole header taller, which is the opposite of what a tight bar needs.
             Shrink pressure is routed to the MODEL chip below instead. */}
-        <Text numberOfLines={1} style={[styles.brandText, { flexShrink: 0 }, isPortrait && { fontSize: 16 }]}>{title}</Text>
+        <Text
+          numberOfLines={1}
+          style={[styles.brandText, compactHeader && styles.brandTextCompact]}
+        >
+          {title}
+        </Text>
         <View style={[styles.statusBadge, { flexShrink: 0 }, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
           <View style={[styles.statusDot, !isConnected && { backgroundColor: palette.error }]} />
           {/* Connection label — ALWAYS rendered (both orientations). A bare
               dot is not an acceptable disconnect indicator: the OFFLINE state
               especially must read as text, never a single red pixel (QA round 8
-              fix #3). '#00a86b' (MOD_GREEN) is the hardcoded "connected/ok"
-              green — reads as success on both light and dark surfaces. */}
-          <Text style={[styles.labelCaps, { color: isConnected ? '#00a86b' : palette.error }]}>
+              fix #3). The "connected/ok" green is the palette's `tertiary`
+              token (docs/54 §1.1 retires the old '#00a86b' literal) — the
+              palette already defines tertiary as the auto-driven/synced green
+              and it is contrast-picked per theme. */}
+          <Text numberOfLines={1} style={[styles.labelCaps, { color: isConnected ? palette.tertiary : palette.error }]}>
             {isConnected ? 'CONNECTED' : 'OFFLINE'}
           </Text>
         </View>
@@ -127,8 +142,10 @@ Deck" makes the
             kept visually subordinate (the MODEL caps label is dropped in
             portrait to save width — the name alone is enough). */}
         {activeModel ? (
-          <View style={[styles.modelChip, { flexShrink: 1, minWidth: 0 }]}>
-            {!isPortrait && <Text style={styles.labelCaps}>MODEL</Text>}
+          <View style={[styles.modelChip, compactHeader && styles.modelChipCompact]}>
+            {!isPortrait && (
+              <Text numberOfLines={1} style={styles.modelLabel}>MODEL</Text>
+            )}
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
         ) : null}
@@ -138,28 +155,25 @@ Deck" makes the
         {/* Engine-health warning — renders NOTHING when healthy (no layout
             shift); shows an amber "⚠ DEGRADED" chip only when the engine
             reports a degrade on /status. See HealthChip / useEngineHealth. */}
-        <HealthChip compact={isPortrait} />
+        <HealthChip compact={compactHeader} />
       </View>
-      {/* RIGHT cluster — PERFORMANCE · FADE group · MASTER fader · readout.
+      {/* RIGHT cluster — FADE group · MASTER fader · readout.
           `flexShrink: 0` is load-bearing: the master fader is the deck's
           grand-master and the e-stop-adjacent control, so it must NEVER be the
           thing that gets clipped when the bar is tight. The left cluster
           absorbs the shortfall instead (see its note above). */}
-      <View style={{ flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
-        {/* PERFORMANCE MODE — live-show structural lock. Same shared control the
-            mixer header mounts, first in the right cluster so it reads before the
-            master group. Idle chip → confirm → GO LIVE; active badge → exit sheet. */}
-        <PerformanceModeControl isPortrait={isPortrait} />
+      <View style={[styles.controlRack, compactHeader && styles.controlRackCompact]}>
         {/* FADE affordance — the GENTLE path down (and back up) must be
             reachable in BOTH orientations (QA round 8 fix #2): without it,
             portrait left only the HARD blackout cut as a way down. Shared
             MasterFadeGroup (same control the mixer header uses — one
             implementation, no drift). */}
-        <MasterFadeGroup isPortrait={isPortrait} disabled={disabled} />
+        <MasterFadeGroup isPortrait={isPortrait} compact={compactHeader} disabled={disabled} />
         {/* MASTER label — ALWAYS rendered (both orientations). Portrait used
             to drop it, leaving the fader as an unlabeled bare strip
             (QA round 8 BLOCKER #1). */}
-        <Text style={styles.labelCaps}>MASTER</Text>
+        <View style={[styles.masterControlGroup, compactHeader && styles.masterControlGroupCompact]}>
+          <Text numberOfLines={1} style={styles.labelCaps}>MASTER</Text>
         {/* Soft PLAN lock: pointerEvents 'none' blocks the fader's
             PanResponder entirely (a gated onChange alone would still let the
             thumb track the finger locally — a visual lie); the dim marks it
@@ -177,7 +191,16 @@ Deck" makes the
             // bug). null when idle ⇒ normal external sync.
             fadingTarget={fading ? masterFade?.to : null}
             fadingDurationMs={masterFade?.remainingMs}
-            trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 180 }]}
+            trackStyle={[
+              styles.faderTrack,
+              {
+                width: isPortrait
+                  ? 120
+                  : compactHeader
+                    ? HEADER_MASTER_FADER_COMPACT_WIDTH
+                    : HEADER_MASTER_FADER_WIDE_WIDTH,
+              },
+            ]}
             fillStyle={[styles.faderFill, fading && styles.faderFillFading]}
             // Visible, grabbable THUMB (QA round 8 BLOCKER #1) — same pattern as
             // the global hue fader. Without it the master is a full-width hot
@@ -192,20 +215,20 @@ Deck" makes the
             a fixed-width slot, so swapping its text for the hint keeps the
             row geometry stable either way. */}
         {fading ? (
-          <Text style={styles.fadingHint}>FADING…</Text>
+          <Text numberOfLines={1} style={styles.fadingHint}>FADING…</Text>
         ) : (
-          <Text style={[
-            styles.displayMono,
-            // marginLeft keeps the readout off the slider track/thumb so the
-            // leading digit never reads as touching the bar (QA round 10
-            // fix #2) — the resting-row `gap` (4pt in portrait) was too tight
-            // against the thumb. Matches the mixer-landscape master spacing.
-            { fontSize: 16, width: 36, textAlign: 'right', marginLeft: 8 },
-            isPortrait && { fontSize: 14, width: 28 },
-          ]}>
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.displayMono,
+              { fontSize: 16, width: 36, textAlign: 'right' },
+              isPortrait && { fontSize: 14, width: 28 },
+            ]}
+          >
             {Math.round(master * 100)}
           </Text>
         )}
+        </View>
       </View>
     </View>
   );
@@ -229,11 +252,29 @@ function makeStyles(C: Palette) {
       justifyContent: 'space-between' as const,
       paddingHorizontal: 24,
     },
+    headerCompact: {
+      paddingHorizontal: 16,
+    },
+    identityCluster: {
+      flex: 1,
+      minWidth: 0,
+      overflow: 'hidden' as const,
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 12,
+    },
+    identityClusterCompact: {
+      gap: 8,
+    },
     brandText: {
       color: C.primary,
       fontSize: 20,
       fontFamily: 'SpaceGrotesk_700Bold',
       letterSpacing: -0.5,
+      flexShrink: 0,
+    },
+    brandTextCompact: {
+      fontSize: 18,
     },
     statusBadge: {
       flexDirection: 'row' as const,
@@ -242,14 +283,14 @@ function makeStyles(C: Palette) {
       backgroundColor: C.surfaceContainerHigh,
       paddingHorizontal: 12,
       paddingVertical: 6,
-      borderRadius: 8,
+      borderRadius: Radius.control,
       borderWidth: 1,
       borderColor: C.ghostBorder,
     },
     statusDot: {
       width: 8, height: 8, borderRadius: 4,
-      // '#00a86b' MOD_GREEN — works on both themes (matches the connected label).
-      backgroundColor: '#00a86b',
+      // The connected dot wears the same `tertiary` green as its label.
+      backgroundColor: C.tertiary,
     },
     // Secondary "active model" chip. Same surface/border geometry as the
     // status badge so the two read as one toolbar; slightly tighter
@@ -258,27 +299,70 @@ function makeStyles(C: Palette) {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       gap: 6,
-      maxWidth: 200,
+      minWidth: HEADER_MODEL_MIN_WIDTH,
+      maxWidth: HEADER_MODEL_MAX_WIDTH,
+      flexShrink: 0,
       backgroundColor: C.surfaceContainerHigh,
       paddingHorizontal: 10,
       paddingVertical: 6,
-      borderRadius: 8,
+      borderRadius: Radius.control,
       borderWidth: 1,
       borderColor: C.ghostBorder,
+    },
+    modelChipCompact: {
+      maxWidth: 168,
+      paddingHorizontal: 8,
+    },
+    modelLabel: {
+      ...Type.labelCaps,
+      textTransform: Type.labelCaps.textTransform as 'uppercase',
+      color: C.secondary,
+      flexShrink: 0,
     },
     modelName: {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 11,
       letterSpacing: 0.4,
       color: C.primary,
+      minWidth: 0,
       flexShrink: 1,
     },
+    controlRack: {
+      minHeight: 44,
+      flexShrink: 0,
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 12,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: Radius.card,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    controlRackCompact: {
+      gap: 8,
+      paddingHorizontal: 6,
+    },
+    masterControlGroup: {
+      flexShrink: 0,
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 8,
+      paddingLeft: 12,
+      borderLeftWidth: 1,
+      borderLeftColor: C.ghostBorder,
+    },
+    masterControlGroupCompact: {
+      gap: 6,
+      paddingLeft: 8,
+    },
+    // The shared caps recipe (`Type.labelCaps` — SG 700 / 10 / 1.2 upper),
+    // not a sixteenth hand-tuned restatement of it. Same pixels as before.
     labelCaps: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
-      letterSpacing: 1.2,
+      ...Type.labelCaps,
+      textTransform: Type.labelCaps.textTransform as 'uppercase',
       color: C.secondary,
-      textTransform: 'uppercase' as const,
     },
     displayMono: {
       fontFamily: 'SpaceGrotesk_700Bold',
@@ -326,9 +410,6 @@ function makeStyles(C: Palette) {
       color: C.tertiary,
       width: 44,
       textAlign: 'right' as const,
-      // Match the readout's left gap (fix #2) so swapping hint↔value keeps
-      // the same separation from the slider and the row geometry stays put.
-      marginLeft: 8,
     },
   };
 }

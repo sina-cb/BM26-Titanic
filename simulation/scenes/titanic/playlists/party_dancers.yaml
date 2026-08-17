@@ -1,0 +1,231 @@
+schemaVersion: 1
+name: party_dancers
+entries:
+  - id: e_party_dancers_0_134_dom_frequency_baseline
+    pattern: party_dancers/01_dom_ball_dancers
+    label: DOM Ball Dancers
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.5
+      sliderMinimumWidth: 0.42
+      sliderEnergyWidth: 0.58
+      sliderBackgroundLevel: 0.38
+      sliderOrganEnergy: 0.36
+      sliderOrganKick: 0.12
+      sliderIdentityLevel: 0.48
+      sliderDomFreq1: 0.007256
+      sliderDomEnergy1: 0.52
+      sliderDomFreq2: 0.079819
+      sliderDomEnergy2: 0.52
+      sliderSpin: 0.28
+    modulations:
+      - id: mod_party_dancers_01_sliderDomFreq1_micDomFreq1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomFreq1
+        target:
+          scope: pattern
+          parameter: sliderDomFreq1
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_01_sliderDomEnergy1_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderDomEnergy1
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_01_sliderDomFreq2_micDomFreq2
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomFreq2
+        target:
+          scope: pattern
+          parameter: sliderDomFreq2
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_01_sliderDomEnergy2_micDomEnergy2
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy2
+        target:
+          scope: pattern
+          parameter: sliderDomEnergy2
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_01_sliderOrganEnergy_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderOrganEnergy
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.88
+        curve: easeOut
+      - id: mod_party_dancers_01_sliderOrganKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderOrganKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: easeIn
+    midiMappings: []
+    notes: >-
+      Prototype audition - two real dominant-frequency lanes paint broad,
+      exactly mirrored longitudinal bands on both Titanic halves; LOW/KICK
+      make the Organs breathe and pulse only near those same bands. Spin turns
+      one shared hull-local coordinate frame so the dancers travel through the
+      front/back depth without losing left/right fairness.
+  - id: e_party_dancers_1_dom_eq_rise
+    pattern: party_dancers/02_dom_eq_rise
+    label: DOM EQ Rise
+    defaults:
+      sliderLocalSpeed: 0.24
+      sliderLevel: 0.58
+      sliderBandWidth: 0.48
+      sliderBackgroundLevel: 0.3
+      sliderOrganEnergy: 0.34
+      sliderOrganKick: 0.1
+      sliderIdentityLevel: 0.52
+      sliderSpin: 0.32
+      sliderDomFreq1: 0.007256
+      sliderDomEnergy1: 0.54
+      sliderDomFreq2: 0.079819
+      sliderDomEnergy2: 0.54
+    modulations:
+      - id: mod_party_dancers_02_sliderDomFreq1_micDomFreq1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomFreq1
+        target:
+          scope: pattern
+          parameter: sliderDomFreq1
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_02_sliderDomEnergy1_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderDomEnergy1
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_02_sliderDomFreq2_micDomFreq2
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomFreq2
+        target:
+          scope: pattern
+          parameter: sliderDomFreq2
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_02_sliderDomEnergy2_micDomEnergy2
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy2
+        target:
+          scope: pattern
+          parameter: sliderDomEnergy2
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_party_dancers_02_sliderOrganEnergy_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderOrganEnergy
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.84
+        curve: easeOut
+      - id: mod_party_dancers_02_sliderOrganKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderOrganKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.78
+        curve: easeIn
+    midiMappings: []
+    notes: >-
+      Bottom-to-top dual-lane EQ columns: dominant frequency sets each rise
+      height, matching energy sets its brush size and strength, and Spin moves
+      paired antipodal columns around the whole ship. The dim field stays alive
+      in silence while LOW/KICK remain spatially confined to the Organs.

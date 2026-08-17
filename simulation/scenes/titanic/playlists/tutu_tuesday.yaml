@@ -39,7 +39,9 @@ entries:
   - id: e_tutu_tuesday_5_26_dom_dancers_chevron
     pattern: 26_dom_dancers_chevron
     label: null
-    defaults: {}
+    defaults:
+      sliderBall1Energy: 0.333333
+      sliderBall2Energy: 0.333333
     modulations: []
     midiMappings: []
     notes: null
@@ -81,7 +83,12 @@ entries:
   - id: e_tutu_tuesday_11_57_ink_diffuse
     pattern: 57_ink_diffuse
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
     modulations: []
     midiMappings: []
     notes: null

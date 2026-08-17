@@ -2,18 +2,20 @@
 /*
   127_grand_maelstrom.js — GRAND MAELSTROM
 
-  One huge ocean vortex rotates around the normalized XZ center. Two or three
-  broad filled arms curl radially and climb through Y, making the complete ship
-  appear immersed in a single slow maelstrom from far away. This is not a tube
-  helix or a set of ring shells: it is one continuous polar flow field with a
-  calm eye and large area-filling arms.
+  One huge ocean vortex travels slowly through the normalized XZ volume. Two or
+  three broad filled arms curl radially and climb through Y, while a quieter
+  counter-current articulates the ship's outer reaches. The complete ship stays
+  immersed in one grand maelstrom instead of collapsing around a fixed center.
+  This is not a tube helix or a set of ring shells: it is one continuous polar
+  flow field with a calm traveling eye and large area-filling arms.
 
   PORTABILITY
     The shared composition uses normalized XYZ only. No authored view, group,
-    section, controller, raw fixture metadata, or load-bearing fixture role is
-    required. FIX_TE_SIGN is an optional accent: Identity receives a readable
-    floor and a strengthened vortex-eye/arm crossing. Scenes without TE signs
-    compile and render the complete maelstrom unchanged.
+    section, controller, or raw fixture metadata is required. On the Titanic
+    and test bench, FIX_TE_SIGN gives each Identity letter the same vortex
+    current along its real pixelLocalIndex path. Matching local indices on the
+    two signs are therefore byte-symmetric, and every letter keeps a readable
+    floor. A model without that fixture role fails injection loudly.
 
   SAFETY FLOOR
     sliderSafetyFloor maps only 0.10..0.20. Every pixel receives that palette-
@@ -48,12 +50,13 @@ export function sliderDepth(v) { depth = v; }
 export function sliderSafetyFloor(v) { safetyFloor = v; }
 export function sliderPulse(v) { pulse = v; }
 
-// Optional accent role: canonical append-only registry id. It is never needed
-// for the shared composition and matches no pixel on scenes without TE signs.
+// Target-model accent role: canonical append-only registry id. Both required
+// review models expose it; injection fails loudly on an incompatible model.
 var FIX_TE_SIGN = 7;
 
 var PHASE_WRAP = 10000.0;
 var vortexPhase = 0.0;
+var undertowPhase = 0.0;
 
 var pr1 = 1.0, pg1 = 0.0, pb1 = 0.0;
 var pr2 = 0.0, pg2 = 1.0, pb2 = 1.0;
@@ -107,11 +110,14 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // A full rotation takes about eleven seconds at midpoint. Local Speed is the
-  // sole clock trim; integer-turn wrapping preserves both arm solutions.
+  // The primary and quieter counter-current use an irrational rate ratio so
+  // their spatial relationship does not visibly re-lock. Local Speed remains
+  // the sole clock trim; large wrapping keeps every fractional consumer smooth.
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  vortexPhase = vortexPhase + dt * 0.09 * localMultiplier;
+  vortexPhase = vortexPhase + dt * 0.074 * localMultiplier;
+  undertowPhase = undertowPhase + dt * 0.045733 * localMultiplier;
   if (vortexPhase >= PHASE_WRAP) vortexPhase = vortexPhase - PHASE_WRAP;
+  if (undertowPhase >= PHASE_WRAP) undertowPhase = undertowPhase - PHASE_WRAP;
 }
 
 export function render3D(index, x, y, z) {
@@ -119,8 +125,13 @@ export function render3D(index, x, y, z) {
   var ny = clamp01(y);
   var nz = clamp01(z);
 
-  var dx = nx - 0.5;
-  var dz = nz - 0.5;
+  // Let the calm eye tour the vessel instead of pinning all structure to the
+  // normalized center. The two small, incommensurate excursions keep the
+  // off-axis field smooth and distribute broad crossings over the full model.
+  var centerX = 0.5 + sin(undertowPhase * 6.2831853 * 1.4142136) * 0.14;
+  var centerZ = 0.5 + cos(undertowPhase * 6.2831853 * 1.7320508) * 0.12;
+  var dx = nx - centerX;
+  var dz = nz - centerZ;
   var radius = sqrt(dx * dx + dz * dz);
   var angle = atan2(dz, dx) / 6.2831853;
   var depthAmount = clamp01(depth);
@@ -139,17 +150,23 @@ export function render3D(index, x, y, z) {
   var armField = armTwo + (armThree - armTwo) * countMix;
 
   // Width changes filled angular area rather than creating a tubular contour.
-  // A mild radial envelope keeps the complete field broad while preserving a
-  // calm eye and softer outer water.
+  // Outer water remains fully involved; only the calm eye suppresses detail.
   var width = 0.32 + clamp01(armWidth) * 0.62;
   var arm = smoothUnit((armField - (1.0 - width)) / width);
   arm = pow(arm, 0.58 + (1.0 - clamp01(armWidth)) * 0.92);
-  var radialEnvelope = 0.72 + smoothUnit(1.0 - radius / 0.74) * 0.28;
-  arm = arm * radialEnvelope;
   // Expand the low-frequency crest across large ship surfaces. This is a
   // filled ocean arm, so it should read as a monumental mass rather than the
   // thin luminous tubes used by the neighboring helix concepts.
-  arm = smoothUnit(arm * (2.70 + clamp01(armWidth) * 2.20));
+  arm = smoothUnit(arm * (1.48 + clamp01(armWidth) * 1.18));
+
+  // A subordinate counter-current follows the same polar topology at a finer
+  // scale. XYZ and fixture-local travel prevent large instruments from reading
+  // as one flat sample while keeping the maelstrom a single coherent body.
+  var localTravel = pixelLocalIndex * 0.017;
+  var undertowField = wave(-angle * 1.0 - radius * (3.6 + depthAmount * 2.4)
+                         + ny * 1.4142136 + localTravel + undertowPhase);
+  var undertow = smoothUnit((undertowField - 0.34) / 0.66);
+  undertow = undertow * (0.32 + smoothUnit(radius / 0.72) * 0.68);
 
   // The calm eye is a filled center pressure, not a ring shell. Its broad edge
   // meets the passing arms to make a single readable vortex gesture.
@@ -162,24 +179,32 @@ export function render3D(index, x, y, z) {
   var floorV = 0.10 + clamp01(safetyFloor) * 0.10;
   var levelGain = 0.18 + clamp01(level) * 1.28;
   var pulseGain = clamp01(pulse);
-  var energy = arm * levelGain + eyePressure * (0.12 + levelGain * 0.24)
-             + max(arm, eyePressure) * pulseGain * 0.42;
+  var distributedCurrent = arm * (0.70 + undertow * 0.30)
+                         + undertow * (1.0 - arm) * 0.34;
+  var energy = distributedCurrent * levelGain * 0.48
+             + eyePressure * (0.12 + levelGain * 0.24)
+             + max(distributedCurrent, eyePressure) * pulseGain * 0.42;
   var bri = floorV + (1.0 - floorV) * energy;
   bri = clamp01(bri);
 
-  var paletteMix = clamp01(arm * (0.76 + pulseGain * 0.10)
-                          + eyePressure * 0.22);
+  var paletteMix = clamp01(distributedCurrent * (0.70 + pulseGain * 0.10)
+                          + undertow * 0.18 + eyePressure * 0.20);
 
   if (fixtureType == FIX_TE_SIGN) {
-    // Identity holds the vortex eye and brightens the same arm crossing. Its
-    // floor stays readable when neither broad arm occupies the sign geometry.
-    var identityFloor = floorV + 0.07;
-    var crossing = max(arm, eyePressure * 0.72);
-    var identityEnergy = crossing * (0.26 + levelGain * 0.56)
-                       + eye * 0.14 + crossing * pulseGain * 0.32;
-    bri = max(bri, identityFloor + (1.0 - identityFloor) * identityEnergy);
+    // Each letter's physical wiring path becomes a miniature vortex arm. The
+    // formulation intentionally excludes world X so matching local indices on
+    // the two TE signs receive exactly equal RGB bytes on every frame.
+    var signPath = pixelLocalIndex / 39.0;
+    var signArm = wave(signPath * (1.70 + depthAmount * 1.30)
+                      - vortexPhase * 1.18);
+    var signUndertow = wave(signPath * 2.3999632 + undertowPhase * 1.4142136);
+    var signCurrent = smoothUnit(signArm * 0.68 + signUndertow * 0.32);
+    var identityFloor = floorV + 0.13;
+    var identityEnergy = 0.18 + signCurrent * (0.34 + levelGain * 0.32)
+                       + signUndertow * 0.10 + signCurrent * pulseGain * 0.26;
+    bri = identityFloor + (1.0 - identityFloor) * identityEnergy;
     bri = clamp01(bri);
-    paletteMix = clamp01(max(paletteMix, crossing * 0.88));
+    paletteMix = clamp01(0.18 + signCurrent * 0.72 + signUndertow * 0.10);
   }
 
   // Strict cp1<->cp2 RGB interpolation. This concept authors no white, so W

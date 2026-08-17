@@ -19,7 +19,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { assertEngineLinkDown, isolatedCompanionEnv } from '../helpers/companion_isolation.mjs';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TRACKED_AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(path.join(__dirname, '..', '..'));
 const SERVER = path.join(__dirname, '..', '..', 'audio', 'companion', 'companion_server.js');
 const CSS = path.join(__dirname, '..', '..', 'audio', 'companion', 'ui', 'companion_app.css');
 const APP = path.join(__dirname, '..', '..', 'audio', 'companion', 'ui', 'companion_app.js');
@@ -82,6 +86,15 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
   // suite to run at --test-concurrency=1.
   const oscPort = await getFreePort();
   const enginePort = await getFreePort();
+  // Hermeticity (report `_220`): without `MARSIN_STATE_DIR` this spawn read
+  // `states/test_bench/audio_state.yaml` — the OPERATOR'S live overlay — so the
+  // analyzer this test scores booted on whatever knob was last turned on the rig
+  // (measured: inputGain 8.83 not the tracked 1, fftSize 1024 not 2048, per-band
+  // gates 0.12/0.10/0.14 that the tracked config does not carry). Every
+  // assertion below is structural (key present, value finite), so the tracked
+  // config changes none of them — but a test that boots on the show's live
+  // tuning is not a regression gate, it is a snapshot of this afternoon.
+  const isolation = isolatedCompanionEnv('new_signals');
   let stderr = '';
   const proc = spawn('node', [
     SERVER,
@@ -100,6 +113,7 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     String(enginePort),
   ], {
     cwd: path.join(__dirname, '..', '..'),
+    env: isolation.env,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -119,6 +133,18 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     assert.equal(hello.mode, 'test');
     assert.equal(hello.micDisabled, true);
     assert.ok(hello.derivedConfig?.trackChange, 'hello seeds derived config');
+    // The `_173` guarantee, asserted rather than assumed now that this suite
+    // takes the isolated env: a spawned companion that reached a real engine
+    // would PATCH `capture.device` into the operator's running show.
+    assertEngineLinkDown(hello, assert.ok);
+    // …and the analyzer under test is the TRACKED one. Every assertion below is
+    // structural, so without this lock a dropped `env: isolation.env` would go
+    // unnoticed and this suite would silently score the rig's live overlay
+    // again (measured pre-`_220` on this box: inputGain 8.83, noiseGate 0.06).
+    assert.equal(hello.inputGain, TRACKED_AUDIO_CONFIG.bands.inputGain,
+      'the spawned companion is running the operator\'s live input gain, not the tracked one');
+    assert.equal(hello.gates.noiseGate, TRACKED_AUDIO_CONFIG.bands.noiseGate,
+      'the spawned companion is running the operator\'s live noise gate, not the tracked one');
     const micRejected = new Promise((resolve) => {
       ws.on('message', (buf) => {
         const message = JSON.parse(buf.toString());
@@ -130,6 +156,18 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     ws.send(JSON.stringify({ type: 'setMode', mode: 'mic' }));
     const rejected = await micRejected;
     assert.equal(rejected.mode, 'test');
+    const invalidRejected = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const message = JSON.parse(buf.toString());
+        if (message.type === 'sourceStatus'
+          && /unsupported audio source mode/.test(message.status?.error || '')) {
+          resolve(message);
+        }
+      });
+    });
+    ws.send(JSON.stringify({ type: 'setMode', mode: 'not-a-source', device: 'test' }));
+    const invalid = await invalidRejected;
+    assert.equal(invalid.mode, 'test', 'an invalid source request must not change the running source');
     // Force TEST source so analysis runs headless (no mic device in CI).
     ws.send(JSON.stringify({ type: 'setMode', mode: 'test' }));
 
@@ -173,6 +211,7 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     }
   } finally {
     proc.kill('SIGKILL');
+    isolation.cleanup();
   }
 });
 

@@ -14,23 +14,10 @@
  * so it is testable outside the full engine boot (see that file's header) —
  * and lints every patch.
  *
- * REAL FINDING while writing this suite, not fixed (test code only per this
- * agent's mandate): `models/dev_test_bench.js` currently FAILS TO BOOT. Its
- * sidecar `dev_test_bench.viewmasks.js` (or inline groupBits) declares group
- * names — ParLights, VintageLights, BarLights, LED_0 — that don't exist on
- * the (0-pixel) `dev_test_bench.js` model, so `assignGroupBits`
- * (lib/model_loader.js:130) throws "groupBits out of sync with model ...
- * stale: [...]" — verified against the REAL engine too:
- *   node engine.js --pattern 13_sparkle --model dev_test_bench --dry-run
- *     --dest 127.0.0.9 --port 19999
- *   -> "❌ groupBits in dev_test_bench.viewmasks.js is out of sync with model
- *      'dev_test_bench' — table key(s) not in the model: ParLights,
- *      VintageLights, BarLights, LED_0"
- * This is pinned below as a NAMED characterization (today's real, loud
- * failure — not a fallback), not silently skipped and not asserted as a
- * passing load, so a future fix to the sidecar (or the model) will FLIP this
- * test red as the signal to update it. Flagged for the reviewer/fix wave —
- * this agent does not edit models or their sidecars.
+ * `dev_test_bench` used to be a named broken characterization because its
+ * zero-pixel model carried stale group-bit sidecar entries. The sidecar is
+ * now repaired, so it participates in the same load and patch-table lint as
+ * every other model; keeping a special expected-failure would hide a repair.
  */
 
 import test from 'node:test';
@@ -85,25 +72,24 @@ test('every model file under models/ is discovered (sanity on the enumeration fi
   assert.equal(names.length, 9, `expected 9 model files, got ${names.length}: ${names.join(', ')}`);
 });
 
-// ── dev_test_bench: KNOWN BROKEN, pinned not fixed (see file header) ──────
+// ── dev_test_bench repair pin ────────────────────────────────────────────
 
-test('dev_test_bench: KNOWN-BROKEN boot — groupBits sidecar stale against the (0-pixel) model', async () => {
-  await assert.rejects(
-    () => loadModelForGauge('dev_test_bench'),
-    /groupBits out of sync with model — missing: \[\] stale: \[ParLights, VintageLights, BarLights, LED_0\]/,
-    'if this stops throwing, the sidecar was fixed — update/remove this pin',
-  );
+test('dev_test_bench: repaired sidecar loads the zero-pixel development model', async () => {
+  const model = await loadModelForGauge('dev_test_bench');
+  assert.equal(model.pixelCount, 0);
+  assert.deepEqual(model.pixels, []);
 });
 
-// ── Every other model: loads + patch-table lint ───────────────────────────
+// ── Every model: loads + patch-table lint ─────────────────────────────────
 
-const LINTED_MODELS = listModelNames().filter((n) => n !== 'dev_test_bench');
+const LINTED_MODELS = listModelNames();
 
 // Overlap counts snapshotted at survey time (2026-08-05): zero collisions in
 // every model today. Overlaps are operator-legal (ruling 2026-07-31) but must
 // be REPORTED — a nonzero count here is not necessarily a bug, but it is a
 // CHANGE that deserves a look, so this pin makes a new one impossible to miss.
 const EXPECTED_OVERLAP_COUNTS = {
+  dev_test_bench: 0,
   led202: 0,
   studio: 0,
   studio_top_loft: 0,

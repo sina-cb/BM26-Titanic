@@ -29,6 +29,12 @@ function makeFakeWasmHost() {
 }
 function makeMixer() {
   const mixer = new PatternMixer({ wasmHost: makeFakeWasmHost(), pixelCount: 2 });
+  // renderAll6ch has NO host-side lerp fallback: a channel whose blend mode
+  // has no compiled handle THROWS (codex P0 — fail loudly). These fixtures
+  // never set `patternsDir`, so nothing would precompile; prime the steady
+  // blend the fixtures use, exactly as the sibling mixer suites do
+  // (fader_lock, fader_max_clamp, groups_solo_precedence, channel_metering).
+  mixer.blendHandles['blend_screen'] = { fake: true };
   mixer.wantVisThisFrame = false;
   return mixer;
 }

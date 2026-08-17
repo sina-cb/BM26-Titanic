@@ -18,6 +18,10 @@
   };
   var FIT_FILL = 0.92;
   var MAX_DPR = 2;
+  var MAX_PREVIEW_POINTERS = 10;
+  var MIN_VIEW_ZOOM = 0.5;
+  var MAX_VIEW_ZOOM = 4;
+  var VIEW_ZOOM_STEP = 1.25;
   var ARTIFACT_URL = 'touch_control_pixel_views.json';
   var VIEWS_SOURCE_URL = '/simulation/scenes/titanic/pixel_map_views.yaml';
   var CAMERAS_SOURCE_URL = '/simulation/scenes/titanic/cameras.yaml';
@@ -36,22 +40,22 @@
     screenGlyphs: [],
     resizeObserver: null,
     readyPromise: null,
-    previewPointerId: null,
+    previewPointers: new Map(),
     previewPixelIndices: new Set(),
-    previewTarget: null,
     previewFrame: null,
-    previewEvent: null,
+    previewEvents: new Map(),
     drawFrame: null,
     panX: 0,
     panY: 0,
+    zoom: 1,
     panMode: false,
-    panPointerId: null,
-    panStartX: 0,
-    panStartY: 0,
-    panOriginX: 0,
-    panOriginY: 0,
+    navigationPointers: new Map(),
+    navigationGesture: null,
     viewSelect: null,
     panButton: null,
+    zoomOutButton: null,
+    zoomInButton: null,
+    zoomValue: null,
     fitButton: null,
     layoutDirty: true,
     baseCanvas: null,
@@ -69,6 +73,33 @@
     if (typeof value !== 'number' || !isFinite(value)) {
       throw new Error(label + ' must be finite');
     }
+  }
+
+  function clampZoom(value) {
+    requireFinite(value, 'view zoom');
+    return Math.min(MAX_VIEW_ZOOM, Math.max(MIN_VIEW_ZOOM, value));
+  }
+
+  /**
+   * Change zoom without moving the point under the operator's fingers.
+   * Pan is measured from the viewport centre, matching reprojectView().
+   */
+  function zoomAroundPoint(zoom, panX, panY, nextZoom, anchorX, anchorY, width, height) {
+    [zoom, panX, panY, nextZoom, anchorX, anchorY, width, height].forEach(function (value) {
+      requireFinite(value, 'zoom transform value');
+    });
+    if (zoom <= 0 || width <= 0 || height <= 0) {
+      throw new Error('zoom transform needs positive zoom and viewport dimensions');
+    }
+    nextZoom = clampZoom(nextZoom);
+    var ratio = nextZoom / zoom;
+    var fromCenterX = anchorX - width / 2;
+    var fromCenterY = anchorY - height / 2;
+    return {
+      zoom: nextZoom,
+      panX: fromCenterX - (fromCenterX - panX) * ratio,
+      panY: fromCenterY - (fromCenterY - panY) * ratio,
+    };
   }
 
   function sha256(text) {
@@ -334,7 +365,7 @@
    * Reproject resolved design coordinates into a final viewport. Pixel identity
    * and world coordinates are carried unchanged, so resize is display-only.
    */
-  function reprojectView(view, design, width, height, panX, panY) {
+  function reprojectView(view, design, width, height, panX, panY, zoom) {
     requireFinite(width, 'viewport width');
     requireFinite(height, 'viewport height');
     if (width <= 0 || height <= 0) throw new Error('viewport must be positive');
@@ -371,7 +402,7 @@
       maxY = Math.max(maxY, glyph.y + extents.y);
     });
     var fit = Math.min(width * FIT_FILL / Math.max(1, maxX - minX),
-      height * FIT_FILL / Math.max(1, maxY - minY));
+      height * FIT_FILL / Math.max(1, maxY - minY)) * clampZoom(zoom == null ? 1 : zoom);
     var centerX = (minX + maxX) / 2;
     var centerY = (minY + maxY) / 2;
     var tx = width / 2 + (panX || 0);
@@ -495,7 +526,7 @@
   function rebuildBase(width, height, dpr) {
     state.reprojectCount++;
     state.screenGlyphs = reprojectView(
-      state.view, state.artifact.design, width, height, state.panX, state.panY);
+      state.view, state.artifact.design, width, height, state.panX, state.panY, state.zoom);
     state.glyphByPixel.clear();
     state.screenGlyphs.forEach(function (glyph) { state.glyphByPixel.set(glyph.pixelIndex, glyph); });
     if (!state.baseCanvas) state.baseCanvas = root.document.createElement('canvas');
@@ -776,9 +807,12 @@
     state.view = view;
     state.panX = 0;
     state.panY = 0;
-    state.previewTarget = null;
+    state.zoom = 1;
+    state.previewPointers.clear();
+    state.previewEvents.clear();
     state.previewPixelIndices.clear();
     if (state.viewSelect) state.viewSelect.value = view.id;
+    updateZoomReadout();
     scheduleDraw(true);
     if (notify !== false) dispatchViewChange();
     return currentViewSpec();
@@ -801,44 +835,156 @@
     }
     if (state.panButton) {
       state.panButton.addEventListener('click', function () {
+        if (state.navigationPointers.size || state.previewPointers.size) return;
         state.panMode = !state.panMode;
         state.panButton.classList.toggle('on', state.panMode);
         state.panButton.setAttribute('aria-pressed', state.panMode ? 'true' : 'false');
+        state.panButton.textContent = state.panMode ? 'PAN ON' : 'PAN';
+      });
+    }
+    if (state.zoomOutButton) {
+      state.zoomOutButton.addEventListener('click', function () {
+        if (state.navigationPointers.size || state.previewPointers.size) return;
+        setZoomAt(state.zoom / VIEW_ZOOM_STEP);
+      });
+    }
+    if (state.zoomInButton) {
+      state.zoomInButton.addEventListener('click', function () {
+        if (state.navigationPointers.size || state.previewPointers.size) return;
+        setZoomAt(state.zoom * VIEW_ZOOM_STEP);
       });
     }
     if (state.fitButton) {
       state.fitButton.addEventListener('click', function () {
+        if (state.navigationPointers.size || state.previewPointers.size) return;
         state.panX = 0;
         state.panY = 0;
+        state.zoom = 1;
+        updateZoomReadout();
         scheduleDraw(true);
       });
     }
   }
 
-  function installPanGesture() {
+  function updateZoomReadout() {
+    if (state.zoomValue) state.zoomValue.textContent = Math.round(state.zoom * 100) + '%';
+    if (state.zoomOutButton) state.zoomOutButton.disabled = state.zoom <= MIN_VIEW_ZOOM;
+    if (state.zoomInButton) state.zoomInButton.disabled = state.zoom >= MAX_VIEW_ZOOM;
+  }
+
+  function setZoomAt(nextZoom, anchorX, anchorY) {
+    var rect = state.pad.getBoundingClientRect();
+    var localX = anchorX == null ? rect.width / 2 : anchorX;
+    var localY = anchorY == null ? rect.height / 2 : anchorY;
+    var transformed = zoomAroundPoint(
+      state.zoom, state.panX, state.panY, nextZoom,
+      localX, localY, rect.width, rect.height);
+    state.zoom = transformed.zoom;
+    state.panX = transformed.panX;
+    state.panY = transformed.panY;
+    updateZoomReadout();
+    scheduleDraw(true);
+  }
+
+  function installViewGesture() {
+    function localPoint(event) {
+      var rect = state.pad.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    }
+    function beginGesture() {
+      var entries = Array.from(state.navigationPointers.entries());
+      if (!entries.length) {
+        state.navigationGesture = null;
+        return;
+      }
+      if (entries.length === 1) {
+        state.navigationGesture = {
+          kind: 'pan',
+          pointerId: entries[0][0],
+          start: entries[0][1],
+          panX: state.panX,
+          panY: state.panY,
+        };
+        return;
+      }
+      var first = entries[0][1];
+      var second = entries[1][1];
+      state.navigationGesture = {
+        kind: 'pinch',
+        pointerIds: [entries[0][0], entries[1][0]],
+        startMidX: (first.x + second.x) / 2,
+        startMidY: (first.y + second.y) / 2,
+        startDistance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+        zoom: state.zoom,
+        panX: state.panX,
+        panY: state.panY,
+      };
+    }
+    function moveGesture() {
+      var gesture = state.navigationGesture;
+      if (!gesture) return;
+      if (gesture.kind === 'pan') {
+        var point = state.navigationPointers.get(gesture.pointerId);
+        if (!point) return;
+        state.panX = gesture.panX + point.x - gesture.start.x;
+        state.panY = gesture.panY + point.y - gesture.start.y;
+        scheduleDraw(true);
+        return;
+      }
+      var first = state.navigationPointers.get(gesture.pointerIds[0]);
+      var second = state.navigationPointers.get(gesture.pointerIds[1]);
+      if (!first || !second) return;
+      var midX = (first.x + second.x) / 2;
+      var midY = (first.y + second.y) / 2;
+      var distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+      var rect = state.pad.getBoundingClientRect();
+      var transformed = zoomAroundPoint(
+        gesture.zoom, gesture.panX, gesture.panY,
+        gesture.zoom * distance / gesture.startDistance,
+        gesture.startMidX, gesture.startMidY, rect.width, rect.height);
+      state.zoom = transformed.zoom;
+      state.panX = transformed.panX + midX - gesture.startMidX;
+      state.panY = transformed.panY + midY - gesture.startMidY;
+      updateZoomReadout();
+      scheduleDraw(true);
+    }
     function capture(event) {
       if (!state.panMode || !state.engineVerified) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (event.type === 'pointerdown' && state.panPointerId === null) {
-        state.panPointerId = event.pointerId;
-        state.panStartX = event.clientX;
-        state.panStartY = event.clientY;
-        state.panOriginX = state.panX;
-        state.panOriginY = state.panY;
-        state.pad.setPointerCapture(event.pointerId);
-      } else if (event.type === 'pointermove' && event.pointerId === state.panPointerId) {
-        state.panX = state.panOriginX + event.clientX - state.panStartX;
-        state.panY = state.panOriginY + event.clientY - state.panStartY;
-        scheduleDraw(true);
-      } else if ((event.type === 'pointerup' || event.type === 'pointercancel') &&
-          event.pointerId === state.panPointerId) {
-        state.panPointerId = null;
+      if (event.type === 'pointerdown') {
+        if (state.navigationPointers.size >= 2 &&
+            !state.navigationPointers.has(event.pointerId)) return;
+        state.navigationPointers.set(event.pointerId, localPoint(event));
+        try { state.pad.setPointerCapture(event.pointerId); } catch (error) {
+          state.navigationPointers.delete(event.pointerId);
+          beginGesture();
+          return;
+        }
+        beginGesture();
+        return;
+      }
+      if (event.type === 'pointermove' && state.navigationPointers.has(event.pointerId)) {
+        state.navigationPointers.set(event.pointerId, localPoint(event));
+        moveGesture();
+        return;
+      }
+      if ((event.type === 'pointerup' || event.type === 'pointercancel') &&
+          state.navigationPointers.has(event.pointerId)) {
+        state.navigationPointers.delete(event.pointerId);
+        beginGesture();
       }
     }
     ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'].forEach(function (type) {
       state.pad.addEventListener(type, capture, true);
     });
+    state.pad.addEventListener('wheel', function (event) {
+      if (!state.panMode || !state.engineVerified) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      var point = localPoint(event);
+      setZoomAt(state.zoom * Math.exp(-event.deltaY * 0.002), point.x, point.y);
+    }, { capture: true, passive: false });
   }
 
   function installInteractionGate() {
@@ -854,8 +1000,15 @@
   }
 
   function installBrushPreview() {
+    function rebuildUnion() {
+      var selected = new Set();
+      state.previewPointers.forEach(function (pointer) {
+        pointer.pixelIndices.forEach(function (pixelIndex) { selected.add(pixelIndex); });
+      });
+      state.previewPixelIndices = selected;
+    }
     function update(event) {
-      if (!state.engineVerified || event.pointerId !== state.previewPointerId) return;
+      if (!state.engineVerified || !state.previewPointers.has(event.pointerId)) return;
       var rect = state.cachedPadRect || state.pad.getBoundingClientRect();
       state.cachedPadRect = rect;
       var target = padToWorld(
@@ -867,8 +1020,9 @@
         return;
       }
       var radius = root.padBrushWorld(target);
-      var previous = state.previewTarget;
-      state.previewPixelIndices = affectedPixelIndices(
+      var pointer = state.previewPointers.get(event.pointerId);
+      var previous = pointer.target;
+      pointer.pixelIndices = affectedPixelIndices(
         state.screenGlyphs,
         {
           axisX: state.view.axisX,
@@ -881,38 +1035,38 @@
           radiusY: radius.y,
         },
       );
-      state.previewTarget = target;
-      scheduleDraw(false);
+      pointer.target = target;
     }
     function queueUpdate(event) {
-      if (!state.engineVerified || event.pointerId !== state.previewPointerId) return;
-      state.previewEvent = {
+      if (!state.engineVerified || !state.previewPointers.has(event.pointerId)) return;
+      state.previewEvents.set(event.pointerId, {
         pointerId: event.pointerId,
         clientX: event.clientX,
         clientY: event.clientY,
-      };
+      });
       if (state.previewFrame !== null) return;
       state.previewFrame = root.requestAnimationFrame(function () {
         state.previewFrame = null;
-        var latest = state.previewEvent;
-        state.previewEvent = null;
-        if (latest) update(latest);
+        var latest = Array.from(state.previewEvents.values());
+        state.previewEvents.clear();
+        latest.forEach(update);
+        rebuildUnion();
+        scheduleDraw(false);
       });
     }
     state.pad.addEventListener('pointerdown', function (event) {
-      if (!state.engineVerified || state.previewPointerId !== null) return;
-      state.previewPointerId = event.pointerId;
-      state.previewTarget = null;
+      if (!state.engineVerified || state.previewPointers.has(event.pointerId)
+          || state.previewPointers.size >= MAX_PREVIEW_POINTERS) return;
+      state.previewPointers.set(event.pointerId, { target: null, pixelIndices: new Set() });
       queueUpdate(event);
     });
     state.pad.addEventListener('pointermove', queueUpdate);
     ['pointerup', 'pointercancel'].forEach(function (type) {
       state.pad.addEventListener(type, function (event) {
-        if (event.pointerId !== state.previewPointerId) return;
-        state.previewPointerId = null;
-        state.previewTarget = null;
-        state.previewPixelIndices.clear();
-        state.previewEvent = null;
+        if (!state.previewPointers.has(event.pointerId)) return;
+        state.previewPointers.delete(event.pointerId);
+        state.previewEvents.delete(event.pointerId);
+        rebuildUnion();
         scheduleDraw(false);
       });
     });
@@ -945,14 +1099,21 @@
         sha256(canonicalSource(loaded[3]) + '\n-- touch resolver boundary --\n' +
           canonicalSource(loaded[4])),
       ]).then(function (fingerprints) {
+        // Staleness is self-healing at the source: the save server re-exports
+        // the artifact at boot and after every save that touches an input
+        // (save-server.js refreshTouchPixelViews). Reaching one of these
+        // refusals therefore means that regeneration did not run or failed —
+        // the copy names the remedy instead of only the symptom.
+        var REGEN_HINT = ' — restart the sim stack (the save server re-exports it at boot)' +
+          ' or run: cd simulation && npm run pixel-views:export';
         if (fingerprints[1] !== artifact.source.viewsFingerprint) {
-          throw new Error('pixel-view artifact is stale against pixel_map_views.yaml');
+          throw new Error('pixel-view artifact is stale against pixel_map_views.yaml' + REGEN_HINT);
         }
         if (fingerprints[2] !== artifact.source.camerasFingerprint) {
-          throw new Error('pixel-view artifact is stale against cameras.yaml');
+          throw new Error('pixel-view artifact is stale against cameras.yaml' + REGEN_HINT);
         }
         if (fingerprints[3] !== artifact.source.resolverFingerprint) {
-          throw new Error('pixel-view artifact is stale against the simulation resolver');
+          throw new Error('pixel-view artifact is stale against the simulation resolver' + REGEN_HINT);
         }
         state.artifact = artifact;
         selectView(viewId, false);
@@ -974,13 +1135,16 @@
     state.errorElement = options.errorElement;
     state.viewSelect = options.viewSelect || null;
     state.panButton = options.panButton || null;
+    state.zoomOutButton = options.zoomOutButton || null;
+    state.zoomInButton = options.zoomInButton || null;
+    state.zoomValue = options.zoomValue || null;
     state.fitButton = options.fitButton || null;
     if (!state.canvas || !state.pad || !state.errorElement) {
       return Promise.reject(new Error('pixel-view mount needs canvas, pad, and error element'));
     }
     failClosed('waiting for source and engine verification');
     installInteractionGate();
-    installPanGesture();
+    installViewGesture();
     installBrushPreview();
     if (typeof root.ResizeObserver !== 'function') {
       return Promise.reject(new Error('ResizeObserver is unavailable; pixel view cannot reproject'));
@@ -1002,6 +1166,8 @@
     topologyFingerprint: topologyFingerprint,
     reprojectView: reprojectView,
     screenPointToTarget: screenPointToTarget,
+    clampZoom: clampZoom,
+    zoomAroundPoint: zoomAroundPoint,
     panelSubRects: panelSubRects,
     panelTransform: panelTransform,
     affectedPixelIndices: affectedPixelIndices,
@@ -1019,10 +1185,16 @@
         axisX: state.view && state.view.axisX,
         axisY: state.view && state.view.axisY,
         panMode: state.panMode,
+        panX: state.panX,
+        panY: state.panY,
+        zoom: state.zoom,
+        activeNavigationPointers: state.navigationPointers.size,
         staticRenderCount: state.staticRenderCount,
         previewRenderCount: state.previewRenderCount,
         reprojectCount: state.reprojectCount,
         canvasResizeCount: state.canvasResizeCount,
+        activePreviewPointers: state.previewPointers.size,
+        previewPixelCount: state.previewPixelIndices.size,
         pendingPreviewFrames: state.previewFrame === null ? 0 : 1,
         pendingDrawFrames: state.drawFrame === null ? 0 : 1,
       };

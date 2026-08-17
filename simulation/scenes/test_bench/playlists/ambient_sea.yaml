@@ -1,0 +1,246 @@
+schemaVersion: 1
+name: ambient_sea
+entries:
+  - id: e_ambient_sea_00_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_01_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderLevel: 0.87
+      sliderKick: 0.12
+      sliderDetail: 0.89
+      sliderPortholeWhite: 0.87
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_02_122_breathing_horizon
+    pattern: 122_breathing_horizon
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderLevel: 0.48
+      sliderHorizonWidth: 0.7
+      sliderBreathDepth: 0.81
+      sliderAfterglow: 0.63
+      sliderSafetyFloor: 0.17
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_03_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_04_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_05_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_06_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.91
+      sliderLevel: 0.79
+      sliderKick: 0.17
+      sliderRadius: 0.3
+      sliderDetail: 0.71
+      sliderWhiteFoam: 0.11
+      sliderUvUndertow: 0.71
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_07_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderSwell: 0.75
+      sliderFoam: 0.12
+      sliderSpan: 0.76
+      sliderDepth: 0.6
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_08_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderLevel: 0.71
+      sliderKick: 0.17
+      sliderRadius: 0.23
+      sliderDetail: 0.64
+      sliderDensity: 0.39
+      sliderUvGlow: 0.89
+      sliderWhiteLevel: 0.89
+      sliderWhiteSpeed: 0.48
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_09_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderSwell: 0.45
+      sliderSparkle: 0.75
+      sliderKick: 0.01
+      sliderUvGlow: 0.81
+      sliderBase: 0.16
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_10_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.24
+      sliderLevel: 0.22
+      sliderKick: 0
+      sliderRadius: 1
+      sliderDetail: 0.86
+      sliderFrondDensity: 0.68
+      sliderTipGlow: 0.34
+      sliderBaseDarkness: 0.68
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_11_46_abyssal_fronds
+    pattern: 46_abyssal_fronds
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.25
+      sliderLevel: 0.82
+      sliderGlints: 0.88
+      sliderBreathRate: 0.32
+      sliderBreathDepth: 0.92
+      sliderFrondDensity: 0.85
+      sliderBaseGlow: 0.86
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_12_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_13_127_grand_maelstrom
+    pattern: 127_grand_maelstrom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.84
+      sliderLevel: 0.82
+      sliderArmWidth: 0.58
+      sliderArmCount: 0.32
+      sliderDepth: 0.56
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_14_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.79
+      sliderSpiralWidth: 0.78
+      sliderTurns: 0.8
+      sliderWakeContrast: 0.85
+      sliderSafetyFloor: 0.14
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_15_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.65
+      sliderBeamWidth: 0.32
+      sliderCrossing: 0.83
+      sliderAfterglow: 0.66
+      sliderSafetyFloor: 0.16
+      sliderFlash: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_16_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_sea_17_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderSwell: 0.13
+      sliderBlinder: 1
+      sliderShimmer: 0.5
+      sliderNoiseScale: 0.75
+    modulations: []
+    midiMappings: []
+    notes: null

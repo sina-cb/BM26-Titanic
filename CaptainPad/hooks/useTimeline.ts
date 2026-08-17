@@ -21,6 +21,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { engineEvents } from '@/utils/engineEvents';
+import { getPerformanceModeState } from '@/hooks/usePerformanceMode';
+import { runGatedTakeover } from '@/utils/takeover_passcode';
 import {
   fetchTimelineState,
   activateTimelinePlan,
@@ -55,16 +57,24 @@ export interface TimelineActions {
   /** Dismiss the pending-program lease; stay manual (docs/38 §16.5 lease-dismiss). */
   dismissProgram: () => Promise<boolean>;
   fireCue: (id: string) => Promise<boolean>;
-  /** Take the rig over from a running plan; arms the operator lease. */
-  takeover: () => Promise<boolean>;
+  /**
+   * Take the rig over from a running plan; arms the operator lease.
+   *
+   * THREE outcomes, not two (operator ruling 2026-08-14): while performance
+   * mode is live the operator is asked for a passcode first, and DISMISSING
+   * that prompt is not a failure — no request is even made. Callers must not
+   * alert on `'cancelled'`.
+   */
+  takeover: () => Promise<TakeoverOutcome>;
   /** Refresh the takeover lease (no-op when none held). Throttle the caller. */
   activity: () => Promise<boolean>;
   /**
    * EVENT ZOOM · PERFORM (_95 §3.3): a SCOPED takeover of the LIVE event —
    * the plan holds, and a program that comes due is deferred until exit.
-   * Returns the engine's error verbatim on failure (null on success).
+   * Carries the engine's error verbatim on failure; `'cancelled'` means the
+   * operator dismissed the performance-mode passcode prompt.
    */
-  performTakeover: (cueId: string) => Promise<string | null>;
+  performTakeover: (cueId: string) => Promise<PerformTakeoverResult>;
   /**
    * EVENT ZOOM · TIME TRAVEL (_95 §3.4): enter (or retarget) a travel zoom.
    * Returns the engine's error verbatim on failure (null on success).
@@ -73,6 +83,20 @@ export interface TimelineActions {
 }
 
 export type UseTimelineResult = TimelineHookState & TimelineActions;
+
+/**
+ * `'ok'`        the engine armed the operator lease.
+ * `'cancelled'` the operator dismissed the performance-mode passcode prompt —
+ *               NOTHING was requested and the plan keeps running. Never alert.
+ * `'failed'`    the engine refused; the reason is on the hook's error channel.
+ */
+export type TakeoverOutcome = 'ok' | 'cancelled' | 'failed';
+
+export interface PerformTakeoverResult {
+  outcome: TakeoverOutcome;
+  /** The engine's message, verbatim, when `outcome === 'failed'`. */
+  error: string | null;
+}
 
 const EMPTY: TimelineHookState = { state: null, connected: false, error: null };
 
@@ -226,16 +250,54 @@ async function _fireCue(id: string): Promise<boolean> {
   return true;
 }
 
-async function _takeover(): Promise<boolean> {
-  const r = await postTimelineTakeover();
-  if (!r.ok) {
-    _emit({ ..._cached, error: r.error || 'Failed to take over plan' });
-    return false;
+// ── PERFORMANCE-MODE TAKEOVER PASSCODE (operator ruling 2026-08-14) ───────
+//
+// "Take over in performance mode from the timeline needs to have either of the
+// passwords we have for Sina, Muisha, or Sailors" … "pass code is required
+// EVERY TIME."
+//
+// EVERY takeover affordance in this app funnels through the two functions
+// below, so gating them here is what makes the rule exhaustive: the
+// PlanLockBanner button on deck/mixer/touch-control, the mixer's
+// takeover-and-switch-output variant, the implicit takeover fired by touching a
+// manual control under a live plan (useOperatorTakeover), and the EVENT sheet's
+// scoped PERFORM.
+//
+// The gate reads the ENGINE-GLOBAL performance flag, not this device's
+// privilege: a privileged pad with a live 30-minute session is asked for the
+// passcode exactly like every other pad, because the engine ignores session
+// tokens on this route. The passcode is never stored — see the storage audit in
+// utils/takeover_passcode.ts.
+const TAKEOVER_PROMPT_TITLE = 'Operator passcode required';
+const TAKEOVER_PROMPT_DETAIL =
+  'The show is live and the timeline is driving the rig. Enter an authorized operator '
+  + 'passcode to take control. A fresh passcode is required for every takeover; handing '
+  + 'the rig back to the plan never needs one.';
+
+async function _takeover(): Promise<TakeoverOutcome> {
+  let gated;
+  try {
+    gated = await runGatedTakeover({
+      performanceActive: getPerformanceModeState().active,
+      title: TAKEOVER_PROMPT_TITLE,
+      detail: TAKEOVER_PROMPT_DETAIL,
+      send: (passcode?: string) => postTimelineTakeover(undefined, passcode),
+    });
+  } catch (err: any) {
+    // No prompt host mounted, or the transport threw: fail LOUD, never take
+    // over unauthenticated and never pretend it worked.
+    _emit({ ..._cached, error: err?.message || 'Failed to take over plan' });
+    return 'failed';
+  }
+  if (gated.cancelled) return 'cancelled';
+  if (!gated.result.ok) {
+    _emit({ ..._cached, error: gated.result.error || 'Failed to take over plan' });
+    return 'failed';
   }
   // Re-seed so the indicator flips to the lease/countdown state immediately —
   // the engine also broadcasts `timelineState`, this just converges faster.
   await _reseedAfterAction();
-  return true;
+  return 'ok';
 }
 
 // ── EVENT ZOOM: "did THIS client enter the zoom?" ────────────────────────
@@ -274,16 +336,31 @@ export function clearZoomClaims(): void {
   _zoomExitRequested = false;
 }
 
-async function _performTakeover(cueId: string): Promise<string | null> {
-  const r = await postTimelineTakeover({ scope: 'perform', cueId });
-  if (!r.ok) {
-    const msg = r.error || 'Failed to take the deck';
+async function _performTakeover(cueId: string): Promise<PerformTakeoverResult> {
+  let gated;
+  try {
+    // Same gate as the plain takeover: a SCOPED perform is still seizing the
+    // rig from a running plan, which is exactly what the ruling covers.
+    gated = await runGatedTakeover({
+      performanceActive: getPerformanceModeState().active,
+      title: TAKEOVER_PROMPT_TITLE,
+      detail: TAKEOVER_PROMPT_DETAIL,
+      send: (passcode?: string) => postTimelineTakeover({ scope: 'perform', cueId }, passcode),
+    });
+  } catch (err: any) {
+    const msg = err?.message || 'Failed to take the deck';
     _emit({ ..._cached, error: msg });
-    return msg;
+    return { outcome: 'failed', error: msg };
+  }
+  if (gated.cancelled) return { outcome: 'cancelled', error: null };
+  if (!gated.result.ok) {
+    const msg = gated.result.error || 'Failed to take the deck';
+    _emit({ ..._cached, error: msg });
+    return { outcome: 'failed', error: msg };
   }
   _zoomEnteredHere = true;
   await _reseedAfterAction();
-  return null;
+  return { outcome: 'ok', error: null };
 }
 
 async function _travel(spec: TimelineTravelSpec): Promise<string | null> {
@@ -313,6 +390,11 @@ async function _activity(): Promise<boolean> {
   }
   return true;
 }
+
+// Non-hook entry points for the two gated takeovers. Same functions the hook
+// hands out — exported so imperative code (and vitest, which runs in plain
+// node with no React renderer) can exercise the passcode gate directly.
+export { _takeover as runTakeover, _performTakeover as runPerformTakeover };
 
 export function useTimeline(): UseTimelineResult {
   _ensureInitialized();

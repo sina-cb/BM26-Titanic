@@ -775,19 +775,54 @@ test('_153 §10 / _158 D-158-3: a destination is emitted only when its regions a
       'and a misaligned one must be named too — that is the state that used to be invisible');
   });
 
-test('_158 D-158-3: a misaligned frame is reported IMMEDIATELY, and names the symptom', () => {
+test('_233 F4: a misaligned frame settles first, then names the symptom', () => {
   const src = bridgeSrc();
   // A missing source is normal for a few ms between an engine frame's
-  // datagrams, so it waits for the settling window. Regions disagreeing about
-  // WHICH frame they are is never normal, so it is logged at once.
+  // datagrams, so it waits for the settling window.
   assert.match(src, /waited >= MIRROR_STALL_WARN_MS/, 'the missing-source case settles first');
-  assert.match(src, /state\.count === 1 \|\| firstFixed/,
-    'the misaligned case logs on the first occurrence, then throttled — and a newly-detected ' +
-    'FIXED offset jumps the throttle, because it is a different diagnosis from the line before');
+  // SUPERSEDES `_158` D-158-3 ON THIS POINT ONLY. That ruling logged a torn read
+  // at once, reasoning that regions disagreeing about which frame they are is
+  // "never normal". `_229` measured 975 such lines in one session at a 0.6 %
+  // tear rate, every one of them self-healing on the next frame: a source that
+  // HAS arrived carrying the next frame's sequence is the same mid-burst
+  // situation the missing-source branch already calls normal. So it gets the
+  // same grace — and a tear that OUTLIVES it is still named immediately.
+  assert.match(src, /const MIRROR_TEAR_GRACE_MS = MIRROR_STALL_WARN_MS;/,
+    'the torn read must get the SAME settling grace as the missing source — they are one ' +
+    'situation seen a frame apart');
+  assert.match(src, /const sustained = now - state\.since >= MIRROR_TEAR_GRACE_MS;/);
+  assert.match(src, /if \(fixed \|\| sustained\) \{/,
+    'only a tear that outlived the grace — or a genuine STUCK — may print');
+  assert.match(src, /firstFixed \|\| state\.lastLoggedAt === 0/,
+    'then throttled — and a newly-detected FIXED offset jumps the throttle, because it is a ' +
+    'different diagnosis from the line before');
+  // …and what is NOT printed is not lost: it is counted and summarised.
+  assert.match(src, /function reportTearRollup\(key, now\)/,
+    'sub-grace tears must be summarised, never silently dropped — 975 immediate lines for a ' +
+    '0.6 % tear rate is how the real signal got buried');
+  assert.match(src, /const MIRROR_TEAR_SUMMARY_MS = \d+;/);
+  assert.match(src, /bench mirror burst skew/);
+  const alignedIdx = src.indexOf('THE WHOLE-FRAME STAMP');
+  assert.ok(alignedIdx > 0);
+  assert.match(src.slice(alignedIdx, alignedIdx + 600), /reportTearRollup\(key, now\)/,
+    'the rollup must also fire on the ALIGNED path, or a burst that stops is never reported');
+  // The line must also carry the CUMULATIVE count (report 20260814_212).
+  // `_mirrorMisaligned` is deleted whenever the destination composes one whole
+  // frame, so a flapping destination re-entered at `count === 1` and every line
+  // claimed to be the first: 1594 of 1627 in the incident, with nothing on
+  // screen showing that this one destination had failed hundreds of times.
+  assert.match(src, /_mirrorMisalignTotal/,
+    'the misalign log needs a per-destination total that survives a brief realignment, or it ' +
+    'under-reports a flapping destination as a series of first offences');
+  const forgetIdx = src.indexOf('function forgetMirrorGather');
+  const forgetBody = src.slice(forgetIdx, src.indexOf('\n}', forgetIdx));
+  assert.match(forgetBody, /_mirrorMisalignTotal\.delete/,
+    'and it must be forgotten with the destination, or it is a leak');
   // The strings below are split across template-literal lines in the source, so
   // match the distinctive halves rather than a contiguous sentence.
-  assert.match(src, /its regions carry DIFFERENT engine/);
-  assert.match(src, /frames \(\$\{regions\}\)/);
+  assert.match(src, /its regions have carried DIFFERENT/);
+  assert.match(src, /engine frames for \$\{Math\.round\(now - state\.since\)\} ms/,
+    'and for HOW LONG — a tear is judged by duration now, so the line must report it');
   assert.match(src, /U\$\{u\}#\$\{regionSeq\.get\(u\)\}/,
     'the log must name every region WITH the frame it is carrying, or it is not diagnosable');
   assert.match(src, /STEADY WRONG COLOUR, not flicker/,
@@ -796,19 +831,74 @@ test('_158 D-158-3: a misaligned frame is reported IMMEDIATELY, and names the sy
   // R-158-A: the SAME state has two causes with OPPOSITE remedies, and the log
   // must say which one it is looking at.
   assert.match(src, /const MIRROR_FIXED_OFFSET_FLUSHES = \d+;/);
-  assert.match(src, /filter\(\(\[, lag\]\) => lag > 0\)/,
-    'a source that NEVER catches up across the window is what separates a fixed sender offset ' +
-    'from a lost datagram — offsets swing within one frame, so consecutive readings never match');
-  assert.match(src, /if \(!minLag\.has\(u\) \|\| lag < minLag\.get\(u\)\) minLag\.set\(u, lag\);/);
   assert.match(src, /BENCH MIRROR STUCK/);
-  assert.match(src, /FIXED sequence offset/);
-  assert.match(src, /This is NOT/);
-  assert.match(src, /network loss and it will NOT recover on its own/);
-  assert.match(src, /\*\*RESTART THE ENGINE\*\*/,
-    'the remedy must be stated, not implied');
   assert.match(src, /function offsetSignature\(required, regionSeq\)/,
     'and the offset itself must be named — wrap-aware and signed, so seven frames behind ' +
     'reads as -7 rather than 249');
+});
+
+// ── _233: the STUCK discriminator, in source ───────────────────────────────
+// `_229` found the old one structurally unable to answer "not stuck": it
+// normalised against the most advanced source (so every trailing source read
+// < 0 by construction), sampled `minLag` only on flushes that were ALREADY
+// torn, and called six consecutive tears a FIXED offset. 48 STUCK lines in one
+// session, all false, all telling the operator to restart a healthy engine.
+test('_233 F1/F2/F3: STUCK needs a fixed offset AND no composed frame at all', () => {
+  const src = bridgeSrc();
+
+  // F2 — the class-deleter. A genuine sender offset composes ZERO whole frames;
+  // a torn read composes one between every tear. That is the only property the
+  // two causes do not share, so it is the one the gate is built on.
+  assert.match(src, /const _mirrorLastWholeAt = new Map\(\);/);
+  assert.match(src, /_mirrorLastWholeAt\.set\(key, now\);/,
+    'the aligned path must stamp the whole-frame time, or the gate has nothing to read');
+  assert.match(src, /const MIRROR_STUCK_NO_WHOLE_MS = \d+;/);
+  assert.match(src, /const noWholeFrame = wholeAge >= MIRROR_STUCK_NO_WHOLE_MS;/);
+  assert.match(src, /const fixed = persistent && noWholeFrame;/,
+    'STUCK must require BOTH a persistent offset and a destination that has composed nothing');
+
+  // F3 — "fixed" means literally fixed: one value, all run, against a stable
+  // anchor. The old normalisation against `max` could not express this — the
+  // anchor moved whenever the laggard's wrapped sequence read higher.
+  assert.match(src, /const anchor = universes\[0\];/,
+    'offsets must be measured against a FIXED anchor, not the most advanced source');
+  assert.match(src, /seen\.size === 1/,
+    'a fixed offset is a SINGLETON set of observed values — anything else is a moving one');
+  assert.doesNotMatch(src, /minLag/,
+    'the old "did this source ever reach lag 0" test must be gone — it asked a question the ' +
+    'normalisation had already answered no');
+
+  // F1 — ±1 is the definition of a torn read of one frame's datagram burst
+  // (850 of the 975 misalignments in the `_229` session), never a fixed offset.
+  assert.match(src, /const MIRROR_MIN_FIXED_OFFSET = 2;/);
+  assert.match(src, /Math\.abs\(\[\.\.\.seen\]\[0\]\) >= MIRROR_MIN_FIXED_OFFSET/);
+
+  // O(1) in the stall's length — the property `_212` pinned. The per-source
+  // set answers one yes/no question, so it is capped rather than grown.
+  assert.match(src, /const MIRROR_OFFSET_SET_CAP = \d+;/);
+  assert.match(src, /seen\.size < MIRROR_OFFSET_SET_CAP \|\| seen\.has\(d\)/);
+  const forgetIdx = src.indexOf('function forgetMirrorGather');
+  const forgetBody = src.slice(forgetIdx, src.indexOf('\n}', forgetIdx));
+  assert.match(forgetBody, /_mirrorLastWholeAt\.delete/);
+  assert.match(forgetBody, /_mirrorTearWindow\.delete/);
+});
+
+test('_233 F5: the STUCK remedy states what was measured, and stops blaming the engine', () => {
+  const src = bridgeSrc();
+  // "RESTART THE ENGINE" was wrong 48 times out of 48, and `_212` made the cause
+  // it named impossible: the engine stamps ONE sequence counter across every
+  // universe of a frame, so a live engine cannot put its own senders at
+  // different origins.
+  assert.doesNotMatch(src, /\*\*RESTART THE ENGINE\*\*/,
+    'the remedy that was wrong 48/48 must be gone, not softened');
+  assert.match(src, /NO whole frame has composed for \$\{secs\} s/,
+    'the line must state the MEASUREMENT — that is what makes it checkable');
+  assert.match(src, /PERSISTENT multi-step offset/);
+  assert.match(src, /Both were measured, not inferred/);
+  assert.match(src, /DO NOT restart the engine on this/);
+  assert.match(src, /SECOND WRITER/,
+    'and must name the causes that actually remain, or the operator is left with a symptom');
+  assert.match(src, /DISARM and re-arm/);
 });
 
 test('_158 D-158-8: the emission path carries NO permissive default', () => {

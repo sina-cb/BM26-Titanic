@@ -34,7 +34,8 @@ import { topicForType, TOPICS } from '../../lib/ws_topic_routing.js';
 const harness = createEngineHarness({
   scene: 'test_bench',
   prefix: 'wsreplay',
-  extraArgs: ['--dest', '127.0.0.9'],
+  // TEST-NET-1 (RFC 5737) black hole — loopback is not one.
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 before(async () => {
@@ -84,6 +85,12 @@ const CAPTAINPAD_CONSUMED_TYPES = new Set([
 // of ENGINE_ONLY_TYPES so this contract records their actual consumer.
 const TOUCH_CONTROL_WIRE_CONSUMED_TYPES = new Set([
   'touchControlBrightness', 'dimmerState',
+  // docs/70 W4: the per-scene Live Touch preset playlist
+  // (states/<scene>/live_touch_presets.yaml). Replayed on connect so a pad
+  // that joins mid-show renders the saved list immediately. Consumed by the
+  // panel's own /ws/control client, NOT by CaptainPad's useEngineState.ts —
+  // same posture as the two entries above it.
+  'liveTouchPresets',
 ]);
 
 // Every OTHER type this suite has observed replayed on /ws/control at
@@ -94,6 +101,11 @@ const ENGINE_ONLY_TYPES = new Set([
   'autopilot', 'colorAutopilot', 'undoState', 'viewOverride', 'audioConfig',
   'audioChainsChanged', 'engineSettings', 'performanceMode', 'effectBanks',
   'timelineState', 'partyConfig', 'layerSettings',
+  // docs/52 SPECIAL EVENTS runner. Replayed on connect so a fresh (or
+  // woken-up) CaptainPad paints the live stage without waiting a tick. Read by
+  // its own hook — CaptainPad/hooks/useSpecialEvents.ts — not by
+  // useEngineState.ts, exactly like timelineState beside it.
+  'specialEvents',
   // Not part of the connect-replay proper — a periodic render-loop stats
   // tick that can land inside the collection window since it isn't gated
   // by connection timing. Still /ws/control (router-confirmed below).

@@ -107,6 +107,100 @@ export function describePartySignal(value: number | null | undefined): PartySign
   return { label: 'PARTY SIGNAL OFF', tone: 'off' };
 }
 
+// ── party-signal truth gate (link + arrival) ────────────────────────
+//
+// describePartySignal turns ONE value into a label. It cannot tell an engine
+// reading from the value the UI happened to be HOLDING when the live-signal
+// link went away — and the live-param cache is deliberately NOT cleared on
+// disconnect (every meter keeps its last frame rather than snapping to zero).
+// So the pill went on claiming "PARTY SIGNAL ON" with no engine behind it.
+//
+// This reducer is the missing piece. It folds each render's OBSERVATION of the
+// live bus — is the /ws/signals transport up, which live document is in hand,
+// what `audioParty` does that document carry — into the only value the pill is
+// allowed to display. Two rules:
+//
+//   1. Transport down → UNKNOWN immediately. Never a stale ON/OFF. While the
+//      link is down the engine's held gate is simply not observable.
+//   2. Transport back up → still UNKNOWN until a live document ARRIVES that is
+//      not the one we were holding through the outage. Documents are compared
+//      by IDENTITY (each WS frame is parsed into a fresh object), which is what
+//      distinguishes "the engine just told us" from "React still has the old
+//      frame in state". The engine replays its last cached liveParams payload
+//      to every fresh /ws/signals connection (api_server.js,
+//      `wssSignals.on('connection')`), so that arrival normally lands within
+//      milliseconds and the pill resumes from the engine's CURRENT held gate.
+//
+// Deliberately NOT here: any age/no-message timeout. `liveParams` is
+// CHANGE-driven — a calm room produces no frames at all — so "nothing arrived
+// recently" is not evidence of lost truth, and a timeout would flip a healthy
+// calm rig to unknown. And no second threshold / no re-tuned detection: the
+// ON/OFF boundary stays entirely in describePartySignal. This decides only
+// whether we are entitled to show a boundary verdict at all.
+
+export type PartySignalTruth = {
+  /** The value the pill may display. `null` means UNKNOWN ("PARTY SIGNAL …"). */
+  value: number | null;
+  /**
+   * The live document this truth is bound to, compared by IDENTITY. When
+   * `value` is null this is the document we refuse to trust (held through an
+   * outage), so the same object reappearing after a reconnect stays untrusted.
+   */
+  doc: object | null;
+};
+
+/** Startup state: nothing observed, nothing claimed. */
+export const PARTY_SIGNAL_UNKNOWN: PartySignalTruth = { value: null, doc: null };
+
+export type PartySignalObservation = {
+  /** Is the live-signal transport that carries `audioParty` connected NOW? */
+  connected: boolean;
+  /** The live document in hand (identity-compared), or `null` when there is none. */
+  doc: object | null;
+  /** `audioParty` from that document, or `null` when it doesn't carry one. */
+  value: number | null;
+};
+
+/**
+ * Fold one observation of the live-signal bus into the party-signal truth.
+ *
+ * Idempotent for a repeated observation, and returns the PREVIOUS object
+ * identity whenever nothing changed — so a caller can hold it in a ref and
+ * re-run it on every render without churn.
+ *
+ * @param prev current truth (start from PARTY_SIGNAL_UNKNOWN)
+ * @param obs  what the live bus looks like right now
+ * @returns the value the pill may display, for describePartySignal
+ */
+export function nextPartySignalTruth(
+  prev: PartySignalTruth,
+  obs: PartySignalObservation,
+): PartySignalTruth {
+  // Drop to unknown while REMEMBERING the document in hand, so that exact
+  // document cannot be re-read as truth once the link comes back.
+  const unknownHolding = (doc: object | null): PartySignalTruth =>
+    (prev.value === null && prev.doc === doc) ? prev : { value: null, doc };
+
+  // 1. No transport → no truth.
+  if (!obs.connected) return unknownHolding(obs.doc);
+
+  // 2. Connected, but nothing usable in hand (cold start, or the Companion
+  //    isn't publishing audioParty) → unknown, never a manufactured OFF.
+  if (obs.doc === null || obs.value === null || !Number.isFinite(obs.value)) {
+    return unknownHolding(obs.doc);
+  }
+
+  // 3. Connected again, but still holding the very document we distrusted —
+  //    nothing has arrived yet. Stay unknown.
+  if (prev.value === null && prev.doc !== null && prev.doc === obs.doc) return prev;
+
+  // 4. A document that arrived on a live link: authoritative. (Same value as
+  //    before → keep `prev` so a 30 Hz stream doesn't allocate per frame; the
+  //    stored `doc` only matters while `value` is null.)
+  if (prev.value === obs.value) return prev;
+  return { value: obs.value, doc: obs.doc };
+}
+
 // ── pulse signals (one-frame transients) ────────────────────────────
 //
 // A growing class of Companion CPC keys are NOT continuous [0,1] levels —

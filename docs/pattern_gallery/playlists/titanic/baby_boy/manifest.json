@@ -1,327 +1,548 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "scene": "titanic",
   "playlist": "baby_boy",
-  "seconds": 10,
+  "seconds": 20,
   "fps": 8,
   "variation": "saved",
   "palette": null,
   "source": "simulation/scenes/titanic/playlists/baby_boy.yaml",
+  "playlistDigest": "5b2ddbc4b2f6b429f1321d776b4a5a315c6a776ed850ee2c59fd323fe1ad772b",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
   "items": [
     {
       "index": 0,
-      "pattern": "133_baby_reveal_burst",
-      "title": "Baby Boy - Reveal Explosion",
-      "goal": "The manually pushed answer erupts from black as a spherical shock front and twelve petal-rays, then settles into one baby-pink or baby-blue photo-safe rose with Vintage-only diamond white.",
+      "pattern": "baby/51_boy_keel_breath",
+      "title": "Baby Boy - Keel Breath",
+      "goal": "Baby-blue keel breath: a calm luminous foundation expands through the complete vessel.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.32,
+          "value": 0.3,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderFinalColor",
-          "label": "Final Color",
-          "value": 1,
-          "description": "Final Color character control.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.9,
+          "value": 0.86,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
           "audio": null
         },
         {
-          "name": "sliderSpatialDepth",
-          "label": "Spatial Depth",
-          "value": 0.72,
+          "name": "sliderKeelWidth",
+          "label": "Keel Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBreathDepth",
+          "label": "Breath Depth",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
           "description": "Shape and intensity of the main organic motion.",
           "audio": null
-        },
-        {
-          "name": "sliderSparkle",
-          "label": "Sparkle",
-          "value": 0.58,
-          "description": "Fine highlight texture.",
-          "audio": null
-        },
-        {
-          "name": "sliderRestartReveal",
-          "label": "Restart Reveal",
-          "value": 0,
-          "description": "Restart Reveal character control.",
-          "audio": null
         }
       ],
-      "gif": "001_133_baby_reveal_burst.gif",
-      "video": "001_133_baby_reveal_burst.mp4",
-      "seconds": 10,
-      "chapters": [
-        {
-          "time": 0,
-          "label": "Reveal explosion"
-        },
-        {
-          "time": 2,
-          "label": "Photo hold"
-        }
-      ],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKeelWidth": 0.52,
+        "sliderBreathDepth": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKeelWidth": 0.52,
+        "sliderBreathDepth": 0.46
+      },
+      "gif": "001_baby__51_boy_keel_breath.gif",
+      "video": "001_baby__51_boy_keel_breath.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "189a1e712936b54a1d4ee035d665732a3f9302e9e54be169f834c6b5269970aa"
     },
     {
       "index": 1,
-      "pattern": "118_grand_orbit_rings",
-      "title": "Baby Boy - Family Orbit Rings",
-      "goal": "Three monumental oblique ring shells orbit the complete ship while a protected safety floor preserves its silhouette.",
+      "pattern": "baby/56_boy_sign_lantern",
+      "title": "Baby Boy - Sign Lantern",
+      "goal": "Baby-blue sign lantern: both TE signs lead as balanced, readable Identity beacons.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.74,
+          "value": 0.28,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.78,
+          "value": 0.94,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.3,
-            "max": 1,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderRingWidth",
-          "label": "Ring Width",
-          "value": 0.82,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": {
-            "slider": "sliderRingWidth",
-            "signal": "micFlux",
-            "min": 0.2,
-            "max": 0.85,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderOrbitTilt",
-          "label": "Orbit Tilt",
-          "value": 0.58,
-          "description": "Orbit Tilt character control.",
           "audio": null
         },
         {
-          "name": "sliderContrast",
-          "label": "Contrast",
-          "value": 0.62,
-          "description": "Contrast character control.",
+          "name": "sliderLanternDepth",
+          "label": "Lantern Depth",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "002_118_grand_orbit_rings.gif",
-      "video": "002_118_grand_orbit_rings.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.28,
+        "sliderLevel": 0.94,
+        "sliderLanternDepth": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.28,
+        "sliderLevel": 0.94,
+        "sliderLanternDepth": 0.52
+      },
+      "gif": "002_baby__56_boy_sign_lantern.gif",
+      "video": "002_baby__56_boy_sign_lantern.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "eefd8e3057363ae3563816a19a3965249648384228ddada8f8523080fe74c125"
     },
     {
       "index": 2,
-      "pattern": "119_bow_stern_tidal_push",
-      "title": "Baby Boy - Welcome Tide",
-      "goal": "A coherent pressure wall travels bow-to-stern and returns as a broad recoil, readable from far across the playa.",
+      "pattern": "baby/23_boy_moonlit_ripples",
+      "title": "Baby Boy - Moonlit Ripples",
+      "goal": "Baby-blue travelling moon ripples. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.3,
+          "value": 0.44,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.59,
+          "value": 0.88,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
+          "audio": null
         },
         {
-          "name": "sliderWaveWidth",
-          "label": "Wave Width",
-          "value": 0.56,
+          "name": "sliderRippleWidth",
+          "label": "Ripple Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
-          "audio": {
-            "slider": "sliderWaveWidth",
-            "signal": "micFlux",
-            "min": 0.28,
-            "max": 0.82,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderRecoil",
-          "label": "Recoil",
-          "value": 0.48,
-          "description": "Recoil character control.",
           "audio": null
         },
         {
-          "name": "sliderContrast",
-          "label": "Contrast",
+          "name": "sliderOriginOffset",
+          "label": "Origin Offset",
           "value": 0.58,
-          "description": "Contrast character control.",
+          "valueSource": "playlist saved value",
+          "description": "Origin Offset character control.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "003_119_bow_stern_tidal_push.gif",
-      "video": "003_119_bow_stern_tidal_push.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderLevel": 0.88,
+        "sliderRippleWidth": 0.52,
+        "sliderOriginOffset": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderLevel": 0.88,
+        "sliderRippleWidth": 0.52,
+        "sliderOriginOffset": 0.58
+      },
+      "gif": "003_baby__23_boy_moonlit_ripples.gif",
+      "video": "003_baby__23_boy_moonlit_ripples.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "ea5f6f2ea5d5c67017f63f21485246615c68288adb1b56f12e4eb6edf9823437"
     },
     {
       "index": 3,
-      "pattern": "120_crossing_beacons",
-      "title": "Baby Boy - Crossing Beacons",
-      "goal": "Two counter-rotating lighthouse fans cross above the ship and leave long, elegant afterglow corridors.",
+      "pattern": "baby/20_boy_cradle_waves",
+      "title": "Baby Boy - Cradle Waves",
+      "goal": "Baby-blue mirrored cradle arcs. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.35,
+          "value": 0.38,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.7,
+          "value": 0.87,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.25,
-            "max": 1,
-            "curve": "linear"
-          }
+          "audio": null
         },
         {
-          "name": "sliderBeamWidth",
-          "label": "Beam Width",
-          "value": 0.38,
+          "name": "sliderArcWidth",
+          "label": "Arc Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderCrossing",
-          "label": "Crossing",
-          "value": 0.5,
-          "description": "Crossing character control.",
-          "audio": {
-            "slider": "sliderCrossing",
-            "signal": "micFlux",
-            "min": 0.25,
-            "max": 0.85,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderAfterglow",
-          "label": "Afterglow",
-          "value": 0.45,
-          "description": "Afterglow character control.",
+          "name": "sliderCradleDepth",
+          "label": "Cradle Depth",
+          "value": 0.66,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderFlash",
-          "label": "Flash",
-          "value": 0,
-          "description": "Transient accent strength.",
-          "audio": {
-            "slider": "sliderFlash",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "004_120_crossing_beacons.gif",
-      "video": "004_120_crossing_beacons.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.87,
+        "sliderArcWidth": 0.5,
+        "sliderCradleDepth": 0.66
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.87,
+        "sliderArcWidth": 0.5,
+        "sliderCradleDepth": 0.66
+      },
+      "gif": "004_baby__20_boy_cradle_waves.gif",
+      "video": "004_baby__20_boy_cradle_waves.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b2bc299f608afad538ea5eccb5f1e8098197e739609e60f67cf0a6e5591d2963"
     },
     {
       "index": 4,
-      "pattern": "121_spiral_wake",
-      "title": "Baby Boy - Celebration Spiral",
-      "goal": "A pair of broad helical wakes curls around the ship as one large spatial gesture rather than a fine repeating texture.",
+      "pattern": "baby/19_boy_horizon_tides",
+      "title": "Baby Boy - Horizon Tides",
+      "goal": "Baby-blue horizon tides. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderVerticalReach",
+          "label": "Vertical Reach",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Vertical Reach character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.86,
+        "sliderTideWidth": 0.52,
+        "sliderVerticalReach": 0.62
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.86,
+        "sliderTideWidth": 0.52,
+        "sliderVerticalReach": 0.62
+      },
+      "gif": "005_baby__19_boy_horizon_tides.gif",
+      "video": "005_baby__19_boy_horizon_tides.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c3908fb38f1786bb19e9b94d0a79979c748b1ebfd1559188c3e0824bc814218f"
+    },
+    {
+      "index": 5,
+      "pattern": "baby/54_boy_stack_halo",
+      "title": "Baby Boy - Stack Halo",
+      "goal": "Baby-blue stack halo: the smoke stacks lead a gentle structural glow over a visible ship.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
           "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderHaloWidth",
+          "label": "Halo Width",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderHaloDepth",
+          "label": "Halo Depth",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.92,
+        "sliderHaloWidth": 0.56,
+        "sliderHaloDepth": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.92,
+        "sliderHaloWidth": 0.56,
+        "sliderHaloDepth": 0.52
+      },
+      "gif": "006_baby__54_boy_stack_halo.gif",
+      "video": "006_baby__54_boy_stack_halo.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "685a6b345fa23fa4a95745b6aa140142ec4121ee617e3a71e953f95d1ee965c0"
+    },
+    {
+      "index": 6,
+      "pattern": "baby/58_boy_silhouette_tide",
+      "title": "Baby Boy - Silhouette Tide",
+      "goal": "Baby-blue silhouette tide: a continuous current traces the recognizable outline of the ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSilhouetteDepth",
+          "label": "Silhouette Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderTideWidth": 0.52,
+        "sliderSilhouetteDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderTideWidth": 0.52,
+        "sliderSilhouetteDepth": 0.58
+      },
+      "gif": "007_baby__58_boy_silhouette_tide.gif",
+      "video": "007_baby__58_boy_silhouette_tide.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "00763b868385a46d02702cae500b4338fbf73f1b4e428e1e194967df7c642d4d"
+    },
+    {
+      "index": 7,
+      "pattern": "baby/57_boy_hull_constellations",
+      "title": "Baby Boy - Hull Constellations",
+      "goal": "Baby-blue hull constellations: connected points span the broad ship canvas instead of becoming random sparkle.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.94,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarSize",
+          "label": "Star Size",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Star Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderConnectorContrast",
+          "label": "Connector Contrast",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Connector Contrast character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.94,
+        "sliderStarSize": 0.54,
+        "sliderConnectorContrast": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.94,
+        "sliderStarSize": 0.54,
+        "sliderConnectorContrast": 0.46
+      },
+      "gif": "008_baby__57_boy_hull_constellations.gif",
+      "video": "008_baby__57_boy_hull_constellations.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8df665bd1ea668c042c80980e289ccb25618132aa2ec57ad4e9c9b2a4a09e4bd"
+    },
+    {
+      "index": 8,
+      "pattern": "baby/22_boy_constellation_flow",
+      "title": "Baby Boy - Constellation Flow",
+      "goal": "Baby-blue drifting constellation lattice. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarSize",
+          "label": "Star Size",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Star Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderConstellationDensity",
+          "label": "Constellation Density",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "gif": "009_baby__22_boy_constellation_flow.gif",
+      "video": "009_baby__22_boy_constellation_flow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "96d3020f763672257329ff97769041094b2d1e3c58dffe873aebae83278a5181"
+    },
+    {
+      "index": 9,
+      "pattern": "baby/16_boy_orbit_glow",
+      "title": "Baby Boy - Orbit Glow",
+      "goal": "Baby-blue orbital shells for long photo holds. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
@@ -329,399 +550,58 @@
           "name": "sliderLevel",
           "label": "Level",
           "value": 0.84,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.35,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderSpiralWidth",
-          "label": "Spiral Width",
-          "value": 0.5,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": {
-            "slider": "sliderSpiralWidth",
-            "signal": "micFlux",
-            "min": 0.22,
-            "max": 0.82,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderTurns",
-          "label": "Turns",
-          "value": 0.5,
-          "description": "Turns character control.",
           "audio": null
         },
         {
-          "name": "sliderWakeContrast",
-          "label": "Wake Contrast",
-          "value": 0.58,
-          "description": "Wake Contrast character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "005_121_spiral_wake.gif",
-      "video": "005_121_spiral_wake.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 5,
-      "pattern": "122_breathing_horizon",
-      "title": "Baby Boy - New Horizon",
-      "goal": "A monumental horizon line rises and falls through the whole vessel, preserving a luminous safety bed between breaths.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.8,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.59,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderHorizonWidth",
-          "label": "Horizon Width",
-          "value": 0.5,
+          "name": "sliderRingWidth",
+          "label": "Ring Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderBreathDepth",
-          "label": "Breath Depth",
-          "value": 0.5,
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": {
-            "slider": "sliderBreathDepth",
-            "signal": "micFlux",
-            "min": 0.18,
-            "max": 0.88,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderAfterglow",
-          "label": "Afterglow",
-          "value": 0.58,
-          "description": "Afterglow character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "006_122_breathing_horizon.gif",
-      "video": "006_122_breathing_horizon.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 6,
-      "pattern": "123_mirrored_broadside_call",
-      "title": "Baby Boy - Broadside Joy",
-      "goal": "Mirrored wave walls call from the ship's centre to both ends, then answer inward in perfect bilateral symmetry.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.32,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.69,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.3,
-            "max": 1,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderWallWidth",
-          "label": "Wall Width",
-          "value": 0.48,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderExpansion",
-          "label": "Expansion",
-          "value": 0.72,
-          "description": "Expansion character control.",
-          "audio": {
-            "slider": "sliderExpansion",
-            "signal": "micFlux",
-            "min": 0.35,
-            "max": 1,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderContrast",
-          "label": "Contrast",
-          "value": 0.62,
-          "description": "Contrast character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "007_123_mirrored_broadside_call.gif",
-      "video": "007_123_mirrored_broadside_call.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 7,
-      "pattern": "124_aurora_crown",
-      "title": "Baby Boy - Aurora Crown",
-      "goal": "Four enormous upper-volume arcs curl into a luminous crown over the ship, with Identity acting as its central jewel.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.32,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.7,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.25,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderCrownHeight",
-          "label": "Crown Height",
-          "value": 0.55,
-          "description": "Crown Height character control.",
-          "audio": {
-            "slider": "sliderCrownHeight",
-            "signal": "micFlux",
-            "min": 0.3,
-            "max": 0.85,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderArcWidth",
-          "label": "Arc Width",
-          "value": 0.5,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderCurl",
-          "label": "Curl",
-          "value": 0.45,
-          "description": "Curl character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "008_124_aurora_crown.gif",
-      "video": "008_124_aurora_crown.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 8,
-      "pattern": "125_eclipse_orbit",
-      "title": "Baby Boy - Gentle Eclipse",
-      "goal": "A dark celestial body crosses a palette-lit vessel while a bright rim keeps the eclipse legible at distance.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.18,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.85,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderEclipseSize",
-          "label": "Eclipse Size",
-          "value": 0.52,
-          "description": "Eclipse Size character control.",
-          "audio": {
-            "slider": "sliderEclipseSize",
-            "signal": "micFlux",
-            "min": 0.26,
-            "max": 0.86,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderRimWidth",
-          "label": "Rim Width",
-          "value": 0.52,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderDepth",
-          "label": "Depth",
-          "value": 0.58,
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
           "description": "Shape and intensity of the main organic motion.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "009_125_eclipse_orbit.gif",
-      "video": "009_125_eclipse_orbit.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "gif": "010_baby__16_boy_orbit_glow.gif",
+      "video": "010_baby__16_boy_orbit_glow.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "70ebe529c3e76a40aaea083b0c81cc4efbde86c69e712c902126364e478d0ce4"
     },
     {
-      "index": 9,
-      "pattern": "126_cathedral_rib_wave",
-      "title": "Baby Boy - Family Cathedral",
-      "goal": "Monumental rib planes bow sequentially through a vaulted field, turning the ship into moving luminous architecture.",
+      "index": 10,
+      "pattern": "baby/60_boy_orbital_pearls",
+      "title": "Baby Boy - Orbital Pearls",
+      "goal": "Baby-blue orbital pearls: smooth pearl bodies circulate through the three-dimensional model.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.75,
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
@@ -729,148 +609,1166 @@
           "name": "sliderLevel",
           "label": "Level",
           "value": 0.9,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderRibCount",
-          "label": "Rib Count",
-          "value": 0.31,
-          "description": "Amount of active visual material.",
           "audio": null
         },
         {
-          "name": "sliderRibWidth",
-          "label": "Rib Width",
-          "value": 0.23,
-          "description": "Spatial reach or width within this pattern.",
+          "name": "sliderPearlSize",
+          "label": "Pearl Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Pearl Size character control.",
           "audio": null
         },
         {
-          "name": "sliderBow",
-          "label": "Bow",
-          "value": 0.48,
-          "description": "Bow character control.",
-          "audio": {
-            "slider": "sliderBow",
-            "signal": "micFlux",
-            "min": 0.22,
-            "max": 0.88,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
+          "name": "sliderOrbitDepth",
+          "label": "Orbit Depth",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
           "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.9,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "010_126_cathedral_rib_wave.gif",
-      "video": "010_126_cathedral_rib_wave.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderPearlSize": 0.5,
+        "sliderOrbitDepth": 0.6
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderPearlSize": 0.5,
+        "sliderOrbitDepth": 0.6
+      },
+      "gif": "011_baby__60_boy_orbital_pearls.gif",
+      "video": "011_baby__60_boy_orbital_pearls.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "626f50aa66d8f932afab3df13e97900806ce64a85c1d2bf7d80063d40540e304"
     },
     {
-      "index": 10,
-      "pattern": "127_grand_maelstrom",
-      "title": "Baby Boy - Joyful Maelstrom",
-      "goal": "A broad two-to-three-arm ocean mass rotates around a calm eye while the full ship remains safely visible.",
+      "index": 11,
+      "pattern": "baby/18_boy_rose_glow",
+      "title": "Baby Boy - Rose Glow",
+      "goal": "Baby-blue counter-wound rose for long photo holds. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.3,
+          "value": 0.34,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.63,
+          "value": 0.86,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
+          "audio": null
         },
         {
-          "name": "sliderArmWidth",
-          "label": "Arm Width",
-          "value": 0.58,
+          "name": "sliderPetalWidth",
+          "label": "Petal Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderArmCount",
-          "label": "Arm Count",
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.7,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "gif": "012_baby__18_boy_rose_glow.gif",
+      "video": "012_baby__18_boy_rose_glow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c36afd5c2225a64085e5c121f7c60e0bbd9b135018c5e28a5da7532679f7fb8d"
+    },
+    {
+      "index": 12,
+      "pattern": "baby/24_boy_ribbon_braid",
+      "title": "Baby Boy - Ribbon Braid",
+      "goal": "Baby-blue three-strand ribbon braid. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibbonWidth",
+          "label": "Ribbon Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBraidAmount",
+          "label": "Braid Amount",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Braid Amount character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "gif": "013_baby__24_boy_ribbon_braid.gif",
+      "video": "013_baby__24_boy_ribbon_braid.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d6f0a399950c597883f39241efc577712c98b72d6cee266da1508c555c29bb8f"
+    },
+    {
+      "index": 13,
+      "pattern": "baby/55_boy_rail_cascade",
+      "title": "Baby Boy - Rail Cascade",
+      "goal": "Baby-blue rail cascade: smooth bands travel along the Jewelry and silhouette language of the vessel.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRailWidth",
+          "label": "Rail Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCascadeDepth",
+          "label": "Cascade Depth",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderRailWidth": 0.48,
+        "sliderCascadeDepth": 0.56
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderRailWidth": 0.48,
+        "sliderCascadeDepth": 0.56
+      },
+      "gif": "014_baby__55_boy_rail_cascade.gif",
+      "video": "014_baby__55_boy_rail_cascade.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "fa521a8d6f716842efb68c7d6900ee705a744dda8cdcacf89be3428eea0522a7"
+    },
+    {
+      "index": 14,
+      "pattern": "baby/52_boy_bow_wave",
+      "title": "Baby Boy - Bow Wave",
+      "goal": "Baby-blue bow wave: a broad spatial crest announces the front of the ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.96,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWaveWidth",
+          "label": "Wave Width",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderWaveDepth",
+          "label": "Wave Depth",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.96,
+        "sliderWaveWidth": 0.62,
+        "sliderWaveDepth": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.96,
+        "sliderWaveWidth": 0.62,
+        "sliderWaveDepth": 0.5
+      },
+      "gif": "015_baby__52_boy_bow_wave.gif",
+      "video": "015_baby__52_boy_bow_wave.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "98a1d428696c5f448d6761a424a13200346fd967206a01c7eb739101ee1bb038"
+    },
+    {
+      "index": 15,
+      "pattern": "baby/53_boy_stern_wake",
+      "title": "Baby Boy - Stern Wake",
+      "goal": "Baby-blue stern wake: layered ripples spread from the rear through the full model.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWakeSpread",
+          "label": "Wake Spread",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderRippleDensity",
+          "label": "Ripple Density",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.88,
+        "sliderWakeSpread": 0.56,
+        "sliderRippleDensity": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.88,
+        "sliderWakeSpread": 0.56,
+        "sliderRippleDensity": 0.48
+      },
+      "gif": "016_baby__53_boy_stern_wake.gif",
+      "video": "016_baby__53_boy_stern_wake.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "71cdacf1405bba19bd70a113e2509a9c76cb56fab7538e154c609dc751705bc2"
+    },
+    {
+      "index": 16,
+      "pattern": "baby/28_boy_waterfall_veil",
+      "title": "Baby Boy - Waterfall Veil",
+      "goal": "Baby-blue cascading veil filaments. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderVeilWidth",
+          "label": "Veil Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCascadeDensity",
+          "label": "Cascade Density",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.6,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.52,
+        "sliderCascadeDensity": 0.54
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.6,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.52,
+        "sliderCascadeDensity": 0.54
+      },
+      "gif": "017_baby__28_boy_waterfall_veil.gif",
+      "video": "017_baby__28_boy_waterfall_veil.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c6ec5d649f3891dafc93e2bec4e4172912b5170119716ae2c66b6d8fcba62497"
+    },
+    {
+      "index": 17,
+      "pattern": "baby/26_boy_lighthouse_fans",
+      "title": "Baby Boy - Lighthouse Fans",
+      "goal": "Baby-blue mirrored lighthouse fans. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderFanCount",
+          "label": "Fan Count",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "gif": "018_baby__26_boy_lighthouse_fans.gif",
+      "video": "018_baby__26_boy_lighthouse_fans.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e8b0102add17358c7612fa6a80daaf5d96cb7a623648b57591c1c1a0e415c0df"
+    },
+    {
+      "index": 18,
+      "pattern": "baby/17_boy_crossing_glow",
+      "title": "Baby Boy - Crossing Glow",
+      "goal": "Baby-blue crossing beacons for long photo holds. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
           "value": 0.32,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCrossingOffset",
+          "label": "Crossing Offset",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Crossing Offset character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.32,
+        "sliderLevel": 0.86,
+        "sliderBeamWidth": 0.46,
+        "sliderCrossingOffset": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.32,
+        "sliderLevel": 0.86,
+        "sliderBeamWidth": 0.46,
+        "sliderCrossingOffset": 0.5
+      },
+      "gif": "019_baby__17_boy_crossing_glow.gif",
+      "video": "019_baby__17_boy_crossing_glow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "2067f4b9afb4d3ca5ac67174436b885bc833f3f4681b9c0b54cffbfbcaf59ea4"
+    },
+    {
+      "index": 19,
+      "pattern": "baby/61_boy_crossing_beacons",
+      "title": "Baby Boy - Crossing Beacons",
+      "goal": "Baby-blue crossing beacons: broad paired signals meet over the complete ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeaconWidth",
+          "label": "Beacon Width",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCrossingDepth",
+          "label": "Crossing Depth",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.9,
+        "sliderBeaconWidth": 0.58,
+        "sliderCrossingDepth": 0.54
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.9,
+        "sliderBeaconWidth": 0.58,
+        "sliderCrossingDepth": 0.54
+      },
+      "gif": "020_baby__61_boy_crossing_beacons.gif",
+      "video": "020_baby__61_boy_crossing_beacons.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "7e4969e27c6991d6089aa743b4e4c41106e46bca4812076318cbcbc546cff8b8"
+    },
+    {
+      "index": 20,
+      "pattern": "baby/25_boy_bubble_chorus",
+      "title": "Baby Boy - Bubble Chorus",
+      "goal": "Baby-blue breathing bubble field. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.49,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBubbleSize",
+          "label": "Bubble Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Bubble Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCellDensity",
+          "label": "Cell Density",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "gif": "021_baby__25_boy_bubble_chorus.gif",
+      "video": "021_baby__25_boy_bubble_chorus.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4530c0ece7dcb55f928adebefb38566ff56212093c8d98e62eb0ed95d35b9675"
+    },
+    {
+      "index": 21,
+      "pattern": "baby/29_boy_diamond_quilt",
+      "title": "Baby Boy - Diamond Quilt",
+      "goal": "Baby-blue travelling diamond quilt. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.65,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSeamWidth",
+          "label": "Seam Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderQuiltScale",
+          "label": "Quilt Scale",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Quilt Scale character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "gif": "022_baby__29_boy_diamond_quilt.gif",
+      "video": "022_baby__29_boy_diamond_quilt.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e7999c816f07bb47babd5d11aeaf4b1904c1397b9c26891e6e8bc208238a8047"
+    },
+    {
+      "index": 22,
+      "pattern": "baby/64_boy_harbor_fireflies",
+      "title": "Baby Boy - Harbor Fireflies",
+      "goal": "Baby-blue harbor fireflies: detailed lights drift over a dependable full-ship floor.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderFireflySize",
+          "label": "Firefly Size",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Firefly Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDriftDepth",
+          "label": "Drift Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.62,
+        "sliderLevel": 0.91,
+        "sliderFireflySize": 0.48,
+        "sliderDriftDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.62,
+        "sliderLevel": 0.91,
+        "sliderFireflySize": 0.48,
+        "sliderDriftDepth": 0.58
+      },
+      "gif": "023_baby__64_boy_harbor_fireflies.gif",
+      "video": "023_baby__64_boy_harbor_fireflies.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e8ac0fc8a751f90975a3ecdf2035f231eb1f12609014b6ca31d73bfd6cf1eb09"
+    },
+    {
+      "index": 23,
+      "pattern": "baby/21_boy_comet_lullaby",
+      "title": "Baby Boy - Comet Lullaby",
+      "goal": "Baby-blue smooth comet procession. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Tail Length character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCometCount",
+          "label": "Comet Count",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "gif": "024_baby__21_boy_comet_lullaby.gif",
+      "video": "024_baby__21_boy_comet_lullaby.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "6f74c286b5a6b99daaa912a89e12e6f7192c1fbe98ef44eb15097cfb3fd2e6ee"
+    },
+    {
+      "index": 24,
+      "pattern": "baby/59_boy_cathedral_ribs",
+      "title": "Baby Boy - Cathedral Ribs",
+      "goal": "Baby-blue cathedral ribs: large animated arches turn the vessel into luminous architecture.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.96,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibWidth",
+          "label": "Rib Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderArchHeight",
+          "label": "Arch Height",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Arch Height character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.96,
+        "sliderRibWidth": 0.54,
+        "sliderArchHeight": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.96,
+        "sliderRibWidth": 0.54,
+        "sliderArchHeight": 0.58
+      },
+      "gif": "025_baby__59_boy_cathedral_ribs.gif",
+      "video": "025_baby__59_boy_cathedral_ribs.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d59592fcd9ff2321426b77ffe6ccf45ed7cc06a1506bc47509d9b40b84476193"
+    },
+    {
+      "index": 25,
+      "pattern": "baby/63_boy_aurora_veil",
+      "title": "Baby Boy - Aurora Veil",
+      "goal": "Baby-blue aurora veil: smooth curtains fold across the hull and Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderVeilWidth",
+          "label": "Veil Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderAuroraDepth",
+          "label": "Aurora Depth",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.54,
+        "sliderAuroraDepth": 0.62
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.54,
+        "sliderAuroraDepth": 0.62
+      },
+      "gif": "026_baby__63_boy_aurora_veil.gif",
+      "video": "026_baby__63_boy_aurora_veil.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "0621ef4b8b381d0dc716a775ef729498d4bd960a2c389d0ec5674ef08500e4ba"
+    },
+    {
+      "index": 26,
+      "pattern": "baby/62_boy_gentle_maelstrom",
+      "title": "Baby Boy - Gentle Maelstrom",
+      "goal": "Baby-blue gentle maelstrom: a broad photo-safe spiral carries motion without losing the ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.94,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpiralWidth",
+          "label": "Spiral Width",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCurrentDepth",
+          "label": "Current Depth",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.94,
+        "sliderSpiralWidth": 0.68,
+        "sliderCurrentDepth": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.94,
+        "sliderSpiralWidth": 0.68,
+        "sliderCurrentDepth": 0.48
+      },
+      "gif": "027_baby__62_boy_gentle_maelstrom.gif",
+      "video": "027_baby__62_boy_gentle_maelstrom.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b0ea614c434de4a65b61c9d1d18b5edd1dcc3c67da17fd529030e5c177d3b473"
+    },
+    {
+      "index": 27,
+      "pattern": "baby/27_boy_heartbeat_bloom",
+      "title": "Baby Boy - Heartbeat Bloom",
+      "goal": "Baby-blue nested heartbeat blooms. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloomSharpness",
+          "label": "Bloom Sharpness",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderEchoDepth",
+          "label": "Echo Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "gif": "028_baby__27_boy_heartbeat_bloom.gif",
+      "video": "028_baby__27_boy_heartbeat_bloom.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "46cc7897861dbb11979e2e897b415c569aaf6e88f9405a2cfb9f33d24ab6ccb3"
+    },
+    {
+      "index": 28,
+      "pattern": "baby/65_boy_celebration_bloom",
+      "title": "Baby Boy - Celebration Bloom",
+      "goal": "Baby-blue celebration bloom: sustained spatial petals create a joyful photo-hold finale.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderPetalCount",
+          "label": "Petal Count",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Amount of active visual material.",
           "audio": null
         },
         {
-          "name": "sliderDepth",
-          "label": "Depth",
-          "value": 0.56,
+          "name": "sliderBloomDepth",
+          "label": "Bloom Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
           "description": "Shape and intensity of the main organic motion.",
-          "audio": {
-            "slider": "sliderDepth",
-            "signal": "micFlux",
-            "min": 0.2,
-            "max": 0.88,
-            "curve": "linear"
-          }
-        },
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.48,
+        "sliderLevel": 0.92,
+        "sliderPetalCount": 0.52,
+        "sliderBloomDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.48,
+        "sliderLevel": 0.92,
+        "sliderPetalCount": 0.52,
+        "sliderBloomDepth": 0.58
+      },
+      "gif": "029_baby__65_boy_celebration_bloom.gif",
+      "video": "029_baby__65_boy_celebration_bloom.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a4bb48c930625206a69cf4ca5d5b10042075ac5e6ad2d8ab298381ff83d52185"
+    },
+    {
+      "index": 29,
+      "pattern": "baby/30_boy_celebration_burst",
+      "title": "Baby Boy - Celebration Burst",
+      "goal": "Baby-blue repeating celebration bursts. Hard-coded baby-blue photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
         {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.65,
-          "description": "Quiet-state floor and negative-space balance.",
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstWidth",
+          "label": "Burst Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstReach",
+          "label": "Burst Reach",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
         }
       ],
-      "gif": "011_127_grand_maelstrom.gif",
-      "video": "011_127_grand_maelstrom.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "gif": "030_baby__30_boy_celebration_burst.gif",
+      "video": "030_baby__30_boy_celebration_burst.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8c30fb64a8a1031417a5431fb368cc733164a310bae480d56fc135fcb82ff838"
     }
   ]
 }

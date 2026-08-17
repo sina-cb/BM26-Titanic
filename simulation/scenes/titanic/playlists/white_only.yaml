@@ -4,35 +4,82 @@ entries:
   - id: e_white_only_0_60_white_wash
     pattern: 60_white_wash
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.58
+      sliderEvenness: 0.42
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.18
+      sliderWarmth: 0.14
     modulations: []
     midiMappings: []
     notes: null
   - id: e_white_only_1_61_white_breathe
     pattern: 61_white_breathe
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.28
+      sliderDirection: 0.75
+      sliderLevel: 0.75
+      sliderKick: 0.10
+      sliderRadius: 0.58
+      sliderDepth: 0.68
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.20
+      sliderWarmth: 0.18
     modulations: []
     midiMappings: []
     notes: null
   - id: e_white_only_2_62_white_shimmer
     pattern: 62_white_shimmer
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderDirection: 0.75
+      sliderLevel: 0.70
+      sliderKick: 0.08
+      sliderRadius: 0.42
+      sliderDensity: 0.52
+      sliderSharpness: 0.76
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.22
+      sliderWarmth: 0.08
     modulations: []
     midiMappings: []
     notes: null
   - id: e_white_only_3_63_white_chase
     pattern: 63_white_chase
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.38
+      sliderTailLength: 0.58
+      sliderCount: 0.42
+      sliderWhiteLevel: 0.70
+      sliderWhiteKick: 0.24
+      sliderWarmth: 0.06
     modulations: []
     midiMappings: []
     notes: null
   - id: e_white_only_4_64_temple_warm_white
     pattern: 64_temple_warm_white
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.22
+      sliderDirection: 0.75
+      sliderLevel: 0.72
+      sliderKick: 0.06
+      sliderRadius: 0.52
+      sliderCeiling: 0.58
+      sliderWarmth: 0.78
+      sliderWhiteLevel: 0.74
+      sliderWhiteKick: 0.12
     modulations: []
     midiMappings: []
     notes: null

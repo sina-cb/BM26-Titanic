@@ -47,7 +47,8 @@ import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
 import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel, testConnection } from '@/utils/api';
-import type { RenderHealth, DeckRestoreDegraded, AudioSuggestion } from '@/utils/api';
+import type { RenderHealth, DeckRestoreDegraded, AudioSuggestion, DeckColorAutopilotConfig } from '@/utils/api';
+import { colorAutopilotFrame } from '@/utils/color_autopilot_frame';
 
 export interface SharedParamValue {
   // The engine emits HSV objects for color palettes and plain floats
@@ -250,6 +251,21 @@ export interface EngineLiveState {
      */
     sizeLockWarning: string | null;
   } | null;
+  /**
+   * Read-only mirror of the `/ws/control` `colorAutopilot` broadcast
+   * (docs/61_colors_interaction_model.md §4.4, W4) — surfaced APP-WIDE so
+   * the shared-header COLOR chip can name a running colour rotation/
+   * follow-note mode from ANY tab, not just the Deck screen. The deck
+   * screen keeps its OWN existing consumer of this broadcast (its `colors`
+   * window state); this field is a SEPARATE read of the same wire, added
+   * for the chip only — nothing here writes to the engine.
+   *
+   * Parsed via `colorAutopilotFrame()` (utils/color_autopilot_frame.ts) so
+   * a malformed broadcast maps to `null` rather than a half-built config.
+   * `null` until the first broadcast lands (there is no REST seed for this
+   * field — the deck screen's own fetch already owns that on mount).
+   */
+  colorAutopilot: DeckColorAutopilotConfig | null;
 }
 
 /**
@@ -326,6 +342,7 @@ const EMPTY_STATE: EngineLiveState = {
   paramSchema: {},
   activeModel: null,
   engineHealth: null,
+  colorAutopilot: null,
 };
 
 let _cached: EngineLiveState = EMPTY_STATE;
@@ -660,6 +677,14 @@ function _onMessage(msg: EngineMessage) {
         lastKickMs: typeof msg.lastKickMs === 'number' ? msg.lastKickMs : 0,
       },
     });
+  } else if (msg.type === 'colorAutopilot') {
+    // App-wide read-only mirror (docs/61 §4.4, W4) — see the `colorAutopilot`
+    // field doc on EngineLiveState. `colorAutopilotFrame` copies the
+    // broadcast through WHOLESALE (mode-scoped, never merged with the prior
+    // frame), so a malformed message maps to a no-op here rather than
+    // corrupting the cached frame with a half-built config.
+    const frame = colorAutopilotFrame(msg);
+    if (frame) _emit({ ..._cached, colorAutopilot: frame });
   }
 }
 
@@ -953,6 +978,36 @@ export function useLiveParams(): LiveParams | null {
 }
 
 /**
+ * Is the LIVE-SIGNAL transport (/ws/signals — the socket that carries
+ * `liveParams`) connected right now?
+ *
+ * The live-param cache is deliberately NOT cleared when that socket drops:
+ * every meter holds its last frame rather than snapping to zero. That is the
+ * right default for a bar, but it means a BINARY readout (the AUDIO tab's
+ * PARTY SIGNAL pill) would keep asserting ON/OFF with no engine behind it.
+ * Such a readout pairs `useLiveParams()` with this hook and shows UNKNOWN
+ * while it reports false — presentation only; nothing here mutates the cache
+ * or any other surface's state.
+ *
+ * Narrow on purpose: it subscribes ONLY to the signals bus status (not the
+ * control/params buses), because that is the exact transport the live audio
+ * values arrive on, and it re-renders only on an actual connect/disconnect
+ * edge — never at the 15-30 Hz value cadence.
+ */
+export function useLiveSignalsConnected(): boolean {
+  _ensureSignalsInitialized();
+  const [connected, setConnected] = useState<boolean>(
+    () => engineSignalsEvents.getStatus().connected,
+  );
+  useEffect(() => {
+    // subscribeStatus fires immediately with the current status, which also
+    // closes the mount-vs-first-event race.
+    return engineSignalsEvents.subscribeStatus((s) => setConnected(!!s.connected));
+  }, []);
+  return connected;
+}
+
+/**
  * Convenience selector mirroring useSharedParamValues but bound to
  * the live audio bus. Defaults are merged on top so callers don't
  * have to deal with the pre-load null case.
@@ -1187,6 +1242,22 @@ export function useOscStatus(): OscPillState | null {
  */
 export function useMaster(): number {
   return useEngineSlice<number>((s) => s.master);
+}
+
+/**
+ * Selector for the app-wide colour-autopilot control frame (docs/61 §4.4,
+ * W4) — the shared-header COLOR chip's ONLY read of engine state. Reference-
+ * stable per-key slice so a tab that doesn't render the chip never re-renders
+ * off this broadcast, and the chip itself only re-renders when the frame
+ * object actually changes (a fresh `colorAutopilot` broadcast, or a boot
+ * before the first one has landed).
+ *
+ * READ-ONLY: nothing in this hook, or the field it reads, ever posts to the
+ * engine. The deck screen's own `colors` window state is a SEPARATE consumer
+ * of the same broadcast — this selector does not replace it.
+ */
+export function useColorAutopilotFrame(): DeckColorAutopilotConfig | null {
+  return useEngineSlice<DeckColorAutopilotConfig | null>((s) => s.colorAutopilot);
 }
 
 /**

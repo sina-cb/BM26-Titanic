@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, Modal } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -7,6 +7,7 @@ import {
   performanceExitChoices,
   dirtySummaryText,
   dirtyRestoreCaption,
+  PASSCODE_REQUIRED_HINT,
   type DeckDirtyEntry,
   type PerformanceExitAction,
 } from '@/components/performance_mode_logic';
@@ -32,6 +33,21 @@ import {
 // performanceExitChoices() so the wording is vitest-pinned and can't drift.
 // No optimistic flip — the caller awaits the engine WS echo; a brief `pending`
 // spinner label covers the round-trip.
+//
+// PASSCODE (docs/56 D2/D8). Leaving the lock now requires a FRESH operator
+// passcode, verified per attempt by the engine, because the principal who types
+// it becomes the edit session that decides what gets written to disk. The field
+// uses the takeover_passcode_sheet idiom deliberately — a single useState wiped
+// on submit and on close, no remember affordance, nothing persisted — and NOT
+// PrivilegedAuthSheet, which mints the 30-minute session this flow ignores.
+// The passcode rides on the SAME request as the exit action: one entry, one
+// verification, atomic with the choice.
+//
+// KEEP & SAVE TUNING carries a "captain's passcode only" caption and stays
+// TAPPABLE for everyone. The client cannot pre-know which principal is being
+// typed (that would mean verifying before submit), so a sailor who picks it
+// gets the engine's 400 rendered in the error box below — an honest refusal
+// beats a button that lies about why it is greyed.
 
 const BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
 
@@ -48,7 +64,13 @@ export interface ExitPerformanceSheetProps {
    *  exits, so a second press only closes; this line says so. Null / absent
    *  → no controller connected → the sheet renders exactly as before. */
   controllerHint?: string | null;
-  onChoose: (action: PerformanceExitAction) => void;
+  /** True when this engine gates the exit on a passcode (auth enabled). False
+   *  on benches / isolated test engines, where the field is not rendered at
+   *  all and the sheet behaves exactly as it did before docs/56. */
+  passcodeRequired?: boolean;
+  /** The engine's refusal for the last attempt; never contains the passcode. */
+  error?: string | null;
+  onChoose: (action: PerformanceExitAction, passcode: string) => void;
   onCancel: () => void;
 }
 
@@ -58,6 +80,8 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
   dirtyCount = 0,
   dirtyEntries = [],
   controllerHint = null,
+  passcodeRequired = false,
+  error = null,
   onChoose,
   onCancel,
 }) => {
@@ -67,6 +91,39 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
   const choices = useMemo(() => performanceExitChoices(dirtyCount), [dirtyCount]);
   const summary = isDirty ? dirtySummaryText(dirtyCount, dirtyEntries) : '';
   const restoreCaption = isDirty ? dirtyRestoreCaption(dirtyCount) : '';
+
+  const [passcode, setPasscode] = useState('');
+  // Wipe on close. With the wipe on submit below, this component holds the
+  // secret only while the operator is typing it.
+  useEffect(() => {
+    if (!visible) setPasscode('');
+  }, [visible]);
+
+  const choose = (action: PerformanceExitAction) => {
+    const attempted = passcode;
+    // Clear BEFORE handing it off: the request is in flight, nothing here needs
+    // the value any more, and a rejection must start from an empty field.
+    setPasscode('');
+    onChoose(action, attempted);
+  };
+  // ONLY the in-flight request disables the choices (report _236).
+  //
+  // This used to also read `passcodeRequired && passcode.length === 0`, and that
+  // was the operator's "the buttons aren't making progress anymore": with the
+  // field empty BOTH exits rendered at 0.45 opacity, swallowed the tap, fired no
+  // request, and printed no reason anywhere on screen. A refusal nobody can see
+  // is exactly the silent behaviour codex P0 forbids — and the client was
+  // guessing at a gate the ENGINE owns, so a pad holding a stale `authRequired`
+  // could have bricked a legitimate exit on a bench.
+  //
+  // The engine is the single authority now: an empty passcode POSTs, and
+  // `verifyPrincipalPasscode` answers 401 EXIT_AUTH_REQUIRED — which the caller
+  // renders in the error box below. That refusal costs NOTHING against the
+  // lockout ring (a missing header returns before `verifyPassphrase` is ever
+  // reached, marsin_engine/lib/api_server.js), so mashing the button cannot lock
+  // the operator out mid-show.
+  const choicesDisabled = pending;
+
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
       <TouchableOpacity
@@ -96,18 +153,51 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
               <Text style={styles.controllerHint}>{controllerHint}</Text>
             ) : null}
 
-            {choices.map(({ action, label, hint, tone }) => {
+            {passcodeRequired ? (
+              <>
+                <TextInput
+                  value={passcode}
+                  onChangeText={setPasscode}
+                  editable={!pending}
+                  secureTextEntry
+                  autoFocus
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="off"
+                  textContentType="none"
+                  placeholder="Operator passcode"
+                  placeholderTextColor={C.secondary}
+                  style={styles.input}
+                  accessibilityLabel="Operator passcode to leave performance mode"
+                />
+                {/* Says WHY the field is there, before the operator finds out by
+                    being refused (report _236). The choices stay tappable — this
+                    is a hint, never a gate. */}
+                <Text style={styles.passcodeHint}>{PASSCODE_REQUIRED_HINT}</Text>
+              </>
+            ) : null}
+            {error ? (
+              <View style={styles.errorBox} accessibilityRole="alert">
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            {choices.map(({ action, label, hint, tone, caption }) => {
               const isRestore = tone === 'restore';
               return (
                 <TouchableOpacity
                   key={action}
-                  style={[styles.choiceBtn, isRestore && styles.restoreBtn, pending && { opacity: 0.5 }]}
-                  onPress={() => onChoose(action)}
-                  disabled={pending}
+                  style={[
+                    styles.choiceBtn,
+                    isRestore && styles.restoreBtn,
+                    choicesDisabled && { opacity: 0.45 },
+                  ]}
+                  onPress={() => choose(action)}
+                  disabled={choicesDisabled}
                   hitSlop={BTN_HIT_SLOP}
                   accessibilityRole="button"
-                  accessibilityLabel={label}
-                  accessibilityState={{ disabled: pending }}
+                  accessibilityLabel={caption ? `${label} — ${caption}` : label}
+                  accessibilityState={{ disabled: choicesDisabled }}
                 >
                   <Text style={[styles.choiceLabel, isRestore && { color: C.tertiary }]}>
                     {label}
@@ -115,6 +205,7 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
                   <Text style={styles.choiceHint}>
                     {isRestore && restoreCaption ? `${hint} ${restoreCaption}` : hint}
                   </Text>
+                  {caption ? <Text style={styles.choiceCaption}>{caption}</Text> : null}
                 </TouchableOpacity>
               );
             })}
@@ -207,6 +298,45 @@ function makeStyles(C: Palette) {
       marginTop: -10,
       marginBottom: 14,
     },
+    // Operator passcode field — mirrors takeover_passcode_sheet's input so the
+    // two passcode moments in the app look and feel identical.
+    input: {
+      minHeight: 56,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+      color: C.text,
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 20,
+      letterSpacing: 2,
+      paddingHorizontal: 16,
+      marginBottom: 8,
+    },
+    // Standing explanation for the passcode field. Secondary ink so it reads as
+    // a caption, not as an error — errors get the box below it.
+    passcodeHint: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 12,
+      lineHeight: 17,
+      color: C.secondary,
+      marginBottom: 14,
+    },
+    errorBox: {
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: C.errorContainerBorder,
+      backgroundColor: C.errorContainer,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      marginBottom: 14,
+    },
+    errorText: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 13,
+      lineHeight: 18,
+      color: C.error,
+    },
     choiceBtn: {
       minHeight: 56,
       borderRadius: 10,
@@ -217,6 +347,15 @@ function makeStyles(C: Palette) {
       paddingVertical: 10,
       justifyContent: 'center' as const,
       marginBottom: 10,
+    },
+    // The owner-only qualifier under KEEP & SAVE TUNING.
+    choiceCaption: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      lineHeight: 16,
+      letterSpacing: 0.4,
+      color: C.warning,
+      marginTop: 4,
     },
     restoreBtn: {
       borderColor: C.tertiary,

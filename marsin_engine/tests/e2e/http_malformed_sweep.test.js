@@ -13,7 +13,9 @@
  * 413 cap, per-route bad-JSON handling, or the traversal guards
  * (`path.basename` call sites) at the HTTP layer.
  *
- * Uses `createEngineHarness` (`--dest 127.0.0.9`, black-holed) against the
+ * Uses `createEngineHarness` (`--dest 192.0.2.9` — TEST-NET-1 / RFC 5737, a
+ * true black hole; loopback is not, since the sim's sACN receiver binds every
+ * local interface) against the
  * `test_bench` scene. All assertions are RESPONSE-SHAPE + PROCESS-ALIVE: the
  * real guarantee under test is that the engine never 5xxs, never drops the
  * connection, and never dies — `/status` after every attack is the load-
@@ -50,7 +52,8 @@ const PATTERNS_DIR = path.resolve(__dirname, '..', '..', 'patterns');
 const harness = createEngineHarness({
   scene: 'test_bench',
   prefix: 'httpsweep',
-  extraArgs: ['--dest', '127.0.0.9'],
+  // TEST-NET-1 (RFC 5737) black hole — loopback is not one.
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 before(async () => {
@@ -182,21 +185,16 @@ test('unknown route: GET /definitely-not-a-route -> 404', async () => {
   await assertAlive();
 });
 
-test('N-5 subdir-slug pin: POST /pattern {pattern:"test/breathing"} resolves via basename to "breathing" -> 404', async () => {
-  // Catalog N-5: direct pattern-set routes apply path.basename, which
-  // MANGLES legal subdir slugs — playlist-driven loads accept `dir/name`
-  // correctly (VALID_PATTERN regex), but this direct route does not. Pinned
-  // WITH the N-5 reference: if the fix wave changes this routing, this test
-  // is the tripwire that the semantic changed on purpose. Verified at
-  // test-write time: patterns/breathing.js does NOT exist (only
-  // patterns/test/breathing.js), so this 404s today rather than silently
-  // loading the wrong root-level pattern.
+test('N-5 fixed: PUT /pattern preserves and loads the legal test/breathing subdir slug', async () => {
+  // Direct pattern routes now use the same one-subdirectory validator as
+  // playlists. Keep the absence of a root-level twin pinned so a 200 proves
+  // the legal subdirectory survived validation instead of being basename'd.
   assert.equal(fs.existsSync(path.join(PATTERNS_DIR, 'breathing.js')), false,
     'sanity: no root-level breathing.js exists to be silently loaded instead');
   assert.equal(fs.existsSync(path.join(PATTERNS_DIR, 'test', 'breathing.js')), true,
     'sanity: patterns/test/breathing.js exists');
   const { status } = await harness.api('PUT', '/pattern', { pattern: 'test/breathing' });
-  assert.equal(status, 404, 'basename("test/breathing") -> "breathing", which has no root-level file (N-5)');
+  assert.equal(status, 200, 'legal subdirectory pattern loads without basename mangling');
   await assertAlive();
 });
 

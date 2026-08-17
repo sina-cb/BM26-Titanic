@@ -18,7 +18,10 @@
  *     that still declares `controllers:` makes it refuse to boot
  *     (`lib/output_config_guard.js`). This harness therefore writes a config
  *     with the key ABSENT (not merely emptied — an empty key is itself refused)
- *     plus `sacn.destinations: [127.0.0.9]`, points the engine at it with
+ *     plus `sacn.destinations: [192.0.2.9]` — TEST-NET-1 (RFC 5737), reserved
+ *     for documentation and never routed; a LOOPBACK dest is NOT a black hole,
+ *     because the sim's sACN receiver binds every local interface and would
+ *     relay the frames onward — points the engine at it with
  *     MARSIN_CONFIG_FILE, and ASSERTS on the way up that
  *     (a) every `[sACN Out] Sender started` line names only the black hole, and
  *     (b) `GET /status.outputRouting.controllers` is empty.
@@ -56,8 +59,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ENGINE_DIR = path.resolve(__dirname, '..', '..');
 export const REPO_DIR = path.resolve(ENGINE_DIR, '..');
 
-/** The sACN black hole. Nothing listens here; nothing on the rig is at .9. */
-export const BLACKHOLE_HOST = '127.0.0.9';
+/**
+ * The sACN black hole: TEST-NET-1 (RFC 5737), reserved for documentation and
+ * never routed, so a datagram can only be dropped. NOT a loopback address —
+ * the simulation's sACN receiver binds every local interface, so a
+ * loopback-destined frame is still RECEIVED and relayed on to the live rig.
+ */
+export const BLACKHOLE_HOST = '192.0.2.9';
 
 /** The scene these engines run. test_bench — never `titanic`. */
 export const E2E_SCENE = 'test_bench';
@@ -283,14 +291,23 @@ export function buildDormantPlan(nowMs, { name = 'zoom_e2e_dormant', startInDays
  * @param {object}  [o.timelinePatch] merged over the config `timeline:` block
  * @param {string}  [o.pattern]
  * @param {object}  [o.extraEnv]      test-only engine environment overrides
+ * @param {number}  [o.portBase]      isolated HTTP port range start
+ * @param {number}  [o.portSpan]      number of candidate ports above portBase
  */
 export function createTimelineE2E(o) {
   const {
     prefix, plans = {}, copyPlans = [], activePlan,
     timelinePatch = {}, pattern = '13_sparkle', extraEnv = {},
+    portBase = 7700, portSpan = 200,
   } = o;
   if (!prefix) throw new Error('createTimelineE2E: `prefix` is required');
   if (!activePlan) throw new Error('createTimelineE2E: `activePlan` is required');
+  if (!Number.isInteger(portBase) || portBase < 1024 || portBase > 65535) {
+    throw new Error('createTimelineE2E: `portBase` must be an integer from 1024 to 65535');
+  }
+  if (!Number.isInteger(portSpan) || portSpan < 1 || portBase + portSpan > 65536) {
+    throw new Error('createTimelineE2E: `portSpan` must define a non-empty range within 65535');
+  }
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
   const stateRoot = path.join(root, 'states');
@@ -319,7 +336,7 @@ export function createTimelineE2E(o) {
   // Well clear of the pinned 6967-6972 band, of the other spawn harnesses'
   // 7100-7400 range, and of 7680 (Windows Delivery Optimization squats it on
   // this box — a random hit there would fail the boot for no real reason).
-  const port = 7700 + Math.floor(Math.random() * 200);
+  const port = portBase + Math.floor(Math.random() * portSpan);
   const base = () => `http://127.0.0.1:${port}`;
 
   let proc = null;

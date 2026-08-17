@@ -62,9 +62,17 @@ test('Companion derived config protocol hot-applies valid patches and rejects in
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bm26-companion-derived-'));
   const stateDir = path.join(stateRoot, 'test_bench');
   fs.mkdirSync(stateDir);
-  fs.copyFileSync(
-    path.join(ENGINE_DIR, 'states', 'test_bench', 'audio_state.yaml'),
+  // A FIXTURE, not a copy of the operator's live scene state (report _207).
+  // The temp root already stops the Companion writing into the tracked tree,
+  // but copying that file in also copied its CONTENT — and the assertion below
+  // ("nothing was live-patched, so nothing is persisted") is a statement about
+  // what the Companion did during this test, not about whether the operator
+  // happens to have live-patched a derived group into test_bench. Every knob
+  // the Companion needs comes from config.yaml; the scene state contributes
+  // only the mic selection, so that is all the fixture carries.
+  fs.writeFileSync(
     path.join(stateDir, 'audio_state.yaml'),
+    'capture:\n  device: test\n  platform: auto\n',
   );
   // Snapshot: the Companion must leave this file byte-for-byte alone.
   const stateFileBefore = fs.readFileSync(path.join(stateDir, 'audio_state.yaml'), 'utf8');

@@ -24,6 +24,11 @@ Protocol (format, rules, when to write): [`../os/memory.md`](../os/memory.md).
   CLEAN object census = the browser is on the Intel iGPU, not the 4090;
   check the adapter (chrome://gpu / UNMASKED_RENDERER) before blaming
   code; probes can pin an adapter via `--use-adapter-luid`.
+- [yoga-flex-shorthand-trap](yoga_flex_shorthand_trap.md) — Yoga IGNORES an
+  explicit `flexBasis:'auto'` whenever a `flex:N` shorthand co-flattens
+  (basis → 0 on native; CSS honors it on web) — never override a `flex`
+  base with longhands, select whole style objects; prove native layout with
+  yoga-layout tests, never web screenshots.
 - [spawning-a-test-engine](spawning_a_test_engine.md) — `--dest` does NOT
   black-hole sACN (the `controllers:` block wins, and the default destination
   is the operator's own sim bridge); use `MARSIN_CONFIG_FILE` with a

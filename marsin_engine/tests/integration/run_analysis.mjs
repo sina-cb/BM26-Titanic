@@ -47,23 +47,22 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
-import {
-  buildAudioAnalyzerOptions,
-  loadEffectiveAudioAnalysisConfig,
-} from '../../audio/config/audio_analysis_config.js';
+import { buildAudioAnalyzerOptions } from '../../audio/config/audio_analysis_config.js';
 import { buildRawMirrorWrites } from '../../audio/companion/audio_pipeline.js';
 import { SignalPostProcessor } from '../../audio/postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { ParamCenter } from '../../lib/param_center.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 import { writeWavMono, readWavMono } from './wav_io.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(__dirname, '..', '..');
-const PRODUCTION_AUDIO = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+// HERMETIC: tracked config.yaml only, never the scene-state overlay. This
+// harness IS the detector gate (audio_analysis_validation, detection_metrics),
+// and the overlay's live mic gain took both labelled drop clips to ZERO
+// detected drops. See tests/helpers/tracked_audio_config.mjs.
+const PRODUCTION_AUDIO = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 const FFT_SIZE = PRODUCTION_AUDIO.fftSize;
 const HOP_SIZE = PRODUCTION_AUDIO.hopSize;
 const BANDS = PRODUCTION_AUDIO.bands;
@@ -98,6 +97,20 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
 
   // Real ParamCenter, no persistence (null statePath → no disk I/O).
   const paramCenter = new ParamCenter(null);
+  if (mode === 'stems-fed') {
+    // Stem signals are Companion-manifest keys, not built-in CPC entries.
+    // Reproduce the production manifest registration before feeding them;
+    // otherwise setMany() correctly ignores the unknown keys and a test
+    // labelled "stems-fed" silently exercises the mic-only path.
+    for (const key of ['stemsBassRaw', 'stemsDrumsRaw', 'stemsVocalsRaw']) {
+      paramCenter.registerDynamicLiveParam({
+        key,
+        label: key,
+        oscAddress: `/test/${key}`,
+        range: [0, 1],
+      });
+    }
+  }
 
   // Synthetic monotonic hop clock (ms). Advanced by exactly one hop per
   // analysis; shared between analyzer nowFn and detector tick.

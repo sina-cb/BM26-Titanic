@@ -407,7 +407,11 @@ test('V9: due program arms a lease, dismiss latches firedToday (no re-arm)', asy
   const { svc } = setup({ now: 0 });
   svc.nowFn = () => nowMs;
   await svc.start();
-  await svc.setAutopilotEnabled(false); // manual/idle
+  // Operator TAKEOVER is the manual owner the pending-program lease serves.
+  // (Autopilot OFF is no longer a route here: a DISABLED plan is totally inert
+  // and arms no lease at all — operator ruling 2026-08-14, covered by its own
+  // tests in timeline_plan_disabled.test.js.)
+  svc.takeover();
   nowMs = Date.UTC(2026, 7, 30, 19, 0, 0); // 12:00 PT — cue now due
   await svc._tick();
   assert.ok(svc.state.pendingProgram && svc.state.pendingProgram.cueId === 'c_show', 'lease armed by tick');
@@ -452,7 +456,7 @@ test('V11: pending + ap-on → program fires', async () => {
 test('lease auto-expiry through tick → program auto-starts', async () => {
   const { svc, calls } = setup();
   await svc.start();
-  await svc.setAutopilotEnabled(false);
+  svc.takeover();   // manual owner; a DISABLED plan never auto-starts anything
   calls.loadPlaylist.length = 0;
   // Arm an already-expired lease, then tick.
   armPendingLease(svc, { expiresAtMs: svc.nowFn() - 1000 });
@@ -731,7 +735,7 @@ test('§16.9 schema: rejects an unknown transition mode (allowed list in message
   assert.throws(() => validateShowPlan(plan), /trans_crossfade, trans_flash, trans_color_burst/);
 });
 
-test('§16.9 schema: accepts the full 16-blend set (e.g. trans_iris) + shuffle round-trip', () => {
+test('§16.9 schema: accepts the full 15-transition set (e.g. trans_iris) + shuffle round-trip', () => {
   const plan = makePlanWithDeckKnobs({
     type: 'playlist', name: 'party_pl',
     target: { channel: 'deck', id: null },

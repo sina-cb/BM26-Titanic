@@ -24,8 +24,12 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertEngineLinkDown, isolatedCompanionEnv } from '../helpers/companion_isolation.mjs';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(__dirname, '..', '..');
+const TRACKED_AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 const SERVER = path.join(ENGINE_DIR, 'audio', 'companion', 'companion_server.js');
 
 async function getFreePort() {
@@ -58,11 +62,20 @@ async function waitForServer(port, timeoutMs = 8000) {
  * documented bench ports (31601/31668) turned this into a shared-resource test
  * — two spawned companions aimed at the same targets — which is why the whole
  * companion suite had to run at `--test-concurrency=1`.
+ *
+ * CONFIG + STATE are isolated too (`isolatedCompanionEnv`, report `_220`):
+ * before that this spawn merged the operator's live
+ * `states/test_bench/audio_state.yaml` over config.yaml, so the boot DESIGN
+ * these collision tests mutate was assembled under the rig's live analyzer
+ * tuning. The assertions are structural (which signal owns `micLow`, which
+ * address has one producer), so the tracked config moves none of them — it just
+ * makes "the shipped design" mean the shipped design.
  */
 async function withCompanion(fn) {
   const port = await getFreePort();
   const oscPort = await getFreePort();
   const enginePort = await getFreePort();
+  const isolation = isolatedCompanionEnv('live_edit_collisions');
   let stderr = '';
   const proc = spawn('node', [
     SERVER,
@@ -73,7 +86,7 @@ async function withCompanion(fn) {
     '--no-mic',
     '--osc-port', String(oscPort),
     '--engine-port', String(enginePort),
-  ], { cwd: ENGINE_DIR, stdio: ['ignore', 'ignore', 'pipe'] });
+  ], { cwd: ENGINE_DIR, env: isolation.env, stdio: ['ignore', 'ignore', 'pipe'] });
   proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
   try {
     await waitForServer(port);
@@ -87,6 +100,15 @@ async function withCompanion(fn) {
         if (m.type === 'hello') resolve(m);
       });
     });
+    // `_173`: a spawned companion that reached a real engine would PATCH the
+    // operator's running show. Asserted, not assumed.
+    assertEngineLinkDown(hello, assert.ok);
+    // `_220`: and the boot design these collision tests mutate was assembled
+    // under the TRACKED analyzer config. The collision assertions are all
+    // structural, so this is the only thing that would notice a dropped
+    // `env: isolation.env` (pre-`_220` this booted on inputGain 8.83).
+    assert.equal(hello.inputGain, TRACKED_AUDIO_CONFIG.bands.inputGain,
+      'the spawned companion is running the operator\'s live input gain, not the tracked one');
     // One request → one typed reply, so each assertion reads its own result.
     const request = (message, replyType) => new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`no ${replyType} within 5s`)), 5000);
@@ -104,6 +126,7 @@ async function withCompanion(fn) {
     ws.close();
   } finally {
     proc.kill('SIGKILL');
+    isolation.cleanup();
   }
 }
 

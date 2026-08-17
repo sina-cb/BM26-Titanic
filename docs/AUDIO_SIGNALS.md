@@ -156,13 +156,19 @@ estimator commits a pitch class only after its evidence window agrees and the
 change is confirmed, so the numbers below are the honest envelope. Do not
 design a program that needs more than this.
 
+> **Parity-locked figures.** Every number in the three paragraphs below also
+> appears, verbatim, in the `derivedSignals.noteTracking` comment block of
+> `marsin_engine/config.yaml`. `marsin_engine/tests/audio/note_evidence_docs_parity.test.mjs`
+> parses both files and fails loudly, naming both, if they disagree — so
+> re-measure and update the two together, never one alone.
+
 **Latency.** At the shipped 86.13 hops/s a far move (more than 2 semitones)
 commits in 18 hops (0.21 s) ideal; a **near** move (1–2 semitones — the common
 case inside a chord progression) costs 32 hops (0.37 s) ideal, because a small
 step is indistinguishable from a dominant-frequency glide and is deliberately
-made expensive. Through the real analyzer at 18 dB SNR the holdout's typical
-change lands around **450 ms**; the p90 of each run's p95 latency is **854 ms**
-and the worst run-level p95 is **935 ms**. Design consequence: a note held for less
+made expensive. Through the real analyzer at 18 dB SNR the holdout shows
+**451 ms** typical change latency, **853.6 ms** p90 run-level p95 latency and
+**934.8 ms** worst run-level p95 latency. Design consequence: a note held for less
 than about **0.5 s never commits at all**. Sustained bass/root anchors under a
 chord bed can track; this does not identify the chord or its quality. Arps,
 fills, and fast melodic lines freeze the colour on the last committed note.
@@ -172,17 +178,27 @@ fills, and fast melodic lines freeze the colour on the last committed note.
 uses a predetermined 24-seed holdout (the first 24 primes above 100), fixed
 before measuring its outputs. It gates aggregate means and distribution tails
 instead of fitting a separate floor to every explored seed. Measured there:
-**93.43%** mean settled-window accuracy, **51.09%** full-segment accuracy,
-**99.17%** expected root-change recall, and 18/24 perfectly ordered committed
+**93.43%** mean settled-window accuracy, **51.09%** mean full-segment accuracy,
+**99.17%** mean expected root-change recall, and **18 of 24** clean committed
 sequences. The full-segment number includes the previous note shown while a
 change is being confirmed and therefore exposes transition lag.
 
+**What those numbers are measured against.** The holdout scores the **tracked
+`config.yaml` audio block only** — it deliberately does *not* overlay
+`states/<scene>/audio_state.yaml`. The scene state carries `bands.inputGain`,
+which the operator turns live, and the whole holdout moves with it: the same 24
+seeds scored 93.43% settled at the tracked gain of 1 and 98.27% settled (22/24
+clean) at a live gain of 9.1 on 2026-08-14. A louder capture genuinely helps
+note tracking, but a gate that a gain knob can lift five points would hide a
+real tracker regression, so the published figures are the hermetic ones.
+
 **Degradation profile.** The same test reproduces `heavy` tier (**9 dB SNR**)
-evidence over fixed seeds 1–4 and prints it as report-only. Current means are
-**11.22%** settled-window accuracy, **9.81%** full-segment accuracy, and
-**13.33%** expected root-change recall; one seed never commits a correct scored
-root. Heavy results do not gate a tracker tuned for music, but they must remain
-visible. Treat 9 dB as unsupported for note colour.
+evidence over fixed seeds 1–4 and prints it as **report-only** — it is never
+gated and must never be promoted into a threshold. Current means are **11.22%**
+heavy-tier settled accuracy, **9.81%** heavy-tier full-segment score, and
+**13.33%** heavy-tier root-change recall; one seed never commits a correct
+scored root. Heavy results do not gate a tracker tuned for music, but they must
+remain visible. Treat 9 dB as unsupported for note colour.
 
 **Unvalidated.** The `playa` and `adversarial` tiers (wind gusts,
 neighbour-camp bleed, hard clipping) have **never been scored** for note

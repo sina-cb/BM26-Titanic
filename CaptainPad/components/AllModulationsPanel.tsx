@@ -36,6 +36,15 @@ import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   ModulationPopover, MOD_GREEN, useModulationState,
 } from '@/components/Modulation';
+import { Radius } from '@/constants/theme';
+import { readableInk, useGlobalStyles } from '@/styles/globalStyles';
+
+// Ink for anything FILLED with MOD_GREEN. Derived once (docs/54 §1.1: a
+// fixed accent never hardcodes its ink) instead of the '#fff' literals this
+// file used to carry. MOD_GREEN itself is the modulation subsystem's shared
+// accent and is deliberately NOT re-toned here — it is owned by
+// Modulation.tsx and rendered on the mixer too.
+const MOD_GREEN_INK = readableInk(MOD_GREEN);
 
 type Props = {
   visible: boolean;
@@ -93,6 +102,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
   visible, onClose, playlistName, activeEntryId,
 }) => {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
   // PERFORMANCE MODE: mapping CRUD is 409-gated while a show is live — the
   // panel stays viewable but CLEAR ALL / per-row edit/toggle/delete go inert.
   const perfLocked = usePerfLock();
@@ -209,7 +219,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
       <View style={{
         marginBottom: 10,
         padding: 10,
-        borderRadius: 8,
+        borderRadius: Radius.control,
         borderWidth: 1,
         borderColor: isActive ? MOD_GREEN : C.ghostBorder,
         backgroundColor: C.surfaceContainerHigh,
@@ -226,10 +236,10 @@ export const AllModulationsPanel: React.FC<Props> = ({
           </Text>
           {isActive ? (
             <View style={{
-              paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4,
+              paddingHorizontal: 6, paddingVertical: 1, borderRadius: Radius.chip,
               backgroundColor: MOD_GREEN,
             }}>
-              <Text style={{ color: '#fff', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.5 }}>ACTIVE</Text>
+              <Text style={{ color: MOD_GREEN_INK, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.5 }}>ACTIVE</Text>
             </View>
           ) : null}
           {isActive && liveActive ? (
@@ -246,7 +256,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
             accessibilityLabel={`Clear all modulations on ${entry.label || entry.pattern}`}
             accessibilityState={{ disabled: perfLocked }}
             style={{
-              paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
+              paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.chip,
               borderWidth: 1, borderColor: C.error,
               backgroundColor: 'transparent',
               opacity: perfLocked ? 0.45 : 1,
@@ -294,7 +304,9 @@ export const AllModulationsPanel: React.FC<Props> = ({
           accessibilityLabel="Close all-modulations panel (backdrop)"
         />
         <View
-          style={{
+          // Surface / hairline / radius / shadow: the shared `panel` recipe
+          // (docs/54 row 19 — an overlay card is a panel).
+          style={[globalStyles.panel, {
             width: 700,
             maxWidth: '95%',
             // Definite height (not maxHeight) so the body FlatList has
@@ -303,12 +315,8 @@ export const AllModulationsPanel: React.FC<Props> = ({
             // collapses to ~0px — visible as "the list is empty even
             // though entries exist".
             height: '80%',
-            backgroundColor: C.surfaceContainerLowest,
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: C.ghostBorder,
             overflow: 'hidden',
-          }}
+          }]}
         >
           {/* Header */}
           <View style={{
@@ -327,7 +335,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityLabel="Close all-modulations panel"
               style={{
-                paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+                paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.control,
                 borderWidth: 1, borderColor: C.ghostBorder,
               }}
             >
@@ -469,15 +477,17 @@ function ModulationRow({
           {shortSource(mapping.source.key)}
         </Text>
         <View style={{
-          paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4,
+          paddingHorizontal: 6, paddingVertical: 1, borderRadius: Radius.chip,
           // OVERRIDE replaces the static value — call it out with the green
-          // `!` styling, same family as the deck's OverrideBadge.
-          backgroundColor: mapping.mode === 'override' ? '#00a86b' : C.surfaceContainerLow,
-          borderWidth: 1, borderColor: mapping.mode === 'override' ? '#00a86b' : C.ghostBorder,
+          // `!` styling, same family as the deck's OverrideBadge. The hex was
+          // a duplicate of MOD_GREEN; one declaration now, so the two can
+          // never drift apart.
+          backgroundColor: mapping.mode === 'override' ? MOD_GREEN : C.surfaceContainerLow,
+          borderWidth: 1, borderColor: mapping.mode === 'override' ? MOD_GREEN : C.ghostBorder,
         }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-            color: mapping.mode === 'override' ? '#fff' : C.secondary,
+            color: mapping.mode === 'override' ? MOD_GREEN_INK : C.secondary,
             letterSpacing: 0.4,
           }}>
             {mapping.mode === 'override'

@@ -51,6 +51,35 @@ import { frostSparkleEffect } from '../effects/frost_sparkle.js';
 // presets for the operator-facing slot layer.
 const DROP_HIT_MAX_POLY = 6; // cap concurrent dropHit envelopes (E3 pile-up guard)
 
+/**
+ * The channel slams that own a RELEASE envelope (docs/57 §2.2). Everything else
+ * in `this.effects` is a DMX relay (fogger/horn/fire) or a whole-frame filter
+ * (invert) with no boost to decay, so naming one in `opts` is an authoring
+ * mistake and is refused rather than ignored.
+ */
+export const RELEASABLE_EFFECTS = Object.freeze(['vintageWhite', 'blastWhite', 'uvBlast']);
+
+/** Release targets. `show` decays the boost; `dark` decays the pixel. */
+export const EFFECT_RELEASE_TO = Object.freeze(['show', 'dark']);
+
+/**
+ * Upper bound on a release ramp — the same 0..5000 the Stoker panel has always
+ * enforced on `vintageWhiteReleaseMs`, and the same bound the show schema puts
+ * on an authored `releaseMs`. Never clamped; an out-of-range value throws.
+ */
+export const EFFECT_RELEASE_MS_MAX = 5000;
+
+/**
+ * One channel of a release, for the frame's already-computed envelope.
+ *
+ *   show → raise toward the decaying boost, never pull the pattern down
+ *   dark → replace: the release owns the channel until it retires at zero
+ */
+function releaseChannel(rel, current) {
+  if (rel.releaseTo === 'dark') return rel.value;
+  return rel.value > current ? rel.value : current;
+}
+
 export class GlobalEffectsController {
   constructor(config = {}) {
     // ── Legacy effect toggles ───────────────────────────────────────
@@ -69,23 +98,43 @@ export class GlobalEffectsController {
     this.horns = [];
     this.fires = [];
 
-    // ── vintageWhite RELEASE envelope (BM26 fire → lights sync) ─────
-    // Vintage filament heads do not go dark the instant the flame stops, and a
-    // hard cut reads as a glitch. When `vintageWhiteReleaseMs` > 0 the white
-    // boost ramps 1.0 → 0 linearly over that long after vintageWhite goes off,
-    // instead of disappearing on the next frame. 0 = the historical behavior
-    // (instant off), which is also what an engine with no fire-sync config gets
-    // — this feature is inert unless something sets it (the Stoker panel pushes
-    // the operator's value over the fire-sync channel; see fire_sync_listener).
+    // ── EFFECT RELEASE envelopes (soft flash exits) ─────────────────
+    // A slam that ends on a frame boundary reads as a glitch: vintage filament
+    // heads do not go dark the instant the flame stops, and a 900 ms all-white
+    // blast that vanishes in 25 ms snaps the eye. A RELEASE ramps the effect's
+    // boost 1.0 → 0 linearly over `releaseMs` after the falling edge instead of
+    // dropping it on the next frame.
     //
-    // The ramp only ever RAISES a pixel's white above what the pattern already
-    // wrote (Math.max), so it decays the BOOST and never dims live content.
-    // A retrigger (vintageWhite back on) cancels the fade and snaps to full —
+    // This started as the vintageWhite-only fire→lights sync ramp
+    // (`vintageWhiteReleaseMs`, pushed by the Stoker panel over the fire-sync
+    // channel; see fire_sync_listener) and is now the shared mechanism for all
+    // three channel slams. Per-effect entry, or `null` when nothing is decaying:
+    //
+    //   { startMs, releaseMs, releaseTo, fromConfig }
+    //
+    // Two release TARGETS, authored per call (docs/57 §2.2):
+    //
+    //   'show'  px.c = max(px.c, env)  — decays the BOOST and never dims live
+    //           content, so the running pattern RISES THROUGH the flash. This is
+    //           the historical vintageWhite behavior and the default.
+    //   'dark'  px.c = env             — replace-decay: the flash fades to black
+    //           over whatever is underneath. Authored intent for a flash whose
+    //           next state is dark (pair it with a masterFade to 0); at env = 0
+    //           the entry retires and the pattern owns the pixel again.
+    //
+    // A retrigger (the effect back ON) cancels the ramp and snaps to full —
     // standard envelope retrigger, and it keeps fast poof bursts reading as one
-    // solid stab of white.
+    // solid stab of white. The envelope is computed ONCE PER FRAME in
+    // applyPixels() and retires itself at zero, so an idle rig pays nothing.
+    //
+    // `fromConfig` marks an entry that took vintageWhite's CONFIGURED default
+    // (no explicit opts.releaseMs): those keep reading `vintageWhiteReleaseMs`
+    // live, so retuning or zeroing it mid-ramp behaves exactly as it did before
+    // this generalization.
+    this._fxRelease = { vintageWhite: null, blastWhite: null, uvBlast: null };
+    // 0 = the historical instant-off, which is also what an engine with no
+    // fire-sync config gets — the vintageWhite release is inert unless set.
     this.vintageWhiteReleaseMs = 0;
-    this._vwFadeActive = false;
-    this._vwFadeStartMs = 0;
 
     // ── Macro runtime state (transient on boot per §8) ──────────────
     this.frameRate = (config && config.engine && config.engine.fps) || 40;
@@ -539,7 +588,20 @@ export class GlobalEffectsController {
   }
 
   // ── Legacy methods ────────────────────────────────────────────────
-  setEffect(effectName, state) {
+  /**
+   * @param {string} effectName
+   * @param {boolean} state
+   * @param {object} [opts] RELEASE envelope for the falling edge (docs/57 §2.2).
+   *   Additive and backwards-compatible: every two-argument caller gets today's
+   *   behavior bit-for-bit.
+   * @param {number} [opts.releaseMs] 0..EFFECT_RELEASE_MS_MAX. 0 (and the
+   *   default) is the historical hard cut. For `vintageWhite`, ABSENT means
+   *   "use the configured `vintageWhiteReleaseMs`" — an explicit value wins for
+   *   that one call and leaves the fire-sync setting alone.
+   * @param {'show'|'dark'} [opts.releaseTo] default `'show'`.
+   * @param {number} [opts.nowMs] injectable clock for the envelope start.
+   */
+  setEffect(effectName, state, opts) {
     // Codex P0: a typo in effectName must not silently no-op. Pre-fix
     // any `setEffect('horm', true)` (or similar) returned without
     // touching state, hiding the bug. Now: throw with a useful
@@ -549,22 +611,118 @@ export class GlobalEffectsController {
     if (!known) {
       throw new Error(`setEffect: unknown effect '${effectName}'`);
     }
+    const o = opts || {};
     const next = !!state;
-    if (effectName === 'vintageWhite') {
-      const prev = !!this.effects.vintageWhite;
-      if (prev && !next && this.vintageWhiteReleaseMs > 0) {
+    const releasable = RELEASABLE_EFFECTS.includes(effectName);
+    const namesRelease = o.releaseMs !== undefined || o.releaseTo !== undefined;
+
+    // An envelope asked for on an effect that has none is an authoring mistake,
+    // not something to drop on the floor.
+    if (namesRelease && !releasable) {
+      throw new Error(
+        `setEffect: '${effectName}' has no release envelope — releaseMs/releaseTo are only `
+        + `valid for ${RELEASABLE_EFFECTS.join(' | ')}`);
+    }
+    let askedMs = null;               // null = the caller named no length
+    let releaseTo = 'show';
+    if (o.releaseMs !== undefined) {
+      if (!Number.isFinite(o.releaseMs) || o.releaseMs < 0 || o.releaseMs > EFFECT_RELEASE_MS_MAX) {
+        throw new Error(
+          `setEffect: releaseMs must be a number in [0, ${EFFECT_RELEASE_MS_MAX}], `
+          + `got ${JSON.stringify(o.releaseMs)}.`);
+      }
+      askedMs = o.releaseMs;
+    }
+    if (o.releaseTo !== undefined) {
+      if (!EFFECT_RELEASE_TO.includes(o.releaseTo)) {
+        throw new Error(
+          `setEffect: releaseTo must be ${EFFECT_RELEASE_TO.map((t) => `'${t}'`).join(' or ')}, `
+          + `got ${JSON.stringify(o.releaseTo)}.`);
+      }
+      releaseTo = o.releaseTo;
+    }
+
+    if (releasable) {
+      const prev = !!this.effects[effectName];
+      // vintageWhite with no explicit length rides its configured fire-sync
+      // value, and keeps reading it live (see `fromConfig`).
+      const fromConfig = askedMs === null && effectName === 'vintageWhite';
+      const releaseMs = fromConfig ? this.vintageWhiteReleaseMs : (askedMs === null ? 0 : askedMs);
+      if (prev && !next && releaseMs > 0) {
         // Falling edge → start the release ramp from full.
-        this._vwFadeActive = true;
-        this._vwFadeStartMs = Date.now();
-      } else if (next) {
-        // Retrigger (or a plain ON): snap back to full, cancel any ramp.
-        this._vwFadeActive = false;
+        this._fxRelease[effectName] = {
+          startMs: Number.isFinite(o.nowMs) ? o.nowMs : Date.now(),
+          releaseMs,
+          releaseTo,
+          fromConfig,
+        };
       } else {
+        // Retrigger / plain ON → snap back to full and cancel any ramp.
         // OFF with no release configured → historical instant-off.
-        this._vwFadeActive = false;
+        this._fxRelease[effectName] = null;
       }
     }
     this.effects[effectName] = next;
+  }
+
+  // Back-compat view of the vintageWhite half of `_fxRelease`. The fire-sync
+  // suite, getStatus() and the Stoker path all speak these two names; they are
+  // now a window onto the shared map rather than a second copy of the state.
+  get _vwFadeActive() { return this._fxRelease.vintageWhite !== null; }
+
+  set _vwFadeActive(v) {
+    if (v) {
+      throw new Error(
+        '_vwFadeActive cannot be set true directly — a release needs a start time; '
+        + "go through setEffect('vintageWhite', false).");
+    }
+    this._fxRelease.vintageWhite = null;
+  }
+
+  get _vwFadeStartMs() {
+    const entry = this._fxRelease.vintageWhite;
+    return entry ? entry.startMs : 0;
+  }
+
+  /**
+   * The frame's release envelope for one effect, or `null` when nothing is
+   * decaying. Retires the entry the moment it reaches zero — called once per
+   * effect per frame, so an idle rig pays one map lookup.
+   */
+  _releaseEnvelope(effectName, nowMs) {
+    const entry = this._fxRelease[effectName];
+    if (!entry) return null;
+    // Re-lit mid-ramp: the hold owns the pixel (the rising edge already dropped
+    // the entry; this is belt and braces).
+    if (this.effects[effectName]) return null;
+    const releaseMs = entry.fromConfig ? this.vintageWhiteReleaseMs : entry.releaseMs;
+    const elapsed = nowMs - entry.startMs;
+    if (releaseMs <= 0 || elapsed >= releaseMs) {
+      this._fxRelease[effectName] = null;
+      return null;
+    }
+    return {
+      value: elapsed <= 0 ? 1.0 : 1.0 - (elapsed / releaseMs),
+      releaseTo: entry.releaseTo,
+    };
+  }
+
+  /** Read-only envelope snapshot for getStatus(). Never retires an entry. */
+  _releaseStatus(nowMs = Date.now()) {
+    const out = {};
+    for (const name of RELEASABLE_EFFECTS) {
+      const entry = this._fxRelease[name];
+      if (!entry || this.effects[name]) { out[name] = null; continue; }
+      const releaseMs = entry.fromConfig ? this.vintageWhiteReleaseMs : entry.releaseMs;
+      const elapsed = nowMs - entry.startMs;
+      out[name] = (releaseMs <= 0 || elapsed >= releaseMs) ? null : {
+        releaseMs,
+        releaseTo: entry.releaseTo,
+        env: elapsed <= 0 ? 1.0 : 1.0 - (elapsed / releaseMs),
+        remainingMs: releaseMs - elapsed,
+      };
+    }
+    return out;
   }
 
   /**
@@ -615,20 +773,12 @@ export class GlobalEffectsController {
    *   fire-sync listener stamps its edges with.
    */
   applyPixels(pixels, nowMs = Date.now()) {
-    // vintageWhite release ramp: 1.0 → 0 over vintageWhiteReleaseMs after the
-    // effect goes off. Computed ONCE per frame (not per pixel) and retired the
-    // moment it reaches zero, so an idle rig pays nothing.
-    let vwFade = 0;
-    if (this._vwFadeActive && !this.effects.vintageWhite) {
-      const elapsed = nowMs - this._vwFadeStartMs;
-      if (elapsed >= this.vintageWhiteReleaseMs || this.vintageWhiteReleaseMs <= 0) {
-        this._vwFadeActive = false;
-      } else if (elapsed <= 0) {
-        vwFade = 1.0;
-      } else {
-        vwFade = 1.0 - (elapsed / this.vintageWhiteReleaseMs);
-      }
-    }
+    // RELEASE ramps: 1.0 → 0 over each effect's releaseMs after its falling
+    // edge. Computed ONCE per frame (not per pixel) and retired the moment they
+    // reach zero, so an idle rig pays nothing.
+    const vwRel = this._releaseEnvelope('vintageWhite', nowMs);
+    const uvRel = this._releaseEnvelope('uvBlast', nowMs);
+    const bwRel = this._releaseEnvelope('blastWhite', nowMs);
 
     for (let i = 0; i < pixels.length; i++) {
       const px = pixels[i];
@@ -642,17 +792,22 @@ export class GlobalEffectsController {
           px.w = 1.0;
           if (this.effects.vintageWhiteBypassDimmer) px.ignoreDimmerForW = true;
         }
-      } else if (vwFade > 0) {
-        // Releasing. Raise the head toward the decaying boost but NEVER pull it
-        // below what the pattern already wrote — this decays the effect, it
-        // does not take over the pixel.
+      } else if (vwRel) {
+        // Releasing. `show` raises the head toward the decaying boost but NEVER
+        // pulls it below what the pattern already wrote — it decays the effect,
+        // it does not take over the pixel. `dark` replaces, on purpose.
         if (px.fixtureType === 'VintageLed' && px.name && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
-          if (vwFade > px.w) px.w = vwFade;
+          px.w = releaseChannel(vwRel, px.w);
+          // The ramp keeps the same dimmer treatment it had while lit —
+          // otherwise the release would jump brightness at the falling edge.
           if (this.effects.vintageWhiteBypassDimmer) px.ignoreDimmerForW = true;
         }
       }
       if (this.effects.uvBlast && px.channels && px.channels.u !== undefined) {
         px.u = 1.0;
+        if (this.effects.uvBlastBypassDimmer) px.ignoreDimmerForU = true;
+      } else if (uvRel && px.channels && px.channels.u !== undefined) {
+        px.u = releaseChannel(uvRel, px.u);
         if (this.effects.uvBlastBypassDimmer) px.ignoreDimmerForU = true;
       }
       if (this.effects.blastWhite) {
@@ -665,6 +820,20 @@ export class GlobalEffectsController {
             px.ignoreDimmerForW = true;
             px.ignoreDimmerForA = true;
           }
+        }
+      } else if (bwRel && px.channels) {
+        // The all-white slam owns every channel it owned while lit, so the
+        // release has to decay every one of them or the white would fall apart
+        // into a colour cast on its way out.
+        px.r = releaseChannel(bwRel, px.r);
+        px.g = releaseChannel(bwRel, px.g);
+        px.b = releaseChannel(bwRel, px.b);
+        if (px.channels.w !== undefined) px.w = releaseChannel(bwRel, px.w);
+        if (px.channels.a !== undefined) px.a = releaseChannel(bwRel, px.a);
+        if (this.effects.blastWhiteBypassDimmer) {
+          px.ignoreDimmerForRGB = true;
+          px.ignoreDimmerForW = true;
+          px.ignoreDimmerForA = true;
         }
       }
     }
@@ -2406,6 +2575,10 @@ export class GlobalEffectsController {
       // vintageWhite release envelope (BM26 fire → lights sync). 0 = instant off.
       vintageWhiteReleaseMs: this.vintageWhiteReleaseMs,
       vintageWhiteReleasing: this._vwFadeActive,
+      // Every slam's RELEASE envelope in flight (docs/57 §2.2): `null` per
+      // effect when nothing is decaying, else the live env value and what is
+      // left of the ramp. This is what proves a soft flash exit from outside.
+      effectReleases: this._releaseStatus(),
       strobe: {
         active: this.strobeActive,
         presetId: this.activeStrobePresetId,

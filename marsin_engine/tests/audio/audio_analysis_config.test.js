@@ -13,9 +13,21 @@ import {
 } from '../../audio/config/audio_analysis_config.js';
 import { AUDIO_LIVE_FIELDS } from '../../audio/config/audio_config.js';
 import { DETECTOR_DEFAULTS } from '../../audio/detector/audio_structure_detector.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(__dirname, '..', '..');
+// Two config sources, deliberately:
+//   - `loadEffectiveAudioAnalysisConfig` is the SUBJECT of the first four tests
+//     (config.yaml + the states/<scene>/audio_state.yaml overlay, which is what
+//     the engine boots on). Those tests own the merge semantics.
+//   - every CONTRACT test below builds on TRACKED_AUDIO — config.yaml alone.
+//     They assert what the repo ships (`bpmTracker` bounds, the detector
+//     defaults, validator behaviour); scored against the effective config they
+//     would instead assert whatever the operator last patched into the scene
+//     state, and would go red on a knob turn rather than on a real drift.
+// See tests/helpers/tracked_audio_config.mjs.
+const TRACKED_AUDIO = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 
 test('production and evaluation resolve one byte-equivalent titanic analyzer config', () => {
   const production = loadEffectiveAudioAnalysisConfig({
@@ -68,6 +80,38 @@ test('effective audio config honors the test state-root redirect', () => {
   }
 });
 
+test('the tracked loader ignores the scene overlay the effective loader honors', () => {
+  // The hermeticity guard for every gate that builds on loadTrackedAudioAnalysisConfig
+  // (report _207). A scene state carrying an absurd mic gain must move the
+  // EFFECTIVE config and must NOT move the TRACKED one — otherwise the audio
+  // gates silently rescore themselves against the operator's live knobs, which
+  // is how `tests/integration/audio_analysis_validation.test.mjs` came to
+  // report zero drops on both labelled drop clips.
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bm26-audio-hermetic-'));
+  const previous = process.env.MARSIN_STATE_DIR;
+  try {
+    const stateDir = path.join(stateRoot, 'test_bench');
+    fs.mkdirSync(stateDir);
+    fs.writeFileSync(
+      path.join(stateDir, 'audio_state.yaml'),
+      'bands:\n  inputGain: 12.5\n',
+    );
+    process.env.MARSIN_STATE_DIR = stateRoot;
+    const effective = loadEffectiveAudioAnalysisConfig({
+      engineDir: ENGINE_DIR,
+      modelName: 'test_bench',
+    });
+    assert.equal(effective.audioConfig.bands.inputGain, 12.5, 'overlay must reach the show config');
+    const tracked = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
+    assert.notEqual(tracked.bands.inputGain, 12.5, 'the overlay must NOT reach a gate');
+    assert.deepEqual(tracked, TRACKED_AUDIO, 'the tracked config is state-independent');
+  } finally {
+    if (previous === undefined) delete process.env.MARSIN_STATE_DIR;
+    else process.env.MARSIN_STATE_DIR = previous;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test('effective loader rejects semantic scalar roots and nested detector scalars', () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bm26-audio-semantic-root-'));
   const previous = process.env.MARSIN_STATE_DIR;
@@ -98,10 +142,7 @@ test('effective loader rejects semantic scalar roots and nested detector scalars
 });
 
 test('analyzer factory applies every configured analyzer field', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   const options = buildAudioAnalyzerOptions(audioConfig, {
     nowFn: () => 123,
     onConditioned: () => {},
@@ -120,10 +161,7 @@ test('analyzer factory applies every configured analyzer field', () => {
 });
 
 test('BPM detector bounds are explicit, validated, and independent from speed mapping', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   assert.deepEqual(buildBpmTrackerOptions(audioConfig), {
     minBpm: 70,
     maxBpm: 180,
@@ -145,10 +183,7 @@ test('BPM detector bounds are explicit, validated, and independent from speed ma
 });
 
 test('the tracker hop rate follows the capture config, never a baked constant', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   // An operator who halves the hop size doubles the analysis hop rate; the
   // tracker must be told, or every lag→BPM conversion silently doubles.
   const halvedHop = { ...audioConfig, hopSize: audioConfig.hopSize / 2 };
@@ -163,10 +198,7 @@ test('the tracker hop rate follows the capture config, never a baked constant', 
 });
 
 test('an unknown or typo bpmTracker key fails loudly, naming the key', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   assert.throws(
     () => buildBpmTrackerOptions({
       ...audioConfig,
@@ -186,10 +218,7 @@ test('an unknown or typo bpmTracker key fails loudly, naming the key', () => {
 });
 
 test('activityThreshold is validated as a band level in (0, 1]', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   const withThreshold = (activityThreshold) => ({
     ...audioConfig,
     bpmTracker: { ...audioConfig.bpmTracker, activityThreshold },
@@ -201,10 +230,7 @@ test('activityThreshold is validated as a band level in (0, 1]', () => {
 });
 
 test('the published-BPM slew is validated, never silently defaulted', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   const withSlew = (slew) => ({
     ...audioConfig,
     bpmTracker: { ...audioConfig.bpmTracker, ...slew },
@@ -227,10 +253,7 @@ test('the published-BPM slew is validated, never silently defaulted', () => {
 });
 
 test('analyzer factory fails loudly when a required field is absent', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   const broken = { ...audioConfig, bands: { ...audioConfig.bands } };
   delete broken.bands.noiseGate;
   assert.throws(
@@ -240,10 +263,7 @@ test('analyzer factory fails loudly when a required field is absent', () => {
 });
 
 test('structureDetector boot config exactly covers the live contract', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   assert.deepEqual(
     Object.keys(audioConfig.structureDetector).sort(),
     [...AUDIO_LIVE_FIELDS.structureDetector].sort(),
@@ -256,10 +276,7 @@ test('structureDetector boot config exactly covers the live contract', () => {
 });
 
 test('structureDetector boot config rejects missing, unknown, typed, and ranged fields', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   const withDetector = (structureDetector) => ({ ...audioConfig, structureDetector });
 
   const missing = { ...audioConfig.structureDetector };
@@ -293,10 +310,7 @@ test('structureDetector boot config rejects missing, unknown, typed, and ranged 
 });
 
 test('complete validation rejects analyzer combinations before they can be persisted', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   assert.throws(
     () => buildAudioAnalyzerOptions({
       ...audioConfig,
@@ -320,10 +334,7 @@ test('complete validation rejects analyzer combinations before they can be persi
 });
 
 test('sourceSmoothHz contract accepts exact Nyquist as the documented off setting', () => {
-  const { audioConfig } = loadEffectiveAudioAnalysisConfig({
-    engineDir: ENGINE_DIR,
-    modelName: 'titanic',
-  });
+  const audioConfig = TRACKED_AUDIO;
   const exactNyquist = {
     ...audioConfig,
     bands: {

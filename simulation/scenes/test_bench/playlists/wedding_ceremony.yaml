@@ -1,0 +1,53 @@
+schemaVersion: 1
+name: wedding_ceremony
+entries:
+  - id: e_wedding_ceremony_0_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: The reverent one. Dim, candle-warm, no strobe, no snap — built for vows.
+  - id: e_wedding_ceremony_1_61_white_breathe
+    pattern: 61_white_breathe
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: A slow white breath under the words.
+  - id: e_wedding_ceremony_3_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.26
+      sliderLevel: 0.68
+      sliderDetail: 0.9
+      sliderKick: 0.86
+      sliderJewelryWhite: 0.82
+    modulations: []
+    midiMappings: []
+    notes: Candle shimmer, held low.
+  - id: e_wedding_ceremony_4_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: One clean sheet of white when the moment wants plain light.
+  - id: e_wedding_ceremony_5_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
+      sliderBrilliance: 0.59
+      sliderTwinkleFocus: 0.88
+      sliderAfterglow: 0.13
+      sliderStarChorus: 0.63
+      sliderBurst: 0.15
+      sliderJewelryWhite: 0.81
+      sliderUvStars: 0.78
+    modulations: []
+    midiMappings: []
+    notes: Restrained constellations — the quietest sparkle in the catalog.

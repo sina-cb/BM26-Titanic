@@ -17,7 +17,8 @@ const h = createEngineHarness({
     MARSIN_VSN1_DEPLOY: '0',
     BM26_ARM_LEASE_MS: '10000',
   },
-  extraArgs: ['--dest', '127.0.0.9'],
+  // TEST-NET-1 (RFC 5737) black hole — loopback is not one.
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

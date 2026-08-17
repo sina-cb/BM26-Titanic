@@ -363,4 +363,3 @@ test('a NON-party mood cue keeps its own authored numbers', () => {
   assert.deepEqual(r.fires.map((f) => f.cueId), ['c_party_to_calm'],
     'the party override must only govern cues that go INTO party');
 });
-

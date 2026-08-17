@@ -1,0 +1,1265 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "white_only",
+  "seconds": 40,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/white_only.yaml",
+  "playlistDigest": "1a2e813ed20275a8b0ee5456414bac98767bb988162a0c7738992131cc306ac7",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "60_white_wash",
+      "title": "White Wash",
+      "goal": "An elegant white satin sheet reveals the ship while five fixture families retain distinct lighting jobs.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "An elegant white satin sheet reveals the ship while five fixture families retain distinct lighting jobs.",
+        "design_intent": "Replace the equal whole-rig wash with a complete but authored white composition: broad Hull material, protected contour, pearl-like Jewelry, discrete Organ punctuation, and calm Identity engraving.",
+        "why_exists": "It is the white family's versatile bread-and-butter look and practical work-light endpoint without surrendering fixture hierarchy.",
+        "visual_goal_titanic": "The ship should read immediately from distance as a luminous white vessel, while the rail Jewelry is visibly finer and brighter than the Hull surface and the signs remain deliberate.",
+        "unique_topology": "Two irrationally related XYZ satin planes form a broad material field; fixture roles reinterpret that field as folds, contour ripple, six-head pearls, discrete organ pulses, and sign engraving.",
+        "distance_silhouette": "Raw LED strands hold a continuous high white contour with restrained movement even when the Hull material enters a trough.",
+        "close_detail": "Jewelry facets, Hull satin grain, Silhouette contour, Organ breath, and complete folded 74-pixel sign engraving remain independently authored at close range.",
+        "motion_grammar": "Two signed long-wrap phase accumulators drift at a golden ratio; direction remains manually dominant and live controls slew without teleporting geometry.",
+        "xyz_use": "Centered X/Y/Z jointly determine the two material planes. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Broad satin-white material with a quiet longitudinal fold catch.",
+          "Silhouette": "Protected far-field contour with only a restrained material ripple.",
+          "Jewelry": "Hero six-pearl white sequence with the strongest native-white catchlight.",
+          "Organs": "Discrete structural punctuation, intensified by kick rather than flattened into wash.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel engraved satin nameplate from signIndex=index%74, with an authored full-surface floor and slow fold detail."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel engraved satin nameplate from signIndex=index%74, with an authored full-surface floor and slow fold detail.",
+        "jewelry_white": "Vintage rails are the native-white hero: an RGB white bed supports six-head pearl catchlights, with sliderWhiteKick reserved for the pearl cores.",
+        "palette_white_material": "No colorPalette exports. Warm-neutral RGB is shaped only by sliderWarmth; explicit W=A on every pixel and U=0 make the look immune to global palette tinting.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets the drift rate of both satin material planes.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses the signed material travel without a center freeze.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets authored whole-look intensity above the non-black role floors.",
+            "code_default_value": 0.65
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Adds a bounded whole-look pop and stronger Organ punctuation.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets the literal spatial scale of the satin planes.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderEvenness",
+            "behavior": "Crossfades textured satin toward an even work-light field while preserving role hierarchy.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves the white balance from warm-neutral RGB toward the dedicated matched W/A emitters.",
+            "code_default_value": 0.7
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Raises native-white Jewelry pearls and Organ catches without tinting RGB.",
+            "code_default_value": 0.15
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Warms neutral RGB by lowering green and blue while W and A remain matched.",
+            "code_default_value": 0.15
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.35,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "Brightness pop."
+          },
+          {
+            "target": "sliderRadius",
+            "source": "micFlux",
+            "range": [
+              0.35,
+              0.85
+            ],
+            "curve": "linear",
+            "intent": "Wash feature scale."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Every fixture role carries a positive authored bed; evenness=1 remains complete and no moving fold can black out the rig.",
+        "anti_duplication_notes": "Keep this the satin material/work-light member. Do not turn it into Breathe's global inhale, Shimmer's sparse points, Chase's processional bars, or Temple's candle vigil.",
+        "review_state": "TUNE",
+        "evidence_notes": "Source defaults and slider order match the prior registered source exactly; white_only now saves an explicit unmodulated operator-review tune for every control. The prior test-bench capture showed a mostly equal wash, motivating the new fixture hierarchy. The final source applies signed direction immediately, adds moving cross-grain satin ribs and selvedge, and concentrates native white in Jewelry catchlights. Cross-model truth reports zero WRONG, WEAK, or DEAD controls; exact saved-value silence/audio gates cover Titanic and test_bench. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Sets the drift rate of both satin material planes.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Reverses the signed material travel without a center freeze.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.78,
+          "valueSource": "playlist saved value",
+          "description": "Sets authored whole-look intensity above the non-black role floors.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.35,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.08,
+          "valueSource": "playlist saved value",
+          "description": "Adds a bounded whole-look pop and stronger Organ punctuation.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "brightness pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Sets the literal spatial scale of the satin planes.",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.35,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "wash feature scale"
+          }
+        },
+        {
+          "name": "sliderEvenness",
+          "label": "Evenness",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Crossfades textured satin toward an even work-light field while preserving role hierarchy.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Moves the white balance from warm-neutral RGB toward the dedicated matched W/A emitters.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.18,
+          "valueSource": "playlist saved value",
+          "description": "Raises native-white Jewelry pearls and Organ catches without tinting RGB.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.14,
+          "valueSource": "playlist saved value",
+          "description": "Warms neutral RGB by lowering green and blue while W and A remain matched.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.78,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.58,
+        "sliderEvenness": 0.42,
+        "sliderWhiteLevel": 0.72,
+        "sliderWhiteKick": 0.18,
+        "sliderWarmth": 0.14
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.78,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.58,
+        "sliderEvenness": 0.42,
+        "sliderWhiteLevel": 0.72,
+        "sliderWhiteKick": 0.18,
+        "sliderWarmth": 0.14
+      },
+      "gif": "001_60_white_wash.gif",
+      "video": "001_60_white_wash.mp4",
+      "seconds": 40,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d7e64dedeb5081307c3b47210ba535c15a9ea40b66e69858e186ff78fbf51ff2"
+    },
+    {
+      "index": 1,
+      "pattern": "61_white_breathe",
+      "title": "White Breathe",
+      "goal": "One slow white inhale moves through the ship as five coordinated but non-identical breaths.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "One slow white inhale moves through the ship as five coordinated but non-identical breaths.",
+        "design_intent": "Preserve the recognizable whole-rig breath while separating Hull volume, Silhouette crest, Jewelry pearls, Organ answers, and readable Identity.",
+        "why_exists": "It is the family's soft organism: a welcoming white motion that reads as one body without a synchronized flat pulse.",
+        "visual_goal_titanic": "The silhouette should stay visible through every exhale; Jewelry should reveal a sequential necklace inhale; Organs should answer the breath rather than merely copy its brightness.",
+        "unique_topology": "Two incommensurate scalar breaths combine with a signed oblique XYZ roll; role branches resample that envelope into physical breathing vocabularies.",
+        "distance_silhouette": "A travelling crest rides a continuous contour floor so the full vessel remains recognizable at the lowest point of the inhale.",
+        "close_detail": "Six-head pearl breathing, staggered par sources, Hull vertical volume, and gentle complete folded 74-pixel sign breath reward close viewing.",
+        "motion_grammar": "One signed clock reverses the whole breath and its quicker spatial roll; all phases use large seam-free wraps and controls slew smoothly.",
+        "xyz_use": "Centered X/Y/Z create the oblique rolling volume; pixelLocalIndex sequences Jewelry, and fixtureId offsets Organ breaths. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Broad luminous volume with a slow vertical lift.",
+          "Silhouette": "Continuous contour carrying the clearest travelling breath crest.",
+          "Jewelry": "Hero six-pearl necklace inhaling head by head with native-white cores.",
+          "Organs": "Staggered single-source answers to the shared inhale.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel breathing nameplate from signIndex=index%74; the full surface inhales while retaining a protected floor."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel breathing nameplate from signIndex=index%74; the full surface inhales while retaining a protected floor.",
+        "jewelry_white": "Native white concentrates in the sequential pearl crests; the rail bed stays warm-neutral RGB so the six heads retain visible shape between crests.",
+        "palette_white_material": "No colorPalette exports; warm-neutral RGB, W=A byte-identical, and U=0 make every breath white and globally untintable.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets the shared breath and travelling-roll rates.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses the shared inhale and travelling XYZ roll without a center freeze.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets overall breathing intensity above complete role floors.",
+            "code_default_value": 0.7
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Adds a bounded breath pop and a restrained Organ emphasis.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets the spatial reach and scale of the travelling roll.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDepth",
+            "behavior": "Sets inhale-to-exhale contrast without eliminating the safety bed.",
+            "code_default_value": 0.42
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves white energy from RGB toward matched dedicated W/A.",
+            "code_default_value": 0.65
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Strengthens Jewelry pearl cores and Organ white accents.",
+            "code_default_value": 0.2
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Warms neutral RGB while retaining the white-family neutrality bounds.",
+            "code_default_value": 0.2
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.3,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "A restrained kick briefly opens the breath without flattening the fixture-role hierarchy."
+          },
+          {
+            "target": "sliderDepth",
+            "source": "micMid",
+            "range": [
+              0.35,
+              0.9
+            ],
+            "curve": "linear",
+            "intent": "Breath depth."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Every role has a positive bed before depth is applied; a full exhale remains a complete, readable ship.",
+        "anti_duplication_notes": "Protect the shared inhale grammar. It must not flatten into White Wash, fragment into Shimmer, travel as Chase bars, or become Temple's candle vigil.",
+        "review_state": "TUNE",
+        "evidence_notes": "Control names, declaration order, defaults, and source AUDIO_MODULATION_V1 handles are byte-for-value preserved; white_only saves an explicit unmodulated operator-review tune for every control. The old capture read as nearly uniform, so the rework adds cross-roll negative space, breathing ribs and voids, sequential Jewelry pearls, staggered Organ punctuation, and moving Identity diagonals while retaining one shared body breath. Cross-model truth reports zero WRONG, WEAK, or DEAD controls; exact saved-value silence/audio gates cover Titanic and test_bench. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.28,
+          "valueSource": "playlist saved value",
+          "description": "Sets the shared breath and travelling-roll rates.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Reverses the shared inhale and travelling XYZ roll without a center freeze.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Sets overall breathing intensity above complete role floors.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.1,
+          "valueSource": "playlist saved value",
+          "description": "Adds a bounded breath pop and a restrained Organ emphasis.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "breath pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Sets the spatial reach and scale of the travelling roll.",
+          "audio": null
+        },
+        {
+          "name": "sliderDepth",
+          "label": "Depth",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Sets inhale-to-exhale contrast without eliminating the safety bed.",
+          "audio": {
+            "slider": "sliderDepth",
+            "signal": "micMid",
+            "min": 0.35,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "breath depth"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Moves white energy from RGB toward matched dedicated W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "Strengthens Jewelry pearl cores and Organ white accents.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.18,
+          "valueSource": "playlist saved value",
+          "description": "Warms neutral RGB while retaining the white-family neutrality bounds.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.28,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.75,
+        "sliderKick": 0.1,
+        "sliderRadius": 0.58,
+        "sliderDepth": 0.68,
+        "sliderWhiteLevel": 0.72,
+        "sliderWhiteKick": 0.2,
+        "sliderWarmth": 0.18
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.28,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.75,
+        "sliderKick": 0.1,
+        "sliderRadius": 0.58,
+        "sliderDepth": 0.68,
+        "sliderWhiteLevel": 0.72,
+        "sliderWhiteKick": 0.2,
+        "sliderWarmth": 0.18
+      },
+      "gif": "002_61_white_breathe.gif",
+      "video": "002_61_white_breathe.mp4",
+      "seconds": 40,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1a0091ed2825d0406fc21a52a15d5af1a8d2410587f1b29d59bc4945cc0d2bb1"
+    },
+    {
+      "index": 2,
+      "pattern": "62_white_shimmer",
+      "title": "White Shimmer",
+      "goal": "Broad crossing frost planes sweep through a complete white ship while deterministic facets and sparks reveal crystalline detail.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "Broad crossing frost planes sweep through a complete white ship while deterministic facets and sparks reveal crystalline detail.",
+        "design_intent": "Replace low-resolution whole-rig glitter with legible crystalline motion: broad Hull sweeps, a protected counter-moving contour edge, hero Jewelry diamonds, restrained Organ cohorts, and a fully engraved Identity surface.",
+        "why_exists": "It provides the white family's fine-detail vocabulary without risking blackout or making every fixture sparkle equally.",
+        "visual_goal_titanic": "From playa distance the outline and signs remain stable; nearby, the rail diamonds should be the clearest and brightest native-white points over subtler frost elsewhere.",
+        "unique_topology": "Two broad oblique crystalline planes intersect over deterministic XYZ facets and point sparks; fixture-local six-head diamonds and a complete folded 74-pixel frost engraving refine the direct-view families.",
+        "distance_silhouette": "The Silhouette carries a continuous white floor plus sparse stars, never a field of disconnected black gaps.",
+        "close_detail": "High-power Jewelry diamonds, crystalline Hull grain, fixture-cohort Organ stars, and fine sign frost create multiple scales of detail.",
+        "motion_grammar": "Counter-moving signed frost planes create large readable sweeps while deterministic facets and sparks move at subordinate rates; long wraps and parameter slew prevent seams and edit jumps.",
+        "xyz_use": "Centered X/Y/Z feed both deterministic hashes and the oblique frost bed; pixelLocalIndex authors the six-head Jewelry. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Low crystalline grain with distributed, restrained catchlights.",
+          "Silhouette": "Continuous contour with sparse white stars.",
+          "Jewelry": "Hero six-head diamond glints with the strongest native-white peaks.",
+          "Organs": "Sparse structural stars phased by fixture identity.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel frost plaque from signIndex=index%74, with fine shimmer over a stable full-surface floor."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel frost plaque from signIndex=index%74, with fine shimmer over a stable full-surface floor.",
+        "jewelry_white": "Jewelry gets exclusive hero treatment: the largest native-white accent rides crisp six-head diamonds while RGB maintains a visible rail between events.",
+        "palette_white_material": "No palette exports; warm-neutral RGB plus explicit W=A and U=0 makes the frost untintable and hardware-consistent.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets independent sparkle clocks and the slow frost-bed rate.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses both the sparkle clocks and slow spatial frost drift without a center freeze.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets the complete frost look's intensity above the non-black beds.",
+            "code_default_value": 0.7
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Pops active sparkles while leaving the stable beds intact.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets the literal spatial scale of the slow frost material.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDensity",
+            "behavior": "Smoothly expands the fraction of active sparkle sites.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderSharpness",
+            "behavior": "Sets sparkle exponent from soft glints to crisp pinpoints.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves white output from neutral RGB toward matched native W/A.",
+            "code_default_value": 0.6
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Raises native-white accent peaks, strongest on Jewelry.",
+            "code_default_value": 0.3
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets subtle warm-neutral RGB temperature without introducing hue.",
+            "code_default_value": 0.1
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.3,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "Sparkle pop."
+          },
+          {
+            "target": "sliderDensity",
+            "source": "micHigh",
+            "range": [
+              0.25,
+              0.95
+            ],
+            "curve": "linear",
+            "intent": "How much of the rig glitters."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Each role owns a stable positive bed independent of density and sparkle phase; no sparse state can erase the whole ship.",
+        "anti_duplication_notes": "Keep it the sparse fine-detail member. Do not broaden glints into White Wash material, synchronize them into Breathe, line them up as Chase, or warm them into Temple candles.",
+        "review_state": "TUNE",
+        "evidence_notes": "The old test-bench capture showed isolated bright points over large near-black regions and no role hierarchy. The bold source retains exact controls/defaults/audio handles while broad crossing crystal planes make the motion legible and six-head Jewelry remains the fine-detail hero. At the saved review tune 121/166 test-bench pixels change materially over three seconds; all 74 Identity pixels are dynamic and both Titanic signs match exactly. Cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.32,
+          "valueSource": "playlist saved value",
+          "description": "Sets independent sparkle clocks and the slow frost-bed rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Reverses both the sparkle clocks and slow spatial frost drift without a center freeze.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.7,
+          "valueSource": "playlist saved value",
+          "description": "Sets the complete frost look's intensity above the non-black beds.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.08,
+          "valueSource": "playlist saved value",
+          "description": "Pops active sparkles while leaving the stable beds intact.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "sparkle pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Sets the literal spatial scale of the slow frost material.",
+          "audio": null
+        },
+        {
+          "name": "sliderDensity",
+          "label": "Density",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Smoothly expands the fraction of active sparkle sites.",
+          "audio": {
+            "slider": "sliderDensity",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "how much of the rig glitters"
+          }
+        },
+        {
+          "name": "sliderSharpness",
+          "label": "Sharpness",
+          "value": 0.76,
+          "valueSource": "playlist saved value",
+          "description": "Sets sparkle exponent from soft glints to crisp pinpoints.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Moves white output from neutral RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.22,
+          "valueSource": "playlist saved value",
+          "description": "Raises native-white accent peaks, strongest on Jewelry.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.08,
+          "valueSource": "playlist saved value",
+          "description": "Sets subtle warm-neutral RGB temperature without introducing hue.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.32,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.7,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.42,
+        "sliderDensity": 0.52,
+        "sliderSharpness": 0.76,
+        "sliderWhiteLevel": 0.72,
+        "sliderWhiteKick": 0.22,
+        "sliderWarmth": 0.08
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.32,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.7,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.42,
+        "sliderDensity": 0.52,
+        "sliderSharpness": 0.76,
+        "sliderWhiteLevel": 0.72,
+        "sliderWhiteKick": 0.22,
+        "sliderWarmth": 0.08
+      },
+      "gif": "003_62_white_shimmer.gif",
+      "video": "003_62_white_shimmer.mp4",
+      "seconds": 40,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5ccb5048f495c08c67372a111644ae1bcb14889505482d1bd216161156e9a819"
+    },
+    {
+      "index": 3,
+      "pattern": "63_white_chase",
+      "title": "White Chase",
+      "goal": "A white procession crosses the ship in role-specific ribbons, tracers, pearls, strikes, and sign scans.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "A white procession crosses the ship in role-specific ribbons, tracers, pearls, strikes, and sign scans.",
+        "design_intent": "Retain a clear directional chase but stop projecting the same bar onto every fixture family; each instrument should express travel at its own scale.",
+        "why_exists": "It is the white family's explicit motion look and the strongest manual-direction performance handle.",
+        "visual_goal_titanic": "Broad Hull ribbons and a fine outline tracer should establish direction at distance, while six-head Jewelry marquee motion and discrete Organ hits provide close and structural authority.",
+        "unique_topology": "A fixed longitudinal X projection creates mirrored bow-to-stern processions; separate coordinates create a counter-moving Silhouette tracer, six-head Jewelry pearls, Organ cohorts, and one complete folded 74-pixel cross-scan.",
+        "distance_silhouette": "A narrower bright tracer travels across a permanently visible Silhouette, making both motion direction and ship outline legible.",
+        "close_detail": "Six-pearl rail marquees, fixture-cohort par strikes, broad Hull ribbon edges, and a restrained sign scan resolve at close range.",
+        "motion_grammar": "A manually signed long-wrap phase drives broad mirrored bow-to-stern travel; a counter-tracer and role-specific subordinate phases prevent lockstep repetition while controls slew without geometry jumps.",
+        "xyz_use": "Normalized longitudinal X establishes bow-to-stern travel while Y/Z preserve exact port-starboard mirroring and add vertical/depth facets; pixelLocalIndex builds Jewelry chases, and fixtureId builds Organ cohorts. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Broad white searchlight ribbons revealing Hull material.",
+          "Silhouette": "Narrower, brighter tracer over a continuous outline.",
+          "Jewelry": "Hero six-pearl marquee chase with strong native-white cores.",
+          "Organs": "Discrete structural strikes phased across fixtures.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel scan from signIndex=index%74, moving across one full readable plaque rather than restarting per panel."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel scan from signIndex=index%74, moving across one full readable plaque rather than restarting per panel.",
+        "jewelry_white": "Six-head Vintage rails carry the brightest native-white chase cores and the shortest local tail, preserving a fine Jewelry read.",
+        "palette_white_material": "No color palettes bind. RGB remains warm-neutral, W=A exactly, and UV=0 through every moving bar.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets chase travel and slow axis-rotation speed.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses all signed chase motion with manual endpoints dominant.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets chase intensity above role-specific visibility floors.",
+            "code_default_value": 0.75
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Pops current moving bars and strengthens Organ strikes.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets literal bar width across ship and local chase variants.",
+            "code_default_value": 0.4
+          },
+          {
+            "exported_name": "sliderTailLength",
+            "behavior": "Sets the trailing decay length behind each chase core.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderCount",
+            "behavior": "Selects one through five simultaneous procession bars.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves white output from RGB toward matched native W/A.",
+            "code_default_value": 0.6
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Raises the dedicated-white cores, strongest on Jewelry and Organ strikes.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets a subtle warm-neutral RGB temperature for the chase.",
+            "code_default_value": 0.05
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.3,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "A restrained kick adds one crisp bar accent without turning the chase into a full-rig flash."
+          },
+          {
+            "target": "sliderRadius",
+            "source": "micFlux",
+            "range": [
+              0.25,
+              0.75
+            ],
+            "curve": "linear",
+            "intent": "Bar width swells on the build."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Every instrument retains a white bed between processional cores; count, radius, and phase cannot create a whole-rig blackout.",
+        "anti_duplication_notes": "Protect explicit signed travel and multiple bar cores. It must not soften into Breathe, randomize into Shimmer, flatten into Wash, or slow into Temple's vigil.",
+        "review_state": "TUNE",
+        "evidence_notes": "The previous capture looked like one projection shared by the whole test bench. The bold rework preserves every public value and exact audio handle while replacing the generic projection with a mirrored bow-to-stern procession and distinct role counterpoint. At the saved review tune 101/166 test-bench pixels change materially over three seconds; all 74 Identity pixels are dynamic and both Titanic signs match exactly. Cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Sets chase travel and slow axis-rotation speed.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Reverses all signed chase motion with manual endpoints dominant.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.78,
+          "valueSource": "playlist saved value",
+          "description": "Sets chase intensity above role-specific visibility floors.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.08,
+          "valueSource": "playlist saved value",
+          "description": "Pops current moving bars and strengthens Organ strikes.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "bar pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.38,
+          "valueSource": "playlist saved value",
+          "description": "Sets literal bar width across ship and local chase variants.",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.25,
+            "max": 0.75,
+            "curve": "linear",
+            "note": "bar width swells on the build"
+          }
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Sets the trailing decay length behind each chase core.",
+          "audio": null
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Selects one through five simultaneous procession bars.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.7,
+          "valueSource": "playlist saved value",
+          "description": "Moves white output from RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "Raises the dedicated-white cores, strongest on Jewelry and Organ strikes.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.06,
+          "valueSource": "playlist saved value",
+          "description": "Sets a subtle warm-neutral RGB temperature for the chase.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.78,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.38,
+        "sliderTailLength": 0.58,
+        "sliderCount": 0.42,
+        "sliderWhiteLevel": 0.7,
+        "sliderWhiteKick": 0.24,
+        "sliderWarmth": 0.06
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.78,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.38,
+        "sliderTailLength": 0.58,
+        "sliderCount": 0.42,
+        "sliderWhiteLevel": 0.7,
+        "sliderWhiteKick": 0.24,
+        "sliderWarmth": 0.06
+      },
+      "gif": "004_63_white_chase.gif",
+      "video": "004_63_white_chase.mp4",
+      "seconds": 40,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5df4dbdc7df4a9f4b353ab9c2e7cd3ba46d1bd093922d428f8824ea6c175ea18"
+    },
+    {
+      "index": 4,
+      "pattern": "64_temple_warm_white",
+      "title": "Temple Warm White",
+      "goal": "A warm candle procession composes the vessel as layered wax and flame, lantern contour, Jewelry cups, Organ vigils, and engraved Identity fields.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "A warm candle procession composes the vessel as layered wax and flame, lantern contour, Jewelry cups, Organ vigils, and engraved Identity fields.",
+        "design_intent": "Preserve Temple reverence and the hard ceiling while replacing equal warm dimness with a deliberate ceremonial hierarchy led by Vintage candle cups and a slow asymmetric procession fold.",
+        "why_exists": "It is the white family's reverent slow look: warm, calm, readable, and intentionally incapable of becoming a party cue at its defaults.",
+        "visual_goal_titanic": "The Hull should feel softly revealed through dust, the outline should remain lantern-clear, Jewelry should read as small candle sources, and Identity should be warm and still enough to read.",
+        "unique_topology": "Golden-ratio and square-root-related clocks shape layered candle wells, flame and wax material, a broad asymmetric procession fold, six candle cups, independent Organ vigils, and a complete folded 74-pixel field.",
+        "distance_silhouette": "A steady warm contour with a very shallow lift preserves the whole ship throughout the slow dust cycle.",
+        "close_detail": "Six-head candle flames, height-biased Organ vigils, fine Hull dust rays, and subtle complete folded 74-pixel warm-plaque variation create a ceremonial close read.",
+        "motion_grammar": "Very slow signed candle material and a broad asymmetric procession fold reverse together through large wraps; all controls slew and no pulse snaps or strobes.",
+        "xyz_use": "Centered X/Y/Z define candle wells, layered flame/wax material, and the broad procession fold; pixelLocalIndex authors Jewelry candles, while fixtureId phases Organ vigils. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Slow candle-white material and soft light-through-dust rays.",
+          "Silhouette": "Steady lantern contour with only a shallow warm lift.",
+          "Jewelry": "Hero row of six restrained candle cups with native-white flames.",
+          "Organs": "Quiet individual vigils shaped by fixture phase and real height.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel warm vigil plaque from signIndex=index%74, with minimal full-surface lift and strong legibility."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel warm vigil plaque from signIndex=index%74, with minimal full-surface lift and strong legibility.",
+        "jewelry_white": "Vintage native white is limited to candle-flame cores; warm-neutral RGB carries the cup and halo so the Jewelry remains dimensional under the ceiling.",
+        "palette_white_material": "No palette exports. Warmth reaches the family maximum R:G:B ratio of 1.00:0.68:0.32 at full control, W=A remains exact, UV is zero, and the ceiling binds RGB and W/A.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets the deliberately slow dust and vigil rates.",
+            "code_default_value": 0.25
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses signed dust travel and the vigil breath together.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets shallow ceremonial intensity above the warm safety bed.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Adds only a gentle lift, with restrained Organ emphasis.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets spatial scale of the slow dust planes.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderCeiling",
+            "behavior": "Sets the hard maximum for RGB and matched W/A while retaining a minimum non-black cap.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets candle temperature from neutral to the bounded tungsten-white RGB ratio.",
+            "code_default_value": 0.85
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves the body from warm-neutral RGB toward matched native W/A.",
+            "code_default_value": 0.7
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Adds a deliberately small native-white lift to candle and vigil cores.",
+            "code_default_value": 0.06
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.35,
+              0.8
+            ],
+            "curve": "linear",
+            "intent": "Shallow intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              0.45
+            ],
+            "curve": "pow2",
+            "intent": "Gentle lift only."
+          }
+        ],
+        "safety_floor": "The ceiling maps to a minimum 0.06 cap and every role owns a positive bed, so Temple can be dim but never black.",
+        "anti_duplication_notes": "Protect the candle-vigil restraint and hard ceiling. Do not brighten it into Wash, deepen it into Breathe, sharpen it into Shimmer, or turn it into a Chase.",
+        "review_state": "TUNE",
+        "evidence_notes": "The prior capture was uniformly brown-white across fixture families. The bold rework preserves exact public values and the two source audio handles while separating Hull candle material, protected contour, six-cup Jewelry, independent Organ vigils, and warm Identity. Exact saved-value silence/audio gates cover Titanic and test_bench; cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.22,
+          "valueSource": "playlist saved value",
+          "description": "Sets the deliberately slow dust and vigil rates.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Reverses signed dust travel and the vigil breath together.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Sets shallow ceremonial intensity above the warm safety bed.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.35,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "shallow intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.06,
+          "valueSource": "playlist saved value",
+          "description": "Adds only a gentle lift, with restrained Organ emphasis.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.45,
+            "curve": "pow2",
+            "note": "gentle lift only"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Sets spatial scale of the slow dust planes.",
+          "audio": null
+        },
+        {
+          "name": "sliderCeiling",
+          "label": "Ceiling",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Sets the hard maximum for RGB and matched W/A while retaining a minimum non-black cap.",
+          "audio": null
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.78,
+          "valueSource": "playlist saved value",
+          "description": "Sets candle temperature from neutral to the bounded tungsten-white RGB ratio.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.74,
+          "valueSource": "playlist saved value",
+          "description": "Moves the body from warm-neutral RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "Adds a deliberately small native-white lift to candle and vigil cores.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.22,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.72,
+        "sliderKick": 0.06,
+        "sliderRadius": 0.52,
+        "sliderCeiling": 0.58,
+        "sliderWarmth": 0.78,
+        "sliderWhiteLevel": 0.74,
+        "sliderWhiteKick": 0.12
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.22,
+        "sliderDirection": 0.75,
+        "sliderLevel": 0.72,
+        "sliderKick": 0.06,
+        "sliderRadius": 0.52,
+        "sliderCeiling": 0.58,
+        "sliderWarmth": 0.78,
+        "sliderWhiteLevel": 0.74,
+        "sliderWhiteKick": 0.12
+      },
+      "gif": "005_64_temple_warm_white.gif",
+      "video": "005_64_temple_warm_white.mp4",
+      "seconds": 40,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "bcb8ec50b93a0b740c54a6b8111381cc1683c2cbd35352e95b7176c8c949d7de"
+    }
+  ]
+}

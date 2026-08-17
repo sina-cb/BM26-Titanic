@@ -229,8 +229,8 @@ cues:
         - afterSec: 0
           action:
             type: playlist
-            name: baby_reveal
-            entryId: e_baby_reveal_pink
+            name: baby_tease
+            entryId: e_baby_reveal_orbit_question
             palette: baby_reveal_duet
             target:
               channel: deck
@@ -259,7 +259,7 @@ cues:
         - afterSec: 992
           action:
             type: playlist
-            name: baby_pink
+            name: baby_girl
             palette: baby_pink
             target:
               channel: deck
@@ -301,8 +301,8 @@ cues:
         - afterSec: 0
           action:
             type: playlist
-            name: baby_reveal
-            entryId: e_baby_reveal_blue
+            name: baby_tease
+            entryId: e_baby_reveal_orbit_question
             palette: baby_reveal_duet
             target:
               channel: deck
@@ -331,7 +331,7 @@ cues:
         - afterSec: 992
           action:
             type: playlist
-            name: baby_blue
+            name: baby_boy
             palette: baby_blue
             target:
               channel: deck

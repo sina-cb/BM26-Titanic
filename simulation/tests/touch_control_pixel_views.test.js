@@ -117,11 +117,10 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
   }
 
   const top = findView(artifact, 'top_down');
-  assert.deepEqual(top.framing, {
-    zoom: 1,
-    panX: 0,
-    panY: 0,
-  });
+  const authoredTop = yaml.load(fs.readFileSync(PIXEL_MAP_PATH, 'utf8')).views
+    .find((view) => view.id === 'top_down');
+  assert.deepEqual(top.framing, authoredTop.framing,
+    'resolved artifact must carry the authored Top-Down framing unchanged');
   assert.equal(new Set(top.panels[0].glyphs.map((glyph) => glyph.group)).size, 18);
   assert.ok(top.panels[0].glyphs.every((glyph) =>
     glyph.fixtureType !== 'TeSignV3A40' && glyph.fixtureType !== 'TeSignV3B34'));
@@ -283,6 +282,39 @@ test('pan is display-only and pure screen mapping preserves pixel identity and v
         `${view.id} must map the displayed glyph back to its canonical engine target`);
     }
   }
+});
+
+test('zoom is display-only, bounded, and keeps its finger anchor fixed', () => {
+  const artifact = runtime.validateArtifact(buildArtifact());
+  const view = findView(artifact, 'top_down');
+  const width = 733;
+  const height = 411;
+  const base = runtime.reprojectView(view, artifact.design, width, height, 0, 0, 1);
+  const zoomed = runtime.reprojectView(view, artifact.design, width, height, 0, 0, 2);
+  assert.equal(zoomed.length, base.length);
+  for (let index = 0; index < base.length; index++) {
+    assert.equal(zoomed[index].pixelIndex, base[index].pixelIndex);
+    assert.equal(zoomed[index].world, base[index].world);
+    assert.ok(Math.abs((zoomed[index].x - width / 2) -
+      (base[index].x - width / 2) * 2) < 1e-9);
+    assert.ok(Math.abs((zoomed[index].y - height / 2) -
+      (base[index].y - height / 2) * 2) < 1e-9);
+    assert.ok(Math.abs(zoomed[index].sizeX - base[index].sizeX * 2) < 1e-9);
+    assert.ok(Math.abs(zoomed[index].sizeY - base[index].sizeY * 2) < 1e-9);
+  }
+
+  const start = { zoom: 1.25, panX: 31, panY: -17 };
+  const anchor = { x: 608, y: 93 };
+  const next = runtime.zoomAroundPoint(
+    start.zoom, start.panX, start.panY, 2.5,
+    anchor.x, anchor.y, width, height,
+  );
+  const modelX = (anchor.x - width / 2 - start.panX) / start.zoom;
+  const modelY = (anchor.y - height / 2 - start.panY) / start.zoom;
+  assert.ok(Math.abs(width / 2 + modelX * next.zoom + next.panX - anchor.x) < 1e-9);
+  assert.ok(Math.abs(height / 2 + modelY * next.zoom + next.panY - anchor.y) < 1e-9);
+  assert.equal(runtime.clampZoom(0.01), 0.5);
+  assert.equal(runtime.clampZoom(99), 4);
 });
 
 test('runtime refuses malformed identities and tampered resolved geometry', async () => {

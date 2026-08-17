@@ -32,13 +32,13 @@ presets:
   - name: Dramatic
     key: dramatic
     position:
-      x: -11.015
-      'y': 6.512
-      z: 28.639
+      x: -50.067
+      'y': 8.18
+      z: 42.371
     target:
-      x: 3.125
-      'y': 4.611
-      z: 1.923
+      x: -12.565
+      'y': 4.009
+      z: -12.286
   - name: Night Walk
     key: night-walk
     position:
@@ -62,13 +62,13 @@ presets:
   - name: Top Left Half
     key: topleft
     position:
-      x: -22
+      x: 24.334
       'y': 55
-      z: 8
+      z: -11.421
     target:
-      x: -22
+      x: 24.334
       'y': 6
-      z: 8
+      z: -11.421
   - name: LED Grid Close
     key: led-grid-close
     position:

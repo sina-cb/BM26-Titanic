@@ -1,0 +1,3484 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "default",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/default.yaml",
+  "playlistDigest": "a7259412cc4490d5ab9fd9e6d155fa4823656b0cadd51c21b23113a54f1a0ae4",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "00_golden_hour_wash",
+      "title": "Golden Hour Wash",
+      "goal": "The iconic bread-and-butter Titanic look: a continuous sunset wash with ember texture and Vintage-only golden-white sweeps.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.38,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "whole-ship breathing",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.42,
+            "max": 0.92,
+            "curve": "ease",
+            "note": "whole-ship breathing"
+          }
+        },
+        {
+          "name": "sliderGrain",
+          "label": "Grain",
+          "value": 0.67,
+          "valueSource": "playlist saved value",
+          "description": "Grain character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderEmberSwell",
+          "label": "Ember Swell",
+          "value": 0.95,
+          "valueSource": "playlist saved value",
+          "description": "broad warm expansion",
+          "audio": {
+            "slider": "sliderEmberSwell",
+            "signal": "micFlux",
+            "min": 0.08,
+            "max": 0.95,
+            "curve": "ease",
+            "note": "broad warm expansion"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderJewelrySpeed",
+          "label": "Jewelry Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderJewelryFlash",
+          "label": "Jewelry Flash",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "Vintage-only golden-white hit",
+          "audio": {
+            "slider": "sliderJewelryFlash",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "Vintage-only golden-white hit"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.2,
+        "sliderGrain": 0.67,
+        "sliderEmberSwell": 0.95,
+        "sliderJewelryWhite": 0.64,
+        "sliderJewelrySpeed": 0.72,
+        "sliderJewelryFlash": 0.24
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.2,
+        "sliderGrain": 0.67,
+        "sliderEmberSwell": 0.95,
+        "sliderJewelryWhite": 0.64,
+        "sliderJewelrySpeed": 0.72,
+        "sliderJewelryFlash": 0.24
+      },
+      "gif": "001_00_golden_hour_wash.gif",
+      "video": "001_00_golden_hour_wash.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "49735c89f60cab77617e16eb14efa132044da570304b931b2ae709447429870f"
+    },
+    {
+      "index": 1,
+      "pattern": "01_cylon_sweep",
+      "title": "Cylon Sweep",
+      "goal": "A saved Cylon Sweep look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.77,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "overall brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "brightness pop on the eye",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "brightness pop on the eye"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "sweep travel / eye-width amplitude",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "sweep travel / eye-width amplitude"
+          }
+        },
+        {
+          "name": "sliderTrail",
+          "label": "Trail",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "afterglow / hats sparkle (secondary)",
+          "audio": {
+            "slider": "sliderTrail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "afterglow / hats sparkle (secondary)"
+          }
+        },
+        {
+          "name": "sliderEyeWidth",
+          "label": "Eye Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackgroundGlow",
+          "label": "Background Glow",
+          "value": 0.15,
+          "valueSource": "playlist saved value",
+          "description": "Background Glow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "vintage warm-white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "vintage warm-white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderDirection": 0.77,
+        "sliderLevel": 0.2,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderTrail": 0.5,
+        "sliderEyeWidth": 0.5,
+        "sliderBackgroundGlow": 0.15,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.3,
+        "sliderBlinderBite": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderDirection": 0.77,
+        "sliderLevel": 0.2,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderTrail": 0.5,
+        "sliderEyeWidth": 0.5,
+        "sliderBackgroundGlow": 0.15,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.3,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "002_01_cylon_sweep.gif",
+      "video": "002_01_cylon_sweep.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "64a05c9794a341f5c9659d635c8cdf9902496a26edec7cec855506a49aa6ae7e"
+    },
+    {
+      "index": 2,
+      "pattern": "02_phase_cathedral",
+      "title": "Phase Cathedral",
+      "goal": "Build luminous interference arches across the ship, with stained-glass Identity and architectural depth rather than a generic wash.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.16,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.73,
+          "valueSource": "playlist saved value",
+          "description": "final whole-pattern brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "final whole-pattern brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.08,
+          "valueSource": "playlist saved value",
+          "description": "whole-ship light strike + W/A punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "whole-ship light strike + W/A punch"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "visible arch expands from apex to hull",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.08,
+            "max": 0.92,
+            "curve": "linear",
+            "note": "visible arch expands from apex to hull"
+          }
+        },
+        {
+          "name": "sliderSharpness",
+          "label": "Sharpness",
+          "value": 0.83,
+          "valueSource": "playlist saved value",
+          "description": "node-crush reshape (secondary geometry)",
+          "audio": {
+            "slider": "sliderSharpness",
+            "signal": "micMid",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "node-crush reshape (secondary geometry)"
+          }
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.59,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.17,
+        "sliderDirection": 0.16,
+        "sliderLevel": 0.73,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.92,
+        "sliderSharpness": 0.83,
+        "sliderCount": 0.59
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.17,
+        "sliderDirection": 0.16,
+        "sliderLevel": 0.73,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.92,
+        "sliderSharpness": 0.83,
+        "sliderCount": 0.59
+      },
+      "gif": "003_02_phase_cathedral.gif",
+      "video": "003_02_phase_cathedral.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4efc929732aa673e2bd7d00e44bf052b2f48c84075ca2bd90abafd82e380f83f"
+    },
+    {
+      "index": 3,
+      "pattern": "03_dual_axis_crush",
+      "title": "Dual Axis Crush",
+      "goal": "A saved Dual Axis Crush look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.55,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "overall brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "beam-head + convergence flash pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beam-head + convergence flash pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "beam reach / travel distance",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "beam reach / travel distance"
+          }
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.12,
+        "sliderDirection": 0.55,
+        "sliderLevel": 1,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderBeamWidth": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.12,
+        "sliderDirection": 0.55,
+        "sliderLevel": 1,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderBeamWidth": 0.5
+      },
+      "gif": "004_03_dual_axis_crush.gif",
+      "video": "004_03_dual_axis_crush.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "ffd6c41d1442badc7a013b478a8143aae809296130e5e971b801b5077d59a7ba"
+    },
+    {
+      "index": 4,
+      "pattern": "04_beat_folded_helix",
+      "title": "Beat Folded Helix",
+      "goal": "A saved Beat Folded Helix look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "tunnel speed / arm spread",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "tunnel speed / arm spread"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "beat pop + vintage W blinders",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat pop + vintage W blinders"
+          }
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderTwistFreq",
+          "label": "Twist Freq",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Twist Freq character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "arm-crispness reshape (secondary)",
+          "audio": {
+            "slider": "sliderContrast",
+            "signal": "micMid",
+            "min": 0.3,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "arm-crispness reshape (secondary)"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "overall white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderWhiteWarmth",
+          "label": "White Warmth",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderRadius": 0.5,
+        "sliderKick": 0,
+        "sliderLevel": 0.5,
+        "sliderCount": 0.5,
+        "sliderTwistFreq": 0.5,
+        "sliderContrast": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.3,
+        "sliderWhiteWarmth": 0.3
+      },
+      "gif": "005_04_beat_folded_helix.gif",
+      "video": "005_04_beat_folded_helix.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "3ba24e23e77acd870043cbbbc1158268d3fa74718aad2584588d257b7f272afc"
+    },
+    {
+      "index": 5,
+      "pattern": "05_orbital_attractor_field",
+      "title": "Orbital Attractor Field",
+      "goal": "A saved Orbital Attractor Field look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.57,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.65,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "overall brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "vintage W blinder pop (sec 2)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage W blinder pop (sec 2)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "how far attractors travel",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "how far attractors travel"
+          }
+        },
+        {
+          "name": "sliderFalloff",
+          "label": "Falloff",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Falloff character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderFocus",
+          "label": "Focus",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderColorVariation",
+          "label": "Color Variation",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "colour shimmer / warm-arc spread (secondary)",
+          "audio": {
+            "slider": "sliderColorVariation",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "colour shimmer / warm-arc spread (secondary)"
+          }
+        },
+        {
+          "name": "sliderBlackoutTexture",
+          "label": "Blackout Texture",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Blackout Texture character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "overall white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "overall white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.57,
+        "sliderDirection": 0.65,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderFalloff": 0.5,
+        "sliderFocus": 0.5,
+        "sliderColorVariation": 0.5,
+        "sliderBlackoutTexture": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.57,
+        "sliderDirection": 0.65,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderFalloff": 0.5,
+        "sliderFocus": 0.5,
+        "sliderColorVariation": 0.5,
+        "sliderBlackoutTexture": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "006_05_orbital_attractor_field.gif",
+      "video": "006_05_orbital_attractor_field.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "fbff4a3e1dab862226f1bc5e1fb4318d9a74205839e5652f4e0ff480af822633"
+    },
+    {
+      "index": 6,
+      "pattern": "06_neon_elevator",
+      "title": "Neon Elevator",
+      "goal": "A saved Neon Elevator look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Par-row arrival colour ding (kick pop)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "Par-row arrival colour ding (kick pop)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "car glow height / travel reach (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "car glow height / travel reach (build)"
+          }
+        },
+        {
+          "name": "sliderSteps",
+          "label": "Steps",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Steps character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "always-on warm white keep (bass)",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "always-on warm white keep (bass)"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "vintage-head arrival BLINDER bite (kick pop)",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head arrival BLINDER bite (kick pop)"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderDirection": 0.71,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderSteps": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderDirection": 0.71,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderSteps": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "007_06_neon_elevator.gif",
+      "video": "007_06_neon_elevator.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c621eac861a3e5f461edeca924580d8c18adacf1ee78140cec5665e5a795e540"
+    },
+    {
+      "index": 7,
+      "pattern": "07_shimmer",
+      "title": "Shimmer",
+      "goal": "Elegant candlelight on moving water: fine traveling glints, a stable readable sign, and Jewelry as the golden lead.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.26,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "whole-pattern brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "whole-pattern brightness"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "shimmer texture/count",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "shimmer texture/count"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "colored + Jewelry glint punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "colored + Jewelry glint punch"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.82,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.26,
+        "sliderLevel": 0.68,
+        "sliderDetail": 0.9,
+        "sliderKick": 0.86,
+        "sliderJewelryWhite": 0.82
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.26,
+        "sliderLevel": 0.68,
+        "sliderDetail": 0.9,
+        "sliderKick": 0.86,
+        "sliderJewelryWhite": 0.82
+      },
+      "gif": "008_07_shimmer.gif",
+      "video": "008_07_shimmer.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4e1c65352ab04b0639cee02e8a99ef19d931ddb42d9374e40444dad114b9ed6e"
+    },
+    {
+      "index": 8,
+      "pattern": "08_ocean_liner",
+      "title": "Ocean Liner",
+      "goal": "Turn the ship into a nocturnal liner: deep palette water, warm cabin-light detail, and a calm crest moving through Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "water + porthole brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "water + porthole brightness"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "decisive porthole flare",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "decisive porthole flare"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "porthole count/texture",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "porthole count/texture"
+          }
+        },
+        {
+          "name": "sliderPortholeWhite",
+          "label": "Porthole White",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.12,
+        "sliderDetail": 0.89,
+        "sliderPortholeWhite": 0.87
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.12,
+        "sliderDetail": 0.89,
+        "sliderPortholeWhite": 0.87
+      },
+      "gif": "009_08_ocean_liner.gif",
+      "video": "009_08_ocean_liner.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1ea09ab70a943276dea0c9e86b354e59a3e2f68abd89374b4236b13224622165"
+    },
+    {
+      "index": 9,
+      "pattern": "09_cyclone",
+      "title": "Cyclone",
+      "goal": "A saved Cyclone look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.22,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.22,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "confetti burst pop (kick)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "confetti burst pop (kick)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "speck travel / size (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "speck travel / size (build)"
+          }
+        },
+        {
+          "name": "sliderDensity",
+          "label": "Density",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "speck count / sparkle (highs)",
+          "audio": {
+            "slider": "sliderDensity",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "speck count / sparkle (highs)"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "overall white keep/amount (bass)",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "overall white keep/amount (bass)"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "vintage white burst + blinder pop (kick)",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage white burst + blinder pop (kick)"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.22,
+        "sliderDirection": 0.22,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderDensity": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.22,
+        "sliderDirection": 0.22,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderDensity": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "010_09_cyclone.gif",
+      "video": "010_09_cyclone.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "53e0e2ff2d3483909837043611606f8fc34e1ec479d670a4f0fcea52e137ce98"
+    },
+    {
+      "index": 10,
+      "pattern": "10_chasers",
+      "title": "Chasers",
+      "goal": "A saved Chasers look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "head flare pop (kick)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "head flare pop (kick)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "tail length / head size (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "tail length / head size (build)"
+          }
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "number of chasers flying (highs)",
+          "audio": {
+            "slider": "sliderCount",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "number of chasers flying (highs)"
+          }
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderCount": 0.5
+      },
+      "gif": "011_10_chasers.gif",
+      "video": "011_10_chasers.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "ac94ecb293e850b49255f987354fe04aef4ef5fcf16d171279830a669746008f"
+    },
+    {
+      "index": 11,
+      "pattern": "11_bioluminescence",
+      "title": "Bioluminescence",
+      "goal": "A living underwater reef of branching phosphor filaments, restrained crest flashes, UV undertow, and a calm reef-emblem sign.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.27,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "whole-look brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "whole-look brightness"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "bioluminescent bloom",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "bioluminescent bloom"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.23,
+          "valueSource": "playlist saved value",
+          "description": "crest spread",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "crest spread"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "filament complexity",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "filament complexity"
+          }
+        },
+        {
+          "name": "sliderDensity",
+          "label": "Density",
+          "value": 0.39,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvGlow",
+          "label": "Uv Glow",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "UV undertow",
+          "audio": {
+            "slider": "sliderUvGlow",
+            "signal": "micHigh",
+            "min": 0.18,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "UV undertow"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteSpeed",
+          "label": "White Speed",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.27,
+        "sliderLevel": 0.71,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.23,
+        "sliderDetail": 0.64,
+        "sliderDensity": 0.39,
+        "sliderUvGlow": 0.89,
+        "sliderWhiteLevel": 0.89,
+        "sliderWhiteSpeed": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.27,
+        "sliderLevel": 0.71,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.23,
+        "sliderDetail": 0.64,
+        "sliderDensity": 0.39,
+        "sliderUvGlow": 0.89,
+        "sliderWhiteLevel": 0.89,
+        "sliderWhiteSpeed": 0.48
+      },
+      "gif": "012_11_bioluminescence.gif",
+      "video": "012_11_bioluminescence.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5fb707cd58033cdc50c8bb60fa9207abd8fca832aa36bd677d92027c8e4f9f1e"
+    },
+    {
+      "index": 12,
+      "pattern": "12_breathing",
+      "title": "Breathing",
+      "goal": "Make the entire model inhale and exhale as one organism over a detailed quasicrystal field, with Identity protected through the exhale.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "whole-model energy",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "whole-model energy"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.13,
+          "valueSource": "playlist saved value",
+          "description": "immediate heartbeat",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.72,
+            "curve": "pow2",
+            "note": "immediate heartbeat"
+          }
+        },
+        {
+          "name": "sliderBreathDepth",
+          "label": "Breath Depth",
+          "value": 0.69,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBreathShape",
+          "label": "Breath Shape",
+          "value": 0.23,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloom",
+          "label": "Bloom",
+          "value": 0.94,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibbing",
+          "label": "Ribbing",
+          "value": 0.19,
+          "valueSource": "playlist saved value",
+          "description": "Ribbing character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSparkle",
+          "label": "Sparkle",
+          "value": 0.37,
+          "valueSource": "playlist saved value",
+          "description": "high-frequency scintillation",
+          "audio": {
+            "slider": "sliderSparkle",
+            "signal": "micHigh",
+            "min": 0.04,
+            "max": 0.72,
+            "curve": "ease",
+            "note": "high-frequency scintillation"
+          }
+        },
+        {
+          "name": "sliderWhiteGlow",
+          "label": "White Glow",
+          "value": 0.69,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderFieldDetail",
+          "label": "Field Detail",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.13,
+        "sliderBreathDepth": 0.69,
+        "sliderBreathShape": 0.23,
+        "sliderBloom": 0.94,
+        "sliderRibbing": 0.19,
+        "sliderSparkle": 0.37,
+        "sliderWhiteGlow": 0.69,
+        "sliderFieldDetail": 0.91
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.13,
+        "sliderBreathDepth": 0.69,
+        "sliderBreathShape": 0.23,
+        "sliderBloom": 0.94,
+        "sliderRibbing": 0.19,
+        "sliderSparkle": 0.37,
+        "sliderWhiteGlow": 0.69,
+        "sliderFieldDetail": 0.91
+      },
+      "gif": "013_12_breathing.gif",
+      "video": "013_12_breathing.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "2267e44927db2c11ec25a8dedacecbc20226502e1f38dee2482a79b34614143b"
+    },
+    {
+      "index": 13,
+      "pattern": "13_sparkle",
+      "title": "Sparkle",
+      "goal": "An elegant Celestial Chandelier: fixed constellation points ignite, form diamond cores, and decay over velvet-black negative space.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.57,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "total elegance budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "total elegance budget"
+          }
+        },
+        {
+          "name": "sliderStarCount",
+          "label": "Star Count",
+          "value": 0.73,
+          "valueSource": "playlist saved value",
+          "description": "build reveals more stars",
+          "audio": {
+            "slider": "sliderStarCount",
+            "signal": "micFlux",
+            "min": 0.12,
+            "max": 0.86,
+            "curve": "ease",
+            "note": "build reveals more stars"
+          }
+        },
+        {
+          "name": "sliderBrilliance",
+          "label": "Brilliance",
+          "value": 0.59,
+          "valueSource": "playlist saved value",
+          "description": "high-frequency diamonds",
+          "audio": {
+            "slider": "sliderBrilliance",
+            "signal": "micHigh",
+            "min": 0.16,
+            "max": 0.76,
+            "curve": "linear",
+            "note": "high-frequency diamonds"
+          }
+        },
+        {
+          "name": "sliderTwinkleFocus",
+          "label": "Twinkle Focus",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderAfterglow",
+          "label": "Afterglow",
+          "value": 0.13,
+          "valueSource": "playlist saved value",
+          "description": "Afterglow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarChorus",
+          "label": "Star Chorus",
+          "value": 0.63,
+          "valueSource": "playlist saved value",
+          "description": "Star Chorus character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurst",
+          "label": "Burst",
+          "value": 0.15,
+          "valueSource": "playlist saved value",
+          "description": "constellation burst",
+          "audio": {
+            "slider": "sliderBurst",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.78,
+            "curve": "pow2",
+            "note": "constellation burst"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.81,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvStars",
+          "label": "Uv Stars",
+          "value": 0.78,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.57,
+        "sliderLevel": 0.17,
+        "sliderStarCount": 0.73,
+        "sliderBrilliance": 0.59,
+        "sliderTwinkleFocus": 0.88,
+        "sliderAfterglow": 0.13,
+        "sliderStarChorus": 0.63,
+        "sliderBurst": 0.15,
+        "sliderJewelryWhite": 0.81,
+        "sliderUvStars": 0.78
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.57,
+        "sliderLevel": 0.17,
+        "sliderStarCount": 0.73,
+        "sliderBrilliance": 0.59,
+        "sliderTwinkleFocus": 0.88,
+        "sliderAfterglow": 0.13,
+        "sliderStarChorus": 0.63,
+        "sliderBurst": 0.15,
+        "sliderJewelryWhite": 0.81,
+        "sliderUvStars": 0.78
+      },
+      "gif": "014_13_sparkle.gif",
+      "video": "014_13_sparkle.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e793ac29e726d423dcab8a2c879d871aa0a41e277be2e112cc38201535246d42"
+    },
+    {
+      "index": 14,
+      "pattern": "14_lunar_current",
+      "title": "Lunar Current",
+      "goal": "A bounded moonlit river with banks, shadow depth, and internal caustic lace—not a repeating full-rig field.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.39,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "whole-look energy",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.22,
+            "max": 0.74,
+            "curve": "linear",
+            "note": "whole-look energy"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.26,
+          "valueSource": "playlist saved value",
+          "description": "lunar crest flash",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.72,
+            "curve": "pow2",
+            "note": "lunar crest flash"
+          }
+        },
+        {
+          "name": "sliderCurrentWidth",
+          "label": "Current Width",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "river opens on builds",
+          "audio": {
+            "slider": "sliderCurrentWidth",
+            "signal": "micFlux",
+            "min": 0.16,
+            "max": 0.78,
+            "curve": "ease",
+            "note": "river opens on builds"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.82,
+          "valueSource": "playlist saved value",
+          "description": "caustic lace energy",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micMid",
+            "min": 0.12,
+            "max": 0.82,
+            "curve": "linear",
+            "note": "caustic lace energy"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvUndertow",
+          "label": "Uv Undertow",
+          "value": 0.66,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.39,
+        "sliderLevel": 0.85,
+        "sliderKick": 0.26,
+        "sliderCurrentWidth": 0.89,
+        "sliderShimmer": 0.82,
+        "sliderDetail": 0.88,
+        "sliderJewelryWhite": 0.75,
+        "sliderUvUndertow": 0.66
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.39,
+        "sliderLevel": 0.85,
+        "sliderKick": 0.26,
+        "sliderCurrentWidth": 0.89,
+        "sliderShimmer": 0.82,
+        "sliderDetail": 0.88,
+        "sliderJewelryWhite": 0.75,
+        "sliderUvUndertow": 0.66
+      },
+      "gif": "015_14_lunar_current.gif",
+      "video": "015_14_lunar_current.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "deaf17b61ab6f2fbd1c1cb7c2aad1752cba9aef3ae61c24109f71acc404f9e04"
+    },
+    {
+      "index": 15,
+      "pattern": "15_silk_prism_ribbons",
+      "title": "Silk Prism Ribbons",
+      "goal": "A saved Silk Prism Ribbons look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "ribbon-crest brightness pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "ribbon-crest brightness pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "ribbon width / spread (movement)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "ribbon width / spread (movement)"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "satin sheen / fine detail (highs)",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "satin sheen / fine detail (highs)"
+          }
+        },
+        {
+          "name": "sliderRibbonCount",
+          "label": "Ribbon Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderSoftness",
+          "label": "Softness",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Softness character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 1,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderShimmer": 0.5,
+        "sliderRibbonCount": 0.5,
+        "sliderSoftness": 0.4
+      },
+      "gif": "016_15_silk_prism_ribbons.gif",
+      "video": "016_15_silk_prism_ribbons.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a1f83ebe38af332da6a8d5c0015dd8a6dfea34e00ee02d9da7c94bc04f2b77b9"
+    },
+    {
+      "index": 16,
+      "pattern": "16_ghost_tide_uv",
+      "title": "Ghost Tide Uv",
+      "goal": "A sparse oblique foam front traveling through mist and a separately phased UV undertow.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.15,
+            "max": 1,
+            "curve": "ease",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.31,
+          "valueSource": "playlist saved value",
+          "description": "foam / white crest pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "foam / white crest pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "true surge excursion, independent of foam width",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.1,
+            "max": 0.95,
+            "curve": "ease",
+            "note": "true surge excursion, independent of foam width"
+          }
+        },
+        {
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvLevel",
+          "label": "Uv Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "UV undertow glow (highs / sparkle band)",
+          "audio": {
+            "slider": "sliderUvLevel",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "UV undertow glow (highs / sparkle band)"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKick": 0.31,
+        "sliderRadius": 0.5,
+        "sliderTideWidth": 0.5,
+        "sliderWhiteLevel": 0.6,
+        "sliderUvLevel": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKick": 0.31,
+        "sliderRadius": 0.5,
+        "sliderTideWidth": 0.5,
+        "sliderWhiteLevel": 0.6,
+        "sliderUvLevel": 0.45
+      },
+      "gif": "017_16_ghost_tide_uv.gif",
+      "video": "017_16_ghost_tide_uv.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "7fb9d1a99378b5ec5e7bc309c1b2cc4de475c47c7ecda61fed9ec31eb616c73b"
+    },
+    {
+      "index": 17,
+      "pattern": "17_rolling_color_dunes",
+      "title": "Rolling Color Dunes",
+      "goal": "A saved Rolling Color Dunes look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "surf crest + Vintage blinder pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "surf crest + Vintage blinder pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "dune fold depth / sand shift",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "dune fold depth / sand shift"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "dune contrast / surf sharpness (highs)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "dune contrast / surf sharpness (highs)"
+          }
+        },
+        {
+          "name": "sliderDuneScale",
+          "label": "Dune Scale",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Dune Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderStageSurf",
+          "label": "Stage Surf",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Stage Surf character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderAmberWarmth",
+          "label": "Amber Warmth",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Amber Warmth character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "overall white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 1,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderDuneScale": 0.5,
+        "sliderStageSurf": 0.5,
+        "sliderAmberWarmth": 0.55,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderBlinderBite": 0.6
+      },
+      "gif": "018_17_rolling_color_dunes.gif",
+      "video": "018_17_rolling_color_dunes.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e210a3fdcb035a9ee41833a8aa8eb851ae194a4387d5e39bc0a91f81f40631b5"
+    },
+    {
+      "index": 18,
+      "pattern": "18_deep_space_lattice",
+      "title": "Deep Space Lattice",
+      "goal": "A rigid cosmic crossed-grid and diagonal constellation over near-black voids, with a stable deep-space Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.18,
+          "valueSource": "playlist saved value",
+          "description": "beat pop on the lattice",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "beat pop on the lattice"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "lattice displacement excursion",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "lattice displacement excursion"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "star/node microstructure",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "star/node microstructure"
+          }
+        },
+        {
+          "name": "sliderLatticeScale",
+          "label": "Lattice Scale",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Lattice Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLineSoftness",
+          "label": "Line Softness",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Line Softness character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0.18,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderLineSoftness": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0.18,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderLineSoftness": 0.5
+      },
+      "gif": "019_18_deep_space_lattice.gif",
+      "video": "019_18_deep_space_lattice.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d024b05d201d4087b863c9cfd3a29c4863809dbfef45a7f3ff0545cfef518c32"
+    },
+    {
+      "index": 19,
+      "pattern": "19_swaying_lattice_ballet",
+      "title": "Swaying Lattice Ballet",
+      "goal": "Living architecture: lattice cohorts bow in counterphase so the geometry feels organic and theatrical rather than rigid.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "beat pop on the nodes",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "beat pop on the nodes"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "sway radius / bow travel",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "sway radius / bow travel"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "node sharpness / sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "node sharpness / sparkle"
+          }
+        },
+        {
+          "name": "sliderLatticeScale",
+          "label": "Lattice Scale",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Lattice Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCounterPhase",
+          "label": "Counter Phase",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloorLevel",
+          "label": "Floor Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "white keep on crests (bass)",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "white keep on crests (bass)"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "white accent pop (beat)",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "white accent pop (beat)"
+          }
+        },
+        {
+          "name": "sliderWhiteSpread",
+          "label": "White Spread",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderCounterPhase": 0.5,
+        "sliderFloorLevel": 0.45,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderWhiteSpread": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderCounterPhase": 0.5,
+        "sliderFloorLevel": 0.45,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderWhiteSpread": 0.5
+      },
+      "gif": "020_19_swaying_lattice_ballet.gif",
+      "video": "020_19_swaying_lattice_ballet.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1aec17408298240d7e615392eb0c294939d19b9d69f813dcf12998bd37ec3f90"
+    },
+    {
+      "index": 20,
+      "pattern": "20_parametric_sway_field",
+      "title": "Parametric Sway Field",
+      "goal": "Three dancing attractors wander on incommensurate Lissajous paths, leaving colored proximity trails and node punctuation.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.47,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.39,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.29,
+          "valueSource": "playlist saved value",
+          "description": "beat brightness pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "beat brightness pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "attractor travel / movement",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "attractor travel / movement"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "glow sharpness / sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "glow sharpness / sparkle"
+          }
+        },
+        {
+          "name": "sliderFocus",
+          "label": "Focus",
+          "value": 0.67,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderTrailBlend",
+          "label": "Trail Blend",
+          "value": 0.11,
+          "valueSource": "playlist saved value",
+          "description": "Trail Blend character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.47,
+        "sliderLevel": 0.39,
+        "sliderKick": 0.29,
+        "sliderRadius": 0.85,
+        "sliderDetail": 0.24,
+        "sliderFocus": 0.67,
+        "sliderTrailBlend": 0.11
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.47,
+        "sliderLevel": 0.39,
+        "sliderKick": 0.29,
+        "sliderRadius": 0.85,
+        "sliderDetail": 0.24,
+        "sliderFocus": 0.67,
+        "sliderTrailBlend": 0.11
+      },
+      "gif": "021_20_parametric_sway_field.gif",
+      "video": "021_20_parametric_sway_field.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f58a3ed098fb716f7971861208d75ce524842104c429194ec37ca223bdb52d0d"
+    },
+    {
+      "index": 21,
+      "pattern": "21_pelagic_manta_rays",
+      "title": "Pelagic Manta Rays",
+      "goal": "Two coherent manta silhouettes and wakes cross sparse dark water; localized bodies remain readable as creatures.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.79,
+          "valueSource": "playlist saved value",
+          "description": "bass reveals the rays",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.28,
+            "max": 1,
+            "curve": "linear",
+            "note": "bass reveals the rays"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "beat foam/ocean punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat foam/ocean punch"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "builds widen coherent wings",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.32,
+            "max": 0.92,
+            "curve": "linear",
+            "note": "builds widen coherent wings"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "highs articulate anatomy",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "highs articulate anatomy"
+          }
+        },
+        {
+          "name": "sliderWhiteFoam",
+          "label": "White Foam",
+          "value": 0.11,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvUndertow",
+          "label": "Uv Undertow",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.91,
+        "sliderLevel": 0.79,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.3,
+        "sliderDetail": 0.71,
+        "sliderWhiteFoam": 0.11,
+        "sliderUvUndertow": 0.71
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.91,
+        "sliderLevel": 0.79,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.3,
+        "sliderDetail": 0.71,
+        "sliderWhiteFoam": 0.11,
+        "sliderUvUndertow": 0.71
+      },
+      "gif": "022_21_pelagic_manta_rays.gif",
+      "video": "022_21_pelagic_manta_rays.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "55c71296cfd403f57cc6600c68c6fff37fcb94d12d5a461931823a2387db3355"
+    },
+    {
+      "index": 22,
+      "pattern": "22_abyssal_sway_garden",
+      "title": "Abyssal Sway Garden",
+      "goal": "A distributed abyssal botanical garden: rooted fronds sway, branch, and carry phosphorescent tips through negative space.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.22,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "tip-flash / brightness pop (beat)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "tip-flash / brightness pop (beat)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "sway amplitude / travel (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "sway amplitude / travel (build)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "tip sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "tip sparkle"
+          }
+        },
+        {
+          "name": "sliderFrondDensity",
+          "label": "Frond Density",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderTipGlow",
+          "label": "Tip Glow",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Tip Glow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBaseDarkness",
+          "label": "Base Darkness",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.24,
+        "sliderLevel": 0.22,
+        "sliderKick": 0,
+        "sliderRadius": 1,
+        "sliderDetail": 0.86,
+        "sliderFrondDensity": 0.68,
+        "sliderTipGlow": 0.34,
+        "sliderBaseDarkness": 0.68
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.24,
+        "sliderLevel": 0.22,
+        "sliderKick": 0,
+        "sliderRadius": 1,
+        "sliderDetail": 0.86,
+        "sliderFrondDensity": 0.68,
+        "sliderTipGlow": 0.34,
+        "sliderBaseDarkness": 0.68
+      },
+      "gif": "023_22_abyssal_sway_garden.gif",
+      "video": "023_22_abyssal_sway_garden.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8f3e834a7879c44cec71c25cad26ab3d09475e7f226d5621d4106bad1ad8cfc1"
+    },
+    {
+      "index": 23,
+      "pattern": "23_prismatic_strange_attractors",
+      "title": "Prismatic Strange Attractors",
+      "goal": "A saved Prismatic Strange Attractors look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.4,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "core / brightness pop (beat)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "core / brightness pop (beat)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.39,
+          "valueSource": "code default",
+          "description": "orbit reach / travel (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "orbit reach / travel (build)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "filament density / sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "filament density / sparkle"
+          }
+        },
+        {
+          "name": "sliderChaos",
+          "label": "Chaos",
+          "value": 6,
+          "valueSource": "code default",
+          "description": "Chaos character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 4.5,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteCore",
+          "label": "White Core",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvGhost",
+          "label": "Uv Ghost",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        },
+        {
+          "name": "sliderColorSpread",
+          "label": "Color Spread",
+          "value": 0.95,
+          "valueSource": "code default",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.6,
+        "sliderLevel": 0.7,
+        "sliderKick": 0,
+        "sliderRadius": 0.39,
+        "sliderDetail": 0.5,
+        "sliderChaos": 6,
+        "sliderContrast": 4.5,
+        "sliderWhiteCore": 0.5,
+        "sliderUvGhost": 0.4,
+        "sliderColorSpread": 0.95
+      },
+      "gif": "024_23_prismatic_strange_attractors.gif",
+      "video": "024_23_prismatic_strange_attractors.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b5e1970e7cd2758ddd247af453982e3f992762f55881fcb9916c073ef595d00c"
+    },
+    {
+      "index": 24,
+      "pattern": "24_chromatic_murmuration",
+      "title": "Chromatic Murmuration",
+      "goal": "A saved Chromatic Murmuration look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness budget"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "additive core pop on the beat",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "additive core pop on the beat"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.34,
+          "valueSource": "code default",
+          "description": "flock reach / travel (build = wider sweep)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.2,
+            "max": 1,
+            "curve": "linear",
+            "note": "flock reach / travel (build = wider sweep)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "filament density (sparkle/detail)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 1,
+            "curve": "linear",
+            "note": "filament density (sparkle/detail)"
+          }
+        },
+        {
+          "name": "sliderFlockFocus",
+          "label": "Flock Focus",
+          "value": 3,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 3,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderAfterglow",
+          "label": "Afterglow",
+          "value": 0.135,
+          "valueSource": "code default",
+          "description": "Afterglow character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.06,
+        "sliderLevel": 0.5,
+        "sliderKick": 0,
+        "sliderRadius": 0.34,
+        "sliderDetail": 0.5,
+        "sliderFlockFocus": 3,
+        "sliderContrast": 3,
+        "sliderAfterglow": 0.135
+      },
+      "gif": "025_24_chromatic_murmuration.gif",
+      "video": "025_24_chromatic_murmuration.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "16ff2cfc223734ebe4aeb6d4f70724947e857f23c3147ab8da14b7b25967517c"
+    },
+    {
+      "index": 25,
+      "pattern": "25_heartbeat",
+      "title": "Heartbeat",
+      "goal": "A saved Heartbeat look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY continuous brightness budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY continuous brightness budget"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "HEADLINE beat/blinder pop (kick-gated)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "HEADLINE beat/blinder pop (kick-gated)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "ripple spread / travel (build = wider sweep)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "ripple spread / travel (build = wider sweep)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "lub/dub crispness (sparkle/detail)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 1,
+            "curve": "linear",
+            "note": "lub/dub crispness (sparkle/detail)"
+          }
+        },
+        {
+          "name": "sliderDormantGlow",
+          "label": "Dormant Glow",
+          "value": 0.075,
+          "valueSource": "code default",
+          "description": "Dormant Glow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBlinder",
+          "label": "Blinder",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white amount / keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall white amount / keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "extra white blinder pop on the beat",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "extra white blinder pop on the beat"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.06,
+        "sliderLevel": 0.5,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderDormantGlow": 0.075,
+        "sliderBlinder": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "026_25_heartbeat.gif",
+      "video": "026_25_heartbeat.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "cee3f2903356903fd7334dde337cf6c36fef7748c63b49002b831b6809e015a6"
+    },
+    {
+      "index": 26,
+      "pattern": "rainbow",
+      "title": "Rainbow",
+      "goal": "A saved Rainbow look authored for Titanic.",
+      "intent": null,
+      "controls": [],
+      "savedValues": {},
+      "effectiveValues": {},
+      "gif": "027_rainbow.gif",
+      "video": "027_rainbow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "360e1fcf66d59b4bc35a59e3377cb686c51301fcad72f69ac352f5301292e654"
+    }
+  ]
+}

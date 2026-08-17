@@ -39,8 +39,10 @@
 
 'use strict';
 
-const { WebSocketServer } = require('ws');
+const fs = require('fs');
 const path = require('path');
+
+const { WebSocketServer } = require('ws');
 
 // ── Config (fail-loud: no silent port guessing) ──────────────────────────────
 const { loadSimPorts } = require('../lib/load_ports.cjs');
@@ -112,3 +114,37 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// ── Last-resort loudness + exit breadcrumb (report 20260814_212) ─────────────
+// On 2026-08-14 this process exited `code=1` with NOTHING in the launcher log —
+// no stack, no message — during ordinary operation, and the input bridge did
+// the same thing later the same evening. Neither could be told apart from an
+// external kill after the fact, because on Windows a force-terminated process
+// (`taskkill /F`, how port sweeps and stack teardowns kill things) exits with
+// exactly code 1 and no output.
+//
+// There is nothing in this file that can exit nonzero on its own — it holds no
+// sACN sender, no timers and no state — so an internal cause was always
+// unlikely. These two handlers make that provable rather than argued: any exit
+// this process CHOSE now says so on the way out, synchronously, and any escaped
+// error is named with its stack before it dies. An exit with neither line was
+// imposed from outside.
+//
+// `fs.writeSync` on fd 2, never `console.error`: an 'exit' listener cannot
+// queue async work, and this path ends in `process.exit`.
+function fatalEscapedError(kind, err) {
+  const e = err instanceof Error ? err : new Error(String(err));
+  fs.writeSync(2, `[Bridge] ❌ FATAL ${kind} — ${e.message}\n${e.stack}\n` +
+    'This escaped every guard, so the process state is UNKNOWN and it will NOT continue on a ' +
+    'guess. Exiting nonzero so the launcher restarts it. This is a DEFECT — report the stack.\n');
+  process.exit(1);
+}
+process.on('unhandledRejection', (reason) => fatalEscapedError('unhandled promise rejection', reason));
+process.on('uncaughtException', (err) => fatalEscapedError('uncaught exception', err));
+
+process.on('exit', (code) => {
+  fs.writeSync(2, `[Bridge] process exiting on its own with code=${code}. If the launcher ` +
+    'reports an exit WITHOUT this line, this process did not choose it — it was force-killed ' +
+    'from outside (on Windows that is code=1 with no output; suspect a port sweep or a stack ' +
+    'teardown from another session).\n');
+});

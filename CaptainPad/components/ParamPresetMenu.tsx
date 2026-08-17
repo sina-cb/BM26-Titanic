@@ -25,7 +25,8 @@
 // stays live across clients — we never optimistically mutate it.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { opError, opWarn } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
@@ -102,7 +103,7 @@ export function ParamPresetMenu({ channelId, channelPattern, locked }: Props) {
     setBusy(false);
     if (!res.ok) {
       console.error('[ParamPresetMenu] Capture rejected:', res.error);
-      Alert.alert('Preset not saved', `The engine rejected this preset. ${res.error || ''}`.trim());
+      opError('Preset not saved', `The engine rejected this preset. ${res.error || ''}`.trim());
       return;
     }
     setNameDraft('');
@@ -119,7 +120,7 @@ export function ParamPresetMenu({ channelId, channelPattern, locked }: Props) {
       console.error(`[ParamPresetMenu] Recall rejected for "${name}":`, res.error);
       const code = (res.data as { code?: string } | undefined)?.code;
       if (code === PARAM_PRESET_PATTERN_MISMATCH) {
-        Alert.alert(
+        opWarn(
           'Wrong pattern for this preset',
           `This preset was captured on a different pattern than this channel is ` +
             `running, so its params don't apply here. Switch the channel to the ` +
@@ -127,7 +128,7 @@ export function ParamPresetMenu({ channelId, channelPattern, locked }: Props) {
         );
         return;
       }
-      Alert.alert('Preset not recalled', `The engine rejected recalling "${name}". ${res.error || ''}`.trim());
+      opError('Preset not recalled', `The engine rejected recalling "${name}". ${res.error || ''}`.trim());
     }
   }, [channelId]);
 
@@ -138,7 +139,7 @@ export function ParamPresetMenu({ channelId, channelPattern, locked }: Props) {
     const res = await deleteParamPreset(name);
     if (!res.ok) {
       console.error(`[ParamPresetMenu] Delete rejected for "${name}":`, res.error);
-      Alert.alert('Preset not deleted', `The engine rejected deleting "${name}". ${res.error || ''}`.trim());
+      opError('Preset not deleted', `The engine rejected deleting "${name}". ${res.error || ''}`.trim());
     }
     // WS `paramPresets` event reconciles the list on success.
   }, [deletePrompt]);

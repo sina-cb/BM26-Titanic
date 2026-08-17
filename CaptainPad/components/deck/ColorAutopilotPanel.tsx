@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
-import { useGlobalStyles } from '@/styles/globalStyles';
+import { accentWash, glowFor, identityDot, useGlobalStyles } from '@/styles/globalStyles';
+import { Radius, Type } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { TimerPillBar, SwapCountdown } from '@/components/DeckTransitionControls';
 import { DualSwatch } from '@/components/ColorPickerModal';
@@ -41,6 +42,14 @@ function formatTransition(ms: number): string {
   return ms % 1000 === 0 ? `${ms / 1000}s` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+// `delay_s: 0` is CONTINUOUS (docs/55 §3.1) — the COLORS window's crossfade
+// card can post it, so this panel must be able to SAY it. Rendering the pill
+// bar with a value that is not one of its presets left a blank selection that
+// read as "no cadence set", which is a lie: the cadence is "no hold at all".
+function isContinuous(delayS: number): boolean {
+  return delayS === 0;
+}
+
 export interface ColorAutopilotPanelProps {
   config: DeckColorAutopilotConfig;
   onChange: (patch: Partial<DeckColorAutopilotConfig>) => void;
@@ -63,6 +72,10 @@ export interface ColorAutopilotPanelProps {
 export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled, countdownTargetMs, bare = false, title = 'AUTOPILOT COLORS' }) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
+  // Matched pair with PatternAutopilotPanel: the same on-state wash, the same
+  // live green + glow, the same AUTOPILOT identity dot (docs/54 rows 13/14).
+  const on = accentWash(C.primary);
+  const live = accentWash(C.tertiary);
 
   // Read the cached palette library; warm it on mount so the chips are
   // populated even on a cold open (same self-healing cache the COLORS picker
@@ -82,8 +95,24 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
   // operator can pick more palettes; collapsed by default to stay compact.
   const [adding, setAdding] = useState(false);
 
-  const selectedIds = config.palettes;
-  const selectedSet = new Set(selectedIds);
+  // A selected entry is EITHER a library id OR an inline {c1,c2} pair posted by
+  // the COLORS window's PALETTE TURNS (engine slice E1, docs/53 §5.3). The old
+  // `byId.get(id)` render skipped anything it couldn't resolve, which would
+  // have made a live TURNS rotation look like an EMPTY palette set — the panel
+  // must show what the engine is actually rotating, so inline entries render as
+  // a CUSTOM chip with their real hues.
+  // MODE-SCOPED payloads (docs/59 §4.1): the colour daemon can be running
+  // FOLLOW NOTE, whose broadcast carries NO `palettes` at all — the ring is
+  // re-derived engine-side on every committed note, so there is no palette set
+  // to send. This panel is the palettes-mode surface; it must not read that
+  // absence as a config (`config.palettes.length` on `undefined` white-screened
+  // the whole deck screen when it loaded while follow-note was driving), and it
+  // must not draw an empty chip row as though the operator had selected
+  // nothing. Empty here means "not this mode's rotation", and the banner below
+  // says which one is actually running.
+  const followNoteDriving = config.mode === 'followNote';
+  const selectedIds = Array.isArray(config.palettes) ? config.palettes : [];
+  const selectedSet = new Set(selectedIds.filter((e): e is string => typeof e === 'string'));
   const transitionMs = config.transitionMs ?? 0;
   // The engine contract requires >=1 palette id on EVERY write (the POST is
   // merged over the live config, then validated strictly), so with an empty
@@ -92,13 +121,16 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
   // with an explicit hint until a palette is added.
   const noPalettes = selectedIds.length === 0;
 
-  // Remove a selected palette. The engine contract requires >=1 palette id, so
-  // a removal that would empty the set is a no-op (mirrors the deck's fail-loud
-  // posture: we don't post an invalid empty set).
-  const removePalette = (id: string) => {
+  // Remove a selected palette BY INDEX. The engine contract requires >=1 entry,
+  // so a removal that would empty the set is a no-op (mirrors the deck's
+  // fail-loud posture: we don't post an invalid empty set). By index, not by
+  // value: two inline TURNS pairs can be structurally distinct objects that a
+  // value filter would have to compare field-by-field, and an index is exactly
+  // what the chip already knows.
+  const removePaletteAt = (index: number) => {
     if (disabled) return;
-    if (selectedSet.size <= 1) return; // keep at least one
-    onChange({ palettes: selectedIds.filter((x) => x !== id) });
+    if (selectedIds.length <= 1) return; // keep at least one
+    onChange({ palettes: selectedIds.filter((_, i) => i !== index) });
   };
   // Add a palette from the library popover (idempotent — already-selected is a
   // no-op so a double-tap can't duplicate).
@@ -111,12 +143,15 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
   return (
     <View style={bare
       ? { gap: 8, opacity: disabled ? 0.6 : 1 }
-      : { marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 8, opacity: disabled ? 0.6 : 1 }}>
+      : { marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: Radius.card, backgroundColor: C.surfaceContainerLowest, ...globalStyles.ghostBorder, gap: 8, opacity: disabled ? 0.6 : 1 }}>
       {/* Header row: label + ON/PAUSE + SHUFFLE — same recipe as the pattern
           AUTOPILOT card so the two read as a matched pair. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 6, columnGap: 8 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', flexShrink: 1 }}>{title}</Text>
+        {/* flexWrap — same reason as the pattern panel: the transport wraps
+            rather than being clipped by a shrinking cluster. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', rowGap: 6, gap: 8, flexShrink: 1, minWidth: 0 }}>
+          <View style={identityDot(C.tertiary)} />
+          <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, flexShrink: 1 }}>{title}</Text>
           {/* Next-palette-swap countdown — matched pair with the pattern
               autopilot's timer chip; self-ticking, only shows while a swap is
               scheduled. */}
@@ -128,13 +163,19 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
           <TouchableOpacity
             disabled={disabled || noPalettes}
             onPress={() => { if (!noPalettes) onChange({ active: !config.active }); }}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: config.active ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: config.active ? 'transparent' : C.ghostBorder, opacity: noPalettes ? 0.4 : 1 }}
+            style={[
+              // flexShrink 0 — same reason as the pattern panel: the header's
+              // identity dot costs room, and the transport must never be the
+              // thing that gets clipped.
+              { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: config.active ? live.backgroundColor : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.control, borderWidth: 1, borderColor: config.active ? live.borderColor : C.ghostBorder, opacity: noPalettes ? 0.4 : 1 },
+              config.active && { boxShadow: glowFor(C.tertiary) },
+            ]}
             accessibilityRole="switch"
             accessibilityState={{ checked: config.active, disabled: !!disabled || noPalettes }}
             accessibilityLabel={noPalettes ? 'Add a palette to play color autopilot' : (config.active ? 'Pause color autopilot' : 'Play color autopilot')}
           >
-            <IconSymbol name={config.active ? 'pause.fill' : 'play.fill'} size={16} color={config.active ? '#FFF' : C.text} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: config.active ? '#FFF' : C.text, fontSize: 12 }}>
+            <IconSymbol name={config.active ? 'pause.fill' : 'play.fill'} size={16} color={config.active ? live.color : C.text} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: config.active ? live.color : C.text, fontSize: 12 }}>
               {config.active ? 'PAUSE' : 'PLAY'}
             </Text>
           </TouchableOpacity>
@@ -142,13 +183,20 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
         <TouchableOpacity
           disabled={disabled || noPalettes}
           onPress={() => { if (!noPalettes) onChange({ shuffle: !config.shuffle }); }}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8, opacity: noPalettes ? 0.4 : 1, flexShrink: 0 }}
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 6,
+            paddingHorizontal: 8, paddingVertical: 8,
+            borderRadius: Radius.control, borderWidth: 1,
+            borderColor: config.shuffle ? on.borderColor : 'transparent',
+            backgroundColor: config.shuffle ? on.backgroundColor : 'transparent',
+            opacity: noPalettes ? 0.4 : 1, flexShrink: 0,
+          }}
           accessibilityRole="switch"
           accessibilityState={{ checked: config.shuffle, disabled: !!disabled || noPalettes }}
           accessibilityLabel={noPalettes ? 'Add a palette to enable color shuffle' : (config.shuffle ? 'Disable color shuffle' : 'Enable color shuffle')}
         >
-          <IconSymbol name="shuffle" size={16} color={config.shuffle ? C.primary : C.icon} />
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: config.shuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
+          <IconSymbol name="shuffle" size={16} color={config.shuffle ? on.color : C.icon} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: config.shuffle ? on.color : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
         </TouchableOpacity>
       </View>
 
@@ -156,39 +204,66 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
           plus a "+ ADD" affordance that expands the full library inline. We
           never render the entire library grid by default (operator feedback). */}
       <View style={{ gap: 4 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: C.icon, textTransform: 'uppercase' }}>PALETTES</Text>
-        {palettes.length === 0 ? (
+        <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.icon }}>PALETTES</Text>
+        {followNoteDriving ? (
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
+            FOLLOW NOTE is driving the colours — the music picks the hue and the
+            generators cycle on their own timer, so there is no palette set here.
+            Its controls are in the COLORS window.
+          </Text>
+        ) : palettes.length === 0 && selectedIds.length === 0 ? (
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, fontStyle: 'italic' }}>
             No palettes in the rig library.
           </Text>
         ) : (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-            {selectedIds.map((id) => {
-              const p = byId.get(id);
-              if (!p) return null;
-              const canRemove = selectedSet.size > 1;
+            {selectedIds.map((entry, index) => {
+              // Inline {c1,c2} pair → a CUSTOM chip carrying its real hues.
+              // Library id → the named chip. An id we cannot resolve is still
+              // skipped: the library is cached and self-healing, and drawing a
+              // chip for an id with no colours would be inventing one.
+              // D2 (docs/55 §1): a channel is a hue number OR a full {h,s,v}.
+              // The old code multiplied `inline.c1` by 360 directly, which
+              // renders "NaN°" for the object form — and `DualSwatch` would
+              // have been handed an object where it expects a hue. Read the
+              // hue out of whichever form arrived.
+              const inline = typeof entry !== 'string' ? entry : null;
+              const p = inline ? null : byId.get(entry as string);
+              if (!inline && !p) return null;
+              const chanHue = (c: NonNullable<typeof inline>['c1']) => (typeof c === 'number' ? c : c.h);
+              const c1 = inline ? chanHue(inline.c1) : p!.c1;
+              const c2 = inline ? chanHue(inline.c2) : p!.c2;
+              const name = inline
+                ? `CUSTOM ${Math.round(c1 * 360)}°/${Math.round(c2 * 360)}°`
+                : p!.name.toUpperCase();
+              const canRemove = selectedIds.length > 1;
               return (
                 <TouchableOpacity
-                  key={id}
+                  key={inline ? `inline-${index}-${c1}-${c2}` : (entry as string)}
                   disabled={disabled || !canRemove}
-                  onPress={() => removePalette(id)}
+                  onPress={() => removePaletteAt(index)}
                   accessibilityRole="button"
                   accessibilityState={{ disabled: !!disabled || !canRemove }}
-                  accessibilityLabel={`Remove palette ${p.name}`}
+                  accessibilityLabel={`Remove palette ${name}`}
+                  // A selected chip is a SELECTION, so its ring is
+                  // `borderStrong` and its ground is the standard on-state
+                  // wash (docs/54 row 14). The old flat `primary` fill fought
+                  // the DualSwatch's real hues — which are the DATA here and
+                  // must stay unmistakable.
                   style={{
                     paddingLeft: 8, paddingRight: 8, paddingVertical: 6,
-                    borderRadius: 8, borderWidth: 2, borderColor: C.primary,
-                    backgroundColor: C.primary, flexDirection: 'row',
+                    borderRadius: Radius.control, borderWidth: 2, borderColor: C.borderStrong,
+                    backgroundColor: on.backgroundColor, flexDirection: 'row',
                     alignItems: 'center', gap: 6,
                   }}
                 >
                   {/* Real c1/c2 hues — same split swatch the COLORS picker uses. */}
-                  <DualSwatch h1={p.c1} h2={p.c2} size={14} />
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: '#FFF', letterSpacing: 0.4 }}>
-                    {p.name.toUpperCase()}
+                  <DualSwatch h1={c1} h2={c2} size={14} />
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text, letterSpacing: 0.4 }}>
+                    {name}
                   </Text>
                   {canRemove ? (
-                    <IconSymbol name="xmark" size={11} color="#FFF" />
+                    <IconSymbol name="xmark" size={11} color={C.secondary} />
                   ) : null}
                 </TouchableOpacity>
               );
@@ -201,7 +276,7 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
               accessibilityState={{ expanded: adding, disabled: !!disabled }}
               accessibilityLabel={adding ? 'Close palette picker' : 'Add palettes'}
               style={{
-                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+                paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.control,
                 borderWidth: 1, borderColor: C.ghostBorder, borderStyle: 'dashed',
                 flexDirection: 'row', alignItems: 'center', gap: 4,
               }}
@@ -217,7 +292,7 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
         {/* Inline library popover — only the UNSELECTED palettes, tap to add.
             Collapsed by default so the panel stays compact. */}
         {adding && palettes.length > 0 ? (
-          <View style={{ marginTop: 6, padding: 8, borderRadius: 8, backgroundColor: C.surfaceContainerLow, borderWidth: 1, borderColor: C.ghostBorder }}>
+          <View style={{ marginTop: 6, padding: 8, borderRadius: Radius.control, backgroundColor: C.surfaceContainerLow, borderWidth: 1, borderColor: C.ghostBorder }}>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
               {palettes.filter((p) => !selectedSet.has(p.id)).length === 0 ? (
                 <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, fontStyle: 'italic' }}>
@@ -232,7 +307,7 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
                     accessibilityRole="button"
                     accessibilityLabel={`Add palette ${p.name}`}
                     style={{
-                      paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8,
+                      paddingHorizontal: 8, paddingVertical: 6, borderRadius: Radius.control,
                       borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: 'transparent',
                       flexDirection: 'row', alignItems: 'center', gap: 6,
                     }}
@@ -257,12 +332,35 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
           >=1 palette, so live-looking pills here would just 400 + snap back. */}
       {noPalettes ? (
         <View style={{ paddingVertical: 2 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: C.secondary, marginBottom: 3, textTransform: 'uppercase' }}>
+          <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.secondary, marginBottom: 3 }}>
             SWITCH EVERY
           </Text>
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
             Add at least one palette to set the switch timer.
           </Text>
+        </View>
+      ) : isContinuous(config.delay_s) ? (
+        // CONTINUOUS: no hold at all — the crossfade IS the cycle. Stated as a
+        // sentence rather than a pill bar with nothing selected, and the pills
+        // stay one tap away so the operator can leave continuous mode.
+        <View style={{ gap: 4 }}>
+          <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.secondary }}>
+            SWITCH EVERY
+          </Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.tertiary, letterSpacing: 0.5 }}>
+            CONTINUOUS
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
+            No hold — each fade runs straight into the next. Pick a hold below to change it.
+          </Text>
+          <TimerPillBar
+            label=""
+            compact
+            presets={COLOR_AUTOPILOT_DELAY_PRESETS}
+            value={config.delay_s}
+            onChange={(v) => { if (!disabled) onChange({ delay_s: v }); }}
+            formatter={(v) => (v < 60 ? `${v}s` : `${v % 60 === 0 ? v / 60 : (v / 60).toFixed(1)}m`)}
+          />
         </View>
       ) : (
         <TimerPillBar
@@ -281,7 +379,7 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
           cycle). ms under the hood. Same no-palettes gating as SWITCH EVERY. */}
       {noPalettes ? (
         <View style={{ paddingVertical: 2 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: C.secondary, marginBottom: 3, textTransform: 'uppercase' }}>
+          <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.secondary, marginBottom: 3 }}>
             TRANSITION
           </Text>
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>

@@ -37,6 +37,37 @@ export function createSacnOutput({
   // just don't repeat 80×/second. See send_error_throttle.js.
   const sendErrors = createSendErrorThrottle({ prefix: '[sACN Out]' });
 
+  /**
+   * The E1.31 sequence carried by EVERY universe of one engine frame.
+   *
+   * The `sacn` package gives each Sender its own counter starting at 0
+   * (sender.js `this.sequence = (this.sequence + 1) % 256`), so universes stay
+   * mutually aligned only by the accident of having been constructed together
+   * and fed on every frame since. A model reload breaks all three legs of that
+   * accident at once (report 20260814_212):
+   *   - `addUniverse` builds a NEW Sender mid-run, starting at 0 while its
+   *     siblings are at whatever ~40 fps has reached — a permanent offset, since
+   *     both wrap mod 256 at the same rate and the delta never closes;
+   *   - a universe pruned from `universeIds` keeps its Sender but stops being
+   *     fed, so its counter freezes and it returns offset by the frames it
+   *     missed;
+   *   - the 3× blackout burst on a de-mapped universe skews that one by +3.
+   *
+   * The bench mirror composes one destination out of several universes and
+   * proves they belong to the SAME engine frame by requiring their sequences to
+   * be equal. Under any of the above that proof refuses every frame forever and
+   * the only remedy was an engine restart.
+   *
+   * So the sequence is made an ENGINE-FRAME identity rather than a per-sender
+   * one: one counter, stamped onto every sender at send time. Alignment stops
+   * being an accident of sender lifetime and becomes true by construction —
+   * immune to when a Sender was built, how long it was dark, and how many
+   * out-of-band frames it took. Per-universe values still advance strictly
+   * forward and wrap mod 256, which is all E1.31 receivers require (a forward
+   * jump is legal; only a repeat or a small backward step is discarded).
+   */
+  let _frameSequence = 0;
+
   function addUniverse(uid) {
     if (senders[uid]) return;
     senders[uid] = [];
@@ -65,6 +96,20 @@ export function createSacnOutput({
         },
       }) });
     }
+    // The stamping below reaches into the `sacn` package's own counter. That
+    // property is `private` in the TypeScript source but plain and writable in
+    // the shipped JS, so the reach is sound — but it is exactly the kind of
+    // thing a package upgrade removes or renames. If it ever does, frame
+    // identity silently stops being carried and the mirror's composition proof
+    // starts passing frames that are NOT the same engine frame. Crash instead.
+    for (const { sender } of senders[uid]) {
+      if (typeof sender.sequence !== 'number') {
+        throw new Error('[sACN Out] the sacn package Sender no longer exposes a numeric ' +
+          '`sequence` property — engine-frame sequence stamping cannot work, and without it ' +
+          "the bench mirror's all-sequences-equal proof is not a proof. Pin/repair the sacn " +
+          'dependency (see report 20260814_212).');
+      }
+    }
   }
 
   let _started = false;
@@ -76,6 +121,11 @@ export function createSacnOutput({
    */
   async function sendFrame(buffers) {
     if (!_started) return;
+
+    // Every datagram of THIS frame carries THIS number, whatever universes the
+    // frame happens to contain and whenever their senders were built.
+    const seq = _frameSequence;
+    _frameSequence = (seq + 1) % 256;
 
     const promises = [];
     for (const [uid, data] of Object.entries(buffers)) {
@@ -91,6 +141,11 @@ export function createSacnOutput({
 
       for (const { sender, dest } of uSenders) {
         const key = `U${uid} → ${dest}`;
+        // `Sender.send()` builds its Packet synchronously inside the promise
+        // executor, reading `this.sequence` before it increments — so setting it
+        // here is read by THIS datagram and cannot be raced by a sibling
+        // universe's send in the same loop.
+        sender.sequence = seq;
         promises.push(
           sender.send({
             payload,

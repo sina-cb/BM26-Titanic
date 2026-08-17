@@ -12,9 +12,11 @@
  *
  * Spawns `node engine.js` directly (NOT `tests/helpers/spawn_engine.mjs`'s
  * `createEngineHarness`, which unconditionally injects `--port` — several
- * cases below need to boot WITHOUT one). Every case passes `--dest 127.0.0.9`
- * (black-hole) so a case that boots past `--dry-run` can never reach the
- * operator's live sACN bridge; `--dry-run` is used everywhere it doesn't
+ * cases below need to boot WITHOUT one). Every case passes `--dest 192.0.2.9`
+ * — TEST-NET-1 (RFC 5737), never routed, a real black hole where a loopback
+ * dest is not (the sim's sACN receiver binds every local interface) — so a
+ * case that boots past `--dry-run` can never reach the operator's live sACN
+ * bridge; `--dry-run` is used everywhere it doesn't
  * defeat the assertion. Zero ports in the reserved 6966-6972/5568/8081/10000
  * range are ever bound — random high ports only, and only for the two cases
  * that must boot past the port check to observe something.
@@ -85,6 +87,10 @@ async function spawnAndObserve(args, env, port, timeoutMs = 15000) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, BM26_DISABLE_TIMELINE: '1', ...env },
   });
+  const exited = new Promise((resolve, reject) => {
+    proc.once('exit', resolve);
+    proc.once('error', reject);
+  });
   let stdout = '';
   proc.stdout.on('data', (d) => { stdout += d; });
   const t0 = Date.now();
@@ -94,8 +100,8 @@ async function spawnAndObserve(args, env, port, timeoutMs = 15000) {
       await new Promise((r) => setTimeout(r, 150));
     }
   } finally {
-    proc.kill('SIGKILL');
-    await new Promise((r) => proc.on('exit', r));
+    if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+    await exited;
   }
   return { stdout };
 }
@@ -103,9 +109,9 @@ async function spawnAndObserve(args, env, port, timeoutMs = 15000) {
 // ── Case 1: missing server.port, no --port ────────────────────────────────
 
 test('config without server.port and no --port: exit 1, refuses to guess', async () => {
-  const cfg = writeTempConfig('sacn:\n  destinations:\n    - 127.0.0.9\n');
+  const cfg = writeTempConfig('sacn:\n  destinations:\n    - 192.0.2.9\n');
   const { code, stderr } = await spawnCase(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '127.0.0.9'],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '192.0.2.9'],
     { MARSIN_CONFIG_FILE: cfg },
   );
   assert.equal(code, 1);
@@ -117,7 +123,7 @@ test('config without server.port and no --port: exit 1, refuses to guess', async
 
 test('MARSIN_CONFIG_FILE relative path: throws naming "must be an absolute path"', async () => {
   const { code, stdout, stderr } = await spawnCase(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '127.0.0.9', '--port', String(randomPort())],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '192.0.2.9', '--port', String(randomPort())],
     { MARSIN_CONFIG_FILE: 'relative/path.yaml' },
   );
   assert.notEqual(code, 0);
@@ -127,7 +133,7 @@ test('MARSIN_CONFIG_FILE relative path: throws naming "must be an absolute path"
 test('MARSIN_CONFIG_FILE pointing at a missing file: throws naming "does not exist"', async () => {
   const missing = path.join(os.tmpdir(), 'definitely-does-not-exist-' + Date.now() + '.yaml');
   const { code, stdout, stderr } = await spawnCase(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '127.0.0.9', '--port', String(randomPort())],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '192.0.2.9', '--port', String(randomPort())],
     { MARSIN_CONFIG_FILE: missing },
   );
   assert.notEqual(code, 0);
@@ -139,7 +145,7 @@ test('MARSIN_CONFIG_FILE pointing at a missing file: throws naming "does not exi
 test('override file with corrupt YAML: the yaml.load throw is NOT caught — process exits nonzero', async () => {
   const cfg = writeTempConfig('{{{ not yaml\n');
   const { code, stdout, stderr } = await spawnCase(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '127.0.0.9', '--port', String(randomPort())],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '192.0.2.9', '--port', String(randomPort())],
     { MARSIN_CONFIG_FILE: cfg },
   );
   assert.notEqual(code, 0);
@@ -149,9 +155,9 @@ test('override file with corrupt YAML: the yaml.load throw is NOT caught — pro
 // ── Case 5: silent conflations — N-3/D-12-class falsy defaults ────────────
 
 test('engine.fps: "abc" boots fine under --dry-run (fps is never read before the dry-run exit)', async () => {
-  const cfg = writeTempConfig('engine:\n  fps: "abc"\nsacn:\n  destinations:\n    - 127.0.0.9\n');
+  const cfg = writeTempConfig('engine:\n  fps: "abc"\nsacn:\n  destinations:\n    - 192.0.2.9\n');
   const { code, stdout } = await spawnCase(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '127.0.0.9', '--port', String(randomPort())],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '192.0.2.9', '--port', String(randomPort())],
     { MARSIN_CONFIG_FILE: cfg },
   );
   // NOT a validation success — engine.js never validates `engine.fps` at all
@@ -170,12 +176,12 @@ test('engine.fps: "abc" boots fine under --dry-run (fps is never read before the
 
 test('sacn.priority: 0 is coerced to the 100 default (falsy-default conflation, report _157 D12)', async () => {
   const port = randomPort();
-  const cfg = writeTempConfig(`server:\n  port: ${port}\nsacn:\n  priority: 0\n  destinations:\n    - 127.0.0.9\n`);
+  const cfg = writeTempConfig(`server:\n  port: ${port}\nsacn:\n  priority: 0\n  destinations:\n    - 192.0.2.9\n`);
   // Must boot PAST dry-run to observe createSacnOutput's priority — the
   // "[sACN Out] Sender started" log line prints the resolved priority.
-  // --dest 127.0.0.9 keeps every packet black-holed.
+  // --dest 192.0.2.9 (TEST-NET-1, RFC 5737) keeps every packet black-holed.
   const { stdout } = await spawnAndObserve(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dest', '127.0.0.9'],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dest', '192.0.2.9'],
     { MARSIN_CONFIG_FILE: cfg },
     port,
   );
@@ -190,9 +196,9 @@ test('sacn.priority: 0 is coerced to the 100 default (falsy-default conflation, 
 
 test('a real config file carrying `controllers: []` refuses to boot, naming the key and the file', async () => {
   const port = randomPort();
-  const cfg = writeTempConfig(`server:\n  port: ${port}\ncontrollers: []\nsacn:\n  destinations:\n    - 127.0.0.9\n`);
+  const cfg = writeTempConfig(`server:\n  port: ${port}\ncontrollers: []\nsacn:\n  destinations:\n    - 192.0.2.9\n`);
   const { code, stdout, stderr } = await spawnCase(
-    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '127.0.0.9'],
+    ['--pattern', '13_sparkle', '--model', 'test_bench', '--dry-run', '--dest', '192.0.2.9'],
     { MARSIN_CONFIG_FILE: cfg },
   );
   const out = stdout + stderr;

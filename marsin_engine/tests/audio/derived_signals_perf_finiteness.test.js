@@ -38,19 +38,19 @@ import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
 import {
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { SignalPostProcessor } from '../../audio/postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // DerivedSignals requires the SHIPPED tracker options — the perf/finiteness
 // budget must be measured against the production config, not module DEFAULTS.
-const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+// TRACKED config.yaml only: a per-hop budget and a published-range guard scored
+// against the operator's live overlay are not reproducible on another box.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 const BPM_TRACKER = buildBpmTrackerOptions(AUDIO_CONFIG);
 const DERIVED_CONFIG = buildDerivedSignalsOptions(AUDIO_CONFIG);
 

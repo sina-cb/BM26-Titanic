@@ -130,9 +130,10 @@ test('EVERY saved 13_sparkle reference in the titanic scene still resolves', () 
   assert.deepEqual(orphans, [], `orphaned saved 13_sparkle references:\n${orphans.join('\n')}`);
 });
 
-test('the migrated saved VALUES are byte-for-byte what was on disk pre-rename', () => {
-  // Pinned from the pre-rename files (report 20260806_184 has the full
-  // old-name -> new-name -> value table). Only the KEYS changed.
+test('every non-diagnostic Sparkle reuse inherits the locked Ambient identity', () => {
+  // Ambient is the operator-owned source of truth. Reactive and Default both
+  // inherit its exact saved identity so neither silence nor a themed reuse can
+  // select a stale alternate look.
   const expected = {
     'ambient.yaml': {
       sliderLocalSpeed: 0.57, sliderLevel: 0.17, sliderStarCount: 0.73,
@@ -141,16 +142,16 @@ test('the migrated saved VALUES are byte-for-byte what was on disk pre-rename', 
       sliderUvStars: 0.78,
     },
     'ambient_sound_reactive.yaml': {
-      sliderLocalSpeed: 0.3, sliderLevel: 0.45, sliderStarCount: 0.5,
-      sliderBrilliance: 0.7, sliderTwinkleFocus: 0.5, sliderAfterglow: 0.5,
-      sliderStarChorus: 0.55, sliderBurst: 0, sliderJewelryWhite: 0.5,
-      sliderUvStars: 0.3,
+      sliderLocalSpeed: 0.57, sliderLevel: 0.17, sliderStarCount: 0.73,
+      sliderBrilliance: 0.59, sliderTwinkleFocus: 0.88, sliderAfterglow: 0.13,
+      sliderStarChorus: 0.63, sliderBurst: 0.15, sliderJewelryWhite: 0.81,
+      sliderUvStars: 0.78,
     },
     'default.yaml': {
-      sliderLocalSpeed: 0.3, sliderLevel: 1, sliderStarCount: 0.5,
-      sliderBrilliance: 0.7, sliderTwinkleFocus: 0.5, sliderAfterglow: 0.5,
-      sliderStarChorus: 0.55, sliderBurst: 0, sliderJewelryWhite: 0.5,
-      sliderUvStars: 0.3,
+      sliderLocalSpeed: 0.57, sliderLevel: 0.17, sliderStarCount: 0.73,
+      sliderBrilliance: 0.59, sliderTwinkleFocus: 0.88, sliderAfterglow: 0.13,
+      sliderStarChorus: 0.63, sliderBurst: 0.15, sliderJewelryWhite: 0.81,
+      sliderUvStars: 0.78,
     },
   };
   const byFile = Object.fromEntries(
@@ -161,19 +162,18 @@ test('the migrated saved VALUES are byte-for-byte what was on disk pre-rename', 
   }
 });
 
-test('the sound-reactive playlist keeps all four modulations, retargeted only', () => {
+test('the rebuilt sound-reactive entry uses restrained, resolved mappings', () => {
   const entry = titanicEntriesFor('13_sparkle')
     .find(e => e.file === 'ambient_sound_reactive.yaml').entry;
   assert.deepEqual(entry.modulations.map(m => ({
     id: m.id, key: m.source.key, param: m.target.parameter,
     mode: m.mode, range: m.range, curve: m.curve,
   })), [
-    { id: 'mod_sliderLevel_micLow', key: 'micLow', param: 'sliderLevel', mode: 'override', range: [0.2, 0.7], curve: 'linear' },
-    { id: 'mod_sliderBrilliance_micHigh', key: 'micHigh', param: 'sliderBrilliance', mode: 'override', range: [0.16, 0.76], curve: 'linear' },
-    { id: 'mod_sliderBurst_micKick', key: 'micKick', param: 'sliderBurst', mode: 'override', range: [0, 0.78], curve: 'easeIn' },
-    { id: 'mod_sliderStarCount_micFlux', key: 'micFlux', param: 'sliderStarCount', mode: 'override', range: [0.12, 0.86], curve: 'easeOut' },
+    { id: 'mod_sliderLevel_micLow', key: 'micLow', param: 'sliderLevel', mode: 'override', range: [0.17, 0.25], curve: 'easeOut' },
+    { id: 'mod_sliderBrilliance_micHigh', key: 'micHigh', param: 'sliderBrilliance', mode: 'override', range: [0.59, 0.67], curve: 'linear' },
+    { id: 'mod_sliderBurst_micKick', key: 'micKick', param: 'sliderBurst', mode: 'override', range: [0.15, 0.23], curve: 'easeIn' },
   ]);
-  // The micFlux binding is the one the operator reported as dead. It survives
-  // the rename; the Companion now actually publishes the signal it rides.
-  assert.ok(entry.modulations.some(m => m.source.key === 'micFlux'));
+  assert.equal(entry.defaults.sliderLevel, entry.modulations[0].range[0]);
+  assert.equal(entry.defaults.sliderBrilliance, entry.modulations[1].range[0]);
+  assert.equal(entry.defaults.sliderBurst, entry.modulations[2].range[0]);
 });

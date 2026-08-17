@@ -4,7 +4,7 @@
 
 ## The trap
 
-`node engine.js --dest 127.0.0.9` overrides **`sacn.destinations` only**.
+`node engine.js --dest <host>` overrides **`sacn.destinations` only**.
 
 Historically the config could also carry a `controllers:` block that unicast
 declared universes **straight to hardware**, ignoring `--dest` entirely — which
@@ -21,6 +21,23 @@ The remaining trap is smaller but still real: `config.sacn.destinations`
 defaults to `127.0.0.1` — which is the operator's own sim bridge on UDP 5568,
 and the bridge relays onward to the rig. "Loopback" is not "nowhere".
 
+## The black hole must NOT be a loopback address (corrected `_219`)
+
+The repo used to point test engines at `127.0.0.9` and call it black-holed. It
+is not. The simulation's sACN receiver binds **`0.0.0.0`**, so it accepts
+datagrams addressed to **any** local address — and every address in
+`127.0.0.0/8` is local. A frame sent to `127.0.0.9:5568` is received by the
+operator's bridge and relayed to the rig exactly like one sent to `127.0.0.1`.
+(Same measurement that forced the TEST-NET-1 `BLACK_HOLE_HOST` in
+`tests/helpers/companion_isolation.mjs`, report `_173`.)
+
+**Use TEST-NET-1 — the `192.0.2.x` block** (RFC 5737, reserved for
+documentation, never routed; the suites all use host `.9`) as the sACN
+`--dest` / `sacn.destinations` in every test and harness. A UDP datagram to it
+can only be dropped. Every site under
+`marsin_engine/tests/` was converted in `_219`; keep new ones on TEST-NET-1 —
+never on a `127.x` address.
+
 ## What actually works
 
 **`MARSIN_CONFIG_FILE`** is the one seam. Since `_100` it governs the engine's
@@ -28,7 +45,8 @@ and the bridge relays onward to the rig. "Loopback" is not "nowhere".
 black-holed copy of `config.yaml` and points the env var at it:
 
 - `controllers: []`
-- `sacn.destinations: ['127.0.0.9']`
+- `sacn.destinations: [<TEST-NET-1 host — `192.0.2.x`, the suites use `.9`>]`
+  — never a `127.x` address
 - `osc.enabled: false`, `web_client.enabled: false`, `audio.enabled: false`,
   `vsn1.deployLayout/deployOnBoot: false`
 

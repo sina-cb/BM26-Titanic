@@ -77,7 +77,8 @@ an isolated LAN. No internet is used at deploy time or boot time.
 │    engine /status, sim page, │◀──────────▶│   → Scheduled Task at logon         │
 │    scene == manifest scene   │            │   → boot_server.ps1 (supervisor)    │
 └──────────────────────────────┘            │   → launcher.js prod --scene <X>    │
-                                            │   → sim + engine + audio companion  │
+                                            │   → sim + engine + companion +      │
+                                            │     CaptainPad (prebuilt static)    │
                                             │   → sACN → LED controllers          │
                                             └─────────────────────────────────────┘
 ```
@@ -88,8 +89,18 @@ Design choices, and why:
   startup order, readiness probes, port claiming (`prod` force-claims),
   single-instance lock, scene-switch restarts (exit 75), zombie-free
   teardown. The server layer wraps it; it does not fork it.
-- **The server runs the full `prod` profile (sim + engine + companion),
-  headless (`--no-launch`).** The sim's servers are cheap (http + save +
+- **The server runs the full `prod` profile (sim + engine + companion +
+  CaptainPad), headless (`--no-launch`).** CaptainPad is served on :6967
+  from its PREBUILT export (`CaptainPad/dist`, shipped by the sync) through
+  `tools/static_web_server.cjs` — Node built-ins only, so there is no Metro
+  and nothing to resolve over a network the server does not have. It is on
+  the show machine so the operator can reach a control surface from the
+  iPad even when the laptop is not on the LAN. **Build it before deploying:
+  `cd CaptainPad && npm run web:build`** — the launcher refuses to start
+  `prod` without `CaptainPad/dist/index.html`. The sim renders in the
+  `2d_pixels` profile (2D Pixel Map only, every per-frame GPU 3D pass
+  skipped) so an open console tab costs the show box almost nothing.
+  The sim's servers are cheap (http + save +
   sACN bridges; the heavy WebGL only runs when a browser opens the page),
   and keeping them means the operator can open
   `http://titanic-int:6969/simulation/…` from the laptop to *see* what the

@@ -44,7 +44,8 @@
  *   - With NO draft, the strip shows the live active-plan overview.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
+import { opConfirm, opWarn } from '@/utils/op_dialog';
 import { useFocusEffect, router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -97,6 +98,7 @@ import {
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
 import { babyRevealConfirmation } from '@/components/timeline/baby_reveal_confirmation';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
 
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
@@ -240,6 +242,14 @@ function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | n
 }
 
 export default function TimelineScreen() {
+  return (
+    <PerformanceRouteGuard routeName="timeline">
+      <TimelineScreenContent />
+    </PerformanceRouteGuard>
+  );
+}
+
+function TimelineScreenContent() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -726,7 +736,7 @@ export default function TimelineScreen() {
 
   const openEditCue = useCallback((cue: PlanCue) => {
     if (cue.action.type === 'sequence') {
-      Alert.alert(
+      opWarn(
         'Sequenced event is locked',
         'This cue contains second-accurate event steps that the visual cue editor cannot safely rewrite. Edit its plan YAML and revalidate instead.',
       );
@@ -891,12 +901,21 @@ export default function TimelineScreen() {
   // that comes due is deferred (never dismissed) until the zoom exits. On
   // success we land on the DECK tab under the green banner — the event level
   // does not build a second deck UI, it reuses the real one.
+  //
+  // PERFORMANCE MODE (operator ruling 2026-08-14): a scoped PERFORM is still a
+  // takeover from a running plan, so the operator passcode prompt opens first.
+  // 'cancelled' = they dismissed it — keep the EVENT sheet open, show no error,
+  // and do not navigate (nothing was taken over).
   const handlePerform = useCallback(async () => {
     if (!eventCue) return;
     setEventBusy(true);
-    const err = await performTakeover(eventCue.id);
+    const result = await performTakeover(eventCue.id);
     setEventBusy(false);
-    if (err) { setEventActionError(err); return; }
+    if (result.outcome === 'cancelled') return;
+    if (result.outcome === 'failed') {
+      setEventActionError(result.error || 'Failed to take the deck');
+      return;
+    }
     closeEvent();
     router.push('/');
   }, [eventCue, performTakeover, closeEvent]);
@@ -1924,21 +1943,22 @@ function CueRow({
     : fireBlockedReason === 'activate'
       ? 'activate this plan to fire'
       : null;
-  const fire = () => {
+  // The ONLY alert in CaptainPad that ever carried buttons — and therefore the
+  // one that was outright BROKEN on the web build: RN-web drops Alert.alert
+  // button callbacks, so on the podium this confirmation rendered nothing and
+  // the cue simply never fired. opConfirm resolves on both platforms.
+  const fire = async () => {
     const confirmation = babyRevealConfirmation(cue.id);
     if (!confirmation) {
       onFire(cue.id);
       return;
     }
-    Alert.alert(
-      confirmation.title,
-      confirmation.body,
-      [
-        { text: 'CANCEL', style: 'cancel' },
-        { text: confirmation.confirmLabel, style: 'destructive', onPress: () => onFire(cue.id) },
-      ],
-      { cancelable: true },
-    );
+    const proceed = await opConfirm({
+      title: confirmation.title,
+      message: confirmation.body,
+      confirmLabel: confirmation.confirmLabel,
+    });
+    if (proceed) onFire(cue.id);
   };
   return (
     <View style={[
@@ -1959,7 +1979,7 @@ function CueRow({
       </View>
       <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
       <TouchableOpacity
-        onPress={fire}
+        onPress={() => { void fire(); }}
         disabled={!canFire}
         style={[styles.fireButton, !canFire && { opacity: 0.4 }]}
         accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (${fireHint || 'unavailable'})`}

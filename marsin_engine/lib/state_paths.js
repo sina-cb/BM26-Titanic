@@ -101,11 +101,33 @@ export function resolveTimelineDir(engineDir, modelName) {
   );
 }
 
+/**
+ * Per-scene SPECIAL EVENT show library dir (docs/52). Defaults to the tracked
+ * `<repo>/simulation/scenes/<scene>/special_events`;
+ * `MARSIN_SPECIAL_EVENTS_DIR` overrides it, so the special-events suites can
+ * author throwaway shows (including deliberately BROKEN ones, to prove the
+ * loud-refusal path) without ever writing into the operator's scene tree.
+ *
+ * @param {string} engineDir — absolute path to marsin_engine/
+ * @param {string} modelName — scene/model name (e.g. 'test_bench')
+ * @returns {string}
+ */
+export function resolveSpecialEventsDir(engineDir, modelName) {
+  if (!modelName || typeof modelName !== 'string') {
+    throw new TypeError(`resolveSpecialEventsDir requires a model name, got: ${JSON.stringify(modelName)}`);
+  }
+  return _resolveOverride(
+    'MARSIN_SPECIAL_EVENTS_DIR',
+    () => path.join(engineDir, '..', 'simulation', 'scenes', modelName, 'special_events'),
+  );
+}
+
 /** True when any state-redirect override is active (for boot logging). */
 export function stateOverridesActive() {
   return process.env.MARSIN_STATE_DIR !== undefined
     || process.env.MARSIN_PLAYLISTS_DIR !== undefined
-    || process.env.MARSIN_TIMELINE_DIR !== undefined;
+    || process.env.MARSIN_TIMELINE_DIR !== undefined
+    || process.env.MARSIN_SPECIAL_EVENTS_DIR !== undefined;
 }
 
 function _resolveOverride(envKey, defaultFn) {

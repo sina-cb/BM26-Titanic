@@ -1,0 +1,177 @@
+# Baby Reveal — SPECIAL EVENT show #1 (docs/52)
+#
+# The operator's flow, verbatim: "assume we have only 3 playlists: baby tease,
+# baby girl, baby boy. We start with the first, and have some effects like
+# strobe, and maybe some other minimal effects, like flash all vintage white
+# (shown in front of the UI button that starts the baby reveal). When baby
+# reveal is going, allow 2 buttons to enable baby pink or blue. In between
+# there's another state, which is blackout. When baby is pressed, we flash all
+# white, then enable the selected playlist."
+#
+# WHAT IS DATA HERE. Everything: the stage order, the button words, the accent
+# colours, the quick-effect palette, and every timing number below. Retuning the
+# reveal is a YAML edit, never a code change.
+#
+# WHAT THIS FILE DOES NOT OWN. Playlist CONTENT. `baby_tease`, `baby_girl` and
+# `baby_boy` are the operator's playlists in
+# simulation/scenes/titanic/playlists/. The runner refuses to ARM — loudly, by
+# name — if any of them is missing or has no loadable entry, and it never
+# authors playlist content itself.
+#
+# ARM (not a stage) captures the pre-show look as the reserved snapshot
+# `ev_prev`, disarms the deck's pattern + colour autopilots, and takes the
+# timeline's operator lease. FINISH / ABORT morph `ev_prev` back over 3 s,
+# re-arm the autopilots and hand the plan back. PANIC always wins and skips the
+# snapshot recall.
+
+schemaVersion: 1
+id: baby_reveal
+name: Baby Reveal
+color: '#FF9EC4'
+# No `icon:` — CaptainPad's IconSymbol map has no glyph for a gift/baby yet, and
+# an unmapped SF name renders a blank 0x0 (report _206 §4). The picker card
+# identifies the show by its accent bar and name. Add `icon:` back the day the
+# tab maps one.
+description: Three playlists, one blackout, and a white flash that answers the question.
+leaseDurationSec: 1800
+
+stages:
+  # ── 1. TEASE ─────────────────────────────────────────────────────────────
+  # Pink and blue both on the ship, neither winning. Runs indefinitely — the
+  # operator holds here as long as the crowd needs. The quick effects are
+  # momentary PULSES: they fire and release themselves, and they never advance
+  # the stage, so they can be drummed on at will.
+  - id: tease
+    label: START TEASE
+    color: '#FF9EC4'
+    hint: Pink and blue, no answer yet. Hold as long as you like.
+    advance: manual
+    actions:
+      - { type: playlist, playlist: baby_tease }
+    # PATTERN ROTATION for this stage — the deck's AUTOPILOT PATTERNS behaviour,
+    # scoped to the tease (operator, 2026-08-15: "an auto transition between
+    # those patterns that I can set the timer for in the UI … use crossfade").
+    # These are DEFAULTS: the tab shows the same controls the deck does (minus
+    # colour) and the operator's live changes are remembered per stage.
+    #
+    # Tease rotation shuffles the full mixed-colour playlist. The revealed
+    # Baby stage below owns its answer playlist until END SHOW; blackout never
+    # rotates.
+    # The SHOW card offers 5 / 15 / 30 / 60 SECOND cadence pills. Both Tease
+    # and Reveal start active at 15 seconds with a one-second transition.
+    autopilot:
+      active: true
+      everySec: 15
+      shuffle: true
+      transition:
+        enabled: true
+        mode: trans_crossfade
+        durationMs: 1000
+        shuffle: false
+    extend:
+      label: RESTART TEASE
+      actions:
+        - { type: playlist, playlist: baby_tease }
+    # Each chip ends on a SOFT RELEASE (docs/57 §2): the boost ramps out over
+    # `releaseMs` while the running pattern rises back through it, instead of
+    # vanishing on a frame boundary. `releaseTo: show` is the default and is
+    # what these want — the tease keeps playing underneath the whole time.
+    #
+    # FLASH ALL WHITE is deliberately NOT here. The all-white slam is a staged
+    # moment (see THE REVEAL below), not a drummable chip — the schema refuses
+    # `blastWhite` inside quickEffects, so re-adding it here breaks the load.
+    quickEffects:
+      - id: strobe
+        label: STROBE ON / OFF
+        color: '#FFF6E8'
+        actions:
+          - { type: effect, effectId: strobe, hz: 6, toggle: true }
+      - id: vintage_white
+        label: VINTAGE WHITE
+        color: '#FFD9A0'
+        actions:
+          - { type: effect, effectId: vintageWhite, holdMs: 600, releaseMs: 800 }
+      - id: uv_blast
+        label: UV BLAST
+        color: '#9E6BFF'
+        actions:
+          - { type: effect, effectId: uvBlast, holdMs: 800, releaseMs: 800 }
+
+  # ── 2. BLACKOUT ──────────────────────────────────────────────────────────
+  # A real stage, not a panic. The grand master rides down to 0 over 1.5 s —
+  # the same clean, transient, non-persisted ramp POST /mixer/master/fade uses,
+  # which the reveal simply rides back up. The e-stop blackout is deliberately
+  # NOT used here: it persists, it kills every macro on the way through, and it
+  # is the operator's emergency, not a dramatic pause.
+  #
+  # No quick effects: at master 0 nothing would be visible anyway.
+  - id: blackout
+    label: GO DARK
+    color: '#2A2F45'
+    hint: Drum roll. The ship holds dark until you call it.
+    advance: manual
+    actions:
+      - { type: masterFade, target: 0.0, durationMs: 1500 }
+
+  # ── 3. THE REVEAL ────────────────────────────────────────────────────────
+  # The ceremonial moment: two buttons, and the answer is chosen AT the button,
+  # so the envelope stays sealed until this second.
+  #
+  # THE FLASH-THEN-PLAYLIST ORDERING IS THE MOMENT, and it is authored here as
+  # absolute offsets from the tap:
+  #   t=0 ms    grand master snaps back up over 200 ms (the blackout is over)
+  #   t=0 ms    FLASH ALL WHITE — every channel slammed to 1.0 for 900 ms
+  #   t=700 ms  the answer playlist is activated UNDER the flash
+  #   t=900 ms  the flash starts its RELEASE — pink or blue is already there
+  #   t=1700 ms the release is out and the 1 s answer transition has landed
+  # Retune by moving these numbers; nothing in the engine assumes them.
+  #
+  # THE RELEASE (docs/57 §2). `releaseMs: 800, releaseTo: show` turns the hard
+  # cut at 900 ms into an 800 ms bloom: the white decays while the answer colour
+  # RISES THROUGH it, so the moment reads as the colour emerging from the flash
+  # rather than the flash being switched off in front of it.
+  #
+  # THE SWAP STAYS HIDDEN BY CONSTRUCTION. The release starts where the hold
+  # ends (900 ms), and the swap landed at 700 ms — 200 ms of 100 %-white still
+  # covers its start, and the release remains above the complete 1 s transition
+  # through t=1700 ms. The envelope only reveals the answer already underneath.
+  # The invariant the tests pin: `playlist.delayMs <= effect.delayMs + holdMs`.
+  # Keep it true if you retune.
+  - id: reveal
+    label: THE REVEAL
+    color: '#FFF6E8'
+    ceremonial: true
+    hint: Pick the answer. Its playlist shuffles here until you END SHOW.
+    advance: manual
+    # This is the final holding stage. The answer playlist activates under the
+    # flash, then its engine-side autopilot keeps that Baby family alive until
+    # END SHOW. Pattern order is shuffled; transition style can stay SINGLE or
+    # be changed to SHUFFLE ALL from the simplified card. Every swap is 1 s.
+    autopilot:
+      active: true
+      everySec: 15
+      shuffle: true
+      transition:
+        enabled: true
+        mode: trans_crossfade
+        durationMs: 1000
+        shuffle: false
+    choices:
+      # The operator's own words for these two buttons were "baby pink or blue",
+      # so that is what they say. `IT'S A GIRL` / `IT'S A BOY` is a one-line
+      # edit here if the moment wants it — the button words are show DATA and
+      # the ids below are what bind to the playlists.
+      - id: girl
+        label: BABY PINK
+        color: '#FF9EC4'
+        actions:
+          - { type: masterFade, target: 1.0, durationMs: 200 }
+          - { type: effect, effectId: blastWhite, holdMs: 900, releaseMs: 800, releaseTo: show }
+          - { type: playlist, playlist: baby_girl, delayMs: 700 }
+      - id: boy
+        label: BABY BLUE
+        color: '#4FA8FF'
+        actions:
+          - { type: masterFade, target: 1.0, durationMs: 200 }
+          - { type: effect, effectId: blastWhite, holdMs: 900, releaseMs: 800, releaseTo: show }
+          - { type: playlist, playlist: baby_boy, delayMs: 700 }

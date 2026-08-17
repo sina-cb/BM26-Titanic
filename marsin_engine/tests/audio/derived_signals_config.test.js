@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import {
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { mergeAudioConfig, pickLiveFields, validateLivePatch } from '../../audio/config/audio_config.js';
 import {
@@ -16,13 +15,17 @@ import {
 } from '../../audio/config/derived_signals_config.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
 import { ParamCenter } from '../../lib/param_center.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(__dirname, '..', '..');
-const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+// HERMETIC: tracked config.yaml only. The first test asserts the SHIPPED
+// derived config equals DERIVED_SIGNALS_DEFAULTS — a claim about config.yaml.
+// The scene state persists every derived group the operator live-patches
+// through the Companion, so on the effective config that assertion would go red
+// on a knob turn rather than on a real drift.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 
 function makeDerived() {
   return new DerivedSignals({

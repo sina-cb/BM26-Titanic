@@ -28,7 +28,9 @@ function makeWasmHostStub() {
 }
 
 function makeMixer(wasmHost) {
-  return new PatternMixer({ wasmHost, pixelCount: 4, maxChannels: 4 });
+  const mixer = new PatternMixer({ wasmHost, pixelCount: 4, maxChannels: 4 });
+  mixer.blendHandles.trans_crossfade = { id: 'trans_crossfade' };
+  return mixer;
 }
 
 // Start a deck + an in-flight swap onto 'p_b'. Returns the transition id.
@@ -129,24 +131,26 @@ test('a throwing onDeckSwapCancelled cannot break the cancel path', () => {
   assert.equal(m.isDeckSwapInFlight(), false, 'state must still be clean');
 });
 
-test('re-triggering a swap mid-fade does NOT notify cancellation (a new started follows)', () => {
-  const m = makeMixer(makeWasmHostStub());
+test('re-triggering a swap mid-fade fails loudly and preserves the original swap', () => {
+  const host = makeWasmHostStub();
+  const m = makeMixer(host);
   let fired = 0;
   m.onDeckSwapCancelled = () => { fired += 1; };
-  startSwap(m);
+  const originalId = startSwap(m);
 
   // Operator spams a second pick before the first lands: triggerDeckPatternSwap
   // drops the in-flight transition inline and immediately broadcasts its own
   // deckSwapStarted. A cancelled-notification here would race that started
   // event and could clear the client's in-flight UI for a swap that IS running.
-  const txid2 = m.triggerDeckPatternSwap({
-    newHandle: { id: 'incoming2' },
+  const incoming2 = { id: 'incoming2' };
+  assert.throws(() => m.triggerDeckPatternSwap({
+    newHandle: incoming2,
     patternName: 'p_c',
     durationMs: 5000,
-  });
-  assert.ok(txid2, 'second swap should start');
-  assert.equal(fired, 0, 'swap-over-swap must not emit a cancelled notification');
-  assert.equal(m.isDeckSwapInFlight(), true, 'the NEW swap is in flight');
+  }), (error) => error.code === 'EBUSY');
+  assert.equal(fired, 0, 'rejected overlap must not cancel the original');
+  assert.equal(m._swapTransition.id, originalId, 'the original swap remains authoritative');
+  assert.ok(host.destroyed.includes(incoming2), 'rejected incoming handle must not leak');
 });
 
 test('a completed swap fires onDeckSwapComplete and never onDeckSwapCancelled', () => {

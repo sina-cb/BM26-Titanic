@@ -22,6 +22,8 @@ import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { fetchOscConfig, patchOscConfig, getApiBaseAsync } from '@/utils/api';
 import { useOscStatus } from '@/hooks/useEngineState';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import { ConfigSubviewFrame } from '@/components/config_subview_frame';
 
 const ACCENT_AUTO = '#1b9e77';
 
@@ -214,7 +216,19 @@ function MasterToggle({ on, busy, onPress, label, subtitle }: {
   );
 }
 
+// OSC is a CONFIG sub-view (operator ruling 2026-08-15) — same route, same
+// screen, just reached from a card in CONFIG instead of a rail slot.
 export default function OscConfigScreen() {
+  return (
+    <PerformanceRouteGuard routeName="osc">
+      <ConfigSubviewFrame routeName="osc">
+        <OscConfigScreenContent />
+      </ConfigSubviewFrame>
+    </PerformanceRouteGuard>
+  );
+}
+
+function OscConfigScreenContent() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);

@@ -31,18 +31,18 @@ import { fileURLToPath } from 'node:url';
 import {
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { NoteEstimator } from '../../audio/signals/note_estimator.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // DerivedSignals requires the SHIPPED tracker options — these tests must
-// exercise the production config, not the module DEFAULTS.
-const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+// exercise the production config, not the module DEFAULTS. TRACKED config.yaml
+// only: the scene state overlays live-patched `derivedSignals` groups and
+// `bpmTracker`, so an operator retune would otherwise silently rescore these
+// note assertions. See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 const BPM_TRACKER = buildBpmTrackerOptions(AUDIO_CONFIG);
 const DERIVED_CONFIG = buildDerivedSignalsOptions(AUDIO_CONFIG);
 // The estimator constructor takes a COMPLETE config — no defaults are filled

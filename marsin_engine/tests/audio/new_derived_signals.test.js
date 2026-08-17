@@ -31,12 +31,12 @@ import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
 import {
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { ParamCenter } from '../../lib/param_center.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
 import { fillFrame } from '../../audio/synth/test_synths.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 import { BuildAnticipation } from '../../audio/signals/build_anticipation.js';
 import { TrackChange } from '../../audio/signals/track_change.js';
@@ -48,11 +48,11 @@ const SR = 44100, FFT = 1024, HOP = 512, HOP_MS = (HOP / SR) * 1000;
 
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // DerivedSignals requires the SHIPPED tracker options — this test must exercise
-// the production config, not the module DEFAULTS.
-const AUDIO_CONFIG = loadEffectiveAudioAnalysisConfig({
-  engineDir: ENGINE_DIR,
-  modelName: 'titanic',
-}).audioConfig;
+// the production config, not the module DEFAULTS. TRACKED config.yaml only: the
+// scene state overlays live-patched `derivedSignals` groups and `bpmTracker`,
+// which would rescore every signal threshold below.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 const BPM_TRACKER = buildBpmTrackerOptions(AUDIO_CONFIG);
 const DERIVED_CONFIG = buildDerivedSignalsOptions(AUDIO_CONFIG);
 

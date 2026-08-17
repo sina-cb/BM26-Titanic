@@ -1688,7 +1688,34 @@ function buildNoteColorWheel() {
     armNoteColorReset();
   };
   $('note-color-reset-all').onblur = () => disarmNoteColorReset();
+
+  // SCRIABIN (docs/59 §2, W9). One tap loads the twelve published Scriabin
+  // hues into this wheel — the mapping Live Touch's own FOLLOW NOTE uses — so
+  // the rig and the touch panel can be made to agree about what colour a note
+  // is. It goes through the ORDINARY setDerivedConfig door as a single 12-field
+  // patch, so it is validated, persisted and broadcast exactly like a hand
+  // turn of the hue slider; there is no preset-shaped side channel that could
+  // write a hue the editor would refuse.
+  //
+  // Not two-tap-armed like RESET ALL: this one is reversible by tapping RESET
+  // ALL (or by a single undo of each hue), whereas RESET ALL is the thing that
+  // wipes twelve hand-tuned values.
+  $('note-color-scriabin').onclick = () => {
+    send({ type: 'setDerivedConfig', group: 'noteColors', patch: { ...NOTE_COLOR_SCRIABIN } });
+  };
 }
+
+/**
+ * Scriabin's clavier-à-lumières table, HUES ONLY, in this wheel's key order.
+ * Kept byte-identical to `audio/config/derived_signals_config.js`'s
+ * `NOTE_COLOR_SCRIABIN` — the UI is a static bundle with no import of the
+ * engine's config module, so the two are pinned by
+ * `tests/audio/note_color_scriabin.test.js` instead of by a shared import.
+ */
+const NOTE_COLOR_SCRIABIN = {
+  c: 0.00, cSharp: 0.75, d: 0.14, dSharp: 0.05, e: 0.53, f: 0.99,
+  fSharp: 0.66, g: 0.08, gSharp: 0.79, a: 0.33, aSharp: 0.95, b: 0.60,
+};
 
 // Two-step RESET ALL — arm / disarm. `S.noteResetTimer` holds the lapse timer so
 // a re-arm never stacks two timers on the same button.

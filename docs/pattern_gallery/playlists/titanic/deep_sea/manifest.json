@@ -1,0 +1,1235 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "deep_sea",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/deep_sea.yaml",
+  "playlistDigest": "9fa291605a57cb9fb4ee9894f3a86d2e26b26e31915b586314e7308c4e82b845",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "08_ocean_liner",
+      "title": "Ocean Liner",
+      "goal": "Turn the ship into a nocturnal liner: deep palette water, warm cabin-light detail, and a calm crest moving through Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "water + porthole brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "water + porthole brightness"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "decisive porthole flare",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "decisive porthole flare"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "porthole count/texture",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "porthole count/texture"
+          }
+        },
+        {
+          "name": "sliderPortholeWhite",
+          "label": "Porthole White",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.12,
+        "sliderDetail": 0.89,
+        "sliderPortholeWhite": 0.87
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.12,
+        "sliderDetail": 0.89,
+        "sliderPortholeWhite": 0.87
+      },
+      "gif": "001_08_ocean_liner.gif",
+      "video": "001_08_ocean_liner.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1ea09ab70a943276dea0c9e86b354e59a3e2f68abd89374b4236b13224622165"
+    },
+    {
+      "index": 1,
+      "pattern": "11_bioluminescence",
+      "title": "Bioluminescence",
+      "goal": "A living underwater reef of branching phosphor filaments, restrained crest flashes, UV undertow, and a calm reef-emblem sign.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.27,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "whole-look brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "whole-look brightness"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "bioluminescent bloom",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "bioluminescent bloom"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.23,
+          "valueSource": "playlist saved value",
+          "description": "crest spread",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "crest spread"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "filament complexity",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "filament complexity"
+          }
+        },
+        {
+          "name": "sliderDensity",
+          "label": "Density",
+          "value": 0.39,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvGlow",
+          "label": "Uv Glow",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "UV undertow",
+          "audio": {
+            "slider": "sliderUvGlow",
+            "signal": "micHigh",
+            "min": 0.18,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "UV undertow"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteSpeed",
+          "label": "White Speed",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.27,
+        "sliderLevel": 0.71,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.23,
+        "sliderDetail": 0.64,
+        "sliderDensity": 0.39,
+        "sliderUvGlow": 0.89,
+        "sliderWhiteLevel": 0.89,
+        "sliderWhiteSpeed": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.27,
+        "sliderLevel": 0.71,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.23,
+        "sliderDetail": 0.64,
+        "sliderDensity": 0.39,
+        "sliderUvGlow": 0.89,
+        "sliderWhiteLevel": 0.89,
+        "sliderWhiteSpeed": 0.48
+      },
+      "gif": "002_11_bioluminescence.gif",
+      "video": "002_11_bioluminescence.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5fb707cd58033cdc50c8bb60fa9207abd8fca832aa36bd677d92027c8e4f9f1e"
+    },
+    {
+      "index": 2,
+      "pattern": "16_ghost_tide_uv",
+      "title": "Ghost Tide Uv",
+      "goal": "A sparse oblique foam front traveling through mist and a separately phased UV undertow.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.15,
+            "max": 1,
+            "curve": "ease",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.31,
+          "valueSource": "playlist saved value",
+          "description": "foam / white crest pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "foam / white crest pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "true surge excursion, independent of foam width",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.1,
+            "max": 0.95,
+            "curve": "ease",
+            "note": "true surge excursion, independent of foam width"
+          }
+        },
+        {
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvLevel",
+          "label": "Uv Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "UV undertow glow (highs / sparkle band)",
+          "audio": {
+            "slider": "sliderUvLevel",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "UV undertow glow (highs / sparkle band)"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKick": 0.31,
+        "sliderRadius": 0.5,
+        "sliderTideWidth": 0.5,
+        "sliderWhiteLevel": 0.6,
+        "sliderUvLevel": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKick": 0.31,
+        "sliderRadius": 0.5,
+        "sliderTideWidth": 0.5,
+        "sliderWhiteLevel": 0.6,
+        "sliderUvLevel": 0.45
+      },
+      "gif": "003_16_ghost_tide_uv.gif",
+      "video": "003_16_ghost_tide_uv.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "7fb9d1a99378b5ec5e7bc309c1b2cc4de475c47c7ecda61fed9ec31eb616c73b"
+    },
+    {
+      "index": 3,
+      "pattern": "21_pelagic_manta_rays",
+      "title": "Pelagic Manta Rays",
+      "goal": "Two coherent manta silhouettes and wakes cross sparse dark water; localized bodies remain readable as creatures.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.79,
+          "valueSource": "playlist saved value",
+          "description": "bass reveals the rays",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.28,
+            "max": 1,
+            "curve": "linear",
+            "note": "bass reveals the rays"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "beat foam/ocean punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat foam/ocean punch"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "builds widen coherent wings",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.32,
+            "max": 0.92,
+            "curve": "linear",
+            "note": "builds widen coherent wings"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "highs articulate anatomy",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "highs articulate anatomy"
+          }
+        },
+        {
+          "name": "sliderWhiteFoam",
+          "label": "White Foam",
+          "value": 0.11,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvUndertow",
+          "label": "Uv Undertow",
+          "value": 0.71,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.91,
+        "sliderLevel": 0.79,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.3,
+        "sliderDetail": 0.71,
+        "sliderWhiteFoam": 0.11,
+        "sliderUvUndertow": 0.71
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.91,
+        "sliderLevel": 0.79,
+        "sliderKick": 0.17,
+        "sliderRadius": 0.3,
+        "sliderDetail": 0.71,
+        "sliderWhiteFoam": 0.11,
+        "sliderUvUndertow": 0.71
+      },
+      "gif": "004_21_pelagic_manta_rays.gif",
+      "video": "004_21_pelagic_manta_rays.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "55c71296cfd403f57cc6600c68c6fff37fcb94d12d5a461931823a2387db3355"
+    },
+    {
+      "index": 4,
+      "pattern": "22_abyssal_sway_garden",
+      "title": "Abyssal Sway Garden",
+      "goal": "A distributed abyssal botanical garden: rooted fronds sway, branch, and carry phosphorescent tips through negative space.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.22,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "tip-flash / brightness pop (beat)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "tip-flash / brightness pop (beat)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "sway amplitude / travel (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "sway amplitude / travel (build)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "tip sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "tip sparkle"
+          }
+        },
+        {
+          "name": "sliderFrondDensity",
+          "label": "Frond Density",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderTipGlow",
+          "label": "Tip Glow",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Tip Glow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBaseDarkness",
+          "label": "Base Darkness",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.24,
+        "sliderLevel": 0.22,
+        "sliderKick": 0,
+        "sliderRadius": 1,
+        "sliderDetail": 0.86,
+        "sliderFrondDensity": 0.68,
+        "sliderTipGlow": 0.34,
+        "sliderBaseDarkness": 0.68
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.24,
+        "sliderLevel": 0.22,
+        "sliderKick": 0,
+        "sliderRadius": 1,
+        "sliderDetail": 0.86,
+        "sliderFrondDensity": 0.68,
+        "sliderTipGlow": 0.34,
+        "sliderBaseDarkness": 0.68
+      },
+      "gif": "005_22_abyssal_sway_garden.gif",
+      "video": "005_22_abyssal_sway_garden.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8f3e834a7879c44cec71c25cad26ab3d09475e7f226d5621d4106bad1ad8cfc1"
+    },
+    {
+      "index": 5,
+      "pattern": "32_caustic_shimmer",
+      "title": "Caustic Shimmer",
+      "goal": "Calm refracted pool-light cells: broad lenses and cell walls shimmer without behaving like Moon River.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY: hats/highs create visible white scintillation",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0.05,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY: hats/highs create visible white scintillation"
+          }
+        },
+        {
+          "name": "sliderRipple",
+          "label": "Ripple",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "kick: expanding travelling ring highlight",
+          "audio": {
+            "slider": "sliderRipple",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "kick: expanding travelling ring highlight"
+          }
+        },
+        {
+          "name": "sliderDepth",
+          "label": "Depth",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderShimmer": 0.75,
+        "sliderRipple": 0,
+        "sliderDepth": 0.6,
+        "sliderBase": 0.12
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderShimmer": 0.75,
+        "sliderRipple": 0,
+        "sliderDepth": 0.6,
+        "sliderBase": 0.12
+      },
+      "gif": "006_32_caustic_shimmer.gif",
+      "video": "006_32_caustic_shimmer.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "82a1c1c412eacba49c892975a7ce431b1bc71ae6fe8c25137d12c3aeb9c08c48"
+    },
+    {
+      "index": 6,
+      "pattern": "39_tide_riser",
+      "title": "Tide Riser",
+      "goal": "A saved Tide Riser look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderRise",
+          "label": "Rise",
+          "value": 0.25,
+          "valueSource": "code default",
+          "description": "PRIMARY build/riser: flux climbs the tide height + body brightness",
+          "audio": {
+            "slider": "sliderRise",
+            "signal": "micFlux",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "PRIMARY build/riser: flux climbs the tide height + body brightness"
+          }
+        },
+        {
+          "name": "sliderSpray",
+          "label": "Spray",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick: flings the warm crest spray up above the waterline",
+          "audio": {
+            "slider": "sliderSpray",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick: flings the warm crest spray up above the waterline"
+          }
+        },
+        {
+          "name": "sliderFoam",
+          "label": "Foam",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Fine highlight texture.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderRise": 0.25,
+        "sliderSpray": 0,
+        "sliderFoam": 0.5,
+        "sliderBase": 0.06
+      },
+      "gif": "007_39_tide_riser.gif",
+      "video": "007_39_tide_riser.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f5f54bef17c76724a6aca1bbcf4636b0d0bc254480d458d48e2c0cea7888e165"
+    },
+    {
+      "index": 7,
+      "pattern": "41_reaction_diffusion",
+      "title": "Reaction Diffusion",
+      "goal": "Stateful Gray–Scott chemistry blooms and crawls: substrate, reaction fronts, nuclei, and contour tracing evolve rather than translate.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness: bass lifts the teal floor + reaction-front gain",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass lifts the teal floor + reaction-front gain"
+          }
+        },
+        {
+          "name": "sliderFeed",
+          "label": "Feed",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "mids reshape the chemistry (spots <-> stripes geometry)",
+          "audio": {
+            "slider": "sliderFeed",
+            "signal": "micMid",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "mids reshape the chemistry (spots <-> stripes geometry)"
+          }
+        },
+        {
+          "name": "sliderSeed",
+          "label": "Seed",
+          "value": 0.05,
+          "valueSource": "playlist saved value",
+          "description": "kick: drops a fresh catalyst nucleus into the buffer",
+          "audio": {
+            "slider": "sliderSeed",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick: drops a fresh catalyst nucleus into the buffer"
+          }
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.15,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.85,
+        "sliderLevel": 0.45,
+        "sliderFeed": 0.5,
+        "sliderSeed": 0.05,
+        "sliderBase": 0.15
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.85,
+        "sliderLevel": 0.45,
+        "sliderFeed": 0.5,
+        "sliderSeed": 0.05,
+        "sliderBase": 0.15
+      },
+      "gif": "008_41_reaction_diffusion.gif",
+      "video": "008_41_reaction_diffusion.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "32d5ec0f29733fbaeb0077188ea009b118fa4109cd83c573703eadebcb758178"
+    },
+    {
+      "index": 8,
+      "pattern": "44_biolume_swell",
+      "title": "Biolume Swell",
+      "goal": "A broad mirrored bioluminescent crest rises through the ship with sparse foam points and a coherent swelling Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.33,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderSwell",
+          "label": "Swell",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness + swell amplitude",
+          "audio": {
+            "slider": "sliderSwell",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "PRIMARY brightness + swell amplitude"
+          }
+        },
+        {
+          "name": "sliderSparkle",
+          "label": "Sparkle",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "plankton crest glints/detail",
+          "audio": {
+            "slider": "sliderSparkle",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.8,
+            "curve": "pow2",
+            "note": "plankton crest glints/detail"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.01,
+          "valueSource": "playlist saved value",
+          "description": "spatial crest bloom + Jewelry pearl punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.68,
+            "curve": "ease",
+            "note": "spatial crest bloom + Jewelry pearl punch"
+          }
+        },
+        {
+          "name": "sliderUvGlow",
+          "label": "Uv Glow",
+          "value": 0.81,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.16,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.33,
+        "sliderSwell": 0.45,
+        "sliderSparkle": 0.75,
+        "sliderKick": 0.01,
+        "sliderUvGlow": 0.81,
+        "sliderBase": 0.16
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.33,
+        "sliderSwell": 0.45,
+        "sliderSparkle": 0.75,
+        "sliderKick": 0.01,
+        "sliderUvGlow": 0.81,
+        "sliderBase": 0.16
+      },
+      "gif": "009_44_biolume_swell.gif",
+      "video": "009_44_biolume_swell.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "396478c78f7562179e6ea465955138562b7f7c5b8781c0d9f420d8fe424b1b92"
+    },
+    {
+      "index": 9,
+      "pattern": "45_manta_drift",
+      "title": "Manta Drift",
+      "goal": "A broad lit ocean stage supports a slow variable school of soft manta fields, caustic color bands, and wing-tip foam.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderSwell",
+          "label": "Swell",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness + manta count + glide speed",
+          "audio": {
+            "slider": "sliderSwell",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "PRIMARY brightness + manta count + glide speed"
+          }
+        },
+        {
+          "name": "sliderFoam",
+          "label": "Foam",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "2nd dim: wing-tip foam sparkle/detail",
+          "audio": {
+            "slider": "sliderFoam",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.85,
+            "curve": "pow2",
+            "note": "2nd dim: wing-tip foam sparkle/detail"
+          }
+        },
+        {
+          "name": "sliderSpan",
+          "label": "Span",
+          "value": 0.76,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderDepth",
+          "label": "Depth",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderSwell": 0.75,
+        "sliderFoam": 0.12,
+        "sliderSpan": 0.76,
+        "sliderDepth": 0.6
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderSwell": 0.75,
+        "sliderFoam": 0.12,
+        "sliderSpan": 0.76,
+        "sliderDepth": 0.6
+      },
+      "gif": "010_45_manta_drift.gif",
+      "video": "010_45_manta_drift.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "af0bc0a7df8c0c822f50020e319229ccb95a113a9929c2fc4e3c9a46ee244659"
+    },
+    {
+      "index": 10,
+      "pattern": "46_abyssal_fronds",
+      "title": "Abyssal Fronds",
+      "goal": "Tall rooted abyssal organisms breathe upward, fork into crowns, and finish in slow phosphorescent tips.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.25,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.82,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY: bass raises the garden body",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY: bass raises the garden body"
+          }
+        },
+        {
+          "name": "sliderGlints",
+          "label": "Glints",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "highs: tip phosphor and Jewelry-white sparkle",
+          "audio": {
+            "slider": "sliderGlints",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "highs: tip phosphor and Jewelry-white sparkle"
+          }
+        },
+        {
+          "name": "sliderBreathRate",
+          "label": "Breath Rate",
+          "value": 0.32,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBreathDepth",
+          "label": "Breath Depth",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderFrondDensity",
+          "label": "Frond Density",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderBaseGlow",
+          "label": "Base Glow",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.25,
+        "sliderLevel": 0.82,
+        "sliderGlints": 0.88,
+        "sliderBreathRate": 0.32,
+        "sliderBreathDepth": 0.92,
+        "sliderFrondDensity": 0.85,
+        "sliderBaseGlow": 0.86
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.25,
+        "sliderLevel": 0.82,
+        "sliderGlints": 0.88,
+        "sliderBreathRate": 0.32,
+        "sliderBreathDepth": 0.92,
+        "sliderFrondDensity": 0.85,
+        "sliderBaseGlow": 0.86
+      },
+      "gif": "011_46_abyssal_fronds.gif",
+      "video": "011_46_abyssal_fronds.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b285caf81a30b73fdf66393bed01635ccac15a0cc1a9d28f03bca5adae647c2f"
+    },
+    {
+      "index": 11,
+      "pattern": "57_ink_diffuse",
+      "title": "Ink Diffuse",
+      "goal": "Three independent analytic XYZ dye clouds wander, expand, and soften through a subordinate dark-water floor.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderInk",
+          "label": "Ink",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "DETAIL: highs release vivid fresh dye",
+          "audio": {
+            "slider": "sliderInk",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "DETAIL: highs release vivid fresh dye"
+          }
+        },
+        {
+          "name": "sliderFlow",
+          "label": "Flow",
+          "value": 0.81,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY: lows stir and lift the water",
+          "audio": {
+            "slider": "sliderFlow",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "ease",
+            "note": "PRIMARY: lows stir and lift the water"
+          }
+        },
+        {
+          "name": "sliderDiffuse",
+          "label": "Diffuse",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "MOTION: builds widen and soften the clouds",
+          "audio": {
+            "slider": "sliderDiffuse",
+            "signal": "micFlux",
+            "min": 0.15,
+            "max": 0.9,
+            "curve": "ease",
+            "note": "MOTION: builds widen and soften the clouds"
+          }
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.09,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.85,
+        "sliderInk": 0.72,
+        "sliderFlow": 0.81,
+        "sliderDiffuse": 0.92,
+        "sliderBase": 0.09
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.85,
+        "sliderInk": 0.72,
+        "sliderFlow": 0.81,
+        "sliderDiffuse": 0.92,
+        "sliderBase": 0.09
+      },
+      "gif": "012_57_ink_diffuse.gif",
+      "video": "012_57_ink_diffuse.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "251d42b3b45edf9e8dd2801df5eb23069543543acf51c4d0de60d80290cd51dc"
+    }
+  ]
+}

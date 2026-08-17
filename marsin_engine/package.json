@@ -11,7 +11,7 @@
     "fire": "node engine.js --pattern test/fire --model test_bench",
     "bio": "node engine.js --pattern 11_bioluminescence --model test_bench",
     "golden": "node engine.js --pattern 00_golden_hour_wash --model test_bench",
-    "test": "node --import ./tests/helpers/setup_config_guard.mjs --test \"tests/**/*.test.js\" \"tests/**/*.test.mjs\"",
+    "test": "node --import ./tests/helpers/setup_config_guard.mjs --test --test-concurrency=4 \"tests/**/*.test.js\" \"tests/**/*.test.mjs\"",
     "test:eval": "node --import ./tests/helpers/setup_config_guard.mjs --test \"tests/**/*.eval.mjs\"",
     "check:syntax": "node --check engine.js",
     "check:dry-run": "node engine.js --pattern test_const --model test_bench --dry-run",
@@ -24,11 +24,14 @@
     "check:fire": "node engine.js --pattern test/fire --model test_bench --dry-run"
   },
   "dependencies": {
+    "@intechstudio/grid-protocol": "^1.20260615.942",
     "ffmpeg-static": "^5.3.0",
     "fft.js": "^4.0.4",
     "js-yaml": "^4.1.1",
     "osc-min": "^2.1.2",
     "sacn": "^4.5.0",
+    "serialport": "^13.0.0",
+    "tslib": "^2.8.1",
     "ws": "^8.20.0"
   }
 }

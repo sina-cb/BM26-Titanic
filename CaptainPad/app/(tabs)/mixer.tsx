@@ -1,11 +1,22 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Palette } from '@/constants/theme';
-import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { opError, opWarn } from '@/utils/op_dialog';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { useFocusEffect } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+// docs/67 §5 (order 2: "when working with sliders on the mixer layers, disable
+// the master scroll — they conflict and are annoying"). The `_263` lock seam
+// is OPT-IN per scroll host: every drag-steered control on this screen is
+// already a lock-ACQUIRING `HorizontalFader` (or, inside COLORS, the hue
+// wheel), so this wave adds ZERO acquire sites — it only enlists the three
+// hosts those drags were fighting. Web is byte-identical: nothing acquires
+// there (the acquirers gate on `Platform.OS !== 'web'`), so `LockableScrollView`
+// passes the caller's own `scrollEnabled` — `undefined` included — straight
+// through.
+import { LockableScrollView } from '@/components/ui/lockable_scroll_view';
 import { RigGlobals } from '@/components/RigGlobals';
 import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
 import { mixerFocusMayActivate } from '@/utils/layer_settings';
@@ -15,10 +26,12 @@ import {
   fetchChannelBlends, fetchTransitions, activateLayerSetting,
   fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
-  type PlaylistData,
+  setDeckColorAutopilot, patchDeckColorAutopilot,
+  type PlaylistData, type DeckColorAutopilotConfig,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
-import { useActiveModel } from '@/hooks/useEngineState';
+import { useActiveModel, useColorAutopilotFrame } from '@/hooks/useEngineState';
+import { ColorsWindow } from '@/components/deck/colors_window';
 import { setMidiActiveContext, setMidiFocus, useIsMidiFocused } from '@/hooks/useMidiControl';
 import { MidiMapBadge, MidiMapPopover, useEntryMidiMappings, MIDI_VIOLET } from '@/components/MidiMap';
 import { KnobPill } from '@/components/ui/knob_pill';
@@ -29,6 +42,22 @@ import { globalKnobNumber } from '@/utils/midi/knob_page';
 import { CPCControls } from '@/components/CPCControls';
 import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
+import {
+  MIXER_BOUNDED_SCROLL_AREA,
+  MIXER_CHANNEL_CARD_TRACK,
+  MIXER_LANDSCAPE_PARAMS_PANEL_COLLAPSED,
+  MIXER_LANDSCAPE_PARAMS_PANEL_EMPTY,
+  MIXER_LANDSCAPE_PLAYLIST_PANEL_EXPANDED,
+  MIXER_PORTRAIT_PARAMS_PANEL,
+  MIXER_PORTRAIT_PARAMS_PANEL_COLLAPSED,
+  MIXER_PORTRAIT_PLAYLIST_PANEL,
+  MIXER_TALL_PORTRAIT_PARAMS_PANEL,
+  MIXER_TALL_PORTRAIT_PLAYLIST_PANEL,
+  isCompactMixerPortrait,
+  mixerChannelContentLayout,
+  mixerChannelRowScrollEnabled,
+  mixerLandscapeMediaBandSlot,
+} from '@/components/mixer_scroll_layout';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
 // (MiniFader is no longer used for the LOCAL PARAMS rows — they render the
 // shared ParamRow, which owns the header line the MiniFader used to draw
@@ -41,8 +70,12 @@ import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { ViewSelectionPicker } from '@/components/ViewSelectionPicker';
 import { type NamedView } from '@/components/view_selection_picker_logic';
 import { SnapshotBar } from '@/components/SnapshotBar';
-import { PerformanceModeControl } from '@/components/PerformanceModeControl';
-import { usePerformanceMode, usePerfLock } from '@/hooks/usePerformanceMode';
+import { usePerfLock, usePerformanceMode } from '@/hooks/usePerformanceMode';
+import { PixelViewBand } from '@/components/mixer/pixel_view_band';
+import {
+  BAND_HEADER_HEIGHT,
+} from '@/components/mixer/pixel_view_band_logic';
+import { mixerChannelPerformanceState } from '@/components/mixer/mixer_channel_performance';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
@@ -53,6 +86,18 @@ import {
 } from '@/utils/groupsSoloApi';
 import { postBump } from '@/utils/bumpApi';
 import { GroupRailBody, MixGroupHeader, tintFromHex } from '@/components/GroupRail';
+import { useMixerWorkspace } from '@/hooks/use_mixer_workspace';
+import { MixerWorkspaceBar, type MixerBarChannel } from '@/components/mixer/mixer_workspace_bar';
+import {
+  MASTER_BAR_SEAT_LANDSCAPE,
+  MASTER_BAR_SEAT_PORTRAIT,
+} from '@/components/mixer/mixer_workspace_bar_logic';
+import {
+  effectiveCitizenShown,
+  isSectionShown,
+  sectionSurfaceId,
+  visibleChannels as mixerVisibleChannels,
+} from '@/components/mixer/mixer_workspace_layout';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
@@ -75,6 +120,13 @@ import { paramDisplayName } from '@/components/param_row_layout';
 // floor. An 8pt hitSlop on every edge expands the *interactive* area to
 // 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
 const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
+// Mixer workspace (docs/64 §2.5, D10): a hidden channel/group stays MOUNTED
+// but is suppressed with `display:'none'` — never unmounted (a mid-rename
+// unmount would eat operator input) and never an engine call (hiding is
+// view-only). Shared by ChannelStrip's own root style array and by the
+// group-container wrappers in the strip render plan below.
+const MIXER_HIDDEN_DISPLAY = { display: 'none' as const };
 
 // (Per-channel color-accent palette removed 2026-06-22 — color coding was
 // dropped from the channel strip at operator request.)
@@ -406,7 +458,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange, hidden, workspaceLayout, onOpenSection, onCloseSection }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -416,6 +468,14 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   // the side-by-side params column. Landscape keeps the side-by-side split.
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const isPortrait = winWidth < winHeight;
+  const [channelCardHeight, setChannelCardHeight] = useState(0);
+  const isCompactPortrait = isCompactMixerPortrait(isPortrait, channelCardHeight);
+  const handleChannelCardLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextHeight = event.nativeEvent.layout.height;
+    setChannelCardHeight((previousHeight) => (
+      Math.abs(previousHeight - nextHeight) > 1 ? nextHeight : previousHeight
+    ));
+  }, []);
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
@@ -424,6 +484,24 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   // controls (fader, blend mode, lock, pin, mute/solo/bump, params) stay
   // fully live — only the structural affordances grey.
   const perfLocked = usePerfLock();
+  // ── THE PERFORMANCE OVERLAY (docs/58 §2.3) ────────────────────────────
+  // Read RAW (`usePerformanceMode().active`), NOT `usePerfLock()` — the same
+  // call the deck workspace records at deck_workspace.tsx:227-233: the lock's
+  // captain-session bypass is about EDIT RIGHTS, while "performance mode hides
+  // the params and grows the viz" is about SCREEN COMPOSITION, which should
+  // mean the mode, for every session, symmetric on exit. Unresolved state
+  // defaults to inactive (everything shown) — hiding on unknown state would be
+  // a fallback behavior (codex P0).
+  //
+  // Everything below that reads it is DERIVED IN RENDER. Nothing is written:
+  // no layout state, no preference, no AsyncStorage. Leaving performance mode
+  // therefore restores the operator's own band collapse/view choices exactly
+  // as he left them, because they were never touched.
+  const perfActive = usePerformanceMode().active;
+  const channelPerformance = mixerChannelPerformanceState(channel, {
+    performanceModeActive: perfActive,
+    performanceAuthorityLocked: perfLocked,
+  });
   // The MIDI-focused mixer layer (module state shared with the APC track
   // buttons + the MFT). This strip is focused when its 0-based layer index
   // matches. Tapping FOCUS writes the same module state, so touch and the
@@ -436,6 +514,48 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   // two strips whose focus actually flips on a focus change — with the numeric
   // selector, every strip re-rendered on any focus change (render churn).
   const isFocused = useIsMidiFocused(layerIndex);
+
+  // ── Section hiding (docs/64 §3.1, W4) ───────────────────────────────────
+  // Persisted, per-channel truth for the two hideable regions — LOCAL PARAMS
+  // and the 2D pixel band. Read straight off the workspace store the parent
+  // owns (`workspaceLayout`); this component never re-derives the fact, it
+  // only asks `isSectionShown`. Perf mode's params suppression is a SEPARATE
+  // derived overlay handled structurally below (the whole params column is
+  // replaced while `perfActive`, exactly as shipped by `_243`) — consulting
+  // the PERSISTED value here (not `effectiveSectionShown`) is deliberate: the
+  // ⋮ menu row and the header chevron must always act on, and report, the
+  // operator's actual stored preference, never the perf-suppressed one (so a
+  // toggle made mid-show reads correctly the moment perf mode ends).
+  const paramsShown = isSectionShown(workspaceLayout, channel.id, 'params');
+  const pixelsShown = isSectionShown(workspaceLayout, channel.id, 'pixels');
+  const toggleParamsSection = useCallback(() => {
+    const id = sectionSurfaceId(channel.id, 'params');
+    if (paramsShown) onCloseSection(id); else onOpenSection(id);
+  }, [channel.id, paramsShown, onCloseSection, onOpenSection]);
+  const togglePixelsSection = useCallback(() => {
+    const id = sectionSurfaceId(channel.id, 'pixels');
+    if (pixelsShown) onCloseSection(id); else onOpenSection(id);
+  }, [channel.id, pixelsShown, onCloseSection, onOpenSection]);
+
+  // What the media column (LOCAL PARAMS, and now the relocated PIXELS band
+  // in landscape edit) is actually rendering — sliders and/or the band's
+  // picture ('full'), just the 28 px micro-header stub(s) ('stub'), or
+  // nothing at all ('empty', perf only). Derived by the pure layout module
+  // so the sizing rule and the render branches below can never drift apart;
+  // the panel styles keyed off it are what finally give the operator's freed
+  // space to the pattern list (operator ask 2026-08-16, extended by docs/69
+  // W3 — see `mixer_scroll_layout.ts` for the full account, including why
+  // portrait gains ROWS and landscape gains WIDTH, and why LANDSCAPE EDIT
+  // now asks "is either occupant showing?" instead of "is params showing?").
+  const contentLayout = mixerChannelContentLayout({
+    performanceModeActive: perfActive,
+    isPortrait,
+    paramsShown,
+    pixelsShown,
+  });
+  const mediaColumnMode = contentLayout.mediaColumnMode;
+  const mediaColumnCollapsed = mediaColumnMode !== 'full';
+
   // Overflow (⋮) menu for the secondary channel-control actions (pin fader,
   // delete). The 2026-06-22 toolbar cleanup keeps only lock, the reorder
   // chevrons, the blend-mode dropdown, and this ⋮ button inline on ONE
@@ -443,6 +563,12 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   // (icon + text). Same modalOverlay/modalContent pattern as the
   // blend/transition/view pickers for visual consistency.
   const [showActionsMenu, setShowActionsMenu] = useState(false);
+  useEffect(() => {
+    if (!channelPerformance.managementVisible) {
+      if (showActionsMenu) setShowActionsMenu(false);
+      if (showBlendPicker) setShowBlendPicker(false);
+    }
+  }, [channelPerformance.managementVisible, showActionsMenu, showBlendPicker]);
   // Transition duration is stored as ms-integers (matching the deck's
   // TRANSITION_DURATION_PRESETS_MS) so the wheel's centered-row preset
   // equality lights up consistently. Engine wire format is seconds
@@ -469,7 +595,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   // name min (~150pt).
   const [headerWidth, setHeaderWidth] = useState(0);
   const headerTwoRow = headerWidth > 0 && headerWidth < 340;
-  const locked = !!channel.locked;
+  const locked = channelPerformance.effectiveLocked;
   // Fader-lock (slot 5, independent of `locked`): freezes the fader
   // against scripted transitions and client-side solo. Distinct icon
   // + colour so operators can tell the two locks apart at a glance:
@@ -531,7 +657,8 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
     // the slim column width; each member renders as ONE tiny vertical cell:
     //   number (top) → a small level indicator (mini fill bar + %) → stacked
     //   M / S toggles.
-    // We deliberately DON'T apply cardStyle (which would force a ≥320pt column).
+    // We deliberately do not apply the full-card track (which is exactly
+    // 320pt wide).
     // The full level fader / viz / hue / playlist / params chrome is dropped —
     // collapsed = "left alone, save space". Tapping the group header expands the
     // whole group back. Touch targets stay ≥44pt via thinVToggle minHeight +
@@ -542,6 +669,12 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
         style={[
           styles.channelCellV,
           dimmedBySolo ? { opacity: 0.45 } : null,
+          // docs/64 §2.5/D10 (W3b): a workspace-hidden channel stays MOUNTED
+          // (a mid-rename unmount would eat operator input) but suppressed —
+          // display-only, no engine call, applies in the collapsed-cell
+          // branch too so a hidden member of a collapsed group doesn't leak
+          // through as a visible thin cell.
+          hidden ? MIXER_HIDDEN_DISPLAY : null,
         ]}
       >
         <View style={[styles.channelBadge, styles.channelBadgeThin]}>
@@ -596,11 +729,10 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
       // engine gates its contribution to 0. We mirror that visually by
       // dimming the strip — we NEVER mutate its enabled/fader.
       dimmedBySolo ? { opacity: 0.45 } : null,
-      // Responsive width override (QA round1 #7): in landscape the parent
-      // hands each strip a flex width so the cards fill the viewport instead
-      // of hugging the left edge with a grey void to the right.
-      cardStyle,
-    ]}>
+      // docs/64 §2.5/D10 (W3b): workspace-hidden — MOUNTED, display-suppressed.
+      hidden ? MIXER_HIDDEN_DISPLAY : null,
+    ]}
+    onLayout={handleChannelCardLayout}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
       {/* Header — title bar buttons share one geometry (28×28 squircle,
@@ -694,6 +826,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
             and duplicate were removed at operator request; pin-fader and delete
             live in the ⋮ menu as LABELED rows. The per-button 28pt squircles +
             their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
+        {channelPerformance.managementVisible ? (
         <View style={{ flexDirection: 'row', flexShrink: 0, columnGap: 4, alignItems: 'center', justifyContent: headerTwoRow ? 'flex-start' : 'flex-end' }}>
           {/* Lock (playlist/pattern lock) — amber when engaged. Gated under
               the soft PLAN lock: toggling it changes save/edit behaviour. */}
@@ -772,6 +905,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.secondary }}>⋮</Text>
           </TouchableOpacity>
         </View>
+        ) : null}
       </View>
 
       {/* ── Channel-actions overflow menu ────────────────────────────────
@@ -781,7 +915,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
           0.7 backdrop) so it reads the same as the blend/transition/view
           pickers and never clips. Each row is ≥44pt tall and preserves the
           exact handler + gating of the original icon button. */}
-      <Modal transparent visible={showActionsMenu} animationType="fade" onRequestClose={() => setShowActionsMenu(false)}>
+      <Modal transparent visible={channelPerformance.managementVisible && showActionsMenu} animationType="fade" onRequestClose={() => setShowActionsMenu(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowActionsMenu(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.modalContent}>
@@ -809,6 +943,34 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
                   <Text style={styles.actionsMenuLabel}>{faderLocked ? 'Unpin fader' : 'Pin fader'}</Text>
                 </TouchableOpacity>
               )}
+              {/* docs/64 §3.1 (W4): mirror rows for the two per-channel
+                  hideable sections — the SAME store action the header
+                  chevrons dispatch, so both affordances always agree. Lives
+                  here so a section is always reachable even when its own
+                  chevron isn't on screen (e.g. PIXELS collapsed to its 28px
+                  stub on a very short card). View-only — no engine call, no
+                  soft-lock gate (docs/64 §2.5). */}
+              <View style={styles.actionsMenuDivider} />
+              <TouchableOpacity
+                style={styles.actionsMenuRow}
+                onPress={() => { toggleParamsSection(); setShowActionsMenu(false); }}
+                accessibilityLabel={paramsShown ? 'Hide local params' : 'Show local params'}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: paramsShown }}
+              >
+                <IconSymbol name={paramsShown ? 'eye.slash' : 'eye'} size={16} color={C.secondary} />
+                <Text style={styles.actionsMenuLabel}>{paramsShown ? 'Hide params' : 'Show params'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionsMenuRow}
+                onPress={() => { togglePixelsSection(); setShowActionsMenu(false); }}
+                accessibilityLabel={pixelsShown ? 'Hide pixel view' : 'Show pixel view'}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: pixelsShown }}
+              >
+                <IconSymbol name={pixelsShown ? 'eye.slash' : 'eye'} size={16} color={C.secondary} />
+                <Text style={styles.actionsMenuLabel}>{pixelsShown ? 'Hide pixels' : 'Show pixels'}</Text>
+              </TouchableOpacity>
               {/* Round8 #5: separate the destructive Delete from Pin fader with
                   a divider + ≥16px gap so it can't be hit by a mis-tap meant for
                   Pin (they were stacked 4px apart). The engine forbids deleting
@@ -862,12 +1024,53 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
           request 2026-06-29): every layer's vis stays active so the operator
           can read each pattern and tune live, matching the (perfect) master
           strip. The fader's effect on the mix is shown by the master/preDimmer
-          preview + the fader value — not by dimming this strip. (Replaces the
-          Round8 effective-output greying, which dimmed/greyed this strip with
-          the fader and read as "the channel vis is affected by the fader".) */}
-      <View style={{ marginBottom: 6 }}>
-        <ChannelVizStrip vizKey={channel.id} height={14} />
-      </View>
+          preview + the fader value — not by dimming this strip.
+
+          docs/64 §3.5 (D4, W4): this used to render UNCONDITIONALLY,
+          alongside the full 2D band below — M4's "duplicated surfaces". It
+          is now the collapsed band's honest residue, not a permanent
+          duplicate: it renders ONLY while the PIXELS section is hidden. The
+          buffer/subscription are untouched either way — this is a render
+          gate only. */}
+      {!pixelsShown ? (
+        <View style={{ marginBottom: 6 }}>
+          <ChannelVizStrip vizKey={channel.id} height={14} />
+        </View>
+      ) : null}
+
+      {/* ── The 2D ship, for THIS channel (docs/58 §2.2, docs/64 §3.1) ──
+          The simulation's own pixel map, lit by this channel's live vis
+          buffer: which pattern this layer is painting, and WHERE on the
+          Titanic it lands. The header (title + ▾/▸ chevron) always renders —
+          it IS the 28px stub docs/53 §3.1 requires when the section is
+          hidden; only the picture stage is gated by `pixelsShown`. The
+          chevron and the ⋮ menu's "Show/Hide pixels" row dispatch the SAME
+          `sec/<id>/pixels` workspace action, so they always agree.
+
+          In PERFORMANCE MODE this band is suppressed here and reappears
+          DOMINANT in the vacated LOCAL PARAMS column below — never two
+          canvases per channel, and never a band that grows by pushing the
+          playlist and the MUTE/SOLO row off a fixed-height card (measured,
+          report _243).
+
+          docs/69 W3 (order 3): LANDSCAPE EDIT no longer renders the band
+          HERE at all — it moved into the media column below, above LOCAL
+          PARAMS (the `channelBody` JSX further down), because a card-width
+          block in this vertical stack was the whole reason the pattern list
+          had 0-56 pt to work with (`_280`/`_285`). PORTRAIT EDIT is
+          untouched: a portrait card has no side-by-side column to move it
+          into (docs/64 §3.7 already special-cases portrait perf the same
+          way), so it keeps this exact position. */}
+      {contentLayout.showPortraitPixelBand ? (
+        <View style={{ marginBottom: 6 }}>
+          <PixelViewBand
+            visKey={channel.id}
+            placement="channel"
+            sectionOpen={pixelsShown}
+            onToggleSection={togglePixelsSection}
+          />
+        </View>
+      ) : null}
 
       {/* Level Fader. `fader` is null-coalesced to 0 for display ONLY —
           a broadcast that omits it shows an empty fader rather than NaN%
@@ -955,17 +1158,64 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
         </View>
       )}
 
+      {/* docs/64 §3.7 (W5): PORTRAIT PERFORMANCE MODE — a ~470pt portrait
+          card has no room for the landscape side-by-side split (§3.4), so
+          the dominant band renders full-card-width, aspect-fit, ABOVE the
+          body instead of filling the vacated params column. Gated on
+          `pixelsShown` exactly like the landscape dominant band below (the
+          top-of-card thin strip already carries the pixels-hidden residue,
+          §3.5 D4) — the two never both render. */}
       <View style={[styles.channelBody, isPortrait && styles.channelBodyPortrait]}>
         {/* Left column = the playlist (this IS the pattern list — "1 list to
             rule them all"). Wider than the params column so long names fit.
             In PORTRAIT this stacks ABOVE the params and spans the full strip
             width so track names get the room the squeezed side-by-side layout
             denied them (QA round1 #2). */}
-        <View style={[styles.patternListPanel, isPortrait && styles.patternListPanelPortrait]}>
+        <View style={[
+          styles.patternListPanel,
+          // PERFORMANCE MODE: the body flips to 45/55 — the playlist keeps
+          // enough width for its entry names, and the pixel view beside it
+          // takes the larger half. "Viz more dominantly WITH PATTERNS".
+          isPortrait && styles.patternListPanelPortrait,
+          // W0 fix (docs/64 §1 M3 / §3.7): portrait ALWAYS uses a bounded
+          // flex chain now — never the old unshrinkable minHeight floor —
+          // so the body can never overflow its allotted box. Compact vs
+          // tall is only a WEIGHT tier (both bounded); see
+          // mixer_scroll_layout.ts.
+          isPortrait && (isCompactPortrait
+            ? styles.patternListPanelCompactPortrait
+            : styles.patternListPanelTallPortrait),
+          // The operator's freed space, claimed (2026-08-16). LANDSCAPE only:
+          // the media column beside this one has stopped claiming its 40 %,
+          // so the list takes the row's whole remainder instead of leaving a
+          // dead gutter. LAST in the array on purpose — it must beat both the
+          // base 60 % and perf's 45 % width above.
+          //
+          // PORTRAIT deliberately needs nothing here: params sits BELOW the
+          // list there, and the collapsed panel's dropped flex weight already
+          // leaves this panel as the body's only grower, so the freed HEIGHT
+          // (and with it the extra pattern rows) arrives on its own.
+          //
+          // docs/69 W3: reads the unified `mediaColumnMode` now — in
+          // LANDSCAPE EDIT the column also holds the relocated PIXELS band,
+          // so it only collapses (and gives its width away) when BOTH
+          // occupants are hidden, not whenever params alone is hidden. Perf
+          // resolves through the very same variable (delegated, byte-
+          // identical to `_279` — see `mixerMediaColumnMode`).
+          !isPortrait && mediaColumnCollapsed && MIXER_LANDSCAPE_PLAYLIST_PANEL_EXPANDED,
+        ]}>
           <PlaylistPanel
             channelId={channel.id}
             channelLabel={isDeck ? 'DECK MAIN' : `CH ${index}`}
             compact
+            // docs/69 W3 R1 (operator-authorized 2026-08-16, D5 default ON):
+            // the mixer mount ONLY — floors each row at the docs/66 44pt
+            // minimum instead of the ~57pt content-sized row, so more
+            // pattern rows are visible per card. Scoped by prop all the way
+            // down through `playlist_row_sizing.ts`; neither
+            // `DeckOverlayStack.tsx` nor `split_playlist_panes.tsx` passes
+            // this, so both deck mounts stay pixel-identical.
+            compactRows
             locked={locked}
             initialAssignment={channel.playlist || null}
             initialPlaylist={initialPlaylist || null}
@@ -986,26 +1236,158 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
             2026-05-26: bare list felt visually merged with the strip
             chrome). The card also makes the "modulation active" green
             ring on individual rows pop against a neutral container. */}
-        <View style={[styles.paramsPanel, isPortrait && styles.paramsPanelPortrait]}>
-          <ScrollView nestedScrollEnabled style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }}>
-            <View style={styles.localParamsCard}>
-              {/* numberOfLines + adjustsFontSizeToFit keep the header on one
-                  line on the narrower 2nd strip instead of clipping (QA
-                  round1 #22). */}
-              <Text
-                style={[styles.labelCaps, { marginBottom: 6, fontSize: 9, color: C.secondary }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-              >LOCAL PARAMS</Text>
-              {/* Row-0 globals (knob 1 SPEED, knob 2 HUE) are NOT re-legended
-                  here — their canonical UI elements wear the KNOB badges
-                  directly (SPEED on the GLOBALS-row fader, HUE on this focused
-                  strip's own per-channel HUE trim above). The old read-only
-                  MftGlobalsRow duplicate was removed 2026-07 per operator
-                  request — no duplicate speed/hue UI. */}
-              <MixerLocalParams channel={channel} onControlChange={onControlChange} disabled={activationsLocked} />
-            </View>
-          </ScrollView>
+        {/* PERFORMANCE MODE (docs/58 §2.3, the mixer's twin of docs/55 D3):
+            the LOCAL PARAMS sliders fold away and THIS column becomes the
+            pixel view — "hide parameters during performance and show viz more
+            dominantly with patterns" (operator). The PLAYLIST column beside it
+            deliberately stays: pattern activation is live-performance work,
+            not structure (_228 — the engine 409s the structural routes, while
+            playlist activation, faders, mute/solo and bump all stay live).
+
+            Purely DERIVED from `perfActive` in render: nothing here writes
+            layout or preference state, so leaving the mode brings the sliders
+            back byte-identically, with every band folded exactly as it was. */}
+        {/* docs/64 §3.7 (W5): this whole column is skipped entirely in
+            PORTRAIT PERFORMANCE MODE — the dominant band renders full-card-
+            width ABOVE `channelBody` instead (see the block before this
+            View), since a ~470pt portrait card has no room for the
+            landscape side-by-side split. Skipping the column (rather than
+            rendering it empty) lets the playlist above claim the full
+            remaining body height. Reachable in every other case: landscape
+            perf (side-by-side dominant band, unchanged) and edit mode
+            (LOCAL PARAMS, any orientation). */}
+        <View style={[
+          styles.paramsPanel,
+          isPortrait && styles.paramsPanelPortrait,
+          // W0 fix — same bounded-chain-always rule as the playlist panel
+          // above.
+          isPortrait && (isCompactPortrait
+            ? styles.paramsPanelCompactPortrait
+            : styles.paramsPanelTallPortrait),
+          // STOP CLAIMING SPACE THIS COLUMN NO LONGER USES (2026-08-16). The
+          // whole point of hiding LOCAL PARAMS is to give the room to the
+          // pattern list; before this, a hidden column kept its portrait flex
+          // weight and its landscape 40 % width while rendering only the 28 px
+          // stub, so the freed area was dead ground and the playlist never
+          // moved. LAST in the array so it beats the base width, perf's
+          // PERF_PIXEL_COLUMN_WIDTH, and the portrait weight tiers above.
+          //
+          // 'stub'  — edit mode, section(s) hidden: hug the micro-header(s),
+          //           which always stay rendered and tappable (docs/64
+          //           §3.1). docs/69 W3: in LANDSCAPE EDIT this now fires
+          //           only when BOTH the band and params are hidden — the
+          //           column also carries the relocated PIXELS band, so
+          //           hiding params alone must NOT collapse it (the band
+          //           still needs the width) — see `mixerMediaColumnMode`.
+          // 'empty' — perf mode with the band hidden too: the column renders
+          //           nothing, so it takes nothing. Landscape only; portrait
+          //           perf already skips this column entirely (the guard
+          //           above), and the same "claim nothing" outcome is why.
+          mediaColumnCollapsed && (isPortrait
+            ? MIXER_PORTRAIT_PARAMS_PANEL_COLLAPSED
+            : (mediaColumnMode === 'empty'
+              ? MIXER_LANDSCAPE_PARAMS_PANEL_EMPTY
+              : MIXER_LANDSCAPE_PARAMS_PANEL_COLLAPSED)),
+        ]}>
+          {contentLayout.forcePixelExpanded ? (
+            // docs/64 §3.6 (D5, W4): PARAMS-HIDDEN used to print HERE, once
+            // PER CHANNEL — the workspace bar now prints it ONCE, at its own
+            // right end (`showPerfCaption`), so nothing repeats it per strip.
+            // docs/64 §3.5 (D4): the dominant band is this channel's "2D
+            // band, forced open" — it only renders while PIXELS is actually
+            // shown; an operator-hidden pixels section is never resurrected
+            // just because perf mode wants the real estate (§2.6). When
+            // hidden, the top-of-card thin strip (gated by `!pixelsShown`
+            // above) is already this channel's honest residue — no second
+            // copy renders in the vacated column. LANDSCAPE ONLY here — the
+            // guard above sends portrait perf to the full-card-width band.
+            pixelsShown ? (
+              <PixelViewBand
+                visKey={channel.id}
+                placement="channel"
+                allowCollapse={false}
+                forceExpanded
+              />
+            ) : null
+          ) : (
+            <>
+              {/* docs/69 W3 (order 3): the per-channel PIXELS band, relocated
+                  here from the card's vertical stack — LANDSCAPE EDIT ONLY
+                  (portrait keeps it in its old full-card-width position
+                  above `channelBody`; see that block's comment). Same
+                  section wiring as before — the chevron and the ⋮ menu's
+                  Show/Hide pixels row still dispatch `sec/<id>/pixels` and
+                  still agree. `mixerLandscapeMediaBandSlot` bounds its own
+                  slot (flexShrink + a floor of header+MIN_BAND_CANVAS_HEIGHT,
+                  overflow:hidden) so a starved column shrinks the band first,
+                  never lets it paint over LOCAL PARAMS below (docs/69 W3
+                  item 3 / `_285` §7's containment recommendation). */}
+              {contentLayout.showLandscapePixelBand ? (
+                <View style={mixerLandscapeMediaBandSlot(pixelsShown)}>
+                  <PixelViewBand
+                    visKey={channel.id}
+                    placement="channel"
+                    sectionOpen={pixelsShown}
+                    onToggleSection={togglePixelsSection}
+                    // docs/69 W3 MISS 1: this is the ONLY call site that opts
+                    // into the collapsed-header diet — the view-picker chip
+                    // and honesty ratio are dead chrome once the section is
+                    // closed, and left at full width they force the media
+                    // column to hug a 247.64 px stub instead of the ~105 px
+                    // LOCAL PARAMS micro-header beside it (measured, both
+                    // sections hidden). Portrait's fixed-position band above
+                    // and the MASTER band below never pass this — see
+                    // `pixel_view_band.tsx`'s prop doc for why it's safe to
+                    // default off everywhere else.
+                    compactWhenCollapsed
+                  />
+                </View>
+              ) : null}
+              {/* LOCAL PARAMS section header — docs/64 §3.1: the SAME 28px
+                  micro-header idiom as the pixel band above, with its own
+                  ▾/▸ chevron dispatching `sec/<id>/params`. This IS the stub
+                  that stays reachable when the section is hidden — the
+                  ScrollView + card below render only while `paramsShown`. */}
+              <View style={styles.sectionMicroHeader}>
+                <Text
+                  style={[styles.labelCaps, { fontSize: 9, color: C.secondary }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >LOCAL PARAMS</Text>
+                <TouchableOpacity
+                  onPress={toggleParamsSection}
+                  hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={paramsShown ? 'Hide local params' : 'Show local params'}
+                  accessibilityState={{ expanded: paramsShown }}
+                  style={styles.sectionMicroHeaderChevron}
+                >
+                  <Text style={[styles.chevronGlyph, { color: C.secondary }]}>
+                    {paramsShown ? '⌄' : '▸'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {paramsShown ? (
+                // docs/67 §5.2 host 2: the LOCAL PARAMS column. Its sliders
+                // are `HorizontalFader`s, and the vertical drift of a
+                // horizontal fader drag is exactly what scrolls this column
+                // out from under the finger today. `nestedScrollEnabled`
+                // stays — it is a plain pass-through prop.
+                <LockableScrollView nestedScrollEnabled style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }}>
+                  <View style={styles.localParamsCard}>
+                    {/* Row-0 globals (knob 1 SPEED, knob 2 HUE) are NOT
+                        re-legended here — their canonical UI elements wear
+                        the KNOB badges directly (SPEED on the GLOBALS-row
+                        fader, HUE on this focused strip's own per-channel
+                        HUE trim above). The old read-only MftGlobalsRow
+                        duplicate was removed 2026-07 per operator request —
+                        no duplicate speed/hue UI. */}
+                    <MixerLocalParams channel={channel} onControlChange={onControlChange} disabled={activationsLocked} />
+                  </View>
+                </LockableScrollView>
+              ) : null}
+            </>
+          )}
         </View>
       </View>
 
@@ -1263,8 +1645,13 @@ export default function MixerScreen() {
   // grey the STRUCTURAL affordances (channel add, snapshots) so the operator
   // sees they're locked before the round-trip. Runtime controls (faders, solo,
   // master) stay live — those are NOT gated by the engine.
-  const performanceActive = usePerformanceMode().active;
+  const performanceActive = usePerfLock();
   const structuralLocked = activationsLocked || performanceActive;
+  // The RAW mode, for SCREEN COMPOSITION only (docs/58 §2.3 — the same call
+  // and the same reasoning as deck_workspace.tsx:227-233). It drives the
+  // master pixel-view band's forced-open height and nothing else; every
+  // structural gate above still reads `usePerfLock()`.
+  const perfComposition = usePerformanceMode().active;
   // ── Entering the mixer while a plan forces the deck (CP-VIEWSWITCH) ─────
   // `forcingDeckView` (engine, on timelineState) = plan active AND output
   // pinned to the deck under plan control. The old behaviour popped a blue
@@ -1350,6 +1737,139 @@ export default function MixerScreen() {
       name: deriveChannelTitle(ch, idx + 1, ch.playlist, inlinePlaylistRef.current.get(ch.id) || null),
     }));
   }, [channels, inlinePlaylistVersion]);
+
+  // ── Mixer workspace (docs/64 §2, §3) — hide/show channels + citizens ──────
+  // W1's pure store (`mixer_workspace_layout.ts`) + W3b's persistence hook
+  // (`use_mixer_workspace.ts`). `workspace.layout` is the ONLY source of
+  // hidden/visible truth for the strip row below; nothing here re-derives a
+  // layout fact of its own — the same discipline the store documents for
+  // itself. Hiding is VIEW-ONLY: it never mutes, never solos, never calls the
+  // engine (docs/64 §2.5) — every selector below only decides what RENDERS.
+  const workspace = useMixerWorkspace();
+  const channelRoster = useMemo(() => channels.map((ch) => ch.id as string), [channels]);
+  const visibleChannelIds = useMemo(
+    () => mixerVisibleChannels(channelRoster, workspace.layout),
+    [channelRoster, workspace.layout],
+  );
+  const visibleChannelIdSet = useMemo(() => new Set(visibleChannelIds), [visibleChannelIds]);
+  // D1 floor: the last visible channel's chip renders unpressable with the
+  // explanatory a11y label (docs/53 §3.1) — null once more than one channel
+  // is visible, so nothing on the bar is floor-disabled.
+  const floorChannelId = visibleChannelIds.length === 1 ? visibleChannelIds[0] : null;
+  // ── COLORS citizen (docs/64 §4, W6) ─────────────────────────────────────
+  // The rig-global COLORS window, mounted exactly ONCE — never per-channel
+  // (colorPalette1/2 is one engine-global CPC pair, not per-channel state).
+  // The workspace bar's COLORS chip (already wired end-to-end in
+  // `mixer_workspace_bar_logic.ts`'s `buildMixerBarPlan`) is the only thing
+  // that opens/closes `citizen/colors` — this file only READS the result.
+  const colorsShown = effectiveCitizenShown(workspace.layout, 'colors', perfComposition);
+  // In landscape the citizen mounts INSIDE the channel-strip ScrollView (§4:
+  // "right end of the strip row, scrolling with the row") at its own fixed
+  // width the visible-CHANNEL-count centring/scroll math below cannot see —
+  // this flag is that math's own citizen-awareness fix (see the ScrollView
+  // below). Portrait mounts the citizen as a separate full-width block
+  // BELOW the ScrollView instead, so it never enters that row's math.
+  const colorsInRow = colorsShown && !isPortrait;
+  // LEAD RULING (this wave): the mixer's COLORS chip is VIEW-ONLY. Hiding it
+  // unmounts the window below and posts NOTHING to the engine — no
+  // `runYieldGesture`, no L3 tab-blur yield. docs/61 §2.1's yield rule was
+  // designed when COLORS existed on exactly one surface (the Deck); with the
+  // window also live there (display:'none', never unmounted), stopping a
+  // running show mode because the operator tapped a chip on a SECOND surface
+  // would be a surprising engine write mid-show. The Deck's own L1/L2/L3
+  // yield paths are untouched by this file.
+  //
+  // `colorAutopilot`: read-only off the SAME app-wide broadcast mirror the
+  // header chip uses (docs/61 §4.4/W4, `useColorAutopilotFrame` —
+  // `hooks/useEngineState.ts`), not a second local echo of engine state.
+  const colorAutopilotFrame = useColorAutopilotFrame();
+  // `onColorAutopilotChange` / `onColorAutopilotRetune`: the mixer screen has
+  // no existing optimistic-update plumbing for the colour autopilot (that
+  // lives only on the Deck screen, `app/(tabs)/index.tsx`'s
+  // `handleColorAutopilotChange`/`handleColorAutopilotRetune`) — so these
+  // POST/PATCH through the SAME engine endpoints via the SAME `utils/api`
+  // functions the Deck screen calls (`setDeckColorAutopilot`,
+  // `patchDeckColorAutopilot`), narrated the same way every other mixer
+  // write is narrated here (`opError`). This is the one engine write path
+  // that exists — not a second one — deliberately without a local optimistic
+  // snapshot/rollback: this screen doesn't own a private copy of
+  // `colorAutopilot` to roll back, and the shared broadcast mirror above
+  // reconciles from the engine's own echo on every tab the instant it lands.
+  const handleColorsAutopilotChange = useCallback((patch: Partial<DeckColorAutopilotConfig>, failNote?: string) => {
+    notifyInteraction();
+    void setDeckColorAutopilot(patch).then((res) => {
+      if (!res.ok) {
+        console.error('[Mixer] Color-autopilot POST rejected:', res.error);
+        opError('Color autopilot not applied', [
+          `The engine rejected the change. ${res.error || ''}`.trim(), failNote,
+        ].filter(Boolean).join(' '));
+      }
+    }).catch((err) => {
+      console.error('[Mixer] Color-autopilot POST failed:', err);
+      opError('Color autopilot not applied', [
+        `Could not reach the engine. ${err?.message || ''}`.trim(), failNote,
+      ].filter(Boolean).join(' '));
+    });
+  }, [notifyInteraction]);
+  const handleColorsAutopilotRetune = useCallback((patch: Record<string, unknown>) => {
+    notifyInteraction();
+    void patchDeckColorAutopilot(patch).then((res) => {
+      if (!res.ok) {
+        console.error('[Mixer] Color-autopilot PATCH rejected:', res.error);
+        opError('Retune not applied', `The engine refused the change. ${res.error || ''} The rotation is still running its previous settings.`.trim());
+      }
+    }).catch((err) => {
+      console.error('[Mixer] Color-autopilot PATCH failed:', err);
+      opError('Retune not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
+    });
+  }, [notifyInteraction]);
+  // The mount itself — the REAL `ColorsWindow` (no fork, no copy), styled as
+  // one panel surface (`styles.colorsCard` = `globalStyles.panel`, the same
+  // "workspace window" recipe the Deck's own `<DeckWindow>` uses for its
+  // COLORS track) with its OWN vertical scroll, so a tall picker never
+  // forces the whole strip row taller. `disabled={activationsLocked}` is
+  // the same plan-lock the channel strips obey (docs/64 §4). Conditionally
+  // rendered (unmounted, not `display:none`), so hiding it is trivially
+  // engine-silent (nothing is even mounted
+  // to post) and `visible` is simply `true` whenever this renders at all,
+  // which still correctly arms docs/61 §4.3's entry auto-select on every
+  // show (armedRef/wasVisibleRef start fresh on each mount).
+  const colorsCitizenCard = colorsShown ? (
+    <View
+      key="citizen/colors"
+      {...({ dataSet: { mixercitizen: 'colors' } } as object)}
+      style={[styles.colorsCard, isPortrait && styles.colorsCardPortrait]}
+    >
+      {/* docs/67 §5.2 host 3: the COLORS citizen card's scroller. The hue dial
+          and the BLEND scrubber both live inside it — this is literally the
+          `_263` deck bug in its mixer mount. */}
+      <LockableScrollView contentContainerStyle={{ flexGrow: 1 }} style={{ flex: 1, ...MIXER_BOUNDED_SCROLL_AREA }}>
+        <ColorsWindow
+          disabled={activationsLocked}
+          colorAutopilot={colorAutopilotFrame ?? undefined}
+          onColorAutopilotChange={handleColorsAutopilotChange}
+          onColorAutopilotRetune={handleColorsAutopilotRetune}
+          visible={colorsShown}
+        />
+      </LockableScrollView>
+    </View>
+  ) : null;
+  // The bar's channel list — ALL channels (shown AND hidden), canonical
+  // engine order, with the same display name / group tint / mute flag the
+  // strip itself carries (docs/64 §2.4).
+  const mixerBarChannels = useMemo<MixerBarChannel[]>(() => {
+    void inlinePlaylistVersion;
+    return channels.map((ch, idx) => {
+      const group = ch.mixGroupId ? mixGroups.find((g) => g.id === ch.mixGroupId) : null;
+      return {
+        id: ch.id,
+        index: idx + 1,
+        title: deriveChannelTitle(ch, idx + 1, ch.playlist, inlinePlaylistRef.current.get(ch.id) || null),
+        groupColor: group?.color ?? null,
+        muted: ch.enabled === false,
+      };
+    });
+  }, [channels, mixGroups, inlinePlaylistVersion]);
   // globalExports fetching moved to GlobalParams.tsx
   const throttleRef = useRef<{[key: string]: number}>({});
   // Per-channel pixel viz no longer lives at the screen level. Each
@@ -1405,15 +1925,22 @@ export default function MixerScreen() {
   // every mixer channel sits at fader 0 the exterior goes dark until they raise
   // one. The never-dark mission rule governs AUTONOMOUS/plan behavior — not a
   // hands-on operator who chose to grab the mixer.
+  //
+  // PERFORMANCE MODE (operator ruling 2026-08-14): timelineTakeover() opens the
+  // per-attempt operator passcode prompt first. 'cancelled' = the operator
+  // dismissed it, nothing was requested — leave the plan alone and do NOT
+  // switch the output to the mixer (that would strand the rig on a surface the
+  // operator never took).
   const handleMixerTakeover = useCallback(async () => {
-    const ok = await timelineTakeover();
-    if (!ok) {
-      Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
+    const outcome = await timelineTakeover();
+    if (outcome === 'cancelled') return;
+    if (outcome === 'failed') {
+      opError('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
       return;
     }
     const layerResult = await activateLayerSetting('mixer', { reason: 'captainpad_mixer_takeover' });
     if (!layerResult.ok) {
-      Alert.alert('Mixer activation failed', layerResult.error || 'The engine rejected the Mixer layer setting.');
+      opError('Mixer activation failed', layerResult.error || 'The engine rejected the Mixer layer setting.');
     }
   }, [timelineTakeover]);
 
@@ -1439,11 +1966,11 @@ export default function MixerScreen() {
         if (handoffResult !== null) return;
         return activateLayerSetting('mixer', { reason: 'captainpad_mixer_tab' }).then((result) => {
           if (!result.ok) {
-            Alert.alert('Mixer activation failed', result.error || 'The engine rejected the Mixer layer setting.');
+            opError('Mixer activation failed', result.error || 'The engine rejected the Mixer layer setting.');
           }
         });
       }).catch((error) => {
-        Alert.alert('Mixer handoff failed', error instanceof Error ? error.message : String(error));
+        opError('Mixer handoff failed', error instanceof Error ? error.message : String(error));
       });
     }
   }, [timelineState, leaseHeld, waitForHandoff]);
@@ -1515,6 +2042,13 @@ export default function MixerScreen() {
         for (const ch of incoming) {
           if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
         }
+        // Mixer workspace roster commit (docs/64 §2.3, W3b): a `mixer` WS
+        // broadcast IS a confirmed roster (connected + mixer doc received) —
+        // commit exactly once per broadcast so a deleted channel's chip
+        // vanishes and a newly-added channel's `known` membership updates.
+        // No timers: this is the ONE call site that can prune, and it only
+        // ever fires off a real broadcast.
+        workspace.commit(incoming.map((ch: any) => ch.id), true);
         // GC inlinePlaylistRef: drop entries for channels the engine
         // no longer reports. Keeps the map bounded across long
         // sessions of add/remove churn.
@@ -1592,7 +2126,14 @@ export default function MixerScreen() {
         }
       }
     }
-  }, [setInlinePlaylist]);
+    // `workspace.commit` is the hook's own useCallback-stabilized reference
+    // (identity never changes) — depending on the bare `workspace` object
+    // instead would be wrong: that object is rebuilt every render because it
+    // embeds `layout` state, so listing it here would give `onControl` a new
+    // identity on every hide/show/commit and thrash useEngineConnection's
+    // subscribe/reseed effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setInlinePlaylist, workspace.commit]);
 
   // Connection state pill (mirror status → setIsConnected). The shared
   // hook funnels BOTH the boot-time testConnection probe and live
@@ -1657,9 +2198,18 @@ export default function MixerScreen() {
       for (const ch of (mRes.data.channels || [])) {
         if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
       }
+      // Mixer workspace roster commit (docs/64 §2.3, W3b): GET /mixer landing
+      // after a successful connect IS a confirmed roster, same as the WS
+      // `mixer` broadcast above — commit here too so a reload/reconnect
+      // prunes stale hidden-channel entries against the real roster instead
+      // of waiting for the next broadcast.
+      workspace.commit((mRes.data.channels || []).map((ch: any) => ch.id), true);
     }
 
-  }, []);
+    // Same reasoning as `onControl` above: `workspace.commit` is stable,
+    // the bare `workspace` object is not (it embeds `layout` state).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.commit]);
 
   // Boot + subscription lifecycle is shared with the deck via
   // useEngineConnection: it resolves the API base, probes the connection
@@ -1734,7 +2284,7 @@ export default function MixerScreen() {
     // mirror, and a failure here means the mute may not persist.
     updateMixerChannel(channelId, { enabled }).catch((err) => {
       console.error('[Mixer] Mute PATCH failed:', err);
-      Alert.alert('Mute may not have applied', `Could not confirm the mute change. ${err?.message || ''}`.trim());
+      opWarn('Mute may not have applied', `Could not confirm the mute change. ${err?.message || ''}`.trim());
     });
   }, [notifyInteraction]);
 
@@ -1783,7 +2333,7 @@ export default function MixerScreen() {
       postSolo(channelId, false).then((res) => {
         if (!res.ok) {
           console.error(`[Mixer] Solo REST mirror rejected for ${channelId}:`, res.error);
-          Alert.alert('Solo not applied', `The engine rejected this solo. ${res.error || ''}`.trim());
+          opError('Solo not applied', `The engine rejected this solo. ${res.error || ''}`.trim());
         }
       }).catch((err) => {
         console.error(`[Mixer] Solo REST mirror failed for ${channelId}:`, err);
@@ -1812,7 +2362,7 @@ export default function MixerScreen() {
     if (!res.ok) {
       console.error(`[Mixer] Solo-safe toggle rejected for ${channelId}:`, res.error);
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, soloSafe: prev } : c));
-      Alert.alert('Solo-safe not applied', `The engine rejected this change. ${res.error || ''}`.trim());
+      opError('Solo-safe not applied', `The engine rejected this change. ${res.error || ''}`.trim());
     }
   }, []);
 
@@ -1851,7 +2401,7 @@ export default function MixerScreen() {
         console.error(`[Mixer] Bump REST mirror rejected for ${channelId}:`, res.error);
         // Roll back the optimistic flip — the engine never accepted it.
         setBumpedIds(prev => { const n = new Set(prev); n.delete(channelId); return n; });
-        Alert.alert('Bump not applied', `The engine rejected this bump. ${res.error || ''}`.trim());
+        opError('Bump not applied', `The engine rejected this bump. ${res.error || ''}`.trim());
       }
     }).catch((err) => console.error(`[Mixer] Bump REST mirror failed for ${channelId}:`, err));
     // Start the hold-renew heartbeat (idempotent — replace any prior timer).
@@ -1909,7 +2459,7 @@ export default function MixerScreen() {
         savedModesRef.current[channelId] = prevMode;
         setChannels(chs => chs.map(c => c.id === channelId ? { ...c, mode: prevMode } : c));
       }
-      Alert.alert(
+      opError(
         'Blend mode not applied',
         `The engine rejected this blend mode. ${res.error || ''} The channel kept its previous mode.`.trim(),
       );
@@ -1938,7 +2488,7 @@ export default function MixerScreen() {
       if (!res.ok) {
         console.error(`[Mixer] Lock engage rejected for ${channelId}:`, res.error);
         setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: false } : c));
-        Alert.alert(
+        opError(
           'Lock not applied',
           `The engine rejected locking this channel. ${res.error || ''} The channel is still unlocked.`.trim(),
         );
@@ -1963,7 +2513,7 @@ export default function MixerScreen() {
     if (!res.ok) {
       console.error(`[Mixer] Lock release rejected for ${channelId}:`, res.error);
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: true } : c));
-      Alert.alert(
+      opError(
         'Unlock not applied',
         `The engine rejected unlocking this channel. ${res.error || ''} The channel is still locked.`.trim(),
       );
@@ -2003,7 +2553,7 @@ export default function MixerScreen() {
       console.error(`[Mixer] Unlock release rejected for ${prompt.channelId}:`, unlockRes.error);
       setChannels(chs => chs.map(c => c.id === prompt.channelId ? { ...c, locked: true } : c));
       setUnlockPrompt({ ...prompt, pending: false });
-      Alert.alert(
+      opError(
         'Unlock not applied',
         `Edits were saved, but the engine rejected releasing the lock. ${unlockRes.error || ''} The channel is still locked.`.trim(),
       );
@@ -2040,7 +2590,7 @@ export default function MixerScreen() {
     if (!res.ok) {
       console.error(`[Mixer] color change rejected for ${channelId}:`, res.error);
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, color: prev } : c));
-      Alert.alert(
+      opError(
         'Color not applied',
         `The engine rejected this color. ${res.error || ''} The channel kept its previous color.`.trim(),
       );
@@ -2061,7 +2611,7 @@ export default function MixerScreen() {
       console.error(`[Mixer] hue change rejected for ${channelId}:`, res.error);
       // Revert to the prior hue; the next mixer broadcast re-syncs too.
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, hue: prev ?? 0 } : c));
-      Alert.alert(
+      opError(
         'Hue not applied',
         `The engine rejected this hue. ${res.error || ''} The channel kept its previous hue.`.trim(),
       );
@@ -2195,7 +2745,7 @@ export default function MixerScreen() {
     }).then((result) => {
       if (!result.ok) {
         clearAddBusy();
-        Alert.alert(
+        opError(
           'Add channel failed',
           result.error || 'Engine did not accept the new channel. Check that the engine is running and reachable, then try again.',
         );
@@ -2217,7 +2767,7 @@ export default function MixerScreen() {
       }
     }).catch((err) => {
       clearAddBusy();
-      Alert.alert('Add channel failed', err?.message || String(err));
+      opError('Add channel failed', err?.message || String(err));
     });
   };
 
@@ -2256,7 +2806,7 @@ export default function MixerScreen() {
     const res = await removeMixerChannel(target.id);
     if (!res.ok) {
       console.error('[Mixer] Delete channel failed:', res.error);
-      Alert.alert(
+      opError(
         'Delete channel failed',
         `"${target.name}" is still in the live mix. ${res.error || 'The engine did not accept the delete.'} Check that the engine is reachable, then try again.`,
       );
@@ -2280,7 +2830,7 @@ export default function MixerScreen() {
     const res = await duplicateMixerChannel(channelId);
     if (!res.ok) {
       console.error(`[Mixer] Duplicate channel failed for ${channelId}:`, res.error);
-      Alert.alert(
+      opError(
         'Duplicate channel failed',
         `${res.error || 'The engine did not accept the duplicate.'} `
           + `(Up to ${maxChannelsRef.current} mixer channels are allowed.)`,
@@ -2319,7 +2869,7 @@ export default function MixerScreen() {
     const res = await reorderMixerChannels(orderIds);
     if (!res.ok) {
       console.error(`[Mixer] Reorder rejected (${res.error}); order=`, orderIds);
-      Alert.alert(
+      opError(
         'Reorder not applied',
         `The engine rejected this reorder. ${res.error || ''} The stack kept its previous order.`.trim(),
       );
@@ -2350,7 +2900,7 @@ export default function MixerScreen() {
       if (!res.ok) {
         console.error('[Mixer] Panic reported a loud fallback:', res.error, res.data);
         const rigLit = (res.data as any)?.rigLit === true;
-        Alert.alert(
+        opError(
           'Panic — home look not loaded',
           `${res.error || 'The "home" snapshot could not be recalled.'} `
             + (rigLit
@@ -2360,7 +2910,7 @@ export default function MixerScreen() {
       }
     } catch (err: any) {
       console.error('[Mixer] Panic request failed:', err);
-      Alert.alert('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
+      opError('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
     } finally {
       setPanicBusy(false);
     }
@@ -2393,14 +2943,14 @@ export default function MixerScreen() {
       const res = await updateMixerChannel(channelId, { viewSelection });
       if (!res.ok) {
         console.error('[Mixer] View-selection PATCH rejected:', res.error);
-        Alert.alert(
+        opError(
           'View selection not applied',
           `The engine rejected this view selection. ${res.error || ''} The channel will snap back to its committed value.`.trim(),
         );
       }
     } catch (err: any) {
       console.error('[Mixer] View-selection PATCH failed:', err);
-      Alert.alert('View selection not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
+      opError('View selection not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
     }
   }, []);
 
@@ -2491,7 +3041,7 @@ export default function MixerScreen() {
           future-proof, and a backstop for any control that doesn't wire its
           own `activationsLocked`. The floating PlanLockBanner (above) and the
           bottom safety bar (PANIC/BLACKOUT, a sibling BELOW) stay OUTSIDE. */}
-      <View style={{ flex: 1, position: 'relative' }}>
+      <View style={{ flex: 1, ...MIXER_BOUNDED_SCROLL_AREA, position: 'relative' }}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
       <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
         {/* LEFT cluster — identity + status + LOOKS. ONE-ROW LANDSCAPE HEADER
@@ -2580,14 +3130,6 @@ export default function MixerScreen() {
           columnGap: 6,
           rowGap: 8,
         }}>
-          {/* PERFORMANCE MODE — live-show structural lock. Same shared control
-              the deck header mounts, first in the right cluster (operator ruling:
-              the lock affordance leads). Idle chip → confirm → GO LIVE; active
-              badge → exit sheet (KEEP / RESTORE). */}
-          {/* `isPortrait` here is really "compact": landscape borrows the
-              portrait chip ("PERF" instead of "PERFORMANCE") to buy ~55pt for
-              the one-row header. The ACTIVE badge wording is unchanged. */}
-          <PerformanceModeControl isPortrait />
           {/* CLEAR SOLO — only shown while a server-authoritative solo is
               engaged. Sends WS clearSolo (all) + REST mirror; the broadcast's
               empty soloedChannelIds[] reconciles every strip back to lit. */}
@@ -2709,29 +3251,34 @@ export default function MixerScreen() {
         }
       />
 
-      {/* ── Master Visualization ──────────────────────────────────────
-          Tight band (2026-06-22 UI cleanup): the label sits inline with no
-          extra top padding and the viz is a slim 12px strip, so the channel
-          strip below moves up and reclaims the vertical space the operator
-          flagged as wasted on narrow (phone) widths.
-          QA round1 #8: the bare pixel strip read as a "broken black bar" with
-          no scale/value. We now (a) surface the master output % inline with the
-          label, and (b) seat the strip in a bordered light track (matching every
-          other slider's track styling) so an all-dark frame reads as a real
-          meter at idle, not a glitch. */}
-      <View style={{ paddingHorizontal: 16 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-          <Text style={[styles.labelCaps, { fontSize: 9 }]}>MASTER OUTPUT</Text>
-          <Text style={[styles.labelCaps, { fontSize: 9, color: C.primary }]}>{Math.round(master * 100)}%</Text>
+      {/* The master keeps only a compact output-truth strip. The large 2D
+          ship is per-channel now, where it is materially useful. */}
+      <View style={[styles.masterRow, isPortrait && styles.masterRowPortrait]}>
+        {/* Left / top: label + either the thin strip residue or the real
+            canvas. No `flex` of its own in landscape — it sizes to its own
+            content (the aspect-honest canvas width, §3.2), which is
+            exactly what leaves the remainder of the row for the bar. */}
+        <View style={[styles.masterCanvasColumn, isPortrait && styles.masterCanvasColumnPortrait]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+            <Text style={[styles.labelCaps, { fontSize: 9 }]}>MASTER OUTPUT</Text>
+            <Text style={[styles.labelCaps, { fontSize: 9, color: C.primary }]}>{Math.round(master * 100)}%</Text>
+          </View>
+          <View style={styles.masterVizTrack}>
+            <ChannelVizStrip vizKey="preDimmer" height={12} style={{ borderRadius: 6 }} showMeter={false} />
+          </View>
         </View>
-        {/* QA round3 #5: the header above already shows MASTER OUTPUT <n>%, so
-            ChannelVizStrip's own in-track meter row (a duplicate bar + a
-            right-hugging `<n>%` label) was redundant — and its level sidecar
-            read 0% while the header read 100%, so the stray `0%` looked like a
-            bug. showMeter={false} drops the in-strip meter row, leaving just
-            the pixel strip under the single authoritative header value. */}
-        <View style={styles.masterVizTrack}>
-          <ChannelVizStrip vizKey="preDimmer" height={12} style={{ borderRadius: 6 }} showMeter={false} />
+
+        {/* The workspace bar owns the remaining row width and scrolls its
+            restore chips internally. */}
+        <View style={isPortrait ? MASTER_BAR_SEAT_PORTRAIT : MASTER_BAR_SEAT_LANDSCAPE}>
+          <MixerWorkspaceBar
+            layout={workspace.layout}
+            channels={mixerBarChannels}
+            onOpen={workspace.open}
+            onClose={workspace.close}
+            perfActive={perfComposition}
+            floorChannelId={floorChannelId}
+          />
         </View>
       </View>
 
@@ -2741,21 +3288,26 @@ export default function MixerScreen() {
           iterate the array directly — no `.slice(1)` skip-the-deck
           dance. The engine's HIL test (hil_channel_isolation_test)
           guards this invariant. */}
-      {/* Round8 #3: previously 1-2 landscape cards were left-anchored
-          (justifyContent flex-start for <3 layers), so a lone strip hugged the
-          left edge with a big right gutter (the operator-flagged "large
-          left-anchored void"). We now CENTER the row at every count so the
-          unused width sits as symmetric margins instead of one lopsided right
-          gutter, and we let 1-2 cards grow wider (cap raised below) so they
-          fill more of the freed width. A full 3-layer row already fills evenly,
-          so centering it is a visual no-op. Portrait is untouched (always a
-          single fixed column).*/}
-      {/* Horizontal scroll is enabled ONLY when the strips overflow the row
-          (>3 landscape / >2 portrait) — so the common case has NO scroll
-          container to fight the horizontal faders, and the faders (which now
-          capture-claim their own drags) stay rock-solid. When few channels fit,
-          they center; when many, they left-align and scroll. */}
-      <ScrollView horizontal scrollEnabled={!isPortrait ? channels.length > 3 : channels.length > 2} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && (channels.length <= 3 ? { justifyContent: 'center' } : { justifyContent: 'flex-start' })]} style={{ flex: 1 }}>
+      {/* Every channel is the same fixed 320pt instrument. One or two cards
+          center; three or more left-align inside an enabled horizontal host,
+          so row padding, group borders, and native rounding can never create
+          unreachable overflow. `colorsInRow` also forces the host on because
+          COLORS mounts INSIDE
+          this same ScrollView in landscape (§4's "right end of the strip
+          row, scrolling with the row"), at its OWN fixed ~380pt width
+          (`styles.colorsCard`, not the channel-card track). Fader gestures
+          synchronously lock this host through `LockableScrollView`. */}
+      <LockableScrollView
+        horizontal
+        scrollEnabled={mixerChannelRowScrollEnabled(isPortrait, visibleChannelIds.length, colorsInRow)}
+        contentContainerStyle={[
+          { padding: 16, gap: 16, flexGrow: 1 },
+          mixerChannelRowScrollEnabled(isPortrait, visibleChannelIds.length, colorsInRow)
+            ? { justifyContent: 'flex-start' }
+            : { justifyContent: 'center' },
+        ]}
+        style={{ flex: 1, ...MIXER_BOUNDED_SCROLL_AREA }}
+      >
         {/* Track which groups have already had their slim in-list header
             rendered, so the header is emitted ONCE — before a group's FIRST
             member in list order. Group members may not be contiguous (channels
@@ -2778,14 +3330,6 @@ export default function MixerScreen() {
           // the position of its FIRST member, preserving channel order
           // otherwise. The header is therefore emitted ONCE per group, on top
           // of (expanded) / above (collapsed) its members.
-          // Landscape width distribution (QA round1 #7): in landscape each
-          // standalone strip / each member column gets a flex width so the row
-          // fills the viewport; portrait keeps the fixed 320 column.
-          const landscapeMaxWidth = channels.length >= 3 ? 560 : (channels.length === 1 ? 920 : 760);
-          const cardStyle = isPortrait
-            ? null
-            : { width: undefined, flex: 1, minWidth: 320, maxWidth: landscapeMaxWidth };
-
           // Per-channel ChannelStrip element factory — keeps the (large) prop
           // wiring in one place whether the strip is standalone or a group
           // member, and whether it's expanded or collapsed.
@@ -2801,6 +3345,11 @@ export default function MixerScreen() {
             // changes (Maps aren't structurally compared by React).
             void inlinePlaylistVersion;
             const channelInlinePlaylist = inlinePlaylistRef.current.get(channel.id) || null;
+            // docs/64 §2.5/D10: view-only visibility from the workspace store
+            // — the card stays MOUNTED (below) but display-suppressed. NEVER
+            // used to gate a structural prop (isOnlyChannel/canMoveUp/canMoveDown
+            // below stay keyed to the TOTAL roster — see their own comments).
+            const isHidden = !visibleChannelIdSet.has(channel.id);
             return (
               <ChannelStrip
                 key={channel.id}
@@ -2820,7 +3369,12 @@ export default function MixerScreen() {
                 transitions={transitionsList}
                 playlistLibrary={playlistLibrary}
                 initialPlaylist={channelInlinePlaylist}
-                cardStyle={cardStyle}
+                hidden={isHidden}
+                // STAYS keyed to the TOTAL roster (docs/64 §3.3 audit): the
+                // engine's "at least one channel must remain" delete gate is
+                // about real channels, not the operator's view preference —
+                // hiding must never change what a structural engine call
+                // will accept.
                 isOnlyChannel={channels.length === 1}
                 activationsLocked={activationsLocked}
                 onRename={handleRename}
@@ -2836,6 +3390,10 @@ export default function MixerScreen() {
                 onDuplicate={handleDuplicateChannel}
                 onMoveUp={handleMoveUp}
                 onMoveDown={handleMoveDown}
+                // STAY keyed to the TOTAL roster / `idx` (its position in the
+                // real `channels` array) — reorder is a structural engine
+                // call over the actual roster order, not the view's visible
+                // subset (docs/64 §3.3 audit).
                 canMoveUp={idx < channels.length - 1}
                 canMoveDown={idx > 0}
                 onLockToggle={handleLockToggle}
@@ -2844,6 +3402,16 @@ export default function MixerScreen() {
                 onTransitionSettingsChange={handleTransitionSettingsChange}
                 viewSelectionNamedViews={viewSelectionNamedViews}
                 onViewSelectionChange={handleViewSelectionChange}
+                // docs/64 §3.1 (W4): the persisted section store, plus the
+                // two raw workspace actions — the strip builds its own
+                // `sec/<id>/params` / `sec/<id>/pixels` ids (constructor
+                // path) and decides open vs close from its OWN read of the
+                // layout, so this stays two stable function references
+                // (React.memo-friendly) rather than a per-channel closure
+                // rebuilt on every parent render.
+                workspaceLayout={workspace.layout}
+                onOpenSection={workspace.open}
+                onCloseSection={workspace.close}
               />
             );
           };
@@ -2882,6 +3450,13 @@ export default function MixerScreen() {
             const collapsed = collapsedGroups.has(group.id);
             const borderColor = group.color || C.ghostBorder;
             const tint = tintFromHex(group.color, 0.07);
+            // docs/64 §2.5 (W3b): a group container whose members are ALL
+            // workspace-hidden must not render as an empty bordered box — the
+            // container itself suppresses the same display-only way its
+            // members do. Groups get no citizenship/chip of their own (§5) —
+            // this is purely a rendering consequence of every member being
+            // individually hidden, not a new hideable surface.
+            const allMembersHidden = members.every((m) => !visibleChannelIdSet.has(m.channel.id));
 
             if (collapsed) {
               // Collapsed group → one narrow VERTICAL bar: a vertical name +
@@ -2896,6 +3471,7 @@ export default function MixerScreen() {
                     styles.groupBarV,
                     { borderColor },
                     tint ? { backgroundColor: tint } : null,
+                    allMembersHidden ? MIXER_HIDDEN_DISPLAY : null,
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel={`${(group.name || `GROUP ${groupIndex + 1}`).toUpperCase()} group, ${memberCount} channel${memberCount === 1 ? '' : 's'}, collapsed — tap to expand`}
@@ -2924,7 +3500,7 @@ export default function MixerScreen() {
                   styles.groupContainer,
                   { borderColor },
                   tint ? { backgroundColor: tint } : null,
-                  cardStyle ? { alignSelf: 'stretch' } : null,
+                  allMembersHidden ? MIXER_HIDDEN_DISPLAY : null,
                 ]}
               >
                 <View style={styles.groupContainerHeader}>
@@ -2948,7 +3524,14 @@ export default function MixerScreen() {
             <Text style={[styles.labelCaps, { fontSize: 14 }]}>NO CHANNELS — TAP &quot;+ DEFAULT&quot; OR &quot;+ FROM PLAYLIST&quot;</Text>
           </View>
         )}
-      </ScrollView>
+        {/* docs/64 §4 (W6): the COLORS citizen, landscape placement — the
+            LAST child of this row, at the right end, scrolling with it. */}
+        {colorsInRow ? colorsCitizenCard : null}
+      </LockableScrollView>
+      {/* docs/64 §4 (W6): the COLORS citizen, portrait placement — a
+          full-width block BELOW the strip row instead of inside it (§4:
+          "Portrait: a full-width block below the strips"). */}
+      {colorsShown && isPortrait ? colorsCitizenCard : null}
         {/* Hermetic plan-lock scrim — blankets the header + master + channels
             region above with one tap-catching layer. Active only under the
             soft PLAN lock and NOT during an operator takeover
@@ -3306,8 +3889,49 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     borderColor: C.ghostBorder,
     overflow: 'hidden',
   },
+  // docs/64 §3.2 (W5): the master row — canvas column + workspace bar, one
+  // row in landscape, stacked in portrait. `alignItems:'center'` in
+  // landscape vertically centers the (much shorter) bar alongside a taller
+  // perf-mode canvas column instead of stretching the bar's own row to
+  // match it.
+  masterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  masterRowPortrait: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 6,
+  },
+  // No `flex`/`width` of its own — it sizes to its content (the label row
+  // and the aspect-honest canvas, §3.2), which is exactly what leaves the
+  // row's remainder for `masterBarFill`. `flexShrink:0` keeps it from being
+  // squeezed if the bar's chip row ever wants more than its share; the bar
+  // scrolls internally instead (`masterBarFill`'s own `minWidth:0`).
+  masterCanvasColumn: {
+    paddingHorizontal: 16,
+    flexShrink: 0,
+  },
+  masterCanvasColumnPortrait: {
+    paddingHorizontal: 16,
+  },
+  // The master-bar SEAT no longer lives here. docs/69 §2: both orientations'
+  // seats are pure, exported objects (`MASTER_BAR_SEAT_LANDSCAPE` /
+  // `MASTER_BAR_SEAT_PORTRAIT` in `components/mixer/mixer_workspace_bar_logic.ts`)
+  // and the render SELECTS one instead of composing an override over a base.
+  //
+  // Why they cannot be a StyleSheet base + `isPortrait &&` override: an
+  // override can only ADD keys, and a `flex: 1` on the base survives every
+  // longhand layered on top of it (different key, so flattening never drops
+  // it). Yoga then ignores an explicit `flexBasis:'auto'` whenever a positive
+  // `flex` shorthand co-flattens, resolving the portrait seat to
+  // grow 0 · shrink 0 · basis 0 = **0 pt** — the `_273` bug, which `_275`
+  // "fixed" without moving the number. CSS honors the longhand, so every web
+  // screenshot passed while the iPad failed twice. Selection makes the trap
+  // structurally unreachable; `master_bar_seat_yoga.test.ts` runs the real
+  // Yoga algorithm over both historical compositions to keep it that way.
   channelCard: {
-    width: 320,
+    ...MIXER_CHANNEL_CARD_TRACK,
     backgroundColor: C.surfaceContainerLowest,
     borderRadius: 16,
     borderWidth: 1,
@@ -3316,11 +3940,47 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     // Stretch to the parent ScrollView's height so the playlist column fills
     // the entire visible strip area, regardless of how many entries exist.
     alignSelf: 'stretch',
+    ...MIXER_BOUNDED_SCROLL_AREA,
     ...globalStyles.ambientShadow,
   },
   channelCardLocked: {
     borderColor: 'rgba(245,166,35,0.4)',
     borderWidth: 2,
+  },
+  // docs/64 §4 (W6): the rig-global COLORS citizen. Its OWN explicit width —
+  // deliberately NOT the channel-card track. Uses the
+  // same "one object" panel surface `globalStyles.panel` the Deck's own
+  // `<DeckWindow>` uses for its COLORS track, so this reads as deck-window
+  // styled here too — `ColorsWindow`'s own inner card (border/bg/radius/
+  // padding) nests inside it exactly like the Deck's SectionHost →
+  // ColorsWindow nesting.
+  colorsCard: {
+    ...globalStyles.panel,
+    width: 380,
+    flexShrink: 0,
+    alignSelf: 'stretch',
+    overflow: 'hidden',
+    ...MIXER_BOUNDED_SCROLL_AREA,
+  },
+  // Portrait: a full-width block below the strips (§4), not a fixed-width
+  // row card — width comes from the parent column's own stretch instead.
+  // `flex:1` + `minHeight:0` makes it a FAIR flex participant alongside the
+  // channel-strip ScrollView (that ScrollView is itself a bare `flex:1`
+  // sibling in this same column, `MIXER_BOUNDED_SCROLL_AREA` style below the
+  // ScrollView call) — without this, `ColorsWindow`'s own long content
+  // (wheel, schemes, transport, saved-palette gallery) sizes to its NATURAL
+  // height as an unbounded sibling and swallows the whole column, squeezing
+  // the flex:1 channel row to zero (caught in the W6 screenshot pass: the
+  // strips vanished entirely the moment COLORS showed in portrait). Splitting
+  // the remaining height 1:1 keeps both regions real and independently
+  // scrollable instead of either one disappearing.
+  colorsCardPortrait: {
+    width: undefined,
+    flex: 1,
+    minHeight: 0,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
   },
   // ── Group container (operator request 2026-06-29 #1) ──────────────────
   // A bordered/tinted box that VISUALLY SURROUNDS a group's header + member
@@ -3629,14 +4289,27 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     // Wider than params (item 1): the list is the channel's primary surface.
     width: '60%',
     padding: 6,
+    ...MIXER_BOUNDED_SCROLL_AREA,
   },
-  // Portrait: full strip width for the playlist so track names stop being
-  // squeezed by the side-by-side params column. A minHeight keeps the
-  // internally-scrolling list usable now that the parent is no longer a
-  // height-distributing flex row.
+  // Portrait: full strip width, height comes from the bounded flex chain
+  // below (W0 fix, docs/64 §1 M3 / §3.7) — NOT a fixed minHeight. An
+  // unshrinkable floor here is exactly what let a tall real iPad card's
+  // playlist+params overflow channelBody's allotted box and paint under the
+  // MUTE/SOLO/TRANSITION rows (mixer_scroll_layout.ts has the full account).
   patternListPanelPortrait: {
     width: '100%',
-    minHeight: 220,
+  },
+  // A narrow desktop/phone-height viewport: the tight 3:1 split so the
+  // playlist owns most of the body while local params stay independently
+  // scrollable in their own smaller pane.
+  patternListPanelCompactPortrait: {
+    ...MIXER_PORTRAIT_PLAYLIST_PANEL,
+  },
+  // A full-height real iPad portrait card: same bounded chain, but params
+  // (and the perf pixel view, which fills this column) get more relative
+  // room since there's space to spare (mixer_scroll_layout.ts).
+  patternListPanelTallPortrait: {
+    ...MIXER_TALL_PORTRAIT_PLAYLIST_PANEL,
   },
   paramsPanel: {
     width: '40%',
@@ -3647,11 +4320,38 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     // actually bound itself to the flex-distributed body space and scroll its
     // contents, instead of growing to its full intrinsic content height and
     // pushing the tail of the list under the footer band.
-    minHeight: 0,
+    ...MIXER_BOUNDED_SCROLL_AREA,
   },
-  // Portrait: params sit BELOW the playlist at full width.
+  // Portrait: params sit BELOW the playlist at full width; height comes
+  // from the bounded flex chain below (W0 fix, same rule as
+  // patternListPanelPortrait above).
   paramsPanelPortrait: {
     width: '100%',
+  },
+  paramsPanelCompactPortrait: {
+    ...MIXER_PORTRAIT_PARAMS_PANEL,
+  },
+  paramsPanelTallPortrait: {
+    ...MIXER_TALL_PORTRAIT_PARAMS_PANEL,
+  },
+  // docs/64 §3.1 (W4): the LOCAL PARAMS section header — the SAME 28px
+  // micro-header idiom `PixelViewBand` renders for PIXELS (BAND_HEADER_HEIGHT
+  // imported verbatim, not re-guessed), so the two hideable sections read as
+  // one consistent affordance up and down the card.
+  sectionMicroHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: BAND_HEADER_HEIGHT,
+  },
+  sectionMicroHeaderChevron: {
+    width: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chevronGlyph: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 13,
   },
   // Bordered "LOCAL PARAMS" card inside the right column. Gives each
   // channel's local sliders a distinct visual cluster so the strip

@@ -1,68 +1,40 @@
 /*
-  61_white_breathe.js — "White Breathe"  [WHITE ONLY family]
+  61_white_breathe.js - "White Breathe"  [WHITE ONLY family]
 
-  A slow, deep, whole-rig WHITE breath. The rig inhales and exhales as one
-  body, with a gentle travelling component so the breath rolls across the
-  fixtures instead of pulsing in perfect lockstep. Pure white throughout.
+  One slow breath passes through five physical instruments without forcing
+  them into lockstep: Hull becomes a luminous volume, Silhouette carries the
+  travelling contour, Jewelry inhales as a six-pearl necklace, Organs answer
+  in staggered pulses, and Identity remains a readable breathing nameplate.
+  Real XYZ defines the roll; canonical fixture roles author the arrangement.
 
-  WHY IT IS ACTUALLY WHITE — see 60_white_wash.js's header (same three
-  guarantees, verbatim): no colorPalette exports (the global palette /
-  palette autopilot cannot bind to this pattern), neutral RGB (hue-invariant,
-  so the per-channel hue stage cannot tint it), and an explicit W lane via
-  rgbwau() rather than the mapper's min(R,G,B) host-synth.
+  No palette exports are present. Warm-neutral RGB plus explicit byte-matched
+  W/A stays white under global palette and hue changes; UV is always zero.
 
-  FIXTURE COVERAGE is model-independent — no FIX_* / sectionId branching.
-  Amber is emitted unconditionally for warmth; sacn_mapper only writes a
-  channel the fixture's channel map declares, so RGBW and RGB-only fixtures
-  simply drop it.
-
-  CORE (non-repeating) MATH — the breath is the product of TWO breaths at an
-  irrational period ratio, so the envelope never repeats:
-      body = wave(breathA) * 0.68 + wave(breathA * 0.41421 + 0.37) * 0.32
-      roll = wave(nx*0.55*R + ny*0.90*R - nz*0.35*R + breathB)
-  breathA and breathB accumulate at rates in a 1 : 0.61803 (golden) ratio.
-  Direction biases which way the roll travels and eases through reversals via
-  a soft-clipped sine, so the roll changes heading on its own without a kink.
-
-  CONTROLS (UI order = declaration order = MFT knob order)
-    - localSpeed : FIRST. Breath rate.
-    - direction  : SECOND (project rule). Guarded sign, never 0.
-    - level      : overall intensity (PRIMARY audio target).
-    - kick       : kick brightness pop on top of the breath.
-    - radius     : how far the roll travels across the rig.
-    - depth      : breath depth — 0 nearly steady, 1 full inhale/exhale.
-    - whiteLevel : crossfade of the white between RGB and the W emitter.
-    - whiteKick  : kick-driven W pop (blinder bite; allowed to stack).
-    - warmth     : 0 neutral/cool white, 1 warm white (amber + RGB tint).
-
-  The `hueSpread >= 0.10` bar does not apply to the WHITE ONLY family (a
-  white pattern is deliberately hue-free); every other production bar does.
-
-AUDIO_MODULATION_V1:
-  sliderLevel     <- micLow  range 0.30..1.00 curve linear  # overall intensity (PRIMARY)
-  sliderKick      <- micKick range 0.00..1.00 curve pow2    # breath pop
-  sliderDepth     <- micMid  range 0.35..0.90 curve linear  # breath depth
-  sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # W-emitter blinder bite
-  # STATIC (omit from audio): localSpeed, direction, radius, whiteLevel, warmth
+  AUDIO_MODULATION_V1:
+    sliderLevel     <- micLow  range 0.30..1.00 curve linear  # overall intensity (PRIMARY)
+    sliderKick      <- micKick range 0.00..1.00 curve pow2    # breath pop
+    sliderDepth     <- micMid  range 0.35..0.90 curve linear  # breath depth
+    sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # W-emitter blinder bite
+    # STATIC (omit from audio): localSpeed, direction, radius, whiteLevel, warmth
 */
 
-// ── Exported controls (UI order = declaration order) ─────────────────────────
-export var localSpeed = 0.35;  // FIRST: breath rate (slow by design)
-export var direction  = 1.0;   // SECOND: signed roll direction (-1..1 stored)
-export var level      = 0.70;  // overall intensity (PRIMARY)
-export var kick       = 0.0;   // kick brightness pop (transient target)
-export var radius     = 0.5;   // how far the roll travels
-export var depth      = 0.42;  // breath depth
-export var whiteLevel = 0.65;  // RGB <-> W emitter crossfade
-export var whiteKick  = 0.20;  // kick-driven W pop
-export var warmth     = 0.20;  // 0 neutral white -> 1 warm white
+export var localSpeed = 0.35;
+export var direction  = 1.0;
+export var level      = 0.70;
+export var kick       = 0.0;
+export var radius     = 0.5;
+export var depth      = 0.42;
+export var whiteLevel = 0.65;
+export var whiteKick  = 0.20;
+export var warmth     = 0.20;
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderDirection(v) {
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06;
-  else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
+  var signed = v * 2.0 - 1.0;
+  if (signed >= 0.0 && signed < 0.06) signed = 0.06;
+  else if (signed < 0.0 && signed > -0.06) signed = -0.06;
+  direction = signed;
+  liveDirection = signed;
 }
 export function sliderLevel(v)      { level = v; }
 export function sliderKick(v)       { kick = v; }
@@ -72,111 +44,172 @@ export function sliderWhiteLevel(v) { whiteLevel = v; }
 export function sliderWhiteKick(v)  { whiteKick = v; }
 export function sliderWarmth(v)     { warmth = v; }
 
-// ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.085;      // breaths/sec at localSpeed = 1.0 (~12 s inhale+exhale)
-var BASE_RATE = 0.012;     // the breath never stops, even at localSpeed = 0
-var PHASE_WRAP = 1000.0;
-var OSC_WRAP = 1000.0;
+var PHASE_WRAP = 4096.0;
+var breathPhase = 0.0;
+// Launch away from a wrap boundary so a direction edit reverses the visible
+// crest from the same mid-surface position instead of showing two wrap edges.
+var rollPhase = 0.15;
+var secondaryPhase = 0.19;
+var bodyBreath = 0.5;
+var liveDirection = 1.0;
+var liveLevel = 0.70;
+var liveKick = 0.0;
+var liveRadius = 0.5;
+var liveDepth = 0.42;
+var liveWhiteLevel = 0.65;
+var liveWhiteKick = 0.20;
+var liveWarmth = 0.20;
 
-function clamp01(v) {
-  if (v < 0.0) return 0.0;
-  if (v > 1.0) return 1.0;
-  return v;
+function clamp01(value) {
+  if (value < 0.0) return 0.0;
+  if (value > 1.0) return 1.0;
+  return value;
 }
 
-// ── Persistent state ─────────────────────────────────────────────────────────
-var breathA = 0.0;
-var breathB = 0.0;
-var dirOsc = 0.0;
-var autoSign = 1.0;
-var body = 0.5;        // whole-rig breath envelope, resolved once per frame
-var levGain = 1.0;
-var radScale = 0.5;
-var kickBody = 0.0;
-var depthAmt = 0.6;
-var whiteKeep = 0.0;
-var whiteBite = 0.0;
-var warmAmt = 0.0;
+function slew(current, target, amount) {
+  return current + (target - current) * amount;
+}
+
+function breathRibbon(coordinate) {
+  var wrapped = coordinate - floor(coordinate);
+  var coreAmount = 1.0 - clamp01(wrapped / 0.24);
+  var core = coreAmount * coreAmount * coreAmount;
+  var tailAmount = 1.0 - clamp01((1.0 - wrapped) / 0.58);
+  return clamp01(core + tailAmount * tailAmount * 0.34);
+}
 
 export function beforeRender(delta) {
-  var dt = delta / 1000.0;
-  if (dt < 0.0) dt = 0.0;
+  var dt = clamp01(delta / 1000.0);
   if (dt > 0.1) dt = 0.1;
+  var edit = clamp01(dt * 8.0);
+  liveDirection = slew(liveDirection, direction, clamp01(dt * 24.0));
+  liveLevel = slew(liveLevel, clamp01(level), edit);
+  liveKick = slew(liveKick, clamp01(kick), edit);
+  liveRadius = slew(liveRadius, clamp01(radius), edit);
+  liveDepth = slew(liveDepth, clamp01(depth), edit);
+  liveWhiteLevel = slew(liveWhiteLevel, clamp01(whiteLevel), edit);
+  liveWhiteKick = slew(liveWhiteKick, clamp01(whiteKick), edit);
+  liveWarmth = slew(liveWarmth, clamp01(warmth), edit);
 
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
-  var rate = BASE_RATE + MAX_RATE * localMult;
+  var rate = 0.010 + localMult * 0.050;
+  breathPhase = breathPhase + dt * rate * liveDirection;
+  // The quicker spatial roll makes reverse an honest contour-travel control
+  // rather than a barely moving phase trim.
+  rollPhase = rollPhase + dt * (0.075 + localMult * 0.44) * liveDirection;
+  secondaryPhase = secondaryPhase + dt * rate * liveDirection * 0.41421;
+  if (breathPhase >= PHASE_WRAP) breathPhase = breathPhase - PHASE_WRAP;
+  else if (breathPhase <= -PHASE_WRAP) breathPhase = breathPhase + PHASE_WRAP;
+  if (rollPhase >= PHASE_WRAP) rollPhase = rollPhase - PHASE_WRAP;
+  else if (rollPhase <= -PHASE_WRAP) rollPhase = rollPhase + PHASE_WRAP;
+  if (secondaryPhase >= PHASE_WRAP) secondaryPhase = secondaryPhase - PHASE_WRAP;
+  else if (secondaryPhase <= -PHASE_WRAP) secondaryPhase = secondaryPhase + PHASE_WRAP;
 
-  // Autonomous heading variation (soft-clipped sine — continuous through the
-  // reversal, so the roll velocity never jumps). sin() is in TURNS, so an
-  // integer wrap of dirOsc is exactly seam-free.
-  dirOsc = dirOsc + dt * 0.0163;      // ~61 s per full turn
-  if (dirOsc >= OSC_WRAP) dirOsc = dirOsc - OSC_WRAP;
-  var osc = sin(dirOsc);
-  autoSign = osc / sqrt(osc * osc + 0.0036);
-
-  var effDir = direction;
-  if (effDir >= 0.0 && effDir < 0.06) effDir = 0.06;
-  else if (effDir < 0.0 && effDir > -0.06) effDir = -0.06;
-
-  // The BODY breath always runs forward (a breath does not reverse); only the
-  // travelling roll takes the heading.
-  breathA = breathA + dt * rate;
-  if (breathA >= PHASE_WRAP) breathA = breathA - PHASE_WRAP;
-  breathB = breathB + dt * rate * 0.61803 * effDir * autoSign;
-  if (breathB >= PHASE_WRAP) breathB = breathB - PHASE_WRAP;
-  else if (breathB <= -PHASE_WRAP) breathB = breathB + PHASE_WRAP;
-
-  // Two incommensurate breaths -> a never-repeating envelope.
-  var b1 = wave(breathA);
-  var b2 = wave(breathA * 0.41421 + 0.37);     // sqrt(2)-1 ratio
-  body = b1 * 0.68 + b2 * 0.32;
-
-  // Wide levGain + a moderate default `depth`: the breath envelope and the
-  // audio level both move total brightness, so if the envelope swings as hard
-  // as `level` does the PRIMARY correlation collapses (measured 0.21 at
-  // depth 0.60). The shipped depth keeps the breath clearly visible while
-  // leaving `level` the dominant term; push depth up for a deeper breath and
-  // the pattern simply becomes less audio-legible, which is the honest
-  // trade and the operator's to make.
-  levGain = 0.08 + 0.92 * clamp01(level);
-  radScale = 0.30 + clamp01(radius) * 1.30;
-  kickBody = clamp01(kick);
-  depthAmt = clamp01(depth);
-  whiteKeep = clamp01(whiteLevel);
-  whiteBite = clamp01(whiteKick);
-  warmAmt = clamp01(warmth);
+  var inhale = wave(breathPhase);
+  var second = wave(secondaryPhase + 0.37);
+  bodyBreath = inhale * 0.72 + second * 0.28;
 }
 
 export function render3D(index, x, y, z) {
-  var nx = clamp01(x);
-  var ny = clamp01(y);
-  var nz = clamp01(z);
+  var px = x - 0.5;
+  var py = y - 0.5;
+  var pz = z - 0.5;
+  var isSign = fixtureType == FIX_TE_SIGN;
+  if (isSign) {
+    // Complete model-index folding carries one breath plane through the 40/34
+    // fixture seam and makes the paired 74-pixel signs byte-identical.
+    var signIndex = index % 74.0;
+    px = (signIndex % 10.0) / 9.0 - 0.5;
+    py = floor(signIndex / 10.0) / 7.0 - 0.5;
+    pz = 0.0;
+  }
+  var scale = 0.50 + liveRadius * 2.35;
+  var roll = wave((px * 0.78 + py * 0.93 - pz * 0.51) * scale
+                - rollPhase);
+  var crossRoll = wave((px * -0.41 + py * 0.37 + pz * 0.89) * scale
+                     + secondaryPhase);
+  var spatialBreath = bodyBreath * 0.64 + roll * 0.24 + crossRoll * 0.12;
+  var depthShape = 1.0 - liveDepth
+                 + liveDepth * spatialBreath * spatialBreath;
+  var travellingInhale = breathRibbon(py * 0.90 + px * 0.08
+                                    + pz * 0.02 - rollPhase);
+  // A second, opposed fold produces deliberate negative space during the
+  // exhale while the global bodyBreath still unifies the whole model.
+  var quietFold = smoothstep(0.28, 0.76,
+                             roll * 0.58 + (1.0 - crossRoll) * 0.42);
+  var globalInhale = 0.16 + bodyBreath * 0.84;
+  var roleLevel = 0.10 + depthShape * 0.44
+                + travellingInhale * liveDepth * 0.30;
+  var nativeAccent = 0.0;
+  var nativeShare = 0.14;
+  var rgbBias = 1.0;
 
-  // The travelling component: the breath rolls across the rig rather than
-  // flashing everywhere at once.
-  var roll = wave(nx * 0.55 * radScale + ny * 0.90 * radScale - nz * 0.35 * radScale + breathB);
+  if (fixtureType == FIX_BAR_18) {
+    // Hull Canvas: broad ribs inhale together, while offset voids keep the
+    // surface dimensional instead of uniformly white.
+    var volume = wave(py * scale * 0.74 - pz * 0.31
+                    + rollPhase * 0.52);
+    var hullRib = pow(wave(pixelLocalIndex / 18.0 * 1.5
+                         + rollPhase * 0.29), 4.0);
+    roleLevel = 0.08 + globalInhale * 0.28 + depthShape * 0.24
+              + volume * liveDepth * 0.18
+              + hullRib * quietFold * liveDepth * 0.24;
+    nativeShare = 0.18;
+  } else if (fixtureType == FIX_RAW_LED) {
+    // Silhouette: one bright crest traces the outline with a dim tail.
+    var contourCrest = breathRibbon(pixelLocalIndex * 0.021 + pz * 0.28
+                                  + py * 0.12 - rollPhase * 1.17);
+    roleLevel = 0.14 + globalInhale * 0.20 + depthShape * 0.16
+              + contourCrest * liveDepth * 0.56;
+    nativeShare = 0.08;
+    rgbBias = 1.08;
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    // Jewelry: six pearls inhale in sequence rather than as a flat rail.
+    var pearlBreath = wave(pixelLocalIndex / 6.0 - breathPhase * 0.72
+                         - rollPhase * 0.24);
+    var pearlHalo = pow(pearlBreath, 2.0);
+    var pearl = pow(pearlBreath, 8.0);
+    roleLevel = 0.12 + globalInhale * 0.16 + pearlHalo * 0.18
+              + pearl * 0.58;
+    nativeAccent = pearl * 0.18
+                 + liveWhiteKick * (0.10 + pearl * 0.62);
+    nativeShare = 0.84;
+    rgbBias = 1.10;
+  } else if (fixtureType == FIX_PAR) {
+    // Organs: staggered single-source answers to the shared inhale.
+    var organBreath = wave(breathPhase + fixtureId * 0.173);
+    organBreath = pow(organBreath, 4.0);
+    roleLevel = 0.10 + globalInhale * 0.18 + organBreath * 0.64
+              + liveKick * organBreath * 0.24;
+    nativeAccent = liveWhiteKick * organBreath * 0.34;
+    nativeShare = 0.32;
+  } else if (isSign) {
+    // Identity: a complete paired 74-pixel card breathes globally while two
+    // local diagonals move through it, preserving both readability and life.
+    var signDiagonal = breathRibbon((px + 0.5) * 0.76
+                                  + (py + 0.5) * 0.38
+                                  - rollPhase * 0.71);
+    var signCounter = wave((px - py) * scale * 0.67
+                         + secondaryPhase * 0.63);
+    var letterBreath = signDiagonal * 0.68 + signCounter * 0.32;
+    roleLevel = 0.20 + globalInhale * 0.22 + depthShape * 0.12
+              + letterBreath * liveDepth * 0.42;
+    nativeShare = 0.22;
+    rgbBias = 1.10;
+  }
+  // Every instrument receives the same signed travelling inhale on top of
+  // its authored detail, making Direction an unmistakable physical reversal.
+  roleLevel = roleLevel + travellingInhale * liveDepth * 0.52;
 
-  // Combine the whole-rig breath with the roll, then apply depth. depth = 0
-  // leaves a steady sheet; depth = 1 swings from a dim floor to full.
-  var env = body * 0.70 + roll * 0.30;
-  var shaped = 1.0 - depthAmt + depthAmt * (env * env);   // squared -> softer bottoms
+  var authoredLevel = 0.14 + liveLevel * 0.86;
+  var brightness = clamp01((0.045 + roleLevel * 0.91) * authoredLevel
+                         * (1.0 + liveKick * 0.30));
+  var rgbShare = (0.28 + (1.0 - liveWhiteLevel) * 0.56) * rgbBias;
+  var red = brightness * rgbShare;
+  var green = red * (1.0 - liveWarmth * 0.26);
+  var blue = red * (1.0 - liveWarmth * 0.60);
+  var white = clamp01(brightness * liveWhiteLevel * nativeShare
+                    + nativeAccent);
 
-  var bri = shaped * levGain * (1.0 + kickBody * 0.28);
-  bri = clamp01(bri);
-
-  // ── WHITE EMIT (see 60_white_wash.js header) ───────────────────────────────
-  var rgbShare = 1.0 - 0.72 * whiteKeep;
-  var wg = 1.0 - warmAmt * 0.26;
-  var wb = 1.0 - warmAmt * 0.60;
-  var rgbBri = bri * rgbShare;
-
-  var wLane = bri * whiteKeep + whiteBite * bri * 0.85;
-  if (wLane > 1.0) wLane = 1.0;
-  // LANE MATCH (w == a): amber tracks white exactly. Bare W is cold, bare A is
-  // yellow; matched W+A is the warm white the ship reads as white, and it is
-  // what the LED strands already render. Warmth still shapes the RGB lanes.
-  var aLane = wLane;
-
-  rgbwau(clamp01(rgbBri), clamp01(rgbBri * wg), clamp01(rgbBri * wb),
-         clamp01(wLane), clamp01(aLane), 0.0);
+  rgbwau(clamp01(red), clamp01(green), clamp01(blue), white, white, 0.0);
 }

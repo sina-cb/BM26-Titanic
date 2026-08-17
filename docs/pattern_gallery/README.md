@@ -11,11 +11,14 @@ From `marsin_engine/`:
 
 ```bash
 node tools/playlist_gallery/generate.mjs --scene titanic --playlist ambient
-node tools/playlist_gallery/generate.mjs --scene titanic --playlist baby_blue --palette baby_blue
+node tools/playlist_gallery/generate.mjs --scene titanic --playlist deep_sea --palette baby_reveal_duet
+node tools/transition_gallery/generate.mjs
 node tools/playlist_gallery/generate.mjs --index-only
 ```
 
-Default clips are 10 seconds at 8 fps and use exact saved values with no audio.
+Default clips are 10 seconds at 8 fps, a 100% pattern clock, and use exact saved values with no audio.
+Use `--global-speed 0.3` when the operator's review target is the Ambient
+30% global clock; the manifest and gallery header record that scale explicitly.
 Use `--variation sound` only when you intentionally want the pattern-authored
 audio suggestions. Use `--palette <id>` to apply an exact palette from
 `marsin_engine/config.yaml`; an unknown palette or a pattern without both
@@ -27,3 +30,9 @@ A mild display-only tone curve keeps low-light detail legible on ordinary screen
 The interactive local review system in `marsin_engine/tools/gallery/` remains
 the live audition tool; this directory is the permanent, teammate-shareable
 playlist record.
+
+The transition gallery under `transitions/` renders every Deck transition
+against one fixed full-rig Baby blue-to-pink sequence. It mirrors the current
+Deck compositor, including its smoothstep fader and tail-replacement behavior,
+so visual defects remain visible rather than being polished out of the review
+artifact.

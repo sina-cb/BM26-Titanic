@@ -6,6 +6,8 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { CodeHighlight } from '@/components/code_highlight';
 import { caretScrollTarget, TAB_INSERTION } from '@/components/studio_editor_logic';
 import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern, getApiBaseAsync } from '@/utils/api';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import { ConfigSubviewFrame } from '@/components/config_subview_frame';
 
 // ---------------------------------------------------------------------------
 // Editor geometry constants. The highlight sub-layer and the transparent
@@ -33,7 +35,19 @@ const WEB_EDITOR_INPUT_STYLE = (Platform.OS === 'web'
   ? { caretColor: '#00daf3', overflow: 'hidden' }
   : null) as TextStyle | null;
 
+// STUDIO is a CONFIG sub-view (operator ruling 2026-08-15) — same route,
+// same screen, just reached from a card in CONFIG instead of a rail slot.
 export default function StudioScreen() {
+  return (
+    <PerformanceRouteGuard routeName="studio">
+      <ConfigSubviewFrame routeName="studio">
+        <StudioScreenContent />
+      </ConfigSubviewFrame>
+    </PerformanceRouteGuard>
+  );
+}
+
+function StudioScreenContent() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const [patterns, setPatterns] = useState<string[]>([]);

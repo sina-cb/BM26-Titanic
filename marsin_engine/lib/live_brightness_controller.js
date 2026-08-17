@@ -23,6 +23,34 @@ function requireRevision(value, current) {
   }
 }
 
+/** Stable group-name to section-id map used to guard armed model reloads. */
+export function modelGroupSectionMap(pixels) {
+  if (!Array.isArray(pixels)) throw new Error('model pixels must be an array');
+  const groups = new Map();
+  for (const pixel of pixels) {
+    if (!pixel || typeof pixel.group !== 'string' || pixel.group.length === 0
+        || !Number.isInteger(pixel.sId) || pixel.sId <= 0) {
+      throw new Error('every model pixel needs a group name and positive integer sectionId');
+    }
+    const previous = groups.get(pixel.group);
+    if (previous !== undefined && previous !== pixel.sId) {
+      throw new Error(`model group '${pixel.group}' spans sectionIds ${previous} and ${pixel.sId}`);
+    }
+    groups.set(pixel.group, pixel.sId);
+  }
+  return groups;
+}
+
+export function sameModelGroupSections(currentPixels, candidatePixels) {
+  const current = modelGroupSectionMap(currentPixels);
+  const candidate = modelGroupSectionMap(candidatePixels);
+  if (current.size !== candidate.size) return false;
+  for (const [group, sectionId] of current) {
+    if (candidate.get(group) !== sectionId) return false;
+  }
+  return true;
+}
+
 /**
  * Transient brightness owned by one ARMED Live Touch session.
  *
@@ -190,7 +218,10 @@ export class LiveBrightnessController {
     this._tick();
     for (const pixel of pixels) {
       const group = this.groupsBySectionId.get(pixel.sId);
-      const scale = this.master * (group === undefined ? 1 : group);
+      if (group === undefined) {
+        throw new Error(`Live Touch brightness has no factor for sectionId ${pixel.sId}`);
+      }
+      const scale = this.master * group;
       for (const lane of PIXEL_LANES) {
         pixel[lane] = Math.max(0, Math.min(1, pixel[lane])) * scale;
       }
@@ -212,7 +243,12 @@ export class LiveBrightnessController {
     this._tick();
     for (let pixelIndex = 0; pixelIndex < modelPixels.length; pixelIndex++) {
       const group = this.groupsBySectionId.get(modelPixels[pixelIndex].sId);
-      const scale = this.master * (group === undefined ? 1 : group);
+      if (group === undefined) {
+        throw new Error(
+          `Live Touch brightness has no factor for sectionId ${modelPixels[pixelIndex].sId}`,
+        );
+      }
+      const scale = this.master * group;
       const offset = pixelIndex * PIXEL_LANES.length;
       for (let laneIndex = 0; laneIndex < PIXEL_LANES.length; laneIndex++) {
         buffer6ch[offset + laneIndex] = Math.round(buffer6ch[offset + laneIndex] * scale);

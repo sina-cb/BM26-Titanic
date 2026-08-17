@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { LiveBrightnessController } from '../../lib/live_brightness_controller.js';
+import {
+  LiveBrightnessController,
+  modelGroupSectionMap,
+  sameModelGroupSections,
+} from '../../lib/live_brightness_controller.js';
 
 function pixel(sectionId, value = 1) {
   return { sId: sectionId, r: value, g: value, b: value, w: value, a: value, u: value };
@@ -56,6 +60,32 @@ test('Uint8 render buffer refuses a model-size mismatch', () => {
     () => controller.applyBuffer(new Uint8Array(6), [{ sId: 11 }, { sId: 11 }]),
     /output\/model size mismatch/,
   );
+});
+
+test('active brightness refuses unknown model sections instead of bypassing them', () => {
+  const controller = new LiveBrightnessController();
+  controller.activate('touch_a', [11]);
+  assert.throws(() => controller.apply([pixel(22)]), /no factor for sectionId 22/);
+  assert.throws(
+    () => controller.applyBuffer(new Uint8Array(6), [{ sId: 22 }]),
+    /no factor for sectionId 22/,
+  );
+});
+
+test('armed model reload compatibility is keyed by stable group name and section id', () => {
+  const current = [
+    { group: 'Hull', sId: 11 },
+    { group: 'Hull', sId: 11 },
+    { group: 'Sign', sId: 22 },
+  ];
+  assert.deepEqual(modelGroupSectionMap(current), new Map([['Hull', 11], ['Sign', 22]]));
+  assert.equal(sameModelGroupSections(current, [...current].reverse()), true);
+  assert.equal(sameModelGroupSections(current, [
+    { group: 'Hull', sId: 22 }, { group: 'Sign', sId: 11 },
+  ]), false);
+  assert.throws(() => modelGroupSectionMap([
+    { group: 'Hull', sId: 11 }, { group: 'Hull', sId: 12 },
+  ]), /spans sectionIds/);
 });
 
 test('replace is exhaustive and atomic', () => {

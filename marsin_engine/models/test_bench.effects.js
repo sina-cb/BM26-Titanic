@@ -1,5 +1,5 @@
 // Auto-generated Companion Special Effects model — do not edit manually
-// Updated: 2026-08-06T21:48:08.969Z
+// Updated: 2026-08-16T05:16:50.771Z
 
 export const specialEffects = [
   { id: 'chauvethaze4d_10', kind: 'haze', fixtureType: 'ChauvetHaze4D', name: 'ChauvetHaze4D 10', group: 'SpecialEffects', patch: { universe: 1, addr: 510, footprint: 2 }, channels: {"fan":1,"haze":2}, controlGroup: 'fogger' },

@@ -17,7 +17,8 @@
 // honour res.ok and never fabricate success.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
@@ -96,7 +97,7 @@ export function SnapshotBar({ disabled = false, compact = false }: {
     setBusy(false);
     if (!res.ok) {
       console.error('[SnapshotBar] Capture rejected:', res.error);
-      Alert.alert('Snapshot not saved', `The engine rejected this look. ${res.error || ''}`.trim());
+      opError('Snapshot not saved', `The engine rejected this look. ${res.error || ''}`.trim());
       return;
     }
     setNameDraft('');
@@ -111,7 +112,7 @@ export function SnapshotBar({ disabled = false, compact = false }: {
     const res = await recallSnapshot(name);
     if (!res.ok) {
       console.error(`[SnapshotBar] Recall rejected for "${name}":`, res.error);
-      Alert.alert(
+      opError(
         'Look not recalled',
         `The engine rejected recalling "${name}". ${res.error || ''} `.trim() +
           'A look with more overlays than the channel cap, or a malformed snapshot, cannot be recalled.',
@@ -129,7 +130,7 @@ export function SnapshotBar({ disabled = false, compact = false }: {
     const res = await recallSnapshotFade(name, Math.round(durationS * 1000));
     if (!res.ok) {
       console.error(`[SnapshotBar] Morph rejected for "${name}":`, res.error);
-      Alert.alert(
+      opError(
         'Look not morphed',
         `The engine rejected morphing to "${name}". ${res.error || ''} `.trim() +
           'A look with more overlays than the channel cap, or a malformed snapshot, cannot be recalled.',
@@ -144,7 +145,7 @@ export function SnapshotBar({ disabled = false, compact = false }: {
     const res = await deleteSnapshot(name);
     if (!res.ok) {
       console.error(`[SnapshotBar] Delete rejected for "${name}":`, res.error);
-      Alert.alert('Snapshot not deleted', `The engine rejected deleting "${name}". ${res.error || ''}`.trim());
+      opError('Snapshot not deleted', `The engine rejected deleting "${name}". ${res.error || ''}`.trim());
     }
     // WS `snapshots` event reconciles the list on success.
   }, [deletePrompt]);

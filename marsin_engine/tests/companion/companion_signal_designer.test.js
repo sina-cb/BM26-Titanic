@@ -21,7 +21,8 @@ import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, VIEW_TYPES,
   defaultCompanionConfig, validateCompanionConfig, validateSignal, validateView,
   dumpCompanionConfig, loadCompanionConfig, saveCompanionConfig,
-  parseCaptureDevice, captureDeviceString, resolveOscOut, missingCuratedOutputs,
+  parseCaptureDevice, captureDeviceString, resolveCompanionBootSource,
+  resolveOscOut, missingCuratedOutputs,
   COMPANION_CONFIG_PATH,
 } from '../../audio/companion/companion_config.js';
 import { ParamCenter } from '../../lib/param_center.js';
@@ -535,6 +536,31 @@ test('captureDeviceString is the inverse (Companion source → capture.device)',
   assert.equal(captureDeviceString({ mode: 'file', file: '/songs/a.wav' }), 'file:/songs/a.wav');
   assert.equal(captureDeviceString({ mode: 'mic', device: 'hw:1,0' }), 'hw:1,0');
   assert.equal(captureDeviceString({ mode: 'mic', device: null }), '');
+});
+
+test('Companion boot treats persisted source sentinels as sources, never microphones', () => {
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'mic', captureDevice: 'test',
+  }), { mode: 'test' });
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'mic', captureDevice: 'file:/songs/a.wav',
+  }), { mode: 'file', file: '/songs/a.wav' });
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'test', captureDevice: 'audio=Amazon USB Mic',
+  }), { mode: 'mic', device: 'audio=Amazon USB Mic' });
+});
+
+test('explicit Companion source/device and CLI source overrides remain authoritative', () => {
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'mic', companionDevice: 'audio=Booth Mic', captureDevice: 'test',
+  }), { mode: 'mic', device: 'audio=Booth Mic' });
+  assert.deepEqual(resolveCompanionBootSource({
+    sourceOverride: 'test', companionSource: 'mic', companionDevice: 'audio=Booth Mic',
+    captureDevice: 'audio=Amazon USB Mic',
+  }), { mode: 'test' });
+  assert.throws(() => resolveCompanionBootSource({
+    companionSource: 'bogus', captureDevice: undefined,
+  }), /one of: mic, test, file/);
 });
 
 test('source mode round-trips through capture.device (two-way sync)', () => {

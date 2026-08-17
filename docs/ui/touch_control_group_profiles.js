@@ -122,13 +122,18 @@
     if (cap) cap.style.bottom = value + '%';
     if (out) out.textContent = mixed ? 'MIX' : value + '%';
     strip.classList.toggle('is-mixed', mixed === true);
+    var track = strip.querySelector('.fader-track');
+    if (track) {
+      track.setAttribute('aria-valuenow', String(value));
+      track.setAttribute('aria-valuetext', mixed ? 'Mixed group levels' : value + ' percent');
+    }
     var badge = strip.querySelector('.profile-view-count');
     if (badge && strip.dataset.summary) {
       badge.textContent = mixed ? 'MIX · ' + strip.dataset.groupCount + 'G' : strip.dataset.summary;
     }
   }
 
-  function bindFader(track, apply) {
+  function bindFader(track, apply, label) {
     var pointerId = null;
     var latestY = null;
     var frame = null;
@@ -149,9 +154,27 @@
         apply(valueFor(latestY), false);
       });
     }
+    function finish(event, cancelled) {
+      if (event.pointerId !== pointerId) return;
+      event.preventDefault();
+      cancelFrame();
+      var y = cancelled ? latestY : event.clientY;
+      if (y !== null) apply(valueFor(y), true);
+      pointerId = null;
+      latestY = null;
+    }
+    track.setAttribute('role', 'slider');
+    track.setAttribute('tabindex', '0');
+    track.setAttribute('aria-label', label);
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    track.setAttribute('aria-valuenow', '100');
     track.addEventListener('pointerdown', function (event) {
       pointerId = event.pointerId;
-      try { track.setPointerCapture(pointerId); } catch (_) { /* pointer capture is optional */ }
+      try { track.setPointerCapture(pointerId); } catch (_) {
+        // Window-level release listeners below remain authoritative when an
+        // older iPad browser refuses pointer capture.
+      }
       event.preventDefault();
       schedule(event.clientY);
     });
@@ -160,18 +183,22 @@
       event.preventDefault();
       schedule(event.clientY);
     });
-    track.addEventListener('pointerup', function (event) {
-      if (event.pointerId !== pointerId) return;
+    root.addEventListener('pointerup', function (event) { finish(event, false); });
+    root.addEventListener('pointercancel', function (event) { finish(event, true); });
+    track.addEventListener('keydown', function (event) {
+      var current = Number(track.getAttribute('aria-valuenow'));
+      if (!Number.isFinite(current)) current = 100;
+      var step = event.shiftKey ? 5 : 1;
+      var next = current;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowRight') next += step;
+      else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') next -= step;
+      else if (event.key === 'PageUp') next += 10;
+      else if (event.key === 'PageDown') next -= 10;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = 100;
+      else return;
       event.preventDefault();
-      cancelFrame();
-      apply(valueFor(event.clientY), true);
-      pointerId = null;
-    });
-    track.addEventListener('pointercancel', function (event) {
-      if (event.pointerId !== pointerId) return;
-      cancelFrame();
-      if (latestY !== null) apply(valueFor(latestY), true);
-      pointerId = null;
+      apply(Math.max(0, Math.min(100, next)), true);
     });
   }
 
@@ -189,7 +216,7 @@
       var value = bank.setMaster(percent);
       drawLevel(strip, value, false);
       dispatchMaster(value, final);
-    });
+    }, 'Live groups master brightness');
     return strip;
   }
 
@@ -212,12 +239,22 @@
       var state = bank.readGroups(channel.groups);
       drawLevel(strip, state.level, state.mixedLevel);
       if (changed.length) dispatchBrightness(changed, final);
-    });
-    strip.querySelector('[data-role=profilepower]').addEventListener('click', function (event) {
+    }, channel.name + ' brightness');
+    var power = strip.querySelector('[data-role=profilepower]');
+    power.setAttribute('role', 'button');
+    power.setAttribute('tabindex', '0');
+    power.setAttribute('aria-label', channel.name + ' power');
+    function togglePower(event) {
       event.stopPropagation();
       var state = bank.readGroups(channel.groups);
       bank.setGroupsPower(channel.groups, state.onCount !== state.count);
       syncActiveProfile();
+    }
+    power.addEventListener('click', togglePower);
+    power.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      togglePower(event);
     });
     return strip;
   }
@@ -249,6 +286,7 @@
       power.classList.toggle('is-on', state.onCount === state.count);
       strip.classList.toggle('is-off', state.onCount === 0);
       power.title = state.onCount + '/' + state.count + ' member groups on';
+      power.setAttribute('aria-pressed', state.onCount === state.count ? 'true' : 'false');
     });
     syncSummary();
   }

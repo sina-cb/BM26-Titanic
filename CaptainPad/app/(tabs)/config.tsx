@@ -1,19 +1,33 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Linking, ActivityIndicator } from 'react-native';
+import { router, type Href } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useGlobalStyles, shadow } from '@/styles/globalStyles';
 import { usePalette, useTheme, ThemeMode } from '@/hooks/use-theme';
 import { THEMES, THEME_ORDER } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult, fetchEngineSettings, setEngineSettings } from '@/utils/api';
+// Straight from the leaf: api.ts re-exports only the getters it always has, and
+// the resolution SOURCE is a Config-tab concern (report _246).
+import { getApiBaseSource, type ApiBaseSource } from '@/utils/apiBase';
 import { useServerDiscovery, DiscoveredServer, normalizeSubnetPrefix } from '@/hooks/useServerDiscovery';
 import { engineEvents } from '@/utils/engineEvents';
 import {
+  BOOT_MODE_OPTIONS,
   DEFAULT_ENGINE_SETTINGS,
   EngineSettingsState,
   autoSaveHint,
+  bootModeHint,
   reconcileEngineSettings,
+  withBootMode,
+  type EngineBootMode,
 } from '@/components/engine_settings_logic';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import {
+  captainPadRouteHref,
+  captainPadSubviewRoutes,
+  type CaptainPadSubview,
+} from '@/utils/captainpad_tab_policy';
 
 // AsyncStorage key for the operator-picked subnet prefix (e.g. "10.1.1").
 // iOS getIpAddressAsync() is unreliable when multiple interfaces are
@@ -23,7 +37,24 @@ import {
 // launch, especially on the rig where the show network is fixed.
 const SUBNET_OVERRIDE_KEY = '@CaptainPad:subnetOverride';
 
+// Plain-language name for each engine-address source utils/apiBase.ts can
+// resolve from, so the operator can see WHY the address below is what it is.
+const API_BASE_SOURCE_LABEL: Record<ApiBaseSource, string> = {
+  'async-storage': 'saved on this device',
+  'served-host': "derived from this page's host",
+  'metro-host': 'derived from the Metro host',
+  'config-yaml': 'CaptainPad/config.yaml',
+};
+
 export default function ConfigScreen() {
+  return (
+    <PerformanceRouteGuard routeName="config">
+      <ConfigScreenContent />
+    </PerformanceRouteGuard>
+  );
+}
+
+function ConfigScreenContent() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const [ip, setIp] = useState('');
@@ -153,6 +184,9 @@ export default function ConfigScreen() {
              CONFIGURATION
            </Text>
         </View>
+
+        {/* ── Section 0: Config sub-views (STUDIO / MIDI / OSC) ─────────── */}
+        <ConfigSubviewCards />
 
         {/* ── Section 1: Connection Status ──────────────────────────────── */}
         <View style={[globalStyles.card, { alignSelf: 'stretch', padding: 24, marginBottom: 24 }]}>
@@ -432,10 +466,17 @@ export default function ConfigScreen() {
            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.secondary, marginBottom: 4 }}>
              ENGINE API BASE URL
            </Text>
-           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginBottom: 16 }}>
-             Currently resolved: {getApiBase()}
+           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginBottom: 8 }}>
+             Currently resolved: {getApiBase()} ({API_BASE_SOURCE_LABEL[getApiBaseSource()]})
            </Text>
-           
+           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, lineHeight: 18, marginBottom: 16 }}>
+             With nothing saved here, CaptainPad points at the host it was loaded from, on port 6968 —
+             so an iPad that opens CaptainPad from the show machine reaches that machine&apos;s engine with
+             nothing typed in. CaptainPad/config.yaml&apos;s api_base is used only when there is no serving
+             host to derive from (running on the engine box itself). Save an address to override this
+             device; RESET returns to the derived default.
+           </Text>
+
            <TextInput
              style={{
                width: '100%',
@@ -486,7 +527,7 @@ export default function ConfigScreen() {
                }}
              >
                <Text style={{ color: C.primary, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16 }}>
-                 RESET TO YAML
+                 RESET TO DEFAULT
                </Text>
              </TouchableOpacity>
            </View>
@@ -529,6 +570,70 @@ export default function ConfigScreen() {
         </View>
 
       </ScrollView>
+    </View>
+  );
+}
+
+// ── ConfigSubviewCards ────────────────────────────────────────────────
+// The surfaces that live INSIDE Config (operator ruling 2026-08-15): STUDIO,
+// MIDI and OSC each get their OWN card here instead of their own sidebar
+// slot — they are setup surfaces, and the rail's real estate belongs to the
+// surfaces you touch during a show. Each card opens the real route (nothing
+// about those screens changed); the sub-view frame carries the way back.
+//
+// The list is DERIVED from captainpad_tab_policy (parentRoute: 'config'), in
+// its declaration order — the policy stays the single source of truth for
+// which surfaces exist and where they hang.
+function ConfigSubviewCards() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
+  const subviews: CaptainPadSubview[] = captainPadSubviewRoutes('config');
+
+  return (
+    <View style={{ alignSelf: 'stretch', marginBottom: 24 }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold',
+        fontSize: 11,
+        color: C.secondary,
+        letterSpacing: 1.2,
+        marginBottom: 10,
+      }}>
+        SETUP SURFACES
+      </Text>
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
+        {subviews.map((subview) => (
+          <TouchableOpacity
+            key={subview.routeName}
+            onPress={() => router.navigate(captainPadRouteHref(subview.routeName) as Href)}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${subview.title}`}
+            style={[
+              globalStyles.card,
+              globalStyles.ambientShadow,
+              { flexGrow: 1, flexBasis: 260, padding: 20 },
+            ]}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <IconSymbol name={subview.tabBarIconName} size={22} color={C.primary} />
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 15,
+                color: C.text,
+                letterSpacing: 1.2,
+                textTransform: 'uppercase',
+              }}>
+                {subview.title}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <IconSymbol name="chevron.right" size={18} color={C.icon} />
+            </View>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, lineHeight: 17 }}>
+              {subview.summary}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
     </View>
   );
 }
@@ -583,7 +688,7 @@ function EngineSettingsCard() {
   const handleSet = useCallback(async (value: boolean) => {
     if (busy || value === settings.autoSave) return;
     // Optimistic flip, then reconcile from the engine's authoritative echo.
-    setSettings({ autoSave: value });
+    setSettings((prev) => ({ ...prev, autoSave: value }));
     setBusy(true);
     const r = await setEngineSettings({ autoSave: value });
     setBusy(false);
@@ -593,10 +698,29 @@ function EngineSettingsCard() {
     } else {
       // Roll back the optimistic flip and surface the rejection (codex P0 —
       // never show a value the engine never accepted).
-      setSettings({ autoSave: !value });
+      setSettings((prev) => ({ ...prev, autoSave: !value }));
       setError(r.error || 'Engine rejected the change');
     }
   }, [busy, settings.autoSave]);
+
+  // BOOT MODE (report _236). Rides the same route, so it needs `autoSave` in
+  // the body — the engine 400s a POST /settings without a boolean autoSave, and
+  // sending the value we already hold keeps this a one-field change.
+  const handleSetBootMode = useCallback(async (value: EngineBootMode) => {
+    if (busy || value === settings.bootMode) return;
+    const previous = settings.bootMode;
+    setSettings((prev) => withBootMode(prev, value));
+    setBusy(true);
+    const r = await setEngineSettings({ autoSave: settings.autoSave, bootMode: value });
+    setBusy(false);
+    if (r.ok && r.data) {
+      setSettings((prev) => reconcileEngineSettings(prev, r.data));
+      setError(null);
+    } else {
+      setSettings((prev) => withBootMode(prev, previous));
+      setError(r.error || 'Engine rejected the change');
+    }
+  }, [busy, settings.bootMode, settings.autoSave]);
 
   const options: { value: boolean; label: string }[] = [
     { value: true, label: 'ON' },
@@ -660,6 +784,82 @@ function EngineSettingsCard() {
       {/* Hint for the current position. */}
       <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginTop: 14, lineHeight: 17 }}>
         {autoSaveHint(settings.autoSave)}
+      </Text>
+
+      {/* ── BOOT MODE (report _236) ────────────────────────────────────
+          Which face the ENGINE comes up in on its next start. It lives in this
+          card because it is stored in the same engine-persisted settings file
+          as AUTO-SAVE (settings_state.yaml) and rides the same route — not in
+          this pad's own storage, because the boot face is decided engine-side
+          (docs/56 D1) and has to survive an engine restart with no pad present.
+          The copy states plainly that it applies NEXT boot, and that EDIT does
+          NOT open the passcode gate. */}
+      <View style={{ height: 1, backgroundColor: C.ghostBorder, marginTop: 22, marginBottom: 20 }} />
+
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <IconSymbol name="power" size={24} color={C.primary} />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 1 }}>
+          BOOT MODE
+        </Text>
+      </View>
+
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, marginBottom: 16, lineHeight: 18 }}>
+        Which mode the engine starts in the next time it launches.
+      </Text>
+
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        {BOOT_MODE_OPTIONS.map((opt) => {
+          const active = loaded && opt.value === settings.bootMode;
+          return (
+            <TouchableOpacity
+              key={opt.value}
+              onPress={() => handleSetBootMode(opt.value)}
+              disabled={busy}
+              accessibilityLabel={`Start the engine in ${opt.label} mode`}
+              accessibilityRole="button"
+              style={{
+                flexGrow: 1,
+                flexBasis: '40%',
+                paddingVertical: 14,
+                paddingHorizontal: 12,
+                borderRadius: 10,
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? C.primary : C.ghostBorder,
+                backgroundColor: active ? C.primaryContainer : C.surfaceContainerLow,
+                alignItems: 'center',
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 13,
+                color: active ? C.primary : C.text,
+                letterSpacing: 1.2,
+              }}>
+                {opt.label}
+              </Text>
+              <Text style={{
+                fontFamily: 'Inter_400Regular',
+                fontSize: 11,
+                lineHeight: 15,
+                color: C.secondary,
+                marginTop: 4,
+                textAlign: 'center',
+              }}>
+                {opt.detail}
+              </Text>
+              {active ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.primary, marginTop: 4 }}>
+                  ACTIVE
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginTop: 14, lineHeight: 17 }}>
+        {bootModeHint(settings.bootMode)}
       </Text>
 
       {/* Fetch/POST failure — visible, never a silent default. */}

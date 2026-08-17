@@ -1403,10 +1403,10 @@ So `blend_screen.js` with `progress = fader` blends the channel's output using s
 **Resolution and the valid set.** The mixer resolves a blend name by looking in
 `patterns/channel_blends/<name>.js` first, then `patterns/transitions/<name>.js`
 (`lib/pattern_mixer.js` `_compileBlend`); a name found in neither is reported
-loudly and the channel composites through the degraded host-side path. The API
+loudly and rendering is blocked without substituting another compositor. The API
 accepts exactly **three steady channel-blend modes**
-(`VALID_CHANNEL_BLEND_MODES` in `lib/api_server.js`), plus any `trans_*` name
-used transiently while a fade is in flight — anything else is rejected with a
+(`VALID_CHANNEL_BLEND_MODES` in `lib/api_server.js`), plus cataloged `trans_*`
+names used transiently while a fade is in flight — anything else is rejected with a
 400:
 
 | Script | Behavior |
@@ -1418,7 +1418,7 @@ used transiently while a fade is in flight — anything else is rejected with a
 Scripted transitions live in `patterns/transitions/` as `trans_*` — currently
 `trans_color_burst`, `trans_crossfade`, `trans_diagonal_wipe`,
 `trans_diamond_wipe`, `trans_dissolve`, `trans_flash`, `trans_iris`,
-`trans_iris_close`, `trans_morse_blink`, `trans_ripple_in`,
+`trans_iris_close`, `trans_ripple_in`,
 `trans_split_horizontal`, `trans_split_vertical`, `trans_wave_sweep`,
 `trans_wipe_down`, `trans_wipe_left`, `trans_wipe_right`. Read the directory
 rather than this list when it matters — the set changes.

@@ -11,10 +11,20 @@ import { saveShowPlan, validateShowPlan } from '../../lib/timeline/show_plan.js'
 
 const TARGET = { channel: 'deck', id: null };
 
+// The Baby show has exactly three playlists — `baby_tease`, `baby_girl`,
+// `baby_boy`. `baby_reveal` is the SPECIAL EVENT show id and never a playlist,
+// and the old `baby_pink`/`baby_blue` photo-hold playlists are retired (the
+// same two words survive only as COLOUR PALETTE ids in config.yaml, which is
+// why the palette assertions below still name them).
+const TEASE_PLAYLIST = 'baby_tease';
+const BOY_PLAYLIST = 'baby_boy';
+const GIRL_PLAYLIST = 'baby_girl';
+const TEASE_ENTRY = 'e_baby_reveal_orbit_question';
+
 function playlistAction(entryId, palette, celebration = false) {
   return {
     type: 'playlist',
-    name: celebration ? 'baby_blue' : 'baby_reveal',
+    name: celebration ? BOY_PLAYLIST : TEASE_PLAYLIST,
     ...(entryId ? { entryId } : {}),
     palette,
     target: TARGET,
@@ -67,7 +77,7 @@ function babyPlan() {
       action: {
         type: 'sequence',
         steps: [
-          { afterSec: 0, action: playlistAction('e_baby_reveal_blue', 'baby_reveal_duet') },
+          { afterSec: 0, action: playlistAction(TEASE_ENTRY, 'baby_reveal_duet') },
           { afterSec: 992, action: playlistAction(null, 'baby_blue', true) },
         ],
       },
@@ -94,7 +104,7 @@ function setup() {
   };
   const deps = {
     loadPlaylist: wire => {
-      if (wire.entryId === 'missing_entry') throw new Error('entry "missing_entry" not found in playlist "baby_reveal"');
+      if (wire.entryId === 'missing_entry') throw new Error(`entry "missing_entry" not found in playlist "${TEASE_PLAYLIST}"`);
       calls.loadPlaylist.push(structuredClone(wire));
     },
     setAutopilot: wire => calls.setAutopilot.push(structuredClone(wire)),
@@ -106,8 +116,8 @@ function setup() {
     listMixerChannelIds: () => [],
     listPlaylists: () => [
       { name: 'ambient' },
-      { name: 'baby_reveal' },
-      { name: 'baby_blue' },
+      { name: TEASE_PLAYLIST },
+      { name: BOY_PLAYLIST },
     ],
     setDeckTransition: () => {},
     setDeckOverlaysEnabled: () => {},
@@ -147,7 +157,7 @@ test('sequence schema preserves exact entries and rejects decreasing offsets', (
   const normalized = validateShowPlan(babyPlan());
   const sequence = normalized.cues[0].action;
   assert.equal(sequence.type, 'sequence');
-  assert.equal(sequence.steps[0].action.entryId, 'e_baby_reveal_blue');
+  assert.equal(sequence.steps[0].action.entryId, TEASE_ENTRY);
   assert.equal(sequence.steps[0].action.palette, 'baby_reveal_duet');
 
   const invalid = babyPlan();
@@ -155,11 +165,20 @@ test('sequence schema preserves exact entries and rejects decreasing offsets', (
   assert.throws(() => validateShowPlan(invalid), /afterSec must be a finite number >= 0/);
 });
 
-test('shipped Titanic plan and palette catalog contain both explicit reveal paths', () => {
+// This test used to pin `baby_reveal` / `baby_pink` / `baby_blue` as the plan's
+// PLAYLIST names, which is how the shipped plan kept pointing at playlists that
+// had been deleted: nothing anywhere checked that a timeline playlist action
+// names a playlist that EXISTS. The special-event runner has that check
+// (`_assertPlaylistsUsable` refuses the ARM by name); the timeline does not, so
+// a dangling name is silent until the cue fires in front of the crowd. The
+// on-disk assertion at the end of this test is that missing guard, standing in
+// until the timeline grows a load-time one of its own.
+test('shipped Titanic plan drives the three canonical Baby playlists, and they exist', () => {
   const engineDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const repoRoot = path.resolve(engineDir, '..');
   const config = yaml.load(fs.readFileSync(path.join(engineDir, 'config.yaml'), 'utf8'));
   const paletteIds = new Set(config.colorPalettes.map(palette => palette.id));
+  // COLOUR PALETTES, not playlists — these three ids keep their names.
   assert.ok(paletteIds.has('baby_reveal_duet'));
   assert.ok(paletteIds.has('baby_pink'));
   assert.ok(paletteIds.has('baby_blue'));
@@ -170,14 +189,37 @@ test('shipped Titanic plan and palette catalog contain both explicit reveal path
   )));
   const pink = plan.cues.find(cue => cue.id === 'c_baby_reveal_pink');
   const blue = plan.cues.find(cue => cue.id === 'c_baby_reveal_blue');
-  assert.equal(pink.action.steps[0].action.entryId, 'e_baby_reveal_pink');
-  assert.equal(pink.action.steps[1].action.name, 'baby_pink');
+
+  // Both paths open on the SAME outcome-blind tease — the answer only appears
+  // in step two, which is the whole point of the reveal.
+  assert.equal(pink.action.steps[0].action.name, TEASE_PLAYLIST);
+  assert.equal(blue.action.steps[0].action.name, TEASE_PLAYLIST);
+  assert.equal(pink.action.steps[0].action.entryId, TEASE_ENTRY);
+  assert.equal(blue.action.steps[0].action.entryId, TEASE_ENTRY);
+  assert.equal(pink.action.steps[0].action.palette, 'baby_reveal_duet');
+  assert.equal(blue.action.steps[0].action.palette, 'baby_reveal_duet');
+
+  assert.equal(pink.action.steps[1].action.name, GIRL_PLAYLIST);
   assert.equal(pink.action.steps[1].action.palette, 'baby_pink');
-  assert.equal(blue.action.steps[0].action.entryId, 'e_baby_reveal_blue');
-  assert.equal(blue.action.steps[1].action.name, 'baby_blue');
+  assert.equal(blue.action.steps[1].action.name, BOY_PLAYLIST);
   assert.equal(blue.action.steps[1].action.palette, 'baby_blue');
   assert.equal(pink.action.steps[1].afterSec, 992);
   assert.equal(blue.action.steps[1].afterSec, 992);
+
+  // Every playlist this plan names must be on disk, with the named entry.
+  const playlistDir = path.join(repoRoot, 'simulation', 'scenes', 'titanic', 'playlists');
+  for (const cue of [pink, blue]) {
+    for (const step of cue.action.steps) {
+      const file = path.join(playlistDir, `${step.action.name}.yaml`);
+      assert.equal(fs.existsSync(file), true,
+        `${cue.id} fires playlist "${step.action.name}" which does not exist`);
+      const doc = yaml.load(fs.readFileSync(file, 'utf8'));
+      assert.ok(doc.entries.length > 0, `${step.action.name}.yaml has no entries`);
+      if (!step.action.entryId) continue;
+      assert.ok(doc.entries.some(entry => entry.id === step.action.entryId),
+        `${cue.id} names entry "${step.action.entryId}" which ${step.action.name}.yaml does not define`);
+    }
+  }
 });
 
 test('baby sequence starts exact entry at zero and celebrates at exactly 992 seconds', async () => {
@@ -190,8 +232,8 @@ test('baby sequence starts exact entry at zero and celebrates at exactly 992 sec
     await service.fireCue('c_baby_reveal_blue');
     assert.deepEqual(calls.loadPlaylist[0], {
       target: { kind: 'deck' },
-      name: 'baby_reveal',
-      entryId: 'e_baby_reveal_blue',
+      name: TEASE_PLAYLIST,
+      entryId: TEASE_ENTRY,
     });
     assert.equal(service.getState().activeSequence?.nextInSec, 992);
     assert.ok(calls.setParams.some(call => call.colorPalette1?.h === 0.94));
@@ -206,7 +248,7 @@ test('baby sequence starts exact entry at zero and celebrates at exactly 992 sec
     assert.equal(calls.loadPlaylist.length, 2);
     assert.deepEqual(calls.loadPlaylist[1], {
       target: { kind: 'deck' },
-      name: 'baby_blue',
+      name: BOY_PLAYLIST,
       entryId: null,
     });
     assert.equal(service.getState().activeSequence, null);

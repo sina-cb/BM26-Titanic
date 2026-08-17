@@ -1,6 +1,13 @@
-// Shared isolation for the two suites that spawn the REAL Audio Companion
-// (tests/companion/companion_osc_accounting.test.js and
-// tests/companion/companion_new_signals.test.js).
+// Shared isolation for suites that spawn the REAL Audio Companion. Three
+// things get neutralised: the OUTBOUND endpoints (engine + OSC), the audio
+// SOURCE, and the STATE ROOT. Current consumers:
+// tests/companion/companion_derived_patch_order.test.js,
+// tests/companion/companion_isolation_state_root.test.js,
+// tests/companion/companion_new_signals.test.js,
+// tests/companion/companion_osc_accounting.test.js (full env for the booting
+// tests, `isolatedStateRoot` alone for the ones whose subject IS the tracked
+// config's production endpoints) and
+// tests/companion/companion_live_edit_collisions.test.js.
 //
 // ░░ WHY (incident, report _173) ░░
 // companion_server.js reads the ENGINE's config to learn (a) which engine to
@@ -52,11 +59,79 @@ const ENGINE_DIR = path.resolve(__dirname, '..', '..');
 export const BLACK_HOLE_HOST = '192.0.2.1';
 
 /**
+ * The ONLY thing a fresh isolated scene-state file may say: which capture
+ * source to use. Deliberately NOT a copy of the operator's scene state (report
+ * `_207` — the copy leaked its content, so the test scored the operator's live
+ * mic gain / FFT size / live-patched derived groups). Every analyzer knob the
+ * Companion needs comes from the tracked `config.yaml`; the scene state
+ * contributes only the mic selection, so that is all the fixture carries.
+ */
+const ISOLATED_SCENE_STATE = 'capture:\n  device: test\n  platform: auto\n';
+
+/**
+ * Just the STATE half of the isolation: a fresh throwaway `MARSIN_STATE_DIR`
+ * seeded with the two-key mic fixture for every tracked scene NAME, leaving
+ * `MARSIN_CONFIG_FILE` untouched.
+ *
+ * ░░ WHO NEEDS THIS RATHER THAN THE FULL ENV (report `_220`) ░░
+ * A test whose SUBJECT is the tracked `config.yaml` — e.g. "a `--no-mic`
+ * companion must refuse a port that matches the CONFIGURED production
+ * endpoint" — cannot be handed the black-holed scratch config: that rewrites
+ * the very endpoint under test (`targetsMatch` compares hosts, so a
+ * TEST-NET-1 configured host stops matching the loopback effective one and
+ * the refusal the test exists to prove never fires). Such a test still must
+ * not read the operator's live scene overlay, so it takes the state root
+ * alone.
+ *
+ * @param {string} prefix  scratch-dir name prefix (per-suite, for debugging)
+ * @returns {{ env: object, stateRoot: string, cleanup: () => void }}
+ */
+export function isolatedStateRoot(prefix) {
+  if (!prefix || typeof prefix !== 'string') {
+    throw new TypeError(`isolatedStateRoot requires a prefix, got: ${JSON.stringify(prefix)}`);
+  }
+  // A brand-new state root per call. `loadEffectiveAudioAnalysisConfig` REQUIRES
+  // `<root>/<scene>/audio_state.yaml` to exist (a missing file throws — codex
+  // P0, no silent default), so seed the fixture for every scene NAME the tracked
+  // tree knows about. Names only: no byte of the operator's state is copied, and
+  // a `--model` the repo has no scene for still fails exactly as loudly as it
+  // did before this redirect existed.
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}_companion_state_`));
+  for (const scene of fs.readdirSync(path.join(ENGINE_DIR, 'states'), { withFileTypes: true })) {
+    if (!scene.isDirectory()) continue;
+    fs.mkdirSync(path.join(stateRoot, scene.name), { recursive: true });
+    fs.writeFileSync(path.join(stateRoot, scene.name, 'audio_state.yaml'), ISOLATED_SCENE_STATE, 'utf8');
+  }
+  return {
+    stateRoot,
+    env: { ...process.env, MARSIN_STATE_DIR: stateRoot },
+    cleanup() {
+      try { fs.rmSync(stateRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+    },
+  };
+}
+
+/**
  * Write a scratch config.yaml whose companion endpoints can't reach anything,
- * and return the child `env` that points a spawned companion at it.
+ * plus a fresh throwaway state root, and return the child `env` that points a
+ * spawned companion at both.
+ *
+ * ░░ WHY THE STATE ROOT (report `_214`) ░░
+ * `companion_server.js` resolves its analyzer config with
+ * `loadEffectiveAudioAnalysisConfig({modelName: <--model>})` — tracked
+ * `config.yaml` with `states/<scene>/audio_state.yaml` merged OVER it. Without
+ * `MARSIN_STATE_DIR` a spawned companion therefore booted on the OPERATOR'S
+ * live overlay (measured on this box: `bands.inputGain` 1 → 8.83, `fftSize`
+ * 2048 → 1024 on `test_bench`), so every companion suite was scored against
+ * whatever knob had last been turned, and any state write the companion ever
+ * gains would land in the tracked tree. Redirecting the state root closes both
+ * halves at once: reads resolve to a fresh fixture, writes can only reach a
+ * temp dir. `lib/state_paths.js` is the single seam every state path goes
+ * through, so this covers writers that do not exist yet as well.
  *
  * @param {string} prefix  scratch-file name prefix (per-suite, for debugging)
- * @returns {{ env: object, configPath: string, cleanup: () => void }}
+ * @returns {{ env: object, configPath: string, stateRoot: string,
+ *            cleanup: () => void }}
  */
 export function isolatedCompanionEnv(prefix) {
   if (!prefix || typeof prefix !== 'string') {
@@ -83,10 +158,18 @@ export function isolatedCompanionEnv(prefix) {
   const configPath = path.join(os.tmpdir(), `${prefix}_companion_config_${process.pid}.yaml`);
   fs.writeFileSync(configPath, yaml.dump(cfg), 'utf8');
 
+  // The state half is the same fixture seeding either way — one implementation,
+  // shared with the config-sensitive callers that take the state root alone.
+  const state = isolatedStateRoot(prefix);
+
   return {
     configPath,
-    env: { ...process.env, MARSIN_CONFIG_FILE: configPath },
-    cleanup() { try { fs.rmSync(configPath, { force: true }); } catch { /* best-effort */ } },
+    stateRoot: state.stateRoot,
+    env: { ...state.env, MARSIN_CONFIG_FILE: configPath },
+    cleanup() {
+      try { fs.rmSync(configPath, { force: true }); } catch { /* best-effort */ }
+      state.cleanup();
+    },
   };
 }
 

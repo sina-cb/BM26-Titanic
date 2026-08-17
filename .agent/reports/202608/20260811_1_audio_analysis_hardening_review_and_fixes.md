@@ -26,13 +26,13 @@ Review contract honored throughout: no git write ops, no engine boot, no mic, no
   `bpm_tracker.js` DEFAULTS (lag-normalized AC + explicit metrical-grid model).
 - **`--no-mic` was airtight for the mic but not for the network.** It now enforces three
   boot interlocks: explicit `--source test|file`, explicit `--osc-port`+`--engine-port`
-  (loopback ≠ isolation — the production engine lives on 127.0.0.1:6968), and loopback-host
+  (loopback ≠ isolation — the production engine lives on the loopback interface at its standard port), and loopback-host
   checks on shared target resolvers.
 - **Silent-zero publish path removed** (`?? 0` → throw, consistent with raw path);
   live-edit collision checks added; `/signal_snapshot` now reports real per-key write counts
   instead of a static "registered" flag.
 - **Incident root cause:** `tests/hil/hil_audio_realtime_test.mjs` — matched the default test
-  glob, defaulted to `--source mic` on `0.0.0.0:31666`, no liveness assert. Now gated behind
+  glob, defaulted to `--source mic` bound to all interfaces on its designer port, no liveness assert. Now gated behind
   `BM26_HIL_OK=1` before any spawn. Note: `run_hil.mjs run-all` therefore now *skips* it —
   deliberate coverage change, operator informed.
 - **Evaluator had no gates.** Now: 14-tempo grid, subgroup gates with exit 1 naming the

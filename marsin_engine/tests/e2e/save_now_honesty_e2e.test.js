@@ -61,7 +61,8 @@ function makeEngine() {
     proc = spawn(
       'node',
       ['engine.js', '--pattern', '13_sparkle', '--model', E2E_SCENE,
-        '--port', String(port), '--dest', '127.0.0.9'],
+        // TEST-NET-1 (RFC 5737) black hole — loopback is not one.
+        '--port', String(port), '--dest', '192.0.2.9'],
       {
         cwd: ENGINE_DIR,
         stdio: ['ignore', 'pipe', 'pipe'],

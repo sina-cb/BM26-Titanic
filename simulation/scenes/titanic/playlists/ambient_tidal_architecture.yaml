@@ -1,0 +1,255 @@
+schemaVersion: 1
+name: ambient_tidal_architecture
+entries:
+  - id: e_ambient_tidal_architecture_00_119_bow_stern_tidal_push
+    pattern: 119_bow_stern_tidal_push
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderLevel: 0.55
+      sliderWaveWidth: 0.42
+      sliderRecoil: 0.92
+      sliderContrast: 0.84
+      sliderSafetyFloor: 0.09
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_01_123_mirrored_broadside_call
+    pattern: 123_mirrored_broadside_call
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.36
+      sliderLevel: 0.85
+      sliderWallWidth: 0.49
+      sliderExpansion: 0.26
+      sliderContrast: 0.85
+      sliderSafetyFloor: 0.12
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_02_122_breathing_horizon
+    pattern: 122_breathing_horizon
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderLevel: 0.48
+      sliderHorizonWidth: 0.7
+      sliderBreathDepth: 0.81
+      sliderAfterglow: 0.63
+      sliderSafetyFloor: 0.17
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_03_126_cathedral_rib_wave
+    pattern: 126_cathedral_rib_wave
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderLevel: 0.51
+      sliderRibCount: 0.67
+      sliderRibWidth: 0.74
+      sliderBow: 0.9
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_04_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.17
+      sliderDirection: 0.16
+      sliderLevel: 0.73
+      sliderKick: 0.08
+      sliderRadius: 0.92
+      sliderSharpness: 0.83
+      sliderCount: 0.59
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_05_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderCounterPhase: 0.5
+      sliderFloorLevel: 0.45
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0
+      sliderWhiteSpread: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_06_41_reaction_diffusion
+    pattern: 41_reaction_diffusion
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderLevel: 0.45
+      sliderFeed: 0.5
+      sliderSeed: 0.05
+      sliderBase: 0.15
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_07_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_08_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_09_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_10_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_11_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.87
+      sliderKick: 0.13
+      sliderBreathDepth: 0.69
+      sliderBreathShape: 0.23
+      sliderBloom: 0.94
+      sliderRibbing: 0.19
+      sliderSparkle: 0.37
+      sliderWhiteGlow: 0.69
+      sliderFieldDetail: 0.91
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_12_118_grand_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.72
+      sliderRingWidth: 0.26
+      sliderOrbitTilt: 0.83
+      sliderContrast: 0.89
+      sliderSafetyFloor: 0.05
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_13_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.79
+      sliderSpiralWidth: 0.78
+      sliderTurns: 0.8
+      sliderWakeContrast: 0.85
+      sliderSafetyFloor: 0.14
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_14_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.39
+      sliderKick: 0.29
+      sliderRadius: 0.85
+      sliderDetail: 0.24
+      sliderFocus: 0.67
+      sliderTrailBlend: 0.11
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_15_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.65
+      sliderBeamWidth: 0.32
+      sliderCrossing: 0.83
+      sliderAfterglow: 0.66
+      sliderSafetyFloor: 0.16
+      sliderFlash: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_16_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_tidal_architecture_17_127_grand_maelstrom
+    pattern: 127_grand_maelstrom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.84
+      sliderLevel: 0.82
+      sliderArmWidth: 0.58
+      sliderArmCount: 0.32
+      sliderDepth: 0.56
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null

@@ -42,8 +42,14 @@ function stripComments(src) {
 function rgbwauPatterns() {
   return fs.readdirSync(PATTERNS_DIR)
     .filter(f => f.endsWith('.js'))
-    .filter(f => /\brgbwau\s*\(/.test(stripComments(
-      fs.readFileSync(path.join(PATTERNS_DIR, f), 'utf8'))))
+    .filter((f) => {
+      const source = fs.readFileSync(path.join(PATTERNS_DIR, f), 'utf8');
+      // Titanic-only authored-view patterns are rendered by their dedicated
+      // model-aware suite. The generic white-lane pass intentionally uses the
+      // portable test_bench catalog, where those authored names must fail.
+      if (/TITANIC-SPECIFIC:/.test(source)) return false;
+      return /\brgbwau\s*\(/.test(stripComments(source));
+    })
     .map(f => f.slice(0, -3))
     .sort();
 }

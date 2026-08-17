@@ -2,7 +2,39 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 
-import { SIZE_LOCK_REASON } from './size_lock.js';
+import {
+  LOCKED_SIZE,
+  SIZE_LOCK_KEY,
+  SIZE_LOCK_REASON,
+  isLockedSize,
+} from './size_lock.js';
+
+// ── Engine BOOT MODE (report _236) ──────────────────────────────────────
+//
+// Which face the engine comes up in. Operator order: "in the config, add a new
+// config toggle to go straight to edit mode or performance mode, and make sure
+// that's stored as part of the state persisted". It lives in the engine's
+// persisted settings (settings_state.yaml, alongside autoSave) rather than in
+// CaptainPad's AsyncStorage, because the boot face is decided ENGINE-side —
+// docs/56 D1 — and must therefore survive an engine restart with no pad present.
+//
+//   'performance' — the shipped docs/56 D1 behaviour: an engine with privileged
+//                   auth enabled boots LOCKED, with a reserved pre-show
+//                   snapshot, and a fresh passcode opens edit mode.
+//   'edit'        — boot straight into the edit face. The AUTH GATE IS NOT
+//                   LIFTED: `editSession.principal` still starts null, so on an
+//                   auth-enabled engine `principalMaySave()` is false and NOTHING
+//                   is persisted until a principal is asserted (POST
+//                   /edit-session, the pad's session chip). Structural editing
+//                   is open; writing it down is not. The gate never opens by
+//                   itself — it only stops hiding the rig behind the show lock.
+export const BOOT_MODES = Object.freeze({ PERFORMANCE: 'performance', EDIT: 'edit' });
+
+/** Coerce an unknown value to a known boot mode. Unknown → 'performance': the
+ *  SAFE direction is "the show gate is on" (mirrors autoSave's coerce-to-true). */
+export function normalizeBootMode(value) {
+  return value === BOOT_MODES.EDIT ? BOOT_MODES.EDIT : BOOT_MODES.PERFORMANCE;
+}
 
 // ── Channel serialization (additive de-dup helper) ──────────────────────
 // saveDeckState and saveMixerState both flatten a PatternChannel into the
@@ -238,23 +270,40 @@ export class StateManager {
   }
 
   /**
-   * Engine-wide settings (currently just `autoSave`). Persisted in its OWN
-   * per-scene file so the toggle survives even when auto-save is OFF — the
-   * setting that GATES the auto-persistence can never live in a file whose
-   * writes it gates (that would make "turn auto-save off" un-persistable).
+   * Engine-wide operator settings. Persisted in its OWN per-scene file so the
+   * toggles survive even when auto-save is OFF — the setting that GATES the
+   * auto-persistence can never live in a file whose writes it gates (that would
+   * make "turn auto-save off" un-persistable).
    *
-   * DEFAULT autoSave = TRUE (auto-persist on, the pre-feature behaviour).
+   * `autoSave` — DEFAULT TRUE (auto-persist on, the pre-feature behaviour).
    * A missing file returns the default. A present-but-malformed `autoSave`
    * (hand-edited junk) coerces to TRUE, not false: the SAFE direction is
    * "keep saving the operator's work", never "silently stop persisting".
+   *
+   * `bootMode` — which face the engine comes up in on an auth-enabled show
+   * engine (operator order, report `_236`: "add a new config toggle to go
+   * straight to edit mode or performance mode, and make sure that's stored as
+   * part of the state persisted"). DEFAULT `'performance'`, which is the
+   * shipped docs/56 D1 behaviour: an engine that has passcodes boots LOCKED.
+   * Anything unrecognised — a missing key on an older file, a typo, junk —
+   * coerces to `'performance'` for the same reason `autoSave` coerces to true:
+   * the safe direction is "the show gate is ON", and a gate that opens itself
+   * because a YAML value was unreadable is precisely the quiet fallback the
+   * codex forbids.
    */
   loadSettingsState() {
-    const raw = this.load('settings_state.yaml', { autoSave: true });
-    return { autoSave: typeof raw.autoSave === 'boolean' ? raw.autoSave : true };
+    const raw = this.load('settings_state.yaml', { autoSave: true, bootMode: BOOT_MODES.PERFORMANCE });
+    return {
+      autoSave: typeof raw.autoSave === 'boolean' ? raw.autoSave : true,
+      bootMode: normalizeBootMode(raw.bootMode),
+    };
   }
 
   saveSettingsState(settings) {
-    this.save('settings_state.yaml', { autoSave: !!(settings && settings.autoSave) });
+    this.save('settings_state.yaml', {
+      autoSave: !!(settings && settings.autoSave),
+      bootMode: normalizeBootMode(settings && settings.bootMode),
+    });
   }
 
   loadGlobalsState() {
@@ -280,6 +329,60 @@ export class StateManager {
       delete state.hueShift;
     }
     return state;
+  }
+
+  /**
+   * One-time boot migration for the operator-pinned global SIZE value.
+   *
+   * The lock already guarantees the live engine runs at LOCKED_SIZE, but an
+   * older globals_state.yaml can keep carrying a stale value forever. Every
+   * restart would then report the same permanent DEGRADED condition even
+   * though no live writer is fighting the lock. Converge that one persisted
+   * field before applyGlobalsState sees it, and persist the schema/lock repair
+   * independently of the operator's normal auto-save preference.
+   *
+   * This method is deliberately boot-only. Snapshot/look recall continues
+   * through applyGlobalsState with an explicit restoreLabel, so a stale
+   * snapshot remains a real, correctly-attributed runtime violation and is
+   * never rewritten into globals_state.yaml by this migration.
+   *
+   * @param {object} globalsState the object loaded from globals_state.yaml
+   * @returns {boolean} true iff the file was rewritten
+   */
+  convergeBootSizeLock(globalsState) {
+    if (!globalsState || typeof globalsState !== 'object'
+        || !globalsState.params || typeof globalsState.params !== 'object') {
+      return false;
+    }
+    const paramData = globalsState.params.params || globalsState.params;
+    if (!paramData || typeof paramData !== 'object'
+        || !Object.prototype.hasOwnProperty.call(paramData, SIZE_LOCK_KEY)) {
+      return false;
+    }
+    const entry = paramData[SIZE_LOCK_KEY];
+    const persisted = entry && typeof entry === 'object' && entry.value !== undefined
+      ? entry.value
+      : entry;
+    if (isLockedSize(persisted)) return false;
+
+    const statePath = path.join(this.stateDir, 'globals_state.yaml');
+    console.warn(
+      `[StateManager] ${statePath} carried legacy SIZE=${JSON.stringify(persisted)}; ` +
+      `migrating it to the operator-locked ${LOCKED_SIZE} before restore.`);
+    if (entry && typeof entry === 'object' && entry.value !== undefined) {
+      entry.value = LOCKED_SIZE;
+    } else {
+      paramData[SIZE_LOCK_KEY] = LOCKED_SIZE;
+    }
+
+    // This is a deterministic schema/lock migration, not an operator tuning
+    // save. Use the atomic strict writer directly so autoSave=false cannot
+    // strand the legacy value and a failed convergence aborts boot loudly.
+    this.save('globals_state.yaml', globalsState, { strict: true });
+    console.log(
+      `[StateManager] globals_state.yaml SIZE migration persisted at ${LOCKED_SIZE}; ` +
+      'future boots start clean.');
+    return true;
   }
 
   /**

@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
-import { Palette } from '@/constants/theme';
+import { Palette, Radius } from '@/constants/theme';
+import { accentFill, useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
 // ── ConfirmSheet ────────────────────────────────────────────────────────
@@ -58,7 +59,12 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
   onCancel,
 }) => {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C), [C]);
+  // The destructive button stays LOUD — but its ink is DERIVED from the
+  // theme's `error` (docs/54 §1.1 `accentFill`), so sunset's salmon error
+  // gets near-black text instead of the old hardcoded white at ~2.5:1.
+  const danger = accentFill(C.error);
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
       <TouchableOpacity
@@ -69,7 +75,7 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
       >
         {/* Inner wrapper swallows taps so the card stays open. */}
         <TouchableOpacity activeOpacity={1} onPress={() => {}}>
-          <View style={styles.card} accessibilityViewIsModal accessibilityRole="alert">
+          <View style={[globalStyles.panel, styles.card]} accessibilityViewIsModal accessibilityRole="alert">
             <View style={styles.titleRow}>
               <IconSymbol name="exclamationmark.triangle.fill" size={18} color={C.error} />
               <Text style={styles.title}>{title}</Text>
@@ -87,13 +93,13 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
                 <Text style={[styles.btnText, { color: C.text }]}>{cancelLabel}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.btn, styles.confirmBtn]}
+                style={[styles.btn, { backgroundColor: danger.backgroundColor }]}
                 onPress={onConfirm}
                 hitSlop={BTN_HIT_SLOP}
                 accessibilityRole="button"
                 accessibilityLabel={confirmLabel}
               >
-                <Text style={[styles.btnText, { color: '#FFF' }]}>{confirmLabel}</Text>
+                <Text style={[styles.btnText, { color: danger.color }]}>{confirmLabel}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -113,14 +119,12 @@ function makeStyles(C: Palette) {
       justifyContent: 'center' as const,
       alignItems: 'center' as const,
     },
+    // Surface / hairline / radius / shadow all come from `globalStyles.panel`
+    // (docs/54 row 19 — a modal is a panel); this entry only sizes it.
     card: {
-      backgroundColor: C.surfaceContainerLowest,
-      borderRadius: 16,
       padding: 24,
       minWidth: 320,
       maxWidth: 440,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
     },
     titleRow: {
       flexDirection: 'row' as const,
@@ -152,7 +156,7 @@ function makeStyles(C: Palette) {
       minHeight: 44,
       minWidth: 96,
       paddingHorizontal: 18,
-      borderRadius: 10,
+      borderRadius: Radius.control,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },
@@ -160,9 +164,6 @@ function makeStyles(C: Palette) {
       borderWidth: 1,
       borderColor: C.ghostBorder,
       backgroundColor: C.surfaceContainerHigh,
-    },
-    confirmBtn: {
-      backgroundColor: C.error,
     },
     btnText: {
       fontFamily: 'SpaceGrotesk_700Bold',

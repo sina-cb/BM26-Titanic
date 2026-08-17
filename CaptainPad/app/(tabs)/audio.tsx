@@ -38,7 +38,7 @@
 // mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
@@ -51,12 +51,17 @@ import {
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
   resetAllAudioChains,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useLiveSignalsConnected, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { PulseFlash } from '@/components/audio/PulseFlash';
-import { audioAccentHex, audioGenreName, describePartySignal, isGenreKey, isPulseKey } from '@/utils/audioSignals';
+import {
+  audioAccentHex, audioGenreName, describePartySignal, isGenreKey, isPulseKey,
+  nextPartySignalTruth, PARTY_SIGNAL_UNKNOWN, type PartySignalTruth,
+} from '@/utils/audioSignals';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
+import { EmbeddedServiceScreen } from '@/components/embedded_service_screen';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -680,10 +685,28 @@ function LiveAudioMeters({
   // optimizer receive. Detector sensitivity stays in Audio Companion ->
   // DERIVED TUNE; CaptainPad observes engine truth and does not maintain a
   // second threshold. Missing live data is shown as unknown, never as calm.
+  //
+  // "Missing" includes the LINK being down: the live-param cache holds its
+  // last frame when /ws/signals drops (deliberate — every meter freezes
+  // rather than snapping to zero), so reading the cached `audioParty` alone
+  // let the pill keep asserting ON/OFF with no engine behind it. We therefore
+  // fold {is the signals socket up, which live doc is in hand, what does it
+  // say} through nextPartySignalTruth: it yields null (→ "PARTY SIGNAL …")
+  // the instant the link drops, and holds unknown after a reconnect until a
+  // live doc actually ARRIVES rather than re-reading the one frozen on screen.
+  //
+  // Reduced during render (not in an effect) so the unknown paints on the
+  // SAME frame as the disconnect; the reducer is idempotent for a repeated
+  // observation, so a re-render with no new data is a no-op.
+  const signalsConnected = useLiveSignalsConnected();
   const partyEntry = liveDoc?.params?.audioParty;
-  const partySignal = describePartySignal(
-    partyEntry && typeof partyEntry.value === 'number' ? partyEntry.value : null,
-  );
+  const partyTruthRef = useRef<PartySignalTruth>(PARTY_SIGNAL_UNKNOWN);
+  partyTruthRef.current = nextPartySignalTruth(partyTruthRef.current, {
+    connected: signalsConnected,
+    doc: liveDoc,
+    value: partyEntry && typeof partyEntry.value === 'number' ? partyEntry.value : null,
+  });
+  const partySignal = describePartySignal(partyTruthRef.current.value);
 
   return (
     <View style={{ marginBottom: 24 }}>
@@ -961,9 +984,9 @@ function CompactBpmCard({
 
 // ── Audio Companion launcher ───────────────────────────────────────────
 //
-// One-tap jump from the iPad to the Marsin Audio Companion's own web UI
-// (signal/chain DESIGN lives there since 2026-06-17 — this tab is the lean
-// control surface). The Companion runs on the SAME machine as the engine
+// One tap opens the Marsin Audio Companion as an explicit view inside this
+// Audio tab (signal/chain DESIGN lives there since 2026-06-17). The Companion
+// runs on the SAME machine as the engine
 // (launcher.js → COMPANIONS.audio), so its address is derived from the
 // EFFECTIVE api_base (Config-tab AsyncStorage override included) with the
 // port swapped — never a hardcoded host, never 127.0.0.1 on the operator's
@@ -972,7 +995,7 @@ function CompactBpmCard({
 // Codex P0: a base we cannot parse throws, and we render the LOUD error
 // instead of a link to a guessed address.
 
-function CompanionLinkCard() {
+function CompanionLinkCard({ onOpen }: { onOpen: () => void }) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
@@ -995,10 +1018,6 @@ function CompanionLinkCard() {
     return () => { alive = false; };
   }, []);
 
-  const open = useCallback(() => {
-    if (url) void Linking.openURL(url);
-  }, [url]);
-
   return (
     <View style={CARD}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1019,7 +1038,7 @@ function CompanionLinkCard() {
           </Text>
         </View>
         <TouchableOpacity
-          onPress={open}
+          onPress={onOpen}
           disabled={!url}
           activeOpacity={0.7}
           style={{
@@ -1033,7 +1052,7 @@ function CompanionLinkCard() {
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
             color: url ? '#fff' : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8,
           }}>
-            Open Companion ↗
+            Open in Audio
           </Text>
         </TouchableOpacity>
       </View>
@@ -1240,6 +1259,32 @@ const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
 // screen, so the operator never sees the spinner stick.
 
 export default function AudioAnalysisScreen() {
+  return (
+    <PerformanceRouteGuard routeName="audio">
+      <AudioAnalysisScreenContent />
+    </PerformanceRouteGuard>
+  );
+}
+
+function AudioAnalysisScreenContent() {
+  const [view, setView] = useState<'controls' | 'companion'>('controls');
+
+  if (view === 'companion') {
+    return (
+      <EmbeddedServiceScreen
+        title="AUDIO COMPANION"
+        description="LOCAL SIGNAL DESIGNER · PORT 6966"
+        resolveUrl={companionUrlFromApiBase}
+        onExit={() => setView('controls')}
+        exitLabel="AUDIO CONTROLS"
+      />
+    );
+  }
+
+  return <AudioAnalysisControls onOpenCompanion={() => setView('companion')} />;
+}
+
+function AudioAnalysisControls({ onOpenCompanion }: { onOpenCompanion: () => void }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const status = useAudioStatus();
@@ -1296,7 +1341,16 @@ export default function AudioAnalysisScreen() {
     );
   }
 
-  return <AudioConfigBody cfg={cfg} setCfg={setCfg} status={status} oscStatus={oscStatus} reload={reload} />;
+  return (
+    <AudioConfigBody
+      cfg={cfg}
+      setCfg={setCfg}
+      status={status}
+      oscStatus={oscStatus}
+      reload={reload}
+      onOpenCompanion={onOpenCompanion}
+    />
+  );
 }
 
 // ── Loaded body ────────────────────────────────────────────────────────────
@@ -1309,13 +1363,14 @@ export default function AudioAnalysisScreen() {
 // spinner even if /ws/signals is firehose-streaming behind us.
 
 function AudioConfigBody({
-  cfg, setCfg, status, oscStatus, reload,
+  cfg, setCfg, status, oscStatus, reload, onOpenCompanion,
 }: {
   cfg: AudioConfig;
   setCfg: React.Dispatch<React.SetStateAction<AudioConfig | null>>;
   status: ReturnType<typeof useAudioStatus>;
   oscStatus: ReturnType<typeof useOscStatus>;
   reload: () => Promise<void>;
+  onOpenCompanion: () => void;
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
@@ -1591,7 +1646,7 @@ function AudioConfigBody({
             Sits with the config controls, ABOVE the SETTINGS disclosure so
             it is visible without expanding anything. Address is derived
             from the effective api_base (see CompanionLinkCard). */}
-        <CompanionLinkCard />
+        <CompanionLinkCard onOpen={onOpenCompanion} />
 
         {/* ── 4. SETTINGS (collapsed by default) ───────────────────────
             Pinned bottom disclosure that holds everything rarely touched

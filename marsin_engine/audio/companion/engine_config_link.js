@@ -206,6 +206,15 @@ export class EngineConfigLink {
    * failure (engine down, 400 validation, etc.) so the caller can fall
    * back to a local apply and surface the degraded state — never a silent
    * swallow that pretends the engine accepted the change.
+   *
+   * ░░ WHY THE REJECTION CARRIES `error.status` ░░
+   * "The engine refused this value" and "the request never reached the
+   * engine" demand OPPOSITE handling from a write queue: the first must
+   * revert (a byte-identical retry can only be refused again), the second
+   * must retry (the value is still correct, the wire was not). A message
+   * string cannot be classified reliably, so an ANSWERED request attaches
+   * the HTTP status to the Error and a TRANSPORT failure leaves it absent.
+   * Callers classify on `Number.isInteger(error.status)`, never on prose.
    */
   async patch(partial) {
     const ctrl = new AbortController();
@@ -219,7 +228,11 @@ export class EngineConfigLink {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(body && body.error ? body.error : `PATCH /audio/config → ${res.status}`);
+        const error = new Error(
+          body && body.error ? body.error : `PATCH /audio/config → ${res.status}`,
+        );
+        error.status = res.status;
+        throw error;
       }
       return body;
     } finally {

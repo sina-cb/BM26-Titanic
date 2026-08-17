@@ -275,6 +275,23 @@ test('ARM prepare atomically replaces 24-group Live state and lands in 100 ms', 
       colors: (await h.api('GET', '/group-fixed-colors', undefined, OWNER_HEADERS)).data,
       brightness,
     };
+    response = await h.api('POST', '/layers/live_touch/prepare', {
+      expectedSessionRevision: sessionRevision,
+      operations: [{
+        method: 'POST',
+        path: '/param-center',
+        body: { speed: 0.91, definitelyNotAControl: 1 },
+      }],
+      brightness: buildBrightness(brightness, 0.12),
+    }, OWNER_HEADERS);
+    assert.equal(response.status, 400, JSON.stringify(response.data));
+    assert.equal(response.data.code, 'LIVE_TOUCH_PREPARE_INVALID');
+    assert.equal(response.data.operationIndex, 0);
+    assert.deepEqual(
+      (await h.api('GET', '/param-center', undefined, OWNER_HEADERS)).data,
+      beforeInvalid.params,
+      'a partial Param Center response must roll back the complete prepare transaction',
+    );
     const invalidOperations = buildOperations(groups, 0.91, localControl.id);
     invalidOperations.push({
       method: 'PUT',

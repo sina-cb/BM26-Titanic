@@ -208,6 +208,40 @@ export function parseCaptureDevice(device) {
 }
 
 /**
+ * Resolve the Companion boot source without confusing persisted source
+ * sentinels (`test`, `file:...`) for physical microphone device names.
+ * An explicit Companion device override keeps the authored companion.source
+ * contract; otherwise the persisted capture.device is the latest operator
+ * source selection and therefore owns both mode and device.
+ */
+export function resolveCompanionBootSource({
+  sourceOverride = null,
+  companionSource,
+  companionDevice = null,
+  captureDevice,
+} = {}) {
+  const persisted = parseCaptureDevice(captureDevice);
+  const mode = sourceOverride !== null
+    ? sourceOverride
+    : (companionDevice !== null && companionDevice !== undefined
+        ? companionSource
+        : (captureDevice !== undefined ? persisted.mode : companionSource));
+  if (!['mic', 'test', 'file'].includes(mode)) {
+    throw new Error('Companion source must be one of: mic, test, file');
+  }
+  if (mode === 'test') return { mode: 'test' };
+  if (mode === 'file') {
+    return { mode: 'file', file: persisted.mode === 'file' ? persisted.file : null };
+  }
+  return {
+    mode: 'mic',
+    device: companionDevice !== null && companionDevice !== undefined
+      ? companionDevice
+      : (persisted.mode === 'mic' ? persisted.device : null),
+  };
+}
+
+/**
  * The inverse: a Companion source state → its `capture.device` string. mic
  * with no device → '' (CaptainPad's "default input" convention).
  * @param {{ mode: string, file?: string, device?: (string|null) }} src

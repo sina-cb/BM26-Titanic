@@ -20,7 +20,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { isolatedCompanionEnv, isolatedStateRoot } from '../helpers/companion_isolation.mjs';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TRACKED_AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(path.join(__dirname, '..', '..'));
 const SERVER = path.join(__dirname, '..', '..', 'audio', 'companion', 'companion_server.js');
 const CSS = path.join(__dirname, '..', '..', 'audio', 'companion', 'ui', 'companion_app.css');
 
@@ -68,9 +72,17 @@ async function getFreePort() {
 // companion was pointed at. The documented bench ports used to be hardcoded
 // here, which made the file a shared-resource test and forced the whole
 // companion suite to run at --test-concurrency=1.
+//
+// HERMETIC (report `_220`): `isolatedCompanionEnv` hands the child a scratch
+// config with black-holed companion endpoints AND a throwaway `MARSIN_STATE_DIR`
+// seeded with the two-key mic fixture. Before this the spawn merged the
+// operator's live `states/test_bench/audio_state.yaml` over config.yaml, so the
+// analyzer feeding this accounting ran at whatever inputGain / fftSize the rig
+// happened to be on.
 async function withCompanion(port, fn) {
   const oscPort = await getFreePort();
   const enginePort = await getFreePort();
+  const isolation = isolatedCompanionEnv('osc_accounting');
   let stderr = '';
   const proc = spawn('node', [
     SERVER,
@@ -89,6 +101,7 @@ async function withCompanion(port, fn) {
     String(enginePort),
   ], {
     cwd: path.join(__dirname, '..', '..'),
+    env: isolation.env,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -99,7 +112,23 @@ async function withCompanion(port, fn) {
     // the companion in mic mode, which has no device in CI).
     const { WebSocket } = await import('ws');
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const helloPromise = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const message = JSON.parse(buf.toString());
+        if (message.type === 'hello') resolve(message);
+      });
+    });
     await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    const hello = await helloPromise;
+    // The analyzer producing this accounting is the TRACKED one. Every
+    // assertion in this file is structural or a counter, so nothing else here
+    // would notice a dropped `env: isolation.env` and the suite would quietly
+    // go back to scoring the rig's live overlay (pre-`_220`: inputGain 8.83,
+    // noiseGate 0.06, fftSize 1024 rather than the tracked 1 / 0.04 / 2048).
+    assert.equal(hello.inputGain, TRACKED_AUDIO_CONFIG.bands.inputGain,
+      'the spawned companion is running the operator\'s live input gain, not the tracked one');
+    assert.equal(hello.gates.noiseGate, TRACKED_AUDIO_CONFIG.bands.noiseGate,
+      'the spawned companion is running the operator\'s live noise gate, not the tracked one');
     ws.send(JSON.stringify({ type: 'setMode', mode: 'test' }));
     // Let a few analyzer hops + accounting ticks happen.
     await new Promise(r => setTimeout(r, 1500));
@@ -107,6 +136,7 @@ async function withCompanion(port, fn) {
     ws.close();
   } finally {
     proc.kill('SIGKILL');
+    isolation.cleanup();
   }
 }
 
@@ -203,6 +233,15 @@ test('/osc_accounting enumerates every designed OUTPUT + the BPM emit, live', as
   });
 });
 
+// ── ARGUMENT-PARSE REFUSALS — no isolation env, on purpose ──────────────────
+// The four tests below die inside companion_server.js's CLI validation, which
+// runs BEFORE `loadEffectiveAudioAnalysisConfig` (before the `--host` check, at
+// module scope). They therefore never open config.yaml and never touch
+// `states/`, so there is nothing for `MARSIN_CONFIG_FILE` / `MARSIN_STATE_DIR`
+// to isolate — adding an env here would only imply a coupling that does not
+// exist. The two production-port tests further down DO reach the config read;
+// see the note there.
+//
 // --no-mic means "this process must not touch the show". Without --source the
 // boot source falls back to config.yaml companion.source — `mic` on the rig —
 // and setMode('mic') threw inside the ffmpeg-resolver `.finally()`, killing the
@@ -261,6 +300,14 @@ for (const omitted of ['--osc-port', '--engine-port', 'both']) {
   });
 }
 
+// These two reach the SECOND interlock stage, which is the only place in this
+// file that reads the effective analyzer config — so they get the STATE half of
+// the isolation (`isolatedStateRoot`, report `_220`) and deliberately NOT the
+// config half. The subject here IS the tracked config.yaml's production
+// endpoint: `targetsMatch` compares hosts, so handing the child the black-holed
+// scratch config (companion.engine/osc host → TEST-NET-1) would stop the
+// configured target matching the loopback effective one and the refusal this
+// test exists to prove would never fire — a green run that proved nothing.
 for (const target of [
   { flag: '--engine-port', productionPort: 6968, label: 'engine' },
   { flag: '--osc-port', productionPort: 10000, label: 'OSC' },
@@ -268,6 +315,7 @@ for (const target of [
   test(`--no-mic rejects the explicit configured production ${target.label} port`, async () => {
     const port = await getFreePort();
     const otherPort = await getFreePort();
+    const isolation = isolatedStateRoot(`osc_accounting_prod_${target.label}`);
     const args = [
       SERVER, '--port', String(port), '--host', '127.0.0.1',
       '--model', 'test_bench', '--source', 'test', '--no-mic',
@@ -276,14 +324,19 @@ for (const target of [
     ];
     const proc = spawn('node', args, {
       cwd: path.join(__dirname, '..', '..'),
+      env: isolation.env,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    const code = await new Promise((resolve) => proc.on('exit', resolve));
-    assert.notEqual(code, 0, 'the companion must refuse before opening outbound links');
-    assert.match(stderr, new RegExp(`matches configured production ${target.label} endpoint`, 'i'));
-    await assert.rejects(fetch(`http://127.0.0.1:${port}/catalog`));
+    try {
+      const code = await new Promise((resolve) => proc.on('exit', resolve));
+      assert.notEqual(code, 0, 'the companion must refuse before opening outbound links');
+      assert.match(stderr, new RegExp(`matches configured production ${target.label} endpoint`, 'i'));
+      await assert.rejects(fetch(`http://127.0.0.1:${port}/catalog`));
+    } finally {
+      isolation.cleanup();
+    }
   });
 }
 

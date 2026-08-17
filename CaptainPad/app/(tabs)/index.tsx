@@ -1,6 +1,9 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet, useWindowDimensions } from 'react-native';
-import { useGlobalStyles } from '@/styles/globalStyles';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { View, Text, TouchableOpacity, Modal, Platform, StyleSheet, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { opError, opInfo } from '@/utils/op_dialog';
+import { accentWash, useGlobalStyles, withAlpha } from '@/styles/globalStyles';
+import { Radius, Space, Type } from '@/constants/theme';
+import { PANIC_AMBER } from '@/constants/identity';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
@@ -23,7 +26,7 @@ import {
   fetchDeckChannel, setDeckChannelControl,
   activateLayerSetting,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
-  fetchDeckColorAutopilot, setDeckColorAutopilot,
+  fetchDeckColorAutopilot, setDeckColorAutopilot, patchDeckColorAutopilot,
   fetchPlaylists,
   fetchChannelPlaylist,
   setChannelPlaylist,
@@ -49,6 +52,44 @@ import { PlanLockScrim } from '@/components/PlanLockScrim';
 import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
 import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
 import { SplitPlaylistPanes } from '@/components/deck/split_playlist_panes';
+// ── Deck WINDOW WORKSPACE (docs/53) ─────────────────────────────────────
+// The three deck columns (+ the new COLORS window) are windows the operator
+// can hide and restore from one compact bar. Layout management only: with the
+// default layout the columns below render exactly as they always have.
+import { useDeckWorkspace, DeckWorkspaceBar } from '@/components/deck/deck_workspace';
+import {
+  NARROW_PATTERNS_NATIVE_CLIP_STYLE,
+  NARROW_PATTERNS_OUTER_MARGIN,
+  deckWorkspaceIsWide,
+  narrowStackSizing,
+  narrowStackTrackStyles,
+  type DeckSurfaceId,
+  type NarrowStackTrackStyle,
+} from '@/components/deck/deck_workspace_layout';
+import { DeckWindow } from '@/components/deck/deck_window';
+import { ColorsWindow } from '@/components/deck/colors_window';
+import {
+  PARAMETER_CARD_BOUNDARY_STYLE,
+  PARAMETER_HEADER_ACTIONS_STYLE,
+  PARAMETER_HEADER_LABEL_STYLE,
+  PARAMETER_HEADER_STYLE,
+} from '@/components/deck/parameter_header_layout';
+import { PixelViewWindow } from '@/components/deck/pixel_view_window';
+// NATIVE GESTURE ARMOR (see components/ui/scroll_lock.ts). The deck's two
+// vertical scroll hosts are the ones a leaf drag control fights on the iPad —
+// the COLORS hue dial and every HorizontalFader in these columns. On native a
+// UIScrollView cannot see a JS responder living inside it, so those controls
+// take a scroll_lock for the life of the gesture and this host honours it.
+// Inert on web (nothing acquires there), so the _211 browser armor stands.
+import { LockableScrollView } from '@/components/ui/lockable_scroll_view';
+// ── COLORS yield rule (docs/61 §2.1, W3) ────────────────────────────────
+// L2 (hide the COLORS window) and L3 (leave the Deck tab) both run the
+// operator's navigation through the same §2.1 arbitration `yieldDecision`
+// (colors_window_logic.ts, W1) via this pure bridge, so the rule is proven
+// once and wired twice rather than re-implemented per call site.
+import { runYieldGesture } from '@/components/deck/colors_yield_bridge';
+import { rotationKind, type ColorsCard } from '@/components/deck/colors_window_logic';
+import { subscribeDeckWindowRequests } from '@/utils/deck_window_requests';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -76,21 +117,28 @@ const CHANNEL_COLOR_SWATCHES: string[] = [
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
+// docs/54 row 12: the ON state is the shared translucent on-state
+// (`accentWash(primary)` + a `borderStrong` selection ring), not a flat
+// opaque repaint. A latched macro now reads like every other latched thing
+// on the deck — and, because the wash keeps the accent as ink, the label is
+// still legible on all five palettes without a hardcoded '#fff'. Height,
+// flexBasis and the press handlers are untouched.
 const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const [isOn, setIsOn] = React.useState(initialValue > 0.5);
   React.useEffect(() => { setIsOn(initialValue > 0.5) }, [initialValue]);
+  const on = accentWash(C.primary);
   return (
-    <TouchableOpacity 
+    <TouchableOpacity
       onPress={() => { const next = !isOn; setIsOn(next); onChange(id, next ? 1.0 : 0.0); }}
       style={[
-        globalStyles.macroButton, 
-        { flexBasis: '30%' }, 
-        isOn ? { backgroundColor: C.primary, borderColor: C.primary } : {}
+        globalStyles.macroButton,
+        { flexBasis: '30%' },
+        isOn ? { backgroundColor: on.backgroundColor, borderColor: C.borderStrong } : {}
       ]}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : C.text, textAlign: 'center' }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? on.color : C.text, textAlign: 'center' }}>
         {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
       </Text>
     </TouchableOpacity>
@@ -101,18 +149,19 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const [isPressed, setIsPressed] = React.useState(false);
+  const pressed = accentWash(C.error);
   return (
-    <TouchableOpacity 
+    <TouchableOpacity
       onPressIn={() => { setIsPressed(true); onChange(id, 1.0); }}
       onPressOut={() => { setIsPressed(false); onChange(id, 0.0); }}
       activeOpacity={1}
       style={[
-        globalStyles.macroButton, 
-        { flexBasis: '30%' }, 
-        isPressed ? { backgroundColor: C.error, borderColor: C.error } : {}
+        globalStyles.macroButton,
+        { flexBasis: '30%' },
+        isPressed ? { backgroundColor: pressed.backgroundColor, borderColor: pressed.borderColor } : {}
       ]}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : C.text, textAlign: 'center' }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? pressed.color : C.text, textAlign: 'center' }}>
         {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
       </Text>
     </TouchableOpacity>
@@ -126,7 +175,16 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
 // and a ScrollView in the narrow stack. Module-scoped so its component identity
 // is stable — defining it inline in render would remount col2/col3 (losing their
 // scroll position + state) on every parent render.
-function ColumnsScrollRest({ isWide, children }: { isWide: boolean; children: React.ReactNode }) {
+function ColumnsScrollRest({ isWide, collapsed, narrowStyle, children }: {
+  isWide: boolean;
+  collapsed?: boolean;
+  narrowStyle: NarrowStackTrackStyle;
+  children: React.ReactNode;
+}) {
+  // NOTE the region is still `flex:1` when it is not collapsed — it takes the
+  // stack MINUS whatever `narrowStackSizing` gave PATTERNS. The arbitration
+  // lives entirely in that one pure function (report _273); this component
+  // does not compute a share of its own.
   // WIDE: a Fragment, so PARAMETERS and AUTOPILOT stay flex SIBLINGS of the
   // pinned PATTERNS column and render SIDE BY SIDE, each with its own scroll
   // (SectionHost). 2026-07-27: a stacked-in-one-scroll variant was tried and
@@ -134,13 +192,24 @@ function ColumnsScrollRest({ isWide, children }: { isWide: boolean; children: Re
   // each other; only the PATTERNS column narrowed (flex 4→2).
   if (isWide) return <>{children}</>;
   return (
-    <ScrollView
-      style={{ flex: 1 }}
-      contentContainerStyle={{ paddingBottom: 16 }}
+    // COLLAPSED (docs/55 §2.4): every window this region hosts is hidden, so it
+    // yields its space to the PATTERNS fill instead of holding open a dead
+    // scroll region. It STAYS MOUNTED with all its children — the no-remount
+    // contract (docs/53 §3.4) is what preserves scroll offsets, in-progress
+    // parameter edits and the live WS reconciles, and it applies just as much
+    // to a window hidden by the performance overlay as to one the operator
+    // minimized by hand.
+    <LockableScrollView
+      // The measured region basis comes from the SAME split as PATTERNS.
+      // Longhands only: co-flattening a positive `flex` shorthand with an
+      // explicit basis is a native Yoga trap even though web CSS accepts it.
+      style={narrowStyle}
+      contentContainerStyle={{ paddingBottom: collapsed ? 0 : 16 }}
       showsVerticalScrollIndicator={false}
+      scrollEnabled={!collapsed}
     >
       {children}
-    </ScrollView>
+    </LockableScrollView>
   );
 }
 
@@ -149,15 +218,16 @@ const OfflineBanner = ({ error }: { error: string }) => {
   const C = usePalette();
   return (
     <View style={{
-      // 'rgba(186, 26, 26, 0.12)' — translucent error wash; reads as
-      // alarm on both light and dark surfaces, so we keep it as a
-      // literal rather than burning a palette token.
-      backgroundColor: 'rgba(186, 26, 26, 0.12)',
-      borderColor: C.error,
+      // docs/54 row 18: the hand-rolled 'rgba(186, 26, 26, 0.12)' wash is
+      // retired — `errorContainer` / `errorContainerBorder` are the tokens
+      // that exist for exactly this box, and they are per-theme (the light
+      // palette wants a lighter wash than the dark ones).
+      backgroundColor: C.errorContainer,
+      borderColor: C.errorContainerBorder,
       borderWidth: 1,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
+      borderRadius: Radius.card,
+      padding: Space.lg,
+      marginBottom: Space.lg,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 12
@@ -188,8 +258,22 @@ export default function ControlDeckScreen() {
   // (mixer.tsx), plus an absolute floor: below ~900px even a landscape phone is
   // too narrow to seat three readable columns, so it stacks too.
   const { width: winWidth, height: winHeight } = useWindowDimensions();
-  const isPortrait = winWidth < winHeight;
-  const isWide = !isPortrait && winWidth >= 900;
+  // CaptainPad native is a landscape-only instrument. Keep its wide workspace
+  // mounted even during iOS's brief rotation handoff so Fabric can never enter
+  // the retired portrait stack. Web remains responsive for desktop tooling.
+  const isWide = deckWorkspaceIsWide(Platform.OS, winWidth, winHeight);
+  // NARROW STACK ARBITRATION (report _273): the columns host's MEASURED height.
+  // The narrow split used to be computed from the device window alone, which is
+  // how a 400 pt PATTERNS pin ended up inside a 309 pt stack (overflowing the
+  // bottom bar, squeezing the reopened window to zero height). The host is a
+  // `flex:1` sibling of the fixed chrome, so its height depends on the bars
+  // above it and NOT on its own children — measuring it cannot feed back into
+  // itself. Guarded on `!==` so a re-layout at the same height is a no-op.
+  const [columnsHostHeight, setColumnsHostHeight] = useState<number | null>(null);
+  const handleColumnsHostLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    setColumnsHostHeight((prev) => (prev !== null && Math.abs(prev - h) < 0.5 ? prev : h));
+  }, []);
   // PATTERNS-PIN (operator request 2026-07-11): the columns host is now ALWAYS a
   // plain View. Wide = the 3-column row (unchanged). Narrow = a flex COLUMN whose
   // first child (PATTERNS) is pinned at a fixed height and whose remaining columns
@@ -200,10 +284,52 @@ export default function ControlDeckScreen() {
   // own); a plain View in the stacked page-scroll (an inner ScrollView there
   // collapses to zero height — the party 2026-07-11 'third column missing'
   // bug). There is never a same-axis ScrollView nested inside another.
-  const SectionHost: React.ComponentType<any> = isWide ? ScrollView : View;
+  // LockableScrollView, not ScrollView: this host is what the COLORS hue dial
+  // and the column's faders freeze while a drag is in flight (native only —
+  // it is a plain ScrollView in every other respect, `scrollEnabled` included).
+  const SectionHost: React.ComponentType<any> = isWide ? LockableScrollView : View;
   const sectionHostProps = isWide
     ? { contentContainerStyle: { padding: 16, paddingBottom: 80 }, showsVerticalScrollIndicator: false }
     : { style: { padding: 16, paddingBottom: 24 } };
+  // ── WINDOW WORKSPACE (docs/53 §3) ───────────────────────────────────────
+  // Which of the four windows are open, persisted (closed-set ONLY) under
+  // `deck_workspace_layout_v1`. A closed window keeps rendering — hidden with
+  // display:'none', never unmounted — so its scroll offset, local edit state
+  // and live WS reconciles survive a minimize/restore round trip. PATTERNS is
+  // protected: it has no hide affordance and the reducer refuses to close it.
+  const workspace = useDeckWorkspace();
+  // Stable member references, extracted so a hook that depends on JUST the
+  // function (below) reads as a plain identifier rather than an `object.method`
+  // call — react-hooks/exhaustive-deps otherwise asks for the whole `workspace`
+  // object (its `this`-binding heuristic for member calls), which would defeat
+  // the point: `workspace` itself is a fresh object literal every render, while
+  // `openWindow`/`closeWindow` are individually stable (`useDeckWorkspace`'s own
+  // `useCallback([dispatch])`).
+  const { openWindow: workspaceOpenWindow, closeWindow: workspaceCloseWindow } = workspace;
+  // ── WINDOW TRACK SURFACE (docs/54 §3, restyle slice R2) ────────────────
+  // Every OPEN window sits on the SAME `panel` recipe — one object: fill +
+  // hairline + inset top highlight + ambient shadow. This is the restyle's
+  // single biggest visual change: before it, PATTERNS was a pane while
+  // PARAMETERS / AUTOPILOT / COLORS were bare transparent scroll columns
+  // with floating cards, so the deck read as "one pane and some loose
+  // stacks" instead of a set of instruments.
+  //
+  // Geometry, not paint: the tracks carry a symmetric 4pt horizontal margin
+  // and the columns host carries the matching 4pt padding, so the gutter
+  // between two windows is `Space.sm` (8) and the outer edges are 8 too.
+  // Column WEIGHTS are untouched (they still come from `workspace.flexFor`).
+  //
+  // Why 4 and not 6: window chrome costs horizontal room, and the ALL-FOUR-
+  // OPEN layout at 1194pt landscape is the binding case — at a 12pt gutter
+  // the AUTOPILOT header clipped its PLAY/PAUSE control. Density is a
+  // feature here (docs/54 §6 decision 5: the restyle preserves current
+  // compactness), so the gutter yields, not the control.
+  const windowTrack = isWide
+    ? [globalStyles.panel, { marginVertical: 8, marginHorizontal: 4 }]
+    : [
+      globalStyles.panel,
+      { marginVertical: NARROW_PATTERNS_OUTER_MARGIN / 2, marginHorizontal: 4 },
+    ];
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
@@ -232,7 +358,7 @@ export default function ControlDeckScreen() {
   // PlanIndicatorPill (globals row, top-right) reflects plan/lease/countdown;
   // the inline warning strip surfaces the live-plan takeover non-intrusively
   // (no modal — never block a live performance).
-  const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
+  const { leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
     useOperatorTakeover();
 
   // ── Soft PLAN lock (CONTRACT: globalsState.controlLock ∈ {null,'portwatch',
@@ -284,6 +410,20 @@ export default function ControlDeckScreen() {
   const [deckSplitRatio, setDeckSplitRatio] = useState<number>(0.5);
   const [deckSecondaryBound, setDeckSecondaryBound] = useState<boolean>(false);
 
+  // ── The NARROW stack split (report _273) ────────────────────────────────
+  // ONE call, ONE authority. `narrowStackSizing` is pure and unit-tested; this
+  // screen only measures the host and renders what it is told. `mode:'fill'`
+  // IS the old `patternsFillsNarrow` predicate — same condition, now carried
+  // by the same value that carries the split, so the PATTERNS track and the
+  // ColumnsScrollRest can never disagree about which composition they are in.
+  const narrowStack = narrowStackSizing({
+    openCount: workspace.open.length,
+    windowHeight: winHeight,
+    hostHeight: columnsHostHeight,
+    secondaryBound: deckSecondaryBound,
+  });
+  const narrowTracks = narrowStackTrackStyles(narrowStack);
+
   // Deck transition config (soft swap between patterns via server-side
   // double-buffer — see DECK TRANSITIONS in DeckTransitionControls.tsx
   // and triggerDeckPatternSwap in marsin_engine/lib/pattern_mixer.js).
@@ -307,6 +447,43 @@ export default function ControlDeckScreen() {
     delay_s: 30,
     shuffle: false,
   });
+
+  // ── COLORS yield rule (docs/61 §2.1, W3) ──────────────────────────────
+  // L2 (hide the COLORS window) and L3 (leave the Deck tab) both need
+  // GESTURE-TIME truth — the visible COLORS card, the daemon's kind off the
+  // BROADCAST, and the disabled gate — read from a `useFocusEffect` cleanup
+  // closure that was captured on an earlier render. A `useState` alone would
+  // give that closure a STALE snapshot; these refs are the plain-object
+  // mirrors the cleanup reads instead. `colorsCardRef` is written in the same
+  // setter as `colorsCard` (`handleColorsCardChange`, below); the autopilot +
+  // disabled mirrors are written every render (cheap, synchronous, and never
+  // wrong by more than the current render — no effect indirection needed).
+  const [colorsCard, setColorsCard] = useState<ColorsCard>('two');
+  // Not read by this screen's own JSX today — only `colorsCardRef` is, by the
+  // yield gestures below. Kept as real state (not just a ref) because it is
+  // the value contract W3 was handed and the natural hook for a future
+  // on-screen "which COLORS card is showing" affordance; `void` is the
+  // codebase's existing idiom for state kept live but not yet rendered
+  // (see `mixer.tsx`'s `inlinePlaylistVersion`).
+  void colorsCard;
+  const colorsCardRef = useRef<ColorsCard>('two');
+  const handleColorsCardChange = useCallback((card: ColorsCard) => {
+    colorsCardRef.current = card;
+    setColorsCard(card);
+  }, []);
+  const colorAutopilotRef = useRef<DeckColorAutopilotConfig>(colorAutopilot);
+  colorAutopilotRef.current = colorAutopilot;
+  // Mirrors the exact `disabled` gate <ColorsWindow> renders with (below) —
+  // one predicate, read fresh by the yield gestures the same way the window
+  // itself is gated.
+  const colorsDisabledRef = useRef<boolean>(false);
+  colorsDisabledRef.current = isConnected === false || planGate;
+  // L3's cleanup fires on blur — after this component has stopped
+  // re-rendering — so it needs its own fresh mirror of whether the COLORS
+  // window was open, rather than trusting `workspace.isOpen('colors')` from
+  // whatever render last ran the effect body.
+  const colorsWindowOpenRef = useRef<boolean>(false);
+  colorsWindowOpenRef.current = workspace.isOpen('colors');
 
   // Next-swap countdowns (operator request 2026-07-02: "add 2 countdown timers
   // for the auto pilot pattern and auto pilot colors in the deck view... this
@@ -395,11 +572,11 @@ export default function ControlDeckScreen() {
         if (handoffResult !== null) return;
         return activateLayerSetting('deck', { reason: 'captainpad_deck_tab' }).then((result) => {
           if (!result.ok) {
-            Alert.alert('Deck activation failed', result.error || 'The engine rejected the Deck layer setting.');
+            opError('Deck activation failed', result.error || 'The engine rejected the Deck layer setting.');
           }
         });
       }).catch((error) => {
-        Alert.alert('Deck handoff failed', error instanceof Error ? error.message : String(error));
+        opError('Deck handoff failed', error instanceof Error ? error.message : String(error));
       });
       // Switch the MIDI controller to its Deck mapping context.
       setMidiActiveContext('deck');
@@ -414,9 +591,53 @@ export default function ControlDeckScreen() {
         }
         swapTransitionIdRef.current = null;
         setDeckSwapInFlight(false);
+        // ── L3 — leaving the Deck tab (docs/61 §2.1/§3) ────────────────────
+        // Fires ONLY here, in the focus effect's CLEANUP (blur/unmount) —
+        // never on mount, never on focus, never from a broadcast or a WS
+        // reconnect (see the `onControl` guard below; `no_raw_alerts.test.ts`
+        // is the idiom this file's own source-scan test follows to prove it).
+        // Deliberately reads every input off the refs mirrored above rather
+        // than a state variable: this closure was captured whenever
+        // `waitForHandoff` last changed (the dep array is untouched, on
+        // purpose — widening it would re-run the effect and re-arm this
+        // cleanup on every render), so only `.current` reads are fresh at the
+        // moment the operator actually blurs the tab.
+        runYieldGesture({
+          gesture: 'tab',
+          card: colorsCardRef.current,
+          colorsWindowOpen: colorsWindowOpenRef.current,
+          kind: rotationKind(
+            colorAutopilotRef.current.active,
+            colorAutopilotRef.current.palettes,
+            colorAutopilotRef.current.mode,
+          ),
+          disabled: colorsDisabledRef.current,
+          post: (patch, failNote) => handleColorAutopilotChange(patch, failNote),
+          say: (message) => opInfo('COLORS', message),
+        });
       };
+      // Deliberately NOT depending on `handleColorAutopilotChange` (or any of
+      // the refs the cleanup reads): widening this array would re-run the
+      // effect and re-arm the cleanup on every render, which is exactly what
+      // W3's brief forbids — the cleanup closes over the current render's
+      // `handleColorAutopilotChange` (stable enough via its own
+      // `notifyInteraction`-only deps) and reads everything else through the
+      // refs mirrored above, which are always fresh at blur time regardless
+      // of when this effect itself last re-ran.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [waitForHandoff])
   );
+
+  // ── App-wide COLOR chip's "open the COLORS window" request (docs/61 §4.4,
+  // W4) ─────────────────────────────────────────────────────────────────
+  // A UI hint from the shared header's chip (Sonnet D), fired through the
+  // zero-import `deck_window_requests` pub/sub rather than a prop or a store,
+  // because the chip renders on every tab and this screen owns the workspace
+  // it wants restored. Purely additive — `workspace.openWindow` is the exact
+  // handler already wired to the bar's own OPEN chips above — and it must
+  // never post anything; it only ever opens a window, never touches the
+  // colour-autopilot daemon.
+  useEffect(() => subscribeDeckWindowRequests((id) => workspaceOpenWindow(id)), [workspaceOpenWindow]);
 
   // Control plane: deck channel state, autopilot, deck-transition
   // config, soft-swap lifecycle markers.
@@ -511,13 +732,36 @@ export default function ControlDeckScreen() {
       // transitionMs}. We merge per-field (same defensive posture as the
       // deckTransitionConfig branch) so a malformed field can't blow away a
       // good one; palettes is replaced wholesale (it IS the selection).
-      setColorAutopilot((prev) => ({
-        active: typeof msg.active === 'boolean' ? msg.active : prev.active,
-        palettes: Array.isArray(msg.palettes) ? (msg.palettes as string[]) : prev.palettes,
-        delay_s: typeof msg.delay_s === 'number' ? msg.delay_s : prev.delay_s,
-        shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
-        transitionMs: typeof msg.transitionMs === 'number' ? msg.transitionMs : prev.transitionMs,
-      }));
+      //
+      // MODE-SCOPED since docs/59: the payload carries exactly ONE mode's
+      // fields, so a FOLLOW NOTE frame has no `palettes` at all. Keeping the
+      // previous ones through a mode change would leave the window able to
+      // render a rotation the daemon is not running — empty is the truth
+      // there, and it is set explicitly rather than by omission.
+      setColorAutopilot((prev) => {
+        const mode = (msg.mode === 'followNote' || msg.mode === 'palettes') ? msg.mode : prev.mode;
+        return {
+          active: typeof msg.active === 'boolean' ? msg.active : prev.active,
+          mode,
+          palettes: Array.isArray(msg.palettes)
+            ? (msg.palettes as string[])
+            : (mode === 'followNote' ? [] : prev.palettes),
+          delay_s: typeof msg.delay_s === 'number' ? msg.delay_s : prev.delay_s,
+          shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
+          transitionMs: typeof msg.transitionMs === 'number' ? msg.transitionMs : prev.transitionMs,
+          // The follow-note block rides along in BOTH modes (inert in palettes
+          // mode) so a mode toggle restores the operator's cycle tuning.
+          followNote: (msg.followNote && typeof msg.followNote === 'object')
+            ? (msg.followNote as DeckColorAutopilotConfig['followNote'])
+            : prev.followNote,
+          // Runtime facts — present only while following, and cleared when not,
+          // so the card can never show a note letter for a parked daemon.
+          currentScheme: mode === 'followNote' ? (msg.currentScheme as string | null ?? null) : undefined,
+          notePc: mode === 'followNote' ? (msg.notePc as number | null ?? null) : undefined,
+          noteHue: mode === 'followNote' ? (msg.noteHue as number | null ?? null) : undefined,
+          nextMethodAtMs: mode === 'followNote' ? (msg.nextMethodAtMs as number | null ?? null) : undefined,
+        };
+      });
       // Next-palette-swap wall-clock ms (null when inactive) — mirrors the
       // pattern-autopilot countdown; re-broadcast on every color cycle, so it
       // ticks accurately under operator OR plan-cue drive.
@@ -559,12 +803,28 @@ export default function ControlDeckScreen() {
     setConnectionError(s.connected ? '' : (s.lastError || ''));
   }, []);
 
+  // ── docs/63 §2.6 — gate the vis-driven re-render on the OUTPUT bar ───────
+  // `onViz` below is a zero-dependency `useCallback`; its STABLE identity is
+  // what keeps the engine-bus subscription from tearing down and
+  // resubscribing on every render. Reading `workspace.isBarShown('outputBar')`
+  // directly inside it would force adding a dependency, which would defeat
+  // that — so instead the shown-ness is mirrored into a ref by a plain
+  // effect, and `onViz` reads the REF. `visDataRef.current` is still written
+  // on every message regardless of this gate (below) — only the React state
+  // bump (`setVisVersion`) is skipped, so the strip paints the latest frame
+  // the instant the bar comes back, with no missed data.
+  const outputBarShown = workspace.isBarShown('outputBar');
+  const outputBarShownRef = useRef(outputBarShown);
+  useEffect(() => {
+    outputBarShownRef.current = outputBarShown;
+  }, [outputBarShown]);
+
   // Viz plane: master strip lives on the deck tab too.
   const onViz = useCallback((msg: EngineMessage) => {
     if (msg.type === 'vis') {
       visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
       const now = Date.now();
-      if (now - lastVisUpdateRef.current > 200) {
+      if (outputBarShownRef.current && now - lastVisUpdateRef.current > 200) {
         lastVisUpdateRef.current = now;
         setVisVersion(v => v + 1);
       }
@@ -620,7 +880,17 @@ export default function ControlDeckScreen() {
     // Load deck COLOR autopilot config (palette-cycling autopilot).
     const caRes = await fetchDeckColorAutopilot();
     if (caRes.ok && caRes.data) {
-      setColorAutopilot(caRes.data);
+      // NORMALIZE `palettes` (docs/59 §4.1). The payload is MODE-SCOPED: a
+      // FOLLOW NOTE config carries no `palettes` at all, and seeding that
+      // straight into state left every consumer of the (non-optional) field
+      // holding `undefined` — the AUTOPILOT window's colour panel read
+      // `.length` off it and white-screened the deck on load. The WS reconcile
+      // below already guarantees an array; the focus seed must too, or the two
+      // doors into the same state disagree about its shape.
+      setColorAutopilot({
+        ...caRes.data,
+        palettes: Array.isArray(caRes.data.palettes) ? caRes.data.palettes : [],
+      });
     }
 
     // Load initial deck channel state.
@@ -677,7 +947,7 @@ export default function ControlDeckScreen() {
       if (!res.ok) {
         console.error('[Deck] Transition-config POST rejected:', res.error);
         setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
-        Alert.alert(
+        opError(
           'Transition setting not applied',
           `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
         );
@@ -685,7 +955,7 @@ export default function ControlDeckScreen() {
     }).catch((err) => {
       console.error('[Deck] Transition-config POST failed:', err);
       setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
-      Alert.alert('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+      opError('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction]);
 
@@ -697,7 +967,13 @@ export default function ControlDeckScreen() {
   // onControl handler above reconciles — that broadcast is the source of truth
   // (it also carries PLAN-driven and per-tick palette-advance changes), so the
   // optimistic value just avoids a tap-snap until the echo lands.
-  const handleColorAutopilotChange = useCallback((patch: Partial<DeckColorAutopilotConfig>) => {
+  // `failNote` (docs/61 §2.1, W3): the YIELD gestures (L2/L3, below) call this
+  // as their POST path, and on a REJECTED/unreachable stop the operator needs
+  // `YIELD_FAIL_SAY` ("Couldn't stop FOLLOW NOTE — it is still driving.") —
+  // not the generic "reverted" sentence, because a yield's `patch` is
+  // `{active:false}` with no prior snapshot worth narrating as a revert. Every
+  // other caller omits it and gets the unchanged sentence.
+  const handleColorAutopilotChange = useCallback((patch: Partial<DeckColorAutopilotConfig>, failNote?: string) => {
     notifyInteraction();
     let prevSnapshot: Partial<DeckColorAutopilotConfig> = {};
     setColorAutopilot((prev) => {
@@ -712,15 +988,74 @@ export default function ControlDeckScreen() {
       if (!res.ok) {
         console.error('[Deck] Color-autopilot POST rejected:', res.error);
         setColorAutopilot((prev) => ({ ...prev, ...prevSnapshot }));
-        Alert.alert(
+        opError(
           'Color autopilot not applied',
-          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+          [`The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(), failNote]
+            .filter(Boolean).join(' '),
         );
       }
     }).catch((err) => {
       console.error('[Deck] Color-autopilot POST failed:', err);
       setColorAutopilot((prev) => ({ ...prev, ...prevSnapshot }));
-      Alert.alert('Color autopilot not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+      opError(
+        'Color autopilot not applied',
+        [`Could not reach the engine. ${err?.message || ''} Reverted.`.trim(), failNote].filter(Boolean).join(' '),
+      );
+    });
+  }, [notifyInteraction]);
+
+  // ── L2 — hiding the COLORS window (docs/61 §2.1/§3) ─────────────────────
+  // The workspace bar's hide-COLORS chip runs through the same
+  // `runYieldGesture` bridge as L3, THEN closes the window regardless of the
+  // POST outcome — yield is fire-with-narration, never a navigation gate.
+  // Every other window's hide (patterns is protected and has no chip;
+  // parameters/autopilot/pixels have no running colour mode to leave) just
+  // falls through to `workspace.closeWindow` unchanged. Widened to
+  // `DeckSurfaceId` (docs/63 W3) because this is now also the bar chips'
+  // `onClose` — closing/opening a BAR runs no yield, posts nothing; the
+  // branch below stays keyed on `id === 'colors'` exactly as before, which
+  // TypeScript narrows fine since `'colors'` is one member of the union.
+  const handleWorkspaceClose = useCallback((id: DeckSurfaceId) => {
+    if (id === 'colors') {
+      runYieldGesture({
+        gesture: 'hide',
+        card: colorsCardRef.current,
+        // L2's own gesture passes `true`: it fires BEFORE the close below, so
+        // the window is still open at the moment the rule is evaluated.
+        colorsWindowOpen: true,
+        kind: rotationKind(colorAutopilot.active, colorAutopilot.palettes, colorAutopilot.mode),
+        disabled: isConnected === false || planGate,
+        post: (patch, failNote) => handleColorAutopilotChange(patch, failNote),
+        say: (message) => opInfo('COLORS', message),
+      });
+    }
+    workspaceCloseWindow(id);
+  }, [colorAutopilot, isConnected, planGate, handleColorAutopilotChange, workspaceCloseWindow]);
+
+  // LIVE RETUNE the running colour rotation (docs/59 §5.2). Deliberately NOT
+  // handleColorAutopilotChange: that POSTs, and a POST is a full replace — the
+  // daemon bumps its generation, kills the in-flight tween and re-arms the hold
+  // from zero, which is the visible restart the operator asked us to remove.
+  // This PATCHes the moved field in place.
+  //
+  // NO optimistic update. The retune fields the card sends live are the ones
+  // the daemon may adopt at a boundary (a fade lands at its own duration; a
+  // subset swap takes effect at the next advance), so painting the new value
+  // immediately would claim a change the rig has not made yet. The broadcast
+  // that follows the PATCH is the truth, and it arrives in one round trip.
+  const handleColorAutopilotRetune = useCallback((patch: Record<string, unknown>) => {
+    notifyInteraction();
+    void patchDeckColorAutopilot(patch).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Color-autopilot PATCH rejected:', res.error);
+        opError(
+          'Retune not applied',
+          `The engine refused the change. ${res.error || ''} The rotation is still running its previous settings.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Color-autopilot PATCH failed:', err);
+      opError('Retune not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
     });
   }, [notifyInteraction]);
 
@@ -741,7 +1076,7 @@ export default function ControlDeckScreen() {
       if (!res.ok) {
         console.error('[Deck] Autopilot-profile POST rejected:', res.error);
         setAutopilotProfile(prevProfile);
-        Alert.alert(
+        opError(
           'Autopilot profile not applied',
           `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
         );
@@ -749,7 +1084,7 @@ export default function ControlDeckScreen() {
     }).catch((err) => {
       console.error('[Deck] Autopilot-profile POST failed:', err);
       setAutopilotProfile(prevProfile);
-      Alert.alert('Autopilot profile not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+      opError('Autopilot profile not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction, planGate]);
 
@@ -768,7 +1103,7 @@ export default function ControlDeckScreen() {
       if (!res.ok) {
         console.error('[Deck] Split-ratio POST rejected:', res.error);
         setDeckSplitRatio(prevRatio);
-        Alert.alert(
+        opError(
           'Split not applied',
           `The engine rejected the divider position. ${res.error || ''} Reverted.`.trim(),
         );
@@ -776,7 +1111,7 @@ export default function ControlDeckScreen() {
     }).catch((err) => {
       console.error('[Deck] Split-ratio POST failed:', err);
       setDeckSplitRatio(prevRatio);
-      Alert.alert('Split not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+      opError('Split not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction, planGate]);
 
@@ -794,7 +1129,7 @@ export default function ControlDeckScreen() {
       if (!res.ok) {
         console.error('[Deck] Clear secondary slot rejected:', res.error);
         setDeckSecondaryBound(prevBound);
-        Alert.alert(
+        opError(
           'Second playlist not cleared',
           `The engine rejected the change. ${res.error || ''} Reverted.`.trim(),
         );
@@ -802,7 +1137,7 @@ export default function ControlDeckScreen() {
     }).catch((err) => {
       console.error('[Deck] Clear secondary slot failed:', err);
       setDeckSecondaryBound(prevBound);
-      Alert.alert('Second playlist not cleared', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+      opError('Second playlist not cleared', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction, planGate, deckSecondaryBound]);
 
@@ -822,7 +1157,7 @@ export default function ControlDeckScreen() {
     if (!res.ok) {
       console.error(`[Deck] color change rejected for ${channelId}:`, res.error);
       setDeckChannel((c: any) => (c ? { ...c, color: prev } : c));
-      Alert.alert(
+      opError(
         'Color not applied',
         `The engine rejected this color. ${res.error || ''} The deck kept its previous color.`.trim(),
       );
@@ -844,7 +1179,7 @@ export default function ControlDeckScreen() {
     if (!res.ok) {
       console.error('[Deck] hue change rejected:', res.error);
       setDeckChannel((c: any) => (c ? { ...c, hue: prev } : c));
-      Alert.alert(
+      opError(
         'Hue not applied',
         `The engine rejected this hue. ${res.error || ''} The deck kept its previous hue.`.trim(),
       );
@@ -871,7 +1206,7 @@ export default function ControlDeckScreen() {
       if (!res.ok) {
         console.error('[Deck] Panic reported a loud fallback:', res.error, res.data);
         const rigLit = (res.data as any)?.rigLit === true;
-        Alert.alert(
+        opError(
           'Panic — home look not loaded',
           `${res.error || 'The "home" snapshot could not be recalled.'} `
             + (rigLit
@@ -881,7 +1216,7 @@ export default function ControlDeckScreen() {
       }
     } catch (err: any) {
       console.error('[Deck] Panic request failed:', err);
-      Alert.alert('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
+      opError('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
     } finally {
       setPanicBusy(false);
     }
@@ -921,74 +1256,119 @@ export default function ControlDeckScreen() {
           scrim so emergency recovery is never locked behind a takeover. */}
       <View style={{ flex: 1, position: 'relative' }}>
       <DeckTopBar isConnected={isConnected} disabled={planGate} />
-      <CPCControls disabled={planGate} />
-      {/* ── Channel Preview Visualization ───────────────────────────── */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, minHeight: 44 }}>
+      {/* ── docs/63 W3 — the view optimizer moves under GLOBALS ─────────────
+          `DeckWorkspaceBar` ("the view optimizer") now renders INSIDE
+          `CPCControls`, between row 1 (GLOBALS) and row 2 (AUDIO SIGNALS),
+          via `optimizerSlot` — a sibling ROW, never an overlay, so it can
+          never steal a fader / split-divider gesture; it still lives inside
+          the plan-lock content wrapper, so the hermetic scrim freezes it with
+          the rest of the deck while a plan is driving. `hideAudioRow` wires
+          the AUDIO SIGNALS row (row 2) to the SAME chip mechanism (operator
+          order 3). */}
+      <CPCControls
+        disabled={planGate}
+        optimizerSlot={
+          <DeckWorkspaceBar
+            layout={workspace.layout}
+            onOpen={workspace.openWindow}
+            onClose={handleWorkspaceClose}
+            perfActive={workspace.perfActive}
+            trailing={
+              <>
+                {/* ── Plan-active lock indicator ──────────────────────────────────
+                    When a plan is live the deck's mutating controls are fully frozen
+                    (pointerEvents 'none' + dim, below) — a tap does NOTHING, so the
+                    old "A TOUCH TAKES OVER" copy was a lie under the full freeze the
+                    operator requested. This SUBTLE inline chip just states the truth:
+                    controls are LOCKED. To edit, use DISABLE PLAN in the amber banner
+                    (pauses the plan) or take over from the MIXER's TAKE-OVER prompt.
+                    While a lease IS held (taken over via that prompt) it becomes the
+                    "plan resumes in M:SS" countdown + a one-tap RESUME affordance. */}
+                {/* ONE PREDICATE. This chip claims "CONTROLS LOCKED", so it must be
+                    driven by the SAME `planGate` that actually locks them — never by
+                    a second, locally-derived plan-active flag. A chip that says
+                    LOCKED over live controls (or stays lit after the operator
+                    DISABLES the plan) is exactly the operator-reported failure this
+                    guards against. Engine side: TimelineService._isPlanDrivingDeck
+                    is the single source both `planActive` and the 'plan' controlLock
+                    derive from, and it is false the instant the plan is disabled. */}
+                {/* Both chips are the ONE on-state recipe (docs/54 row 3): a
+                    translucent accent wash + accent border + accent ink. The plan
+                    chip's accent is the plan subsystem's cyan identity; the
+                    took-over chip's is the theme's `warning` amber (a caution, not
+                    a failure — and per-theme, because the loud amber is ~2:1 on the
+                    daylight palette). Rendered UNCONDITIONALLY (docs/63 §5 pin 6) —
+                    these are safety-relevant and never hideable, which is exactly
+                    why they live in `trailing`, outside the bar's chip ScrollView. */}
+                {planGate ? (
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 6,
+                    paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.control,
+                    borderWidth: 1, ...accentWash(PLAN_INDICATOR_CYAN),
+                  }}>
+                    <Text style={{ ...Type.microCaps, textTransform: 'uppercase', letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN }}>
+                      PLAN LIVE · CONTROLS LOCKED
+                    </Text>
+                  </View>
+                ) : leaseHeld ? (
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 8,
+                    paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.control,
+                    borderWidth: 1, ...accentWash(C.warning),
+                  }}>
+                    <Text style={{ ...Type.microCaps, textTransform: 'uppercase', letterSpacing: 0.6, color: C.warning }}>
+                      {`TOOK OVER · PLAN RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => { void resumeNow(); }}
+                      hitSlop={ICON_BTN_HIT_SLOP}
+                      accessibilityRole="button"
+                      accessibilityLabel="Resume the plan now"
+                    >
+                      <Text style={{ ...Type.microCaps, textTransform: 'uppercase', letterSpacing: 0.6, color: C.warning }}>
+                        RESUME NOW
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                {/* Compact plan-status glyph — RIGHTMOST in the globals row (request
+                    #5). Matches the OscStatusPill idiom (48px tile, coloured
+                    border/dot/label). Tapping routes to the Timeline tab. */}
+                <PlanIndicatorPill />
+              </>
+            }
+          />
+        }
+        hideAudioRow={!workspace.isBarShown('audioBar')}
+      />
+      {/* ── Channel Preview Visualization (docs/63 §2.6/§3) ─────────────────
+          The `DECK MAIN · LIVE OUTPUT` caption and the 1D `<PixelStrip>` below
+          it live and die together as ONE block, rendered only when the
+          OUTPUT bar is effectively shown (operator order 1: PIXELS open
+          suppresses it, or the operator hides it directly via its chip). When
+          hidden, this whole wrapper is absent — no empty padded box remains,
+          since reclaiming that height is the point of this wave. */}
+      {workspace.isBarShown('outputBar') ? (
+        <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
           {/* QA round8 #7: the solid bar below read ambiguously. Label it
               like the mixer's "MASTER OUTPUT" convention so it's clear this
               strip is the deck's live output preview. */}
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: C.icon }}>
+          <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.icon, marginBottom: 4 }}>
             DECK MAIN · LIVE OUTPUT
           </Text>
-          <View style={{ flex: 1 }} />
-          {/* ── Plan-active lock indicator ──────────────────────────────────
-              When a plan is live the deck's mutating controls are fully frozen
-              (pointerEvents 'none' + dim, below) — a tap does NOTHING, so the
-              old "A TOUCH TAKES OVER" copy was a lie under the full freeze the
-              operator requested. This SUBTLE inline chip just states the truth:
-              controls are LOCKED. To edit, use DISABLE PLAN in the amber banner
-              (pauses the plan) or take over from the MIXER's TAKE-OVER prompt.
-              While a lease IS held (taken over via that prompt) it becomes the
-              "plan resumes in M:SS" countdown + a one-tap RESUME affordance. */}
-          {planActive && !leaseHeld ? (
-            <View style={{
-              flexDirection: 'row', alignItems: 'center', gap: 6,
-              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
-              borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
-                PLAN LIVE · CONTROLS LOCKED
-              </Text>
-            </View>
-          ) : leaseHeld ? (
-            <View style={{
-              flexDirection: 'row', alignItems: 'center', gap: 8,
-              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
-              borderWidth: 1, borderColor: '#f5a623',
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
-                {`TOOK OVER · PLAN RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
-              </Text>
-              <TouchableOpacity
-                onPress={() => { void resumeNow(); }}
-                hitSlop={ICON_BTN_HIT_SLOP}
-                accessibilityRole="button"
-                accessibilityLabel="Resume the plan now"
-              >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
-                  RESUME NOW
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-          {/* Compact plan-status glyph — RIGHTMOST in the globals row (request
-              #5). Matches the OscStatusPill idiom (48px tile, coloured
-              border/dot/label). Tapping routes to the Timeline tab. */}
-          <PlanIndicatorPill />
+          {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
+              composition AFTER global FX (invert / group color-locks)
+              but BEFORE the section dimmer rack + blackout (operator request
+              2026-06-29). So the deck preview (a) shows the global effects
+              (and the per-channel hues baked into the composite), while (b)
+              still ignoring the section
+              dimmer-rack trim — it shows what the SHOW is producing, not the
+              dimmed-down hardware output. The section dimmers are still applied to
+              the actual sACN/DMX output — this is preview-only. The mixer master
+              strip uses the same `preDimmer` key for parity. */}
+          <PixelStrip base64Data={visDataRef.current.preDimmer ?? null} height={18} style={{ borderRadius: Radius.control }} />
         </View>
-        {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
-            composition AFTER global FX (invert / group color-locks)
-            but BEFORE the section dimmer rack + blackout (operator request
-            2026-06-29). So the deck preview (a) shows the global effects
-            (and the per-channel hues baked into the composite), while (b)
-            still ignoring the section
-            dimmer-rack trim — it shows what the SHOW is producing, not the
-            dimmed-down hardware output. The section dimmers are still applied to
-            the actual sACN/DMX output — this is preview-only. The mixer master
-            strip uses the same `preDimmer` key for parity. */}
-        <PixelStrip base64Data={visDataRef.current.preDimmer ?? null} height={18} style={{ borderRadius: 6 }} />
-      </View>
+      ) : null}
       {/* ── 3-COLUMN deck layout (operator request June 2026) ───────────────
           On wide surfaces (iPad landscape / web) the deck is three side-by-side
           columns — PATTERNS | PARAMETERS | AUTOPILOT & SETTINGS — each
@@ -1018,7 +1398,14 @@ export default function ControlDeckScreen() {
         // dataSet is an RN-web DOM marker (→ data-layouthost); it's not on the
         // native View prop types, so cast it in like the SectionHost host did.
         {...({ dataSet: { layouthost: 'columns' } } as object)}
-        style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}
+        // The NARROW split is arbitrated against this box's MEASURED height
+        // (report _273) — the pin used to be derived from the device window,
+        // which is how a 400 pt PATTERNS pin ended up inside a 309 pt stack.
+        // Harmless in wide mode: nothing there reads `columnsHostHeight`.
+        onLayout={handleColumnsHostLayout}
+        // paddingHorizontal 4 + each track's marginHorizontal 4 = an 8pt
+        // gutter everywhere (R2 window rhythm — see `windowTrack`).
+        style={[globalStyles.container, { paddingHorizontal: 4 }, !isWide && { flexDirection: 'column' }]}
       >
         {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
             The one-and-only pattern list (active playlist) + the global rig HUE
@@ -1029,8 +1416,15 @@ export default function ControlDeckScreen() {
             bottom bar below (mirrors the mixer tab). The playlist shows ≥5
             entries on 11" iPad landscape; REFRESH/RECONNECT is the header ↻
             icon (PlaylistPanel `onRefreshConnection`). */}
-        <View style={[
-          globalStyles.leftPane,
+        {/* WINDOW: PATTERNS — PROTECTED. It is the floor of the workspace, so
+            it has no hide chip and the layout reducer refuses to close it; the
+            column style below is passed to <DeckWindow> verbatim, so an open
+            window is pixel-identical to the column it replaces. */}
+        <DeckWindow id="patterns" open={workspace.isOpen('patterns')} style={[
+          // R2: the shared window surface. This used to be `leftPane` (the
+          // only pane on the deck); it is now the same `panel` recipe the
+          // other three windows wear, so no window is special.
+          ...windowTrack,
           { padding: 14, gap: 8 },
           // Wide: this column flexes to ~1.1 of the row. Narrow (stacked): the
           // leftPane's default flex:1 inside a column container would let it
@@ -1040,6 +1434,12 @@ export default function ControlDeckScreen() {
           // 320→480 so the split card is tall enough to seat two MIN_PANE panes
           // (deck_split_playlists.md §Resizable split): below 2·MIN_PANE_PT the
           // divider forces a fixed 0.5, so the extra height keeps the drag live.
+          // _225 NOTE: in the narrow stack the two panes are now SIDE BY SIDE
+          // (see `sideBySide` at the SplitPlaylistPanes call below), so the
+          // split axis is width and this raised floor is no longer what keeps
+          // the divider draggable — the container's WIDTH is. The extra height
+          // is kept anyway: two full-height playlist COLUMNS are exactly what
+          // the taller card now buys, so the floor still earns its place.
           // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
           // list is "too small" horizontally in landscape), then pinned to an
           // exact 40/30/30 split (flex 4/3/3) — operator: "patterns column 40%
@@ -1060,12 +1460,52 @@ export default function ControlDeckScreen() {
           // "reduce by 30%"): 38.5% of window height, floored at 400pt
           // (500pt with a second playlist bound — two MIN_PANE panes need
           // the room). iPad portrait 1080pt → ~416pt; 12.9" 1366pt → ~526pt.
+          // The weight now comes from the workspace (docs/53 §3.1) — it is the
+          // SAME 4 while PATTERNS is open, and the other windows' weights are
+          // unchanged too, so the default layout is the 40/30/30 row above.
+          // NARROW FULLSCREEN (docs/55 §2.4, operator intent 4: "when all
+          // colors and params and auto pilot panels are hidden make sure the
+          // pattern is always full screen"). With every other window hidden —
+          // by the operator's own chips OR by the performance overlay — the
+          // fixed pin leaves PATTERNS sitting above a DEAD scroll region, so
+          // the deck shows a short card and a lot of nothing. In that ONE
+          // composition the pin gives way to a flex fill.
+          //
+          // Wide mode never had the bug: its flex weights already renormalize,
+          // so a lone PATTERNS track takes the whole row.
+          //
+          // Strictly conditional: `mode:'fill'` is true only when the EFFECTIVE
+          // open set is exactly {patterns}.
+          //
+          // NARROW SPLIT, ARBITRATED (report _273 ruling, REVISED by _278).
+          // The pinned branch's height is no longer a local
+          // `max(400|500, 38.5 %)` expression: it comes from `narrowStackSizing`,
+          // which measures it against the ACTUAL stack. With ANY secondary
+          // window open on a stack tall enough for the pin, the returned
+          // height IS the party 2026-07-11 pin, to the pixel — `_274`'s
+          // one-secondary slack absorption is GONE (_278 operator ruling:
+          // PATTERNS at 75 % after a reshow read as "not resizing from full
+          // screen" with the restored window "overlaying" its bottom;
+          // restoring a window now snaps the deck to its SHIPPED proportions,
+          // the same thing `wideFlexFor` does in the wide row). The one case
+          // the pin still bends:
+          //   • stack shorter than the pin → the pin yields instead of
+          //     overflowing the host and starving the region to zero.
+          // `flexShrink:1` (was 0) and the dropped `height` are the structural
+          // half of the same fix: even if the arbitrated height and the 4 pt
+          // track margins disagree by a few points, flexbox absorbs it INSIDE
+          // the host — PATTERNS can no longer spill past the host's bottom edge
+          // and be painted over by the scroll region that follows it.
           isWide
-            ? { flex: 4, minWidth: 0 }
-            : (() => {
-                const h = Math.max(deckSecondaryBound ? 500 : 400, Math.round(winHeight * 0.385));
-                return { flexGrow: 0, flexShrink: 0, flexBasis: h, height: h };
-              })(),
+            ? { flex: workspace.flexFor('patterns'), minWidth: 0 }
+            : narrowTracks.patterns,
+          // Fabric can commit the parent's fill->pin frame before every deep
+          // playlist descendant has consumed the new height. A native View is
+          // overflow-visible by default, so that one transition frame lets the
+          // old full-height list paint into the lower window. Clip the narrow
+          // native panel at its authoritative Yoga box; wide and web retain
+          // their byte-identical surface/shadow behavior.
+          !isWide && Platform.OS !== 'web' ? NARROW_PATTERNS_NATIVE_CLIP_STYLE : null,
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
@@ -1109,6 +1549,14 @@ export default function ControlDeckScreen() {
                 playlistLibrary={playlistLibrary}
                 splitRatio={deckSplitRatio}
                 secondaryBound={deckSecondaryBound}
+                // SPLIT AXIS follows the app's layout mode (operator order,
+                // report _225). WIDE = the windows sit in a row, so PATTERNS is
+                // a tall narrow column and DECK B stacks UNDER DECK A exactly
+                // as before. NARROW = the windows stack, so PATTERNS is a
+                // full-width band with height to spare only sideways — DECK B
+                // becomes a column to the RIGHT. Placement only; the ratio, the
+                // engine routes and DECK B's ✕ unbind are unchanged.
+                sideBySide={!isWide}
                 onSplitRelease={handleSplitRelease}
                 onCloseSecondary={handleCloseSecondary}
               />
@@ -1118,12 +1566,16 @@ export default function ControlDeckScreen() {
               Waiting for deck…
             </Text>
           )}
-        </View>
+        </DeckWindow>
 
         {/* PARAMETERS + AUTOPILOT scroll together below the pinned PATTERNS
             column in the narrow stack; in the wide row this is a Fragment so the
             two columns stay flex siblings of PATTERNS. See ColumnsScrollRest. */}
-        <ColumnsScrollRest isWide={isWide}>
+        <ColumnsScrollRest
+          isWide={isWide}
+          collapsed={narrowStack.mode === 'fill'}
+          narrowStyle={narrowTracks.rest}
+        >
         {/* ── COLUMN 2 — PARAMETERS ────────────────────────────────────────
             ONLY the deck's (local) parameter controls — the DECK MAIN channel
             card: entry-label editor, SAVED flash, color swatch, ◎ ALL
@@ -1131,12 +1583,18 @@ export default function ControlDeckScreen() {
             the toggle/trigger button grid. This used to sit BELOW the settings
             stack in the old single right-pane scroll; it now stands alone in
             the middle column, independently scrollable. */}
-        <View style={[
+        {/* WINDOW: PARAMETERS. Hidden = display:'none' (never unmounted), so
+            the slider stack, the entry-label draft and the column's scroll
+            offset are exactly where the operator left them on restore. */}
+        <DeckWindow id="parameters" open={workspace.isOpen('parameters')} style={[
+          // R2: the shared `panel` window surface (docs/54 §3). This track
+          // used to be a bare transparent column.
+          ...windowTrack,
           { padding: 0 },
           // minWidth:0 lets the column actually shrink to its flex share in
           // the row (RN children otherwise refuse below content width and
           // shove the SETTINGS column off-screen). Stacked: content-sized.
-          isWide ? { flex: 3, minWidth: 0 } : {},
+          isWide ? { flex: workspace.flexFor('parameters'), minWidth: 0 } : {},
         ]}>
           <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
             {/* Channel parameters for the deck (base) channel. The deck is
@@ -1165,7 +1623,11 @@ export default function ControlDeckScreen() {
                     // over (leaseHeld) clears planGate and re-enables it.
                     pointerEvents={planGate ? 'none' : 'auto'}
                     style={[
-                      { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
+                      // docs/54 row 9: the DECK MAIN card is the canonical
+                      // `cardOnPanel` — a card nested inside its window,
+                      // not a peer of it.
+                      globalStyles.cardOnPanel,
+                      PARAMETER_CARD_BOUNDARY_STYLE,
                       // Color accent (docs/39 §8.4): tint the card's left edge so
                       // the operator can identify the deck at a glance — mirrors the
                       // mixer strip. The lock border still wins (operator-critical
@@ -1180,17 +1642,19 @@ export default function ControlDeckScreen() {
                         AllModulationsPanel renders an empty state in
                         that case but the disabled affordance is a
                         clearer signal up-front. */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <View style={{ flex: 1 }}>
+                    <View style={PARAMETER_HEADER_STYLE}>
+                      <View style={PARAMETER_HEADER_LABEL_STYLE}>
                         {/* Renaming the active playlist entry: tap the title and type.
                             Auto-saves on blur; the PlaylistPanel listens for the same
                             `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
                         <EntryLabelEditor
                           channelId={channel.id}
+                          role="deck"
                           channelLabel={channelTitle}
                           locked={!!channel.locked}
                         />
                       </View>
+                      <View style={PARAMETER_HEADER_ACTIONS_STYLE}>
                       {/* SAVED flash moved up here from inside GlobalParams
                           so it never reflows the slider stack. The component
                           always reserves the same width/height — the inner
@@ -1229,22 +1693,26 @@ export default function ControlDeckScreen() {
                         // hitSlop + a 44pt min height/width instead of
                         // inflating the chrome, keeping the header tidy.
                         hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
+                        // docs/54 row 11: the old '#00a86b' literal is the
+                        // palette's `tertiary`, and the pill wears the shared
+                        // quiet on-state wash instead of a bare outline.
                         style={{
-                          paddingHorizontal: 12, borderRadius: 6,
+                          paddingHorizontal: 12, borderRadius: Radius.control,
                           minHeight: 44, minWidth: 44,
                           alignItems: 'center', justifyContent: 'center',
-                          borderWidth: 1, borderColor: '#00a86b',
-                          backgroundColor: 'transparent',
+                          borderWidth: 1,
+                          ...accentWash(C.tertiary),
                           opacity: channel.playlist?.name ? 1 : 0.4,
                         }}
                       >
                         <Text style={{
                           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-                          color: '#00a86b', letterSpacing: 0.5,
+                          color: C.tertiary, letterSpacing: 0.5,
                         }}>
                           ◎ ALL
                         </Text>
                       </TouchableOpacity>
+                      </View>
                     </View>
 
                     {/* QA round8 #3: the PARAMETERS section spent ~32px of
@@ -1252,7 +1720,7 @@ export default function ControlDeckScreen() {
                         slider. Tightened both to 6 so the header rides compactly
                         — mirrors the AUTOPILOT card's tight header pattern. */}
                     <View style={{ marginBottom: 6 }}>
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 6, textTransform: 'uppercase' }}>PARAMETERS</Text>
+                      <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, marginBottom: 6 }}>PARAMETERS</Text>
                       <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
                     </View>
 
@@ -1271,20 +1739,25 @@ export default function ControlDeckScreen() {
               })}
             </View>
           </SectionHost>
-        </View>
+        </DeckWindow>
 
         {/* ── COLUMN 3 — AUTOPILOT & SETTINGS ──────────────────────────────
             The deck-settings stack that used to sit ABOVE the local parameters:
             AUTOPILOT (pattern playlist cycler + pattern-group locality),
             COLOR AUTOPILOT (palette cycler), DECK TRANSITIONS, and the DECK
             DYNAMIC VIEW OVERRIDES stack. Independently scrollable. */}
-        <View style={[
+        {/* WINDOW: AUTOPILOT. Hidden windows stay mounted, so the pattern /
+            color autopilot panels keep receiving their WS broadcasts (and
+            their countdowns keep ticking) while minimized — a restored window
+            is instantly current, with no refetch. */}
+        <DeckWindow id="autopilot" open={workspace.isOpen('autopilot')} style={[
+          ...windowTrack,
           { padding: 0 },
           // party 2026-07-11: SETTINGS weight 1.2→1, then 3 in the 40/30/30
           // split (see the column-weights note above).
           // minWidth:0 = same shrink guard as the PARAMETERS column; stacked
           // mode is content-sized inside the outer page scroll.
-          isWide ? { flex: 3, minWidth: 0 } : {},
+          isWide ? { flex: workspace.flexFor('autopilot'), minWidth: 0 } : {},
         ]}>
           {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
               gutter plus the cards' inner paddingRight:24 wasted ~72px of the
@@ -1413,7 +1886,63 @@ export default function ControlDeckScreen() {
               disabled={isConnected === false || planGate}
             />
           </SectionHost>
-        </View>
+        </DeckWindow>
+
+        {/* ── WINDOW 4 — COLORS (docs/53 §4-§5) ────────────────────────────
+            Closed by DEFAULT (it lives on the workspace bar's HIDDEN rail), so
+            the out-of-the-box deck is still the 40/30/30 three-column row.
+            SLICE A mounts the window SHELL: same track + SectionHost recipe as
+            the PARAMETERS / AUTOPILOT columns, with <ColorsWindow> as the body.
+            The colour work (two-colour hue ring + PALETTE TURNS) replaces that
+            component's body — this mount point does not move. In the narrow
+            stack it comes LAST, after AUTOPILOT, inside the same single
+            ColumnsScrollRest scroll. */}
+        <DeckWindow id="colors" open={workspace.isOpen('colors')} style={[
+          ...windowTrack,
+          { padding: 0 },
+          isWide ? { flex: workspace.flexFor('colors'), minWidth: 0 } : {},
+        ]}>
+          <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
+            {/* SLICE B/D: the two-colour wheel + PALETTE TURNS. The palette
+                read/write stays self-contained inside the component
+                (useSharedParamValues + updateParamCenter); the two props below
+                are the SINGLE-WRITER gate (docs/53 §4.4) — the live
+                colour-autopilot config makes the wheel read-only while the
+                daemon owns colorPalette1/2, and the SAME optimistic +
+                rollback + broadcast-reconcile handler the AUTOPILOT window
+                uses is the ONLY path this window changes engine state
+                through. No new state, no new fetch. */}
+            <ColorsWindow
+              disabled={isConnected === false || planGate}
+              colorAutopilot={colorAutopilot}
+              onColorAutopilotChange={handleColorAutopilotChange}
+              onColorAutopilotRetune={handleColorAutopilotRetune}
+              visible={workspace.isOpen('colors')}
+              onCardChange={handleColorsCardChange}
+            />
+          </SectionHost>
+        </DeckWindow>
+
+        {/* ── WINDOW 5 — PIXELS (report _225) ──────────────────────────────
+            The SIMULATION's own 2D pixel map, lit by the engine's live vis
+            frames. Closed by DEFAULT (it waits on the workspace bar's HIDDEN
+            rail), so the out-of-the-box deck is untouched.
+
+            NO SectionHost here, unlike every window above it: the body is a
+            single canvas that must FILL its track, and wrapping a flex:1
+            canvas in a ScrollView gives it an unbounded height to fill, which
+            collapses it to nothing. The window owns its own padding instead.
+            In the narrow stack it comes LAST, inside the same single
+            ColumnsScrollRest scroll, where `minHeight` gives it a real box. */}
+        <DeckWindow id="pixels" open={workspace.isOpen('pixels')} style={[
+          ...windowTrack,
+          { padding: 16 },
+          isWide
+            ? { flex: workspace.flexFor('pixels'), minWidth: 0 }
+            : { minHeight: 300 },
+        ]}>
+          <PixelViewWindow open={workspace.isOpen('pixels')} />
+        </DeckWindow>
         </ColumnsScrollRest>
       </View>
         {/* Hermetic plan-lock scrim — blankets the whole content region above
@@ -1486,8 +2015,8 @@ export default function ControlDeckScreen() {
       <Modal transparent visible={showColorPicker} animationType="fade" onRequestClose={() => setShowColorPicker(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowColorPicker(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
-            <View style={[styles.modalContent, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder }]}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginBottom: 12 }}>DECK COLOR</Text>
+            <View style={[globalStyles.panel, styles.modalContent]}>
+              <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, marginBottom: 12 }}>DECK COLOR</Text>
               <View style={styles.swatchGrid}>
                 {CHANNEL_COLOR_SWATCHES.map((hex) => {
                   const active = (deckChannel?.color ?? null) === hex;
@@ -1544,19 +2073,23 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
   },
   // PANIC / HOME (docs/39 §6b #9) — deck mirror of the mixer tab's panicBtn.
-  // AMBER literals (matched to mixer.tsx) so it reads as the rig's
-  // mission-critical "back to safe" action, distinct from the teal GEM grid
-  // and the red BLACKOUT e-stop inside it. Pinned at the left of the bottom
-  // bar where the operator's thumb can find it. Min 44pt touch target.
+  //
+  // docs/54 row 17 FREEZES this control's colour: "the deliberate loud-amber
+  // identity is PRESERVED — this button must read identically forever". The
+  // operator finds PANIC by colour, in the dark, under pressure. So the amber
+  // does NOT become the theme-aware `warning` token like the caution chips
+  // did; it becomes the one named identity constant, `PANIC_AMBER`
+  // (constants/identity.ts) — the same hex the literals spelled, now with a
+  // name and a reason. Only the radius moves onto the scale.
   panicBtn: {
     minWidth: 96,
     minHeight: 52,
     paddingHorizontal: 14,
     marginRight: 10,
-    borderRadius: 8,
-    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderRadius: Radius.control,
+    backgroundColor: withAlpha(PANIC_AMBER, 0.18),
     borderWidth: 1.5,
-    borderColor: '#F5A623',
+    borderColor: PANIC_AMBER,
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'stretch',
@@ -1565,18 +2098,18 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceGrotesk_700Bold',
     fontSize: 14,
     letterSpacing: 1.2,
-    color: '#F5A623',
+    color: PANIC_AMBER,
   },
   panicBtnHint: {
     fontFamily: 'SpaceGrotesk_700Bold',
     fontSize: 8,
     letterSpacing: 0.6,
-    color: '#F5A623',
+    color: PANIC_AMBER,
     opacity: 0.8,
     marginTop: 1,
   },
   deckSwatchBtn: {
-    width: 44, height: 44, borderRadius: 8,
+    width: 44, height: 44, borderRadius: Radius.control,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1,
   },
@@ -1586,8 +2119,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // docs/54 row 19: a modal is a panel. Radius from the scale; the surface
+  // + hairline + shadow come from `globalStyles.panel` at the call site.
   modalContent: {
-    borderRadius: 12,
+    borderRadius: Radius.panel,
     borderWidth: 1,
     padding: 20,
   },
@@ -1599,7 +2134,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   swatch: {
-    width: 44, height: 44, borderRadius: 10,
+    width: 44, height: 44, borderRadius: Radius.control,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: 'rgba(0,0,0,0.15)',
   },
@@ -1616,7 +2151,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
+    borderRadius: Radius.control,
     borderWidth: 1,
   },
 });

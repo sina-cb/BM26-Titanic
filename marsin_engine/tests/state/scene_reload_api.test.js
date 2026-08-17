@@ -6,8 +6,11 @@
 // ISOLATION (non-negotiable — the operator's live stack must not be touched):
 //   • the API port is an OS-ASSIGNED free port (bind :0, read it, release it),
 //     never the show ports 6966-6972;
-//   • `--dest 127.0.0.9` black-holes sACN, so no frame can reach the live sim
-//     bridge on 127.0.0.1:5568. That is the WHOLE output path now: the engine's
+//   • `--dest 192.0.2.9` — TEST-NET-1 (RFC 5737), never routed — black-holes
+//     sACN, so no frame can reach the live sim bridge on UDP 5568. A LOOPBACK
+//     dest would not: that bridge binds every local interface, so it receives
+//     loopback frames and relays them to the rig. That is the WHOLE output
+//     path now: the engine's
 //     per-controller direct-to-hardware routing is removed and refused at boot
 //     (lib/output_config_guard.js), so `--dest` can no longer be bypassed;
 //   • MARSIN_STATE_DIR / MARSIN_PLAYLISTS_DIR redirect every state write into
@@ -77,7 +80,7 @@ before(async () => {
     // portSpan 1 ⇒ the harness uses exactly the OS-assigned port.
     portBase: port,
     portSpan: 1,
-    extraArgs: ['--dest', '127.0.0.9'],
+    extraArgs: ['--dest', '192.0.2.9'],
     extraEnv: {
       BM26_SUPERVISED: '1',
       BM26_SCENE_SWITCH_FILE: handoffFile,

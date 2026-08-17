@@ -24,7 +24,8 @@
  * controller_map_editor keeps every one of its handlers.
  */
 
-import { renderer } from '../core/state.js';
+import { renderer, params } from '../core/state.js';
+import { canvasDisplayFor } from '../core/canvas_visibility.js';
 import { setLeftDrawersVisible } from './left_drawer.js';
 
 // ─── Geometry constants ──────────────────────────────────────────────────
@@ -138,7 +139,13 @@ function setHudKeepOut(mode, simPaneLeft) {
 function placeCanvas(leftPx, visible) {
   const canvas = renderer && renderer.domElement;
   if (!canvas) return;
-  canvas.style.display = visible ? '' : 'none';
+  // `visible` is what the LAYOUT wants. Whether the canvas may be on screen at
+  // all is the PROFILE's call: a headless profile (`2d_pixels`) does no 3D work,
+  // so anything on the canvas is a stale frame. This used to be an unconditional
+  // `= visible ? '' : 'none'`, and since applyLayout() runs on every window
+  // resize it re-showed that stale frame behind the 2D Pixel Map — the operator's
+  // "dark ghost ship". canvas_visibility.js is now the single authority.
+  canvas.style.display = canvasDisplayFor(params.lightingProfile, visible);
   if (leftPx === null) {
     canvas.style.position = '';
     canvas.style.left = '';

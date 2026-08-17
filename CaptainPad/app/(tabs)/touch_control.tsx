@@ -6,22 +6,27 @@
 // it from the same CaptainPad tab bar as everything else, instead of having to
 // remember a URL.
 //
-// WHY AN IFRAME AND NOT react-native-webview:
-// the dependency is installed, but it ships no web build — package.json has no
-// `browser` field and only WebView.android/.ios variants. CaptainPad is used as
-// a WEB app (the launcher opens http://localhost:6967/ and that is what runs on
-// the iPad), so importing it here would break the bundle this tab actually runs
-// in. On web an iframe is the native answer.
+// ── ONE SCREEN, TWO EMBEDS ──────────────────────────────────────────────────
 //
-// On a NATIVE build this tab says so plainly and shows the URL rather than
-// rendering an empty box — a surface that silently shows nothing is worse than
-// one that tells you where to go (codex: no fallback behaviours).
+// This tab used to say "Touch Control runs in the browser" on a native build,
+// because react-native-webview ships no web build and an iframe is the only
+// answer on web. Report _252 kept BOTH truths and stopped refusing: the
+// browser-only and iPad-only halves live in the platform pair
+// `components/live_touch_surface.web.tsx` / `.tsx` (the same idiom the 2D
+// Simulator tab has used all along), so neither transport is ever bundled into
+// the other platform, and the page itself is the same instrument on both.
+//
+// EVERYTHING platform-neutral stays here: coordinator registration, the theme
+// build/ack/timeout, focus and blur handoffs, `beforeRemove`, the AppState
+// background handoff, and the spatial fullscreen handshake. The surface owns
+// only the transport.
 
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Platform, ActivityIndicator, AppState } from 'react-native';
 
 import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
+import { LiveTouchSurface, type LiveTouchSender } from '@/components/live_touch_surface';
 import { PlanLockBanner } from '@/components/PlanLockBanner';
 import { useTheme } from '@/hooks/use-theme';
 import { getApiBaseAsync } from '@/utils/api';
@@ -29,14 +34,16 @@ import {
   buildLiveTouchThemeMessage,
   canSendLiveTouchTheme,
   LIVE_TOUCH_BRIDGE_VERSION,
-  parseTouchControlBridgeMessage,
+  LIVE_TOUCH_NATIVE_EMBED,
   resolveLiveTouchPanelUrl,
   shouldSendLiveTouchThemeOnReady,
+  type TouchControlBridgeMessage,
 } from '@/utils/live_touch_bridge';
 import {
   layerDestinationForNavigationAction,
   layerDestinationForNavigationState,
 } from '@/utils/layer_settings';
+import { setSpatialFullscreenActive } from '@/utils/spatial_fullscreen';
 
 /** The panel lives on the SIM server, one port below the engine. */
 const SIM_PORT = '6969';
@@ -52,11 +59,20 @@ const PANEL_PATH = '/docs/ui/touch_control.html';
  * ITSELF, and gets nothing. The host the operator actually reached CaptainPad
  * on is the host that can serve the panel.
  *
- * The api_base port/scheme is still the fallback, for a native build where
- * there is no page host to read.
+ * On a NATIVE build there is no page host to read, so the hostname comes from
+ * `apiBase` — which is itself metro-host-derived there (report _246) — and the
+ * URL declares `captainpad_embed=native` instead of a parent origin. There is
+ * no web origin to declare on native, and inventing one would be a lie the
+ * page's own origin check would then bless.
  */
 export function resolvePanelUrl(apiBase: string, pageOrigin?: string | null): string {
-  return resolveLiveTouchPanelUrl(apiBase, PANEL_PATH, SIM_PORT, pageOrigin);
+  return resolveLiveTouchPanelUrl(
+    apiBase,
+    PANEL_PATH,
+    SIM_PORT,
+    pageOrigin,
+    pageOrigin ? null : LIVE_TOUCH_NATIVE_EMBED,
+  );
 }
 
 export default function TouchControlScreen() {
@@ -71,7 +87,8 @@ export default function TouchControlScreen() {
   const [apiBase, setApiBase] = useState<string | null>(null);
   const [pageOrigin, setPageOrigin] = useState<string | null>(null);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [spatialFullscreen, setSpatialFullscreen] = useState(false);
+  const senderRef = useRef<LiveTouchSender | null>(null);
   const frameLoadedRef = useRef(false);
   const frameFocusedRef = useRef(false);
   const requestSequenceRef = useRef(0);
@@ -112,12 +129,18 @@ export default function TouchControlScreen() {
     return `${kind}-${Date.now()}-${requestSequenceRef.current}`;
   }, []);
 
+  /* Stable by construction: the transport lives behind a ref the surface fills
+     in, so the coordinator registration and the theme sender never churn when
+     the URL resolves or the surface remounts. */
   const postToPanel = useCallback((message: object): boolean => {
-    const targetWindow = iframeRef.current?.contentWindow;
-    if (!targetWindow || !panelOrigin) return false;
-    targetWindow.postMessage(message, panelOrigin);
-    return true;
-  }, [panelOrigin]);
+    const send = senderRef.current;
+    if (!send) return false;
+    return send(message);
+  }, []);
+
+  const attachSender = useCallback((send: LiveTouchSender | null) => {
+    senderRef.current = send;
+  }, []);
 
   useEffect(() => registerHost(postToPanel), [postToPanel, registerHost]);
 
@@ -126,7 +149,7 @@ export default function TouchControlScreen() {
     const requestId = nextRequestId('theme');
     const message = buildLiveTouchThemeMessage(requestId, mode, scheme, palette);
     if (!postToPanel(message)) {
-      setBridgeError('LIVE TOUCH THEME LINK UNAVAILABLE - iframe is not ready');
+      setBridgeError('LIVE TOUCH THEME LINK UNAVAILABLE - the panel is not ready');
       return;
     }
 
@@ -147,6 +170,16 @@ export default function TouchControlScreen() {
     });
   }, [nextRequestId, postToPanel]);
 
+  /* The surface says when it can RECEIVE: the iframe's load event on web, the
+     page's own `touch-control-theme-ready` on native (an injected theme can
+     only land once the page has installed its inbound hook, and the page
+     installs it before announcing readiness). */
+  const handleSurfaceReady = useCallback(() => {
+    frameLoadedRef.current = true;
+    sendTheme();
+    if (frameFocusedRef.current) sendSurfaceFocus();
+  }, [sendSurfaceFocus, sendTheme]);
+
   useFocusEffect(
     useCallback(() => {
       handoffCompletedRef.current = false;
@@ -154,6 +187,8 @@ export default function TouchControlScreen() {
       setSurfaceFocused(true);
       if (frameLoadedRef.current) sendSurfaceFocus();
       return () => {
+        setSpatialFullscreen(false);
+        setSpatialFullscreenActive(false);
         frameFocusedRef.current = false;
         /* The navigation state is already committed when blur cleanup runs.
            Deck/Mixer start their exact handback synchronously so the newly
@@ -178,7 +213,15 @@ export default function TouchControlScreen() {
     const handoffForBackground = () => {
       /* Tabs remain mounted. Live may still own output while the operator is
          reading Audio/Config/Dimmer Rack, so background safety cannot depend
-         on the Live tab still being focused. */
+         on the Live tab still being focused.
+
+         NATIVE TRUTH (report _261): docs/47 specified this release for a
+         browser, "while the iframe and WebSocket are still alive". On the iPad
+         neither is: iOS suspends the app's JS and the WebView's on resign, and
+         may reclaim the WebView's content process outright. So this request can
+         fail — loudly, into the banner below — and the engine's deadman owns the
+         lease in that case. What it must NEVER do is curtain the pad on return,
+         which is why `reason: 'background'` raises no handoff curtain. */
       if (!frameLoadedRef.current || backgroundHandoffSentRef.current) return;
       backgroundHandoffSentRef.current = true;
       void requestHandoff('deck', 'background').catch((error) => {
@@ -225,72 +268,74 @@ export default function TouchControlScreen() {
     sendTheme();
   }, [sendTheme]);
 
+  /* NATIVE ONLY. Collapsing the rail and zeroing the scene margin is the iPad's
+     equivalent of what the web surface does by elevating the iframe's DOM
+     ancestors above it (docs/60 §4.5) — doing BOTH on web would reflow the tab
+     tree underneath an already-covering fixed iframe for no visible gain. The
+     clears below are unconditional and idempotent, so a web session can never
+     leave the flag set for a later native one. */
   useEffect(() => {
-    if (Platform.OS !== 'web' || !panelOrigin) return;
+    if (Platform.OS === 'web') return;
+    setSpatialFullscreenActive(spatialFullscreen);
+  }, [spatialFullscreen]);
 
-    function onMessage(event: MessageEvent) {
-      if (event.source !== iframeRef.current?.contentWindow) return;
-      if (event.origin !== panelOrigin) {
-        setBridgeError(`LIVE TOUCH BRIDGE REJECTED ORIGIN ${event.origin}`);
+  useEffect(() => () => setSpatialFullscreenActive(false), []);
+
+  const handleBridgeMessage = useCallback((message: TouchControlBridgeMessage) => {
+    try {
+      if (message.type === 'touch-control-theme-ready') {
+        if (shouldSendLiveTouchThemeOnReady(
+          frameLoadedRef.current,
+          pendingThemeRequestRef.current,
+        )) sendTheme();
         return;
       }
 
-      try {
-        const message = parseTouchControlBridgeMessage(event.data);
-        if (message.type === 'touch-control-theme-ready') {
-          if (shouldSendLiveTouchThemeOnReady(
-            frameLoadedRef.current,
-            pendingThemeRequestRef.current,
-          )) sendTheme();
-          return;
-        }
-
-        if (message.type === 'touch-control-surface-released') {
-          const reason = completeHandoff(message.requestId, message.target);
-          if (reason === 'navigation') handoffCompletedRef.current = true;
-          return;
-        }
-
-        if (pendingThemeRequestRef.current !== message.requestId) {
-          throw new Error(`Live Touch acknowledged stale theme ${message.requestId}`);
-        }
-        pendingThemeRequestRef.current = null;
-        if (themeAckTimerRef.current) {
-          clearTimeout(themeAckTimerRef.current);
-          themeAckTimerRef.current = null;
-        }
-        setBridgeError(null);
-      } catch (error) {
-        setBridgeError(error instanceof Error ? error.message : String(error));
+      if (message.type === 'touch-control-surface-released') {
+        const reason = completeHandoff(message.requestId, message.target);
+        if (reason === 'navigation') handoffCompletedRef.current = true;
+        return;
       }
-    }
 
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [completeHandoff, panelOrigin, sendTheme]);
+      if (message.type === 'touch-control-spatial-fullscreen') {
+        setSpatialFullscreen(message.active);
+        /* A frame boundary makes the acknowledgement truthful: the host has
+           applied its fullscreen layout before the child reports success. */
+        requestAnimationFrame(() => {
+          if (!postToPanel({
+            type: 'captainpad-spatial-fullscreen-applied',
+            version: LIVE_TOUCH_BRIDGE_VERSION,
+            requestId: message.requestId,
+            active: message.active,
+          })) {
+            setBridgeError('LIVE TOUCH FULLSCREEN LINK UNAVAILABLE - the panel is not ready');
+          }
+        });
+        return;
+      }
+
+      if (pendingThemeRequestRef.current !== message.requestId) {
+        throw new Error(`Live Touch acknowledged stale theme ${message.requestId}`);
+      }
+      pendingThemeRequestRef.current = null;
+      if (themeAckTimerRef.current) {
+        clearTimeout(themeAckTimerRef.current);
+        themeAckTimerRef.current = null;
+      }
+      setBridgeError(null);
+    } catch (error) {
+      setBridgeError(error instanceof Error ? error.message : String(error));
+    }
+  }, [completeHandoff, postToPanel, sendTheme]);
 
   useEffect(() => () => {
     if (themeAckTimerRef.current) clearTimeout(themeAckTimerRef.current);
   }, []);
 
-  if (!url) {
+  if (!url || !panelOrigin) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.background }}>
         <ActivityIndicator color={palette.tint} />
-      </View>
-    );
-  }
-
-  if (Platform.OS !== 'web') {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: palette.background }}>
-        <Text style={{ color: palette.text, fontSize: 16, fontWeight: '800', marginBottom: 8 }}>
-          Touch Control runs in the browser
-        </Text>
-        <Text style={{ color: palette.icon, fontSize: 13, textAlign: 'center', lineHeight: 19 }}>
-          This tab embeds the panel on web builds. On a native build, open it directly:
-        </Text>
-        <Text selectable style={{ color: palette.tint, fontSize: 13, marginTop: 10 }}>{url}</Text>
       </View>
     );
   }
@@ -299,20 +344,16 @@ export default function TouchControlScreen() {
     <View style={{ flex: 1, backgroundColor: palette.background }}>
       {/* The panel carries its own RELOAD button in its header now, so the
           floating overlay that used to sit over the groups bank is gone. */}
-      {/* react-native-web passes an unknown string tag through as a real DOM
-          element, which is how the iframe gets rendered from RN code. */}
-      {React.createElement('iframe', {
-        ref: (element: HTMLIFrameElement | null) => { iframeRef.current = element; },
-        src: url,
-        title: 'Live Touch',
-        style: { border: 'none', width: '100%', height: '100%', display: 'block' },
-        allow: 'fullscreen',
-        onLoad: () => {
-          frameLoadedRef.current = true;
-          sendTheme();
-          if (frameFocusedRef.current) sendSurfaceFocus();
-        },
-      })}
+      <LiveTouchSurface
+        url={url}
+        panelOrigin={panelOrigin}
+        onSender={attachSender}
+        onReady={handleSurfaceReady}
+        onMessage={handleBridgeMessage}
+        onBridgeError={setBridgeError}
+        fullscreen={spatialFullscreen}
+        backgroundColor={palette.background}
+      />
       <PlanLockBanner />
       {bridgeError ? (
         <View

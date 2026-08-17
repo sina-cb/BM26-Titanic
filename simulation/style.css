@@ -37,7 +37,11 @@
   --error-container: rgba(251, 73, 52, 0.16);
   --error-container-border: rgba(251, 73, 52, 0.45);
   --tertiary: #b8bb26;
+  --warning: #ffb04d;
+  --warning-container: rgba(255, 176, 77, 0.16);
+  --warning-container-border: rgba(255, 176, 77, 0.45);
   --ghost-border: rgba(168, 153, 132, 0.25);
+  --border-strong: rgba(168, 153, 132, 0.85);
   --ambient-shadow: rgba(0, 0, 0, 0.55);
   --sidebar-background: rgba(40, 40, 40, 0.88);
   --sidebar-active-background: rgba(250, 189, 47, 0.12);

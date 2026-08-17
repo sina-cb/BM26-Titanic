@@ -22,8 +22,10 @@
  *                         grand master, because clearing one without the other
  *                         still leaves a dark hull.
  *
- * The engine is spawned with `--dest 127.0.0.9` so its sACN can never reach the
- * operator's live sim bridge (see spawn_engine.mjs).
+ * The engine is spawned with `--dest 192.0.2.9` — TEST-NET-1 (RFC 5737), never
+ * routed — so its sACN can never reach the operator's live sim bridge (see
+ * spawn_engine.mjs). A loopback dest would NOT do: the sim's sACN receiver
+ * binds every local interface and would relay the frames on to the rig.
  *
  * Run: node --import ./tests/helpers/setup_config_guard.mjs \
  *        --test marsin_engine/tests/effects/arm_lease_revert.test.js
@@ -47,7 +49,7 @@ const h = createEngineHarness({
     MARSIN_VSN1_DEPLOY: '0',
     BM26_ARM_LEASE_MS: String(LEASE_MS),
   },
-  extraArgs: ['--dest', '127.0.0.9'],
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -156,6 +158,32 @@ test('the armed owner is the only HTTP writer until its lease is released', asyn
 
   c.ws.close();
   await sleep(200);
+});
+
+test('a superseded same-owner socket cannot detach the replacement ARM lease', async () => {
+  const first = await control('reconnecting_owner');
+  arm(first);
+  await sleep(300);
+
+  const replacement = await control('reconnecting_owner');
+  arm(replacement);
+  await sleep(300);
+  const rebound = replacement.msgs.find(
+    message => message.type === 'touchControlArmedAck' && message.armed === true,
+  );
+  assert.ok(rebound, 'the replacement socket did not rebind the existing owner lease');
+
+  first.ws.close();
+  await sleep(LEASE_MS + 800);
+  const stillOwned = await h.api('POST', '/param-center', { speed: 0.72 }, {
+    'X-Touch-Control-Owner': 'reconnecting_owner',
+  });
+  assert.equal(stillOwned.status, 200,
+    'the old socket close detached or expired the replacement owner lease');
+
+  arm(replacement, false);
+  replacement.ws.close();
+  await sleep(300);
 });
 
 test('a STALE holder never locks the desk — a live panel takes over', async () => {

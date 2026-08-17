@@ -12,6 +12,7 @@ import { pixelInView } from "../dmx/view_registry.js";
 import { isStaticHost, logStaticHostSkip } from "./static_host.js";
 import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 import { getProfileDef } from "./profile_registry.js";
+import { applyCanvasVisibility } from "./canvas_visibility.js";
 import { updateLightPool } from "./light_pool.js";
 import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
@@ -383,8 +384,15 @@ export function animate() {
   // exit: un-hide the canvas (composer.render() resumes next frame) and hide the
   // 2D map — the 3D vis comes right back. No renderer guard: it exists before
   // the first frame (a missing one is a boot bug that must crash, per repo P0).
+  //
+  // This latch is EDGE-triggered, and that is exactly how the "dark ghost ship"
+  // got on screen: split_layout's resize handler re-showed the canvas behind the
+  // 2D map and the latch, already latched, never took it back. So the hide now
+  // goes through canvas_visibility.applyCanvasVisibility, which BOTH obeys the
+  // profile veto and CLEARS the framebuffer on the way out — after this there is
+  // no stale 3D frame left for any caller to reveal.
   if (_headless !== _headlessLatched) {
-    renderer.domElement.style.display = _headless ? 'none' : '';
+    applyCanvasVisibility(renderer, params.lightingProfile, true);
     if (window.showPixelMap2d) window.showPixelMap2d(_headless);
     _headlessLatched = _headless;
   }

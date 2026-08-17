@@ -323,28 +323,53 @@ export function serializeArtifact(artifact = buildArtifact()) {
   return `${JSON.stringify(artifact)}\n`;
 }
 
-function writeArtifact(serialized) {
-  const tempPath = `${OUTPUT_PATH}.tmp`;
+function writeArtifact(serialized, outputPath) {
+  // Idempotent by content: the save server re-runs this exporter at every
+  // boot and after every input-mutating save, so an already-current artifact
+  // must be a loud no-op, not a rewrite that churns mtimes on a tracked file.
+  if (fs.existsSync(outputPath) && readUtf8(outputPath) === serialized) {
+    process.stdout.write(`[touch-pixel-views] ${path.relative(REPO_ROOT, outputPath)} ` +
+      'is already current (no write)\n');
+    return;
+  }
+  const tempPath = `${outputPath}.tmp`;
   fs.writeFileSync(tempPath, serialized, 'utf8');
-  fs.renameSync(tempPath, OUTPUT_PATH);
-  process.stdout.write(`[touch-pixel-views] wrote ${path.relative(REPO_ROOT, OUTPUT_PATH)}\n`);
+  fs.renameSync(tempPath, outputPath);
+  process.stdout.write(`[touch-pixel-views] wrote ${path.relative(REPO_ROOT, outputPath)}\n`);
 }
 
-function checkArtifact(serialized) {
-  if (!fs.existsSync(OUTPUT_PATH)) {
-    throw new Error(`[touch-pixel-views] missing ${path.relative(REPO_ROOT, OUTPUT_PATH)}; ` +
+function checkArtifact(serialized, outputPath) {
+  if (!fs.existsSync(outputPath)) {
+    throw new Error(`[touch-pixel-views] missing ${path.relative(REPO_ROOT, outputPath)}; ` +
       'run npm run pixel-views:export');
   }
-  if (readUtf8(OUTPUT_PATH) !== serialized) {
-    throw new Error(`[touch-pixel-views] stale ${path.relative(REPO_ROOT, OUTPUT_PATH)}; ` +
+  if (readUtf8(outputPath) !== serialized) {
+    throw new Error(`[touch-pixel-views] stale ${path.relative(REPO_ROOT, outputPath)}; ` +
       'run npm run pixel-views:export and review the resolved view change');
   }
   process.stdout.write('[touch-pixel-views] artifact is current\n');
 }
 
+// `--out <path>` redirects the write/check target. TEST-ONLY seam (same
+// doctrine as SIM_SAVE_SERVER_ROOT in save-server.js): the save server passes
+// it when its scene root is overridden onto a throwaway tree, so a test's
+// artifact refresh can never touch the real tracked docs/ui artifact. Absent
+// in production → the canonical OUTPUT_PATH, exactly as before. A dangling
+// `--out` with no value fails loudly rather than guessing.
+function resolveOutputPath(argv) {
+  const flagIndex = argv.indexOf('--out');
+  if (flagIndex === -1) return OUTPUT_PATH;
+  const value = argv[flagIndex + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error('[touch-pixel-views] --out requires a target path');
+  }
+  return path.resolve(value);
+}
+
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
+  const outputPath = resolveOutputPath(process.argv);
   const serialized = serializeArtifact();
-  if (process.argv.includes('--check')) checkArtifact(serialized);
-  else writeArtifact(serialized);
+  if (process.argv.includes('--check')) checkArtifact(serialized, outputPath);
+  else writeArtifact(serialized, outputPath);
 }

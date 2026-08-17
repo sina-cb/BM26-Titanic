@@ -1491,6 +1491,7 @@ function setupGUI() {
       // fixtures). Re-asked on every profile change; the operator's own
       // "Show Generators" flip still overrides in either direction.
       if (window.applyTraceVisualsVisibility) window.applyTraceVisualsVisibility();
+
     },
     showHelpers: (v) => {
       lights.helpers.forEach((h) => {
@@ -7546,9 +7547,17 @@ function setupGUI() {
   if (guiChildren) guiChildren.appendChild(saveDiv);
 
   // ─── Small Screen Auto-Collapse ───
-  // On phones/tablets, close the GUI panel so it doesn't obscure the 3D viewport.
-  // The user can still tap the title bar to expand it.
-  if (window.innerWidth <= 768) {
-    gui.close();
-  }
+  // NOT a lil-gui root close. That used to be `if (window.innerWidth <= 768)
+  // gui.close()`, and it is what the operator saw as "the Lighting controls menu
+  // renders EMPTY" on the iPad's 2D Simulator tab: this panel hides lil-gui's
+  // root `.title` (our own header replaces it, line ~455), so a closed root has
+  // NO affordance left to reopen it. Measured at 760×1000: the drawer opens to
+  // 330×848 with 1103 `.controller` rows in the DOM and 0 px of them rendered —
+  // a permanently blank panel with no way back.
+  //
+  // The small-screen protection it was reaching for already exists one layer up:
+  // control_drawer.js defaults to COLLAPSED below 800 px (readCollapsed), which
+  // slides the whole drawer off the edge and leaves a reopen tab. That is the
+  // affordance; the redundant root close only broke it.
+  //
 }

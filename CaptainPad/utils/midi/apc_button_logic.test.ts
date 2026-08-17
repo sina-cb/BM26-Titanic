@@ -8,6 +8,7 @@ import {
   combinedAutopilotTarget,
   combinedAutopilotLedOn,
   colorAutopilotWritable,
+  colorAutopilotConfigWritable,
   masterFadeTarget,
   MASTER_BLACK_EPSILON,
   createAutopilotToggleExemption,
@@ -62,6 +63,68 @@ describe('colorAutopilotWritable', () => {
     expect(colorAutopilotWritable(null)).toBe(false);
     expect(colorAutopilotWritable('a')).toBe(false);
     expect(colorAutopilotWritable(3)).toBe(false);
+  });
+});
+
+// ── W6 (docs/59 §4.3): the predicate learns the MODE ────────────────────────
+// A FOLLOW NOTE config has NO `palettes` at all — the ring is re-derived
+// engine-side on every committed note — so the palettes-only test called every
+// follow-note config un-toggleable and quietly dropped the colour half of the
+// APC clip_stop press. Writability now follows what the ENGINE validator
+// actually requires in each mode.
+
+describe('colorAutopilotWritable — FOLLOW NOTE mode', () => {
+  const block = { schemes: ['triadic', 'split'], methodHoldS: 60, methodFadeS: 3, noteFadeMs: 400, sel: [0, 1], shuffle: false };
+
+  it('a follow-note config with a non-empty method subset IS writable, with no palettes', () => {
+    expect(colorAutopilotWritable(undefined, 'followNote', block)).toBe(true);
+    expect(colorAutopilotWritable([], 'followNote', block)).toBe(true);
+  });
+
+  it('an EMPTY method subset is not writable — the engine refuses that config', () => {
+    expect(colorAutopilotWritable(undefined, 'followNote', { ...block, schemes: [] })).toBe(false);
+  });
+
+  it('a missing / malformed block is not writable (never fabricate a cycle)', () => {
+    expect(colorAutopilotWritable(undefined, 'followNote', undefined)).toBe(false);
+    expect(colorAutopilotWritable(undefined, 'followNote', null)).toBe(false);
+    expect(colorAutopilotWritable(undefined, 'followNote', [])).toBe(false);
+    expect(colorAutopilotWritable(undefined, 'followNote', { schemes: 'triadic' })).toBe(false);
+  });
+
+  it('an ABSENT mode keeps the legacy palettes rule, byte-for-byte', () => {
+    expect(colorAutopilotWritable(['a'])).toBe(true);
+    expect(colorAutopilotWritable(['a'], undefined, block)).toBe(true);
+    expect(colorAutopilotWritable([], 'palettes', block)).toBe(false);
+  });
+});
+
+describe('colorAutopilotConfigWritable — the same rule, read off a broadcast frame', () => {
+  it('reads a follow-note frame correctly where the palettes-only test could not', () => {
+    const frame = {
+      type: 'colorAutopilot', active: true, mode: 'followNote',
+      followNote: { schemes: ['triadic'], methodHoldS: 60, methodFadeS: 3, noteFadeMs: 400, sel: [0, 1], shuffle: false },
+    };
+    expect(colorAutopilotConfigWritable(frame)).toBe(true);
+    // The bug this fixes, stated: the old call would have said NOT writable.
+    expect(colorAutopilotWritable((frame as { palettes?: unknown }).palettes)).toBe(false);
+  });
+
+  it('reads a palettes frame correctly, and refuses junk', () => {
+    expect(colorAutopilotConfigWritable({ active: true, mode: 'palettes', palettes: ['aurora'] })).toBe(true);
+    expect(colorAutopilotConfigWritable({ active: true, mode: 'palettes', palettes: [] })).toBe(false);
+    expect(colorAutopilotConfigWritable(null)).toBe(false);
+    expect(colorAutopilotConfigWritable(undefined)).toBe(false);
+  });
+
+  it('the LED and the toggle direction follow it, so a follow-note config is TOGGLEABLE', () => {
+    const cfg = { active: true, mode: 'followNote', followNote: { schemes: ['golden'] } };
+    const toggleable = colorAutopilotConfigWritable(cfg);
+    expect(toggleable).toBe(true);
+    // Both on → the press turns both OFF (the combined rule), which is exactly
+    // what the operator expects and what the palettes-only test prevented.
+    expect(combinedAutopilotTarget(true, true, toggleable)).toBe(false);
+    expect(combinedAutopilotLedOn(true, true, toggleable)).toBe(true);
   });
 });
 
@@ -261,7 +324,7 @@ describe('toggleCombinedAutopilot — read/decide/write with a spied api', () =>
       if (!colorRes.ok || !colorRes.data) return { ok: false, error: 'color read failed' };
       const patternOn = !!patternRes.data.active;
       const colorOn = !!colorRes.data.active;
-      const colorToggleable = colorAutopilotWritable(colorRes.data.palettes);
+      const colorToggleable = colorAutopilotConfigWritable(colorRes.data);
       const next = combinedAutopilotTarget(patternOn, colorOn, colorToggleable);
       const wPattern = await setAutopilot(next);
       if (!wPattern.ok) return { ok: false, error: 'pattern write failed' };

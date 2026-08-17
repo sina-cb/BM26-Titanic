@@ -3,12 +3,30 @@
 > Updated by any agent, any time state changes. Keep it under a screen.
 > Absolute dates only.
 
-_Last touched: 2026-08-13 (Live Touch + audio + Baby Reveal publish handoff)_
+> **OPERATOR DECISION (2026-08-16):** CaptainPad on native iPad is a
+> landscape-only instrument. Expo declares `orientation: landscape` and iOS
+> `requireFullScreen: true`; the Deck also keeps its wide workspace mounted on
+> every native frame, so an orientation handoff cannot enter the retired
+> portrait stack. Web remains responsive for browser tooling. Full CaptainPad
+> gate: 2377 passed, 6 hardware cases skipped.
+
+_Last touched: 2026-08-16 (mixer three-defect design `_280`/`docs/69` ready
+for an Opus implementer; earlier same day: `_274`–`_279` landed)_
+
+> **HOT (2026-08-16):** the `_275` portrait-rail fix is **provably inert on
+> native Yoga** (explicit `flexBasis:'auto'` is ignored when a `flex:N`
+> shorthand co-flattens — `yoga/node/Node.cpp:329`; web CSS honors it, which
+> is why web screenshots keep passing while the iPad fails). Fix + a
+> Yoga-executed regression net + the scroll-lock fast path + the
+> patterns-first landscape card are contracted in
+> `docs/69_mixer_three_defect_triage.md` (report `_280`) — needs ONE Opus
+> session; W3 rebases on `_279` AND the dedicated `_279`-§6 crush-fix wave
+> (landing `_281`-range; W3 blocks on it if unlanded — never double-fix).
 
 ## Active branches
 
-- **`dev/live_touch_bm_readiness_rebase`** — completed integration worktree;
-  publish target `feat/mishas_live_control_panel_sina_changes_some`. Misha's
+- **`dev/bm_readiness_local`** — current local integration and manual-test
+  target. Misha's
   Live Touch is rebased onto `feat/bm_readiness` and production-hardened with
   one 100 ms linear Layers transaction, ARM-owned private creative state,
   Dimmer Rack final authority, canonical simulator projections, bounded
@@ -20,9 +38,39 @@ _Last touched: 2026-08-13 (Live Touch + audio + Baby Reveal publish handoff)_
   128-130 and Baby Reveal owns 131-133 with stable playlist IDs. Combined
   Baby/Live/Timeline/audio-registry gate is 108/108; broader subsystem gates,
   CaptainPad TypeScript/web export, pixel artifact/parity, engine list/dry-run,
-  and brush performance proof pass. Review servers are stopped at publish
-  handoff so the operator can launch a clean stack. Runtime state residue is
-  reported and excluded, never silently reverted.
+  and brush performance proof pass. Final review added mic-source boot fixes,
+  reconnect-safe ARM/Timeline lease semantics, truthful multitouch preview,
+  accessible final-flush group faders, deterministic full-suite concurrency,
+  and locked VSN1 dependencies. Exact gates: engine 3204/3204, CaptainPad
+  1034 pass + 6 hardware skips, lint 0 errors, web export pass, security scan
+  pass. CaptainPad now also has server-authenticated per-device Edit access
+  over the global Performance lock, an optional server-pinned 30-minute
+  session, privileged Audio Companion and 2D Simulator tabs, and fail-closed
+  route/origin/restart handling. Live Spatial fullscreen now covers the real
+  browser viewport without reloading its iframe, preserves DISARMED ownership,
+  supports pan/zoom/FIT, and restores the exact host layout. The latest
+  CaptainPad gate is 1078 pass + 6 hardware skips; auth crash/restart and
+  Live/Timeline isolation are covered; the full public-repo security scan is
+  clean. The stale tracked SIZE=0.773 state now migrates atomically to the
+  intentional 0.5 identity lock before restore; clean boots no longer show a
+  false DEGRADED chip while real lock violations remain loud. Latest operator
+  fixes bound the narrow Mixer playlist above its fixed action rows, regenerate
+  the fail-closed Live Touch pixel artifact and prove authenticated ARM in a
+  real browser, expose only Deck/Mixer/Live Touch while global Performance is
+  active, place Audio Companion inside the Audio tab in Edit mode, and tear
+  down embedded Simulator/Companion frames and streams on navigation. Live
+  browser acceptance then fixed three test-only blind spots: Performance entry
+  now reconciles its successful POST immediately, the narrow portrait Mixer
+  owns a real bounded playlist scroll range above fixed controls, and Live
+  Touch collapses to one full workspace cell when only one panel remains open.
+  The launcher also preserves a crash-relocked Performance show instead of
+  failing startup on an Edit-only pattern write. The Titanic `dev` stack is
+  currently running and healthy on ports 6966-6972 for operator acceptance.
+  Runtime state residue is reported and excluded, never silently reverted.
+  Manual/iPad acceptance and explicit acceptance of Audio Companion's
+  unauthenticated show-LAN bind remain before durable-branch publish/main;
+  record both in
+  `.agent/reports/202608/20260813_4_bm_readiness_operator_test_matrix.md`.
 - **`main`** — integration branch. Push/merge is operator-gated.
 - **`feat/party_integration_20260711`** — party merge wave (studio model +
   LED fixtures + CaptainPad MIDI + autopilot deck) **+ `feat/led_integration`
@@ -36,6 +84,13 @@ _Last touched: 2026-08-13 (Live Touch + audio + Baby Reveal publish handoff)_
 
 ## Active projects
 
+- **pattern_curation_and_playlist_blessing** — Ambient pilot tuning is complete
+  pending physical blessing; `ambient_sound_reactive` has 34 entries and 95
+  restrained mappings; `ambient_default_bkup` holds 11 review candidates;
+  `ambient_extra` has 50 mechanically clean DRAFT patterns and a 20-second
+  gallery; Baby is exactly 20 Tease + 30 Boy + 30 Girl autonomous patterns;
+  `party_dancers` is one DOM-frequency prototype. Current truth and review
+  state: [`../projects/pattern_curation_and_playlist_blessing.md`](../projects/pattern_curation_and_playlist_blessing.md).
 - **party_20260711** — party on Saturday 2026-07-11. THE current plan lives
   in the private repo:
   `BM26-Firmware-Deployment/.agent/plans/20260707_party_plan_20260711.md`
@@ -332,6 +387,15 @@ OPEN (tracked in session task list):
   Needs the parallel engine track (`/global-effects/page`, `mode/cycle`,
   `primaryMode` + `mode*` on slot status). Report `20260709_2_effects_v2_captainpad`.
 
+- **2026-08-15 — the live `:6968` engine WILL DIE if a special event ends over
+  an animating deck crossfade** (`_253`, fixed in the working tree, **restart
+  required**). ABORT/FINISH → `recallSnapshotFade` → `cancelDeckPatternSwap()`
+  rejected the swap's `done` with `ECANCELED` into a fire-and-forget caller;
+  `engine.js`'s fatal `unhandledRejection` handler then exited the process.
+  That is what `_248`'s "18 special-events failures" actually were — one dead
+  engine, 18 `ECONNREFUSED`s. Standing lesson: in `api_server.js`, converting a
+  function to `async` silently deletes its callers' synchronous `try/catch`,
+  and here the failure mode was a **fatal engine exit**, not a visible error.
 - **gitleaks v8.28.0** on `PATH` confirmed working (gate passed 2026-07-07).
 - **marsin_engine tests on the Windows box**: `audio_capture` (no audio
   device configured), `osc_listener` (EACCES instead of EADDRINUSE), and

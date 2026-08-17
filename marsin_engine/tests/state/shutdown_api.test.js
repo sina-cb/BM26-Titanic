@@ -13,8 +13,10 @@
 // ISOLATION (non-negotiable — the operator's live stack must not be touched):
 //   • the API port is an OS-ASSIGNED free port (bind :0, read it, release it),
 //     never the show ports 6966-6972;
-//   • `--dest 127.0.0.9` black-holes sACN, so the blackout frame this test
-//     provokes cannot reach the live sim bridge on 127.0.0.1:5568;
+//   • `--dest 192.0.2.9` — TEST-NET-1 (RFC 5737), never routed — black-holes
+//     sACN, so the blackout frame this test provokes cannot reach the live sim
+//     bridge on UDP 5568. A loopback dest would NOT do it: that bridge binds
+//     every local interface, so loopback frames still arrive;
 //   • MARSIN_STATE_DIR / MARSIN_PLAYLISTS_DIR redirect every state write into
 //     throwaway temp dirs.
 //
@@ -55,7 +57,7 @@ before(async () => {
     prefix: 'marsin-shutdown',
     portBase: port,
     portSpan: 1,          // ⇒ exactly the OS-assigned port
-    extraArgs: ['--dest', '127.0.0.9'],
+    extraArgs: ['--dest', '192.0.2.9'],
   });
   const proc = h.spawnEngine();
   proc.stdout.on('data', d => { out += d.toString(); });

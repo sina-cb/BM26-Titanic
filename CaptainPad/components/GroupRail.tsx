@@ -29,7 +29,8 @@
 // rejected PATCH reverts on the next `mixer` event.
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -164,7 +165,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await createMixGroup();
     if (!res.ok) {
       console.error('[GroupRail] Create group failed:', res.error);
-      Alert.alert('Create group failed', res.error || 'The engine did not accept the new group.');
+      opError('Create group failed', res.error || 'The engine did not accept the new group.');
     }
     // Success: the WS mixer broadcast adds the group to the parent's list.
   }, []);
@@ -182,7 +183,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
       console.error(`[GroupRail] Gang-fader rejected for ${gid}:`, res.error);
       // Drop the optimistic draft so the next broadcast's truth shows.
       setFaderDraft((d) => { const n = { ...d }; delete n[gid]; return n; });
-      Alert.alert('Group fader not applied', `The engine rejected this group fader. ${res.error || ''}`.trim());
+      opError('Group fader not applied', `The engine rejected this group fader. ${res.error || ''}`.trim());
     }
   }, []);
 
@@ -190,7 +191,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await updateMixGroup(gid, { muted });
     if (!res.ok) {
       console.error(`[GroupRail] Group mute rejected for ${gid}:`, res.error);
-      Alert.alert('Group mute not applied', `The engine rejected this group mute. ${res.error || ''}`.trim());
+      opError('Group mute not applied', `The engine rejected this group mute. ${res.error || ''}`.trim());
     }
   }, []);
 
@@ -201,7 +202,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await deleteMixGroup(target.id);
     if (!res.ok) {
       console.error('[GroupRail] Delete group failed:', res.error);
-      Alert.alert('Delete group failed', `"${target.name}" is still active. ${res.error || ''}`.trim());
+      opError('Delete group failed', `"${target.name}" is still active. ${res.error || ''}`.trim());
     }
   }, [deletePrompt]);
 
@@ -212,7 +213,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
       // Surface the single-membership 400 ("already in a different group") and
       // the deck WRONG_ROLE 400 verbatim — these are the operator-facing errors.
       console.error(`[GroupRail] Assign channel ${channelId} → ${gid} rejected:`, res.error);
-      Alert.alert('Could not add to group', res.error || 'The engine rejected this assignment.');
+      opError('Could not add to group', res.error || 'The engine rejected this assignment.');
     }
   }, []);
 
@@ -220,7 +221,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await removeChannelFromGroup(gid, channelId);
     if (!res.ok) {
       console.error(`[GroupRail] Unassign channel ${channelId} from ${gid} rejected:`, res.error);
-      Alert.alert('Could not remove from group', res.error || 'The engine rejected this change.');
+      opError('Could not remove from group', res.error || 'The engine rejected this change.');
     }
   }, []);
 

@@ -22,7 +22,12 @@ export class PatternChannel {
     this.name = name;
     this.pattern = pattern;
     this.handle = handle;
-    this.mode = mode; // 'blend_screen', 'blend_crossfade', 'blend_add', 'blend_over'
+    // Steady blend: 'blend_screen' | 'blend_add' | 'blend_over' (each has a
+    // script in patterns/channel_blends/). A `trans_*` name lives here only
+    // transiently while a scripted transition is in flight. There is no
+    // 'blend_crossfade' script — a mode with no compiled handle THROWS out
+    // of the render hot path (no fallback compositor).
+    this.mode = mode;
     this.fader = fader;
     this.enabled = enabled;
     // Per-channel intensity clamp (F-C). A hard ceiling on this channel's

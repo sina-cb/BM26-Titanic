@@ -119,31 +119,8 @@ test('Live Touch uses the activity-based Timeline lease and yields after inactiv
     assert.equal(taken.forcingDeckView, false);
     assert.ok(taken.operatorLease && taken.operatorLease.expiresAtMs > Date.now());
 
-    // ARM pongs prove only that the desk is alive. With no control changes the
-    // ordinary Timeline inactivity lease must expire and take Deck back.
-    await until(
-      () => h.state(),
-      state => state.mode === 'armed' && state.operatorLease === null,
-      { what: 'Timeline lease expiry under idle Live ARM', timeoutMs: 5000 },
-    );
-    await until(
-      async () => (await h.api('GET', '/layers/state')).data,
-      state => state.active === 'deck' && state.transition === null,
-      { what: 'Timeline Deck handback after Live inactivity', timeoutMs: 5000 },
-    );
-
-    // The next real Live mutation is the same takeover gesture as a Deck/Mixer
-    // interaction: reacquire the lease and bring the isolated Live surface
-    // back on air. Continued mutations, not socket heartbeats, keep it alive.
-    response = await ownerApi(h, 'PUT', '/layers/live_touch/pattern', {
-      pattern: 'test_const',
-    });
-    assert.equal(response.status, 200, JSON.stringify(response.data));
-    await until(
-      async () => (await h.api('GET', '/layers/state')).data,
-      state => state.active === 'live_touch' && state.transition === null,
-      { what: 'Live Touch activity takeover' },
-    );
+    // Real Live control changes — not socket heartbeats — renew the Timeline
+    // lease, exactly like Deck/Mixer interaction.
     for (let i = 0; i < 7; i++) {
       await sleep(350);
       response = await ownerApi(h, 'PUT', '/layers/live_touch/pattern', {
@@ -159,17 +136,72 @@ test('Live Touch uses the activity-based Timeline lease and yields after inactiv
     assert.equal(layers.data.active, 'live_touch');
     assert.equal(layers.data.transition, null);
 
-    // A clean Live -> Mixer handback must not resume the plan and re-pin Deck
-    // after Mixer has visibly landed.
+    // ── TIMELINE PRIORITY: lease expiry FORCE-DISARMS the ARM ────────────
+    // Operator ruling 2026-08-14. ARM pongs prove only that the desk is alive;
+    // with no control changes the Timeline inactivity lease expires, and the
+    // plan takes the rig back EVEN THOUGH THE ARM IS ACTIVE — the desk is
+    // disarmed, not merely pushed off air.
+    start = client.frames.length;
+    await until(
+      () => h.state(),
+      state => state.mode === 'armed' && state.operatorLease === null,
+      { what: 'Timeline lease expiry under idle Live ARM', timeoutMs: 6000 },
+    );
+    const forced = await waitForFrame(
+      client,
+      start,
+      message => message.type === 'liveTouchForceDisarm' && message.ownerId === OWNER,
+    );
+    assert.equal(forced.source, 'timeline');
+    assert.equal(forced.autoRearm, false, 'the client must never auto-re-arm after a force-disarm');
+    assert.match(forced.why, /lease expired/i);
+    await until(
+      async () => (await h.api('GET', '/layers/state')).data,
+      state => state.active === 'deck' && state.transition === null,
+      { what: 'Timeline Deck handback after Live inactivity', timeoutMs: 6000 },
+    );
+    const disarmed = await h.api('GET', '/layers/state');
+    assert.equal(disarmed.data.liveTouch.armed, false, 'the ARM lease survived the lease expiry');
+    assert.equal(disarmed.data.liveTouch.ownerId, null);
+
+    // The plan is DRIVING again, not merely un-overridden.
+    await until(
+      () => h.state(),
+      state => state.planActive === true && state.forcingDeckView === true,
+      { what: 'plan driving again after the forced disarm', timeoutMs: 6000 },
+    );
+
+    // A force-disarmed owner cannot write, and therefore cannot silently
+    // reacquire the Timeline lease behind the operator's back.
+    const staleWrite = await ownerApi(h, 'PUT', '/layers/live_touch/pattern', {
+      pattern: 'test_const',
+    });
+    assert.equal(staleWrite.status, 409, JSON.stringify(staleWrite.data));
+    assert.equal(staleWrite.data.code, 'TOUCH_CONTROL_LEASE_INACTIVE');
+    await sleep(1100);
+    const stillPlan = await h.state();
+    assert.equal(stillPlan.mode, 'armed', 'a rejected write reacquired the Timeline lease');
+    assert.equal(stillPlan.operatorLease, null);
+
+    // ── DISARM ALWAYS RESUMES THE PLAN ───────────────────────────────────
+    // Re-arm explicitly (no auto-re-arm happened above), go on air, then do a
+    // CLEAN disarm: the plan must be running again with no RESUME press.
+    start = client.frames.length;
+    client.ws.send(JSON.stringify({ type: 'touchControlArmed', ownerId: OWNER, armed: true }));
+    const rearmed = await waitForFrame(
+      client, start,
+      message => message.type === 'touchControlArmedAck' && message.requestedArmed === true,
+    );
+    assert.equal(rearmed.armed, true);
     response = await ownerApi(h, 'POST', '/layers/activate', {
-      target: 'mixer', durationMs: 100, ownerId: OWNER,
-      reason: 'timeline_takeover_mixer_handback',
+      target: 'live_touch', durationMs: 100, ownerId: OWNER,
+      reason: 'timeline_takeover_contract_rearm',
     });
     assert.equal(response.status, 200, JSON.stringify(response.data));
     await until(
       async () => (await h.api('GET', '/layers/state')).data,
-      state => state.active === 'mixer' && state.transition === null,
-      { what: 'Live handback to Mixer' },
+      state => state.active === 'live_touch' && state.transition === null,
+      { what: 'Live Touch re-landing' },
     );
 
     start = client.frames.length;
@@ -183,17 +215,28 @@ test('Live Touch uses the activity-based Timeline lease and yields after inactiv
         && message.ownerId === OWNER
         && message.requestedArmed === false,
     );
-    assert.equal(released.armed, false);
-    const transferred = await h.state();
-    assert.equal(transferred.mode, 'overridden',
-      'clean handback resumed the plan instead of preserving Deck/Mixer takeover');
-    assert.ok(transferred.operatorLease && transferred.operatorLease.expiresAtMs > Date.now());
-    const mixerLayers = await h.api('GET', '/layers/state');
-    assert.equal(mixerLayers.data.active, 'mixer',
-      'plan release re-pinned Deck after the requested Mixer landing');
-
-    const resume = await h.api('POST', '/timeline/resume');
-    assert.equal(resume.status, 200, JSON.stringify(resume.data));
+    assert.equal(released.requestedArmed, false);
+    // The panel's cooperative handback lands first, then the explicit ARM-off.
+    await until(
+      async () => (await h.api('GET', '/layers/state')).data,
+      state => state.active !== 'live_touch' && state.transition === null,
+      { what: 'Live handback landing', timeoutMs: 6000 },
+    );
+    client.ws.send(JSON.stringify({
+      type: 'touchControlArmed', ownerId: OWNER, armed: false,
+    }));
+    await until(
+      async () => (await h.api('GET', '/layers/state')).data,
+      state => state.liveTouch.armed === false,
+      { what: 'ARM released by the clean disarm', timeoutMs: 6000 },
+    );
+    // …and the plan is RUNNING again by itself — no RESUME press, no limbo.
+    await until(
+      () => h.state(),
+      state => state.mode === 'armed' && state.operatorLease === null
+        && state.planActive === true,
+      { what: 'plan auto-resumed by the clean disarm', timeoutMs: 6000 },
+    );
     client.close();
   } finally {
     await h.teardown();

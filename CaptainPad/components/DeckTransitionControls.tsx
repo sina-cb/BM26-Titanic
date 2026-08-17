@@ -24,7 +24,8 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
-import { useGlobalStyles } from '@/styles/globalStyles';
+import { accentWash, useGlobalStyles } from '@/styles/globalStyles';
+import { Radius, Type } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { buildTransitionModePatch, isTransitionStylePickerDisabled } from '@/components/deck_tx_logic';
 
@@ -53,7 +54,9 @@ export const SwapCountdown: React.FC<{ targetMs: number | null }> = React.memo((
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
       <IconSymbol name="clock" size={11} color={C.primary} />
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary, letterSpacing: 0.5 }}>
+      {/* microCaps (docs/54 row 13) — the countdown is a caption riding a
+          label row, not a readout of its own. */}
+      <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.primary }}>
         {label}
       </Text>
     </View>
@@ -111,11 +114,14 @@ export function TimerPillBar({
   const pillPaddingY = compact ? 6 : 8;
   const pillFontSize = compact ? 11 : 12;
 
-  // One pill renderer for both orientations so the active-pill fill +
-  // contrast token are identical landscape and portrait (QA #19: the teal
-  // active fill must read the same in both). The active state uses the
-  // primary fill with white text PLUS a thicker primary border so it stays
-  // legible even in the tighter portrait column.
+  // One pill renderer for both orientations so the active-pill tint is
+  // identical landscape and portrait (QA #19: the active state must read the
+  // same in both). RESTYLE (docs/54 row 13): the selected pill is the shared
+  // `accentWash(primary)` on-state — a translucent accent fill + accent
+  // border + accent ink — instead of a flat opaque repaint, so a selected
+  // cadence pill, a selected palette chip and an armed toggle all read as one
+  // idea. The 2px border keeps the selection weight it always had.
+  const on = accentWash(C.primary);
   const renderPill = (preset: number) => {
     const active = preset === value;
     return (
@@ -129,10 +135,10 @@ export function TimerPillBar({
           minWidth: pillMinWidth,
           paddingHorizontal: pillPaddingX,
           paddingVertical: pillPaddingY,
-          borderRadius: 8,
+          borderRadius: Radius.control,
           borderWidth: active ? 2 : 1,
-          borderColor: active ? C.primary : C.ghostBorder,
-          backgroundColor: active ? C.primary : 'transparent',
+          borderColor: active ? on.borderColor : C.ghostBorder,
+          backgroundColor: active ? on.backgroundColor : 'transparent',
           alignItems: 'center',
           justifyContent: 'center',
         }}
@@ -140,7 +146,7 @@ export function TimerPillBar({
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold',
           fontSize: pillFontSize,
-          color: active ? '#FFF' : C.text,
+          color: active ? on.color : C.text,
           letterSpacing: 0.5,
         }}>
           {formatter(preset)}
@@ -153,8 +159,8 @@ export function TimerPillBar({
     <View style={{ width: '100%' }}>
       {label ? (
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
-          color: C.icon, marginBottom: 3, textTransform: 'uppercase',
+          ...Type.microCaps, textTransform: 'uppercase',
+          color: C.icon, marginBottom: 3,
         }}>
           {label}
         </Text>
@@ -198,8 +204,8 @@ export function AutopilotTimerPills({ value, onChange }: { value: number; onChan
 // about. We keep this list explicit (instead of fetching /transitions on
 // open) so the operator sees the same names every time and there's no
 // flash-of-empty while the request flies. The engine ignores any name
-// it doesn't recognise (falls back to crossfade), so adding a name here
-// without engine support is safe.
+// it doesn't recognise and reports the error; this catalog must stay aligned
+// with the engine's canonical executable set.
 const TRANSITION_OPTIONS: { id: string; label: string; hint: string }[] = [
   { id: 'trans_crossfade',       label: 'CROSSFADE', hint: 'Smooth blend (default)' },
   { id: 'trans_flash',           label: 'FLASH',     hint: 'Full-white pop at midpoint' },
@@ -216,7 +222,6 @@ const TRANSITION_OPTIONS: { id: string; label: string; hint: string }[] = [
   { id: 'trans_split_horizontal',label: 'BAY DOORS', hint: 'Opens from horizontal centerline' },
   { id: 'trans_split_vertical',  label: 'CURTAIN',   hint: 'Opens from vertical centerline' },
   { id: 'trans_ripple_in',       label: 'RIPPLE',    hint: 'Concentric water rings' },
-  { id: 'trans_morse_blink',     label: 'SOS',       hint: 'Morse SOS blink reveal' },
 ];
 
 export function TransitionStylePicker({
@@ -229,8 +234,12 @@ export function TransitionStylePicker({
   disabled?: boolean;
 }) {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
   const [open, setOpen] = useState(false);
   const currentMeta = TRANSITION_OPTIONS.find((o) => o.id === current) || TRANSITION_OPTIONS[0];
+  // The picker's enabled fill used to be a stray 'rgba(95, 35, 199, 0.10)'
+  // purple that belonged to no palette. It is the standard on-state now.
+  const on = accentWash(C.primary);
 
   return (
     <>
@@ -245,10 +254,10 @@ export function TransitionStylePicker({
           gap: 6,
           paddingHorizontal: 12,
           paddingVertical: 10,
-          borderRadius: 8,
+          borderRadius: Radius.control,
           borderWidth: 1,
-          borderColor: disabled ? C.ghostBorder : C.primary,
-          backgroundColor: disabled ? 'transparent' : 'rgba(95, 35, 199, 0.10)',
+          borderColor: disabled ? C.ghostBorder : on.borderColor,
+          backgroundColor: disabled ? 'transparent' : on.backgroundColor,
           opacity: disabled ? 0.4 : 1,
           flex: 1,
           // Wrap onto its own full-width line (parent row has flexWrap) rather
@@ -275,11 +284,9 @@ export function TransitionStylePicker({
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
-            style={{
-              width: 320, maxHeight: '80%',
-              backgroundColor: C.surfaceContainerLowest, padding: 20,
-              borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
-            }}
+            // The modal wears the shared `panel` recipe (docs/54 §1.1): one
+            // object — surface + hairline + inset highlight + ambient shadow.
+            style={[globalStyles.panel, { width: 320, maxHeight: '80%', padding: 20 }]}
           >
             <Text style={{
               fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14,
@@ -296,14 +303,14 @@ export function TransitionStylePicker({
                     onPress={() => { onSelect(opt.id); setOpen(false); }}
                     style={{
                       paddingHorizontal: 14, paddingVertical: 12,
-                      borderRadius: 8, marginBottom: 6,
-                      backgroundColor: active ? 'rgba(95, 35, 199, 0.15)' : 'transparent',
-                      borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+                      borderRadius: Radius.control, marginBottom: 6,
+                      backgroundColor: active ? on.backgroundColor : 'transparent',
+                      borderWidth: 1, borderColor: active ? C.borderStrong : C.ghostBorder,
                     }}
                   >
                     <Text style={{
                       fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13,
-                      color: active ? C.primary : C.text, letterSpacing: 0.8,
+                      color: active ? on.color : C.text, letterSpacing: 0.8,
                     }}>
                       {opt.label}
                     </Text>
@@ -352,6 +359,7 @@ export function DeckTransitionControls({
   // 2026-07-07: the old `shuffle` gate blocked blend-mode changes). Only
   // DECK TX OFF greys it — see deck_tx_logic.ts (pinned by its vitest).
   const styleDisabled = isTransitionStylePickerDisabled({ enabled, shuffle });
+  const on = accentWash(C.primary);
 
   // Card-internal header — moved INSIDE the card (May 2026 compaction)
   // to reclaim the vertical space the freestanding label used to occupy
@@ -361,9 +369,13 @@ export function DeckTransitionControls({
   // component self-contained.
   return (
     <View style={bare ? { paddingTop: 6, gap: 6 } : {
+      // Cards sit ON a panel now (docs/54 §1.1 `cardOnPanel`): the lowest
+      // surface + the card radius, so a card reads as nested inside its
+      // window rather than as a peer of it. Padding is unchanged — the
+      // restyle preserves the deck's density.
       paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8,
-      borderRadius: 8, gap: 6,
-      backgroundColor: C.surfaceContainerHigh,
+      borderRadius: Radius.card, gap: 6,
+      backgroundColor: C.surfaceContainerLowest,
       ...globalStyles.ghostBorder,
       marginBottom: 16,
     }}>
@@ -373,9 +385,7 @@ export function DeckTransitionControls({
           ~24px and lets the card breathe horizontally instead. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', rowGap: 6 }}>
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-          letterSpacing: 1.2, color: C.secondary,
-          textTransform: 'uppercase',
+          ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary,
         }}>
           DECK TX
         </Text>
@@ -385,21 +395,21 @@ export function DeckTransitionControls({
           accessibilityLabel={enabled ? 'Disable deck transitions' : 'Enable deck transitions'}
           style={{
             flexDirection: 'row', alignItems: 'center', gap: 6,
-            paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6,
+            paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.control,
             borderWidth: 1,
-            borderColor: enabled ? 'transparent' : C.ghostBorder,
-            backgroundColor: enabled ? C.primary : 'transparent',
+            borderColor: enabled ? on.borderColor : C.ghostBorder,
+            backgroundColor: enabled ? on.backgroundColor : 'transparent',
             minWidth: 70,
           }}
         >
           <IconSymbol
             name={enabled ? 'checkmark.circle.fill' : 'circle'}
             size={14}
-            color={enabled ? '#FFF' : C.icon}
+            color={enabled ? on.color : C.icon}
           />
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: enabled ? '#FFF' : C.text, letterSpacing: 0.5,
+            color: enabled ? on.color : C.text, letterSpacing: 0.5,
           }}>
             {enabled ? 'ON' : 'OFF'}
           </Text>
@@ -440,8 +450,8 @@ export function DeckTransitionControls({
               disabled token — for both the label and the hint so the OFF state
               reads as intentional, not broken. */}
           <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
-            color: C.secondary, marginBottom: 3, textTransform: 'uppercase',
+            ...Type.microCaps, textTransform: 'uppercase',
+            color: C.secondary, marginBottom: 3,
           }}>
             CROSSFADE TIME
           </Text>

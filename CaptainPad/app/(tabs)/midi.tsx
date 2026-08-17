@@ -10,8 +10,23 @@ import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { MidiConfigSection } from '@/components/MidiConfigSection';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import { ConfigSubviewFrame } from '@/components/config_subview_frame';
 
+// MIDI is a CONFIG sub-view (operator ruling 2026-08-15) — same route, same
+// screen (so the header's 🎹 chip router.push('/midi') is unchanged), just
+// reached from a card in CONFIG instead of a rail slot.
 export default function MidiScreen() {
+  return (
+    <PerformanceRouteGuard routeName="midi">
+      <ConfigSubviewFrame routeName="midi">
+        <MidiScreenContent />
+      </ConfigSubviewFrame>
+    </PerformanceRouteGuard>
+  );
+}
+
+function MidiScreenContent() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
 

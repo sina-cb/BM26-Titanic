@@ -288,3 +288,106 @@ test('createSacnOutput always creates udp4 sockets (never udp6 or a real bind)',
     assert.equal(seenType, 'udp4');
     out.stop();
   }));
+
+// ── Engine-frame sequence identity (report 20260814_212) ───────────────────
+// The bench mirror composes ONE destination out of SEVERAL universes and proves
+// they belong to the same engine frame by requiring their sequences to be
+// EQUAL. Nothing pinned that property, so the three ways a model reload breaks
+// it all shipped: a Sender built mid-run starts at 0 while its siblings are
+// mid-count; a universe pruned from the frame loop freezes its counter and
+// returns offset; the de-map blackout burst skews one universe by +3. Each
+// leaves the mirror refusing every frame forever, curable only by an engine
+// restart. `sendFrame` now stamps one engine-owned sequence onto every sender,
+// so alignment is true by construction rather than by accident of lifetime.
+
+/** Group one flush's captured datagrams into `universe → sequence`. */
+function seqByUniverse() {
+  const seen = new Map();
+  for (const c of captured) {
+    const p = new Packet(c.msg);
+    seen.set(p.universe, p.sequence);
+  }
+  return seen;
+}
+
+test('all universes of one engine frame carry the SAME sequence',
+  withFakeDgram(async () => {
+    const out = createSacnOutput({ universes: [3, 4, 5, 12], destinations: ['127.0.0.1'] });
+    out.start();
+    const buf = new Uint8Array(512);
+    for (let i = 0; i < 8; i++) {
+      captured.length = 0;
+      await out.sendFrame({ 3: buf, 4: buf, 5: buf, 12: buf });
+      const seen = seqByUniverse();
+      assert.equal(seen.size, 4, 'all four universes present in the frame');
+      assert.equal(new Set(seen.values()).size, 1,
+        `frame ${i}: every universe must share one sequence, got ${[...seen]}`);
+    }
+    out.stop();
+  }));
+
+test('MODEL RELOAD: a universe whose sender is created mid-run stays aligned with its siblings',
+  withFakeDgram(async () => {
+    // U12 is deliberately absent at construction — this is exactly what an
+    // in-process hot reload does via engine.js `registerUniverse` → addUniverse.
+    const out = createSacnOutput({ universes: [3, 4, 5], destinations: ['127.0.0.1'] });
+    out.start();
+    const buf = new Uint8Array(512);
+    for (let i = 0; i < 37; i++) await out.sendFrame({ 3: buf, 4: buf, 5: buf });
+
+    out.addUniverse(12); // ← the reload
+
+    for (let i = 0; i < 8; i++) {
+      captured.length = 0;
+      await out.sendFrame({ 3: buf, 4: buf, 5: buf, 12: buf });
+      const seen = seqByUniverse();
+      assert.equal(seen.size, 4);
+      assert.equal(new Set(seen.values()).size, 1,
+        `post-reload frame ${i}: the new U12 sender must not sit at a fixed offset — got ${[...seen]}`);
+    }
+    out.stop();
+  }));
+
+test('MODEL RELOAD: a universe that goes dark and is revived returns aligned, not frozen behind',
+  withFakeDgram(async () => {
+    const out = createSacnOutput({ universes: [3, 4, 5, 12], destinations: ['127.0.0.1'] });
+    out.start();
+    const buf = new Uint8Array(512);
+    await out.sendFrame({ 3: buf, 4: buf, 5: buf, 12: buf });
+
+    // De-mapped: the prune path splices U12 out of the frame loop but keeps its
+    // Sender alive, then fires a 3x blackout burst on that universe ALONE.
+    for (let i = 0; i < 3; i++) await out.sendFrame({ 12: buf });
+    for (let i = 0; i < 60; i++) await out.sendFrame({ 3: buf, 4: buf, 5: buf });
+
+    out.addUniverse(12); // no-op by design (sacn_output.js) — the revive
+
+    for (let i = 0; i < 8; i++) {
+      captured.length = 0;
+      await out.sendFrame({ 3: buf, 4: buf, 5: buf, 12: buf });
+      const seen = seqByUniverse();
+      assert.equal(new Set(seen.values()).size, 1,
+        `revived frame ${i}: U12 must not be behind by the frames it was dark — got ${[...seen]}`);
+    }
+    out.stop();
+  }));
+
+test('per-universe sequence still advances strictly forward and wraps mod 256',
+  withFakeDgram(async () => {
+    const out = createSacnOutput({ universes: [3, 4], destinations: ['127.0.0.1'] });
+    out.start();
+    const buf = new Uint8Array(512);
+    const seen = [];
+    for (let i = 0; i < 260; i++) {
+      captured.length = 0;
+      await out.sendFrame({ 3: buf, 4: buf });
+      seen.push(seqByUniverse().get(3));
+    }
+    assert.deepEqual(seen.slice(0, 4), [0, 1, 2, 3]);
+    assert.equal(seen[255], 255);
+    assert.equal(seen[256], 0, 'wraps mod 256');
+    for (let i = 1; i < seen.length; i++) {
+      assert.equal(seen[i], (seen[i - 1] + 1) % 256, `step ${i} must be +1 mod 256`);
+    }
+    out.stop();
+  }));

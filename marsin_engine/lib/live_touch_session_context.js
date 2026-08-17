@@ -323,6 +323,15 @@ export class LiveTouchSessionContext {
         : `HTTP ${status}`;
       throw new Error(detail);
     }
+    if (responseBody && responseBody.status === 'partial') {
+      const ignored = Array.isArray(responseBody.ignored)
+        ? responseBody.ignored.map(item => item && item.key).filter(Boolean)
+        : [];
+      const detail = ignored.length > 0
+        ? `prepared mutation ignored fields: ${ignored.join(', ')}`
+        : 'prepared mutation was only partially applied';
+      throw new Error(detail);
+    }
   }
 
   ownsRequest(req) {

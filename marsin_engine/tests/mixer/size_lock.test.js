@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import yaml from 'js-yaml';
 
@@ -19,6 +20,8 @@ import { LOCKED_SIZE, SIZE_LOCK_REASON, isLockedSize } from '../../lib/size_lock
 // A non-locked size that actually shipped in the titanic scene and started
 // this whole thread (mult ≈ 2.13 → pattern coords compressed to 0 → ~0.47).
 const STRAY_SIZE = 0.773;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_DIR = path.resolve(__dirname, '..', '..');
 
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -210,6 +213,94 @@ test('applyGlobalsState with a clean saved size stays silent', () => {
 });
 
 // ── Persistence ────────────────────────────────────────────────────────────
+
+test('boot migration persists legacy SIZE and the next restart status is clean', () => {
+  const dir = tmpDir('sizelock_boot_migration_');
+  const statePath = path.join(dir, 'globals_state.yaml');
+  fs.writeFileSync(statePath, yaml.dump({
+    blackout: false,
+    params: {
+      revision: 42,
+      sourceLock: null,
+      params: {
+        size: { value: STRAY_SIZE, lastSource: 'init' },
+        rotate: { value: 0.25, lastSource: 'init' },
+      },
+    },
+  }));
+
+  const firstManager = new StateManager(dir);
+  const firstState = firstManager.loadGlobalsState();
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  const migrationLines = [];
+  console.warn = (...args) => migrationLines.push(args.join(' '));
+  console.log = (...args) => migrationLines.push(args.join(' '));
+  try {
+    assert.equal(firstManager.convergeBootSizeLock(firstState), true);
+  } finally {
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
+
+  assert.ok(
+    migrationLines.some(line => line.includes('legacy SIZE=0.773')),
+    'the one-time migration is explicit in the boot log');
+  const persisted = yaml.load(fs.readFileSync(statePath, 'utf8'));
+  assert.equal(persisted.params.params.size.value, LOCKED_SIZE);
+  assert.equal(persisted.params.params.rotate.value, 0.25, 'unrelated globals are unchanged');
+
+  // This is the next process boot: convergence is idempotent and applying the
+  // tracked file creates no restore override, so /status.sizeLockWarning is null.
+  const restartedManager = new StateManager(dir);
+  const restartedState = restartedManager.loadGlobalsState();
+  assert.equal(restartedManager.convergeBootSizeLock(restartedState), false);
+  const restartedCenter = new ParamCenter(tmpStatePath());
+  const errors = captureErrors(() => {
+    restartedManager.applyGlobalsState(restartedState, restartedCenter, null, null);
+  });
+  assert.equal(restartedCenter.getSizeLockWarning(), null);
+  assert.equal(errors.length, 0);
+});
+
+test('stale snapshot stays a visible violation and never rewrites globals_state', () => {
+  const dir = tmpDir('sizelock_snapshot_');
+  const statePath = path.join(dir, 'globals_state.yaml');
+  const snapshotPath = path.join(dir, 'snapshots', 'performance-preshow.yaml');
+  fs.writeFileSync(statePath, yaml.dump({
+    params: { params: { size: { value: LOCKED_SIZE } } },
+  }));
+  const globalsBefore = fs.readFileSync(statePath, 'utf8');
+  const sm = new StateManager(dir);
+  const pc = new ParamCenter(tmpStatePath());
+  const errors = captureErrors(() => {
+    sm.applyGlobalsState(
+      { params: { params: { size: { value: STRAY_SIZE } } } },
+      pc,
+      null,
+      null,
+      null,
+      snapshotPath);
+  });
+
+  assert.match(pc.getSizeLockWarning(), /performance-preshow\.yaml/);
+  assert.ok(errors.some(line => line.includes('performance-preshow.yaml')));
+  assert.equal(fs.readFileSync(statePath, 'utf8'), globalsBefore);
+});
+
+test('tracked Titanic globals boot with clean SIZE lock status', () => {
+  const stateDir = path.join(ENGINE_DIR, 'states', 'titanic');
+  const sm = new StateManager(stateDir);
+  const globalsState = sm.loadGlobalsState();
+  assert.equal(globalsState.params.params.size.value, LOCKED_SIZE);
+
+  const pc = new ParamCenter(tmpStatePath());
+  const errors = captureErrors(() => {
+    sm.applyGlobalsState(globalsState, pc, null, null);
+  });
+  assert.equal(pc.getSizeLockWarning(), null, '/status warning must be null after restart');
+  assert.equal(errors.length, 0);
+});
 
 test('state save persists ONLY the locked size, whatever was attempted', () => {
   const statePath = tmpStatePath({ size: STRAY_SIZE });

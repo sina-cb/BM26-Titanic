@@ -10,6 +10,8 @@
 
 import { getApiBaseAsync } from './apiBase';
 import { fetchWithTimeout, ApiResult } from './api';
+import { TAKEOVER_PASSCODE_HEADER } from './edit_session';
+import type { ColorPaletteEntry } from './api';
 
 // ── Wire types (the engine /timeline contract, docs/38 §7 + §14) ───────
 
@@ -260,12 +262,17 @@ async function timelineSend<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  // Per-request headers, merged over the JSON content type. Used ONLY by the
+  // performance-mode takeover passcode (X-CaptainPad-Passcode): the value is
+  // never stored, so it can only arrive as an argument on the one request it
+  // authorises. See utils/takeover_passcode.ts for the storage audit.
+  extraHeaders?: Record<string, string>,
 ): Promise<ApiResult<T>> {
   try {
     const base = await getApiBaseAsync();
     const res = await fetchWithTimeout(`${base}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal,
     });
@@ -333,8 +340,7 @@ export type DeckTransitionMode =
   | 'trans_diamond_wipe'
   | 'trans_split_horizontal'
   | 'trans_split_vertical'
-  | 'trans_ripple_in'
-  | 'trans_morse_blink';
+  | 'trans_ripple_in';
 
 export const DECK_TRANSITION_MODES: DeckTransitionMode[] = [
   'trans_crossfade',
@@ -352,7 +358,6 @@ export const DECK_TRANSITION_MODES: DeckTransitionMode[] = [
   'trans_split_horizontal',
   'trans_split_vertical',
   'trans_ripple_in',
-  'trans_morse_blink',
 ];
 
 export const DECK_TRANSITION_MODE_LABEL: Record<DeckTransitionMode, string> = {
@@ -371,7 +376,6 @@ export const DECK_TRANSITION_MODE_LABEL: Record<DeckTransitionMode, string> = {
   trans_split_horizontal: 'Bay Doors',
   trans_split_vertical: 'Curtain',
   trans_ripple_in: 'Ripple',
-  trans_morse_blink: 'SOS',
 };
 
 // Cue-level overlay intent on a playlist (deck) action. Absent = leave the
@@ -392,11 +396,19 @@ export interface ActionTransition {
 // Color-autopilot block on a playlist (deck) action. Cycles the color
 // palette over time, distinct from the pattern `autopilot` above. The
 // engine's validator is strict: when present it requires active + a
-// non-empty `palettes` list + delay_s>0 (+ optional shuffle). Shape matches
+// non-empty `palettes` list + delay_s>=0 (+ optional shuffle). Shape matches
 // the engine contract EXACTLY (deck target only).
 export interface ActionColorAutopilot {
   active: boolean;
-  palettes: string[];
+  // A library id OR an inline {c1,c2} colour pair — the engine's validator
+  // accepts both (docs/53 §5.3, slice E1), and a cue that CAPTURES the live
+  // config can capture a PALETTE TURNS ring, which is inline pairs. Narrowing
+  // this to ids would make "capture what the deck is doing" silently lossy —
+  // and since D2 (docs/55 §1) a pair channel may be a full {h,s,v}, so a cue
+  // can capture a full-HSV scheme ring too.
+  palettes: ColorPaletteEntry[];
+  /** Hold between turns, in seconds. 0 == CONTINUOUS (engine requires
+   *  transitionMs >= 100 there). */
   delay_s: number;
   shuffle?: boolean;
   // Crossfade duration (ms) on a palette switch; 0 = hard cut. Optional —
@@ -697,10 +709,32 @@ export interface TimelineTakeoverBody {
   cueId?: string;
 }
 
+// PERFORMANCE-MODE PASSCODE (operator ruling 2026-08-14). While the show is
+// live the engine refuses this route unless the request carries a FRESH
+// `X-CaptainPad-Passcode` (marsin_engine/lib/api_server.js →
+// checkTakeoverPasscode). `passcode` is therefore an argument, never module
+// state: it is attached to THIS request's headers only, is not persisted, not
+// logged, and not reused for the next attempt. Callers get it from the
+// per-attempt prompt in utils/takeover_passcode.ts.
+//
+// The constant itself now lives in `utils/edit_session.ts` — a dependency-free
+// leaf — so the four transports that need it (timeline takeover, special-event
+// ARM, performance-mode exit, edit-session assertion) share ONE definition and
+// no suite that mocks a transport can make it disappear. Re-exported here
+// because this has been its public home for every caller.
+export { TAKEOVER_PASSCODE_HEADER };
+
 export function postTimelineTakeover(
   body?: TimelineTakeoverBody,
+  passcode?: string,
 ): Promise<ApiResult<{ operatorLease?: TimelineOperatorLease; zoom?: TimelineZoom | null }>> {
-  return timelineSend('POST', '/timeline/takeover', body);
+  return timelineSend(
+    'POST',
+    '/timeline/takeover',
+    body,
+    undefined,
+    passcode ? { [TAKEOVER_PASSCODE_HEADER]: passcode } : undefined,
+  );
 }
 
 // ── EVENT ZOOM: resolve + travel (_95 §3.2 / §3.4) ──────────────────────

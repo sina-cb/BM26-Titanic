@@ -4,42 +4,83 @@ entries:
   - id: e_deep_sea_0_08_ocean_liner
     pattern: 08_ocean_liner
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderLevel: 0.87
+      sliderKick: 0.12
+      sliderDetail: 0.89
+      sliderPortholeWhite: 0.87
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_1_11_bioluminescence
     pattern: 11_bioluminescence
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderLevel: 0.71
+      sliderKick: 0.17
+      sliderRadius: 0.23
+      sliderDetail: 0.64
+      sliderDensity: 0.39
+      sliderUvGlow: 0.89
+      sliderWhiteLevel: 0.89
+      sliderWhiteSpeed: 0.48
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_2_16_ghost_tide_uv
     pattern: 16_ghost_tide_uv
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_3_21_pelagic_manta_rays
     pattern: 21_pelagic_manta_rays
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.91
+      sliderLevel: 0.79
+      sliderKick: 0.17
+      sliderRadius: 0.3
+      sliderDetail: 0.71
+      sliderWhiteFoam: 0.11
+      sliderUvUndertow: 0.71
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_4_22_abyssal_sway_garden
     pattern: 22_abyssal_sway_garden
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.24
+      sliderLevel: 0.22
+      sliderKick: 0
+      sliderRadius: 1
+      sliderDetail: 0.86
+      sliderFrondDensity: 0.68
+      sliderTipGlow: 0.34
+      sliderBaseDarkness: 0.68
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_5_32_caustic_shimmer
     pattern: 32_caustic_shimmer
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
     modulations: []
     midiMappings: []
     notes: null
@@ -53,35 +94,63 @@ entries:
   - id: e_deep_sea_7_41_reaction_diffusion
     pattern: 41_reaction_diffusion
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderLevel: 0.45
+      sliderFeed: 0.5
+      sliderSeed: 0.05
+      sliderBase: 0.15
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_8_44_biolume_swell
     pattern: 44_biolume_swell
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderSwell: 0.45
+      sliderSparkle: 0.75
+      sliderKick: 0.01
+      sliderUvGlow: 0.81
+      sliderBase: 0.16
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_9_45_manta_drift
     pattern: 45_manta_drift
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderSwell: 0.75
+      sliderFoam: 0.12
+      sliderSpan: 0.76
+      sliderDepth: 0.6
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_10_46_abyssal_fronds
     pattern: 46_abyssal_fronds
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.25
+      sliderLevel: 0.82
+      sliderGlints: 0.88
+      sliderBreathRate: 0.32
+      sliderBreathDepth: 0.92
+      sliderFrondDensity: 0.85
+      sliderBaseGlow: 0.86
     modulations: []
     midiMappings: []
     notes: null
   - id: e_deep_sea_11_57_ink_diffuse
     pattern: 57_ink_diffuse
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
     modulations: []
     midiMappings: []
     notes: null

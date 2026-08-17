@@ -3,20 +3,23 @@
   124_aurora_crown.js — four enormous aurora arcs crown the installation.
 
   Broad concentric arcs occupy normalized upper Y and curl around the XZ axis.
-  Three-lobe and four-lobe crown profiles counter-sweep through one another, so
-  the ship appears to wear a slowly moving luminous crown at long distance.
-  This is intentionally monumental rather than 33's close-up folded ribbons.
+  Three-lobe and four-lobe crown profiles counter-sweep through ship-length
+  diadem arcs, while their slow descending veils carry related motion through
+  the lower hull. The ship wears one moving luminous crown at long distance;
+  this is intentionally monumental rather than 33's close-up folded ribbons.
 
   A palette-derived safety floor is hard-constrained to 0.10..0.20 on every
   pixel. All visible colour lies strictly on the cp1<->cp2 RGB line. Geometry is
-  normalized XYZ only; the optional TE-sign branch turns arc intersections into
-  a crown jewel without using an authored view, controller, or raw fixture id.
+  normalized XYZ only. The optional TE-sign branch traces the same broad crown
+  phrase across each sign's paired 40/34-pixel paths. Because that branch
+  depends on pixelLocalIndex rather than world-side position, both 74-pixel
+  signs are exactly balanced without an authored view or raw fixture id.
 
   CONTROLS (declaration order = physical MIDI order)
     localSpeed  — crown sweep/curl rate; zero still creeps.
     level       — luminous crown energy above the safety floor.
     crownHeight — raises the crown and increases its upper-Y reach.
-    arcWidth    — broad angular-sheet thickness of all four arcs.
+    arcWidth    — broad sheet thickness of the radial and ship-length arcs.
     curl        — twists the crown around XZ as height/radius change.
     safetyFloor — hard palette-derived floor, constrained to 10%..20%.
     pulse       — immediate crown bloom without fragmenting the arcs.
@@ -173,6 +176,18 @@ export function render3D(index, x, y, z) {
   var lobe4A = wave(curled * 4.0 + sweepB + 0.125);
   var lobe4B = wave(curled * 4.0 - sweepA + 0.625);
 
+  // Two incommensurate, ship-length phrases let the diadem travel all the way
+  // from bow to stern. Their gentle Z coupling prevents front/back surfaces
+  // from reading as copies, while remaining one coherent crown.
+  var spanA = wave(nx * 1.41421356 + nz * 0.437
+                 - sweepA * 0.619
+                 + sin((ny * 0.773 + curlClock * 0.191) * PI2)
+                 * liveCurl * 0.065);
+  var spanB = wave(nx * 1.73205081 - nz * 0.311
+                 + sweepB * 0.527
+                 + sin((nx * 0.618 + curlClock * 0.271) * PI2)
+                 * liveCurl * 0.052);
+
   // Four monumental sheets at different radii. Each height profile is broad,
   // upper-Y, and crown-shaped; no high-frequency ribbon texture is present.
   var h1 = crownBase + crownLift * pow(lobe3A, 0.72);
@@ -184,36 +199,66 @@ export function render3D(index, x, y, z) {
   var a3 = arcProfile(ny - h3, radial - 0.48, resolvedWidth * 1.10);
   var a4 = arcProfile(ny - h4, radial - 0.62, resolvedWidth * 1.14);
 
-  var cp1Arc = max(a1, a3 * 0.90);
-  var cp2Arc = max(a2, a4 * 0.90);
+  // Long diadem rails keep the upper-ship identity but remove the old radial
+  // centre bias. They are intentionally broad across Z and occupy every X.
+  var h5 = crownBase - 0.090 + crownLift * 0.74 * pow(spanA, 0.78);
+  var h6 = crownBase - 0.145 + crownLift * 0.62 * pow(spanB, 0.84);
+  var a5 = arcProfile(ny - h5, dz * 0.22, resolvedWidth * 1.20);
+  var a6 = arcProfile(ny - h6, dz * 0.18, resolvedWidth * 1.27);
+
+  var cp1Arc = max(max(a1, a3 * 0.90), a5 * 0.92);
+  var cp2Arc = max(max(a2, a4 * 0.90), a6 * 0.88);
   var crown = max(cp1Arc, cp2Arc);
   var intersection = sqrt(max(0.0, cp1Arc * cp2Arc));
+
+  // The crown casts two slow, broad aurora veils down through the whole model.
+  // Only a few incommensurate folds span the ship, avoiding a repeated texture
+  // field while keeping every region visibly related to the upper arcs.
+  var veilA = wave(nx * 1.41421356 + nz * 0.61803399
+                 + ny * 0.327 - sweepA * 0.347
+                 + sin((ny * 1.73205081 + curlClock * 0.223) * PI2)
+                 * liveCurl * 0.075);
+  var veilB = wave(nx * 0.57735027 - nz * 1.27201965
+                 - ny * 0.241 + sweepB * 0.293
+                 + sin((nx * 0.80901699 - curlClock * 0.179) * PI2)
+                 * liveCurl * 0.061);
+  var veil = pow(max(veilA, veilB * 0.92), 1.32);
+  var veilReach = 0.48 + ny * 0.30;
+  var veilSignal = veil * veilReach * (0.20 + liveWidth * 0.18);
   var crownSignal = crown * 0.90 + intersection * 0.48;
   var pulseBloom = livePulse * (crown * 0.62 + intersection * 0.58);
   var levelGain = 0.10 + liveLevel * 1.16;
-  var authored = clamp01(crownSignal * levelGain + pulseBloom);
+  var authored = clamp01((crownSignal + veilSignal) * levelGain + pulseBloom);
   var bri = resolvedFloor + (1.0 - resolvedFloor) * authored;
 
   // A palette-derived bed makes the safety floor spatially intentional. Crown
   // families retain distinct palette identities; overlaps become mixed light.
-  var bedMix = clamp01(0.18 + ny * 0.58 + radial * 0.22);
-  var mixValue = (cp2Arc + bedMix * 0.18)
-               / (cp1Arc + cp2Arc + 0.18);
+  var bedMix = clamp01(0.18 + ny * 0.43 + radial * 0.14
+                     + (veilB - veilA) * 0.16);
+  var mixValue = (cp2Arc + veilB * 0.16 + bedMix * 0.18)
+               / (cp1Arc + cp2Arc + (veilA + veilB) * 0.16 + 0.18);
   mixValue = clamp01(mixValue);
 
   if (fixtureType == FIX_TE_SIGN) {
-    // Identity crown jewel: broad arc intersections refract through XYZ. The
-    // prism is continuous and subordinate to the same monumental crown field.
-    var jewelFold = wave(dx * 1.73 + (ny - 0.5) * 2.39 - dz * 1.41
-                         + sweepA - sweepB);
-    var jewel = clamp01(intersection * 1.35
-                      + crown * jewelFold * 0.30);
-    var signKeep = resolvedFloor + 0.06;
+    // Identity crown script: each 74-pixel sign carries the same full-surface
+    // diadem and facets. pixelLocalIndex makes left/right output byte-identical
+    // while the nonzero floor preserves the physical T/E letter shapes.
+    var signU = clamp01(pixelLocalIndex / 39.0);
+    var signArch = wave(signU * 1.0 - sweepA * 0.553
+                     + sin((signU * 0.61803399 + curlClock * 0.173) * PI2)
+                     * liveCurl * 0.082);
+    var signFacet = wave(signU * 2.0 + sweepB * 0.419
+                      + sin((signU * 1.41421356 - curlClock * 0.137) * PI2)
+                      * liveCurl * 0.047);
+    var signCrown = clamp01(pow(signArch, 0.74) * 0.72
+                          + pow(signFacet, 1.65) * 0.38);
+    var signKeep = resolvedFloor + 0.09;
     var signBri = signKeep + (1.0 - signKeep)
-                * clamp01(authored * 0.82 + jewel * 0.52);
-    if (signBri > bri) bri = signBri;
-    mixValue = clamp01(0.42 + (cp2Arc - cp1Arc) * 0.42
-                     + jewelFold * 0.13 + (ny - 0.5) * 0.18);
+                * clamp01(signCrown * (0.34 + liveLevel * 0.56)
+                        + livePulse * 0.24);
+    bri = signBri;
+    mixValue = clamp01(0.30 + signU * 0.32
+                     + (signFacet - signArch) * 0.22);
   }
 
   var r = (pr1 + (pr2 - pr1) * mixValue) * bri;

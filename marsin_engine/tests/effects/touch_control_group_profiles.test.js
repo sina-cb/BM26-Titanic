@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const profilesRuntime = require(path.resolve(
   here, '../../../docs/ui/touch_control_group_profiles.js'));
+const profilesSource = fs.readFileSync(path.resolve(
+  here, '../../../docs/ui/touch_control_group_profiles.js'), 'utf8');
 
 async function liveCatalog() {
   const model = await loadModelForGauge('titanic');
@@ -88,4 +91,14 @@ test('profile compilation fails loudly on stale, partial, or overlapping views',
   const overlap = structuredClone(catalog);
   overlap.namedViews.find((view) => view.name === 'Identity').groupNames.push('Left Auditorium');
   assert.throws(() => profilesRuntime.compileProfiles(overlap), /overlaps group 'Left Auditorium'/);
+});
+
+test('profile faders have keyboard semantics and a window-level final flush', () => {
+  assert.match(profilesSource, /setAttribute\('role', 'slider'\)/);
+  assert.match(profilesSource, /setAttribute\('aria-valuenow'/);
+  assert.match(profilesSource, /event\.key === 'Home'/);
+  assert.match(profilesSource, /root\.addEventListener\('pointerup'/);
+  assert.match(profilesSource, /root\.addEventListener\('pointercancel'/);
+  assert.match(profilesSource, /setAttribute\('role', 'button'\)/);
+  assert.match(profilesSource, /setAttribute\('aria-pressed'/);
 });

@@ -72,7 +72,7 @@ import { resolveFfmpegPath } from '../../lib/ffmpeg_resolver.js';
 import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS, VIEW_TYPES,
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal, validateView,
-  parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
+  parseCaptureDevice, captureDeviceString, resolveCompanionBootSource, COMPANION_CONFIG_PATH,
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
   CURATED_OUTPUTS, missingCuratedOutputs,
 } from './companion_config.js';
@@ -1492,13 +1492,70 @@ function liveDerivedGroup(group, values) {
 const pendingDerivedEdits = new Map();
 const derivedWriteQueues = new Map();
 
+// ── Write-queue RETRY BOUNDS ────────────────────────────────────────────────
+// A PATCH can fail while the engine WS link stays UP: the engine is respawning
+// ffmpeg on a capture change, is mid audio re-init (503 audio_not_initialized),
+// or the 2 s HTTP timeout expired under load. None of those is a verdict on the
+// operator's value, and none of them produces a `close` on /ws/control — so
+// reconnect replay never fires and, before this, the edit sat parked forever
+// while the UI showed it as applied. The queue therefore retries the exact
+// latest snapshot itself.
+//
+// Exponential, capped, and finite — three separate bounds, all deliberate:
+//   MIN 250 ms   a blip (one dropped packet, one 503 during re-init) is fixed
+//                inside a quarter second; faster than this is a busy loop.
+//   MAX 4000 ms  the ceiling, so a long engine sulk costs one request every
+//                4 s, not a hot spin. Mirrors EngineConfigLink's own capped
+//                WS reconnect backoff (500 → 5000 ms).
+//   8 ATTEMPTS   250+500+1000+2000+4000×4 ≈ 23.75 s of cover — comfortably
+//                longer than an ffmpeg capture respawn. Past that the engine
+//                is not merely busy, and hammering it forever hides that. The
+//                snapshot is NOT dropped on exhaustion: it stays parked in
+//                `pendingDerivedEdits` (still locally authoritative, still
+//                replayed on the next reconnect) and the operator is told
+//                loudly that it is unsaved. No silent success, ever.
+const DERIVED_RETRY_MIN_MS = 250;
+const DERIVED_RETRY_MAX_MS = 4000;
+const DERIVED_RETRY_MAX_ATTEMPTS = 8;
+
+// The only two 4xx codes that mean "ask again later" rather than "never". Every
+// other 4xx is the engine's authoritative verdict on THIS value: a byte-for-byte
+// retry can only be refused again, so it reverts instead (codex P0 — the UI must
+// never keep showing a value the show will not run).
+const RETRYABLE_4XX = Object.freeze(new Set([408, 429]));
+
 function derivedWriteQueue(group) {
   let queue = derivedWriteQueues.get(group);
   if (!queue) {
-    queue = { pending: null, running: null };
+    queue = { pending: null, running: null, retryTimer: null, attempts: 0 };
     derivedWriteQueues.set(group, queue);
   }
   return queue;
+}
+
+/**
+ * Did the ENGINE ANSWER with a definitive refusal of this value?
+ *
+ * `EngineConfigLink.patch` attaches `error.status` only when the engine actually
+ * responded. No status ⇒ transport failure (socket destroyed, ECONNREFUSED,
+ * HTTP timeout) ⇒ the value was never judged ⇒ retry. 5xx ⇒ the engine faulted
+ * on its own side (a durable-state write failure is a 500) ⇒ retry, then revert
+ * if it never clears. 4xx ⇒ validation/persistence refusal ⇒ revert, never retry.
+ */
+function isDefinitiveDerivedRejection(error) {
+  const status = error && error.status;
+  if (!Number.isInteger(status)) return false;
+  if (status < 400 || status >= 500) return false;
+  return !RETRYABLE_4XX.has(status);
+}
+
+/** Drop a group's armed retry and reset its attempt budget. */
+function clearDerivedRetry(queue) {
+  if (queue.retryTimer) {
+    clearTimeout(queue.retryTimer);
+    queue.retryTimer = null;
+  }
+  queue.attempts = 0;
 }
 
 // Stub CPC for the all-or-nothing construction probe below. DerivedSignals'
@@ -1554,24 +1611,75 @@ function applyDerivedConfigPatch(group, patch) {
   return config;
 }
 
+/**
+ * Re-arm the LATEST snapshot for this group after a retryable failure.
+ *
+ * The snapshot is deliberately NOT written back into `queue.pending` here — the
+ * drain loop's `while (queue.pending)` would pick it straight back up and spin.
+ * It is handed to the timer instead, and the timer yields to any newer edit that
+ * arrived during the backoff window (newest edit always wins).
+ */
+function scheduleDerivedRetry(group, queue, attempted, error) {
+  if (queue.attempts >= DERIVED_RETRY_MAX_ATTEMPTS) {
+    // Budget spent. Stay parked (pendingDerivedEdits still holds it, so the
+    // group stays locally authoritative and the next reconnect replays it) and
+    // say so — an unsaved edit the operator thinks is saved is the failure mode
+    // this whole path exists to prevent.
+    broadcast({
+      type: 'engineLink',
+      connected: !!(engineLink && engineLink.connected),
+      error: `derived "${group}" still unsaved after ${DERIVED_RETRY_MAX_ATTEMPTS} attempts`
+        + ` (${error && error.message}) — applied locally, kept pending for reconnect`,
+    });
+    return;
+  }
+  const delay = Math.min(
+    DERIVED_RETRY_MAX_MS,
+    DERIVED_RETRY_MIN_MS * 2 ** queue.attempts,
+  );
+  queue.attempts++;
+  broadcast({
+    type: 'engineLink',
+    connected: !!(engineLink && engineLink.connected),
+    error: `derived "${group}" PATCH failed (${error && error.message}) —`
+      + ` retry ${queue.attempts}/${DERIVED_RETRY_MAX_ATTEMPTS} in ${delay} ms`,
+  });
+  if (queue.retryTimer) clearTimeout(queue.retryTimer);
+  queue.retryTimer = setTimeout(() => {
+    queue.retryTimer = null;
+    // A newer edit already claimed the slot — it supersedes this snapshot.
+    if (!queue.pending) queue.pending = attempted;
+    startDerivedGroupWrites(group);
+  }, delay);
+  // Timers must never hold the process open: a Companion whose engine is gone
+  // still has to exit on SIGTERM.
+  if (typeof queue.retryTimer.unref === 'function') queue.retryTimer.unref();
+}
+
 async function drainDerivedGroupWrites(group, queue) {
   while (queue.pending && engineLink && engineLink.connected) {
     const attempted = queue.pending;
     queue.pending = null;
     try {
       await engineLink.patch({ derivedSignals: { [group]: attempted } });
+      clearDerivedRetry(queue);   // the link works again — fresh budget
       if (pendingDerivedEdits.get(group) === attempted && queue.pending === null) {
         pendingDerivedEdits.delete(group);
       }
     } catch (error) {
-      if (pendingDerivedEdits.get(group) === attempted && queue.pending === null) {
-        await revertRejectedDerivedGroup(group, attempted, error);
-      } else {
+      if (pendingDerivedEdits.get(group) !== attempted || queue.pending !== null) {
+        // Superseded: a newer snapshot is already queued and will land after
+        // this iteration, so this failure is not the operator's final answer.
         broadcast({
           type: 'engineLink',
           connected: !!(engineLink && engineLink.connected),
           error: `superseded derived "${group}" PATCH failed: ${error && error.message}`,
         });
+      } else if (isDefinitiveDerivedRejection(error)) {
+        clearDerivedRetry(queue);
+        await revertRejectedDerivedGroup(group, attempted, error);
+      } else {
+        scheduleDerivedRetry(group, queue, attempted, error);
       }
     }
   }
@@ -1608,7 +1716,11 @@ function writeThroughDerivedGroup(group, config) {
   pendingDerivedEdits.set(group, fullGroup);
   // A queued value is a complete group snapshot, so a newer edit can safely
   // coalesce an older queued edit while the current request finishes.
-  derivedWriteQueue(group).pending = fullGroup;
+  const queue = derivedWriteQueue(group);
+  queue.pending = fullGroup;
+  // A fresh operator edit outranks any armed backoff: cancel the retry (its
+  // snapshot is stale now) and give this value the full attempt budget.
+  clearDerivedRetry(queue);
   if (!engineLink || !engineLink.connected) {
     broadcast({
       type: 'engineLink',
@@ -1618,6 +1730,49 @@ function writeThroughDerivedGroup(group, config) {
     return;
   }
   startDerivedGroupWrites(group);
+}
+
+/**
+ * Re-arm a REVERT (not the PATCH) after the engine's truth came back
+ * unreadable. The engine already gave a definitive verdict on the operator's
+ * value, so re-sending it is forbidden; what failed is only the read that tells
+ * us WHAT to snap back to. Same bounds as the write retry.
+ */
+function scheduleDerivedRevertRetry(group, attempted, error, reason, detail) {
+  const queue = derivedWriteQueue(group);
+  if (queue.attempts >= DERIVED_RETRY_MAX_ATTEMPTS) {
+    broadcast({
+      type: 'engineLink',
+      connected: !!(engineLink && engineLink.connected),
+      error: `${reason} (${detail}; unrevertable after ${DERIVED_RETRY_MAX_ATTEMPTS}`
+        + ` attempts — kept pending for reconnect)`,
+    });
+    return;
+  }
+  const delay = Math.min(
+    DERIVED_RETRY_MAX_MS,
+    DERIVED_RETRY_MIN_MS * 2 ** queue.attempts,
+  );
+  queue.attempts++;
+  broadcast({
+    type: 'engineLink',
+    connected: !!(engineLink && engineLink.connected),
+    error: `${reason} (${detail}; re-reading engine truth in ${delay} ms,`
+      + ` attempt ${queue.attempts}/${DERIVED_RETRY_MAX_ATTEMPTS})`,
+  });
+  if (queue.retryTimer) clearTimeout(queue.retryTimer);
+  queue.retryTimer = setTimeout(() => {
+    queue.retryTimer = null;
+    // A newer operator edit supersedes the revert entirely — it will be
+    // written through on its own and judged on its own.
+    if (pendingDerivedEdits.get(group) !== attempted) return;
+    revertRejectedDerivedGroup(group, attempted, error).catch((retryError) => broadcast({
+      type: 'engineLink',
+      connected: !!(engineLink && engineLink.connected),
+      error: `derived "${group}" revert retry failed: ${retryError && retryError.message}`,
+    }));
+  }, delay);
+  if (typeof queue.retryTimer.unref === 'function') queue.retryTimer.unref();
 }
 
 /**
@@ -1632,13 +1787,11 @@ async function revertRejectedDerivedGroup(group, attempted, error) {
   try {
     engineConfig = engineLink ? await engineLink.fetchConfig() : null;
   } catch (fetchError) {
-    // A transport failure is not an authoritative rejection. Keep the exact
-    // local snapshot pending so onStatus(reconnected) replays it.
-    broadcast({
-      type: 'engineLink',
-      connected: !!(engineLink && engineLink.connected),
-      error: `${reason} (engine truth unreadable: ${fetchError && fetchError.message}; kept pending for reconnect)`,
-    });
+    // The verdict stands; only the READ of the revert target failed. Keep the
+    // exact local snapshot pending and re-read on a bounded backoff, so a
+    // link that never drops still resolves the revert.
+    scheduleDerivedRevertRetry(group, attempted, error, reason,
+      `engine truth unreadable: ${fetchError && fetchError.message}`);
     return;
   }
   if (pendingDerivedEdits.get(group) !== attempted) return;   // superseded during fetch
@@ -1646,18 +1799,16 @@ async function revertRejectedDerivedGroup(group, attempted, error) {
     && engineConfig.derivedSignals[group];
   if (!engineValues) {
     // No readable authoritative group means there is no valid revert target.
-    // Keep it pending exactly like a transport failure.
-    broadcast({
-      type: 'engineLink',
-      connected: !!(engineLink && engineLink.connected),
-      error: `${reason} (engine returned no authoritative "${group}" config; kept pending for reconnect)`,
-    });
+    // Re-read exactly like an unreadable truth fetch.
+    scheduleDerivedRevertRetry(group, attempted, error, reason,
+      `engine returned no authoritative "${group}" config`);
     return;
   }
   const engineGroup = liveDerivedGroup(group, engineValues);
   const reverted = Object.keys(attempted)
     .filter((field) => JSON.stringify(engineGroup[field]) !== JSON.stringify(attempted[field]));
   pendingDerivedEdits.delete(group);
+  clearDerivedRetry(derivedWriteQueue(group));   // the verdict is settled
   reconcileDerivedConfig({ [group]: engineValues });
   broadcast({ type: 'derivedConfig', config: derived.getConfig() });
   broadcast({
@@ -1681,6 +1832,9 @@ async function replayPendingDerivedEdits() {
     if (!engineLink || !engineLink.connected) return;   // dropped again — stay pending
     const queue = derivedWriteQueue(group);
     queue.pending = values;
+    // A reconnect is fresh evidence that the engine is reachable: drop any
+    // armed backoff and give the replay the full attempt budget.
+    clearDerivedRetry(queue);
     const running = startDerivedGroupWrites(group);
     if (running) writes.push(running);
   }
@@ -2272,8 +2426,14 @@ function startCapture(device) {
   }
 }
 function setMode(next, opts = {}) {
+  if (!['mic', 'test', 'file'].includes(next)) {
+    throw new Error(`unsupported audio source mode: ${JSON.stringify(next)}`);
+  }
   if (next === 'mic' && MIC_DISABLED) {
     throw new Error('physical microphone disabled by --no-mic');
+  }
+  if (next === 'file' && !opts.file) {
+    throw new Error('file source requires a file path');
   }
   stopSource();
   pendingFrames = [];
@@ -2281,7 +2441,7 @@ function setMode(next, opts = {}) {
   scope.fill(0);
   diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;
   adiag.last = 0; adiag.prevLow = null; adiag.deltas.length = 0; adiag.steps.length = 0;
-  mode = (next === 'mic' || next === 'file') ? next : 'test';
+  mode = next;
   // Re-apply the mode-appropriate analyzer gain: unity for the synthetic 'test'
   // source (no mic preamp on a full-scale generator), the real mic preamp for
   // mic/file. Must run AFTER `mode` is set and analyzers are reset above.
@@ -2289,7 +2449,6 @@ function setMode(next, opts = {}) {
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device != null ? opts.device : configDevice);
   else if (mode === 'file') {
-    if (!opts.file) { broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: 'no file selected' } }); return; }
     currentFile = opts.file;
     browserSource = true;
     broadcast({ type: 'sourceStatus', mode, status: { enabled: true, browser: true, file: currentFile } });
@@ -2907,8 +3066,15 @@ function handleMessage(ws, raw) {
     // without waiting on the engine — analysis never blocks) AND writes through
     // to the engine as `capture.device` so the choice reflects in CaptainPad/
     // engine. test → 'test'; file → 'file:<path>'; mic → the device id.
-    if (m.device !== undefined) configDevice = m.device;   // remember the mic device
+    if (!['mic', 'test', 'file'].includes(m.mode)) {
+      throw new Error(`unsupported audio source mode: ${JSON.stringify(m.mode)}`);
+    }
+    if (m.mode === 'mic' && m.device !== undefined
+      && m.device !== null && typeof m.device !== 'string') {
+      throw new Error('microphone device must be a string or null');
+    }
     setMode(m.mode, { file: m.file, device: m.device });
+    if (m.mode === 'mic' && m.device !== undefined) configDevice = m.device;
     writeThroughCaptureDevice();
   }
   else if (m.type === 'addSignal') {
@@ -3233,8 +3399,6 @@ function applyEngineConfig() {
   // returns 503 and the runtime seed delivers nothing, so we'd otherwise boot
   // with no mic. (When engine audio IS live, the seed/echo reconciles on top.)
   const engineCaptureDevice = PRODUCTION_AUDIO_CONFIG.capture.device;
-  if (comp && comp.device !== undefined && comp.device !== null) configDevice = comp.device;
-  else if (engineCaptureDevice !== undefined) configDevice = engineCaptureDevice;
   // Resolve the engine API endpoint we live-sync the SHARED audio TUNING
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
@@ -3260,11 +3424,17 @@ function applyEngineConfig() {
     if (typeof sm.enabled === 'boolean') bpmSmoother.setEnabled(sm.enabled);
     if (Number.isFinite(sm.tauMs)) bpmSmoother.setTauMs(sm.tauMs);
   }
-  if (SOURCE_OVERRIDE !== null) return SOURCE_OVERRIDE;
   if (!comp || !['mic', 'test', 'file'].includes(comp.source)) {
     throw new Error('config.yaml companion.source must be one of: mic, test, file');
   }
-  return comp.source;
+  const target = resolveCompanionBootSource({
+    sourceOverride: SOURCE_OVERRIDE,
+    companionSource: comp.source,
+    companionDevice: comp.device,
+    captureDevice: engineCaptureDevice,
+  });
+  configDevice = target.mode === 'mic' ? target.device : null;
+  return target;
 }
 
 /**
@@ -3325,10 +3495,8 @@ const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? p
 // passes exactly that, so the show rig's behaviour is unchanged.
 const HOST = HOST_OVERRIDE || '127.0.0.1';
 resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch(() => { ffmpegPath = 'ffmpeg'; }).finally(() => {
-  const bootMode = applyEngineConfig();
-  // Mic boot can fail with no device (e.g. headless); test is always safe and
-  // the operator can switch sources live. Honor config but never crash boot.
-  setMode(bootMode === 'mic' ? 'mic' : 'test', { device: configDevice });
+  const bootTarget = applyEngineConfig();
+  setMode(bootTarget.mode, { device: bootTarget.device, file: bootTarget.file });
   // Bring up the engine SHARED-tuning link AFTER the analyzer exists (the
   // onConfig callback drives applyInputGain/applySmooth on it). Reconnects
   // in the background; analysis never blocks on it.

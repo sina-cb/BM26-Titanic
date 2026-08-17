@@ -36,8 +36,8 @@ boot/persistence integrity, and two UI regressions, not test failures.
   *Fix (verified live):* `flex: 0 0 auto`.
 - **Live NOTE letter illegible** — `companion_app.js:1135` `hsl(h,100%,50%)` on text → 1.62:1
   contrast. *Fix:* full-sat for the swatch only.
-- **Companion default-binds 0.0.0.0** (`companion_server.js:2336`) while the new layer adds an
-  unauthenticated live-mutation surface. *Fix:* default `127.0.0.1`, explicit `--host 0.0.0.0`.
+- **Companion default-binds all interfaces** (`companion_server.js:2336`) while the new layer adds an
+  unauthenticated live-mutation surface. *Fix:* default loopback, all-interfaces only by explicit flag.
 - **Steady-accuracy metric hides ~half the error** — 550 ms scoring exclusion per 968 ms chord;
   full-chord accuracy ≈ 52% (62% noise-free), reported as 93.7%. Publish/assert full-chord too.
 - **Latency claim ~2× off** — config.yaml says ~0.29 s; measured 371 ms ideal (≤2-semitone
@@ -106,5 +106,5 @@ the companion-writes-state discrepancy noted above.
 Screenshots: `~/tmp/derived_review/` (UI reviewer, retained). Reproduction commands and full
 per-scope reports live in the four agent transcripts of session 2026-08-12; key commands:
 the noisy/synthetic suites, 4-batch full suite (750/750), validation probes, and the isolated
-Companion boot (`--model test_bench --port 31766 --host 127.0.0.1 --no-mic --source test
+Companion boot (`--model test_bench --port 31766 --host loopback --no-mic --source test
 --osc-port 31701 --engine-port 31668`, killed + ports verified free afterwards).

@@ -167,9 +167,26 @@
      reported as one instead of silently stalling the show. */
   var REQ_TIMEOUT_MS = 6000;
 
-  function requestJson(method, path, body, ownerTagged) {
+  /* The passcode gate is a HARD DEPENDENCY, exactly like the lifecycle
+     controller. A missing module must never degrade into "takeovers just fail"
+     — it is reported where it matters (the refusal classifier below and the
+     ARM entry point) and the takeover is refused. */
+  function passcodeModule() {
+    if (!window.TouchControlPasscode) {
+      throw new Error('touch_control_passcode.js did not load; Live Touch cannot answer a '
+        + 'performance-mode takeover challenge');
+    }
+    return window.TouchControlPasscode;
+  }
+
+  function requestJson(method, path, body, ownerTagged, passcode) {
     var opts = { method: method, headers: {} };
     if (ownerTagged) opts.headers['X-Touch-Control-Owner'] = OWNER;
+    /* PERFORMANCE-MODE TAKEOVER PASSCODE (operator ruling 2026-08-14).
+       The value arrives as an argument, is written straight into THIS
+       request's headers, and is never assigned to anything that outlives this
+       call — no storage, no module state, no URL, no postMessage. */
+    if (passcode) opts.headers[passcodeModule().HEADER] = passcode;
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -182,7 +199,13 @@
     return fetch(ENGINE + path, opts).then(function (r) {
       if (!r.ok) {
         return r.text().then(function (t) {
-          throw new Error(method + ' ' + path + ' → ' + r.status + ' ' + t.slice(0, 120));
+          var error = new Error(method + ' ' + path + ' → ' + r.status + ' ' + t.slice(0, 120));
+          /* Tag takeover refusals so the ARM gate can tell "type the passcode"
+             apart from "the takeover itself failed". Everything else keeps its
+             existing shape and its existing error channel. */
+          var refusal = passcodeModule().refusalFromResponse(r.status, t);
+          if (refusal) error.takeoverRefusal = refusal;
+          throw error;
         });
       }
       return r.status === 204 ? null : r.json().catch(function () { return null; });
@@ -213,11 +236,91 @@
     return requestJson(method, path, body, false);
   }
 
+  /* ── PERFORMANCE-MODE TAKEOVER PASSCODE ──────────────────────────────────
+     Operator ruling 2026-08-14: taking the rig FROM a running plan while a
+     show is live costs one of the three named operator passcodes, EVERY TIME.
+     The engine refuses such a request with 401/429 + TAKEOVER_AUTH_*; this is
+     the surface's answer to that refusal.
+
+     WHAT IS GATED HERE, AND WHY ONLY THAT.
+     The engine's gate covers exactly two things this page can reach:
+       1. POST /layers/activate with target 'live_touch' while the plan holds
+          the deck pin — i.e. THE ARM BUTTON. That is an explicit operator
+          takeover gesture, so it prompts and retries. It is the only request
+          this file routes through the gate.
+       2. The IMPLICIT re-takeover the engine performs when an owner-tagged
+          mutation arrives after the plan has already taken the rig back. That
+          is a background performance write (a fader, a wheel), not a takeover
+          gesture, and the engine itself answers it by telling the caller to
+          make an explicit gesture. Opening a modal in the middle of a drag
+          would be worse than useless, so those refusals are REPORTED (loudly,
+          on the error toast, with the engine's own words) and the operator
+          presses ARM — which lands on path 1.
+     The reverse direction — handback to Deck/Mixer, pagehide, idle route sync
+     — is never gated by the engine and never carries a passcode.
+
+     NO STORAGE, EVER. The typed value exists as one function argument and as
+     one <input> that is wiped the moment it is read. Nothing on this page
+     keeps it between attempts, so two ARMs ask twice. */
+  var passcodePrompt = null;
+
+  function takeoverPrompt() {
+    if (!passcodePrompt) passcodePrompt = passcodeModule().createPrompt(document);
+    return passcodePrompt;
+  }
+
+  /* Tear the prompt down from OUTSIDE the gate — page lifecycle cancellation, a
+     timeline force-disarm, any path that ends the ARM the prompt belonged to.
+     close() wipes the input and resolves the pending ask() as a cancel, so the
+     gate rejects instead of hanging on an operator who is no longer there. */
+  function closeTakeoverPrompt() {
+    if (!passcodePrompt) return;
+    passcodePrompt.close();
+  }
+
+  /**
+   * Perform one takeover-gated owner-tagged request.
+   *
+   * The first attempt carries no passcode (performance mode off → identical to
+   * before the ruling). If the engine refuses it, the prompt opens and each
+   * submission drives EXACTLY ONE retry carrying the header.
+   */
+  function takeoverGatedReq(method, path, body, what) {
+    var gate = passcodeModule();
+    var prompt;
+    try {
+      prompt = takeoverPrompt();
+    } catch (error) {
+      /* Loud: a gate that cannot ask must not let the takeover past. */
+      return Promise.reject(new Error('performance mode may require an operator passcode for '
+        + what + ', but the prompt cannot be rendered: ' + error.message));
+    }
+    return gate.runGatedRequest(function (passcode) {
+      return passcode === null
+        ? req(method, path, body)
+        : requestJson(method, path, body, true, passcode);
+    }, prompt, what);
+  }
+
+  /* The engine ALSO refuses an implicit re-takeover: an owner-tagged write that
+     arrives after the plan has already taken the rig back. That is a
+     performance write — a fader mid-drag — not a takeover gesture, and a modal
+     opened by a fader movement would be worse than the error. Report it in the
+     operator's own terms and point at the gesture that CAN answer the
+     challenge, which is ARM. Nothing is retried and nothing degrades. */
+  function describeTakeoverRefusal(error) {
+    if (!error || !error.takeoverRefusal) return error;
+    var directed = new Error('the timeline holds the rig and performance mode is live — press '
+      + 'ARM to take over with an operator passcode (' + error.takeoverRefusal.reason + ')');
+    directed.takeoverRefusal = error.takeoverRefusal;
+    return directed;
+  }
+
   /* Writes are REFUSED while disarmed — that is the safety, not a courtesy. */
   function write(method, path, body) {
     if (state.phase !== 'armed') return Promise.resolve(null);
     return req(method, path, body).then(function (v) { clearError(); return v; })
-      .catch(function (e) { fail('write', e); return null; });
+      .catch(function (e) { fail('write', describeTakeoverRefusal(e)); return null; });
   }
 
   /* ARM assertions are a different contract from live, coalesced writes. A
@@ -502,13 +605,21 @@
   }
 
   function activateLayerSetting(target, reason, ownerRequired) {
-    var transport = ownerRequired ? req : unownedReq;
-    return transport('POST', '/layers/activate', {
+    var body = {
       target: target,
       durationMs: LAYER_TRANSITION_MS,
       reason: reason,
       ownerId: ownerRequired ? OWNER : undefined,
-    }).then(requireLayerState);
+    };
+    /* THE ONE GATED DIRECTION. Only an owner-tagged activation of live_touch
+       can be refused for a missing operator passcode; a handback to Deck or
+       Mixer is always free. See the takeover-passcode block above. */
+    if (target === 'live_touch' && ownerRequired) {
+      return takeoverGatedReq('POST', '/layers/activate', body, 'ARM (Live Touch takeover)')
+        .then(requireLayerState);
+    }
+    var transport = ownerRequired ? req : unownedReq;
+    return transport('POST', '/layers/activate', body).then(requireLayerState);
   }
 
   function waitForLayerSetting(target, timeoutMs) {
@@ -532,34 +643,44 @@
   }
 
   function stageSelectedLivePattern() {
-    var selected = patSel && PATTERN_FILES && PATTERN_FILES[patSel.value];
-    if (!selected) throw new Error('Live Touch has no valid selected pattern');
-    return req('PUT', '/layers/live_touch/pattern', { pattern: selected }).then(function (response) {
+    var staged = selectedPatternStagePayload();
+    if (!staged) throw new Error('Live Touch has no valid selected pattern');
+    return req('PUT', '/layers/live_touch/pattern', staged.body).then(function (response) {
       if (!response || !Number.isInteger(response.sessionRevision)) {
         throw new Error('Live Touch pattern stage returned no session revision');
       }
       state.sessionRevision = response.sessionRevision;
-      state.channelPattern = selected;
+      state.channelPattern = staged.pattern;
+      /* Parameters are never rendered for a background pattern (docs/70
+         §3.2): the panel learns local controls ONLY from
+         GET /layers/live_touch/exports, so ARM simply never makes that call
+         for a background — hiding is free and total. A background swap
+         mid-ARM is a hard cut; no live-channel transition exists for it,
+         same as for an instrument. */
+      if (staged.isBackground) return null;
       return refreshLiveExports();
     });
   }
 
-  function parentOrigin() {
-    var raw = new URL(location.href).searchParams.get('captainpad_origin');
-    if (!raw) throw new Error('Live Touch is embedded without captainpad_origin');
-    var parsed = new URL(raw);
-    if (parsed.origin !== raw) throw new Error('captainpad_origin contains a path');
-    return parsed.origin;
-  }
-
+  /* The handoff ack goes through the ONE embed transport built by
+     `touch_control_theme.js` (report _252). In iframe mode that is the same
+     origin-checked post to the parent frame this used to do inline; in a
+     CaptainPad WebView it is the React Native bridge instead. Doing it here by
+     hand would mean the Deck/Mixer blend handshake worked on exactly one of the
+     two platforms. */
   function acknowledgeSurfaceRelease(requestId, target) {
     if (!requestId) return;
-    window.parent.postMessage({
+    var embed = window.CaptainPadEmbed;
+    if (!embed || !embed.embedded) {
+      throw new Error('Live Touch cannot acknowledge a surface release: '
+        + 'the CaptainPad embed transport is unavailable');
+    }
+    embed.post({
       type: 'touch-control-surface-released',
       version: 1,
       requestId: requestId,
       target: target,
-    }, parentOrigin());
+    });
   }
 
   function verifyArmReadiness() {
@@ -903,6 +1024,12 @@
     if (!window.TouchControlLifecycle) {
       return Promise.reject(new Error('Live Touch lifecycle controller did not load'));
     }
+    /* Refuse the gesture BEFORE it acquires a lease if the surface could not
+       answer a performance-mode passcode challenge. Fail closed, out loud. */
+    if (!window.TouchControlPasscode) {
+      return Promise.reject(new Error('Live Touch operator-passcode prompt did not load; '
+        + 'ARM is refused because a performance-mode takeover could not be authorised'));
+    }
     return window.TouchControlLifecycle.arm({
       isCancelled: function () { return pageSessionInvalidated; },
       verify: verifyArmReadiness,
@@ -1076,6 +1203,9 @@
          as its current step settles, then abortArm performs landed cleanup and
          authoritative lease release. */
       pageSessionInvalidated = true;
+      /* If the cancelled step IS the passcode prompt, nothing will ever answer
+         it. Close it so the ARM chain settles instead of waiting forever. */
+      closeTakeoverPrompt();
       setArmUiPhase('disarming');
       return;
     }
@@ -1091,20 +1221,119 @@
        Let that serialized chain finish instead of starting a parallel one. */
   });
 
-  /* ── PATTERN ────────────────────────────────────────────────────────── */
+  /* ── PATTERN / BACKGROUND (docs/70 §3) ─────────────────────────────────
+     The picker is two sections: BACKGROUNDS (the `ambient` playlist's
+     blessed entries, D4: ambient.yaml only) and INSTRUMENTS (128-130,
+     unchanged, D6). `selectedPatternStagePayload()` below is the single
+     place that decides which form a PUT takes, shared by this change
+     handler and the ARM stage step (`stageSelectedLivePattern` above) so
+     the two can never drift apart. */
   var PATTERN_FILES = {
     '130': '130_spatial_paint',
     '128': '128_five_colour_prism',
     '129': '129_five_colour_stations',
   };
+
+  /* The one playlist this picker is allowed to read (D4). Naming stays
+     "BACKGROUND"/"background pattern" everywhere in this file — "ambient"
+     only ever appears as this one literal, matching the actual playlist
+     file on disk; the timeline's cue kind `ambient` is a homonym this
+     surface must not echo (docs/70 §3.2 last bullet). */
+  var BACKGROUND_PLAYLIST_NAME = 'ambient';
+
+  /* Capability tier for EVERY background pattern entry, not a per-entry
+     trait: none of the ambient patterns export sliderHue3/4/5 (five-colour
+     degrades to colorPalette1/2) or targetX/targetY (SPATIAL painting still
+     reaches them through the coordinate-blind /spatial-paint global-effect
+     path, not the pattern's own exports). One constant covers all 34. */
+  var BACKGROUND_PATTERN_CAPS = 'palette (2 colours) · SPATIAL via global paint · no local params';
+
+  /* FALLBACK RULE (docs/70 W2 correction — verified against all 34 entries
+     in ambient.yaml): docs/70 §3.2 says list entries "by label", but every
+     entry in the blessed ambient playlist ships with label: null, so there
+     is no label to list. When an entry has no label, humanize its pattern
+     slug instead: strip the leading numeric ordering prefix and the
+     underscores, then title-case each remaining word — e.g.
+     "00_golden_hour_wash" -> "Golden Hour Wash". This only ever fills a gap;
+     an entry that DOES carry a real label keeps it verbatim (see
+     backgroundEntryLabel below). */
+  function humanizeBackgroundPatternName(patternSlug) {
+    var body = String(patternSlug || '').replace(/^\d+_/, '');
+    var words = body.split('_').filter(Boolean).map(function (word) {
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    });
+    return words.length ? words.join(' ') : String(patternSlug || '');
+  }
+
+  function backgroundEntryLabel(entry) {
+    if (entry && typeof entry.label === 'string' && entry.label) return entry.label;
+    return humanizeBackgroundPatternName(entry && entry.pattern);
+  }
+
+  /* Fills the BACKGROUNDS optgroup from the ambient playlist at boot. This
+     is the entry-resolution read the isolation rule carves out alongside
+     the /layers/live_touch/* writes — GET only, never a second write
+     surface. A failed fetch or an empty playlist fails loudly on the error
+     pill; it never leaves a silently-shortened list standing in for the
+     real one (codex P0, no fallback behaviours). */
+  function populateBackgroundPatternGroup() {
+    var group = document.getElementById('patternBackgroundGroup');
+    if (!group) return Promise.resolve();
+    return req('GET', '/playlists/' + BACKGROUND_PLAYLIST_NAME).then(function (playlist) {
+      var entries = (playlist && Array.isArray(playlist.entries)) ? playlist.entries : [];
+      if (!entries.length) {
+        throw new Error('the "' + BACKGROUND_PLAYLIST_NAME + '" playlist has no background patterns');
+      }
+      entries.forEach(function (entry) {
+        if (!entry || typeof entry.id !== 'string' || typeof entry.pattern !== 'string') return;
+        var option = document.createElement('option');
+        option.value = entry.id;
+        option.textContent = backgroundEntryLabel(entry);
+        option.dataset.pattern = entry.pattern;
+        option.dataset.playlist = BACKGROUND_PLAYLIST_NAME;
+        option.dataset.entryId = entry.id;
+        option.dataset.caps = BACKGROUND_PATTERN_CAPS;
+        group.appendChild(option);
+      });
+    }).catch(function (error) {
+      fail('pattern', new Error('background patterns did not load: ' + error.message));
+    });
+  }
+
   var patSel = document.getElementById('patternSel');
+  populateBackgroundPatternGroup();
+
+  /* A BACKGROUND option carries dataset.entryId (stamped by
+     populateBackgroundPatternGroup above); an INSTRUMENT option does not,
+     and keeps the bare {pattern} form exactly as before this wave
+     (regression guard, docs/70 §3.2 D6). */
+  function selectedPatternStagePayload() {
+    var opt = patSel && patSel.options[patSel.selectedIndex];
+    if (!opt) return null;
+    if (opt.dataset.entryId) {
+      return {
+        pattern: opt.dataset.pattern,
+        isBackground: true,
+        body: { pattern: opt.dataset.pattern, playlist: opt.dataset.playlist, entryId: opt.dataset.entryId },
+      };
+    }
+    var name = PATTERN_FILES[patSel.value];
+    if (!name) return null;
+    return { pattern: name, isBackground: false, body: { pattern: name } };
+  }
+
   if (patSel) {
     patSel.addEventListener('change', function () {
-      var name = PATTERN_FILES[patSel.value];
-      if (!name) return fail('pattern', 'no file mapped for ' + patSel.value);
-      write('PUT', '/layers/live_touch/pattern', { pattern: name }).then(function (result) {
+      var staged = selectedPatternStagePayload();
+      if (!staged) return fail('pattern', 'no file mapped for ' + patSel.value);
+      write('PUT', '/layers/live_touch/pattern', staged.body).then(function (result) {
         if (result === null) return null; /* disarmed or already reported */
-        state.channelPattern = name;
+        state.channelPattern = staged.pattern;
+        /* Parameters are never rendered for a background pattern (docs/70
+           §3.2): the panel learns local controls ONLY from
+           GET /layers/live_touch/exports, so a background selection simply
+           never makes that call — hiding is free and total. */
+        if (staged.isBackground) return null;
         /* Export IDs belong to one WASM instance. Reusing the previous map
            after a live pattern swap can drive an unrelated setter by number. */
         return refreshLiveExports().then(function () {
@@ -1360,10 +1589,16 @@
   var modeToggle = document.getElementById('modeToggle');
   var wirePadRect = null;
 
+  /* Mode identity is the `data-mode` ATTRIBUTE, never the button ordinal.
+     docs/70 W1 reordered the toggle so SPATIAL ships first and lit; the old
+     `btns[1]` read meant "the second button", which silently inverted every
+     mode-gated behaviour the moment the order changed. The attribute survives
+     any future reorder. Fail-open to spatial when the toggle is absent, as
+     before. */
   function spatialMode() {
     if (!modeToggle) return true;
-    var btns = modeToggle.querySelectorAll('button');
-    return !!(btns[1] && btns[1].classList.contains('is-active'));
+    var spatialBtn = modeToggle.querySelector('button[data-mode="spatial"]');
+    return !!(spatialBtn && spatialBtn.classList.contains('is-active'));
   }
 
   /* ── WHAT DRAWING DOES ──────────────────────────────────────────────────
@@ -3606,9 +3841,18 @@
       var el = document.createElement('div');
       el.className = 'sig-row';
       el.style.setProperty('--sc', b.c);
-      el.innerHTML = '<span class="sig-name">' + b.key + '</span>'
+      /* DECLUTTER (docs/65 §4.1): the "<type> · out" line no longer renders -
+         the trace shape and the accent colour already say it - but the same
+         text stays discoverable as the card's title tooltip. */
+      /* The card shows the OPERATOR name (`lab`: "LOW", "DOM1 FREQ"), not the
+         engine key. docs/70 F7/D13: the premium top strip was printing raw
+         analysis identifiers — `micDomFreq1` — which mean nothing mid-show on
+         a dark playa. `lab` has been carried in METER_BARS all along and was
+         dead code; this is the honesty fix, not a new vocabulary. The engine
+         key stays reachable in the tooltip for anyone debugging. */
+      el.title = b.key + ' — ' + b.type + ' · out';
+      el.innerHTML = '<span class="sig-name">' + b.lab + '</span>'
         + '<span class="sig-val">--</span>'
-        + '<span class="sig-sub">' + b.type + ' · out</span>'
         + '<span class="sig-mini"><canvas width="110" height="34"></canvas></span>';
       host.appendChild(el);
       trBuf[b.key] = new Float32Array(TRAIL);
@@ -3658,7 +3902,11 @@
     meterRaf = requestAnimationFrame(function () {
       meterRaf = 0;
       var p = meterPending; meterPending = null;
-      if (p) drawMeterTraces(p);
+      /* HIDDEN (docs/65 §4.2): while docked the strip is display:none, so
+         its nine canvases are invisible - skip the redraw entirely rather
+         than paint a layer nobody can see. Semantics above (BPM/note/liveness
+         events) still run every message regardless of dock state. */
+      if (p && !(strip && strip.classList.contains('is-docked'))) drawMeterTraces(p);
     });
   }
 
@@ -3686,8 +3934,15 @@
       /* The buffer holds the NORMALISED trace; the readout shows the RAW value,
          the way the Companion prints 49 or 322 Hz rather than a fraction. */
       trBuf[b.key][(trHead + TRAIL - 1) % TRAIL] = v;
+      /* Units, not bare numbers (docs/70 F7/D13 — presentation only, the
+         maths above is untouched). A frequency card printing "5733" reads as
+         a build number; "5733 Hz" reads as a measurement. Intensity cards are
+         genuinely unitless 0-1 normals, so they keep the bare 2-decimal form
+         rather than gaining a fake unit. */
       var txt = has
-        ? (METER_LOG[b.key] ? String(Math.round(raw)) : raw.toFixed(2))
+        ? (METER_LOG[b.key]
+            ? String(Math.round(raw)) + (b.type === 'frequency' ? ' Hz' : '')
+            : raw.toFixed(2))
         : '--';
       if (e.lastTxt !== txt) { e.lastTxt = txt; e.val.textContent = txt; }
       var c = e.ctx.canvas;
@@ -3762,6 +4017,9 @@
      button that says ARMED while the wire refuses every write — the worst of
      both. Mirrors exactly what touch_control.html's handler does. */
   function forceDisarmedUi() {
+    /* An open passcode prompt belongs to an ARM that no longer exists. Close it
+       and wipe the box: it resolves as a cancel, so no request is retried. */
+    closeTakeoverPrompt();
     armChainTarget = false;
     armAckPending = false;
     disarmAckPending = false;
@@ -3803,18 +4061,17 @@
     controlWs = ws;
     ws.addEventListener('open', function () {
       sendControl({ type: 'touchControlHello', ownerId: OWNER });
-      /* Reconnect only renews a lease the canonical Layers state still proves.
-         It never re-activates Live Touch automatically. */
+      /* Reconnect renews a lease the engine still proves this panel owns. The
+         Timeline may have yielded an otherwise-armed Live session to Deck;
+         rebinding the socket must preserve that session without putting Live
+         back on air until the operator makes a real mutation. */
       if (state.armed) {
         req('GET', '/layers/state').then(requireLayerState).then(function (layerState) {
-          var liveParticipates = layerState.active === 'live_touch'
-            || (layerState.transition && (layerState.transition.from === 'live_touch'
-              || layerState.transition.to === 'live_touch'));
           var held = layerState.liveTouch && layerState.liveTouch.armed
             && layerState.liveTouch.ownerId === OWNER;
-          if (!held || !liveParticipates) {
+          if (!held) {
             forceDisarmedUi();
-            fail('arm', 'the engine no longer reports this panel as the active Live Touch owner; re-arm');
+            fail('arm', 'the engine no longer reports this panel as the Live Touch owner; re-arm');
             return;
           }
           sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
@@ -3885,6 +4142,28 @@
           fail('arm', 'the engine REVERTED to the automatic show' +
             (m.why ? ' — ' + m.why : '') + '. This panel is disarmed; re-arm to take control.');
         }
+      } else if (m.type === 'liveTouchForceDisarm') {
+        /* TIMELINE PRIORITY (operator ruling 2026-08-14). The show plan took
+           the rig back — RESUME was pressed, or the timeline's operator lease
+           expired — and the engine force-disarmed this desk to do it. The
+           timeline outranks an ARM, so there is nothing to negotiate: drop out
+           of armed mode deliberately and say why, rather than letting the
+           operator discover it through a 409 on the next control write.
+
+           NEVER AUTO-RE-ARM. forceDisarmedUi() clears state.armed, which is
+           exactly what the reconnect handler checks before re-asserting an ARM
+           — so a force-disarmed panel stays disarmed until a human presses ARM
+           again. That is the point of the ruling: the plan is running now. */
+        if (m.ownerId && m.ownerId !== OWNER) return;
+        if (state.phase !== 'idle') {
+          armLeaseRequested = false;
+          armLeaseAcquired = false;
+          disarmAckPending = false;
+          forceDisarmedUi();
+          fail('arm', 'TIMELINE RESUMED — the show plan took the rig back' +
+            (m.why ? ' (' + m.why + ')' : '') +
+            '. This panel is disarmed; press ARM to take control again.');
+        }
       } else if (m.type === 'touchControlArmedRejected') {
         /* ONE DESK AT A TIME. Another panel already holds the rig, so this one
            must not proceed to take it — two surfaces fighting over one owner
@@ -3897,6 +4176,23 @@
         forceDisarmedUi();
         fail('arm', 'REFUSED — ' + (m.reason || 'another panel holds the desk') +
           (m.heldBy ? ' (held by ' + m.heldBy + ')' : ''));
+      } else if (m.type === 'liveTouchPresets') {
+        /* docs/70 W4 (item 3, presets playlist): pure passthrough. The
+           engine's live_touch_presets store is opaque and server-
+           authoritative — this file does not interpret it, it just hands
+           the broadcast (replay-on-connect, plus every create/rename/
+           reorder/delete) to the page over the ONE /ws/control socket this
+           file already owns, rather than the page opening a second one. */
+        document.dispatchEvent(new CustomEvent('liveTouchPresets', { detail: m }));
+      } else if (m.type === 'colorAutopilot') {
+        /* docs/70 W3 (item 2b, deck colour daemon as the main Live colour
+           surface): pure passthrough, same idiom as liveTouchPresets above —
+           this is the ONE /ws/control socket the file already owns, replayed
+           on connect by the engine (api_server.js wssControl 'connection'
+           handler) so a late-joining panel sees the current config
+           immediately, not just future changes. The page's COLOR HUB panel
+           owns everything about interpreting this payload. */
+        document.dispatchEvent(new CustomEvent('colorautopilot', { detail: m }));
       }
     });
     ws.addEventListener('close', function () {
@@ -3906,6 +4202,30 @@
     ws.addEventListener('error', function () { /* close handles the retry */ });
   }
   openControlSocket();
+
+  /* ── COLOR HUB write path (docs/70 W3) ───────────────────────────────────
+     /deck/color-autopilot is a public, unauthenticated Deck-level route
+     (docs/61 §4.1: "Unauthenticated, unscoped: Live Touch may legally drive
+     it today"), not a live_touch LAYER write — so it goes through
+     unownedReq(), same as every other public Deck/Mixer operation this file
+     can reach: no X-Touch-Control-Owner header, and never queued into the
+     ARM prepare-batch (req()'s special-case for mid-takeover sequencing does
+     not apply to a route this file does not own the lease on). Nothing here
+     writes until the page decides to — this file only relays. Every failure
+     is surfaced (never silent, codex P0 rule 1 at the top of this file):
+     both to the existing status pill via fail(), and back to the page so
+     the COLOR HUB's own message line can show what specifically failed. */
+  document.addEventListener('colorautopilotwrite', function (event) {
+    var detail = event.detail || {};
+    unownedReq(detail.method, detail.path || '/deck/color-autopilot', detail.body).then(function (out) {
+      document.dispatchEvent(new CustomEvent('colorautopilotwriteok', { detail: { label: detail.label, state: out } }));
+    }).catch(function (error) {
+      fail('color', error);
+      document.dispatchEvent(new CustomEvent('colorautopilotwritefail', {
+        detail: { label: detail.label, message: error && error.message ? error.message : String(error) },
+      }));
+    });
+  });
 
   /* THE EFFECT CATALOG COMES FROM THE ENGINE, NOT FROM A LIST PASTED IN THE PAGE.
      FX_OPTS was a hardcoded 32-entry literal covering 9 of the engine's 17

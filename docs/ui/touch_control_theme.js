@@ -3,6 +3,18 @@
 
   var BRIDGE_VERSION = 1;
   var PARENT_ORIGIN_PARAM = 'captainpad_origin';
+  /* CaptainPad has THREE embed modes now (report _252, docs/60 §4.3):
+       standalone — opened directly in a browser; no host, dark theme, no bridge.
+       iframe     — the CaptainPad WEB build; host is `window.parent`, messages
+                    are origin-checked in both directions.
+       native     — the CaptainPad iPad build; host is a react-native-webview,
+                    declared by this query param because `window.parent === window`
+                    inside a WebView and iframe detection cannot see it.
+     Everything downstream of the transport below is identical in the two
+     embedded modes: the same versioned schema, the same validate/apply/ack
+     pipeline, the same failure messages. */
+  var EMBED_PARAM = 'captainpad_embed';
+  var NATIVE_EMBED = 'native';
   var THEME_IDS = {
     light: true, dark: true, midnight: true, sunset: true,
     gruvbox: true, system: true,
@@ -36,6 +48,11 @@
 
   function fail(message) {
     var fullMessage = 'CAPTAINPAD THEME LINK: ' + message;
+    // Release the first-paint gate stamped in the document head. A failed theme
+    // handshake must surface as a visible error on a visible panel, never as a
+    // blank rectangle. The palette is NOT substituted — the panel simply shows
+    // itself unthemed alongside the error.
+    document.documentElement.classList.remove('theme-pending');
     console.error('[touch-control-theme]', fullMessage);
     document.dispatchEvent(new CustomEvent('panelerror', {
       detail: { message: fullMessage },
@@ -52,6 +69,57 @@
     var parsed = new URL(raw);
     if (parsed.origin !== raw) throw new Error('declared parent origin must not include a path');
     return parsed.origin;
+  }
+
+  /** Which host is on the other end of this page. Throws (→ `fail`) on a param
+   *  value nobody ships, rather than quietly deciding it is standalone. */
+  function embedMode() {
+    var raw = new URL(window.location.href).searchParams.get(EMBED_PARAM);
+    if (raw === NATIVE_EMBED) return 'native';
+    if (raw) throw new Error('unknown ' + EMBED_PARAM + ' value ' + raw);
+    return window.parent !== window ? 'iframe' : 'standalone';
+  }
+
+  /**
+   * Build the one object every page→host message goes through.
+   *
+   * iframe mode is the ORIGINAL code path, moved verbatim: same
+   * `window.parent.postMessage(message, parentOrigin)` with the same declared
+   * origin, so nothing about the web embed changes by construction.
+   *
+   * native mode hands the JSON to `window.ReactNativeWebView.postMessage`. That
+   * channel is host-authenticated by construction — only the app can inject JS
+   * into this WebView, and only this page's own JS can post out of it — so
+   * there is no origin to check and, deliberately, NO `window` 'message'
+   * listener is installed in native mode. One fewer listening surface.
+   */
+  function buildTransport(mode) {
+    if (mode === 'native') {
+      var rn = window.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') {
+        /* The URL says native but nothing native is here: the panel was opened
+           in Safari with the param, or the WebView bridge is broken. Loud, and
+           never a silent slide back to standalone. */
+        throw new Error(
+          'UNAVAILABLE - ' + EMBED_PARAM + '=' + NATIVE_EMBED + ' but this page is not '
+          + 'inside a CaptainPad WebView'
+        );
+      }
+      return {
+        mode: 'native',
+        embedded: true,
+        parentOrigin: null,
+        post: function (message) { rn.postMessage(JSON.stringify(message)); },
+      };
+    }
+
+    var origin = declaredParentOrigin();
+    return {
+      mode: 'iframe',
+      embedded: true,
+      parentOrigin: origin,
+      post: function (message) { window.parent.postMessage(message, origin); },
+    };
   }
 
   function supportsColor(value) {
@@ -140,18 +208,41 @@
     document.head.appendChild(style);
   }
 
-  if (window.parent === window) {
-    document.documentElement.classList.add('standalone-dark');
-    return;
-  }
-
-  var parentOrigin;
+  var mode;
+  var transport;
   try {
-    parentOrigin = declaredParentOrigin();
+    mode = embedMode();
   } catch (error) {
     fail(error.message);
     return;
   }
+
+  if (mode === 'standalone') {
+    document.documentElement.classList.add('standalone-dark');
+    window.CaptainPadEmbed = {
+      mode: 'standalone',
+      embedded: false,
+      parentOrigin: null,
+      post: function () {
+        throw new Error('Live Touch is standalone: there is no CaptainPad host to post to');
+      },
+    };
+    return;
+  }
+
+  try {
+    transport = buildTransport(mode);
+  } catch (error) {
+    fail(error.message);
+    return;
+  }
+
+  /* Published for the other two page-side touchpoints — `touch_control_wire.js`
+     (the surface-release ack) and the spatial fullscreen requester in
+     `touch_control.html`. Every page→host message in this panel goes through
+     this ONE object; a raw postMessage anywhere else would be a fourth embed
+     mode nobody tests. */
+  window.CaptainPadEmbed = transport;
 
   document.documentElement.classList.add('captainpad-embedded', 'theme-pending');
   installChromeStyles();
@@ -161,72 +252,119 @@
     }
   }, 1000);
 
-  window.addEventListener('message', function (event) {
-    if (event.source !== window.parent) return;
-    if (event.origin !== parentOrigin) {
-      fail('rejected a message from unexpected origin ' + event.origin);
-      return;
-    }
-    if (!isRecord(event.data) || event.data.version !== BRIDGE_VERSION) {
+  /** The ONE host→page pipeline. The iframe listener and the native
+   *  `__captainpadDeliver` hook both feed exactly this, so a message means the
+   *  same thing on both platforms or it means nothing. */
+  function deliver(data) {
+    if (!isRecord(data) || data.version !== BRIDGE_VERSION) {
       fail('rejected a malformed or unsupported parent message');
       return;
     }
 
-    if (event.data.type === 'captainpad-theme') {
+    if (data.type === 'captainpad-theme') {
       try {
-        var theme = validateTheme(event.data);
+        var theme = validateTheme(data);
         applyTheme(theme);
         window.clearTimeout(pendingTimer);
-        window.parent.postMessage({
+        transport.post({
           type: 'touch-control-theme-applied',
           version: BRIDGE_VERSION,
           requestId: theme.requestId,
-        }, parentOrigin);
+        });
       } catch (error) {
         fail(error.message);
       }
       return;
     }
 
-    if (event.data.type === 'captainpad-surface-focus') {
-      if (typeof event.data.requestId !== 'string' || !event.data.requestId) {
+    if (data.type === 'captainpad-surface-focus') {
+      if (typeof data.requestId !== 'string' || !data.requestId) {
         fail('surface focus requires a requestId');
         return;
       }
       document.dispatchEvent(new CustomEvent('captainpad:surface-focus', {
-        detail: { requestId: event.data.requestId },
+        detail: { requestId: data.requestId },
       }));
       return;
     }
 
-    if (event.data.type === 'captainpad-surface-blur') {
-      if (typeof event.data.requestId !== 'string' || !event.data.requestId) {
+    if (data.type === 'captainpad-surface-blur') {
+      if (typeof data.requestId !== 'string' || !data.requestId) {
         fail('surface blur requires a requestId');
         return;
       }
-      if (event.data.target !== 'deck' && event.data.target !== 'mixer') {
+      if (data.target !== 'deck' && data.target !== 'mixer') {
         fail('surface blur requires a Deck or Mixer destination');
         return;
       }
-      if (event.data.reason !== 'navigation' && event.data.reason !== 'background') {
+      if (data.reason !== 'navigation' && data.reason !== 'background') {
         fail('surface blur requires a navigation or background reason');
         return;
       }
       document.dispatchEvent(new CustomEvent('captainpad:surface-blur', {
         detail: {
-          requestId: event.data.requestId,
-          target: event.data.target,
-          reason: event.data.reason,
+          requestId: data.requestId,
+          target: data.target,
+          reason: data.reason,
         },
       }));
       return;
     }
 
-    fail('rejected unknown parent message ' + String(event.data.type));
+    if (data.type === 'captainpad-spatial-fullscreen-applied') {
+      if (typeof data.requestId !== 'string' || !data.requestId ||
+          typeof data.active !== 'boolean') {
+        fail('spatial fullscreen acknowledgement is malformed');
+        return;
+      }
+      document.dispatchEvent(new CustomEvent('captainpad:spatial-fullscreen-applied', {
+        detail: {
+          requestId: data.requestId,
+          active: data.active,
+        },
+      }));
+      return;
+    }
+
+    fail('rejected unknown parent message ' + String(data.type));
+  }
+
+  if (mode === 'native') {
+    /* Installed BEFORE `touch-control-theme-ready` is posted, and the native
+       host only sends after receiving that event — so the host can never inject
+       a call to a function that does not exist yet. An injected call is used
+       rather than `webViewRef.postMessage`, whose delivery target ('message' on
+       `window` vs on `document`) has differed across react-native-webview
+       versions; this is deterministic. */
+    window.__captainpadDeliver = function (message) { deliver(message); };
+  } else {
+    window.addEventListener('message', function (event) {
+      if (event.source !== window.parent) return;
+      if (event.origin !== transport.parentOrigin) {
+        fail('rejected a message from unexpected origin ' + event.origin);
+        return;
+      }
+      deliver(event.data);
+    });
+  }
+
+  document.addEventListener('touchcontrol:spatial-fullscreen-request', function (event) {
+    var detail = event.detail || {};
+    if (typeof detail.requestId !== 'string' || !detail.requestId ||
+        typeof detail.active !== 'boolean') {
+      fail('spatial fullscreen request is malformed');
+      return;
+    }
+    transport.post({
+      type: 'touch-control-spatial-fullscreen',
+      version: BRIDGE_VERSION,
+      requestId: detail.requestId,
+      active: detail.active,
+    });
   });
 
-  window.parent.postMessage({
+  transport.post({
     type: 'touch-control-theme-ready',
     version: BRIDGE_VERSION,
-  }, parentOrigin);
+  });
 }());

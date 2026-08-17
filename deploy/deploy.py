@@ -96,6 +96,30 @@ SYNC_EXCLUDE_DIRS = [
     # Operator-private local planning notes (gitignored AND never shipped:
     # they must exist on the laptop only - Sina 2026-07-28).
     '.agent\\reports_local',
+    # TEST SUITES - never shipped to a show machine (Sina, report _245).
+    # Nothing in the boot chain runs them (boot_server.ps1 -> launcher.js prod
+    # -> sim/engine/companion/CaptainPad only), so this is not what stops them
+    # running; it is what keeps a harness that BINDS PORTS and MUTATES STATE off
+    # the box entirely. marsin_engine/tests in particular spins up real engines
+    # (tests/e2e, tests/hil), writes temp configs, and drives sACN - none of it
+    # may exist within reach of a show server. Excluded on BOTH sides of the
+    # /MIR, so an older deploy's tests\ dir is DELETED from the server on the
+    # next sync (robocopy /XD skips it in both trees).
+    # NOTE: CaptainPad's tests are colocated (components/**/*.test.ts) and are
+    # therefore still copied. They are inert on prod: prod serves the PREBUILT
+    # CaptainPad/dist and never runs Metro or vitest, so nothing loads them.
+    'marsin_engine\\tests',
+    'simulation\\tests',
+    'control_podium\\tests',
+    # AGENT WORKTREES - Claude Code session worktrees are FULL extra checkouts of
+    # this repo (each with its own node_modules, .git, tests\ and
+    # marsin_engine\states\). They are gitignored, so nothing but an explicit
+    # exclusion keeps them out of a /MIR - and a robocopy /L measured 260 MB of
+    # them in two trees (report _245). Shipping them would (a) bloat every sync,
+    # (b) smuggle the test suites and a second engine's state onto the show box
+    # right past the exclusions above, which only name the REAL tree's paths, and
+    # (c) race: a worktree can be created or deleted by an agent mid-sync.
+    '.claude\\worktrees',
 ]
 # deploy_info.yaml is server-owned; machines.yaml is NOT in this repo (private -
 # $BM26_MACHINES) and is shipped explicitly by ship_manifest() AFTER the sync.

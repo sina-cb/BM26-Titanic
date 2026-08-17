@@ -19,7 +19,9 @@
 //   3. STRICT BLACKOUT — /global-blackout rejects every non-boolean state;
 //      {"state":"false"} used to ENGAGE the blackout and persist it.
 //
-// Engine spawns with `--dest 127.0.0.9` so sACN never reaches the live sim.
+// Engine spawns with `--dest 192.0.2.9` — TEST-NET-1 (RFC 5737), never routed —
+// so sACN never reaches the live sim. Loopback is NOT a black hole: the sim's
+// sACN receiver binds every local interface.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
@@ -39,7 +41,7 @@ const h = createEngineHarness({
     MARSIN_VSN1_DEPLOY: '0',
     BM26_ARM_LEASE_MS: String(ARM_LEASE_MS),
   },
-  extraArgs: ['--dest', '127.0.0.9'],
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

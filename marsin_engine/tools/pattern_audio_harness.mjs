@@ -33,6 +33,9 @@
  *             for round(S*F) stored frames — a true S-second clip, not slo-mo.
  *   --out-fps clip playback frame rate (default 20) for --seconds (the stored
  *             frame cadence). Stamped into the JSON as `fps`.
+ *   --time-scale pattern-clock multiplier (default 1). Audio and clip duration
+ *             remain real time; only the VM clock is scaled, matching the
+ *             live global-speed control for exact playlist review.
  *   --max-cells  big-rig safety cap on emitted color cells (frames×pixels,
  *             default 150000). When a clip would exceed it, out-fps is lowered
  *             and/or pixels are strided for the clip — PRINTED loudly, never a
@@ -118,6 +121,12 @@ const seconds = useSeconds ? parseFloat(A.seconds) : null;
 if (useSeconds && (!(seconds > 0) || !isFinite(seconds))) { console.log('SECONDS_FAIL: --seconds must be > 0, got ' + A.seconds); process.exit(2); }
 let outFps = (A['out-fps'] !== undefined && A['out-fps'] !== 'true') ? parseFloat(A['out-fps']) : 20;
 if (!(outFps > 0) || !isFinite(outFps)) { console.log('OUTFPS_FAIL: --out-fps must be > 0, got ' + A['out-fps']); process.exit(2); }
+const timeScale = (A['time-scale'] !== undefined && A['time-scale'] !== 'true')
+  ? parseFloat(A['time-scale']) : 1;
+if (!(timeScale > 0) || !isFinite(timeScale)) {
+  console.log('TIMESCALE_FAIL: --time-scale must be > 0, got ' + A['time-scale']);
+  process.exit(2);
+}
 const maxCells = (A['max-cells'] !== undefined && A['max-cells'] !== 'true') ? parseInt(A['max-cells'], 10) : 150000;
 if (!(maxCells > 0)) { console.log('MAXCELLS_FAIL: --max-cells must be > 0, got ' + A['max-cells']); process.exit(2); }
 // signal key -> the analyzer/synth field it reads. DERIVED from the
@@ -253,9 +262,16 @@ if (idOf('colorPalette2') != null) applyPalette('colorPalette2', defs.cp2H ?? 0,
 for (const e of exps) { if (e.name.startsWith('slider')) { const varName = e.name.slice(6, 7).toLowerCase() + e.name.slice(7);
   if (defs[varName] != null) host.setControl(handle, e.id, defs[varName]); } }
 
-for (const m of mods) if (idOf(m.target) == null) console.log('WARN: --mod target export not found: ' + m.target);
-if (A.set) for (const kv of A.set.split(',')) { const [k, v] = kv.split('='); const id = idOf(k);
-  if (id == null) { console.log('WARN: no export ' + k); continue; } host.setControl(handle, id, parseFloat(v)); }
+for (const m of mods) if (idOf(m.target) == null) {
+  console.log('CONTROL_FAIL: --mod target export not found: ' + m.target); process.exit(2);
+}
+if (A.set) for (const kv of A.set.split(',')) { const [k, raw] = kv.split('='); const id = idOf(k);
+  const v = Number(raw);
+  if (id == null) { console.log('CONTROL_FAIL: --set export not found: ' + k); process.exit(2); }
+  if (!Number.isFinite(v) || v < 0 || v > 1) {
+    console.log('CONTROL_FAIL: --set ' + k + ' must be a finite value in [0, 1]'); process.exit(2);
+  }
+  host.setControl(handle, id, v); }
 
 // ── real analyzer fed by the synth ───────────────────────────────────────────
 let clock = 0; const sig = { low: 0, mid: 0, high: 0, kick: 0, flux: 0 };
@@ -392,7 +408,7 @@ function applyStepMods() {
 // (peak, per-frame black flag, frame time excluding a 2-frame warmup).
 function renderGateFrame() {
   const t0 = process.hrtime.bigint();
-  host.beginFrame(handle, internalT * DT);
+  host.beginFrame(handle, internalT * DT * timeScale);
   const raw6 = host.renderAll6ch(handle);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   const rgb = fold(raw6);
@@ -439,6 +455,7 @@ const coordSpread = (typeof px[0].x === 'number') ? { x: rawSpread('x'), y: rawS
 fs.writeFileSync(out, JSON.stringify({
   pattern: path.basename(patternPath, '.js'), buffer: 'harness', model: modelName,
   fps: stampFps, seconds: useSeconds ? seconds : +(storedFrames / stampFps).toFixed(3),
+  timeScale,
   coordSpread, pixelStride, meta, frames: frameData,
 }));
 

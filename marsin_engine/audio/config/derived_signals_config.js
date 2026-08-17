@@ -39,6 +39,42 @@ export const NOTE_COLOR_WHEEL_DEFAULTS = Object.freeze({
   b: 0.70,       // 252° violet
 });
 
+/**
+ * SCRIABIN — an alternative note→hue wheel, one tap away in the Companion UI
+ * (docs/59 §2, W9).
+ *
+ * WHY IT EXISTS. The rig's FOLLOW NOTE mode consumes `audioNoteHue`, i.e. THIS
+ * wheel — one operator-tunable note→colour authority in one place. Live Touch's
+ * own FOLLOW NOTE uses Scriabin's published clavier-à-lumières table instead
+ * (`docs/ui/touch_control.html:3401-3414`), so the two surfaces can honestly
+ * disagree about what colour an E is. Rather than port a SECOND mapping into
+ * the engine — which would create exactly the two-authorities-that-can-drift
+ * problem the design rejects — the twelve Scriabin HUES are offered here as a
+ * PRESET for the one wheel. Selecting it makes the two agree; not selecting it
+ * is equally valid. The operator decides, and either way there is one mapping.
+ *
+ * HUE ONLY, deliberately. Scriabin's table also varies saturation and value
+ * (D♯ is "flesh with a glint of steel" at s = 0.35), but this wheel is hue-only
+ * BY DESIGN — "it never dims the color or reduces saturation" — and
+ * `generateScheme(scheme, baseH)` takes a bare hue and supplies S/V itself, so
+ * the S/V variation could not ride through the generators anyway. Dropping it
+ * is stated here rather than discovered later.
+ */
+export const NOTE_COLOR_SCRIABIN = Object.freeze({
+  c: 0.00,       // 0°   red (intense)
+  cSharp: 0.75,  // 270° violet / purple
+  d: 0.14,       // 50°  yellow
+  dSharp: 0.05,  // 18°  flesh
+  e: 0.53,       // 191° sky blue (moonshine / frost)
+  f: 0.99,       // 356° deep red
+  fSharp: 0.66,  // 238° bright blue / violet
+  g: 0.08,       // 29°  orange
+  gSharp: 0.79,  // 284° lilac
+  a: 0.33,       // 119° green
+  aSharp: 0.95,  // 342° rose / steel
+  b: 0.60,       // 216° blue / pearly blue
+});
+
 /** Canonical, corpus-tuned configuration for operator-facing derived signals. */
 export const DERIVED_SIGNALS_DEFAULTS = Object.freeze({
   noteTracking: frozenCopy(NOTE_ESTIMATOR_DEFAULTS),

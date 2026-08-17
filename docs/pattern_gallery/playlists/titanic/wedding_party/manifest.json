@@ -1,0 +1,1601 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "wedding_party",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/wedding_party.yaml",
+  "playlistDigest": "d10508d1e477c5574084fdecc36cd9a7eacbcd4be8829fad098071e254a77ef3",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "51_confetti_cyclone",
+      "title": "Confetti Cyclone",
+      "goal": "A saved Confetti Cyclone look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLow",
+          "label": "Low",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness — overall level + spin rate + spark density track the low band",
+          "audio": {
+            "slider": "sliderLow",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness — overall level + spin rate + spark density track the low band"
+          }
+        },
+        {
+          "name": "sliderHigh",
+          "label": "High",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "sparkle/detail — extra confetti twinkle on the crests (highs->glint)",
+          "audio": {
+            "slider": "sliderHigh",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "sparkle/detail — extra confetti twinkle on the crests (highs->glint)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "beat/pop — a confetti BURST fattens + flares the sparks",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat/pop — a confetti BURST fattens + flares the sparks"
+          }
+        },
+        {
+          "name": "sliderSparkSize",
+          "label": "Spark Size",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Spark Size character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLow": 0.5,
+        "sliderHigh": 0.5,
+        "sliderKick": 0,
+        "sliderSparkSize": 0.5
+      },
+      "gif": "001_51_confetti_cyclone.gif",
+      "video": "001_51_confetti_cyclone.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "40f0062b132c2ef27ebd46c808795f8a9546c7e0e3e8f705cdef90bd558df807"
+    },
+    {
+      "index": 1,
+      "pattern": "28_spectrum_bloom",
+      "title": "Spectrum Bloom",
+      "goal": "A saved Spectrum Bloom look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLow",
+          "label": "Low",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness (bars block, the mission-critical mass)",
+          "audio": {
+            "slider": "sliderLow",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness (bars block, the mission-critical mass)"
+          }
+        },
+        {
+          "name": "sliderMid",
+          "label": "Mid",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "geometry (vintage column height)",
+          "audio": {
+            "slider": "sliderMid",
+            "signal": "micMid",
+            "min": 0.15,
+            "max": 1,
+            "curve": "linear",
+            "note": "geometry (vintage column height)"
+          }
+        },
+        {
+          "name": "sliderHigh",
+          "label": "High",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "sparkle/detail (par glint count + brightness)",
+          "audio": {
+            "slider": "sliderHigh",
+            "signal": "micHigh",
+            "min": 0.1,
+            "max": 1,
+            "curve": "linear",
+            "note": "sparkle/detail (par glint count + brightness)"
+          }
+        },
+        {
+          "name": "sliderFloor",
+          "label": "Floor",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLow": 0.5,
+        "sliderMid": 0.5,
+        "sliderHigh": 0.5,
+        "sliderFloor": 0.06
+      },
+      "gif": "002_28_spectrum_bloom.gif",
+      "video": "002_28_spectrum_bloom.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a4479c5e0a8cfbcaf673a297c7eb47a4ecc22ad2e3c7ee52f7cbe715af2bab20"
+    },
+    {
+      "index": 2,
+      "pattern": "36_orbital_pulse",
+      "title": "Orbital Pulse",
+      "goal": "A saved Orbital Pulse look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderFocus",
+          "label": "Focus",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: bass tightens cores + lifts whole-rig floor",
+          "audio": {
+            "slider": "sliderFocus",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass tightens cores + lifts whole-rig floor"
+          }
+        },
+        {
+          "name": "sliderPulse",
+          "label": "Pulse",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick pops: each hit flares every well (transient bloom)",
+          "audio": {
+            "slider": "sliderPulse",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick pops: each hit flares every well (transient bloom)"
+          }
+        },
+        {
+          "name": "sliderReach",
+          "label": "Reach",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Reach character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.18,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderFocus": 0.5,
+        "sliderPulse": 0,
+        "sliderReach": 0.5,
+        "sliderBase": 0.18
+      },
+      "gif": "003_36_orbital_pulse.gif",
+      "video": "003_36_orbital_pulse.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "36a3945518d74208df0a6516dec23ecf118e0c236faad05965b855566e835fcc"
+    },
+    {
+      "index": 3,
+      "pattern": "25_heartbeat",
+      "title": "Heartbeat",
+      "goal": "A saved Heartbeat look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY continuous brightness budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY continuous brightness budget"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "HEADLINE beat/blinder pop (kick-gated)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "HEADLINE beat/blinder pop (kick-gated)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "ripple spread / travel (build = wider sweep)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "ripple spread / travel (build = wider sweep)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "lub/dub crispness (sparkle/detail)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 1,
+            "curve": "linear",
+            "note": "lub/dub crispness (sparkle/detail)"
+          }
+        },
+        {
+          "name": "sliderDormantGlow",
+          "label": "Dormant Glow",
+          "value": 0.075,
+          "valueSource": "code default",
+          "description": "Dormant Glow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBlinder",
+          "label": "Blinder",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white amount / keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall white amount / keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "extra white blinder pop on the beat",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "extra white blinder pop on the beat"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.06,
+        "sliderLevel": 0.5,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderDormantGlow": 0.075,
+        "sliderBlinder": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "004_25_heartbeat.gif",
+      "video": "004_25_heartbeat.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "cee3f2903356903fd7334dde337cf6c36fef7748c63b49002b831b6809e015a6"
+    },
+    {
+      "index": 4,
+      "pattern": "48_heartbeat_drive",
+      "title": "Heartbeat Drive",
+      "goal": "A saved Heartbeat Drive look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "beat/pop — rising edge fires lub-dub + shell + vintage blinder",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat/pop — rising edge fires lub-dub + shell + vintage blinder"
+          }
+        },
+        {
+          "name": "sliderLow",
+          "label": "Low",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness — body level tracks the low band",
+          "audio": {
+            "slider": "sliderLow",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness — body level tracks the low band"
+          }
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderKick": 0,
+        "sliderLow": 0.5
+      },
+      "gif": "005_48_heartbeat_drive.gif",
+      "video": "005_48_heartbeat_drive.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "dc268d8dad305e42ff05ee3d5324f8204b9ec96828af1d49804e47dc5651a982"
+    },
+    {
+      "index": 5,
+      "pattern": "04_beat_folded_helix",
+      "title": "Beat Folded Helix",
+      "goal": "A saved Beat Folded Helix look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "tunnel speed / arm spread",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "tunnel speed / arm spread"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "beat pop + vintage W blinders",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat pop + vintage W blinders"
+          }
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderTwistFreq",
+          "label": "Twist Freq",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Twist Freq character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "arm-crispness reshape (secondary)",
+          "audio": {
+            "slider": "sliderContrast",
+            "signal": "micMid",
+            "min": 0.3,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "arm-crispness reshape (secondary)"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "overall white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderWhiteWarmth",
+          "label": "White Warmth",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderRadius": 0.5,
+        "sliderKick": 0,
+        "sliderLevel": 0.5,
+        "sliderCount": 0.5,
+        "sliderTwistFreq": 0.5,
+        "sliderContrast": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.3,
+        "sliderWhiteWarmth": 0.3
+      },
+      "gif": "006_04_beat_folded_helix.gif",
+      "video": "006_04_beat_folded_helix.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "3ba24e23e77acd870043cbbbc1158268d3fa74718aad2584588d257b7f272afc"
+    },
+    {
+      "index": 6,
+      "pattern": "09_cyclone",
+      "title": "Cyclone",
+      "goal": "A saved Cyclone look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "confetti burst pop (kick)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "confetti burst pop (kick)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "speck travel / size (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "speck travel / size (build)"
+          }
+        },
+        {
+          "name": "sliderDensity",
+          "label": "Density",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "speck count / sparkle (highs)",
+          "audio": {
+            "slider": "sliderDensity",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "speck count / sparkle (highs)"
+          }
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white keep/amount (bass)",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "overall white keep/amount (bass)"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "vintage white burst + blinder pop (kick)",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage white burst + blinder pop (kick)"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderDensity": 0.5,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "007_09_cyclone.gif",
+      "video": "007_09_cyclone.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "53e0e2ff2d3483909837043611606f8fc34e1ec479d670a4f0fcea52e137ce98"
+    },
+    {
+      "index": 7,
+      "pattern": "38_prism_helix",
+      "title": "Prism Helix",
+      "goal": "A saved Prism Helix look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: bass drives whole-strand master gain",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass drives whole-strand master gain"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.25,
+          "valueSource": "code default",
+          "description": "highs: fine fast prism sparkle / detail texture",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0.1,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "highs: fine fast prism sparkle / detail texture"
+          }
+        },
+        {
+          "name": "sliderTwist",
+          "label": "Twist",
+          "value": 4,
+          "valueSource": "code default",
+          "description": "Twist character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 2.2,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderArms",
+          "label": "Arms",
+          "value": 3,
+          "valueSource": "code default",
+          "description": "Arms character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLevel": 0.6,
+        "sliderShimmer": 0.25,
+        "sliderTwist": 4,
+        "sliderContrast": 2.2,
+        "sliderArms": 3
+      },
+      "gif": "008_38_prism_helix.gif",
+      "video": "008_38_prism_helix.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4aa21f38b1be8c5ab075a4e42fd95a1b0f4c569d429988011cd1bc840c7b15ee"
+    },
+    {
+      "index": 8,
+      "pattern": "42_phyllotaxis_spiral",
+      "title": "Phyllotaxis Spiral",
+      "goal": "A saved Phyllotaxis Spiral look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloom",
+          "label": "Bloom",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness + bloom radius",
+          "audio": {
+            "slider": "sliderBloom",
+            "signal": "micLow",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "PRIMARY brightness + bloom radius"
+          }
+        },
+        {
+          "name": "sliderTwinkle",
+          "label": "Twinkle",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "2nd dim: per-seed sparkle/detail",
+          "audio": {
+            "slider": "sliderTwinkle",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.85,
+            "curve": "pow2",
+            "note": "2nd dim: per-seed sparkle/detail"
+          }
+        },
+        {
+          "name": "sliderCoreSize",
+          "label": "Core Size",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Core Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloorLvl",
+          "label": "Floor Lvl",
+          "value": 0.1,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderBloom": 0.5,
+        "sliderTwinkle": 0.35,
+        "sliderCoreSize": 0.45,
+        "sliderFloorLvl": 0.1
+      },
+      "gif": "009_42_phyllotaxis_spiral.gif",
+      "video": "009_42_phyllotaxis_spiral.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1a4947b2bc1f69ea28f448a70a0bc24002aec4a00dc46ad67be004ccd804b3db"
+    },
+    {
+      "index": 9,
+      "pattern": "54_murmuration_storm",
+      "title": "Murmuration Storm",
+      "goal": "A saved Murmuration Storm look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderFlockEnergy",
+          "label": "Flock Energy",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY cohesion + overall brightness",
+          "audio": {
+            "slider": "sliderFlockEnergy",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY cohesion + overall brightness"
+          }
+        },
+        {
+          "name": "sliderScatter",
+          "label": "Scatter",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "SPARKLE: birds scatter into glints",
+          "audio": {
+            "slider": "sliderScatter",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "SPARKLE: birds scatter into glints"
+          }
+        },
+        {
+          "name": "sliderBuild",
+          "label": "Build",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "MOVEMENT: murmuration build / flock expansion",
+          "audio": {
+            "slider": "sliderBuild",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "MOVEMENT: murmuration build / flock expansion"
+          }
+        },
+        {
+          "name": "sliderFocus",
+          "label": "Focus",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "GEOMETRY: mids tighten the flock cores",
+          "audio": {
+            "slider": "sliderFocus",
+            "signal": "micMid",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "GEOMETRY: mids tighten the flock cores"
+          }
+        },
+        {
+          "name": "sliderHaze",
+          "label": "Haze",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Haze character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderFlockEnergy": 0.5,
+        "sliderScatter": 0.5,
+        "sliderBuild": 0.5,
+        "sliderFocus": 0.5,
+        "sliderHaze": 0.35
+      },
+      "gif": "010_54_murmuration_storm.gif",
+      "video": "010_54_murmuration_storm.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a42ec6b9638943951919cd4e8d769877dd2b6e12a20475b49bc0b1322c4b143a"
+    },
+    {
+      "index": 10,
+      "pattern": "30_bass_comet",
+      "title": "Bass Comet",
+      "goal": "A saved Bass Comet look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBass",
+          "label": "Bass",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY (motion): bass drives the comet SPEED (rate), not brightness",
+          "audio": {
+            "slider": "sliderBass",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY (motion): bass drives the comet SPEED (rate), not brightness"
+          }
+        },
+        {
+          "name": "sliderHeadKick",
+          "label": "Head Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "secondary (brightness): high band pops the head/tail brightness",
+          "audio": {
+            "slider": "sliderHeadKick",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "secondary (brightness): high band pops the head/tail brightness"
+          }
+        },
+        {
+          "name": "sliderTail",
+          "label": "Tail",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Tail character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderBass": 0.5,
+        "sliderHeadKick": 0,
+        "sliderTail": 0.55
+      },
+      "gif": "011_30_bass_comet.gif",
+      "video": "011_30_bass_comet.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "999237bdfe5c292cfc502e534721679fe1a4d8947e83a350c190797acac9ac66"
+    },
+    {
+      "index": 11,
+      "pattern": "49_cylon_crush",
+      "title": "Cylon Crush",
+      "goal": "A saved Cylon Crush look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness — overall level + scan rate track the low band",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness — overall level + scan rate track the low band"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "beat/pop — fires the edge->center CRUSH + collision flash",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat/pop — fires the edge->center CRUSH + collision flash"
+          }
+        },
+        {
+          "name": "sliderTrail",
+          "label": "Trail",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Trail character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLevel": 0.5,
+        "sliderKick": 0,
+        "sliderTrail": 0.35
+      },
+      "gif": "012_49_cylon_crush.gif",
+      "video": "012_49_cylon_crush.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "cab7f99505a0222a2741c22b9b535461ee5874d2b02f7e907a3ac697cc1c5482"
+    },
+    {
+      "index": 12,
+      "pattern": "63_white_chase",
+      "title": "White Chase",
+      "goal": "A white procession crosses the ship in role-specific ribbons, tracers, pearls, strikes, and sign scans.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "A white procession crosses the ship in role-specific ribbons, tracers, pearls, strikes, and sign scans.",
+        "design_intent": "Retain a clear directional chase but stop projecting the same bar onto every fixture family; each instrument should express travel at its own scale.",
+        "why_exists": "It is the white family's explicit motion look and the strongest manual-direction performance handle.",
+        "visual_goal_titanic": "Broad Hull ribbons and a fine outline tracer should establish direction at distance, while six-head Jewelry marquee motion and discrete Organ hits provide close and structural authority.",
+        "unique_topology": "A fixed longitudinal X projection creates mirrored bow-to-stern processions; separate coordinates create a counter-moving Silhouette tracer, six-head Jewelry pearls, Organ cohorts, and one complete folded 74-pixel cross-scan.",
+        "distance_silhouette": "A narrower bright tracer travels across a permanently visible Silhouette, making both motion direction and ship outline legible.",
+        "close_detail": "Six-pearl rail marquees, fixture-cohort par strikes, broad Hull ribbon edges, and a restrained sign scan resolve at close range.",
+        "motion_grammar": "A manually signed long-wrap phase drives broad mirrored bow-to-stern travel; a counter-tracer and role-specific subordinate phases prevent lockstep repetition while controls slew without geometry jumps.",
+        "xyz_use": "Normalized longitudinal X establishes bow-to-stern travel while Y/Z preserve exact port-starboard mirroring and add vertical/depth facets; pixelLocalIndex builds Jewelry chases, and fixtureId builds Organ cohorts. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Broad white searchlight ribbons revealing Hull material.",
+          "Silhouette": "Narrower, brighter tracer over a continuous outline.",
+          "Jewelry": "Hero six-pearl marquee chase with strong native-white cores.",
+          "Organs": "Discrete structural strikes phased across fixtures.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel scan from signIndex=index%74, moving across one full readable plaque rather than restarting per panel."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel scan from signIndex=index%74, moving across one full readable plaque rather than restarting per panel.",
+        "jewelry_white": "Six-head Vintage rails carry the brightest native-white chase cores and the shortest local tail, preserving a fine Jewelry read.",
+        "palette_white_material": "No color palettes bind. RGB remains warm-neutral, W=A exactly, and UV=0 through every moving bar.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets chase travel and slow axis-rotation speed.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses all signed chase motion with manual endpoints dominant.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets chase intensity above role-specific visibility floors.",
+            "code_default_value": 0.75
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Pops current moving bars and strengthens Organ strikes.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets literal bar width across ship and local chase variants.",
+            "code_default_value": 0.4
+          },
+          {
+            "exported_name": "sliderTailLength",
+            "behavior": "Sets the trailing decay length behind each chase core.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderCount",
+            "behavior": "Selects one through five simultaneous procession bars.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves white output from RGB toward matched native W/A.",
+            "code_default_value": 0.6
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Raises the dedicated-white cores, strongest on Jewelry and Organ strikes.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets a subtle warm-neutral RGB temperature for the chase.",
+            "code_default_value": 0.05
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.3,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "A restrained kick adds one crisp bar accent without turning the chase into a full-rig flash."
+          },
+          {
+            "target": "sliderRadius",
+            "source": "micFlux",
+            "range": [
+              0.25,
+              0.75
+            ],
+            "curve": "linear",
+            "intent": "Bar width swells on the build."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Every instrument retains a white bed between processional cores; count, radius, and phase cannot create a whole-rig blackout.",
+        "anti_duplication_notes": "Protect explicit signed travel and multiple bar cores. It must not soften into Breathe, randomize into Shimmer, flatten into Wash, or slow into Temple's vigil.",
+        "review_state": "TUNE",
+        "evidence_notes": "The previous capture looked like one projection shared by the whole test bench. The bold rework preserves every public value and exact audio handle while replacing the generic projection with a mirrored bow-to-stern procession and distinct role counterpoint. At the saved review tune 101/166 test-bench pixels change materially over three seconds; all 74 Identity pixels are dynamic and both Titanic signs match exactly. Cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Sets chase travel and slow axis-rotation speed.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "Reverses all signed chase motion with manual endpoints dominant.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.75,
+          "valueSource": "code default",
+          "description": "Sets chase intensity above role-specific visibility floors.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Pops current moving bars and strengthens Organ strikes.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "bar pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Sets literal bar width across ship and local chase variants.",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.25,
+            "max": 0.75,
+            "curve": "linear",
+            "note": "bar width swells on the build"
+          }
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Sets the trailing decay length behind each chase core.",
+          "audio": null
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Selects one through five simultaneous procession bars.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Moves white output from RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Raises the dedicated-white cores, strongest on Jewelry and Organ strikes.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.05,
+          "valueSource": "code default",
+          "description": "Sets a subtle warm-neutral RGB temperature for the chase.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 1,
+        "sliderLevel": 0.75,
+        "sliderKick": 0,
+        "sliderRadius": 0.4,
+        "sliderTailLength": 0.45,
+        "sliderCount": 0.35,
+        "sliderWhiteLevel": 0.6,
+        "sliderWhiteKick": 0.35,
+        "sliderWarmth": 0.05
+      },
+      "gif": "013_63_white_chase.gif",
+      "video": "013_63_white_chase.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5df4dbdc7df4a9f4b353ab9c2e7cd3ba46d1bd093922d428f8824ea6c175ea18"
+    },
+    {
+      "index": 13,
+      "pattern": "50_phase_cathedral_hd",
+      "title": "Phase Cathedral Hd",
+      "goal": "A saved Phase Cathedral Hd look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderNodeContrast",
+          "label": "Node Contrast",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness — node brightness + contrast track the low band (wide range so the level owns the brightness budget -> strong corr)",
+          "audio": {
+            "slider": "sliderNodeContrast",
+            "signal": "micLow",
+            "min": 0.15,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness — node brightness + contrast track the low band (wide range so the level owns the brightness budget -> strong corr)"
+          }
+        },
+        {
+          "name": "sliderPhaseShift",
+          "label": "Phase Shift",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "geometry — slides the four plane phases (lattice slides/breathes)",
+          "audio": {
+            "slider": "sliderPhaseShift",
+            "signal": "micMid",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "geometry — slides the four plane phases (lattice slides/breathes)"
+          }
+        },
+        {
+          "name": "sliderKickLock",
+          "label": "Kick Lock",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "beat — jolts the drift phase forward (re-bloom on the kick)",
+          "audio": {
+            "slider": "sliderKickLock",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "beat — jolts the drift phase forward (re-bloom on the kick)"
+          }
+        },
+        {
+          "name": "sliderSharpBase",
+          "label": "Sharp Base",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderNodeContrast": 0.5,
+        "sliderPhaseShift": 0,
+        "sliderKickLock": 0,
+        "sliderSharpBase": 0.45
+      },
+      "gif": "014_50_phase_cathedral_hd.gif",
+      "video": "014_50_phase_cathedral_hd.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e8e0fb27bc6d3195bd3228e0959b8d83172248d44047da4997334f6b13071253"
+    },
+    {
+      "index": 14,
+      "pattern": "31_strobe_lattice",
+      "title": "Strobe Lattice",
+      "goal": "A saved Strobe Lattice look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderFlash",
+          "label": "Flash",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "pop/strobe: kick blooms node cores (sharpness axis, brightness-neutral)",
+          "audio": {
+            "slider": "sliderFlash",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "pop/strobe: kick blooms node cores (sharpness axis, brightness-neutral)"
+          }
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: bass lifts the node glow",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass lifts the node glow"
+          }
+        },
+        {
+          "name": "sliderScale",
+          "label": "Scale",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSharp",
+          "label": "Sharp",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderFlash": 0,
+        "sliderLevel": 0.55,
+        "sliderScale": 0.5,
+        "sliderSharp": 0.55
+      },
+      "gif": "015_31_strobe_lattice.gif",
+      "video": "015_31_strobe_lattice.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "0d50f7acbb6432311a42cfd43d64fdb79de5c521425ea2e9b6f52fee202d7517"
+    }
+  ]
+}

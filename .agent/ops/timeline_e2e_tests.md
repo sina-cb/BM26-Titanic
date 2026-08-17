@@ -194,7 +194,11 @@ node --import ./tests/helpers/setup_config_guard.mjs --test "tests/e2e/*.test.js
    per-controller `controllers:` block carries its own host and wins for the
    universes it claims (the `_97` §4.4 incident: 30 s of live sACN on the real
    ship). The harness writes a black-holed config (`controllers: []` +
-   `sacn.destinations: [127.0.0.9]`) and hands it to the engine via
+   `sacn.destinations` set to the harness's `BLACKHOLE_HOST` — TEST-NET-1
+   (`192.0.2.x`, RFC 5737), never routed; a
+   LOOPBACK destination is NOT a black hole, because the sim's sACN receiver
+   binds every local interface and relays what it receives onward) and hands
+   it to the engine via
    `MARSIN_CONFIG_FILE`, then asserts every `[sACN Out] Sender started` line,
    the absence of any Art-Net sender, and an empty
    `GET /status.outputRouting.controllers`. **`MARSIN_CONFIG_FILE` now governs

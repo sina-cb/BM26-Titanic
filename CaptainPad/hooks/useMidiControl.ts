@@ -85,7 +85,7 @@ import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import {
   combinedAutopilotTarget,
   combinedAutopilotLedOn,
-  colorAutopilotWritable,
+  colorAutopilotConfigWritable,
   masterFadeTarget,
   createAutopilotToggleExemption,
   deckMixerToggleTarget,
@@ -704,7 +704,7 @@ export async function toggleCombinedAutopilot(): Promise<{ ok: boolean; error?: 
   // Is the colour autopilot writable this instant? (Non-empty palette set — the
   // engine rejects an empty-palette write in either direction.) Read from the
   // SAME config we just fetched, so the decision matches the engine's own view.
-  const colorToggleable = colorAutopilotWritable(colorRes.data.palettes);
+  const colorToggleable = colorAutopilotConfigWritable(colorRes.data);
   // Direction (pure): with colour toggleable → both on → off, else on. Without it
   // → pure pattern toggle (!patternOn), and we write ONLY the pattern autopilot.
   const next = combinedAutopilotTarget(patternOn, colorOn, colorToggleable);
@@ -1385,17 +1385,21 @@ export function useMidiControl(): MidiControlState {
     // replayed on WS connect, so the LED shows the true state on (re)connect and
     // updates on every subsequent change (from ANY surface — a screen toggle, the
     // clip_stop press, the activity auto-disable). Mirror each flag + recompute.
-    const unsubAutopilot = engineEvents.subscribe((m: { type?: string; active?: unknown; palettes?: unknown }) => {
+    const unsubAutopilot = engineEvents.subscribe((m: {
+      type?: string; active?: unknown; palettes?: unknown; mode?: unknown; followNote?: unknown;
+    }) => {
       if (m?.type === 'autopilot') {
         _patternAutopilotOn = !!m.active;
         _patchCombinedAutopilot();
       } else if (m?.type === 'colorAutopilot') {
         _colorAutopilotOn = !!m.active;
-        // Track writability from the broadcast's palette set: an empty set means
-        // the colour autopilot can't be toggled (engine 400s), so the clip_stop
-        // LED + toggle degrade to pattern-only. colorAutopilotState() always
-        // serializes `palettes`, so a real engine populates this every broadcast.
-        _colorAutopilotWritable = colorAutopilotWritable(m.palettes);
+        // Track writability from the broadcast CONFIG: an empty palette set (or,
+        // in FOLLOW NOTE, an empty method subset) means the colour autopilot
+        // can't be toggled (engine 400s), so the clip_stop LED + toggle degrade
+        // to pattern-only. Reading `mode`/`followNote` too is W6 of docs/59 —
+        // the palettes-only test would have called every follow-note config
+        // un-toggleable, because a follow-note config HAS no palettes.
+        _colorAutopilotWritable = colorAutopilotConfigWritable(m);
         _patchCombinedAutopilot();
       } else if (m?.type === 'performanceMode') {
         // APC solo LED: lit while PERFORMANCE MODE is active. Broadcast on

@@ -1,0 +1,231 @@
+schemaVersion: 1
+name: ambient_stars
+entries:
+  - id: e_ambient_stars_00_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
+      sliderBrilliance: 0.59
+      sliderTwinkleFocus: 0.88
+      sliderAfterglow: 0.13
+      sliderStarChorus: 0.63
+      sliderBurst: 0.15
+      sliderJewelryWhite: 0.81
+      sliderUvStars: 0.78
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_01_35_sparkle_rain
+    pattern: 35_sparkle_rain
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.65
+      sliderLevel: 0.76
+      sliderDensity: 0.5
+      sliderKick: 0.19
+      sliderFall: 0.81
+      sliderIntensity: 0.87
+      sliderBase: 0.13
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_02_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0.18
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderLineSoftness: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_03_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.39
+      sliderKick: 0.29
+      sliderRadius: 0.85
+      sliderDetail: 0.24
+      sliderFocus: 0.67
+      sliderTrailBlend: 0.11
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_04_118_grand_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.72
+      sliderRingWidth: 0.26
+      sliderOrbitTilt: 0.83
+      sliderContrast: 0.89
+      sliderSafetyFloor: 0.05
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_05_125_eclipse_orbit
+    pattern: 125_eclipse_orbit
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.18
+      sliderLevel: 0.79
+      sliderEclipseSize: 0.84
+      sliderRimWidth: 0.88
+      sliderDepth: 0.85
+      sliderSafetyFloor: 0.11
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_06_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_07_33_aurora_breath
+    pattern: 33_aurora_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.66
+      sliderLevel: 0.17
+      sliderShimmer: 0.76
+      sliderBreathRate: 0.21
+      sliderBreathDepth: 0.41
+      sliderRibbons: 0.14
+      sliderSoft: 0.58
+      sliderBase: 0.06
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_08_124_aurora_crown
+    pattern: 124_aurora_crown
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderLevel: 0.65
+      sliderCrownHeight: 0.81
+      sliderArcWidth: 0.92
+      sliderCurl: 0.73
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_09_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.65
+      sliderBeamWidth: 0.32
+      sliderCrossing: 0.83
+      sliderAfterglow: 0.66
+      sliderSafetyFloor: 0.16
+      sliderFlash: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_10_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_11_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.79
+      sliderSpiralWidth: 0.78
+      sliderTurns: 0.8
+      sliderWakeContrast: 0.85
+      sliderSafetyFloor: 0.14
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_12_127_grand_maelstrom
+    pattern: 127_grand_maelstrom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.84
+      sliderLevel: 0.82
+      sliderArmWidth: 0.58
+      sliderArmCount: 0.32
+      sliderDepth: 0.56
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_13_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_14_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.87
+      sliderKick: 0.13
+      sliderBreathDepth: 0.69
+      sliderBreathShape: 0.23
+      sliderBloom: 0.94
+      sliderRibbing: 0.19
+      sliderSparkle: 0.37
+      sliderWhiteGlow: 0.69
+      sliderFieldDetail: 0.91
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_stars_15_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null

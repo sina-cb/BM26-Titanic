@@ -45,6 +45,10 @@ export class WasmHost {
     this.coordView = null;
     this.metaPtr = 0;
     this.metaView = null;
+    this.blendScratchCapacity = 0;
+    this.blendOutPtr = 0;
+    this.blendFromPtr = 0;
+    this.blendToPtr = 0;
 
     // C function bindings
     this._compile = null;
@@ -247,27 +251,69 @@ export class WasmHost {
     this._lastSizeScale = m;
   }
 
-  renderBlend6ch(blendHandle, pixelCount, fromBuffer, toBuffer, progress) {
-    if (!blendHandle) return fromBuffer;
-
+  renderBlend6ch(blendHandle, pixelCount, fromBuffer, toBuffer, progress, outBuffer = null) {
+    if (!blendHandle) throw new Error('renderBlend6ch requires a compiled blend handle');
+    if (!Number.isInteger(pixelCount) || pixelCount <= 0) {
+      throw new Error(`renderBlend6ch pixelCount must be a positive integer, got '${pixelCount}'`);
+    }
+    if (!Number.isFinite(progress) || progress < 0 || progress > 1) {
+      throw new Error(`renderBlend6ch progress must be finite in [0,1], got '${progress}'`);
+    }
     const bufSize = pixelCount * 6;
-    const outPtr = this.Module._malloc(bufSize);
-    const fromPtr = this.Module._malloc(bufSize);
-    const toPtr = this.Module._malloc(bufSize);
+    if (!fromBuffer || fromBuffer.length < bufSize || !toBuffer || toBuffer.length < bufSize) {
+      throw new Error(`renderBlend6ch requires ${bufSize}-byte FROM and TO buffers`);
+    }
+    if (outBuffer && outBuffer.length < bufSize) {
+      throw new Error(`renderBlend6ch output buffer must hold ${bufSize} bytes`);
+    }
 
-    this.Module.HEAPU8.set(fromBuffer.subarray(0, bufSize), fromPtr);
-    this.Module.HEAPU8.set(toBuffer.subarray(0, bufSize), toPtr);
+    // The endpoint contract is exact and does not enter the VM. Besides
+    // avoiding float/byte round-trip residue, this removes three WASM copies
+    // on the two most safety-critical frames.
+    if (progress === 0 || progress === 1) {
+      const endpoint = progress === 0 ? fromBuffer : toBuffer;
+      if (outBuffer) {
+        outBuffer.set(endpoint.subarray(0, bufSize));
+        return outBuffer;
+      }
+      return endpoint.slice(0, bufSize);
+    }
 
-    this._renderBlend6ch(blendHandle, outPtr, pixelCount,
+    this._ensureBlendScratch(bufSize);
+
+    this.Module.HEAPU8.set(fromBuffer.subarray(0, bufSize), this.blendFromPtr);
+    this.Module.HEAPU8.set(toBuffer.subarray(0, bufSize), this.blendToPtr);
+
+    this._renderBlend6ch(blendHandle, this.blendOutPtr, pixelCount,
                          this.coordPtr, this.metaPtr || 0,
-                         fromPtr, toPtr, progress);
+                         this.blendFromPtr, this.blendToPtr, progress);
 
-    const result = new Uint8Array(this.Module.HEAPU8.buffer, outPtr, bufSize).slice();
-    this.Module._free(outPtr);
-    this.Module._free(fromPtr);
-    this.Module._free(toPtr);
+    const result = new Uint8Array(this.Module.HEAPU8.buffer, this.blendOutPtr, bufSize);
+    if (outBuffer) {
+      outBuffer.set(result);
+      return outBuffer;
+    }
+    return result.slice();
+  }
 
-    return result;
+  _ensureBlendScratch(bufSize) {
+    if (this.blendScratchCapacity >= bufSize) return;
+    const nextOutPtr = this.Module._malloc(bufSize);
+    const nextFromPtr = this.Module._malloc(bufSize);
+    const nextToPtr = this.Module._malloc(bufSize);
+    if (!nextOutPtr || !nextFromPtr || !nextToPtr) {
+      if (nextOutPtr) this.Module._free(nextOutPtr);
+      if (nextFromPtr) this.Module._free(nextFromPtr);
+      if (nextToPtr) this.Module._free(nextToPtr);
+      throw new Error(`failed to allocate ${bufSize * 3} bytes of blend scratch memory`);
+    }
+    if (this.blendOutPtr) this.Module._free(this.blendOutPtr);
+    if (this.blendFromPtr) this.Module._free(this.blendFromPtr);
+    if (this.blendToPtr) this.Module._free(this.blendToPtr);
+    this.blendOutPtr = nextOutPtr;
+    this.blendFromPtr = nextFromPtr;
+    this.blendToPtr = nextToPtr;
+    this.blendScratchCapacity = bufSize;
   }
 
   setPixelMeta(metaArray) {
@@ -307,7 +353,14 @@ export class WasmHost {
   }
 
   shutdown() {
+    if (this.blendOutPtr) this.Module._free(this.blendOutPtr);
+    if (this.blendFromPtr) this.Module._free(this.blendFromPtr);
+    if (this.blendToPtr) this.Module._free(this.blendToPtr);
     if (this.coordPtr) this.Module._free(this.coordPtr);
     if (this.metaPtr) this.Module._free(this.metaPtr);
+    this.blendOutPtr = 0;
+    this.blendFromPtr = 0;
+    this.blendToPtr = 0;
+    this.blendScratchCapacity = 0;
   }
 }

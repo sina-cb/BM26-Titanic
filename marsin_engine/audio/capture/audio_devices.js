@@ -42,6 +42,11 @@ export function defaultInputFormatFor(platform) {
   return PLATFORM_TO_FORMAT[platform] || null;
 }
 
+/** Resolve the persisted `auto` sentinel at the operating-system boundary. */
+export function resolveAudioPlatform(platform = process.platform) {
+  return !platform || platform === 'auto' ? process.platform : platform;
+}
+
 /**
  * Build the argv vector for `ffmpeg ... -list_devices true ...` on the
  * requested platform / input format. Always returns a plain array
@@ -51,7 +56,8 @@ export function defaultInputFormatFor(platform) {
  * @returns {string[]}
  */
 export function buildListDevicesArgs({ platform = process.platform, inputFormat = null } = {}) {
-  const fmt = inputFormat || defaultInputFormatFor(platform);
+  const resolvedPlatform = resolveAudioPlatform(platform);
+  const fmt = inputFormat || defaultInputFormatFor(resolvedPlatform);
   if (fmt === 'avfoundation') {
     return ['-hide_banner', '-f', 'avfoundation', '-list_devices', 'true', '-i', ''];
   }
@@ -75,7 +81,8 @@ export function buildListDevicesArgs({ platform = process.platform, inputFormat 
  * @returns {Array<{id:string,label:string,platform:string,inputFormat:string,ffmpegDevice:string,alternativeName?:string,isDefault?:boolean}>}
  */
 export function parseAudioDevices({ platform, inputFormat = null, output = '' } = {}) {
-  const fmt = inputFormat || defaultInputFormatFor(platform);
+  const resolvedPlatform = resolveAudioPlatform(platform);
+  const fmt = inputFormat || defaultInputFormatFor(resolvedPlatform);
   if (fmt === 'avfoundation') return parseAvFoundation(output);
   if (fmt === 'dshow')        return parseDshow(output);
   if (fmt === 'pulse')        return parsePulse(output);
@@ -103,13 +110,14 @@ export async function listAudioDevices({
   spawnFn = spawn,
   timeoutMs = 4000,
 } = {}) {
-  const fmt = inputFormat || defaultInputFormatFor(platform);
+  const resolvedPlatform = resolveAudioPlatform(platform);
+  const fmt = inputFormat || defaultInputFormatFor(resolvedPlatform);
   if (!fmt) {
-    const err = new Error(`Unsupported platform: ${platform}`);
+    const err = new Error(`Unsupported platform: ${resolvedPlatform}`);
     err.code = 'unsupported_platform';
     throw err;
   }
-  const args = buildListDevicesArgs({ platform, inputFormat: fmt });
+  const args = buildListDevicesArgs({ platform: resolvedPlatform, inputFormat: fmt });
 
   let child;
   try {
@@ -147,8 +155,8 @@ export async function listAudioDevices({
   });
 
   const raw = stdout + '\n' + stderr;
-  const devices = parseAudioDevices({ platform, inputFormat: fmt, output: raw });
-  return { devices, platform, inputFormat: fmt, raw };
+  const devices = parseAudioDevices({ platform: resolvedPlatform, inputFormat: fmt, output: raw });
+  return { devices, platform: resolvedPlatform, inputFormat: fmt, raw };
 }
 
 /**

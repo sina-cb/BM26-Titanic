@@ -50,6 +50,20 @@ interface CPCControlsProps {
   // (client-side view state), the AUDIO meters + plot picker (display-only
   // local selection), and the OSC status pill (a read-only details sheet).
   disabled?: boolean;
+  // DECK-ONLY (docs/63 §3.1). The Deck's DeckWorkspaceBar ("the view
+  // optimizer") renders here, between row 1 (GLOBALS) and row 2 (AUDIO
+  // SIGNALS) — "under the globals". Undefined renders NOTHING (no wrapper
+  // element, no extra gap) so the mixer — which never passes this — stays
+  // byte-identical (docs/63 §5 pin 8).
+  optimizerSlot?: React.ReactNode;
+  // DECK-ONLY (docs/63 §3.1). When true, row 2 (the AUDIO SIGNALS meters +
+  // the plot-picker button) and its <AudioPlotPicker> modal are not
+  // rendered. The `useAudioPlotSelection` hook and the live audio-signals
+  // subscription stay unconditional — only the JSX is gated — so the
+  // AsyncStorage-backed selection is untouched and simply doesn't mount
+  // while hidden. The mixer never passes this, so its AUDIO row is
+  // unaffected.
+  hideAudioRow?: boolean;
 }
 
 /**
@@ -80,7 +94,7 @@ function useAudioPlotSelection(screen: 'deck' | 'mixer') {
   return [selected, update] as const;
 }
 
-export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPCControlsProps = {}) => {
+export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optimizerSlot, hideAudioRow = false }: CPCControlsProps = {}) => {
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
@@ -484,6 +498,13 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
         ) : null}
       </View>
 
+      {/* ── Deck-only optimizer slot (docs/63 §3.1) — the DeckWorkspaceBar
+          ("view optimizer") renders here, under GLOBALS and above AUDIO
+          SIGNALS. Undefined (the mixer's case) renders NOTHING — not an
+          empty View — so the outer View's `gap` never adds phantom space
+          and the mixer stays byte-identical (docs/63 §5 pin 8). */}
+      {optimizerSlot}
+
       {/* ── Row 2: audio — dynamic live-only signal meters ──────────────
           The columns are rendered from whatever audio CPC keys the
           Companion routes in (useAudioSignals → the engine schema), so
@@ -492,41 +513,52 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
           tune signals in the Companion / Audio tab, not here. The meters
           are intentionally NOT touch-responsive (they show the effective
           post-chain value already being driven into the CPC).
+
+          DECK-ONLY hideAudioRow (docs/63 §3.1): when true, this row and its
+          <AudioPlotPicker> modal below are both skipped — gated on the SAME
+          condition so they can never drift apart and leave the modal
+          mounted over a hidden row. The `useAudioPlotSelection` hook above
+          and the `useAudioSignals` subscription stay unconditional; only
+          this JSX is gated.
        */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 4 : 6 }}>
-        {/* Same labelWidth + labelGap as row 1 so AUDIO lines up directly under
-            SPEED — no white-space gap. STATIC label now (party 2026-07-11): the
-            row is always the minimal strip, so the old collapse chevron/toggle
-            is gone. */}
-        <View
-          style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
-        >
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO SIGNALS'}</Text>
+      {!hideAudioRow ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 4 : 6 }}>
+          {/* Same labelWidth + labelGap as row 1 so AUDIO lines up directly under
+              SPEED — no white-space gap. STATIC label now (party 2026-07-11): the
+              row is always the minimal strip, so the old collapse chevron/toggle
+              is gone. */}
+          <View
+            style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO SIGNALS'}</Text>
+          </View>
+
+          <DynamicAudioRow
+            signals={audioSignals}
+            isPortrait={isPortrait}
+            selectedKeys={audioSelected}
+          />
+
+          {/* Edit which plots show — opens the picker. Right-aligned, compact. */}
+          <TouchableOpacity
+            onPress={() => setAudioPickerOpen(true)}
+            accessibilityLabel="Choose which audio signals to show"
+            style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'center' }}
+          >
+            <IconSymbol name="slider.horizontal.3" size={14} color={C.secondary} />
+          </TouchableOpacity>
         </View>
+      ) : null}
 
-        <DynamicAudioRow
+      {!hideAudioRow ? (
+        <AudioPlotPicker
+          visible={audioPickerOpen}
           signals={audioSignals}
-          isPortrait={isPortrait}
-          selectedKeys={audioSelected}
+          selected={audioSelected}
+          onChange={setAudioSelected}
+          onClose={() => setAudioPickerOpen(false)}
         />
-
-        {/* Edit which plots show — opens the picker. Right-aligned, compact. */}
-        <TouchableOpacity
-          onPress={() => setAudioPickerOpen(true)}
-          accessibilityLabel="Choose which audio signals to show"
-          style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'center' }}
-        >
-          <IconSymbol name="slider.horizontal.3" size={14} color={C.secondary} />
-        </TouchableOpacity>
-      </View>
-
-      <AudioPlotPicker
-        visible={audioPickerOpen}
-        signals={audioSignals}
-        selected={audioSelected}
-        onChange={setAudioSelected}
-        onClose={() => setAudioPickerOpen(false)}
-      />
+      ) : null}
 
       {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
       <ColorPickerModal

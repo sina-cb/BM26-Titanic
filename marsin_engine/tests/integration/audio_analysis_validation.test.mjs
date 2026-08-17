@@ -60,7 +60,10 @@ import { readWavMono, encodeWavMono } from './wav_io.mjs';
 // music" — the two halves of the honest precision/recall story.
 const TUNED_CFG = Object.freeze({
   enabled: true, eventRefractoryMs: 4000,
-  dropEnergyJump: 1.9, dropBuildRise: 0, dropNoveltyRatio: 0, dropSlowZoneMax: 0.4,
+  // 1.5 is calibrated against the production analyzer config loaded by
+  // run_analysis.mjs. The previous 1.9 belonged to its retired hard-coded
+  // attack/gain/kick settings and missed both affirmative fixtures.
+  dropEnergyJump: 1.5, dropBuildRise: 0, dropNoveltyRatio: 0, dropSlowZoneMax: 0.4,
 });
 // The product defaults, used to PROVE the negative controls pass without
 // any tuning at all.

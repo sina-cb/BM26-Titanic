@@ -3,15 +3,19 @@
   126_cathedral_rib_wave.js — CATHEDRAL RIB WAVE
 
   Five to seven monumental vertical rib planes pass through the full model.
-  A slow opening wave bows each plane in sequence, turning the installation
-  into a breathing cathedral skeleton visible at distance. The language is
-  deliberately broad and architectural, never a fine lattice.
+  A slow opening wave bows each plane in sequence while broad flying-buttress
+  light reaches the outer hull, bow, and stern. The installation remains a
+  breathing cathedral skeleton visible at distance, never a fine lattice.
 
   PORTABILITY
-    The shared composition uses normalized XYZ only. No authored view, raw id,
-    controller, group, section, or load-bearing fixture role is required.
-    FIX_TE_SIGN is an optional accent: where present, Identity holds a readable
-    rib-vault intersection. Models without signs render the full work unchanged.
+    The shared composition uses normalized XYZ plus the portable fixture-role
+    ABI; it never depends on a raw id, controller, group, or section number.
+    Bars carry wall buttresses, raw strands carry the skyline procession,
+    Vintage fixtures carry restrained rib jewels, and pars carry lantern vaults.
+    Each TE sign receives the same pixel-local rib-and-vault score. Matching
+    sign topology therefore gives exact bilateral energy while retaining
+    full-surface motion and legibility. Titanic and test_bench both provide the
+    complete authored role set and compile the same work.
 
   SAFETY FLOOR
     sliderSafetyFloor maps only 0.10..0.20. Every pixel remains on a visible,
@@ -46,7 +50,11 @@ export function sliderBow(v) { bow = v; }
 export function sliderSafetyFloor(v) { safetyFloor = v; }
 export function sliderPulse(v) { pulse = v; }
 
-// Optional accent role at the canonical append-only registry id.
+// Stable fixture-capability ids from the canonical append-only registry.
+var FIX_RAW_LED = 1;
+var FIX_PAR = 2;
+var FIX_VINTAGE_6 = 3;
+var FIX_BAR_18 = 4;
 var FIX_TE_SIGN = 7;
 
 var PHASE_WRAP = 10000.0;
@@ -149,56 +157,126 @@ export function render3D(index, x, y, z) {
   var dx = nx - 0.5;
   var dz = nz - 0.5;
 
-  // The upper vault is a single monumental arch. Its opening wave travels
-  // down X, causing successive planes to bow outward rather than translate.
+  // The upper vault is a single monumental arch. A small longitudinal drift
+  // keeps its crown alive across the entire model without breaking its scale.
   var span = abs(dz) * 2.0;
-  var vaultArch = 0.16 + 0.68 * sqrt(max(0.0, 1.0 - span * span));
-  var sequence = wave(openingClock - nx * 0.82);
+  var endSpan = abs(dx) * 2.0;
+  var perimeter = smoothUnit(max(span, endSpan));
+  var vaultDrift = sin((openingClock * 0.44 + nx * 0.23
+                     + span * 0.19) * PI2) * 0.035;
+  var vaultArch = 0.18
+                + 0.62 * sqrt(max(0.0, 1.0 - span * span))
+                + vaultDrift;
+  vaultArch = clamp01(vaultArch);
+
+  // The opening procession reaches the side aisles as well as the nave. Its
+  // depth offset prevents the whole ship from breathing as one repeated field.
+  var sequence = wave(openingClock - nx * 0.71
+                    + span * 0.17 + ny * 0.09);
   var opening = (0.035 + liveBow * 0.205) * (sequence * 2.0 - 1.0);
   var heightBow = (ny - 0.5) * (ny - 0.5) * opening * 1.65;
   var depthBow = sin((ny * 0.72 + vaultClock) * PI2)
-               * opening * (0.30 + 0.70 * (1.0 - span));
+               * opening * (0.56 + 0.44 * span);
+  var ribTravel = sin((openingClock * 0.73 + span * 0.19) * PI2)
+                * (0.022 + liveBow * 0.040);
 
   // A sine distance creates five to seven continuous rib planes. Bow shifts
   // their phase according to height/depth; there is no discrete reindex seam.
-  var ribPhase = (nx + heightBow + depthBow) * resolvedCount;
+  var ribPhase = (nx + heightBow + depthBow + ribTravel) * resolvedCount;
   var planeDistance = abs(sin(ribPhase * PI));
   var plane = smoothUnit(1.0 - planeDistance / resolvedWidth);
 
-  // The plane is brightest where it meets the cathedral vault, but remains a
-  // broad vertical structural band below it so the skeleton reads at distance.
+  // Ribs stay strongest at the vault but the flying-buttress lift deliberately
+  // energizes the model perimeter, so the cathedral is not a center-only halo.
   var vaultDistance = abs(ny - vaultArch);
   var vaultBand = smoothUnit(1.0 - vaultDistance / (0.11 + resolvedWidth * 0.72));
   var pillar = smoothUnit((vaultArch + 0.10 - ny) / 0.24);
-  var rib = plane * (0.38 + pillar * 0.28 + vaultBand * 0.70);
+  var buttress = perimeter
+               * smoothUnit(1.0 - abs(ny - (0.24 + span * 0.34))
+                                      / (0.22 + resolvedWidth));
+  var rib = plane * (0.42 + pillar * 0.24
+                    + vaultBand * 0.56 + buttress * 0.38);
   rib = clamp01(rib);
 
-  // A wide traveling opening glow binds neighboring ribs into a sequence
-  // without adding fine texture or another lattice frequency.
+  // A wide, incommensurate procession binds neighboring ribs. The outer-aisle
+  // term is restrained but visibly moves through bow, stern, and both sides.
   var openingGlow = smoothUnit(sequence) * (0.22 + liveBow * 0.30);
-  var cathedralEnergy = rib * 0.92 + plane * openingGlow * 0.38;
-  var authored = liveLevel * 0.18
-               + cathedralEnergy * (0.06 + liveLevel * 1.18)
+  var procession = smoothUnit(wave(openingClock * 0.73 - nx * 0.29
+                                 + span * 0.17 + ny * 0.11));
+  var aisleSweep = smoothUnit(wave(vaultClock * 1.618
+                                 - nx * 0.31 + span * 0.27));
+  var cathedralEnergy = rib * (0.80 + procession * 0.44)
+                      + plane * openingGlow * 0.40
+                      + plane * perimeter * aisleSweep * 0.30;
+  var authored = liveLevel * 0.10
+               + cathedralEnergy * (0.08 + liveLevel * 1.24)
                + rib * livePulse * 0.48;
-  authored = clamp01(authored);
+  authored = min(0.92, clamp01(authored));
   var bri = resolvedFloor + (1.0 - resolvedFloor) * authored;
 
-  var paletteMix = clamp01(0.12 + vaultBand * 0.60
-                          + sequence * 0.18 + livePulse * rib * 0.10);
+  var paletteMix = clamp01(0.12 + vaultBand * 0.50
+                          + sequence * 0.16 + buttress * 0.16
+                          + livePulse * rib * 0.10);
 
-  if (fixtureType == FIX_TE_SIGN) {
-    // Identity is the readable rib-vault crossing: a protected floor holds
-    // the letters while the same sequential planes visibly open through them.
-    var signVault = smoothUnit(1.0 - abs(ny - vaultArch)
-                            / (0.17 + resolvedWidth));
-    var intersection = clamp01(plane * (0.46 + signVault * 0.72));
-    var signFloor = resolvedFloor + 0.07;
-    var signEnergy = intersection * (0.32 + liveLevel * 0.64)
-                   + signVault * sequence * 0.18
-                   + intersection * livePulse * 0.36;
-    bri = max(bri, signFloor + (1.0 - signFloor) * clamp01(signEnergy));
-    paletteMix = clamp01(0.30 + signVault * 0.42
-                        + sequence * 0.16 + plane * 0.08);
+  if (fixtureType == FIX_BAR_18) {
+    // Hull Canvas: broad wall buttresses make the wooden surface carry the
+    // architecture. Only the moving planes are lifted; the dark bed stays calm.
+    var wallPlane = smoothUnit(1.0 - planeDistance
+                                    / (resolvedWidth * 2.20));
+    var wallLift = wallPlane * (0.14 + buttress * 0.28
+                              + openingGlow * 0.10);
+    bri = min(0.94, bri + wallLift * 1.20);
+    paletteMix = clamp01(paletteMix + buttress * 0.08);
+  } else if (fixtureType == FIX_RAW_LED) {
+    // Silhouette: an index-coherent procession walks the rope outline so the
+    // vessel remains readable even while XYZ ribs bend through it.
+    var outlineProcession = smoothUnit(wave(openingClock * 0.618
+                                          - pixelLocalIndex * 0.013
+                                          + ny * 0.17));
+    var outlineLift = plane * (0.10 + outlineProcession * 0.18)
+                    + rib * 0.08;
+    bri = min(0.94, bri + (1.0 - bri) * outlineLift);
+    paletteMix = clamp01(paletteMix + outlineProcession * 0.08);
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    // Jewelry: restrained six-head rib jewels answer the traveling planes.
+    // They stay palette-derived and architectural, never sparkle confetti.
+    var jewelProcession = smoothUnit(wave(vaultClock * 1.414
+                                        + pixelLocalIndex * 0.071
+                                        - nx * 0.19));
+    var jewelLift = plane * (0.12 + jewelProcession * 0.22)
+                  + rib * jewelProcession * 0.10;
+    bri = min(0.95, bri + (1.0 - bri) * jewelLift);
+    paletteMix = clamp01(paletteMix + jewelProcession * 0.12);
+  } else if (fixtureType == FIX_PAR) {
+    // Organs: pars become slow lanterns at the moving vault intersections.
+    var lantern = smoothUnit(wave(vaultClock * 1.732
+                                - nx * 0.23 + span * 0.17));
+    var lanternLift = plane * (0.14 + lantern * 0.24)
+                    + vaultBand * lantern * 0.12;
+    bri = min(0.95, bri + (1.0 - bri) * lanternLift);
+    paletteMix = clamp01(paletteMix + lantern * 0.14);
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Both 74-pixel signs share the same two-fixture local topology. Using
+    // pixelLocalIndex alone makes their output exactly symmetric while a wide
+    // vault and narrower ribs travel across every letter stroke. The explicit
+    // floor preserves the wordmark instead of letting animation erase it.
+    var signPosition = pixelLocalIndex * 0.025;
+    var signPlaneDistance = abs(sin((signPosition * resolvedCount
+                                  + openingClock * 0.44) * PI));
+    var signRib = smoothUnit(1.0 - signPlaneDistance
+                                  / (0.15 + resolvedWidth * 0.65));
+    var signVault = smoothUnit(wave(vaultClock * 0.73
+                                  - signPosition * 0.62));
+    var signProcession = smoothUnit(wave(openingClock * 0.37
+                                       + signPosition * 0.23));
+    var signFloor = min(0.36, resolvedFloor + 0.11);
+    var signEnergy = 0.08 + signRib * (0.32 + liveLevel * 0.42)
+                   + signVault * 0.20
+                   + signRib * signProcession * 0.18
+                   + signRib * livePulse * 0.34;
+    bri = signFloor + (1.0 - signFloor) * clamp01(signEnergy);
+    paletteMix = clamp01(0.24 + signVault * 0.38
+                        + signProcession * 0.20 + signRib * 0.12);
   }
 
   // All visible light is strict cp1<->cp2 RGB. Native white and amber remain

@@ -28,6 +28,7 @@ import { ChannelParamRouter } from './lib/channel_param_router.js';
 import { startApiServer } from './lib/api_server.js';
 import { ModulationController } from './lib/modulation_controller.js';
 import { IntensityController } from './lib/intensity_controller.js';
+import { sameModelGroupSections } from './lib/live_brightness_controller.js';
 import {
   applyLayerSettingCreativeBuffer,
   enforceLiveDimmerAuthority,
@@ -69,6 +70,7 @@ import { sceneStateDir, stateOverridesActive } from './lib/state_paths.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
+import { resolveVisConfig, createVisSampler, describeVisPlan } from './lib/vis_budget.js';
 import { assertNoDirectHardwareRoutes } from './lib/output_config_guard.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
@@ -80,6 +82,15 @@ import { execSync, spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Node's test runner marks every test worker with NODE_TEST_CONTEXT, and
+// spawned engines inherit it. Make that already-authoritative test boundary an
+// explicit auth-disabled choice so committed integration/HIL harnesses need no
+// private operator secrets. Normal direct engine boots still MUST provide an
+// exact 0/1 (launcher always provides 1); missing production mode fails loud.
+if (process.env.NODE_TEST_CONTEXT && process.env.BM26_CAPTAINPAD_AUTH_REQUIRED === undefined) {
+  process.env.BM26_CAPTAINPAD_AUTH_REQUIRED = '0';
+}
 
 // Shared offline-safe port cleanup (CommonJS, no extra deps) — replaces the
 // old `npx kill-port` which needs the network.
@@ -733,55 +744,30 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   });
 
   // ── Vis broadcast budget (config.yaml → `vis:`) ───────────────────────
-  // The vis broadcast feeds CaptainPad's PixelStrip previews. It is
-  // ADVISORY only — never affects sACN. Two knobs:
+  // The vis broadcast feeds CaptainPad's previews. It is ADVISORY only —
+  // never affects sACN. The whole contract (defaults, per-key overrides,
+  // LOUD validation) lives in lib/vis_budget.js; read its header before
+  // touching any of it. Two knobs, one of them now per key:
   //   * broadcastHz: how often we ship a fresh frame. Default 1 Hz; the
   //     operator only needs a "what's playing" preview, not a live
   //     waveform. Higher rates force the iPad to atob() + re-render N
   //     pixel <View>s per channel N times per second; with 4 mixer
   //     channels open at 10 Hz the iPad UI thread starves and the
   //     operator perceives playlist switches as slow.
-  //   * maxPixels: upper bound on per-channel pixel count. Larger
-  //     models are sampled uniformly down to this cap; smaller models
-  //     are sent verbatim. 100 keeps the per-frame payload small even
-  //     for rigs with thousands of pixels (where the full RGBWAU
-  //     buffer would otherwise dwarf every other broadcast).
-  const visBroadcastHz = (visConfig && visConfig.broadcastHz) > 0
-    ? Number(visConfig.broadcastHz) : 1;
-  const visMaxPixels = (visConfig && visConfig.maxPixels) > 0
-    ? Math.max(1, Math.floor(Number(visConfig.maxPixels))) : 100;
-  const visIntervalMs = Math.max(1, Math.round(1000 / visBroadcastHz));
-  // Sampling index table: built once at boot for this model. `null`
-  // means "no subsampling, copy the whole buffer".
-  let visSampleIdx = null;
-  if (pixelCount > visMaxPixels) {
-    visSampleIdx = new Int32Array(visMaxPixels);
-    for (let i = 0; i < visMaxPixels; i++) {
-      visSampleIdx[i] = Math.floor(i * pixelCount / visMaxPixels);
-    }
-  }
-  const visPxOut = visSampleIdx ? visMaxPixels : pixelCount;
-  // Hot-path scratch buffers — avoid `new Uint8Array(...)` on every
-  // broadcast (allocations are visible at 1 Hz too, especially under
-  // mass channel adds).
-  const visScratch6 = new Uint8Array(visPxOut * 6);
-  function subsampleVis(full6ch) {
-    if (!visSampleIdx) return full6ch;
-    for (let i = 0; i < visMaxPixels; i++) {
-      const src = visSampleIdx[i] * 6;
-      const dst = i * 6;
-      visScratch6[dst]     = full6ch[src];
-      visScratch6[dst + 1] = full6ch[src + 1];
-      visScratch6[dst + 2] = full6ch[src + 2];
-      visScratch6[dst + 3] = full6ch[src + 3];
-      visScratch6[dst + 4] = full6ch[src + 4];
-      visScratch6[dst + 5] = full6ch[src + 5];
-    }
-    return visScratch6;
-  }
-  console.log(`  📊 Vis broadcast: ${visBroadcastHz} Hz · ` +
-    `${visPxOut} px/strip` +
-    (visSampleIdx ? ` (subsampled from ${pixelCount})` : ` (model fits under cap)`));
+  //   * maxPixels: the DEFAULT upper bound on a key's pixel count, and the
+  //     one every per-CHANNEL key takes. Larger models are sampled
+  //     uniformly down to it; smaller models are sent verbatim. 100 keeps
+  //     the per-frame payload small even for rigs with thousands of pixels.
+  //   * keyMaxPixels: per-key overrides for the WHOLE-RIG composites
+  //     (`rig`, `preDimmer`, …), whose consumer is the Deck PIXELS canvas
+  //     (_225/_239) rather than a strip of RN <View>s. `full` = verbatim.
+  const visPlan = resolveVisConfig(visConfig);
+  const visSampler = createVisSampler(pixelCount, visPlan);
+  const visIntervalMs = visPlan.intervalMs;
+  // Per-channel keys all share the default budget; the frame declares this
+  // as its top-level `pixelCount` (see the broadcast below).
+  const visPxOut = visSampler.defaultOutputPixels();
+  console.log(`  📊 Vis broadcast: ${describeVisPlan(visPlan, visSampler, pixelCount)}`);
 
   // We need metadata arrays for 6ch WASM call
   // We can just construct them lazily the first time or pass 0 for null (if memory isn't used)
@@ -1258,22 +1244,29 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       }
     }
 
-    // Vis data broadcast at `visBroadcastHz` (default 1 Hz, see top of
+    // Vis data broadcast at `vis.broadcastHz` (default 1 Hz, see top of
     // createRenderLoop). Per-channel buffers come pre-rendered from
-    // mixer._visData; each one is subsampled down to `visMaxPixels`
-    // here before base64-encoding so a 500-px rig doesn't push a
-    // 3 KB/strip payload at the iPad.
+    // mixer._visData; each one is subsampled down to ITS OWN key budget
+    // here before base64-encoding, so a 500-px rig doesn't push a
+    // 3 KB/strip payload at the iPad while the whole-rig composites can
+    // still run full rate for the Deck PIXELS canvas.
     if (now - lastVisTime > visIntervalMs) {
       lastVisTime = now;
       if (statsCallback) {
         const visData = mixer.getVisData();
         const visPayload = {};
+        // Per-key sample counts. `pixelCount` below stays the DEFAULT-budget
+        // count (what every per-channel key carries, and what pre-_239
+        // clients read); this map is the per-key truth the PIXELS window and
+        // any future mixed-budget consumer needs.
+        const visPixelCounts = {};
         for (const [key, rgb] of Object.entries(visData)) {
           if (!rgb) { visPayload[key] = null; continue; }
-          // subsampleVis returns the shared scratch buffer; we MUST
+          // visSampler.sample() may return a SHARED scratch buffer; we MUST
           // base64-encode immediately (still synchronous here) before
           // the next call overwrites it.
-          visPayload[key] = Buffer.from(subsampleVis(rgb)).toString('base64');
+          visPayload[key] = Buffer.from(visSampler.sample(key, rgb)).toString('base64');
+          visPixelCounts[key] = visSampler.outputPixelsFor(key);
         }
         // `master` is set by pattern_mixer from the pre-dimmer composition,
         // so the UI sees what the show is producing — not the dimmed-down
@@ -1296,13 +1289,16 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
           rigBuffer[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
           rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
-        visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
+        visPayload['rig'] = Buffer.from(visSampler.sample('rig', rigBuffer)).toString('base64');
+        visPixelCounts['rig'] = visSampler.outputPixelsFor('rig');
         // Pre-dimmer composite (after global FX, before dimmers/blackout). The
         // deck + mixer master preview use this key so they show the effects
         // while ignoring the section dimmer rack. Encoded
-        // immediately (subsampleVis returns a shared scratch buffer).
+        // immediately (sample() may return a shared scratch buffer).
         if (preDimmerVisBuf) {
-          visPayload['preDimmer'] = Buffer.from(subsampleVis(preDimmerVisBuf)).toString('base64');
+          visPayload['preDimmer'] =
+            Buffer.from(visSampler.sample('preDimmer', preDimmerVisBuf)).toString('base64');
+          visPixelCounts['preDimmer'] = visSampler.outputPixelsFor('preDimmer');
         }
         // Per-channel effective-output METER levels (channel metering).
         // Plain { <visKey>: number(0..1) } keyed identically to visPayload —
@@ -1317,12 +1313,20 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         for (const [key, level] of Object.entries(visLevels)) {
           levelsPayload[key] = level;
         }
-        // `pixelCount` in the message is the number of pixels the iPad
-        // should actually expect in each base64 buffer — that's the
-        // SAMPLED count, not the model's true pixelCount. PixelStrip
-        // already does Math.min(propPixelCount, bytes.length/6) so the
-        // strip never tries to draw past the data.
-        statsCallback({ type: 'vis', vis: visPayload, levels: levelsPayload, pixelCount: visPxOut });
+        // `pixelCount` is the number of samples a DEFAULT-budget (per-channel)
+        // buffer carries — the SAMPLED count, not the model's true pixel
+        // count. `pixelCounts` is the per-key map, and `modelPixelCount` the
+        // model's real size, so a client can tell "full rate" from "capped"
+        // without guessing. PixelStrip derives its own count from the decoded
+        // byte length, so no strip can ever draw past its data.
+        statsCallback({
+          type: 'vis',
+          vis: visPayload,
+          levels: levelsPayload,
+          pixelCount: visPxOut,
+          pixelCounts: visPixelCounts,
+          modelPixelCount: pixelCount,
+        });
       }
     }
   }
@@ -1977,6 +1981,19 @@ async function main() {
                apiServer.broadcastMixerState();
              }
              return;
+          }
+
+          if (intensityController.liveBrightness.getState().active
+              && !sameModelGroupSections(model.pixels, newModel.pixels)) {
+            const staleMsg = 'Engine model is STALE: group/section mapping changed while Live Touch '
+              + 'is armed. Hot reload refused; disarm Live Touch and restart the engine.';
+            console.log(`  âš ï¸ ${staleMsg}`);
+            engineCore.modelSync.stale = true;
+            engineCore.modelSync.message = staleMsg;
+            if (apiServer && typeof apiServer.broadcastMixerState === 'function') {
+              apiServer.broadcastMixerState();
+            }
+            return;
           }
 
           // Apply new data in place

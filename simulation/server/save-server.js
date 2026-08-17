@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const yaml = require('js-yaml');
 
 const {
@@ -8,6 +9,8 @@ const {
   updateManifest,
   duplicateSceneDir,
 } = require('./scene_duplicate.cjs');
+
+const { listPatterns: listManifestPatterns } = require('./pattern_manifest.cjs');
 
 const ledGamma = require('./led_gamma_service.cjs');
 const controllerProbe = require('./controller_probe_service.cjs');
@@ -134,19 +137,14 @@ function listScenes() {
   return scenes.sort();
 }
 
+// The manifest generator lives in ./pattern_manifest.cjs — see that file for
+// why the subdirectory policy is an explicit registry rather than a blind
+// recursive walk. It THROWS on an unclassified pattern subdirectory;
+// writePatternManifest below catches it, logs loudly and leaves the tracked
+// manifest alone, so a new pattern family is reported instead of silently
+// dropped from the operator's pattern picker.
 function listPatterns() {
-  const patternsDir = path.join(ENGINE_ROOT, 'patterns');
-  if (!fs.existsSync(patternsDir)) return [];
-  const names = fs.readdirSync(patternsDir, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.js') && !e.name.startsWith('test_') && e.name !== 'test.js')
-    .map(e => e.name.replace(/\.js$/, ''));
-  const numbered = names.filter(n => /^\d/.test(n)).sort((a, b) => {
-    const na = parseInt(a, 10);
-    const nb = parseInt(b, 10);
-    return na - nb || a.localeCompare(b);
-  });
-  const named = names.filter(n => !/^\d/.test(n)).sort();
-  return [...numbered, ...named];
+  return listManifestPatterns(path.join(ENGINE_ROOT, 'patterns'));
 }
 
 // A scene name must be a single safe path segment: it starts with an
@@ -212,10 +210,86 @@ function writePatternManifest() {
   }
 }
 
+// ─── Live Touch pixel-view artifact ownership ────────────────────────────
+// docs/ui/touch_control_pixel_views.json is DERIVED state: the sim resolver's
+// output plus byte fingerprints of every authoritative input (the Titanic
+// model, pixel_map_views.yaml, cameras.yaml, views.yaml via the view
+// registry, and the resolver sources). Live Touch fails CLOSED — "PIXEL VIEW
+// UNAVAILABLE" — the moment any live input's bytes disagree with the
+// artifact's recorded fingerprint. This server is the ONLY writer of those
+// scene inputs at runtime, so it owns keeping the derived artifact in
+// lockstep (report 20260815_223 fixed exactly one trigger, the pixel-map
+// auto-save; the operator kept red-screening Live Touch through the OTHER
+// everyday trigger, saving a camera preset → cameras.yaml → stale artifact).
+//
+// Refresh points, all funneled through this one helper:
+//   - startup: heals edits that landed while the stack was down (git pull,
+//     hand-edited YAML, resolver/model changes) on the operator's next boot;
+//   - /save-cameras, /save-pixel-map-views, /save (views.yaml split-out),
+//     /save-model (base model only): heal live operator edits immediately.
+//
+// This is NOT a fallback and does NOT weaken verification: the exporter is
+// the same single resolver implementation, its write is idempotent by
+// content, a genuine resolver failure leaves the old artifact in place so
+// Live Touch still refuses loudly, and the failure is named in both the log
+// and the save response.
+//
+// The exporter path is anchored on __dirname (the real server directory),
+// NOT on SIM_ROOT: under the SIM_SAVE_SERVER_ROOT test override the scene
+// root is a throwaway tree that contains no tools/, and the old SIM_ROOT-
+// anchored spawn simply failed there. With the override active the artifact
+// is redirected INTO the throwaway tree (--out), so tests exercise this
+// exact wiring without ever writing the real tracked artifact.
+const TOUCH_VIEWS_EXPORTER = path.join(__dirname, '..', 'tools',
+  'export_touch_control_pixel_views.mjs');
+const TOUCH_VIEWS_TEST_OUT = process.env.SIM_SAVE_SERVER_ROOT
+  ? path.join(SIM_ROOT, 'touch_control_pixel_views.json')
+  : null;
+
+function refreshTouchPixelViews(trigger) {
+  const args = [TOUCH_VIEWS_EXPORTER];
+  if (TOUCH_VIEWS_TEST_OUT) args.push('--out', TOUCH_VIEWS_TEST_OUT);
+  try {
+    const stdout = execFileSync(process.execPath, args, {
+      cwd: path.join(__dirname, '..'), stdio: 'pipe', timeout: 60000,
+    }).toString().trim();
+    const summary = stdout.split('\n').filter((line) => line.includes('[touch-pixel-views]'))
+      .join(' ') || stdout;
+    console.log(`[SAVE SERVER] ✅ Live Touch pixel-view artifact fresh (${trigger}): ${summary}`);
+    return { ok: true };
+  } catch (exportError) {
+    const detail = (exportError.stderr && exportError.stderr.toString().trim())
+      || exportError.message;
+    console.error(`[SAVE SERVER] ✋ Live Touch pixel-view artifact export FAILED (${trigger}) — ` +
+      'Live Touch will refuse to arm until the artifact is regenerated ' +
+      '(cd simulation && npm run pixel-views:export):', detail);
+    return { ok: false, detail };
+  }
+}
+
+/**
+ * The WARNING trailer appended to a 200 save response when the scene write
+ * landed but the artifact refresh failed. The save itself must never fail
+ * (the operator's edit is safely on disk); the refusal surface is Live Touch,
+ * and this names both the consequence and the remedy.
+ */
+function touchExportWarning(savedWhat, detail) {
+  return `\nWARNING: ${savedWhat} saved, but the Live Touch pixel-view artifact ` +
+    'could NOT be re-exported, so Live Touch will refuse to arm until it is ' +
+    `regenerated (cd simulation && npm run pixel-views:export):\n${detail}`;
+}
+
 // Refresh both manifests at startup so a fresh clone has accurate lists
 // even before any save endpoint is hit.
 writeSceneManifest();
 writePatternManifest();
+// Boot-time self-heal: anything that changed the artifact's inputs while the
+// stack was down (git pull, a hand edit, a merged resolver change) would
+// otherwise red-screen Live Touch until someone remembers the manual export.
+// The operator's next sim restart now regenerates it. A failure here is loud
+// but non-fatal: saves must stay available, and Live Touch keeps refusing
+// with the named remedy until the underlying breakage is fixed.
+refreshTouchPixelViews('startup');
 
 http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -465,7 +539,18 @@ http.createServer((req, res) => {
         console.log(`[SAVE SERVER] ✅ Wrote ${commonPath} and ${outPath}`);
         // Saving may create a new scene directory; keep the manifest live.
         writeSceneManifest();
-        res.end('Saved');
+
+        // A full scene save rewrites views.yaml (split out above), and the
+        // view registry is a resolver input of the Live Touch artifact — a
+        // changed views.yaml with an un-regenerated artifact is SILENTLY
+        // stale geometry (the panel only fingerprints the other inputs).
+        // Re-export; idempotent no-op when nothing resolver-visible changed.
+        let exportNote = '';
+        if ((sceneName || 'titanic') === 'titanic') {
+          const refreshed = refreshTouchPixelViews('save');
+          if (!refreshed.ok) exportNote = touchExportWarning('scene', refreshed.detail);
+        }
+        res.end(`Saved${exportNote}`);
       } catch (e) {
         // Save-honesty (report 20260725_119, Family F / L5): a write that fails
         // (disk-full/EBUSY/EISDIR) MUST surface as a non-200 with the named
@@ -491,7 +576,17 @@ http.createServer((req, res) => {
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         fs.writeFileSync(outPath, body);
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
-        res.end('Saved');
+
+        // cameras.yaml is a fingerprinted input of the Live Touch pixel-view
+        // artifact, so every camera-preset save silently red-screened Live
+        // Touch ("stale against cameras.yaml") until the manual export was
+        // remembered. Re-export here, exactly like /save-pixel-map-views.
+        let exportNote = '';
+        if ((sceneName || 'titanic') === 'titanic') {
+          const refreshed = refreshTouchPixelViews('save-cameras');
+          if (!refreshed.ok) exportNote = touchExportWarning('cameras', refreshed.detail);
+        }
+        res.end(`Saved${exportNote}`);
       } catch (e) {
         // Save-honesty: a failed write is a named 500, never a 200 (see /save).
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -535,7 +630,23 @@ http.createServer((req, res) => {
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         writeFileAtomic(outPath, yaml.dump(tree, { lineWidth: -1 }));
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath} (${tree.views.length} view(s))`);
-        res.end('Saved');
+
+        // Live Touch reads a PRE-RESOLVED artifact (docs/ui/touch_control_pixel_views.json)
+        // that carries a byte fingerprint of this exact YAML, and it fails
+        // CLOSED — "PIXEL VIEW UNAVAILABLE" — the moment the two disagree. The
+        // 2D Pixel Map auto-saves on every pan/zoom, so without this the
+        // operator silently bricks Live Touch just by framing the map (report
+        // 20260815_223). Re-resolving here keeps the two in lockstep.
+        //
+        // The layout is already safely on disk, so an export failure must NOT
+        // fail the save and lose the operator's arrangement. It is reported in
+        // the response body and logged loudly instead of passing silently.
+        let exportNote = '';
+        if ((sceneName || 'titanic') === 'titanic') {
+          const refreshed = refreshTouchPixelViews('save-pixel-map-views');
+          if (!refreshed.ok) exportNote = touchExportWarning('layout', refreshed.detail);
+        }
+        res.end(`Saved${exportNote}`);
       } catch (e) {
         // Save-honesty: a failed write is a named 500, never a 200 (see /save).
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -651,8 +762,18 @@ http.createServer((req, res) => {
         writeFileAtomic(outPath, body);
 
         console.log(`[Save] Wrote model data to ${outPath}`);
+
+        // The BASE model file (titanic.js) is both a fingerprinted source and
+        // the topology the Live Touch artifact is resolved from; effects/
+        // viewmasks companions are NOT exporter inputs, so the model-export
+        // burst (model + effects + viewmasks) refreshes exactly once.
+        let exportNote = '';
+        if (safeScene === 'titanic' && suffix === '.js') {
+          const refreshed = refreshTouchPixelViews('save-model');
+          if (!refreshed.ok) exportNote = touchExportWarning('model', refreshed.detail);
+        }
         res.writeHead(200);
-        res.end('Saved');
+        res.end(`Saved${exportNote}`);
       } catch (e) {
         console.error(`[SAVE SERVER] Model save error:`, e);
         res.statusCode = 500;

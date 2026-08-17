@@ -194,17 +194,24 @@ export function render3D(index, x, y, z) {
 
   var tide = 0.78 + wave(tidePhase + nx * 0.09 + nz * 0.07) * 0.22;
   var kickShape = smKick * (2.0 - smKick);
+  // The existing kickShape keeps the saved low value (.12) as a restrained
+  // lunar crest. A second quadratic stage opens only when the operator pushes
+  // Kick high, making the manual 0 -> 1 sweep unmistakable without retuning
+  // the approved ambient bed.
+  var kickBurst = smKick * smKick;
   var lunarFlash = kickShape * clamp01(river * 0.48 + laceCore * 0.92
                                      + bank * 0.18);
+  var broadBurst = kickBurst * smooth01(clamp01(0.10 + river * 0.72
+                                              + bank * 0.28));
 
   // Low ambient haze, one coherent body, crisp cp2 lace, and dark banks. The
   // current remains legible at low width without filling the entire rig.
   var bodyBri = (0.008 + river * (0.33 + river * 0.78)
                + bank * 0.075 + lace * 0.26 + laceCore * 0.46
-               + lunarFlash * 0.70) * tide * smLevel;
+               + lunarFlash * 0.70 + broadBurst * 0.62) * tide * smLevel;
   bodyBri = clamp01(bodyBri);
   var colorMix = clamp01(0.08 + lace * 0.48 + laceCore * 0.54
-                       + lunarFlash * 0.36);
+                       + lunarFlash * 0.36 + broadBurst * 0.24);
 
   var r = (pr1 + (pr2 - pr1) * colorMix) * bodyBri;
   var g = (pg1 + (pg2 - pg1) * colorMix) * bodyBri;
@@ -222,7 +229,8 @@ export function render3D(index, x, y, z) {
   } else if (fixtureType == FIX_RAW_LED) {
     // Silhouette: saturated tracing on banks and caustic cores.
     var trace = clamp01(bodyBri * 0.24 + bank * smLevel * 0.16
-                      + laceCore * smLevel * 0.72 + lunarFlash * 0.28);
+                      + laceCore * smLevel * 0.72 + lunarFlash * 0.28
+                      + broadBurst * 0.42);
     r = trace * 0.025;
     g = trace * 0.29;
     b = trace;
@@ -239,12 +247,12 @@ export function render3D(index, x, y, z) {
     g = warm * 0.43;
     b = warm * 0.045;
     w = clamp01(smWhite * smLevel * (river * 0.045 + fleck * 1.34
-                                   + lunarFlash * 0.52));
+                                   + lunarFlash * 0.52 + broadBurst * 0.72));
   } else if (fixtureType == FIX_PAR) {
     // Organs: palette-authored pools below the current with UV depth. These
     // deliberately follow the selected colors instead of imposing orange.
     var pool = clamp01((river * 0.22 + bank * 0.11 + lunarFlash * 0.22)
-                     * smLevel);
+                     * smLevel + broadBurst * 0.46);
     var poolMix = clamp01(0.18 + river * 0.34 + lace * 0.32
                         + lunarFlash * 0.16);
     r = (pr1 + (pr2 - pr1) * poolMix) * pool;
@@ -263,7 +271,7 @@ export function render3D(index, x, y, z) {
     var signBody = smooth01(signCurrent);
     var signCrest = smooth01(1.0 - abs(signCurrent - 0.78) / 0.34);
     var signBri = (0.27 + signBody * 0.12 + signCrest * 0.12
-                 + river * 0.025 + lunarFlash * 0.10)
+                 + river * 0.025 + lunarFlash * 0.10 + broadBurst * 0.28)
                  * (0.78 + smLevel * 0.22);
     var signMix = clamp01(0.16 + signBody * 0.35 + signCrest * 0.25
                         + river * 0.08 + lunarFlash * 0.16);

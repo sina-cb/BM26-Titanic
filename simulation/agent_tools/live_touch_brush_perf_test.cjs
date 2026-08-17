@@ -25,6 +25,12 @@ const MODEL_PATH = path.join(REPO_ROOT, 'marsin_engine', 'models', 'titanic.js')
 const RENDER_PATH = path.join(REPO_ROOT, '.agent_renders', 'live_touch_brush_perf.png');
 const FULLSCREEN_RENDER_PATH = path.join(
   REPO_ROOT, '.agent_renders', 'live_touch_spatial_fullscreen.png');
+const VIEW_RENDER_PATHS = Object.freeze({
+  top_down: path.join(REPO_ROOT, '.agent_renders', 'live_touch_view_top_down.png'),
+  front: path.join(REPO_ROOT, '.agent_renders', 'live_touch_view_front.png'),
+  strands: path.join(REPO_ROOT, '.agent_renders', 'live_touch_view_strands.png'),
+  te_sign: path.join(REPO_ROOT, '.agent_renders', 'live_touch_view_te_sign.png'),
+});
 const SAMPLE_FRAMES = 600;
 const SAMPLES_PER_FRAME = 2;
 const MAX_FADE_WAIT_MS = 1700;
@@ -298,13 +304,18 @@ async function multitouchFullscreenGate(page, url, layout) {
     emit('pointermove', 202, 0.7, 0.7, true);
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const two = window.TouchInkDiagnostics();
+    const twoPreview = window.TouchPixelViews.state();
     const secondaryWhileDown = pad.querySelectorAll('.xy-handle.is-secondary').length;
-    if (two.activePointers !== 2 || secondaryWhileDown !== 1) {
-      throw new Error(`expected two visual touches, got ${two.activePointers}/${secondaryWhileDown}`);
+    if (two.activePointers !== 2 || secondaryWhileDown !== 1
+        || twoPreview.activePreviewPointers !== 2 || twoPreview.previewPixelCount === 0) {
+      throw new Error(`expected two visual touches and a unioned pixel preview, got `
+        + `${two.activePointers}/${secondaryWhileDown}/${JSON.stringify(twoPreview)}`);
     }
     emit('pointerup', 101, 0.3, 0.3, false);
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    if (window.TouchInkDiagnostics().activePointers !== 1) {
+    const onePreview = window.TouchPixelViews.state();
+    if (window.TouchInkDiagnostics().activePointers !== 1
+        || onePreview.activePreviewPointers !== 1 || onePreview.previewPixelCount === 0) {
       throw new Error('lifting one touch cancelled the other visual stroke');
     }
     emit('pointerup', 202, 0.7, 0.7, false);
@@ -327,6 +338,28 @@ async function multitouchFullscreenGate(page, url, layout) {
       secondaryHandles: secondaryWhileDown,
     };
   });
+}
+
+async function captureCanonicalViews(page, url, layout) {
+  await page.setViewport({ width: 1180, height: 820, deviceScaleFactor: 2 });
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await waitForPixelRuntime(page);
+  await page.evaluate((engineLayout) => window.TouchPixelViews.verifyEngineLayout(engineLayout), layout);
+  await page.evaluate(() => {
+    document.querySelectorAll('#modeToggle button')[1].click();
+    document.getElementById('spatialFullscreen').click();
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  const panel = await page.$('.spatial-panel');
+  if (!panel) throw new Error('Spatial panel is missing for canonical view screenshots');
+  for (const [viewId, outputPath] of Object.entries(VIEW_RENDER_PATHS)) {
+    await page.evaluate((id) => window.TouchPixelViews.selectView(id), viewId);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(
+      () => requestAnimationFrame(resolve),
+    )));
+    await panel.screenshot({ path: outputPath, type: 'png' });
+  }
+  return { ...VIEW_RENDER_PATHS };
 }
 
 async function main() {
@@ -361,6 +394,7 @@ async function main() {
 
     const geometry = await geometryGate(page, url);
     const multitouch = await multitouchFullscreenGate(page, url, layout);
+    const viewScreenshots = await captureCanonicalViews(page, url, layout);
     await page.evaluate(() => {
       document.querySelectorAll('#modeToggle button')[1].click();
       document.getElementById('spatialFullscreen').click();
@@ -390,6 +424,9 @@ async function main() {
       `${brush.inkAfter.inkFramePending || brush.inkAfter.inputFramePending}`);
     console.log(`  screenshot: ${RENDER_PATH}`);
     console.log(`  fullscreen screenshot: ${FULLSCREEN_RENDER_PATH}`);
+    for (const [viewId, outputPath] of Object.entries(viewScreenshots)) {
+      console.log(`  ${viewId} screenshot: ${outputPath}`);
+    }
   } finally {
     if (browser) await browser.close();
     await closeServer(server);

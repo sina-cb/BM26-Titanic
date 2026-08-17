@@ -42,7 +42,8 @@
  *         no fallback behaviors).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, Alert, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, ScrollView, Platform, useWindowDimensions } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { shadow } from '@/styles/globalStyles';
 import { notifyEffectsPanelLoaded } from '@/hooks/useMidiControl';
@@ -65,7 +66,7 @@ import {
   GlobalEffectSlotStatus,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
-import { usePerfLock, usePerformanceMode } from '@/hooks/usePerformanceMode';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   VISIBLE_SLOT_COUNT,
   EFFECTS_PAGE_COUNT,
@@ -188,7 +189,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // Performance mode (live-show structural lock) dims the ⋯ swap / "+" bind
   // affordances and drives the LOCKED mode badge. Read live so the badge clears
   // the moment performance mode is exited. This is SEPARATE from the profile.
-  const performanceActive = usePerformanceMode().active;
+  const performanceActive = usePerfLock();
   // Named effect banks (ordered, >= 1). This drives ONLY the neutral BANK badge
   // (informational — names the active bank + its position) and the minimal
   // add/delete controls. It must NEVER touch chrome/sizing/affordances — the
@@ -628,7 +629,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     const r = await patchGlobalEffectSlot(slotId, { enabled: false });
     if (!r.ok) {
       console.warn(`[GEM] clear slot ${slotId} failed:`, r.error);
-      Alert.alert('Slot clear failed', r.error || 'Engine rejected the PATCH.');
+      opError('Slot clear failed', r.error || 'Engine rejected the PATCH.');
     }
     refresh();
   }, [refresh, ensureSlotOff]);
@@ -648,7 +649,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     });
     if (!r.ok) {
       console.warn(`[GEM] swap slot ${slotId} failed:`, r.error);
-      Alert.alert('Slot bind failed', r.error || 'Engine rejected the PATCH.');
+      opError('Slot bind failed', r.error || 'Engine rejected the PATCH.');
     }
     refresh();
   }, [refresh, ensureSlotOff]);
@@ -1259,7 +1260,6 @@ const BankControls: React.FC = () => {
   // both strip rows). The hooks above still run (Rules of Hooks — the early return
   // is AFTER them) so the component stays hook-stable; flipping the flag restores
   // the controls verbatim. The create/delete machinery below is kept as a TODO.
-  if (!BANKS_UI_ENABLED) return null;
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -1291,6 +1291,8 @@ const BankControls: React.FC = () => {
       .then((r) => { if (!r.ok) console.warn(`[BankControls] delete failed: ${r.error}`); })
       .finally(() => setBusy(false));
   }, [disabled, canDelete, confirmingDelete, banks.activeBankId]);
+
+  if (!BANKS_UI_ENABLED) return null;
 
   const pillStyle = (active: boolean) => ({
     flexDirection: 'row' as const,

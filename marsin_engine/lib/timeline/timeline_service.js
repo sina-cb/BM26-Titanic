@@ -241,6 +241,11 @@ export class TimelineService {
    *                                            NEVER a real PortWatch hardware lock.
    *   getViewOverrideMode()                  — read-only: current engine view-override ('deck'|null),
    *                                            so getState can surface `forcingDeckView`
+   *   yieldLiveTouch(why)                    — OPTIONAL (api_server always supplies it; unit
+   *                                            harnesses may omit it). TIMELINE PRIORITY, operator
+   *                                            ruling 2026-08-14: force-disarm any active Live Touch
+   *                                            ARM so the plan can take the rig back on resume /
+   *                                            operator-lease expiry. Must never throw.
    * where `target` is { channel:'deck'|'mixer'|'all', id }.
    */
   constructor({ scene, sceneDir, stateDir, getMood, deps, broadcast, config, nowFn }) {
@@ -1739,29 +1744,98 @@ export class TimelineService {
     return festivalDayIndex(this.plan, this.nowFn()) !== null;
   }
 
-  // True when the plan is currently DRIVING the rig (docs/38 §16). Mirrors the
-  // `planActive` computed in getState(): autopilot-or-program controller, not
-  // overridden (operator takeover), AND in the festival window. When false the
+  // ══ OPERATOR-CRITICAL INVARIANT — PLAN DISABLED MEANS TOTALLY INERT ══════
+  //
+  // `planEnabled()` is the AUTHORITATIVE answer to "is the show plan switched
+  // on at all". When it is false the plan must own NOTHING: no cue may fire, no
+  // pending-program lease may arm or auto-start, no autopilot baseline may
+  // cycle the deck, no deck-pin / 'plan' controlLock may be raised, and any cue
+  // that WAS running ends IMMEDIATELY (see `_goDormant`, the shared teardown).
+  // The operator ruling behind this: a disabled plan that still shows a plan
+  // warning, still holds the deck, or lets a scheduled program auto-start 30 s
+  // later is a broken show, not a nuance.
+  //
+  // DO NOT re-derive this from `controller`, `mode`, or a local flag anywhere
+  // else — every consumer (tick gate, catchUp gate, planActive, the status/WS
+  // payload, CaptainPad's banners) must funnel through this predicate and
+  // `_isPlanDrivingDeck()` below so the answer can never disagree with itself.
+  planEnabled() {
+    return this.state ? this.state.autopilotEnabled !== false : false;
+  }
+
+  // ══ TIMELINE PRIORITY OVER LIVE TOUCH — OPERATOR RULING 2026-08-14 ═══════
+  //
+  // "The timeline resume when live touch takes over needs to disarm and switch
+  // back to timeline when resume is pressed OR when the lease is expired —
+  // EVEN IF THE ARM IS ACTIVE. The timeline is high priority."
+  //
+  // Both hand-back paths (`resume()` and `_releaseOperatorLease()`) call this
+  // FIRST. The engine dep runs the ordinary Live Touch disarm — the same code
+  // path a clean disarm uses — so brightness authority, the owner-local Live
+  // session, the param-centre source lock and the ARM lease all go away, and
+  // the Live client is told over WS why it just lost the desk.
+  //
+  // A broken Live client must NEVER hold the show hostage: the dep is written
+  // so it cannot throw, and a failure inside it is logged loudly and the plan
+  // continues regardless. Nothing here is gated on authentication — taking
+  // over FROM the timeline may be gated, coming BACK to it never is.
+  _yieldLiveTouchToPlan(why) {
+    if (typeof this.deps.yieldLiveTouch !== 'function') return;
+    try {
+      this.deps.yieldLiveTouch(why);
+    } catch (e) {
+      this.lastError = `live touch yield: ${e && e.message}`;
+      console.warn(`  ⚠ [timeline] Live Touch force-disarm reported an error (${why}): `
+        + `${e && e.message} — the plan is taking over anyway.`);
+    }
+  }
+
+  // ══ THE ONE "the plan is driving the rig" PREDICATE ══════════════════════
+  //
+  // True when the plan is currently DRIVING the rig (docs/38 §16): the plan is
+  // ENABLED, an autopilot-or-program controller owns it, no operator takeover
+  // is in force, AND the plan is inside its festival window. When false the
   // plan owns nothing and its soft deck-pin must be released.
+  //
+  // getState().planActive returns EXACTLY this value — the two used to be
+  // hand-copied expressions and must never drift apart again. Every plan
+  // banner / scrim / lock in every client derives from that one field.
   //
   // The festival-window term is the SAME isolation gate as everywhere else
   // (operator request 2026-07-03): out of its scheduled days the plan drives
   // nothing, so it never "drives the deck" for pin/lock purposes.
   _isPlanDrivingDeck() {
+    if (!this.planEnabled()) return false;
     const controller = this.state.controller || 'autopilot';
     return (controller === 'autopilot' || controller === 'program')
       && this.state.mode !== 'overridden'
       && this._inFestivalWindow();
   }
 
-  // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): go fully DORMANT.
-  // Out of the plan's scheduled days the plan must affect NOTHING — no autopilot
-  // baseline cycling the deck, no cue fires, no deck-pin / 'plan' lock, no
-  // takeover. The ONLY out-of-window signal is the timeline tab's "not in time"
-  // note (getState.inFestivalWindow=false). This tears down everything the plan
-  // might own and hands the whole rig back to the operator. Idempotent + cheap
-  // at steady state (the disarm is _baselineArmed-gated; the pin release early-
-  // returns when nothing is pinned; the state writes are all no-ops once set).
+  // ══ THE ONE PLAN-TEARDOWN PATH — OPERATOR-CRITICAL, TREAT AS LOAD-BEARING ══
+  //
+  // Go fully DORMANT: the plan must affect NOTHING — no autopilot baseline
+  // cycling the deck, no active program, no armed/pending program lease, no
+  // cue owning the deck window, no deck-pin / 'plan' lock, no takeover lease.
+  //
+  // TWO CALLERS, ONE PATH, BY DESIGN:
+  //   • FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03) — out of the
+  //     plan's scheduled days. Signalled by getState.inFestivalWindow=false.
+  //   • PLAN DISABLED (operator ruling 2026-08-14) — AUTO off / plan not
+  //     enabled. ALL ACTIVE CUES END RIGHT HERE, RIGHT NOW, rather than at
+  //     their natural expiry. This IS the natural cue-end path: it clears the
+  //     active program and the deck-ownership latches and releases the plan's
+  //     deck-pin, which is precisely what a hold expiring does — only executed
+  //     immediately. It deliberately does NOT re-establish a baseline or load a
+  //     replacement look: a disabled plan drives nothing, so the rig simply
+  //     keeps whatever the operator has on it.
+  //
+  // Whoever calls it, afterwards `_isPlanDrivingDeck()` reads false, so
+  // getState().planActive is false and every client's plan banner/scrim/lock
+  // drops. Idempotent + cheap at steady state (the disarm is _baselineArmed-
+  // gated; the pin release early-returns when nothing is pinned; the state
+  // writes are all no-ops once set), so it is safe to fire redundantly — the
+  // tick does exactly that on every dormant/disabled tick.
   async _goDormant() {
     // ZOOM (report _94 §3.3): a TIME-TRAVEL zoom is an OPERATOR-owned rehearsal,
     // not the plan driving the rig — and travel is deliberately ALLOWED while the
@@ -2027,6 +2101,21 @@ export class TimelineService {
       return;
     }
 
+    // ══ PLAN-DISABLED GATE — OPERATOR-CRITICAL ═════════════════════════════
+    // catchUp is the "put the plan's look for right now on the rig" path, run
+    // on boot, scene switch, plan save/activate, resume and lease release. A
+    // DISABLED plan must never do that: an engine restarted with the plan off
+    // has to come up cue-free and stay that way, and a resume/lease-expiry must
+    // not resurrect a plan the operator switched off. Tear down and return —
+    // the rig keeps whatever non-plan state it already has, exactly like the
+    // out-of-window case above (no fallback guessing, no default playlist).
+    if (!this.planEnabled()) {
+      await this._goDormant();
+      saveTimelineState(this.state, this.stateDir);
+      this.lastStateJson = JSON.stringify(this.state);
+      return;
+    }
+
     // Every already-passed clock/sun cue of today is latched fired (the resolver
     // reports them in plan order; the latch itself is ours — the resolver is pure).
     for (const cueId of resolved.passedCueIds) this.state.firedToday[cueId] = dayKey;
@@ -2232,6 +2321,29 @@ export class TimelineService {
         if (dormantJson !== this.lastStateJson) {
           saveTimelineState(this.state, this.stateDir);
           this.lastStateJson = dormantJson;
+        }
+        this._broadcastState();
+        return;
+      }
+
+      // ══ PLAN-DISABLED GATE — OPERATOR-CRITICAL, KEEP IT FIRST ═══════════
+      // A DISABLED plan is totally inert (see `planEnabled()`). This gate sits
+      // beside the festival-window gate and before EVERYTHING that could make
+      // the plan own something: sequence advance, cue evaluation, the arbiter
+      // (whose pending-program lease would otherwise AUTO-START a scheduled
+      // show 30 s after it comes due, even with AUTO off), baseline re-arm and
+      // the deck-pin. `_goDormant()` is the shared teardown, so a disable that
+      // lands mid-flight is reconciled here on the very next tick and cannot
+      // leave a half-active cue behind. Idempotent and cheap at steady state.
+      if (!this.planEnabled()) {
+        this._cancelSequence('the show plan is disabled');
+        await this._goDormant();
+        // A scene action inside a dep could have torn the service down.
+        if (this._tickHandle === null) return;
+        const disabledJson = JSON.stringify(this.state);
+        if (disabledJson !== this.lastStateJson) {
+          saveTimelineState(this.state, this.stateDir);
+          this.lastStateJson = disabledJson;
         }
         this._broadcastState();
         return;
@@ -2621,13 +2733,14 @@ export class TimelineService {
     }
     const controller = this.state.controller || 'autopilot';
     // planActive (docs/38 §16): the timeline is actively DRIVING the rig.
-    // OUT OF THE FESTIVAL WINDOW this is ALWAYS false (operator request
-    // 2026-07-03): the plan drives nothing out of its scheduled days, so the
-    // deck/mixer lock, the takeover flow, and the plan indicator all stay off —
-    // only the timeline tab's inFestivalWindow=false note shows.
-    const planActive = (controller === 'autopilot' || controller === 'program')
-      && this.state.mode !== 'overridden'
-      && inWindow;
+    // THE SINGLE SOURCE OF TRUTH is `_isPlanDrivingDeck()` — do not re-derive
+    // it here. It is false whenever the plan is DISABLED (operator-critical
+    // invariant: a disabled plan owns nothing and shows no warning anywhere)
+    // and whenever the plan is out of its festival window (operator request
+    // 2026-07-03) — so the deck/mixer lock, the takeover flow, and every client
+    // plan banner/scrim all stay off; only the timeline tab's
+    // inFestivalWindow=false / autopilotEnabled=false notes show.
+    const planActive = this._isPlanDrivingDeck();
     // forcingDeckView (docs/38 §16.9): the plan is active AND the engine output
     // is currently pinned to the deck under plan control. CaptainPad reads this
     // to know a switch-to-mixer needs the confirm prompt + 1-min auto-revert
@@ -3139,6 +3252,14 @@ export class TimelineService {
    * explicit hand-back.
    */
   async resume() {
+    // ══ TIMELINE PRIORITY (operator ruling 2026-08-14) ═══════════════════
+    // RESUME outranks a Live Touch ARM. Force-disarm the Live session BEFORE
+    // anything else so its source lock is released and the catchUp below can
+    // actually write params — an armed desk holds a 'global'/'api' source lock
+    // that would otherwise make every catchUp colour/speed write bounce with
+    // reason 'source_lock'. Never gated on auth: getting BACK to the plan is
+    // always free.
+    this._yieldLiveTouchToPlan('timeline resume pressed');
     // Event log (docs/38 §15.2): explicit operator hand-back. EDGE-ONLY — a
     // resume that changes nothing (already armed, no lease) logs nothing.
     // Logged BEFORE _catchUp so the resume precedes its catchUp fire.
@@ -3266,6 +3387,12 @@ export class TimelineService {
    * tick when now ≥ operatorLease.expiresAtMs.
    */
   async _releaseOperatorLease() {
+    // ══ TIMELINE PRIORITY (operator ruling 2026-08-14) ═══════════════════
+    // The lease expiring outranks a Live Touch ARM exactly like RESUME does —
+    // "EVEN IF THE ARM IS ACTIVE". Same force-disarm, same reasons (the source
+    // lock must be gone before the catchUp below writes), same freedom from
+    // any auth gate. See `_yieldLiveTouchToPlan`.
+    this._yieldLiveTouchToPlan('timeline operator lease expired');
     const expiry = this.state.operatorLease && this.state.operatorLease.expiresAtMs;
     this.state.mode = 'armed';
     this.state.operatorLease = null;
@@ -3303,21 +3430,25 @@ export class TimelineService {
         }
         await this._establishBaselineIfActive('operator');
       } else {
-        // Turning the plan's autopilot OFF is an explicit operator "stop
-        // driving" — it must ALSO END any takeover in progress (clear the
-        // operator lease + exit 'overridden'), so no stale "taken over — plan
-        // resumes in M:SS" banner lingers (operator report 2026-07-03:
-        // disabling the plan after a takeover left the warning up). With the
-        // lease cleared and mode armed, planActive AND leaseHeld both read
-        // false → the deck/mixer lock banner and the lease countdown both drop.
-        this.state.operatorLease = null;
-        this.state.mode = 'armed';
-        await this._disarmBaselineAutopilot();
-        if (!this.state.activeProgram) this.state.controller = 'manual';
-        // The baseline no longer owns the deck (docs/38 §16.9). If a program is
-        // still active it keeps its own deck-pin; otherwise release the plan's
-        // soft deck-pin so the 'plan' controlLock clears (yellow lock drops).
-        await this._reconcileDeckPin();
+        // ══ DISABLE = TOTAL TEARDOWN, RIGHT NOW — OPERATOR-CRITICAL ═══════
+        // Turning the plan OFF is an explicit operator "stop driving", and the
+        // operator ruling is that it is ABSOLUTE: the plan is not active any
+        // more and ALL ACTIVE CUES END IMMEDIATELY, not at their natural end.
+        //
+        // This runs the ONE shared teardown (`_goDormant`) rather than a
+        // bespoke partial cleanup, because the partial version leaked twice:
+        //   • an ACTIVE PROGRAM survived the disable (controller stayed
+        //     'program' → planActive stayed true → the plan warning and the
+        //     deck-pin stayed up on a plan the operator had switched off);
+        //   • a PENDING program lease survived and auto-started the show ~30 s
+        //     later, so a disabled plan still seized the rig.
+        // `_goDormant` clears the active program, the pending lease, the
+        // deck-ownership latches, the takeover lease/'overridden' mode, disarms
+        // the baseline and releases the plan's soft deck-pin — the same work a
+        // natural hold expiry does, executed now. The tick's plan-disabled gate
+        // re-runs it every tick, so this transition is idempotent and a disable
+        // that races a cue fire is reconciled within one tick.
+        await this._goDormant();
         this.lastError = null;
       }
     } catch (e) {

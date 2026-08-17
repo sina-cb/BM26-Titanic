@@ -349,6 +349,104 @@ const BENCH_MIRROR_STATE_ROOT =
     ? path.resolve(process.env.BM26_BENCH_MIRROR_STATE_ROOT.trim())
     : path.join(SIM_ROOT, 'scenes');
 
+// ── The port-cleanup ARM INTERLOCK (report 20260815_233 F7) ────────────────
+//
+// `tools/port_cleanup.cjs` resolves the UDP :5568 holder — which is THIS
+// process and nothing else — and `taskkill /T /F`s it. That skips SIGTERM, so
+// `shutdown()` never runs, so the DISARM blackout never goes out, so every
+// mirrored box freezes on its last composed frame: a lit rig with no writer.
+// `_212` called it a standing hazard; `_229` §4 caught it happening.
+//
+// Arming is process memory and its only live surface is the sim WebSocket,
+// which a synchronous zero-dependency killer cannot dial. So the arm publishes
+// a PID-stamped marker that the killer reads, and the killer refuses this pid
+// while the marker is live. Written on ARM success, removed on DISARM, and
+// removed again on a clean exit — and stale-proof by construction, because the
+// guard believes it only while that PID is alive AND still looks like a bridge.
+const { writeArmMarker, clearArmMarker, readArmMarker, pidAlive,
+  BENCH_MIRROR_ARM_MARKER } = require('../../tools/port_cleanup.cjs');
+
+/**
+ * Publish "this process holds an armed bench mirror" for the port sweeps.
+ *
+ * A write failure does NOT unwind the arm — the hardware has already changed
+ * hands — but it is never swallowed: it is logged, broadcast and returned as an
+ * arm warning, because it means the interlock is NOT protecting this session.
+ * @returns {string|null} the warning, or null on success
+ */
+function claimArmInterlock(arm) {
+  try {
+    writeArmMarker({
+      pid: process.pid,
+      armedAt: arm.armedAt,
+      scene: arm.scene,
+      sourceScene: arm.sourceScene,
+      label: arm.label,
+      destinations: arm.destinations.map(d => `U${d.universe} → ${d.ip}`),
+    });
+    console.log(`[sACN Bridge] 🔒 arm interlock claimed — ${BENCH_MIRROR_ARM_MARKER} (pid ` +
+      `${process.pid}). A port sweep that would force-kill this bridge is REFUSED while the ` +
+      'mirror is armed, so the boxes cannot be frozen by one.');
+    return null;
+  } catch (e) {
+    const why = `the port-cleanup ARM INTERLOCK could not be claimed — ${e.message} The mirror ` +
+      'is armed and running, but a port sweep (launcher start, kill-ports, another session) can ' +
+      'still force-kill this bridge, which would FREEZE every mirrored box on its last frame ' +
+      'instead of blacking it out.';
+    console.error(`[sACN Bridge] ❌ 🪞 ${why}`);
+    broadcastLog(`❌ 🪞 ${why}`, 'warn');
+    return why;
+  }
+}
+
+/**
+ * At boot: clear an interlock left behind by a bridge that no longer exists.
+ *
+ * Every start comes up DISARMED, and only one process can hold UDP :5568, so a
+ * marker naming a DEAD pid at this moment is by definition the residue of the
+ * force-kill this interlock exists to prevent. A marker naming a LIVE process is
+ * never touched — it is reported instead, because that is either a second bridge
+ * (a real fault) or a claim that is not ours to drop.
+ */
+function reapStaleArmInterlock() {
+  const state = readArmMarker();
+  if (state.state === 'absent') return;
+  if (state.state === 'corrupt') {
+    console.warn(`[sACN Bridge] ⚠ the port-cleanup arm interlock marker is unreadable — ` +
+      `${state.error}. Port cleanup will refuse to kill ANY sACN bridge until it is deleted.`);
+    return;
+  }
+  if (pidAlive(state.marker.pid) && state.marker.pid !== process.pid) {
+    console.warn(`[sACN Bridge] ⚠ the arm interlock ${BENCH_MIRROR_ARM_MARKER} is claimed by a ` +
+      `LIVE pid ${state.marker.pid} that is not this bridge. Leaving it alone; if that process ` +
+      'is not an armed sACN bridge, port cleanup is being blocked by a claim nobody owns.');
+    return;
+  }
+  try {
+    if (clearArmMarker()) {
+      console.log(`[sACN Bridge] 🔓 cleared a STALE arm interlock (pid ${state.marker.pid} is ` +
+        `gone, armed ${state.marker.armedAt || 'at an unrecorded time'}). That bridge did not ` +
+        'disarm before it died — its mirrored boxes were left holding their last composed frame.');
+    }
+  } catch (e) {
+    console.warn(`[sACN Bridge] ⚠ could not clear the stale arm interlock — ${e.message}`);
+  }
+}
+
+/** Drop the interlock. Loud on failure — a stale claim blocks port cleanup. */
+function releaseArmInterlock(why) {
+  try {
+    if (clearArmMarker()) {
+      console.log(`[sACN Bridge] 🔓 arm interlock released (${why}) — port sweeps may kill this ` +
+        'bridge again.');
+    }
+  } catch (e) {
+    console.error(`[sACN Bridge] ❌ the arm interlock marker ${BENCH_MIRROR_ARM_MARKER} could ` +
+      `NOT be removed (${e.message}). Port cleanup will keep refusing to kill an sACN bridge ` +
+      'until it is deleted by hand.');
+  }
+}
+
 /**
  * The inbound frame's RAW DMX bytes, as the 1-indexed `{channel: value}` object
  * every downstream consumer in this file takes.
@@ -589,7 +687,18 @@ function readSceneTrees(sName) {
     ['sceneConfig', 'scene_config.yaml']]) {
     const p = path.join(dir, file);
     if (!fs.existsSync(p)) return null;
-    out[key] = yaml.load(fs.readFileSync(p, 'utf8'));
+    // A scene file caught MID-WRITE (an editor or another agent saving) is a
+    // PARSE throw, not a missing file — and this runs on the armed health check
+    // every ENGINE_POLL_MS. Unguarded it escaped `resolveMirrorFor` (whose two
+    // try blocks start below these reads), then `recomputeRoutes`, then the
+    // async engine poll, which has no catch: an unhandled rejection that KILLS
+    // the whole input bridge. `readSceneRoutePairs` above has always guarded
+    // its own `yaml.load`; this one was the oversight. Report 20260814_212.
+    try {
+      out[key] = yaml.load(fs.readFileSync(p, 'utf8'));
+    } catch (e) {
+      throw new Error(`${sName}/${file} did not parse — ${e.message}`);
+    }
   }
   return out;
 }
@@ -603,14 +712,24 @@ function readSceneTrees(sName) {
  *            spec:(Object|null)}}
  */
 function resolveMirrorFor(benchSceneName, spec, sourceSceneName, selection) {
-  const benchScene = readSceneTrees(benchSceneName);
+  let benchScene;
+  let sourceScene;
+  try {
+    benchScene = readSceneTrees(benchSceneName);
+    sourceScene = readSceneTrees(sourceSceneName);
+  } catch (e) {
+    // A scene file that does not parse is an operator-fixable condition, so it
+    // is a NAMED REFUSAL — never a throw that unwinds into the caller's async
+    // timer and takes the bridge down with it.
+    return { ok: false, warnings: [], slots: [], spec: null,
+      refusal: `ARM refused [R-16]: a scene declaration file could not be read — ${e.message}` };
+  }
   if (benchScene === null) {
     return { ok: false, warnings: [], slots: [], spec: null,
       refusal: `ARM refused [R-16]: scene '${benchSceneName}' does not carry all three of ` +
         'controllers.yaml / patches.yaml / scene_config.yaml, so its bench slots cannot be ' +
         'resolved.' };
   }
-  const sourceScene = readSceneTrees(sourceSceneName);
   if (sourceScene === null) {
     return { ok: false, warnings: [], slots: [], spec: null,
       refusal: `ARM refused [R-22b]: the engine's scene '${sourceSceneName}' does not carry all ` +
@@ -1119,7 +1238,36 @@ async function pollEngineStatus() {
     console.warn('[sACN Bridge] ⚠ Engine /status has no outputRouting field (older engine build) — cannot suppress engine-owned relay routes. Restart the engine on current code.');
     broadcastLog('⚠ Engine too old for dual-source suppression', 'warn');
   }
-  recomputeRoutes('engine poll');
+  // OUTSIDE the try above, and this whole function is an unawaited async
+  // callback of `setInterval`. Anything that escapes `recomputeRoutes` here
+  // becomes an UNHANDLED REJECTION, which modern Node turns into a process
+  // exit — the input bridge dying every ENGINE_POLL_MS on a condition it is
+  // supposed to merely report. `recomputeRoutes` reads scene YAML, resolves the
+  // armed mapping and walks the client set, so it is not throw-free by
+  // construction. Report 20260814_212.
+  guardedRecompute('engine poll');
+}
+
+/**
+ * Run a route recompute so that a defect inside it CANNOT kill the process.
+ *
+ * This is not a swallow: the failure is named at full volume and, if the bench
+ * mirror is armed, the arm is released — the same loud auto-disarm an
+ * unresolvable mapping already takes. What it refuses to do is let one bad
+ * recompute end the only process that feeds the rig, because a dead router
+ * leaves every mirrored box frozen on its last frame with no blackout.
+ */
+function guardedRecompute(reason) {
+  try {
+    recomputeRoutes(reason);
+  } catch (err) {
+    const why = `the route recompute ('${reason}') threw — ${err.message}`;
+    console.error(`[sACN Bridge] ❌ ${why}\n${err.stack}`);
+    broadcastLog(`❌ ${why}`, 'warn');
+    if (_mirrorArm !== null && !blackoutInFlight()) {
+      disarmInBackground(why, 'auto');
+    }
+  }
 }
 // NOTE: the boot-time recomputeRoutes / pollEngineStatus calls and the poll
 // interval start at the BOTTOM of this file — they broadcast to the WS
@@ -1712,7 +1860,14 @@ async function disarmBenchMirror(reason, how) {
   _mirrorIncompleteSince.clear();
   _mirrorStallWarned.clear();
   _mirrorMisaligned.clear();
+  _mirrorMisalignTotal.clear();
+  _mirrorLastWholeAt.clear();
+  _mirrorTearWindow.clear();
   setDarkTick(false);
+  // The port-cleanup interlock is released HERE — in the same synchronous turn
+  // the arm is cleared, before the blackout is even scheduled — so there is no
+  // window in which a disarmed bridge still looks armed to a port sweep.
+  releaseArmInterlock(`disarming (${how})`);
 
   // The `try` opens HERE — immediately after the hold is raised — not just
   // around the await (report 20260804_152 RESIDUAL-1). The two log calls below
@@ -1880,6 +2035,11 @@ async function armBenchMirror(scene, selection, ws) {
     armedAt: new Date().toISOString(),
     ws,
   };
+  // Claimed in the SAME synchronous turn the arm is recorded — the ship-dark
+  // blackout below takes real time, and a port sweep landing inside it would
+  // freeze the boxes exactly as badly as one landing an hour later.
+  const interlockWarning = claimArmInterlock(_mirrorArm);
+  if (interlockWarning !== null) warnings.push(interlockWarning);
 
   try {
     console.log(`[sACN Bridge] 🪞 BENCH MIRROR ARMED — ${verdict.label.toUpperCase()} ` +
@@ -2058,28 +2218,112 @@ const _mirrorRegionSeq = new Map();
 const _mirrorEmitSeq = new Map();          // destKey → the aligned sequence last emitted
 const _mirrorIncompleteSince = new Map();  // destKey → ms timestamp of first incompleteness
 const _mirrorStallWarned = new Map();      // destKey → the last-warned signature
-const _mirrorMisaligned = new Map();       // destKey → { count, lastLoggedAt, sig, runLength }
+// destKey → { count, since, lastLoggedAt, flushes, offsetSets, announcedFixed }
+const _mirrorMisaligned = new Map();
+// The HONEST scale of a destination's misalignment (report 20260814_212).
+// `_mirrorMisaligned` is deleted the moment a destination composes one whole
+// frame — correct for the stuck DISCRIMINATOR, since a destination that
+// realigns and emits is not stuck, and the immediate `count === 1` line is a
+// deliberate ruling (D-158-3: misalignment is reported at once, never after a
+// settling window). But `count` is also what the log REPORTS, so a destination
+// flapping between aligned and misaligned printed "1 frame(s) so far" over and
+// over: in the incident 1594 of 1627 lines each claimed to be the first, and
+// nothing on screen revealed that the same destination had in fact failed to
+// compose hundreds of times. The per-run count still drives the diagnosis; this
+// cumulative one makes the line tell the truth about the scale. Cleared only
+// when the destination is forgotten.
+const _mirrorMisalignTotal = new Map();    // destKey → cumulative misaligned flushes
+/**
+ * When each destination last composed a WHOLE frame (report 20260815_233 F2).
+ *
+ * THIS IS THE STUCK DISCRIMINATOR. A destination whose sources are at a genuine
+ * fixed offset composes ZERO whole frames — that is what "stuck" means and it is
+ * the only property the two candidate causes do not share. A burst-torn read
+ * composes one between every tear (measured: `count in this run` was 1 in ALL
+ * 975 misaligned lines of the `_229` session, never 2), so this timestamp keeps
+ * moving and STUCK can never fire on it.
+ *
+ * Seeded on the first misaligned flush of a destination that has never composed
+ * one, because that is when the measurement starts — not a fallback value: it is
+ * the earliest instant at which "no whole frame since" can be true.
+ */
+const _mirrorLastWholeAt = new Map();      // destKey → ms of the last whole composition
+/**
+ * The rate-limited tear ROLLUP (report 20260815_233 F4). 975 immediate `⚠`
+ * lines in 3h43m for a 0.6 % tear rate is noise that buried the real signal, so
+ * a run shorter than the settling grace is counted here and summarised, never
+ * printed one line at a time.
+ */
+// destKey → { tears, worst, longestRun, wholeFrames, since, lastSummaryAt }
+const _mirrorTearWindow = new Map();
+//
+// NOT DONE, DELIBERATELY (report 20260815_233, `_229` F6): a one-deep staging
+// slot per region, keyed by sequence, so a datagram for frame N+1 cannot
+// overwrite frame N before N has had its chance to compose. It would erase the
+// residual ~0.6 % drop, and it was skipped because the cost is in the wrong
+// place: every region would carry two buffers and the flush would have to
+// decide WHICH generation it is composing, which is the one path in this file
+// that must stay trivially provable ("every region carries the same sequence,
+// or nothing goes out"). The drop is one frame per ~4 s, invisible on lights,
+// and now costs one summary line per 10 s instead of 975 warnings per session.
+// Revisit only if a dropped frame ever becomes visible.
 const MIRROR_STALL_WARN_MS = 250;
+/**
+ * The settling grace a TORN read gets — the same one a MISSING source already
+ * had (report 20260815_233 F4).
+ *
+ * `_158` D-158-3 ruled that misalignment is reported at once, never after a
+ * settling window, on the grounds that regions disagreeing about which frame
+ * they are is "never normal". `_229` measured it and it is normal: the engine
+ * writes all 38 universes in ONE synchronous burst, and a libuv poll phase that
+ * delivers part of that burst leaves the destination reading `{N+1, N, N}` for
+ * the few milliseconds until the rest lands. That is the identical situation the
+ * missing-source branch already calls NORMAL, seen a frame later. So it gets the
+ * identical grace, and D-158-3 is superseded on this point only: a tear that
+ * OUTLIVES the grace is still reported immediately-on-detection and loudly.
+ */
+const MIRROR_TEAR_GRACE_MS = MIRROR_STALL_WARN_MS;
+/** How often a destination may print its burst-skew rollup. */
+const MIRROR_TEAR_SUMMARY_MS = 10000;
 const MIRROR_MISALIGN_LOG_INTERVAL_MS = 2000;
 /**
- * How many flushes a destination may go without emitting before its lag is
- * judged PERMANENT rather than transient.
+ * How many CONSECUTIVE misaligned flushes a fixed offset must survive before it
+ * counts as persistent rather than transient.
  *
- * The two states look identical for one frame and completely different after
- * several: a lost datagram is a one-frame skew, and the destination realigns and
- * EMITS within a frame or two — which clears this window. A sender that started
- * its sequence later is a CONSTANT skew that never erases, so the destination
- * never emits and the window keeps growing. They have opposite remedies —
- * "check the network" versus "restart the engine" — so telling the operator the
- * wrong one costs a bench session.
- *
- * The discriminator is the MINIMUM lag each source reaches while the window is
- * open. Offsets swing within a single frame as its datagrams arrive one by one,
- * so consecutive readings are never identical; but a source that is merely a
- * frame behind touches 0 at some point in the cycle, and a permanently offset
- * one never does.
+ * This is one of THREE conditions, and on its own it proves nothing — six
+ * consecutive torn reads under CPU load is exactly what fired 47 of the 48 false
+ * STUCK lines in the `_229` session. It is joined by "the offset pattern is
+ * literally FIXED" (below) and "no whole frame has composed at all" (above).
  */
 const MIRROR_FIXED_OFFSET_FLUSHES = 6;
+/**
+ * The smallest offset magnitude that may be called FIXED (report 20260815_233
+ * F1).
+ *
+ * A one-frame skew is the DEFINITION of a torn read of one frame's datagram
+ * burst — 850 of the 975 misalignments in the `_229` session had a circular
+ * spread of exactly 1. A real sender offset is the number of frames that elapsed
+ * between two sender constructions, i.e. a large arbitrary constant. So ±1 is
+ * refused the name unconditionally.
+ */
+const MIRROR_MIN_FIXED_OFFSET = 2;
+/**
+ * How long a destination must compose NO whole frame before STUCK may fire.
+ *
+ * At 40 fps this is ~40 consecutive refused frames with not one composition in
+ * between. A burst tear cannot reach it (it composes every ~25 ms); a genuine
+ * offset never leaves it.
+ */
+const MIRROR_STUCK_NO_WHOLE_MS = 1000;
+/**
+ * Distinct offset values kept per source while judging "is this offset FIXED".
+ *
+ * The only question asked of the set is whether it is a SINGLETON, so the answer
+ * is decided the moment a second value appears and can never change back. Capped
+ * so a long stall costs the same as a short one — the O(1)-in-stall-length
+ * property `_212` pinned.
+ */
+const MIRROR_OFFSET_SET_CAP = 2;
 
 /**
  * A held-dark mapping (EVERY slot `none`) reads no source universe at all, so
@@ -2130,6 +2374,9 @@ function forgetMirrorGather(key) {
   _mirrorIncompleteSince.delete(key);
   _mirrorStallWarned.delete(key);
   _mirrorMisaligned.delete(key);
+  _mirrorMisalignTotal.delete(key);
+  _mirrorLastWholeAt.delete(key);
+  _mirrorTearWindow.delete(key);
 }
 
 function mirrorInbound(universe, payload, sequence) {
@@ -2149,29 +2396,90 @@ function mirrorInbound(universe, payload, sequence) {
 }
 
 /**
- * The per-source sequence offsets of a misaligned destination, relative to its
- * most advanced source, as a stable signature plus an operator-readable form.
+ * The per-source sequence offsets of a misaligned destination, relative to a
+ * FIXED anchor source, as a per-universe signature plus an operator-readable
+ * form.
  *
  * Signed and wrap-aware: E1.31 sequences are one byte, so a source seven frames
  * behind reads as -7 rather than 249.
  *
- * @returns {{sig:string, human:string}}
+ * THE ANCHOR IS THE LOWEST-NUMBERED SOURCE, AND THAT IS THE WHOLE POINT (report
+ * 20260815_233 F3). This used to normalise against the MOST ADVANCED source,
+ * which made the signature useless for the only question it is asked:
+ *
+ *   - the leader always read `d = 0` and every other source read `d < 0` BY
+ *     CONSTRUCTION, so "is any source behind?" was answered `yes` on every torn
+ *     flush, whoever happened to lead it — which is how a source that is merely
+ *     systematically last in the engine's send burst was declared permanently
+ *     offset (`_229` §3.3);
+ *   - and it was not even stable for a genuinely fixed offset: once the laggard's
+ *     wrapped sequence read HIGHER than its siblings', the laggard became the
+ *     `max` and the sign of the whole reading flipped, so a constant skew looked
+ *     like two alternating patterns.
+ *
+ * A fixed anchor gives one reading per real offset, wrap included, so the SET of
+ * values a source produces across a run is a singleton if and only if the offset
+ * is genuinely constant.
+ *
+ * @returns {{anchor:number, byUniverse:Array<[number,number]>, human:string}}
  */
 function offsetSignature(required, regionSeq) {
   const universes = [...required].sort((a, b) => a - b);
-  const raw = universes.map(u => regionSeq.get(u));
-  const max = Math.max(...raw);
-  const parts = universes.map((u, i) => {
-    let d = ((raw[i] - max) % SACN_SEQUENCE_MODULUS + SACN_SEQUENCE_MODULUS)
+  const anchor = universes[0];
+  const base = regionSeq.get(anchor);
+  const parts = universes.map((u) => {
+    let d = ((regionSeq.get(u) - base) % SACN_SEQUENCE_MODULUS + SACN_SEQUENCE_MODULUS)
       % SACN_SEQUENCE_MODULUS;
     if (d > SACN_SEQUENCE_MODULUS / 2) d -= SACN_SEQUENCE_MODULUS;
     return { u, d };
   });
   return {
+    anchor,
     byUniverse: parts.map(x => [x.u, x.d]),
-    human: parts.filter(x => x.d !== 0).map(x => `U${x.u} at ${x.d}`).join(', ')
+    human: parts.filter(x => x.d !== 0).map(x => `U${x.u} at ${signed(x.d)}`).join(', ')
       || 'no offset',
   };
+}
+
+/** `+3` / `-70` — the sign is load-bearing in every offset line. */
+function signed(d) { return d > 0 ? `+${d}` : String(d); }
+
+/**
+ * Print one destination's accumulated burst-skew tears, at most once per
+ * `MIRROR_TEAR_SUMMARY_MS` (report 20260815_233 F4).
+ *
+ * Called from BOTH the torn path and the aligned path, so a burst that stops
+ * still gets reported on the destination's next composed frame rather than
+ * waiting for a tear that may never come. Nothing is ever dropped silently: the
+ * cumulative per-destination total rides every line.
+ */
+function reportTearRollup(key, now) {
+  const w = _mirrorTearWindow.get(key);
+  if (!w || w.tears === 0) return;
+  if (now - w.lastSummaryAt < MIRROR_TEAR_SUMMARY_MS) return;
+  const span = ((now - w.since) / 1000).toFixed(1);
+  const total = _mirrorMisalignTotal.get(key) || 0;
+  // The verdict half of the line is DERIVED, never assumed: a window in which
+  // the destination composed nothing is not burst skew, and saying so would be
+  // the same false reassurance in the opposite direction from the old STUCK.
+  const verdict = w.wholeFrames > 0
+    ? `The destination composed ${w.wholeFrames} whole frame(s) between them, so this is the ` +
+      'engine\'s per-frame datagram burst landing across two libuv poll phases — NOT sender ' +
+      'misalignment and NOT a reason to restart anything (report 20260815_229 §3.2).'
+    : 'This destination composed NO whole frame in that window — it is dark, and the STUCK line ' +
+      'above is the diagnosis to act on.';
+  const msg = `🪞 bench mirror burst skew — ${key}: ${w.tears} frame(s) in the last ${span} s ` +
+    `arrived TORN and were not sent (widest spread ${w.worst}, longest unbroken run ` +
+    `${w.longestRun} flush(es); ${total} torn flush(es) since this destination was composed). ` +
+    verdict;
+  console.log(`[sACN Bridge] ${msg}`);
+  broadcastLog(msg, 'source');
+  w.tears = 0;
+  w.worst = 0;
+  w.longestRun = 0;
+  w.wholeFrames = 0;
+  w.since = now;
+  w.lastSummaryAt = now;
 }
 
 /**
@@ -2258,67 +2566,127 @@ function flushMirrors() {
 
     if (!aligned) {
       // EVERY source is present and they disagree about which engine frame this
-      // is. Unlike a missing source, that is NEVER normal, so it is logged
-      // IMMEDIATELY rather than after a settling window, throttled only so a
-      // sustained fault cannot flood. Nothing is emitted: a mixed frame would
-      // leave those fixtures on a STEADY WRONG COLOUR, which looks nothing like
-      // flicker and would be misread as a fixture-menu problem.
+      // is. Nothing is emitted: a mixed frame would leave those fixtures on a
+      // STEADY WRONG COLOUR, which looks nothing like flicker and would be
+      // misread as a fixture-menu problem.
       //
-      // TWO CAUSES, OPPOSITE REMEDIES (report 20260805_158 R-158-A). A lost
-      // datagram is a ONE-FRAME skew the next frame erases. A source whose sACN
-      // sender started its sequence later — which an engine model reload does,
-      // permanently — is a CONSTANT skew that never erases and never recovers on
-      // its own. Telling the operator "a datagram was lost" in the second case
-      // sends them hunting the network while the fix is a restart, so the two are
-      // distinguished by the only thing that separates them: whether the offset
-      // between the sources is the SAME on consecutive flushes.
+      // TWO CAUSES, OPPOSITE REMEDIES (report 20260805_158 R-158-A, remeasured
+      // by 20260815_229). A TORN READ is the engine's one-frame datagram burst
+      // caught mid-flight — the destination composes a whole frame a millisecond
+      // later and every time after. A FIXED SENDER OFFSET never composes one at
+      // all. The discriminator below asks that, and only that.
+      //
+      // WHAT THIS REPLACED, AND WHY (`_229` §3.3). The old test was "did every
+      // source reach lag 0 at some point in the window", against a signature
+      // normalised to the most advanced source — which gives the leader 0 and
+      // everyone else < 0 BY CONSTRUCTION, so a source that is merely last in
+      // the engine's send burst can never reach 0. Six consecutive torn flushes
+      // then read as "a FIXED offset" and told the operator to restart a
+      // perfectly healthy engine. It did that 48 times in one session and was
+      // wrong 48 times.
       const offsets = offsetSignature(required, regionSeq);
       const prev = _mirrorMisaligned.get(key);
-      const minLag = prev ? prev.minLag : new Map();
+      const offsetSets = prev ? prev.offsetSets : new Map();
+      let worst = 0;
       for (const [u, d] of offsets.byUniverse) {
-        const lag = Math.abs(d);
-        if (!minLag.has(u) || lag < minLag.get(u)) minLag.set(u, lag);
+        if (Math.abs(d) > worst) worst = Math.abs(d);
+        if (!offsetSets.has(u)) offsetSets.set(u, new Set());
+        const seen = offsetSets.get(u);
+        // Bounded — see MIRROR_OFFSET_SET_CAP. Past two distinct values the
+        // singleton answer is settled forever, so growing it would be pure
+        // per-flush accumulation.
+        if (seen.size < MIRROR_OFFSET_SET_CAP || seen.has(d)) seen.add(d);
       }
       const state = {
         count: (prev ? prev.count : 0) + 1,
+        since: prev ? prev.since : now,
         lastLoggedAt: prev ? prev.lastLoggedAt : 0,
         flushes: (prev ? prev.flushes : 0) + 1,
-        minLag,
+        offsetSets,
         announcedFixed: prev ? prev.announcedFixed : false,
       };
       _mirrorMisaligned.set(key, state);
+      const total = (_mirrorMisalignTotal.get(key) || 0) + 1;
+      _mirrorMisalignTotal.set(key, total);
+      // The measurement clock for F2. A destination with no recorded whole frame
+      // has not composed one SINCE NOW — the earliest instant the claim can be
+      // true — so that is where "no whole frame for X" starts counting.
+      if (!_mirrorLastWholeAt.has(key)) _mirrorLastWholeAt.set(key, now);
+      const wholeAge = now - _mirrorLastWholeAt.get(key);
 
-      // Persistently behind = never reached 0 across the whole window. A source
-      // that is merely one frame late touches 0 as its datagram lands; one whose
-      // sender is offset never does.
-      const stuckUniverses = state.flushes >= MIRROR_FIXED_OFFSET_FLUSHES
-        ? [...minLag.entries()].filter(([, lag]) => lag > 0)
-        : [];
-      const fixed = stuckUniverses.length > 0;
+      // ── F3: "fixed" now means literally fixed ─────────────────────────────
+      // One reading per source, against a stable anchor, across the whole run.
+      // A singleton set is a constant offset; anything else is a moving one.
+      // ── F1: an offset of ±1 is a torn read by definition, never "fixed".
+      const fixedUniverses = [...offsetSets.entries()]
+        .filter(([, seen]) => seen.size === 1
+          && Math.abs([...seen][0]) >= MIRROR_MIN_FIXED_OFFSET)
+        .map(([u, seen]) => [u, [...seen][0]]);
+      // ── F2, the class-deleter: has this destination composed ANYTHING? ────
+      // All three must hold. The first two describe the offset; the third is the
+      // one a torn read can never satisfy, because it composes a whole frame
+      // between every tear.
+      const persistent = state.flushes >= MIRROR_FIXED_OFFSET_FLUSHES && fixedUniverses.length > 0;
+      const noWholeFrame = wholeAge >= MIRROR_STUCK_NO_WHOLE_MS;
+      const fixed = persistent && noWholeFrame;
       // A newly-detected fixed offset must not wait out the throttle window: it
       // is a different diagnosis, and the previous line said the wrong thing.
       const firstFixed = fixed && !state.announcedFixed;
       if (firstFixed) state.announcedFixed = true;
-      if (state.count === 1 || firstFixed
-          || now - state.lastLoggedAt >= MIRROR_MISALIGN_LOG_INTERVAL_MS) {
-        state.lastLoggedAt = now;
-        const regions = [...required].map(u => `U${u}#${regionSeq.get(u)}`).join(' ');
-        const named = stuckUniverses.map(([u, lag]) => `U${u} at -${lag}`).join(', ');
-        const msg = fixed
-          ? `❌ 🪞 BENCH MIRROR STUCK — ${key}: its sources are at a FIXED sequence offset ` +
-            `(${named}) — that source has not caught up once in ${state.flushes} flushes. This ` +
-            'is NOT network loss and it will NOT recover on its own: a universe whose sACN ' +
-            'sender was created later starts its sequence at 0 and stays permanently offset ' +
-            'from its siblings, which is what an engine MODEL RELOAD does. ' +
-            '**RESTART THE ENGINE** to realign the senders, then re-arm. This destination is ' +
-            `sending NOTHING until then (regions: ${regions}).`
-          : `⚠ 🪞 BENCH MIRROR frame NOT WHOLE — ${key}: its regions carry DIFFERENT engine ` +
-            `frames (${regions}). A source datagram was lost or a source is lagging ` +
-            `(${state.count} frame(s) so far). That frame was NOT sent — a mixed one would leave ` +
-            'those fixtures showing a STEADY WRONG COLOUR, not flicker. A one-off realigns on ' +
-            'the next frame; if this keeps counting up, the mirror is dropping engine frames.';
-        console.warn(`[sACN Bridge] ${msg}`);
-        broadcastLog(msg, 'warn');
+
+      // ── F4: a tear gets the same settling grace a missing source gets ─────
+      // Below the grace it is counted into the rollup and nothing is printed;
+      // above it, this run is a real sustained fault and is named at once.
+      if (!_mirrorTearWindow.has(key)) {
+        _mirrorTearWindow.set(key,
+          { tears: 0, worst: 0, longestRun: 0, wholeFrames: 0, since: now, lastSummaryAt: now });
+      }
+      const tearWindow = _mirrorTearWindow.get(key);
+      tearWindow.tears += 1;
+      if (worst > tearWindow.worst) tearWindow.worst = worst;
+      if (state.count > tearWindow.longestRun) tearWindow.longestRun = state.count;
+      reportTearRollup(key, now);
+
+      const sustained = now - state.since >= MIRROR_TEAR_GRACE_MS;
+      if (fixed || sustained) {
+        if (firstFixed || state.lastLoggedAt === 0
+            || now - state.lastLoggedAt >= MIRROR_MISALIGN_LOG_INTERVAL_MS) {
+          state.lastLoggedAt = now;
+          const regions = [...required].map(u => `U${u}#${regionSeq.get(u)}`).join(' ');
+          const named = fixedUniverses.map(([u, d]) => `U${u} at ${signed(d)}`).join(', ');
+          const secs = (wholeAge / 1000).toFixed(1);
+          const msg = fixed
+            // ── F5: what was MEASURED, and the remedy that follows from it ──
+            // "RESTART THE ENGINE" was wrong 48 times out of 48 in the `_229`
+            // session, and `_212` made the cause it named — senders at different
+            // sequence origins — impossible by construction: the engine stamps
+            // ONE counter across every universe of a frame. So the line states
+            // the measurement and points at the causes that remain.
+            ? `❌ 🪞 BENCH MIRROR STUCK — ${key}: NO whole frame has composed for ${secs} s ` +
+              `(${state.flushes} consecutive torn flushes, ${total} for this destination) AND ` +
+              `its sources hold a PERSISTENT multi-step offset (${named}, measured against ` +
+              `U${offsets.anchor}). Both were measured, not inferred: a burst-skew tear composes ` +
+              'a whole frame between tears — this has composed none. This destination is sending ' +
+              `NOTHING until it clears (regions: ${regions}). DO NOT restart the engine on this ` +
+              'line alone: since report 20260814_212 the engine stamps every universe of one ' +
+              'frame with ONE sequence counter, so a live engine cannot put its own senders at ' +
+              'different origins. Check instead, in order: (1) is the engine still sending every ' +
+              'source universe — the sACN IN monitor and :6968/status; (2) is a SECOND WRITER ' +
+              '(another engine, a console, a stale bridge) interleaving its own sequence counter ' +
+              'on those universes — that is the only remaining way sources stay permanently ' +
+              'apart; (3) if a source has genuinely died, DISARM and re-arm to recompose from ' +
+              'what is live.'
+            : `⚠ 🪞 BENCH MIRROR frame NOT WHOLE — ${key}: its regions have carried DIFFERENT ` +
+              `engine frames for ${Math.round(now - state.since)} ms (${regions}; offsets ` +
+              `${offsets.human} against U${offsets.anchor}). A source datagram was lost or a ` +
+              `source is lagging (${state.count} frame(s) in this run, ${total} for this ` +
+              'destination since it was composed). Those frames were NOT sent — a mixed one ' +
+              'would leave those fixtures showing a STEADY WRONG COLOUR, not flicker. A tear ' +
+              'shorter than a settling window is ordinary burst skew and is summarised instead ' +
+              'of printed; this one outlived it, so the mirror is dropping engine frames.';
+          console.warn(`[sACN Bridge] ${msg}`);
+          broadcastLog(msg, 'warn');
+        }
       }
       continue;                      // stays dirty; the next arrival re-schedules
     }
@@ -2327,6 +2695,14 @@ function flushMirrors() {
     _mirrorStallWarned.delete(key);
     _mirrorMisaligned.delete(key);
     _mirrorDirty.delete(key);
+    // THE WHOLE-FRAME STAMP (report 20260815_233 F2). Set here — before the
+    // "nothing new to say" short-circuit below — because COMPOSING a whole frame
+    // is the event that disproves stuckness, whether or not those same bytes are
+    // put on the wire again.
+    _mirrorLastWholeAt.set(key, now);
+    const openWindow = _mirrorTearWindow.get(key);
+    if (openWindow) openWindow.wholeFrames += 1;
+    reportTearRollup(key, now);
     // Nothing new to say: the buffer has not moved on since the last emission.
     if (_mirrorEmitSeq.get(key) === seqs[0]) continue;
     _mirrorEmitSeq.set(key, seqs[0]);
@@ -2423,6 +2799,10 @@ pollEngineStatus();
 const _enginePollTimer = setInterval(pollEngineStatus, ENGINE_POLL_MS);
 if (_enginePollTimer.unref) _enginePollTimer.unref();
 
+// A start is always DISARMED, so any interlock claim standing right now belongs
+// to a bridge that died without disarming (report 20260815_233 F7).
+reapStaleArmInterlock();
+
 // ── Shutdown while armed (report 20260804_151) ─────────────────────────────
 // A bridge that dies mid-mirror leaves the composed frame frozen on the box
 // until an unknown device-side dmx.timeoutMs. Take the same blackout path the
@@ -2458,3 +2838,58 @@ function shutdown(signal) {
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// ── Last-resort loudness (report 20260814_212) ─────────────────────────────
+// An error that reaches here has already escaped every guard, so the process
+// state is UNKNOWN. Continuing would be a fallback — a guess that the bridge is
+// still coherent — which the codex forbids and which is worse than dying: a
+// wedged-but-responsive bridge is invisible to the launcher's freeze watchdog
+// (it only kills a server that stops answering its health probe), so it would
+// sit there feeding nothing and reporting healthy.
+//
+// So: SHOUT, release the hardware, then DIE NONZERO and let the supervisor do
+// its job. `start.js` restarts a crashed bridge within 1 s and escalates loudly
+// past its budget, and a restarted bridge comes up DISARMED with the full
+// ordinary relay restored — which is exactly the un-freeze the boxes need.
+//
+// The stack goes out with `fs.writeSync` on fd 2, never `console.error`: this
+// path ends in `process.exit`, and the whole reason this incident took an hour
+// was a diagnostic that never made it to the log.
+function fatalEscapedError(kind, err) {
+  const e = err instanceof Error ? err : new Error(String(err));
+  fs.writeSync(2, `[sACN Bridge] ❌ FATAL ${kind} — ${e.message}\n${e.stack}\n` +
+    'This escaped every guard, so the bridge state is UNKNOWN and it will NOT continue on a ' +
+    'guess. Exiting nonzero so the launcher restarts it (disarmed, full relay restored). ' +
+    'This is a DEFECT — report it with the stack above.\n');
+  if (_mirrorArm === null && !blackoutInFlight()) process.exit(1);
+  // Armed: the owned destinations must go dark deliberately rather than freeze
+  // on their last composed frame. Bounded, because a hung socket must not turn
+  // a crash into a process that will not die.
+  const die = () => process.exit(1);
+  setTimeout(die, SHUTDOWN_BLACKOUT_TIMEOUT_MS).unref();
+  disarmBenchMirror(`a fatal ${kind}: ${e.message}`, 'shutdown').then(die).catch(die);
+}
+process.on('unhandledRejection', (reason) => fatalEscapedError('unhandled promise rejection', reason));
+process.on('uncaughtException', (err) => fatalEscapedError('uncaught exception', err));
+
+// ── Exit breadcrumb ────────────────────────────────────────────────────────
+// The 2026-08-14 incident cost an hour because the bridge vanished with
+// `code=1` and NOTHING else in the launcher log, leaving no way to tell an
+// internal crash from an external kill. On Windows a force-terminated process
+// (`taskkill /F`, which is how port sweeps and stack teardowns kill things)
+// exits with exactly code 1 and no output — indistinguishable, after the fact,
+// from a silent self-exit. This line closes that gap permanently: an exit this
+// process CHOSE always says so. `fs.writeSync` on fd 2, not console.error,
+// because an 'exit' listener may not queue async work.
+process.on('exit', (code) => {
+  // Drop our own interlock claim if it survived this far (a `process.exit` that
+  // skipped the disarm path). Only ever OUR claim, and only synchronous work.
+  const claim = readArmMarker();
+  if (claim.state === 'armed' && claim.marker.pid === process.pid) {
+    try { clearArmMarker(); } catch (e) { fs.writeSync(2, `[sACN Bridge] arm interlock left behind: ${e.message}\n`); }
+  }
+  fs.writeSync(2, `[sACN Bridge] process exiting on its own with code=${code} ` +
+    `(armed=${_mirrorArm !== null}). If the launcher reports an exit WITHOUT this line, the ` +
+    'bridge did not choose it — it was force-killed from outside (on Windows that is code=1 ' +
+    'with no output; suspect a port sweep or a stack teardown from another session).\n');
+});

@@ -16,8 +16,10 @@
 //   5. PERMANENT paint — no ownerId still persists and is NOT swept (no
 //                        regression for saved operator looks)
 //
-// The engine is spawned with `--dest 127.0.0.9` so its sACN can never reach the
-// operator's live sim bridge on 127.0.0.1:5568 (see spawn_engine.mjs).
+// The engine is spawned with `--dest 192.0.2.9` — TEST-NET-1 (RFC 5737), never
+// routed — so its sACN can never reach the operator's live sim bridge on UDP
+// 5568 (see spawn_engine.mjs). A loopback dest would NOT do it: that bridge
+// binds every local interface, so it receives loopback frames too.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,7 +40,7 @@ const h = createEngineHarness({
     MARSIN_VSN1_DEPLOY: '0',
     BM26_TOUCH_PAINT_LEASE_MS: String(LEASE_MS),
   },
-  extraArgs: ['--dest', '127.0.0.9'],
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 
 /** First real group name from the loaded model — never hard-code one. */

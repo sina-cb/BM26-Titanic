@@ -23,10 +23,11 @@ test('accepts the known steady channel-blend modes', () => {
   assert.equal(isValidBlendMode('blend_over'), true);
 });
 
-test('accepts any trans_* scripted transition name', () => {
+test('accepts only cataloged trans_* scripted transition names', () => {
   assert.equal(isValidBlendMode('trans_crossfade'), true);
   assert.equal(isValidBlendMode('trans_iris_close'), true);
-  assert.equal(isValidBlendMode('trans_anything_new'), true);
+  assert.equal(isValidBlendMode('trans_anything_new'), false);
+  assert.equal(isValidBlendMode('trans_morse_blink'), false);
 });
 
 test('rejects typos and unknown modes (FAIL LOUD, not silent fallback)', () => {

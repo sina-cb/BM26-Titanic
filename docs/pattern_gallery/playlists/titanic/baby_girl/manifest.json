@@ -1,876 +1,1774 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "scene": "titanic",
   "playlist": "baby_girl",
-  "seconds": 10,
+  "seconds": 20,
   "fps": 8,
   "variation": "saved",
   "palette": null,
   "source": "simulation/scenes/titanic/playlists/baby_girl.yaml",
+  "playlistDigest": "f02f9bc2a923792da364179a02eb6f96308fc75dd75e5cb9b6a693a3568bcb7d",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
   "items": [
     {
       "index": 0,
-      "pattern": "133_baby_reveal_burst",
-      "title": "Baby Girl - Reveal Explosion",
-      "goal": "The manually pushed answer erupts from black as a spherical shock front and twelve petal-rays, then settles into one baby-pink or baby-blue photo-safe rose with Vintage-only diamond white.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.32,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderFinalColor",
-          "label": "Final Color",
-          "value": 0,
-          "description": "Final Color character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.9,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": null
-        },
-        {
-          "name": "sliderSpatialDepth",
-          "label": "Spatial Depth",
-          "value": 0.72,
-          "description": "Shape and intensity of the main organic motion.",
-          "audio": null
-        },
-        {
-          "name": "sliderSparkle",
-          "label": "Sparkle",
-          "value": 0.58,
-          "description": "Fine highlight texture.",
-          "audio": null
-        },
-        {
-          "name": "sliderRestartReveal",
-          "label": "Restart Reveal",
-          "value": 0,
-          "description": "Restart Reveal character control.",
-          "audio": null
-        }
-      ],
-      "gif": "001_133_baby_reveal_burst.gif",
-      "video": "001_133_baby_reveal_burst.mp4",
-      "seconds": 10,
-      "chapters": [
-        {
-          "time": 0,
-          "label": "Reveal explosion"
-        },
-        {
-          "time": 2,
-          "label": "Photo hold"
-        }
-      ],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 1,
-      "pattern": "118_grand_orbit_rings",
-      "title": "Baby Girl - Family Orbit Rings",
-      "goal": "Three monumental oblique ring shells orbit the complete ship while a protected safety floor preserves its silhouette.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.74,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.71,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.3,
-            "max": 1,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderRingWidth",
-          "label": "Ring Width",
-          "value": 0.82,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": {
-            "slider": "sliderRingWidth",
-            "signal": "micFlux",
-            "min": 0.2,
-            "max": 0.85,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderOrbitTilt",
-          "label": "Orbit Tilt",
-          "value": 0.58,
-          "description": "Orbit Tilt character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderContrast",
-          "label": "Contrast",
-          "value": 0.62,
-          "description": "Contrast character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "002_118_grand_orbit_rings.gif",
-      "video": "002_118_grand_orbit_rings.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 2,
-      "pattern": "119_bow_stern_tidal_push",
-      "title": "Baby Girl - Welcome Tide",
-      "goal": "A coherent pressure wall travels bow-to-stern and returns as a broad recoil, readable from far across the playa.",
+      "pattern": "baby/66_girl_keel_breath",
+      "title": "Baby Girl - Keel Breath",
+      "goal": "Baby-pink keel breath: a calm luminous foundation expands through the complete vessel.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
           "value": 0.3,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.54,
+          "value": 0.86,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderWaveWidth",
-          "label": "Wave Width",
-          "value": 0.56,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": {
-            "slider": "sliderWaveWidth",
-            "signal": "micFlux",
-            "min": 0.28,
-            "max": 0.82,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderRecoil",
-          "label": "Recoil",
-          "value": 0.48,
-          "description": "Recoil character control.",
           "audio": null
         },
         {
-          "name": "sliderContrast",
-          "label": "Contrast",
-          "value": 0.58,
-          "description": "Contrast character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "003_119_bow_stern_tidal_push.gif",
-      "video": "003_119_bow_stern_tidal_push.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 3,
-      "pattern": "120_crossing_beacons",
-      "title": "Baby Girl - Crossing Beacons",
-      "goal": "Two counter-rotating lighthouse fans cross above the ship and leave long, elegant afterglow corridors.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.35,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.64,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.25,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderBeamWidth",
-          "label": "Beam Width",
-          "value": 0.38,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderCrossing",
-          "label": "Crossing",
-          "value": 0.5,
-          "description": "Crossing character control.",
-          "audio": {
-            "slider": "sliderCrossing",
-            "signal": "micFlux",
-            "min": 0.25,
-            "max": 0.85,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderAfterglow",
-          "label": "Afterglow",
-          "value": 0.45,
-          "description": "Afterglow character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderFlash",
-          "label": "Flash",
-          "value": 0,
-          "description": "Transient accent strength.",
-          "audio": {
-            "slider": "sliderFlash",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "004_120_crossing_beacons.gif",
-      "video": "004_120_crossing_beacons.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 4,
-      "pattern": "121_spiral_wake",
-      "title": "Baby Girl - Celebration Spiral",
-      "goal": "A pair of broad helical wakes curls around the ship as one large spatial gesture rather than a fine repeating texture.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.3,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.76,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.35,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderSpiralWidth",
-          "label": "Spiral Width",
-          "value": 0.5,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": {
-            "slider": "sliderSpiralWidth",
-            "signal": "micFlux",
-            "min": 0.22,
-            "max": 0.82,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderTurns",
-          "label": "Turns",
-          "value": 0.5,
-          "description": "Turns character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderWakeContrast",
-          "label": "Wake Contrast",
-          "value": 0.58,
-          "description": "Wake Contrast character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "005_121_spiral_wake.gif",
-      "video": "005_121_spiral_wake.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 5,
-      "pattern": "122_breathing_horizon",
-      "title": "Baby Girl - New Horizon",
-      "goal": "A monumental horizon line rises and falls through the whole vessel, preserving a luminous safety bed between breaths.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.8,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.54,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderHorizonWidth",
-          "label": "Horizon Width",
-          "value": 0.5,
+          "name": "sliderKeelWidth",
+          "label": "Keel Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
           "name": "sliderBreathDepth",
           "label": "Breath Depth",
-          "value": 0.5,
+          "value": 0.46,
+          "valueSource": "playlist saved value",
           "description": "Shape and intensity of the main organic motion.",
-          "audio": {
-            "slider": "sliderBreathDepth",
-            "signal": "micFlux",
-            "min": 0.18,
-            "max": 0.88,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderAfterglow",
-          "label": "Afterglow",
-          "value": 0.58,
-          "description": "Afterglow character control.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "006_122_breathing_horizon.gif",
-      "video": "006_122_breathing_horizon.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKeelWidth": 0.52,
+        "sliderBreathDepth": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKeelWidth": 0.52,
+        "sliderBreathDepth": 0.46
+      },
+      "gif": "001_baby__66_girl_keel_breath.gif",
+      "video": "001_baby__66_girl_keel_breath.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "995e24a73d4372bf013ab2a3690dd441a5c453dc04d0c7a935048986823f1415"
     },
     {
-      "index": 6,
-      "pattern": "123_mirrored_broadside_call",
-      "title": "Baby Girl - Broadside Joy",
-      "goal": "Mirrored wave walls call from the ship's centre to both ends, then answer inward in perfect bilateral symmetry.",
+      "index": 1,
+      "pattern": "baby/71_girl_sign_lantern",
+      "title": "Baby Girl - Sign Lantern",
+      "goal": "Baby-pink sign lantern: both TE signs lead as balanced, readable Identity beacons.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.32,
+          "value": 0.28,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.63,
+          "value": 0.94,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.3,
-            "max": 1,
-            "curve": "ease"
-          }
+          "audio": null
         },
         {
-          "name": "sliderWallWidth",
-          "label": "Wall Width",
-          "value": 0.48,
+          "name": "sliderLanternDepth",
+          "label": "Lantern Depth",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.28,
+        "sliderLevel": 0.94,
+        "sliderLanternDepth": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.28,
+        "sliderLevel": 0.94,
+        "sliderLanternDepth": 0.52
+      },
+      "gif": "002_baby__71_girl_sign_lantern.gif",
+      "video": "002_baby__71_girl_sign_lantern.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "31cc7b285db07087f7d92a7ceff4beb50ce36546578c949f5fcd224ec4db227d"
+    },
+    {
+      "index": 2,
+      "pattern": "baby/38_girl_moonlit_ripples",
+      "title": "Baby Girl - Moonlit Ripples",
+      "goal": "Baby-pink travelling moon ripples. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.44,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRippleWidth",
+          "label": "Ripple Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderExpansion",
-          "label": "Expansion",
-          "value": 0.72,
-          "description": "Expansion character control.",
-          "audio": {
-            "slider": "sliderExpansion",
-            "signal": "micFlux",
-            "min": 0.35,
-            "max": 1,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderContrast",
-          "label": "Contrast",
-          "value": 0.62,
-          "description": "Contrast character control.",
+          "name": "sliderOriginOffset",
+          "label": "Origin Offset",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Origin Offset character control.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "007_123_mirrored_broadside_call.gif",
-      "video": "007_123_mirrored_broadside_call.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderLevel": 0.88,
+        "sliderRippleWidth": 0.52,
+        "sliderOriginOffset": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderLevel": 0.88,
+        "sliderRippleWidth": 0.52,
+        "sliderOriginOffset": 0.58
+      },
+      "gif": "003_baby__38_girl_moonlit_ripples.gif",
+      "video": "003_baby__38_girl_moonlit_ripples.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e6cc81a57571ee3488ec91d3709aea500bbaf294e18943efd1e948cbb3adfb13"
     },
     {
-      "index": 7,
-      "pattern": "124_aurora_crown",
-      "title": "Baby Girl - Aurora Crown",
-      "goal": "Four enormous upper-volume arcs curl into a luminous crown over the ship, with Identity acting as its central jewel.",
+      "index": 3,
+      "pattern": "baby/35_girl_cradle_waves",
+      "title": "Baby Girl - Cradle Waves",
+      "goal": "Baby-pink mirrored cradle arcs. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.32,
+          "value": 0.38,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.64,
+          "value": 0.87,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.25,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderCrownHeight",
-          "label": "Crown Height",
-          "value": 0.55,
-          "description": "Crown Height character control.",
-          "audio": {
-            "slider": "sliderCrownHeight",
-            "signal": "micFlux",
-            "min": 0.3,
-            "max": 0.85,
-            "curve": "ease"
-          }
+          "audio": null
         },
         {
           "name": "sliderArcWidth",
           "label": "Arc Width",
           "value": 0.5,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderCurl",
-          "label": "Curl",
-          "value": 0.45,
-          "description": "Curl character control.",
-          "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 1,
-            "curve": "pow2"
-          }
-        }
-      ],
-      "gif": "008_124_aurora_crown.gif",
-      "video": "008_124_aurora_crown.mp4",
-      "seconds": 10,
-      "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
-    },
-    {
-      "index": 8,
-      "pattern": "125_eclipse_orbit",
-      "title": "Baby Girl - Gentle Eclipse",
-      "goal": "A dark celestial body crosses a palette-lit vessel while a bright rim keeps the eclipse legible at distance.",
-      "controls": [
-        {
-          "name": "sliderLocalSpeed",
-          "label": "Local Speed",
-          "value": 0.18,
-          "description": "Pattern-local motion rate.",
-          "audio": null
-        },
-        {
-          "name": "sliderLevel",
-          "label": "Level",
-          "value": 0.77,
-          "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderEclipseSize",
-          "label": "Eclipse Size",
-          "value": 0.52,
-          "description": "Eclipse Size character control.",
-          "audio": {
-            "slider": "sliderEclipseSize",
-            "signal": "micFlux",
-            "min": 0.26,
-            "max": 0.86,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderRimWidth",
-          "label": "Rim Width",
-          "value": 0.52,
-          "description": "Spatial reach or width within this pattern.",
-          "audio": null
-        },
-        {
-          "name": "sliderDepth",
-          "label": "Depth",
-          "value": 0.58,
+          "name": "sliderCradleDepth",
+          "label": "Cradle Depth",
+          "value": 0.66,
+          "valueSource": "playlist saved value",
           "description": "Shape and intensity of the main organic motion.",
           "audio": null
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
-          "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "009_125_eclipse_orbit.gif",
-      "video": "009_125_eclipse_orbit.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.87,
+        "sliderArcWidth": 0.5,
+        "sliderCradleDepth": 0.66
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.87,
+        "sliderArcWidth": 0.5,
+        "sliderCradleDepth": 0.66
+      },
+      "gif": "004_baby__35_girl_cradle_waves.gif",
+      "video": "004_baby__35_girl_cradle_waves.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "302be897d8f2746f44d4a67661f37e40651edaff012090bcdc18c88a31cb2047"
     },
     {
-      "index": 9,
-      "pattern": "126_cathedral_rib_wave",
-      "title": "Baby Girl - Family Cathedral",
-      "goal": "Monumental rib planes bow sequentially through a vaulted field, turning the ship into moving luminous architecture.",
+      "index": 4,
+      "pattern": "baby/34_girl_horizon_tides",
+      "title": "Baby Girl - Horizon Tides",
+      "goal": "Baby-pink horizon tides. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
-          "value": 0.75,
+          "value": 0.36,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.81,
+          "value": 0.86,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
-        },
-        {
-          "name": "sliderRibCount",
-          "label": "Rib Count",
-          "value": 0.31,
-          "description": "Amount of active visual material.",
           "audio": null
         },
         {
-          "name": "sliderRibWidth",
-          "label": "Rib Width",
-          "value": 0.23,
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderBow",
-          "label": "Bow",
-          "value": 0.48,
-          "description": "Bow character control.",
-          "audio": {
-            "slider": "sliderBow",
-            "signal": "micFlux",
-            "min": 0.22,
-            "max": 0.88,
-            "curve": "ease"
-          }
-        },
-        {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
+          "name": "sliderVerticalReach",
+          "label": "Vertical Reach",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Vertical Reach character control.",
           "audio": null
-        },
-        {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.9,
-            "curve": "pow2"
-          }
         }
       ],
-      "gif": "010_126_cathedral_rib_wave.gif",
-      "video": "010_126_cathedral_rib_wave.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.86,
+        "sliderTideWidth": 0.52,
+        "sliderVerticalReach": 0.62
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.86,
+        "sliderTideWidth": 0.52,
+        "sliderVerticalReach": 0.62
+      },
+      "gif": "005_baby__34_girl_horizon_tides.gif",
+      "video": "005_baby__34_girl_horizon_tides.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b193effbf8a6ece97edc1e17021ac746cdc04d18e0acbc649f7eda4f21c82f05"
     },
     {
-      "index": 10,
-      "pattern": "127_grand_maelstrom",
-      "title": "Baby Girl - Joyful Maelstrom",
-      "goal": "A broad two-to-three-arm ocean mass rotates around a calm eye while the full ship remains safely visible.",
+      "index": 5,
+      "pattern": "baby/69_girl_stack_halo",
+      "title": "Baby Girl - Stack Halo",
+      "goal": "Baby-pink stack halo: the smoke stacks lead a gentle structural glow over a visible ship.",
+      "intent": null,
       "controls": [
         {
           "name": "sliderLocalSpeed",
           "label": "Local Speed",
           "value": 0.3,
+          "valueSource": "playlist saved value",
           "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
           "name": "sliderLevel",
           "label": "Level",
-          "value": 0.57,
+          "value": 0.92,
+          "valueSource": "playlist saved value",
           "description": "Brightness or energy for this visual layer.",
-          "audio": {
-            "slider": "sliderLevel",
-            "signal": "micLow",
-            "min": 0.24,
-            "max": 1,
-            "curve": "linear"
-          }
+          "audio": null
         },
         {
-          "name": "sliderArmWidth",
-          "label": "Arm Width",
-          "value": 0.58,
+          "name": "sliderHaloWidth",
+          "label": "Halo Width",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
           "description": "Spatial reach or width within this pattern.",
           "audio": null
         },
         {
-          "name": "sliderArmCount",
-          "label": "Arm Count",
+          "name": "sliderHaloDepth",
+          "label": "Halo Depth",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.92,
+        "sliderHaloWidth": 0.56,
+        "sliderHaloDepth": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.92,
+        "sliderHaloWidth": 0.56,
+        "sliderHaloDepth": 0.52
+      },
+      "gif": "006_baby__69_girl_stack_halo.gif",
+      "video": "006_baby__69_girl_stack_halo.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a3bf4f2af8b5e8c40bbcecdbd513da561ddd8a5d7c545c118ae0261e5a219bae"
+    },
+    {
+      "index": 6,
+      "pattern": "baby/73_girl_silhouette_tide",
+      "title": "Baby Girl - Silhouette Tide",
+      "goal": "Baby-pink silhouette tide: a continuous current traces the recognizable outline of the ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSilhouetteDepth",
+          "label": "Silhouette Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderTideWidth": 0.52,
+        "sliderSilhouetteDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderTideWidth": 0.52,
+        "sliderSilhouetteDepth": 0.58
+      },
+      "gif": "007_baby__73_girl_silhouette_tide.gif",
+      "video": "007_baby__73_girl_silhouette_tide.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b8fa90bdde2fbae16f32108dbf5d67bdd269fc4d0542ba9e474af50d208b696c"
+    },
+    {
+      "index": 7,
+      "pattern": "baby/72_girl_hull_constellations",
+      "title": "Baby Girl - Hull Constellations",
+      "goal": "Baby-pink hull constellations: connected points span the broad ship canvas instead of becoming random sparkle.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.94,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarSize",
+          "label": "Star Size",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Star Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderConnectorContrast",
+          "label": "Connector Contrast",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Connector Contrast character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.94,
+        "sliderStarSize": 0.54,
+        "sliderConnectorContrast": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.94,
+        "sliderStarSize": 0.54,
+        "sliderConnectorContrast": 0.46
+      },
+      "gif": "008_baby__72_girl_hull_constellations.gif",
+      "video": "008_baby__72_girl_hull_constellations.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "690f48aa932a6d62e0140f62b5a501bbdaba790fce0f61d689f3ca960f5b5c1a"
+    },
+    {
+      "index": 8,
+      "pattern": "baby/37_girl_constellation_flow",
+      "title": "Baby Girl - Constellation Flow",
+      "goal": "Baby-pink drifting constellation lattice. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarSize",
+          "label": "Star Size",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Star Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderConstellationDensity",
+          "label": "Constellation Density",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "gif": "009_baby__37_girl_constellation_flow.gif",
+      "video": "009_baby__37_girl_constellation_flow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "14f023cf7638ef8c3048d34821b0b4a086f1abc4e2c6329115aeda3c238dd237"
+    },
+    {
+      "index": 9,
+      "pattern": "baby/31_girl_orbit_glow",
+      "title": "Baby Girl - Orbit Glow",
+      "goal": "Baby-pink orbital shells for long photo holds. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.84,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRingWidth",
+          "label": "Ring Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "gif": "010_baby__31_girl_orbit_glow.gif",
+      "video": "010_baby__31_girl_orbit_glow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "00b491a65427fbafe06e4f12bd67c543c5dcf4322f87186c452b9a1ce14b09eb"
+    },
+    {
+      "index": 10,
+      "pattern": "baby/75_girl_orbital_pearls",
+      "title": "Baby Girl - Orbital Pearls",
+      "goal": "Baby-pink orbital pearls: smooth pearl bodies circulate through the three-dimensional model.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderPearlSize",
+          "label": "Pearl Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Pearl Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderOrbitDepth",
+          "label": "Orbit Depth",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderPearlSize": 0.5,
+        "sliderOrbitDepth": 0.6
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderPearlSize": 0.5,
+        "sliderOrbitDepth": 0.6
+      },
+      "gif": "011_baby__75_girl_orbital_pearls.gif",
+      "video": "011_baby__75_girl_orbital_pearls.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "0aba9041a4acad203766b01d236b8dc63b176bb0884bf19eba7810cc9eba8b06"
+    },
+    {
+      "index": 11,
+      "pattern": "baby/33_girl_rose_glow",
+      "title": "Baby Girl - Rose Glow",
+      "goal": "Baby-pink counter-wound rose for long photo holds. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderPetalWidth",
+          "label": "Petal Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.7,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "gif": "012_baby__33_girl_rose_glow.gif",
+      "video": "012_baby__33_girl_rose_glow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "aa56d95047a07d66237f16559c47c8be8cfb7ac015eb58e73a872aa40345a7f7"
+    },
+    {
+      "index": 12,
+      "pattern": "baby/39_girl_ribbon_braid",
+      "title": "Baby Girl - Ribbon Braid",
+      "goal": "Baby-pink three-strand ribbon braid. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibbonWidth",
+          "label": "Ribbon Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBraidAmount",
+          "label": "Braid Amount",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Braid Amount character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "gif": "013_baby__39_girl_ribbon_braid.gif",
+      "video": "013_baby__39_girl_ribbon_braid.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4d93b8171c805557e3b6287829170ec87f7d98cb4536f120ba9b847bca8965de"
+    },
+    {
+      "index": 13,
+      "pattern": "baby/70_girl_rail_cascade",
+      "title": "Baby Girl - Rail Cascade",
+      "goal": "Baby-pink rail cascade: smooth bands travel along the Jewelry and silhouette language of the vessel.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRailWidth",
+          "label": "Rail Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCascadeDepth",
+          "label": "Cascade Depth",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderRailWidth": 0.48,
+        "sliderCascadeDepth": 0.56
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderRailWidth": 0.48,
+        "sliderCascadeDepth": 0.56
+      },
+      "gif": "014_baby__70_girl_rail_cascade.gif",
+      "video": "014_baby__70_girl_rail_cascade.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f50e8edb90b96501716b7355f86ba0d4eaa459fb16081efbfabf8d7a97e7f4d3"
+    },
+    {
+      "index": 14,
+      "pattern": "baby/67_girl_bow_wave",
+      "title": "Baby Girl - Bow Wave",
+      "goal": "Baby-pink bow wave: a broad spatial crest announces the front of the ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.96,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWaveWidth",
+          "label": "Wave Width",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderWaveDepth",
+          "label": "Wave Depth",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.96,
+        "sliderWaveWidth": 0.62,
+        "sliderWaveDepth": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.96,
+        "sliderWaveWidth": 0.62,
+        "sliderWaveDepth": 0.5
+      },
+      "gif": "015_baby__67_girl_bow_wave.gif",
+      "video": "015_baby__67_girl_bow_wave.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "64b8cb2f677d2909b3f67cdcfd37a0b0a2feecbf10b2802dfb84784ab434eee0"
+    },
+    {
+      "index": 15,
+      "pattern": "baby/68_girl_stern_wake",
+      "title": "Baby Girl - Stern Wake",
+      "goal": "Baby-pink stern wake: layered ripples spread from the rear through the full model.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWakeSpread",
+          "label": "Wake Spread",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderRippleDensity",
+          "label": "Ripple Density",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.88,
+        "sliderWakeSpread": 0.56,
+        "sliderRippleDensity": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.88,
+        "sliderWakeSpread": 0.56,
+        "sliderRippleDensity": 0.48
+      },
+      "gif": "016_baby__68_girl_stern_wake.gif",
+      "video": "016_baby__68_girl_stern_wake.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a1c8f4ba47dd1c0ddc6dc71aa4938933dd6b0e5a493f39e50e2682739db906fd"
+    },
+    {
+      "index": 16,
+      "pattern": "baby/43_girl_waterfall_veil",
+      "title": "Baby Girl - Waterfall Veil",
+      "goal": "Baby-pink cascading veil filaments. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderVeilWidth",
+          "label": "Veil Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCascadeDensity",
+          "label": "Cascade Density",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.6,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.52,
+        "sliderCascadeDensity": 0.54
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.6,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.52,
+        "sliderCascadeDensity": 0.54
+      },
+      "gif": "017_baby__43_girl_waterfall_veil.gif",
+      "video": "017_baby__43_girl_waterfall_veil.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "de7248f6050885e2362e5e2b5b268107689de8b5205fc64a7a222a988edaa1ce"
+    },
+    {
+      "index": 17,
+      "pattern": "baby/41_girl_lighthouse_fans",
+      "title": "Baby Girl - Lighthouse Fans",
+      "goal": "Baby-pink mirrored lighthouse fans. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderFanCount",
+          "label": "Fan Count",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "gif": "018_baby__41_girl_lighthouse_fans.gif",
+      "video": "018_baby__41_girl_lighthouse_fans.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "97f2750dcf10fed17abc46b672a25459e5e20b1ea69c66ddccbf0b041a6507ae"
+    },
+    {
+      "index": 18,
+      "pattern": "baby/32_girl_crossing_glow",
+      "title": "Baby Girl - Crossing Glow",
+      "goal": "Baby-pink crossing beacons for long photo holds. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
           "value": 0.32,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCrossingOffset",
+          "label": "Crossing Offset",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Crossing Offset character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.32,
+        "sliderLevel": 0.86,
+        "sliderBeamWidth": 0.46,
+        "sliderCrossingOffset": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.32,
+        "sliderLevel": 0.86,
+        "sliderBeamWidth": 0.46,
+        "sliderCrossingOffset": 0.5
+      },
+      "gif": "019_baby__32_girl_crossing_glow.gif",
+      "video": "019_baby__32_girl_crossing_glow.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "da6dba637c089594fd0c1bf1cdb251b9ccabe9aff9ccb954fff2c3f733b33472"
+    },
+    {
+      "index": 19,
+      "pattern": "baby/76_girl_crossing_beacons",
+      "title": "Baby Girl - Crossing Beacons",
+      "goal": "Baby-pink crossing beacons: broad paired signals meet over the complete ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeaconWidth",
+          "label": "Beacon Width",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCrossingDepth",
+          "label": "Crossing Depth",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.9,
+        "sliderBeaconWidth": 0.58,
+        "sliderCrossingDepth": 0.54
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.36,
+        "sliderLevel": 0.9,
+        "sliderBeaconWidth": 0.58,
+        "sliderCrossingDepth": 0.54
+      },
+      "gif": "020_baby__76_girl_crossing_beacons.gif",
+      "video": "020_baby__76_girl_crossing_beacons.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5bc1d1f821b515dfc9ed8efbcb716a468436db091de72c18a017ff54a8c564bd"
+    },
+    {
+      "index": 20,
+      "pattern": "baby/40_girl_bubble_chorus",
+      "title": "Baby Girl - Bubble Chorus",
+      "goal": "Baby-pink breathing bubble field. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.49,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBubbleSize",
+          "label": "Bubble Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Bubble Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCellDensity",
+          "label": "Cell Density",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "gif": "021_baby__40_girl_bubble_chorus.gif",
+      "video": "021_baby__40_girl_bubble_chorus.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e9a32cf5d00f60e4ece5e2a11d3aa0ce864acda740568adc874fd4c87e9a3113"
+    },
+    {
+      "index": 21,
+      "pattern": "baby/44_girl_diamond_quilt",
+      "title": "Baby Girl - Diamond Quilt",
+      "goal": "Baby-pink travelling diamond quilt. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.65,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSeamWidth",
+          "label": "Seam Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderQuiltScale",
+          "label": "Quilt Scale",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Quilt Scale character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "gif": "022_baby__44_girl_diamond_quilt.gif",
+      "video": "022_baby__44_girl_diamond_quilt.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "40bf5a3f3f3c4b453552257cbef88972324eddadf34011f3114069e4a036459f"
+    },
+    {
+      "index": 22,
+      "pattern": "baby/79_girl_harbor_fireflies",
+      "title": "Baby Girl - Harbor Fireflies",
+      "goal": "Baby-pink harbor fireflies: detailed lights drift over a dependable full-ship floor.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderFireflySize",
+          "label": "Firefly Size",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Firefly Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDriftDepth",
+          "label": "Drift Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.62,
+        "sliderLevel": 0.91,
+        "sliderFireflySize": 0.48,
+        "sliderDriftDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.62,
+        "sliderLevel": 0.91,
+        "sliderFireflySize": 0.48,
+        "sliderDriftDepth": 0.58
+      },
+      "gif": "023_baby__79_girl_harbor_fireflies.gif",
+      "video": "023_baby__79_girl_harbor_fireflies.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "358e781f4a2089e48d3849866dc34ac143a8d61a03f9b251aa3f8e7f9a592674"
+    },
+    {
+      "index": 23,
+      "pattern": "baby/36_girl_comet_lullaby",
+      "title": "Baby Girl - Comet Lullaby",
+      "goal": "Baby-pink smooth comet procession. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Tail Length character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCometCount",
+          "label": "Comet Count",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "gif": "024_baby__36_girl_comet_lullaby.gif",
+      "video": "024_baby__36_girl_comet_lullaby.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "bc19fd9ac74395c842c36fd603f7ed4b8c629b957669f292de18bde352bbeced"
+    },
+    {
+      "index": 24,
+      "pattern": "baby/74_girl_cathedral_ribs",
+      "title": "Baby Girl - Cathedral Ribs",
+      "goal": "Baby-pink cathedral ribs: large animated arches turn the vessel into luminous architecture.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.96,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibWidth",
+          "label": "Rib Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderArchHeight",
+          "label": "Arch Height",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Arch Height character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.96,
+        "sliderRibWidth": 0.54,
+        "sliderArchHeight": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.96,
+        "sliderRibWidth": 0.54,
+        "sliderArchHeight": 0.58
+      },
+      "gif": "025_baby__74_girl_cathedral_ribs.gif",
+      "video": "025_baby__74_girl_cathedral_ribs.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d7fcef6ab14f51f0920503b0e1ab57e8b462efb8df96ca634f398bcbfec6322f"
+    },
+    {
+      "index": 25,
+      "pattern": "baby/78_girl_aurora_veil",
+      "title": "Baby Girl - Aurora Veil",
+      "goal": "Baby-pink aurora veil: smooth curtains fold across the hull and Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderVeilWidth",
+          "label": "Veil Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderAuroraDepth",
+          "label": "Aurora Depth",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.54,
+        "sliderAuroraDepth": 0.62
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.91,
+        "sliderVeilWidth": 0.54,
+        "sliderAuroraDepth": 0.62
+      },
+      "gif": "026_baby__78_girl_aurora_veil.gif",
+      "video": "026_baby__78_girl_aurora_veil.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "25806e85e271c16d07b2487485c080cbf8902f142d46d16314c02aec595a8e3c"
+    },
+    {
+      "index": 26,
+      "pattern": "baby/77_girl_gentle_maelstrom",
+      "title": "Baby Girl - Gentle Maelstrom",
+      "goal": "Baby-pink gentle maelstrom: a broad photo-safe spiral carries motion without losing the ship.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.94,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpiralWidth",
+          "label": "Spiral Width",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCurrentDepth",
+          "label": "Current Depth",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.94,
+        "sliderSpiralWidth": 0.68,
+        "sliderCurrentDepth": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.58,
+        "sliderLevel": 0.94,
+        "sliderSpiralWidth": 0.68,
+        "sliderCurrentDepth": 0.48
+      },
+      "gif": "027_baby__77_girl_gentle_maelstrom.gif",
+      "video": "027_baby__77_girl_gentle_maelstrom.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8f8950915e3a507fab150201d54f6a29bd6c80db94c3535e01560261742fe425"
+    },
+    {
+      "index": 27,
+      "pattern": "baby/42_girl_heartbeat_bloom",
+      "title": "Baby Girl - Heartbeat Bloom",
+      "goal": "Baby-pink nested heartbeat blooms. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloomSharpness",
+          "label": "Bloom Sharpness",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderEchoDepth",
+          "label": "Echo Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "gif": "028_baby__42_girl_heartbeat_bloom.gif",
+      "video": "028_baby__42_girl_heartbeat_bloom.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "cc06a4c63659e77197692a151e1ccecc048acaf3ff6666697ec4de8c70fb8cd4"
+    },
+    {
+      "index": 28,
+      "pattern": "baby/80_girl_celebration_bloom",
+      "title": "Baby Girl - Celebration Bloom",
+      "goal": "Baby-pink celebration bloom: sustained spatial petals create a joyful photo-hold finale.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderPetalCount",
+          "label": "Petal Count",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
           "description": "Amount of active visual material.",
           "audio": null
         },
         {
-          "name": "sliderDepth",
-          "label": "Depth",
-          "value": 0.56,
+          "name": "sliderBloomDepth",
+          "label": "Bloom Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
           "description": "Shape and intensity of the main organic motion.",
-          "audio": {
-            "slider": "sliderDepth",
-            "signal": "micFlux",
-            "min": 0.2,
-            "max": 0.88,
-            "curve": "linear"
-          }
-        },
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.48,
+        "sliderLevel": 0.92,
+        "sliderPetalCount": 0.52,
+        "sliderBloomDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.48,
+        "sliderLevel": 0.92,
+        "sliderPetalCount": 0.52,
+        "sliderBloomDepth": 0.58
+      },
+      "gif": "029_baby__80_girl_celebration_bloom.gif",
+      "video": "029_baby__80_girl_celebration_bloom.mp4",
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "940b28bf5f271b36936504665b888f52054bfd6f1559985fc8651580d743c272"
+    },
+    {
+      "index": 29,
+      "pattern": "baby/45_girl_celebration_burst",
+      "title": "Baby Girl - Celebration Burst",
+      "goal": "Baby-pink repeating celebration bursts. Hard-coded baby-pink photo hold — no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
         {
-          "name": "sliderSafetyFloor",
-          "label": "Safety Floor",
-          "value": 0.55,
-          "description": "Quiet-state floor and negative-space balance.",
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
           "audio": null
         },
         {
-          "name": "sliderPulse",
-          "label": "Pulse",
-          "value": 0,
-          "description": "Pulse character control.",
-          "audio": {
-            "slider": "sliderPulse",
-            "signal": "micKick",
-            "min": 0,
-            "max": 0.88,
-            "curve": "pow2"
-          }
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstWidth",
+          "label": "Burst Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstReach",
+          "label": "Burst Reach",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
         }
       ],
-      "gif": "011_127_grand_maelstrom.gif",
-      "video": "011_127_grand_maelstrom.mp4",
-      "seconds": 10,
+      "savedValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "gif": "030_baby__45_girl_celebration_burst.gif",
+      "video": "030_baby__45_girl_celebration_burst.mp4",
+      "seconds": 20,
       "chapters": [],
-      "featureLabel": "IDENTITY · TE SIGNS"
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "584e6a782aacd1f0a609e488e36788f99f4a41323171ed507f7d166f4cb38cec"
     }
   ]
 }

@@ -5,12 +5,15 @@
   v = "catalyst") share a feedback LANE of N=128 cells laid along the normalized
   X axis (0..1) — NOT one cell per physical pixel. Every physical pixel samples
   the catalyst lane cell for its OWN x, so the chemistry reads across the WHOLE
-  rig on every model (test_bench 52, titanic 970, dome 266, logsville 216).
+  rig on every model, from a compact test bench through the 964-pixel Titanic.
 
   RIG-AGNOSTIC: a coordinate lane (not a per-pixel buffer) is required because the
-  VM caps an array at ~162 elements while rigs reach 970 px — so N is NEVER
+  VM caps an array at ~162 elements while rigs reach hundreds of pixels — so N is NEVER
   pixelCount (=144), NEVER a hardcoded 52, and never >162; every lane access is
-  guarded 0..N-1. Each frame we run one Gray-Scott step over the lane in
+  guarded 0..N-1. Each frame we run Gray-Scott steps over the lane. Two soft,
+  moving chemostat sources keep the real culture from settling into an
+  apparently static equilibrium; XYZ advection changes where that reagent is
+  observed without substituting a decorative colour wave. The steps run in
   `beforeRender` (kept out of the per-pixel path, PATTERNS.md §10.5):
 
     DIFFUSE — every cell blends with its two index-neighbours using IRRATIONAL
@@ -27,14 +30,16 @@
 
   FIXTURE COMPOSITION: bars carry the broad chemistry, raw strands trace its
   contours, Vintage fixtures catch sparse matched-W/A nuclei, pars hold a warm
-  root pulse, and TE signs keep a stable substrate. Targeting uses portable
-  FIX_* capability only; unknown fixture roles retain the generic chemistry.
+  root pulse, and both TE signs carry byte-matched petri-glass cells over a
+  reliable substrate floor. Targeting uses portable FIX_* capability only;
+  unknown fixture roles retain the generic chemistry.
 
   IRRATIONAL RATIOS (no integer periods) — equation in one line:
     diffusion weights wU = 1/SQRT2 = 0.70711 , wV = 1/SQRT3 = 0.57735 ;
     seed sites wander by the GOLDEN ANGLE  gp = wave(seedPhase*GOLD)  (GOLD=2.39996)
     with a PHI detune (PHI=1.61803) and a SQRT2 base advance — the reaction
-    front locations never lock into a repeating grid.
+    front locations never lock into a repeating grid. Two culture clocks use
+    sqrt(2)-detuned rates so their observation planes do not re-lock either.
 
   CONTROLS (declaration order = UI order)
     - localSpeed : reaction step rate (how fast the chemistry crawls).
@@ -94,7 +99,7 @@ export function sliderBase(v) { base = v; }     // faint resting cp1 floor
 // ── Tunables ────────────────────────────────────────────────────────────────
 // RIG-AGNOSTIC: the reaction runs on a fixed N=128-cell lane along the normalized
 // X axis, sampled per-pixel by each pixel's x. NOT one cell per physical pixel
-// (the VM caps an array at ~162 elements; rigs reach 970 px), NEVER pixelCount
+// (the VM caps an array at ~162 elements; rigs reach hundreds of pixels), NEVER pixelCount
 // (=144), NEVER 52. 128 < the array cap so all four lane arrays are real, and a
 // 128-cell lane gives plenty of reaction detail on every rig.
 var N = 128;                // reaction-lane resolution along X (under the VM cap)
@@ -154,6 +159,8 @@ var tmpV = array(128);
 var bufInit = 0;
 var seedPhase = 0.0;        // wandering seed-site phase (golden-angle advance)
 var faintPhase = 0.0;       // slow phase for the silent-base shimmer
+var culturePhaseA = 0.0;    // primary advection / moving chemostat phase
+var culturePhaseB = 0.0;    // irrationally detuned counter-phase
 var stepClock = 0.0;        // accumulates time toward the next reaction sub-step
 var feedExp = 2.0;          // resolved coral-front concentration exponent this frame (micMid -> geometry)
 var seedFlash = 0.0;        // short visible life of the most recent edge event
@@ -203,6 +210,15 @@ export function beforeRender(delta) {
   seedPhase = seedPhase - floor(seedPhase);
   faintPhase = faintPhase + dt * 0.18 * localMult;
   faintPhase = faintPhase - floor(faintPhase);
+
+  // Two independently accumulated, incommensurate culture clocks keep the
+  // chemistry visibly migrating at the saved Ambient tune. They wrap at an
+  // integer number of turns, so every wave() consumer remains continuous.
+  // localSpeed changes only their rates; live edits never reset either phase.
+  culturePhaseA = culturePhaseA + dt * (0.012 + localMult * 0.045);
+  culturePhaseB = culturePhaseB + dt * (0.009 + localMult * 0.031831);
+  if (culturePhaseA >= 4096.0) culturePhaseA = culturePhaseA - 4096.0;
+  if (culturePhaseB >= 4096.0) culturePhaseB = culturePhaseB - 4096.0;
 
   // micKick -> Seed is a rising-edge event, never continuous injection while
   // held. The event chooses an irrationally wandering site, mutates the real
@@ -265,6 +281,16 @@ export function beforeRender(delta) {
       tmpV[kk] = nv;
     }
     for (var kk = 0; kk < N; kk++) { bufU[kk] = tmpU[kk]; bufV[kk] = tmpV[kk]; }
+
+    // A living culture needs continuing microscopic perturbations. Two soft
+    // chemostat sources drift at irrationally related rates and feed the real
+    // Gray-Scott buffers (rather than painting a decorative motion layer).
+    // Their low dose sustains migrating fronts without flooding the substrate.
+    var sourceA = floor(wave(culturePhaseA + 0.17) * (N - 1) + 0.5);
+    var sourceB = floor(wave(culturePhaseB + 0.63) * (N - 1) + 0.5);
+    var cultureDose = 0.0035 + clamp01(feed) * 0.0045;
+    injectAt(sourceA, cultureDose);
+    injectAt(sourceB, cultureDose * 0.786151);
   }
 }
 
@@ -272,17 +298,24 @@ export function render3D(index, x, y, z) {
   var nx = clamp01(x);
   var ny = clamp01(y);
   var nz = clamp01(z);
-  // Rig-agnostic chemistry: every fixture samples the same guarded X lane.
-  var li = floor(nx * (N - 1) + 0.5);
+  // Rig-agnostic chemistry: every fixture samples the same guarded lane, but
+  // smooth advection bends that real reagent field through all three model
+  // axes. The two detuned phases prevent a generic repeated sliding band.
+  var advectX = clamp01(nx
+    + (wave(culturePhaseA + ny * 0.371 + nz * 0.229) - 0.5) * 0.18);
+  var advectY = clamp01(ny * 0.73 + nz * 0.27
+    + (wave(culturePhaseB + nx * 0.413) - 0.5) * 0.15);
+  var advectZ = clamp01(nz * 0.61 + (1.0 - nx) * 0.39
+    + (wave(culturePhaseA - culturePhaseB + ny * 0.293) - 0.5) * 0.12);
+  var li = floor(advectX * (N - 1) + 0.5);
   if (li < 0) li = 0;
   if (li > N - 1) li = N - 1;
   var conc = bufV[li];
   // Project the same living reagent lane through two additional XYZ axes. This
   // keeps the real Gray-Scott state while turning the former vertical bands
   // into a model-wide chemical skin with visible cells at playa distance.
-  var liY = floor(clamp01(ny * 0.73 + nz * 0.27) * (N - 1) + 0.5);
-  var liZ = floor(clamp01(nz * 0.61 + (1.0 - nx) * 0.39)
-                * (N - 1) + 0.5);
+  var liY = floor(advectY * (N - 1) + 0.5);
+  var liZ = floor(advectZ * (N - 1) + 0.5);
   if (liY < 0) liY = 0;
   if (liY > N - 1) liY = N - 1;
   if (liZ < 0) liZ = 0;
@@ -305,8 +338,8 @@ export function render3D(index, x, y, z) {
   // Two counter-evolving observation planes expose the 1D reagent as smooth
   // cellular membranes across XYZ. The real concentration controls their
   // energy, so this remains chemistry—not a decorative background wave.
-  var skinA = wave(nx * 1.73 + ny * 1.11 - nz * 0.67 + faintPhase);
-  var skinB = wave(-nx * 0.91 + ny * 1.57 + nz * 1.23 - faintPhase);
+  var skinA = wave(nx * 1.73 + ny * 1.11 - nz * 0.67 + culturePhaseA);
+  var skinB = wave(-nx * 0.91 + ny * 1.57 + nz * 1.23 - culturePhaseB);
   var chemicalSkin = pow(clamp01(1.0 - abs(skinA - skinB)), 3.1)
                    * (0.10 + concShaped * 0.90);
   var reaction = concShaped * 1.48 + chemicalSkin * 0.38;
@@ -347,31 +380,34 @@ export function render3D(index, x, y, z) {
     matchedWhite = rootPulse * 0.10 + eventNucleus * 0.16;
     tcol = clamp01(0.16 + conc * 3.4);
   } else if (fixtureType == FIX_TE_SIGN) {
-    // Identity is readable petri glass sampling the REAL reagent lane through
-    // an XYZ + letter-path coordinate. Catalyst nuclei and their concentration
-    // gradients crawl and split in place; nothing translates the texture or
-    // flat-breathes the whole sign.
-    var signPath = pixelLocalIndex * 0.01351351351;
-    var signCoord = clamp01(nx * 0.47 + ny * 0.23 + nz * 0.17
-                          + signPath * 0.13);
+    // Identity is matched petri glass on both TE signs. Each physical sign has
+    // the same paired 40/34-pixel fixture topology, so pixelLocalIndex gives an
+    // exact side-independent path: counterpart pixels receive byte-identical
+    // output while reaction cells still crawl smoothly across every letter.
+    var signPath = pixelLocalIndex * 0.02564102564;
+    var signCoord = clamp01(signPath
+      + (wave(culturePhaseA + signPath * 0.371) - 0.5) * 0.16);
+    var signCoord2 = clamp01(1.0 - signPath
+      + (wave(culturePhaseB + signPath * 0.229) - 0.5) * 0.13);
     var signIndex = floor(signCoord * (N - 1) + 0.5);
+    var signIndex2 = floor(signCoord2 * (N - 1) + 0.5);
     if (signIndex < 0) signIndex = 0;
     if (signIndex > N - 1) signIndex = N - 1;
+    if (signIndex2 < 0) signIndex2 = 0;
+    if (signIndex2 > N - 1) signIndex2 = N - 1;
     var signLeft = signIndex - 1;
     var signRight = signIndex + 1;
     if (signLeft < 0) signLeft = 0;
     if (signRight > N - 1) signRight = N - 1;
-    var signConc = bufV[signIndex];
+    var signConc = max(bufV[signIndex], bufV[signIndex2] * 0.82);
     var signGradient = abs(bufV[signRight] - bufV[signLeft]);
     // Three counter-evolving observation axes reveal the otherwise 1D reagent
     // as cellular 3D petri geometry. Their composite morphs instead of sliding
     // as one field; the real catalyst concentration biases where nuclei breed.
-    var signChemA = wave((nx * 0.71 + ny * 1.37 - nz * 0.59) * 2.7
-                       + signPath * 0.31 + faintPhase);
-    var signChemB = wave((nx * 1.19 - ny * 0.47 + nz * 0.83) * 3.1
-                       - signPath * 0.23 - faintPhase);
-    var signChemC = wave((nx * 0.43 + ny * 0.89 + nz * 1.41) * 2.3
-                       + signPath * 0.47 + faintPhase * 2.0);
+    var signChemA = wave(signPath * 2.71 + culturePhaseA);
+    var signChemB = wave(signPath * 3.83 - culturePhaseB);
+    var signChemC = wave(signPath * 5.17
+                       + culturePhaseA - culturePhaseB);
     var signPotential = (signChemA + signChemB + signChemC) / 3.0;
     var signCellA = pow(clamp01(1.0 - abs(signChemA - signChemB)), 3.2);
     var signCellB = pow(clamp01(1.0 - abs(signChemB - signChemC)), 4.1);
@@ -385,12 +421,15 @@ export function render3D(index, x, y, z) {
       pow(clamp01(signConc * 4.8), 0.78) * 0.46);
     signFront = max(signFront,
       pow(clamp01(signGradient * 18.0), 0.72) * 0.42);
-    bri = 0.46 + signMembrane * 0.36 + signNucleus * 0.42
+    var signEventDistance = abs(signIndex - seedSite) / (N - 1);
+    var signEventNucleus = clamp01(1.0 - signEventDistance / 0.065)
+                         * seedFlash;
+    bri = 0.50 + signMembrane * 0.34 + signNucleus * 0.40
         + signFront * 0.30
-        + eventNucleus * 0.10;
+        + signEventNucleus * 0.10;
     tcol = clamp01(0.04 + signMembrane * 0.34
                  + signNucleus * 0.52 + signFront * 0.24
-                 + eventNucleus * 0.18);
+                 + signEventNucleus * 0.18);
   } else {
     // Portable fallback for a fixture role added after this pattern.
     bri = substrate * 0.58 + reaction * 0.82 + eventNucleus * 0.38;

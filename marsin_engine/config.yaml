@@ -9,9 +9,29 @@ engine:
   priority: high
 mixer:
   maxChannels: 8
+# /ws/viz preview broadcast. ADVISORY ONLY — never touches sACN. The full
+# contract (defaults, validation, why the cap is per key) is the header of
+# marsin_engine/lib/vis_budget.js; an unknown field or an unreadable value here
+# makes the engine REFUSE TO BOOT rather than quietly ignore it.
 vis:
+  # Frames per second of preview. Default when absent: 1.
   broadcastHz: 5
+  # DEFAULT sample budget — what every PER-CHANNEL key carries. Each channel's
+  # strip is one RN <View> per sample on the iPad's UI thread, times however
+  # many channels are open, so this stays small. Default when absent: 100.
   maxPixels: 100
+  # Per-key overrides, allowed ONLY for the whole-rig composite keys
+  # (master, preDimmer, rig, __deck_inactive__, __deck_swap__). Value is a
+  # positive integer or `full` (= send every model pixel, no subsampling).
+  #
+  # rig + preDimmer run FULL RATE because their consumer is the Deck PIXELS
+  # window (_225/_239) — a 2D canvas whose cost is per pixel DRAWN, not per
+  # sample received, and whose whole job is showing the operator the real rig.
+  # Costs ~13.5 KB/frame more than the capped pair on the 964-px titanic; drop
+  # either to an integer (e.g. 240) if the iPad's WiFi ever needs the room.
+  keyMaxPixels:
+    rig: full
+    preDimmer: full
 server:
   port: 6968
 vsn1:
@@ -95,6 +115,12 @@ audio:
     # moderate 174 → 112 (-35.6%) and heavy 124 → 96 (-22.3%), both correct at
     # 70. Burning Man runs fast; a badly aliased 174 on a dusty night is the expensive
     # failure. Re-run the A/B before widening this again.
+    # Measured on the TRACKED config in this file — no states/<scene>/audio_state.yaml
+    # overlay. Re-verified by report _214, which reproduced both figures exactly; on
+    # the operator's live overlay (inputGain 9.1) the moderate 174 failure VANISHES
+    # (reads 173.3, -0.4%), so a re-run under `--effective` would silently delete the
+    # evidence for minBpm 70. tests/audio/bpm_tune_eval.test.mjs locks these two
+    # numbers to a third witness.
     minBpm: 70
     maxBpm: 180
     activityThreshold: 0.05
@@ -146,10 +172,10 @@ audio:
     #     1-2 semitone step is indistinguishable from a dominant-frequency
     #     tracker glide. Most bass/root progression moves ARE near moves, so
     #     0.37 s is the typical case, not 0.21 s.
-    #   * NEAR move through the REAL analyzer at 18 dB SNR: about 440 ms
-    #     median; the fixed holdout's p90 run-level p95 is 854 ms and its
-    #     worst run-level p95 is 935 ms. The dom tracker adds its own lag.
-    #     (tests/audio/note_estimator_noisy.test.mjs)
+    #   * NEAR move through the REAL analyzer at 18 dB SNR: the fixed holdout
+    #     shows 451 ms typical change latency, 853.6 ms p90 run-level p95
+    #     latency and 934.8 ms worst run-level p95 latency. The dom tracker
+    #     adds its own lag. (tests/audio/note_estimator_noisy.test.mjs)
     #   * First note after boot or a long silence: 18 hops = 0.21 s.
     #
     # DESIGN CONSEQUENCE: this tracks ONE DOMINANT/ROOT PITCH in sustained
@@ -159,17 +185,28 @@ audio:
     # them. That is intentional: audioNote/audioNoteHue are a stable harmonic
     # bed, not a transcription or chord detector.
     #
-    # SCOPE — WHERE THIS IS VALIDATED. Do not claim more than this:
+    # SCOPE — WHERE THIS IS VALIDATED. Do not claim more than this.
+    # PARITY-LOCKED: every figure in this block also appears verbatim in
+    # docs/AUDIO_SIGNALS.md, and tests/audio/note_evidence_docs_parity.test.mjs
+    # fails naming BOTH files if they ever disagree. Re-measure with
+    # tests/audio/note_estimator_noisy.test.mjs, then update both together.
     #   * VALIDATED at the `moderate` mic tier ONLY (18 dB SNR), on a synthetic
     #     124 BPM house root progression, fixed 24-seed prime holdout.
-    #     Measured: 93.43% mean accuracy after settling, 51.09% over each FULL
-    #     968 ms root segment (commit latency consumes roughly the first half),
-    #     99.17% mean root-change recall, and 18 of 24 seeds with a perfectly
-    #     ordered committed sequence.
-    #   * DEGRADED TO NON-FUNCTIONAL at the `heavy` tier (9 dB SNR). Measured
-    #     over fixed report-only seeds 1-4: 11.22% settled accuracy, 9.81%
-    #     full-segment accuracy and 13.33% root-change recall. Note colour must
-    #     NOT be relied on for a far / loud / dusty capture.
+    #     Measured: 93.43% mean settled-window accuracy, 51.09% mean
+    #     full-segment accuracy over each FULL 968 ms root segment (commit
+    #     latency consumes roughly the first half), 99.17% mean expected
+    #     root-change recall, and 18 of 24 clean committed sequences.
+    #   * MEASURED AGAINST THIS FILE ONLY. The holdout scores the tracked
+    #     config.yaml audio block and deliberately does NOT overlay
+    #     states/<scene>/audio_state.yaml, whose live `bands.inputGain` moves
+    #     the whole result (93.43% settled at gain 1, 98.27% at the operator's
+    #     live gain 9.1, measured 2026-08-14). A gate a gain knob can lift is
+    #     not a gate.
+    #   * DEGRADED TO NON-FUNCTIONAL at the `heavy` tier (9 dB SNR) — REPORT
+    #     ONLY, never gated, never promoted into a threshold. Measured over
+    #     fixed seeds 1-4: 11.22% heavy-tier settled accuracy, 9.81% heavy-tier
+    #     full-segment score and 13.33% heavy-tier root-change recall. Note
+    #     colour must NOT be relied on for a far / loud / dusty capture.
     #   * UNVALIDATED at the `playa` and `adversarial` tiers (wind gusts,
     #     neighbour-camp bleed, hard clipping): never scored for note tracking.
     # Making the heavy tier work is a redesign (chroma-based pitch estimation),

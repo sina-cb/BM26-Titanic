@@ -783,4 +783,3 @@ node simulation/agent_tools/wheel_guard_verify.cjs --negative-control # expect t
 nothing edits on wheel any more. Harmless, but a small lie in code. Deliberately not
 removed: `gui_builder.js` carries a 1431-line in-flight diff from other agents and a
 cosmetic edit there is not worth the conflict risk.
-

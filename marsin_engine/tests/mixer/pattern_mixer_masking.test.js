@@ -492,3 +492,72 @@ test('renderAll6ch: PFL blackout zeroes unselected pixels in deck output', () =>
     assert.equal(out[i * 6 + 2], 0);
   }
 });
+
+// ─── PatternMixer: per-channel VIS preview blackout (docs/58 §5, D5) ──
+//
+// The mixer's per-channel `/ws/viz` buffer feeds the pixel-view band on
+// each channel strip: "which pattern is this layer painting, and WHERE on
+// the ship". Before docs/58 that buffer was UNMASKED — a channel
+// view-selected to one group still broadcast its pattern across the whole
+// model, which on a 1D strip was invisible and on a top-down ship view is
+// simply the wrong answer. It now takes the same
+// `applyPreviewMaskBlackout` the deck PFL preview and Live Touch already
+// take (docs/27 §4.2).
+//
+// The COMPOSITE is deliberately untouched by these tests' subject: a mixer
+// overlay still preserves the background outside its view (the never-dark
+// rule), and the fader independence of the preview (2026-06-29) is
+// unchanged — this is about WHERE, not about how bright.
+
+test('vis: a view-selected channel previews BLACK outside its selection', () => {
+  const { mixer } = makeMixerWithRedBase();
+  mixer.setChannelViewSelection('ch_overlay', { type: 'group', target: 'Wall' });
+  mixer.wantVisThisFrame = true;
+  mixer.renderAll6ch();
+
+  const vis = mixer.getVisData()['ch_overlay'];
+  assert.ok(vis, 'the channel must still publish a vis buffer');
+  // Wall pixels (0,1) keep the channel's own blue at FULL brightness —
+  // the preview is still pre-fader, pre-blend.
+  for (const i of [0, 1]) {
+    assert.equal(vis[i * 6 + 2], 255, `pixel ${i} should still be blue`);
+  }
+  // Everything outside the selection is black: this layer lands nowhere else.
+  for (const i of [2, 3]) {
+    assert.equal(vis[i * 6 + 0], 0);
+    assert.equal(vis[i * 6 + 1], 0);
+    assert.equal(vis[i * 6 + 2], 0);
+  }
+});
+
+test('vis: an UNSELECTED (type=all) channel previews the whole model', () => {
+  const { mixer } = makeMixerWithRedBase();
+  mixer.wantVisThisFrame = true;
+  mixer.renderAll6ch();
+
+  const vis = mixer.getVisData()['ch_overlay'];
+  assert.ok(vis, 'the channel must publish a vis buffer');
+  // No selection ⇒ no mask ⇒ the pattern reads across the whole ship,
+  // exactly as it did before docs/58.
+  for (const i of [0, 1, 2, 3]) {
+    assert.equal(vis[i * 6 + 2], 255, `pixel ${i} should be blue`);
+  }
+});
+
+test('vis: the preview mask does NOT darken the composite mix', () => {
+  const { mixer } = makeMixerWithRedBase();
+  mixer.setChannelViewSelection('ch_overlay', { type: 'group', target: 'Wall' });
+  mixer.wantVisThisFrame = true;
+  const out = mixer.renderAll6ch();
+
+  // The masked overlay paints blue on Wall and leaves the red background
+  // intact everywhere else — the never-dark rule (docs/27 §2). If the
+  // preview blackout had leaked into the composite path, pixels 2 and 3
+  // would be black instead of red.
+  for (const i of [0, 1]) {
+    assert.equal(out[i * 6 + 2], 255, `pixel ${i} should be blue in the mix`);
+  }
+  for (const i of [2, 3]) {
+    assert.equal(out[i * 6 + 0], 255, `pixel ${i} must keep the red background`);
+  }
+});

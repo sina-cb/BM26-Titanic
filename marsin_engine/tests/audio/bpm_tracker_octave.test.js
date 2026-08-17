@@ -26,14 +26,18 @@ import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
 import {
   buildAudioAnalyzerOptions,
   buildBpmTrackerOptions,
-  loadEffectiveAudioAnalysisConfig,
 } from '../../audio/config/audio_analysis_config.js';
 import { BpmTracker } from '../../audio/signals/bpm_tracker.js';
 import { SYNTHS } from '../../audio/synth/test_synths.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(__dirname, '..', '..');
-const AUDIO = loadEffectiveAudioAnalysisConfig({ engineDir: ENGINE_DIR, modelName: 'titanic' }).audioConfig;
+// HERMETIC: tracked config.yaml only. These are octave gates on the REAL
+// analyzer, and the first test below asserts what config.yaml declares — both
+// claims are void if the operator's live scene state can move the input.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
 const SR = AUDIO.capture.sampleRate;
 const HOP = AUDIO.hopSize;
 

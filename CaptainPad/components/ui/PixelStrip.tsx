@@ -1,16 +1,27 @@
 import React, { useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 
+import {
+  BYTES_PER_PIXEL,
+  STRIP_MAX_SEGMENTS,
+  stripSampleIndex,
+  stripSegmentCount,
+} from '@/components/ui/pixel_strip_logic';
+
 /**
  * PixelStrip — Renders a horizontal strip of MarsinPixel RGBWAU data.
  * Each pixel is 6 bytes (R, G, B, W, A, U). Renders as a colored bar.
- * 
+ *
  * Color mapping for display:
  *   W (White)  → Cool white  (200, 220, 255)
  *   A (Amber)  → Yellow-white (255, 200, 50)
  *   U (UV)     → Dark purple  (75, 0, 130)
+ *
+ * The strip draws its own budget of segments sampled ACROSS the whole buffer —
+ * never the first N samples of it. See `pixel_strip_logic.ts` for why (the
+ * engine's vis cap became per-key in _239, so `preDimmer` now arrives at full
+ * model rate and "the first 256" would show only the bow of the ship).
  */
-const BYTES_PER_PIXEL = 6;
 
 // WAU display contribution per unit (0-1)
 const W_R = 200/255, W_G = 220/255, W_B = 255/255; // cool white
@@ -19,17 +30,15 @@ const U_R =  75/255, U_G =   0/255, U_B = 130/255;  // dark purple
 
 export const PixelStrip = ({
   base64Data,
-  // Upper bound on the number of pixels we render. The engine
-  // subsamples its vis broadcast to `vis.maxPixels` (config.yaml,
-  // default 100) before shipping, so this cap just needs to be ≥
-  // whatever the engine sends. 256 is plenty for any sensible strip
-  // width without wasting render budget on a thousand <View>s.
-  pixelCount = 256,
+  // Upper bound on the number of coloured segments this strip renders — one
+  // RN <View> each, on the iPad's UI thread. Buffers larger than this are
+  // sampled uniformly across their whole length (see pixel_strip_logic).
+  maxSegments = STRIP_MAX_SEGMENTS,
   height = 12,
   style,
 }: {
   base64Data: string | null;
-  pixelCount?: number;
+  maxSegments?: number;
   height?: number;
   style?: any;
 }) => {
@@ -41,10 +50,11 @@ export const PixelStrip = ({
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);
       }
-      const count = Math.min(pixelCount, Math.floor(bytes.length / BYTES_PER_PIXEL));
+      const samples = Math.floor(bytes.length / BYTES_PER_PIXEL);
+      const count = stripSegmentCount(samples, maxSegments);
       const colors: string[] = [];
       for (let i = 0; i < count; i++) {
-        const off = i * BYTES_PER_PIXEL;
+        const off = stripSampleIndex(i, count, samples) * BYTES_PER_PIXEL;
         const r = bytes[off];
         const g = bytes[off + 1];
         const b = bytes[off + 2];
@@ -63,7 +73,7 @@ export const PixelStrip = ({
     } catch {
       return null;
     }
-  }, [base64Data, pixelCount]);
+  }, [base64Data, maxSegments]);
 
   if (!pixels || pixels.length === 0) {
     return (

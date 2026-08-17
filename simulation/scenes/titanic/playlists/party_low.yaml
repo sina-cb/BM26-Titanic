@@ -11,7 +11,8 @@ entries:
   - id: e_party_low_1_06_neon_elevator
     pattern: 06_neon_elevator
     label: null
-    defaults: {}
+    defaults:
+      sliderSteps: 0.2
     modulations: []
     midiMappings: []
     notes: null
@@ -53,7 +54,9 @@ entries:
   - id: e_party_low_7_26_dom_dancers_chevron
     pattern: 26_dom_dancers_chevron
     label: null
-    defaults: {}
+    defaults:
+      sliderBall1Energy: 0.333333
+      sliderBall2Energy: 0.333333
     modulations: []
     midiMappings: []
     notes: null

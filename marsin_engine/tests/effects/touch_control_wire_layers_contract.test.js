@@ -14,6 +14,8 @@ const lifecyclePath = path.resolve(here, '../../../docs/ui/touch_control_lifecyc
 const lifecycleSource = fs.readFileSync(lifecyclePath, 'utf8');
 const themePath = path.resolve(here, '../../../docs/ui/touch_control_theme.js');
 const themeSource = fs.readFileSync(themePath, 'utf8');
+const pixelViewsPath = path.resolve(here, '../../../docs/ui/touch_control_pixel_views.js');
+const pixelViewsSource = fs.readFileSync(pixelViewsPath, 'utf8');
 
 test('Live Touch routes patterns and controls to its isolated layer', () => {
   assert.match(wire, /['"]\/layers\/live_touch\/pattern['"]/);
@@ -22,15 +24,58 @@ test('Live Touch routes patterns and controls to its isolated layer', () => {
   assert.doesNotMatch(wire, /['"]\/control['"]/);
 });
 
-test('the pattern selector and isolated Live pattern map agree exactly', () => {
+test('the pattern picker offers BACKGROUNDS (ambient playlist) and INSTRUMENTS, isolation intact', () => {
+  // docs/70 §3.2 W2 correction: the picker is no longer the flat 3-option
+  // select — it is BACKGROUNDS (the `ambient` playlist's blessed entries,
+  // runtime-populated) + INSTRUMENTS (128-130, unchanged). The old pin
+  // asserting exactly ['128','129','130'] on the WHOLE select is retired on
+  // purpose; the INSTRUMENTS half of that guarantee is re-asserted below,
+  // scoped to its own optgroup, alongside the new BACKGROUNDS contract.
   const selectBlock = panel.match(/<select class="select" id="patternSel">([\s\S]*?)<\/select>/);
   assert.ok(selectBlock, 'Live Touch is missing its pattern selector');
-  const optionIds = [...selectBlock[1].matchAll(/<option value="(\d+)"/g)].map(match => match[1]);
+  const selectMarkup = selectBlock[1];
+
+  // INSTRUMENTS optgroup: regression guard — same 3 patterns, same map.
+  const instrumentsBlock = selectMarkup.match(/<optgroup label="INSTRUMENTS">([\s\S]*?)<\/optgroup>/);
+  assert.ok(instrumentsBlock, 'Live Touch pattern selector is missing its INSTRUMENTS optgroup');
+  const optionIds = [...instrumentsBlock[1].matchAll(/<option value="(\d+)"/g)].map(match => match[1]);
   const mapBlock = wire.match(/var PATTERN_FILES = \{([\s\S]*?)\n  \};/);
   assert.ok(mapBlock, 'Live Touch wire is missing PATTERN_FILES');
   const mappedIds = [...mapBlock[1].matchAll(/'(\d+)':/g)].map(match => match[1]);
   assert.deepEqual(optionIds.sort(), mappedIds.sort());
   assert.deepEqual(mappedIds.sort(), ['128', '129', '130']);
+
+  // BACKGROUNDS optgroup: an empty, runtime-populated container — the panel
+  // fills it from the `ambient` playlist only (D4), never a bare pattern list.
+  assert.match(selectMarkup, /<optgroup label="BACKGROUNDS" id="patternBackgroundGroup">/,
+    'Live Touch pattern selector is missing its BACKGROUNDS optgroup');
+
+  // The wire reads exactly the `ambient` playlist through the existing
+  // engine-level /playlists route — the one entry-resolution read the
+  // isolation rule permits alongside the /layers/live_touch/* writes.
+  assert.match(wire, /var BACKGROUND_PLAYLIST_NAME = 'ambient';/);
+  assert.match(wire, /req\('GET', '\/playlists\/' \+ BACKGROUND_PLAYLIST_NAME\)/);
+
+  // Staging a BACKGROUND sends the full entry form; staging an INSTRUMENT
+  // keeps the bare {pattern} form exactly as before this wave (regression).
+  assert.match(wire,
+    /body: \{ pattern: opt\.dataset\.pattern, playlist: opt\.dataset\.playlist, entryId: opt\.dataset\.entryId \}/);
+  assert.match(wire, /return \{ pattern: name, isBackground: false, body: \{ pattern: name \} \};/);
+
+  // Parameters are never rendered for a background: both the topbar change
+  // handler and the ARM stage step skip refreshLiveExports() when the
+  // staged selection is a background (the ONLY way local controls are
+  // learned), so hiding is free and total — never a suppression flag.
+  const skipGuards = [...wire.matchAll(/if \(staged\.isBackground\) return null;/g)];
+  assert.equal(skipGuards.length, 2,
+    'both the change handler and the ARM stage step must skip refreshLiveExports() for a background');
+  assert.doesNotMatch(wire, /hideParams|suppressParams|paramsHidden/i,
+    'hiding must fall out of never fetching exports, not a dedicated hide flag');
+
+  // Isolation rule, restated for the wider contract: /playlists is read-only
+  // entry resolution, never a second write surface next to /layers/live_touch/*.
+  assert.doesNotMatch(wire, /req\('(?:POST|PUT|PATCH|DELETE)', '\/playlists/);
+  assert.doesNotMatch(wire, /write\('(?:POST|PUT|PATCH|DELETE)', '\/playlists/);
 });
 
 test('an armed pattern swap refreshes instance-local exports before reasserting palette', () => {
@@ -50,7 +95,32 @@ test('Live Touch uses the canonical Layers blend without a private envelope', ()
   assert.match(wire, /activateLayerSetting\(target, reason, true\)/);
   assert.doesNotMatch(wire, /['"]\/arm-fade['"]/);
   assert.doesNotMatch(wire, /['"]\/param-center\/source-lock['"]/);
-  assert.doesNotMatch(wire, /['"]\/deck\/color-autopilot['"]/);
+});
+
+test('the COLOR HUB panel is the one explicitly authorized non-layer route (docs/70 W3)', () => {
+  // /deck/color-autopilot used to be pinned OUT of this file entirely (this
+  // test, before this wave): Live Touch had no reason to reach a Deck-scoped
+  // route, and before the docs/70 §4.1 fan-out fix an armed session's shared
+  // CPC was source-locked against the daemon's writes anyway, so reaching it
+  // would have been pointless. docs/61 §4.1 states plainly it is
+  // "Unauthenticated, unscoped: Live Touch may legally drive it today" — and
+  // docs/70 §4.2 makes doing so via the COLOR HUB panel this wave's explicit
+  // deliverable. The old blanket ban is retired FOR THIS ONE ROUTE; every
+  // other Deck/Mixer-scoped surface stays out of reach (see the isolation
+  // assertions elsewhere in this file, none of which are relaxed).
+  assert.match(wire, /['"]\/deck\/color-autopilot['"]/);
+  // Still exactly one socket: colorAutopilot rides the /ws/control connection
+  // this file already owns (openControlSocket), never a second WebSocket.
+  const controlSocketBlock = wire.match(/function openControlSocket\(\)[\s\S]*?\n  \}\n/);
+  assert.ok(controlSocketBlock, 'openControlSocket is missing');
+  assert.match(controlSocketBlock[0], /m\.type === 'colorAutopilot'/,
+    'the colorAutopilot broadcast must be handled on the existing /ws/control socket');
+  assert.doesNotMatch(wire, /new WebSocket\([^)]*color/i,
+    'no second WebSocket may be opened for colour state');
+  // Writes are relayed, never issued with the live_touch owner header or
+  // queued into the ARM prepare-batch — /deck/color-autopilot is a public
+  // Deck-level route, not a live_touch layer write.
+  assert.match(wire, /unownedReq\(detail\.method, detail\.path \|\| '\/deck\/color-autopilot', detail\.body\)/);
 });
 
 test('initial ARM batches its complete Live look through atomic prepare', () => {
@@ -85,6 +155,33 @@ test('Spatial XY exposes bounded independent multitouch and Spatial-only fullscr
     'leaving Spatial mode must exit fullscreen');
   assert.match(panel, /event\.key === 'Escape'/,
     'Escape must provide a deterministic fullscreen exit');
+  assert.match(panel, /document\.body\.appendChild\(panel\)/,
+    'fullscreen must escape the two-row workspace before making it inert');
+  assert.match(panel, /shell\.inert = true/,
+    'surrounding Live Touch controls must not remain interactive behind fullscreen');
+  assert.match(panel, /touchcontrol:spatial-fullscreen-request/,
+    'embedded fullscreen must ask CaptainPad to promote the iframe');
+  assert.match(themeSource, /touch-control-spatial-fullscreen/);
+  const screenPath = path.resolve(here, '../../../CaptainPad/app/(tabs)/touch_control.tsx');
+  /* The iframe, and the ancestor z-elevation that lifts it over the navigation
+     rail, moved into the WEB half of the Live Touch surface pair when the iPad
+     grew a WebView peer (report _252). The versioned handshake itself stayed on
+     the platform-neutral screen, which is why the ack is still asserted there. */
+  const webSurfacePath = path.resolve(
+    here, '../../../CaptainPad/components/live_touch_surface.web.tsx');
+  const screen = fs.readFileSync(screenPath, 'utf8');
+  const webSurface = fs.readFileSync(webSurfacePath, 'utf8');
+  assert.match(webSurface, /position: 'fixed'/);
+  assert.match(webSurface, /height: '100dvh'/);
+  assert.match(webSurface, /ancestor\.style\.zIndex = SPATIAL_FULLSCREEN_HOST_Z_INDEX/,
+    'the fixed iframe host must outrank CaptainPad route stacking contexts');
+  assert.match(webSurface, /element\.style\.zIndex = zIndex/,
+    'fullscreen exit must restore every host ancestor inline z-index');
+  assert.doesNotMatch(webSurface, /document\.body\.appendChild\(iframe\)/,
+    'moving an iframe reloads its browsing context and destroys the live surface');
+  assert.doesNotMatch(screen, /document\.body\.appendChild\(iframe\)/,
+    'the screen must never reach past the surface to move the iframe either');
+  assert.match(screen, /captainpad-spatial-fullscreen-applied/);
   assert.match(panel, /var padPointers = new Map\(\)/);
   assert.match(panel, /inkActiveRings = new Map\(\)/);
   assert.doesNotMatch(panel, /var padPointer = null/,
@@ -96,6 +193,20 @@ test('Spatial XY exposes bounded independent multitouch and Spatial-only fullscr
     'browser input must enforce the same bounded batch as the engine');
   assert.match(wire, /pointer\.retiring/,
     'one lift must retire only its own stroke');
+});
+
+test('Spatial view adjustment owns gestures explicitly without consuming paint multitouch', () => {
+  assert.match(panel, /id="pixelZoomOut"/);
+  assert.match(panel, /id="pixelZoomIn"/);
+  assert.match(panel, /id="pixelZoomValue"/);
+  assert.match(pixelViewsSource, /var MIN_VIEW_ZOOM = 0\.5;/);
+  assert.match(pixelViewsSource, /var MAX_VIEW_ZOOM = 4;/);
+  assert.match(pixelViewsSource, /state\.panMode \|\| !state\.engineVerified/);
+  assert.match(pixelViewsSource, /event\.stopImmediatePropagation\(\)/,
+    'view navigation must stop paint handlers only while PAN owns the gesture');
+  assert.match(pixelViewsSource, /kind: 'pinch'/);
+  assert.match(pixelViewsSource, /state\.previewPointers\.size/,
+    'PAN/zoom mode changes must not interrupt a live paint stroke');
 });
 
 test('group profiles load canonical views and route composite faders through real groups', () => {

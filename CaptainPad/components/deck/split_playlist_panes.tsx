@@ -19,20 +19,54 @@
  * refuses termination so an ancestor ScrollView can't steal it, and it mirrors
  * onPanResponderTerminate → release (browser pointercancel). Live drag updates
  * LOCAL state only; the ratio is POSTed ONCE on release/terminate.
+ *
+ * ── SPLIT AXIS FOLLOWS THE APP'S LAYOUT MODE (operator order, report _225) ──
+ *
+ * "when in vertical layout for the whole app (the optional panels go under the
+ * main playlist) spawn the 2nd playlist as a new column on the right of the
+ * main playlist, when moved to horizontal layout, move the 2nd playlist to the
+ * bottom of the main one as it is now."
+ *
+ * The two modes want OPPOSITE axes, and the reason is the shape of the space
+ * PATTERNS is given:
+ *
+ *   WIDE (`isWide`, landscape): PATTERNS is one TALL, NARROW column in a row of
+ *     windows. Height is the abundant axis, so the panes stack — DECK B under
+ *     DECK A, exactly as before this change. Untouched.
+ *
+ *   NARROW (portrait / phone): the windows stack vertically, so PATTERNS is a
+ *     FULL-WIDTH, short band. Width is now the abundant axis and height is the
+ *     scarce one — stacking there gave two ~140pt-tall panes, while splitting
+ *     sideways gives two full-height panes. So DECK B becomes a COLUMN TO THE
+ *     RIGHT of DECK A.
+ *
+ * Everything else is axis-agnostic and shared: the SAME stored ratio (it is
+ * "pane 1's share", which is meaningful on either axis), the SAME engine
+ * clamp band, the SAME divider component, the SAME PanResponder. The axis
+ * selects which layout property, which gesture delta and which minimum a pane
+ * is measured against — nothing about the deck's engine contract moves, and
+ * DECK B's lifecycle (its ✕ is the one authoritative unbind) is untouched.
  */
 import React, { useRef, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, PanResponder, type LayoutChangeEvent } from 'react-native';
+import { View, Text, TouchableOpacity, PanResponder, Platform, type LayoutChangeEvent } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { usePerfLock } from '@/hooks/usePerformanceMode';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import type { PlaylistAssignment } from '@/utils/api';
 
-// Minimum on-screen height for either pane, in points. The effective ratio is
-// clamped so neither pane can be dragged below this — bounded input validation
-// (NOT a fallback): the engine also rejects a ratio outside [0.15,0.85], and we
-// keep our drag inside that same band. Below 2×MIN (a tiny / stacked column) we
-// render a fixed 0.5 and leave the stored ratio untouched.
+// Minimum on-screen extent for either pane, in points, ALONG THE SPLIT AXIS.
+// The effective ratio is clamped so neither pane can be dragged below this —
+// bounded input validation (NOT a fallback): the engine also rejects a ratio
+// outside [0.15,0.85], and we keep our drag inside that same band. Below 2×MIN
+// (a tiny / stacked column) we render a fixed 0.5 and leave the stored ratio
+// untouched.
+//
+// The two axes get different floors because a playlist pane is not square: a
+// 140pt-TALL pane still shows two or three entries and its header, but a
+// 140pt-WIDE one cannot hold an entry label and its LOAD… control at all. 200
+// is the width at which the pane's own header row stops wrapping.
 const MIN_PANE_PT = 140;
+const MIN_PANE_W_PT = 200;
 // Engine-enforced ratio band (POST /deck/playlist/split 400s outside this).
 const RATIO_MIN = 0.15;
 const RATIO_MAX = 0.85;
@@ -50,6 +84,7 @@ export function SplitPlaylistPanes({
   primaryAssignment,
   splitRatio,
   secondaryBound,
+  sideBySide = false,
   onSplitRelease,
   onCloseSecondary,
 }: {
@@ -72,6 +107,12 @@ export function SplitPlaylistPanes({
    *  truth); when false the pane collapses to the "+ SECOND PLAYLIST" bar
    *  unless the operator has locally opened it to assign one. */
   secondaryBound?: boolean;
+  /** Put DECK B in a COLUMN TO THE RIGHT of DECK A instead of underneath it.
+   *  Driven by the app's layout mode: TRUE in the narrow/vertical stack, FALSE
+   *  in the wide/horizontal row (operator order, report _225 — see the header).
+   *  Placement only: the stored ratio, the engine routes and DECK B's binding
+   *  lifecycle are identical on both axes. */
+  sideBySide?: boolean;
   /** POST the new ratio (fired ONCE on drag release/terminate). */
   onSplitRelease: (ratio: number) => void;
   /** Clear the secondary slot binding (✕ on pane 2). */
@@ -91,7 +132,9 @@ export function SplitPlaylistPanes({
   // inside PlaylistPanel, so an already-open pane can't bind either).
   const perfLocked = usePerfLock();
 
-  // Container height (from onLayout) drives the MIN_PANE clamp + px→ratio math.
+  // Container extent ALONG THE SPLIT AXIS (from onLayout) drives the MIN_PANE
+  // clamp + px→ratio math: height when the panes stack, width when they sit
+  // side by side.
   const containerHRef = useRef(1);
   // Live drag ratio (local only). null when not dragging → render `splitRatio`.
   const [dragRatio, setDragRatio] = useState<number | null>(null);
@@ -102,9 +145,15 @@ export function SplitPlaylistPanes({
   splitRatioRef.current = splitRatio;
   const onSplitReleaseRef = useRef(onSplitRelease);
   onSplitReleaseRef.current = onSplitRelease;
+  // The axis is a PROP that can flip while mounted (the operator rotates the
+  // iPad mid-drag, in the worst case), and the PanResponder is built once — so
+  // it reads the axis through a ref like every other live value here.
+  const sideBySideRef = useRef(sideBySide);
+  sideBySideRef.current = sideBySide;
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
-    containerHRef.current = Math.max(1, e.nativeEvent.layout.height);
+    const { width, height } = e.nativeEvent.layout;
+    containerHRef.current = Math.max(1, sideBySideRef.current ? width : height);
   }, []);
 
   // Effective clamp band given the current container height. When the column is
@@ -116,11 +165,17 @@ export function SplitPlaylistPanes({
   // short); it comes back the moment the column is tall enough again.
   const effectiveClamp = (r: number): number => {
     const h = containerHRef.current;
-    if (h < 2 * MIN_PANE_PT) return 0.5;
-    const lo = Math.max(RATIO_MIN, MIN_PANE_PT / h);
-    const hi = Math.min(RATIO_MAX, 1 - MIN_PANE_PT / h);
+    const min = sideBySideRef.current ? MIN_PANE_W_PT : MIN_PANE_PT;
+    if (h < 2 * min) return 0.5;
+    const lo = Math.max(RATIO_MIN, min / h);
+    const hi = Math.min(RATIO_MAX, 1 - min / h);
     return Math.max(lo, Math.min(hi, r));
   };
+
+  // The gesture delta along the split axis: sideways when the panes are side
+  // by side, vertical when they stack.
+  const axisDelta = (gs: { dx: number; dy: number }): number =>
+    (sideBySideRef.current ? gs.dx : gs.dy);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -138,11 +193,11 @@ export function SplitPlaylistPanes({
         setDragRatio(splitRatioRef.current);
       },
       onPanResponderMove: (_evt, gs) => {
-        const next = effectiveClamp(startRatioRef.current + gs.dy / containerHRef.current);
+        const next = effectiveClamp(startRatioRef.current + axisDelta(gs) / containerHRef.current);
         setDragRatio(next);
       },
       onPanResponderRelease: (_evt, gs) => {
-        const next = clampRatio(effectiveClamp(startRatioRef.current + gs.dy / containerHRef.current));
+        const next = clampRatio(effectiveClamp(startRatioRef.current + axisDelta(gs) / containerHRef.current));
         draggingRef.current = false;
         setDragRatio(null);
         onSplitReleaseRef.current(next);
@@ -150,7 +205,7 @@ export function SplitPlaylistPanes({
       // A cancelled gesture (browser pointercancel / focus loss) never fires
       // Release — mirror it so draggingRef clears and the ratio still lands.
       onPanResponderTerminate: (_evt, gs) => {
-        const next = clampRatio(effectiveClamp(startRatioRef.current + gs.dy / containerHRef.current));
+        const next = clampRatio(effectiveClamp(startRatioRef.current + axisDelta(gs) / containerHRef.current));
         draggingRef.current = false;
         setDragRatio(null);
         onSplitReleaseRef.current(next);
@@ -222,12 +277,19 @@ export function SplitPlaylistPanes({
   }
 
   // ── Expanded: two panes + drag divider ───────────────────────────────────
+  // `paneBox` is the ONE place the axis changes a pane's geometry: flexBasis:0
+  // + flexGrow(share) does the splitting on either axis, and BOTH minimums are
+  // zeroed so a flex child can actually shrink to its share (RN children
+  // otherwise refuse to go below their content size and overflow the row).
+  const paneBox = { flexBasis: 0, minHeight: 0, minWidth: 0 } as const;
   return (
-    <View style={{ flex: 1, minHeight: 0 }} onLayout={onLayout}>
-      {/* Pane 1 — DECK A (primary). flexGrow = ratio share; flexBasis:0 +
-          minHeight:0 so it truly splits the container rather than sizing to its
-          content. */}
-      <View key={`primary-${deckChannelId}`} style={{ flexGrow: paintRatio, flexBasis: 0, minHeight: 0 }}>
+    <View
+      style={{ flex: 1, minHeight: 0, flexDirection: sideBySide ? 'row' : 'column' }}
+      onLayout={onLayout}
+    >
+      {/* Pane 1 — DECK A (primary). flexGrow = ratio share; flexBasis:0 so it
+          truly splits the container rather than sizing to its content. */}
+      <View key={`primary-${deckChannelId}`} style={{ ...paneBox, flexGrow: paintRatio }}>
         {/* Both panes read the deck channel's MIDI browse window (the manager
             keys it by engine channel id, not slot key); PlaylistPanel's
             live-slot gate means only the pane hosting the deck's LIVE
@@ -245,23 +307,35 @@ export function SplitPlaylistPanes({
         />
       </View>
 
-      {/* Divider — a ~14pt grip row; hitSlop lifts the touch target to 44pt.
-          Token colours only. A short centered grip bar marks it as draggable. */}
+      {/* Divider — a ~14pt grip band ACROSS the split axis; hitSlop lifts the
+          touch target to 44pt on the axis it is dragged along. Token colours
+          only. A short centred grip bar marks it as draggable, turned to lie
+          along the divider in both orientations. */}
       <View
         {...panResponder.panHandlers}
         accessibilityRole="adjustable"
-        accessibilityLabel="Resize the two playlist panes"
-        hitSlop={{ top: 15, bottom: 15, left: 0, right: 0 }}
-        style={{
-          height: 14,
-          alignItems: 'center',
-          justifyContent: 'center',
-          marginVertical: 2,
-        }}
+        accessibilityLabel={sideBySide
+          ? 'Resize the two playlist columns'
+          : 'Resize the two playlist panes'}
+        hitSlop={sideBySide
+          ? { top: 0, bottom: 0, left: 15, right: 15 }
+          : { top: 15, bottom: 15, left: 0, right: 0 }}
+        style={[
+          sideBySide
+            ? { width: 14, alignItems: 'center', justifyContent: 'center', marginHorizontal: 2 }
+            : { height: 14, alignItems: 'center', justifyContent: 'center', marginVertical: 2 },
+          // Web + side-by-side only. This divider is dragged SIDEWAYS while it
+          // sits inside the deck's vertical scroll region, and a browser starts
+          // panning from a touch on a scrollable ancestor before React's
+          // responder system hears about it (the same fix hue_wheel carries).
+          // Scoped to the new axis so the shipped vertical divider — which has
+          // worked since the split landed — is not touched.
+          sideBySide && Platform.OS === 'web' ? ({ touchAction: 'none' } as any) : null,
+        ]}
       >
         <View style={{
-          width: 44,
-          height: 4,
+          width: sideBySide ? 4 : 44,
+          height: sideBySide ? 44 : 4,
           borderRadius: 2,
           backgroundColor: dragRatio !== null ? C.primary : C.ghostBorder,
         }} />
@@ -269,8 +343,9 @@ export function SplitPlaylistPanes({
 
       {/* Pane 2 — DECK B (secondary). Complementary flexGrow share; ✕ (onClosePane)
           clears the slot binding AND collapses back to the "+ SECOND PLAYLIST"
-          bar. */}
-      <View key={`secondary-${deckChannelId}`} style={{ flexGrow: 1 - paintRatio, flexBasis: 0, minHeight: 0 }}>
+          bar. Its binding lifecycle is identical on both axes — this is
+          placement, nothing else. */}
+      <View key={`secondary-${deckChannelId}`} style={{ ...paneBox, flexGrow: 1 - paintRatio }}>
         <PlaylistPanel
           channelId="secondary"
           role="deckSlot"

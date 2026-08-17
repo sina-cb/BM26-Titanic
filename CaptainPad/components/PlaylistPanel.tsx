@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Pressable } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Pressable, Platform } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -14,7 +14,7 @@ import {
   type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
-import { usePerfLock } from '@/hooks/usePerformanceMode';
+import { useEditPersistLock, usePerfLock } from '@/hooks/usePerformanceMode';
 import { useMidiWindow, noteMidiPatternSelect } from '@/hooks/useMidiControl';
 import { windowPadNumber } from '@/utils/midi/window_slot';
 import {
@@ -22,12 +22,17 @@ import {
   centeredScrollTarget, clampScrollTarget,
 } from '@/components/pattern_scroll_logic';
 import { playlistRowSizing } from '@/components/playlist_row_sizing';
+import { LIBRARY_SWITCH_ONLY_HINT, playlistAccess } from '@/components/playlist_access_logic';
+import { playlistRowAccessibilityRole } from '@/components/playlist_row_web_semantics';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
-// Web-safe alert: RN-web's Alert.alert is an empty stub, so raw Alert.alert
-// error surfaces were SILENT no-ops on the web build (:6967) — a rejected
-// playlist load just snapped the UI back with no message. opAlert is loud on
-// both platforms (window.alert on web, Alert.alert on native).
-import { opAlert } from '@/utils/op_alert';
+// In-app operator notices. RN-web's Alert.alert is an empty stub, so raw
+// Alert.alert error surfaces were SILENT no-ops on the web build (:6967) — a
+// rejected playlist load just snapped the UI back with no message. The 2026-07
+// patch fixed the silence with `window.alert`, which the operator then caught
+// on 2026-08-15 as an unthemed, thread-blocking browser dialog. op_dialog is
+// loud on both platforms AND part of the app UI.
+import { opDialog, opError, opWarn } from '@/utils/op_dialog';
+import { specialEventRefusal } from '@/utils/engine_refusal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Playlist reconcile debug tracing. The activeEntryId reconcile path (below) is
@@ -37,6 +42,36 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // every trace behind this single flag: flip to `true` ONLY when debugging a
 // stuck/ghost active-entry reconcile. No behaviour changes when false.
 const PLAYLIST_DBG = false;
+
+// ── Pattern-switch refusals ────────────────────────────────────────────────
+//
+// A refused pattern switch is normally a toast. ONE refusal is different: the
+// engine's `rejectIfSpecialEventHoldsRig` 409 means a staged show (BABY REVEAL,
+// the wedding, …) currently owns the deck, and NOTHING the operator does here
+// will work until that show is ended or aborted from the Events tab. That is a
+// navigation instruction, not a status message — so it gets a modal that stays
+// put and carries the route out, rather than a toast that fades mid-sentence.
+//
+// This is the exact surface the operator filed on 2026-08-15, screenshotted as
+// a raw `localhost:6967 says` browser dialog.
+async function reportSwitchFailure(res: { ok?: boolean; error?: string; code?: string; data?: unknown }): Promise<void> {
+  const specialEvent = specialEventRefusal(res);
+  if (specialEvent === null) {
+    opError('Switch failed', res.error || 'Unknown error');
+    return;
+  }
+  const chosen = await opDialog({
+    tone: 'warning',
+    title: 'Switch refused',
+    // The engine's sentence, verbatim — it names the show and says where to go.
+    message: specialEvent,
+    actions: [
+      { id: 'dismiss', label: 'DISMISS', kind: 'cancel' },
+      { id: 'events', label: 'OPEN EVENTS' },
+    ],
+  });
+  if (chosen === 'events') router.push('/special_events');
+}
 
 // "1 list to rule them all": this component renders the active playlist's
 // entries AS the channel's pattern queue. There's no separate "all patterns"
@@ -68,6 +103,18 @@ interface Props {
   channelLabel?: string;
   /** Tight padding/font, capped list height — for mixer strips. */
   compact?: boolean;
+  /**
+   * docs/69 W3 R1 (operator-authorized 2026-08-16, D5 default ON): compact
+   * each entry ROW to the docs/66 44pt floor (vs the normal content-sized
+   * row, ~57pt with a sub-label + control row shown) so more patterns fit
+   * per card in the mixer's landscape layout — see `playlist_row_sizing.ts`
+   * for the exact lever. Deliberately SEPARATE from `compact` (which also
+   * gates chrome sizing here and is shared with `DeckOverlayStack.tsx`'s
+   * deck-family mount): only `app/(tabs)/mixer.tsx`'s channel-strip mount
+   * passes this, so `DeckOverlayStack.tsx` and
+   * `components/deck/split_playlist_panes.tsx` — which never pass it —
+   * stay pixel-identical. */
+  compactRows?: boolean;
   /** When the channel is locked, hide destructive controls (+, –, library
    *  picker, SAVE). Taps on entries still work so an operator can perform
    *  the show, but the playlist contents are frozen for safety. */
@@ -201,11 +248,17 @@ function playlistHeaderTitle(channelLabel?: string): string {
   return `${normalized}${HEADER_SEP}PLAYLIST`;
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary, onClosePane, midiWindowChannelId }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, compactRows, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary, onClosePane, midiWindowChannelId }) => {
   const C = usePalette();
   // Live-show structural lock (shared component — gate by performance-mode
-  // state, not by tab). See the `editable` derivation below.
+  // state, not by tab). Feeds playlistAccess() below, which decides what it
+  // actually stops: authoring, not playlist selection (report `_283`).
   const perfLocked = usePerfLock();
+  // PRINCIPAL LOCK (docs/56): a non-owner edit session 403s every playlist-file
+  // write, so the CRUD affordances wear the same read-only idiom the show lock
+  // uses. The refusal is thereby mostly unreachable from the UI — but the
+  // ENGINE is still the enforcement layer; this is honesty, not security.
+  const persistLocked = useEditPersistLock();
   // The APC pad browser windows 6 entries per mixer layer; mirror that as a
   // blue row highlight (tint + border + pad-number chip, matching the blue
   // pads) so the operator sees which entries the pads will select.
@@ -834,7 +887,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       if (!res.ok) {
         setAssignment(prevAssignment);
         setPlaylist(prevPlaylist);
-        opAlert('Load failed', res.error || 'Unknown error');
+        opError('Load failed', res.error || 'Unknown error');
         return;
       }
       // Engine returns `{ status, playlist }` — adopt that as the
@@ -847,7 +900,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       if (myEpoch !== swapEpochRef.current) return;
       setAssignment(prevAssignment);
       setPlaylist(prevPlaylist);
-      opAlert('Load failed', err?.message || 'Network error');
+      opError('Load failed', err?.message || 'Network error');
       return;
     }
     // Fire-and-forget background refresh to pull the new playlist's
@@ -894,7 +947,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         // — this is expected when a user double-taps; no alert spam.
         const code = (res as { code?: string }).code;
         if (code === 'EBUSY' || code === '409') return;
-        opAlert('Switch failed', (res as { error?: string }).error || 'Unknown error');
+        void reportSwitchFailure(res);
         return;
       }
       // Don't await refresh — the WS `mixer` broadcast will reconcile
@@ -908,7 +961,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     } catch (e) {
       clearPending();
       setAssignment(prev);
-      opAlert('Switch failed', (e as Error)?.message || 'Network error');
+      opError('Switch failed', (e as Error)?.message || 'Network error');
     }
   }, [role, assignment, channelId, disabled, refresh, armPendingWatchdog, clearPending]);
 
@@ -929,7 +982,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     setPlaylist({ ...cur, entries: nextEntries });
     const res = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!res.ok) {
-      opAlert('Add failed', res.error || 'Unknown error');
+      opError('Add failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -950,11 +1003,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const fetchDirEntries = useCallback(async (dir: string): Promise<PlaylistEntry[] | null> => {
     const res = await fetchPatternsInDir(dir);
     if (!res.ok || !res.data) {
-      opAlert('Load directory failed', res.error || 'Unknown error');
+      opError('Load directory failed', res.error || 'Unknown error');
       return null;
     }
     if (res.data.length === 0) {
-      opAlert('Empty directory', `No patterns found in "${dir}".`);
+      opWarn('Empty directory', `No patterns found in "${dir}".`);
       return null;
     }
     return res.data.map((pattern) => ({
@@ -987,7 +1040,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!entries) { setPendingNewDir(null); return; }
     const save = await savePlaylist({ name, entries });
     if (!save.ok) {
-      opAlert('Create failed', save.error || 'Unknown error');
+      opError('Create failed', save.error || 'Unknown error');
       return;
     }
     setPendingNewDir(null);
@@ -1015,7 +1068,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!name) return; // Create is disabled when empty; guard anyway.
     const src = await fetchPlaylist(source);
     if (!src.ok || !src.data) {
-      opAlert('Duplicate failed', src.error || 'Unknown error');
+      opError('Duplicate failed', src.error || 'Unknown error');
       return;
     }
     // Fresh entry ids so the copy doesn't alias the source's per-entry
@@ -1025,7 +1078,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     const entries = src.data.entries.map((e) => ({ ...e, id: genEntryId() }));
     const save = await savePlaylist({ name, entries });
     if (!save.ok) {
-      opAlert('Duplicate failed', save.error || 'Unknown error');
+      opError('Duplicate failed', save.error || 'Unknown error');
       return;
     }
     setPendingDupSource(null);
@@ -1046,7 +1099,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     setPlaylist({ ...cur, entries: nextEntries });
     const save = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!save.ok) {
-      opAlert('Load directory failed', save.error || 'Unknown error');
+      opError('Load directory failed', save.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -1074,7 +1127,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     setPlaylist({ ...cur, entries: nextEntries });
     const res = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!res.ok) {
-      opAlert('Remove failed', res.error || 'Unknown error');
+      opError('Remove failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -1131,7 +1184,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!res.ok) {
       // Roll back to the prior order and surface the error.
       setPlaylist({ ...cur, entries: prevEntries });
-      opAlert('Reorder failed', res.error || 'Unknown error');
+      opError('Reorder failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -1143,7 +1196,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!name) return;
     const res = await savePlaylist({ name, entries: [] });
     if (!res.ok) {
-      opAlert('Create failed', res.error || 'Unknown error');
+      opError('Create failed', res.error || 'Unknown error');
       return;
     }
     setNewPlaylistName('');
@@ -1151,9 +1204,9 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   }, [handleLoadPlaylist, newPlaylistName]);
 
   const handleDeletePlaylist = useCallback(async (name: string) => {
-    if (name === 'default') { opAlert('Refused', 'Cannot delete the default playlist'); return; }
+    if (name === 'default') { opWarn('Refused', 'Cannot delete the default playlist'); return; }
     const res = await deletePlaylist(name);
-    if (!res.ok) opAlert('Delete failed', res.error || 'Unknown error');
+    if (!res.ok) opError('Delete failed', res.error || 'Unknown error');
     await refresh();
   }, [refresh]);
 
@@ -1177,16 +1230,32 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     btnFont: compact ? 10 : 11,
     headerFont: compact ? 10 : 11,
     panelPad: compact ? 6 : 8,
-    panelGap: compact ? 4 : 6,
+    // panelGap non-compact trimmed 6→4 (docs/63 §4.2 padding-only lever,
+    // DECK-B-bound landscape playlist floor); compact (mixer) value frozen
+    // per docs/63 §5 pin 8.
+    panelGap: compact ? 4 : 4,
   };
 
   // PERFORMANCE MODE: playlist CRUD (create/save/delete, entry add/remove/
-  // reorder/rename) AND playlist re-assignment are 409-gated engine routes
-  // while a show is live. Fold the perf lock into the panel's existing
-  // read-only "locked" idiom: the dropdown becomes a static "(locked)" label,
-  // the folder/+ buttons and per-row chevrons/− hide — while entry TAPS (an
-  // ALLOWED route) stay fully live so the operator can keep performing.
-  const editable = !locked && !perfLocked;
+  // reorder/rename) is 409-gated engine routes while a show is live, so the
+  // folder/+ buttons and the per-row chevrons/− fold into the panel's existing
+  // read-only "locked" idiom and hide. A non-owner edit session (docs/56) joins
+  // that same idiom: those routes 403 rather than 409, but the operator-visible
+  // truth is identical — "you can perform with this list, you cannot rewrite
+  // its file".
+  //
+  // Playlist RE-ASSIGNMENT used to be in that gated set and no longer is
+  // (operator ruling 2026-08-16, report `_283`) — the dropdown and entry taps
+  // both stay fully live so the operator can keep performing.
+  //
+  // The policy lives in playlist_access_logic so the deck and the mixer — which
+  // both render THIS component — can never disagree about what a show lock
+  // stops. `selectable` (switch which playlist plays) stays live during a show
+  // per the operator ruling 2026-08-16; `editable` (authoring, every branch of
+  // which writes a file) does not. Full reasoning in that module's header.
+  const { selectable, editable } = playlistAccess({
+    locked: !!locked, perfLocked, persistLocked,
+  });
   const showSaved = savedAt !== null;
 
   // ── Entry-row sizing ────────────────────────────────────────────────────
@@ -1201,7 +1270,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // is intentionally untouched by the perf boost. Scroll targeting is
   // onLayout-measured (rowOffsetsRef), so the taller rows re-measure
   // automatically — no scroll-offset math depends on a hardcoded row height.
-  const rowSz = playlistRowSizing({ compact, perfActive: perfLocked });
+  const rowSz = playlistRowSizing({ compact, perfActive: perfLocked, compactRows });
 
   return (
     <View
@@ -1350,7 +1419,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           auto-persist. Lock hides the +; the dropdown becomes a static
           label so the operator can still see which playlist is active. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        {editable ? (
+        {/* `selectable`, not `editable` (report `_283`): the dropdown is how the
+            operator changes playlist mid-show, so it survives the show lock.
+            The library it opens hides its CRUD rows while live. */}
+        {selectable ? (
           <TouchableOpacity
             onPress={() => setShowLibrary(true)}
             style={{
@@ -1510,7 +1582,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                   // on move by default.
                   onPress={() => handleEntryTap(e.id)}
                   disabled={missing || disabled}
-                  accessibilityRole="button"
+                  // RN-web converts accessibilityRole="button" into a native
+                  // <button>. This row contains its own reorder/remove
+                  // buttons, so giving the wrapper that role creates invalid
+                  // <button><button> markup and React hydration failures.
+                  // Pressable remains a focusable, keyboard-operable <div> on
+                  // web; native keeps the explicit button semantics.
+                  accessibilityRole={playlistRowAccessibilityRole(Platform.OS)}
                   accessibilityLabel={`Select ${e.label || patternDisplayName(e.pattern)}`}
                   accessibilityState={{ disabled: !!(missing || disabled), selected: isActive }}
                   style={({ pressed }) => ({
@@ -1737,7 +1815,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         )
       ) : (
         <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: sz.fontSecondary, padding: sz.rowPadY }}>
-          {editable ? 'No playlist loaded. Tap the dropdown above.' : 'No playlist loaded.'}
+          {selectable ? 'No playlist loaded. Tap the dropdown above.' : 'No playlist loaded.'}
         </Text>
       )}
 
@@ -1752,6 +1830,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         setNewPlaylistName={setNewPlaylistName}
         onCreateNew={handleCreateNew}
         onDuplicate={handleDuplicatePlaylist}
+        /* Report `_283`: the library opens during a show so the operator can
+           SWITCH, but create / duplicate / delete are still 409/403 engine
+           routes — they hide rather than render buttons that would be refused. */
+        crudEnabled={editable}
       />
 
       <AddPatternModal
@@ -1857,11 +1939,18 @@ interface LibraryModalProps {
   setNewPlaylistName: (s: string) => void;
   onCreateNew: () => void;
   onDuplicate: (name: string) => void;
+  /**
+   * May this operator EDIT the library right now (create / duplicate / delete)?
+   * False during a show and for a non-owner edit session (report `_283`).
+   * LOADING a playlist is unaffected — that is the whole point of opening the
+   * library while live.
+   */
+  crudEnabled: boolean;
 }
 
 const LibraryModal: React.FC<LibraryModalProps> = ({
   visible, onClose, playlists, currentName, onLoad, onDelete,
-  newPlaylistName, setNewPlaylistName, onCreateNew, onDuplicate,
+  newPlaylistName, setNewPlaylistName, onCreateNew, onDuplicate, crudEnabled,
 }) => {
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
@@ -1920,14 +2009,16 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
                     {/* Duplicate: clone this playlist under a new name. Shown
                         for every row (including `default`) since a copy never
                         overwrites the source. Opens the name prompt. */}
-                    <TouchableOpacity
-                      onPress={() => onDuplicate(name)}
-                      style={{ width: 28, height: 28, borderRadius: 6, borderWidth: 1, borderColor: C.primary, alignItems: 'center', justifyContent: 'center' }}
-                      accessibilityLabel={`Duplicate playlist ${name}`}
-                    >
-                      <Text style={{ color: C.primary, fontSize: 13 }}>⧉</Text>
-                    </TouchableOpacity>
-                    {name !== 'default' && (
+                    {crudEnabled && (
+                      <TouchableOpacity
+                        onPress={() => onDuplicate(name)}
+                        style={{ width: 28, height: 28, borderRadius: 6, borderWidth: 1, borderColor: C.primary, alignItems: 'center', justifyContent: 'center' }}
+                        accessibilityLabel={`Duplicate playlist ${name}`}
+                      >
+                        <Text style={{ color: C.primary, fontSize: 13 }}>⧉</Text>
+                      </TouchableOpacity>
+                    )}
+                    {crudEnabled && name !== 'default' && (
                       <TouchableOpacity
                         onPress={() => onDelete(name)}
                         style={{ width: 28, height: 28, borderRadius: 6, borderWidth: 1, borderColor: C.error, alignItems: 'center', justifyContent: 'center' }}
@@ -1940,20 +2031,31 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
                 );
               })}
             </ScrollView>
-            <View style={{ flexDirection: 'row', gap: 6, marginTop: 10 }}>
-              <TextInput
-                placeholder="new playlist name"
-                placeholderTextColor={C.icon}
-                value={newPlaylistName}
-                onChangeText={setNewPlaylistName}
-                onSubmitEditing={onCreateNew}
-                returnKeyType="done"
-                style={{ flex: 1, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, color: C.text }}
-              />
-              <TouchableOpacity onPress={onCreateNew} style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: C.primary, borderRadius: 6, justifyContent: 'center' }}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#FFF' }}>NEW</Text>
-              </TouchableOpacity>
-            </View>
+            {crudEnabled ? (
+              <View style={{ flexDirection: 'row', gap: 6, marginTop: 10 }}>
+                <TextInput
+                  placeholder="new playlist name"
+                  placeholderTextColor={C.icon}
+                  value={newPlaylistName}
+                  onChangeText={setNewPlaylistName}
+                  onSubmitEditing={onCreateNew}
+                  returnKeyType="done"
+                  style={{ flex: 1, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, color: C.text }}
+                />
+                <TouchableOpacity onPress={onCreateNew} style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: C.primary, borderRadius: 6, justifyContent: 'center' }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#FFF' }}>NEW</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Says WHY the editing rows are gone, so the operator doesn't go
+                 hunting for a NEW button that the engine would refuse anyway. */
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.4,
+                color: '#8a6a1f', marginTop: 10,
+              }}>
+                {LIBRARY_SWITCH_ONLY_HINT}
+              </Text>
+            )}
         </View>
       </TouchableOpacity>
     </TouchableOpacity>

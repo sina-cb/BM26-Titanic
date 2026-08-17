@@ -8,6 +8,7 @@ import {
   LAYER_SETTING_IDS,
   LayerSurfaceRouter,
 } from './layer_surface_router.js';
+import { isDeckTransitionMode } from './transition_modes.js';
 
 // ── View-selection masking ─────────────────────────────────────────────
 // See docs/27_[todo]_mixer_layer_view_selection.md §4.
@@ -556,9 +557,8 @@ export class PatternMixer {
     //
     //   blendErrors: { <blendName>: { message, sinceFrame, count } }
     //
-    // A blend that falls through to the host-side linear-interpolation
-    // path (because its WASM handle is missing/failed to compile) records
-    // its error here ONCE and is logged loudly ONCE per mode (not per
+    // A blend whose WASM handle is missing/failed to compile records its
+    // error here ONCE and is logged loudly ONCE per mode (not per
     // frame — a 40 Hz log would bury the console). `getRenderHealth()`
     // surfaces this for the /status endpoint so an operator (or a smoke
     // check) sees `renderHealth.ok === false` immediately instead of a
@@ -640,7 +640,7 @@ export class PatternMixer {
     this.onTransitionProgress = null; // Callback: (groupId) => void — every frame an active transition is in flight
     this.onTransitionComplete = null; // Callback: (groupId) => void — fired once when the LAST channel in the group lands
 
-    // ── Deck pattern-swap state (ping-pong handle warm-keeper) ──────────
+    // ── Deck pattern-swap state (deterministic double buffer) ───────────
     // The deck renders one pattern at a time, but to get a SMOOTH switch
     // from pattern A to pattern B we need both running simultaneously
     // for the duration of the transition. The operator's mental model
@@ -656,28 +656,27 @@ export class PatternMixer {
     // Implementation: `deckChannel` is the PERSISTENT ACTIVE deck channel
     // (the IDENTITY container — id, localControls, playlist, viewSelection
     // all live here forever). `_inactiveDeckChannel` is a hidden sibling
-    // PatternChannel whose sole job is to keep a SECOND WASM handle warm —
+    // PatternChannel whose sole job is to hold a SECOND WASM handle —
     // it lives OUTSIDE this.channels / mixerChannels so it doesn't show
-    // up in /mixer or count toward maxChannels. Each frame, the inactive
-    // sibling is ticked (beginFrame) so its pattern stays time-synced
-    // with the active. During a swap it composites ON TOP of deckBuffer
+    // up in /mixer or count toward maxChannels. A parked precompile is NOT
+    // ticked: every incoming pattern starts from phase zero regardless of
+    // how long it waited. During a swap it composites ON TOP of deckBuffer
     // via its `fader` (driven by `_swapTransition`) and its `mode`
-    // (a trans_* blend script, or steady blend_screen for a crossfade).
+    // (the selected trans_* blend script, including trans_crossfade).
     //
-    // On swap completion we SWAP HANDLES (not pointers) — `deckChannel`
+    // On swap completion we SWAP HANDLES AND PHASE CLOCKS (not pointers) — `deckChannel`
     // keeps its id and all its operator-visible state intact; only its
     // `.handle` and `.pattern` get rebound to the newly-active pattern.
-    // The OLD active handle moves into the inactive slot for warmth, so
-    // a ping-pong back to the previous pattern is a zero-compile reuse.
-    // The previous design (`_swapChannel`) allocated a fresh PatternChannel
-    // + compiled a fresh WASM handle + destroyed both on EVERY swap,
-    // making A→B→A→B fade latency dominated by recompile time.
+    // The OLD active handle moves into the inactive slot only as an owned
+    // standby; it is marked non-fresh and cannot be reused as an incoming
+    // zero-phase pattern. Sequential autopilot retains the compile-latency
+    // optimization by explicitly parking a newly-compiled fresh handle.
     //
     // Handle reuse contract: callers (api_server.loadPlaylistEntryWith
     // Transition) MUST check `getInactiveDeckPattern()` BEFORE
     // compiling — if the inactive slot already holds the requested
-    // pattern name (typical for ping-pong), they pass `newHandle: null`
-    // to triggerDeckPatternSwap and the existing warm handle is reused.
+    // pattern name AND `isInactiveDeckHandleFresh()` is true, they pass
+    // `newHandle: null` and the deterministic parked handle is reused.
     // If the inactive slot is empty or holds a different pattern, the
     // caller compiles a fresh handle, the old inactive handle (if any)
     // gets destroyed, and the new handle takes over the inactive slot.
@@ -706,8 +705,8 @@ export class PatternMixer {
   }
 
   // Snapshot of render-health for /status. `ok` is false whenever any
-  // blend is degraded (running on the host-side linear-interp fallback
-  // instead of its real WASM blend script). Returns a plain serializable
+  // blend is unavailable (the render path throws instead of substituting
+  // another compositor). Returns a plain serializable
   // object — safe to JSON.stringify into the status payload.
   getRenderHealth() {
     const blendErrors = Object.entries(this.renderHealth.blendErrors).map(
@@ -950,7 +949,7 @@ export class PatternMixer {
       this.renderHealth.loggedBlendErrors[blendName] = true;
       console.error(
         `[Mixer] RENDER-HEALTH DEGRADED: ${message}. ` +
-        `Compositing this mode via host-side linear interpolation ` +
+        `Rendering this mode is blocked; no fallback was substituted ` +
         `(visible on /status as renderHealth.ok=false). This log fires ` +
         `ONCE per mode, not per frame.`,
       );
@@ -2527,10 +2526,9 @@ export class PatternMixer {
    * Honors `transitionMode` — the user-selected `trans_*` blend script
    * that drives the visual effect:
    *
-   *   - 'trans_crossfade' (default): no blend swap. Faders ramp smoothly
-   *     and the existing `blend_screen` (or whatever) modes do the
-   *     compositing. Cheapest, no script overhead, perceptually identical
-   *     to a real crossfade for two-overlay setups.
+   *   - 'trans_crossfade' (default): the target is composited with the real
+   *     endpoint-exact crossfade script, never its steady screen/add/over
+   *     blend masquerading as a crossfade.
    *
    *   - 'trans_flash' / 'trans_dissolve' / 'trans_iris' / 'trans_wipe_*':
    *     the target channel's `mode` is temporarily swapped to the
@@ -2574,20 +2572,19 @@ export class PatternMixer {
     if (overlays.length === 0) return null;
     if (!overlays.find(c => c.id === targetChannelId)) return null;
 
-    // Validate transitionMode: must be a string starting with 'trans_'.
-    // Fall back to crossfade if we can't even load the blend script —
-    // better to do a clean crossfade than throw on the operator's tap.
-    let resolvedTransMode = (typeof transitionMode === 'string' && transitionMode.startsWith('trans_'))
-      ? transitionMode
-      : 'trans_crossfade';
-    if (resolvedTransMode !== 'trans_crossfade') {
-      const handle = this.getBlendHandle(resolvedTransMode);
-      if (!handle) {
-        console.warn(`[Mixer] transitionMode '${resolvedTransMode}' could not be compiled; falling back to trans_crossfade.`);
-        resolvedTransMode = 'trans_crossfade';
-      }
+    // Validate against the canonical executable catalog. A trans_* typo is
+    // rejected explicitly and never substituted with a crossfade.
+    if (!isDeckTransitionMode(transitionMode)) {
+      console.error(`[Mixer] Invalid transitionMode '${transitionMode}'`);
+      return null;
     }
-    const useScriptedTransition = resolvedTransMode !== 'trans_crossfade';
+    const resolvedTransMode = transitionMode;
+    const handle = this.getBlendHandle(resolvedTransMode);
+    if (!handle) {
+      console.error(`[Mixer] transitionMode '${resolvedTransMode}' is missing or failed to compile`);
+      return null;
+    }
+    const useScriptedTransition = true;
 
     // Before scheduling: restore any in-flight saved modes from a
     // previous (still-running) scripted transition. Without this, a
@@ -2646,12 +2643,10 @@ export class PatternMixer {
         // smoothstep ramp will drive it to 1 by transition end.
         c._savedMode = c.mode;
         c.mode = resolvedTransMode;
-        // Force above the renderAll6ch skip threshold (0.001) so the
-        // blend script runs on EVERY frame of the transition, including
-        // the very first tick. Without this nudge the target's blend
-        // would be skipped during the initial ~25 ms while smoothstep
-        // is still below 0.001, producing a tiny "pop" at start.
-        c.fader = 0.002;
+        // Keep progress zero exact. Skipping a target at fader zero is the
+        // precise trans_* p=0 result and avoids a manufactured first-frame
+        // endpoint offset.
+        c.fader = 0;
         this.fadeChannel(c.id, 1.0, durationMs, {
           groupId: id,
           curve,
@@ -2677,19 +2672,18 @@ export class PatternMixer {
    * path. This is the "precompile-next-entry" optimization for hot-swap
    * playlist playback (feat/timeline_support).
    *
-   * Contract (kept deliberately conservative so it can't corrupt the
-   * ping-pong machinery):
+   * Contract (kept deliberately conservative so it can't corrupt phase):
    *   - Refuses while a swap is in flight (the inactive slot is the live
    *     fade target then — overwriting it would glitch the transition).
    *     Returns false; the caller can retry after completion.
    *   - No-op (returns true) if the slot already holds `patternName` —
-   *     the handle is already warm (this is also the ping-pong case).
+   *     the fresh handle is already parked.
    *   - Otherwise installs `handle` into the inactive slot at fader 0
    *     (parked, invisible) and destroys whatever stale handle was there.
    *     Ownership of `handle` transfers to the mixer.
    *
-   * The slot is ticked every frame by renderAll6ch() regardless of fader,
-   * so the warmed pattern stays time-synced and ready.
+   * The parked slot updates only its global-time baseline. It does not enter
+   * WASM until selected, so precompile lead time cannot alter visual phase.
    *
    * @param {string} patternName
    * @param {Object} handle  Compiled WASM handle (ownership transfers).
@@ -2704,7 +2698,8 @@ export class PatternMixer {
       try { this.wasmHost.destroy(handle); } catch (_) {}
       return false;
     }
-    if (this._inactiveDeckChannel && this._inactiveDeckChannel.pattern === patternName) {
+    if (this._inactiveDeckChannel && this._inactiveDeckChannel.pattern === patternName &&
+        this._inactiveDeckChannel._deckHandleFresh) {
       // Already warm — the caller's freshly compiled handle is redundant.
       // Destroy it so we don't leak a duplicate VM.
       try { this.wasmHost.destroy(handle); } catch (_) {}
@@ -2720,6 +2715,9 @@ export class PatternMixer {
       this._inactiveDeckChannel.mode = mode;
       this._inactiveDeckChannel.fader = 0;
       this._inactiveDeckChannel.enabled = true;
+      this._inactiveDeckChannel._phaseSeconds = 0;
+      this._inactiveDeckChannel._lastPhaseElapsed = null;
+      this._inactiveDeckChannel._deckHandleFresh = true;
     } else {
       this._inactiveDeckChannel = new PatternChannel({
         id: '__deck_inactive__',
@@ -2731,6 +2729,7 @@ export class PatternMixer {
       });
       this._inactiveDeckChannel._hidden = true;
       this._inactiveDeckChannel.fader = 0;
+      this._inactiveDeckChannel._deckHandleFresh = true;
     }
     return true;
   }
@@ -2759,8 +2758,12 @@ export class PatternMixer {
     return this._inactiveDeckChannel;
   }
 
+  isInactiveDeckHandleFresh() {
+    return !!(this._inactiveDeckChannel && this._inactiveDeckChannel._deckHandleFresh);
+  }
+
   /**
-   * Soft-swap the deck active channel's pattern using a ping-pong
+   * Soft-swap the deck active channel's pattern using a deterministic
    * inactive sibling.
    *
    * Concept (see also `_inactiveDeckChannel` docstring in the constructor):
@@ -2779,9 +2782,8 @@ export class PatternMixer {
    *   3. On completion, the WASM HANDLES SWAP. `deckChannel` keeps its
    *      id / playlist / localControls / viewSelection intact — only
    *      its `.handle` and `.pattern` get rebound to the newly-active
-   *      pattern. The OLD active handle moves into the inactive slot
-   *      for warmth — a ping-pong back to the previous pattern is a
-   *      zero-compile reuse. From the operator's POV the deck now
+   *      pattern. The OLD active handle and phase move into the inactive
+   *      slot as non-fresh owned state. From the operator's POV the deck now
    *      "is" the new pattern, with no visible glitch.
    *
    * Why we don't reuse `triggerMixerTransition`:
@@ -2793,8 +2795,7 @@ export class PatternMixer {
    *
    * Caller contract:
    *   - When `newHandle` is non-null, ownership transfers to the mixer.
-   *     Whether the swap succeeds, falls back, or is replaced by
-   *     another swap mid-flight, the mixer is responsible for
+   *     Whether the swap succeeds or fails, the mixer is responsible for
    *     destroying it (avoids the caller having to track a
    *     half-installed handle).
    *   - When `newHandle` is null, the caller is asserting that the
@@ -2813,19 +2814,17 @@ export class PatternMixer {
    * @param {string} opts.patternName      Pattern name (for channel.pattern)
    * @param {number} [opts.durationMs=1000]
    * @param {string} [opts.transitionMode='trans_crossfade']
-   * @param {string} [opts.steadyMode='blend_screen'] Blend mode used during a
-   *   crossfade transition (when transitionMode === 'trans_crossfade'). Has
-   *   no effect for scripted transitions because the script IS the blend.
    * @param {Function} [opts.onComplete]   Called once the swap completes
-   * @returns {string|null}  Transition id, or null if swap was rejected.
+   * @param {Function} [opts.onCancel]     Called once if the swap is cancelled
+   * @returns {string} Transition id. Invalid state throws.
    */
   triggerDeckPatternSwap({
     newHandle = null,
     patternName,
     durationMs = 1000,
     transitionMode = 'trans_crossfade',
-    steadyMode = 'blend_screen',
     onComplete = null,
+    onCancel = null,
   } = {}) {
     if (!this.deckChannel) {
       // No active deck to swap onto — refuse and destroy the incoming
@@ -2833,7 +2832,35 @@ export class PatternMixer {
       if (newHandle) {
         try { this.wasmHost.destroy(newHandle); } catch (_) {}
       }
-      return null;
+      throw new Error('cannot start Deck transition without an active Deck channel');
+    }
+
+    if (this._swapTransition) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      const error = new Error('swap-already-in-flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    const resolvedDurationMs = Number(durationMs);
+    if (!Number.isFinite(resolvedDurationMs) || resolvedDurationMs <= 0) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      throw new Error(`Deck transition durationMs must be a positive finite number, got '${durationMs}'`);
+    }
+    if (!isDeckTransitionMode(transitionMode)) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      throw new Error(`invalid Deck transition mode '${transitionMode}'`);
+    }
+    if (!this.getBlendHandle(transitionMode)) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      throw new Error(`Deck transition '${transitionMode}' is missing or failed to compile`);
     }
 
     // Reuse-vs-replace path on the inactive slot:
@@ -2843,10 +2870,9 @@ export class PatternMixer {
     //   newHandle set   → take ownership. If inactive already exists,
     //                     destroy its handle and re-bind to newHandle.
     if (!newHandle) {
-      if (!this._inactiveDeckChannel || this._inactiveDeckChannel.pattern !== patternName) {
-        console.warn(`[Mixer] triggerDeckPatternSwap(newHandle:null) requested for '${patternName}' ` +
-          `but inactive deck slot holds '${this._inactiveDeckChannel?.pattern ?? 'nothing'}'. Refusing.`);
-        return null;
+      if (!this._inactiveDeckChannel || this._inactiveDeckChannel.pattern !== patternName ||
+          !this._inactiveDeckChannel._deckHandleFresh) {
+        throw new Error(`Deck transition reuse requested for '${patternName}', but no fresh precompiled handle is parked`);
       }
       // Reuse path: nothing to install. _inactiveDeckChannel already
       // has the right handle + pattern. Just reset its render state.
@@ -2858,25 +2884,10 @@ export class PatternMixer {
     // over the inactive slot. We deliberately keep the inactive channel
     // object alive; its handle will be replaced below if newHandle is
     // non-null.
-    if (this._swapTransition) {
-      this._swapTransition = null;
-    }
-
     // Resolve transition mode. Fall back to plain crossfade if the
     // requested blend script can't compile — a clean fade beats an
     // operator-tap error every time.
-    let resolved = (typeof transitionMode === 'string' && transitionMode.startsWith('trans_'))
-      ? transitionMode
-      : 'trans_crossfade';
-    if (resolved !== 'trans_crossfade') {
-      const h = this.getBlendHandle(resolved);
-      if (!h) {
-        console.warn(`[Mixer] deck-swap transitionMode '${resolved}' could not be compiled; falling back to trans_crossfade.`);
-        resolved = 'trans_crossfade';
-      }
-    }
-    const useScripted = resolved !== 'trans_crossfade';
-    const inactiveMode = useScripted ? resolved : steadyMode;
+    const inactiveMode = transitionMode;
 
     if (newHandle) {
       // Replace path. Re-bind inactive to the freshly compiled handle.
@@ -2890,6 +2901,9 @@ export class PatternMixer {
         }
         this._inactiveDeckChannel.handle = newHandle;
         this._inactiveDeckChannel.pattern = patternName;
+        this._inactiveDeckChannel._phaseSeconds = 0;
+        this._inactiveDeckChannel._lastPhaseElapsed = null;
+        this._inactiveDeckChannel._deckHandleFresh = true;
       } else {
         // First-ever swap: allocate the inactive sibling. Persistent
         // for the engine's lifetime — subsequent swaps just rebind
@@ -2903,6 +2917,7 @@ export class PatternMixer {
           enabled: true,
         });
         this._inactiveDeckChannel._hidden = true;
+        this._inactiveDeckChannel._deckHandleFresh = true;
       }
     }
 
@@ -2911,7 +2926,7 @@ export class PatternMixer {
     // threshold; otherwise the first ~25 ms would skip compositing
     // and produce a visible "pop").
     this._inactiveDeckChannel.mode = inactiveMode;
-    this._inactiveDeckChannel.fader = 0.002;
+    this._inactiveDeckChannel.fader = 0;
     this._inactiveDeckChannel.enabled = true;
     // Defensive: ensure pattern name is in sync (reuse path passes
     // newHandle=null but the caller still tells us the patternName).
@@ -2923,8 +2938,9 @@ export class PatternMixer {
       startFader: 0,
       targetFader: 1.0,
       startTime: performance.now(),
-      durationMs: Math.max(1, Number(durationMs) || 1),
+      durationMs: resolvedDurationMs,
       onComplete,
+      onCancel,
     };
     return id;
   }
@@ -2944,6 +2960,13 @@ export class PatternMixer {
       // Reset render state so a stale fader doesn't leak into the next
       // render frame.
       this._inactiveDeckChannel.fader = 0;
+    }
+    if (cancelled.onCancel) {
+      try {
+        cancelled.onCancel({ transitionId: cancelled.id });
+      } catch (e) {
+        console.warn('[Mixer] deck-swap onCancel threw:', e.message);
+      }
     }
     // Tell listeners the swap is over. The swap's own onComplete is
     // deliberately NOT run (that would commit the cancelled target) —
@@ -3003,21 +3026,17 @@ export class PatternMixer {
    * Handle-swap semantics: on completion, the WASM handles inside
    * `deckChannel` and `_inactiveDeckChannel` SWAP. The persistent deck
    * identity (`deckChannel.id`, `.localControls`, `.playlist`, etc.) is
-   * preserved — only `.handle` and `.pattern` change. The OLD active
-   * handle moves into the inactive slot, where it stays warm (advanced
-   * each frame via beginFrame() with fader=0) so a ping-pong back to
-   * the previous pattern can reuse it without paying the WASM compile
-   * cost. The old `_swapChannel` design freed the previous handle on
-   * every swap; this design keeps it alive in the inactive slot until
-   * the NEXT swap brings a different pattern.
+   * preserved — `.handle`, `.pattern`, and their phase-clock fields move
+   * together. The OLD active state moves into the inactive slot as non-fresh
+   * owned state and is replaced by the next fresh compile.
    *
    * Why not swap whole channel POINTERS (operator's literal phrasing)?
    * `deckChannel` is the IDENTITY container — id, playlist state,
    * localControls, viewSelection. Swapping the pointer would change
    * the deck's id under the API layer's feet and orphan
    * localControls/playlist on the demoted sibling. The handle swap
-   * gives the operator the same end-result (warm second pattern, no
-   * recompile on ping-pong) while preserving identity.
+   * preserves the operator-visible identity while preventing a one-frame
+   * phase jump at promotion.
    */
   updateDeckSwapTransition(now = performance.now()) {
     if (!this._swapTransition || !this._inactiveDeckChannel) return;
@@ -3048,14 +3067,23 @@ export class PatternMixer {
       const newActivePattern = inactiveCh.pattern;
       const oldActiveHandle = base.handle;
       const oldActivePattern = base.pattern;
+      const newActivePhaseSeconds = inactiveCh._phaseSeconds;
+      const newActiveLastPhaseElapsed = inactiveCh._lastPhaseElapsed;
+      const oldActivePhaseSeconds = base._phaseSeconds;
+      const oldActiveLastPhaseElapsed = base._lastPhaseElapsed;
 
       // Promote on the base channel object.
       base.handle = newActiveHandle;
       base.pattern = newActivePattern;
+      base._phaseSeconds = newActivePhaseSeconds;
+      base._lastPhaseElapsed = newActiveLastPhaseElapsed;
       // Demote into the warm inactive slot. Fader resets to 0 so we
       // don't paint into deckBuffer outside of an active transition.
       inactiveCh.handle = oldActiveHandle;
       inactiveCh.pattern = oldActivePattern;
+      inactiveCh._phaseSeconds = oldActivePhaseSeconds;
+      inactiveCh._lastPhaseElapsed = oldActiveLastPhaseElapsed;
+      inactiveCh._deckHandleFresh = false;
       inactiveCh.fader = 0;
 
       // Clear in-flight bookkeeping BEFORE the onComplete callback so
@@ -3220,15 +3248,12 @@ export class PatternMixer {
         overlay._lastPhaseElapsed = elapsedSeconds;
       }
     }
-    // Tick the inactive deck sibling too so its pattern stays warm —
-    // its time advances alongside the active channel even when its
-    // fader is 0. This is what makes ping-pong "smoothness" work: the
-    // moment we promote it, its pattern is already on the same time
-    // base as the active. Without this, the new pattern would freeze
-    // at its first frame whenever it wasn't being faded in. It MUST share
-    // the active DECK's effectiveSpeed (not its own) so the ping-pong
-    // time-sync contract holds — a swap must not jump-cut the clock rate.
-    if (renderDeck && this._inactiveDeckChannel && this._inactiveDeckChannel.handle) {
+    // Tick the inactive Deck sibling only while it is the live transition
+    // target. A parked precompile updates its baseline below without entering
+    // WASM, so its phase remains zero until selection. During the fade it uses
+    // the active Deck's effective speed, and its phase state is promoted with
+    // its handle at completion.
+    if (renderDeck && this.isDeckSwapInFlight()) {
       const deckSpeed = this.deckChannel ? this._effectiveSpeed(this.deckChannel) : 1;
       this._inactiveDeckChannel.beginFrame(this.wasmHost, elapsedSeconds, true, deckSpeed);
     } else if (this._inactiveDeckChannel) {
@@ -3389,6 +3414,18 @@ export class PatternMixer {
           if (channel.hue) {
             applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
           }
+          // View-selection blackout for the channel PREVIEW (docs/58 §5,
+          // docs/27 §4.2). Same call the deck PFL preview (:3431) and Live
+          // Touch (:3402) already make: a channel view-selected to `te_sign`
+          // must not broadcast its pattern across the whole ship, or the
+          // mixer's top-down pixel view answers "where does this layer land"
+          // wrongly for every view-selected channel. Affects the PREVIEW
+          // buffer only — the composite path below is untouched, and the
+          // 2026-06-29 "TRUE pattern at full brightness" ruling (which is
+          // about FADER independence) still holds.
+          if (channel.compiledPixelMask) {
+            applyPreviewMaskBlackout(this.channelBuffer, channel.compiledPixelMask, this.pixelCount);
+          }
           this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
           this._visLevels[channel.id] =
             this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
@@ -3482,17 +3519,11 @@ export class PatternMixer {
           this.deckBuffer, this.channelBuffer, effFader
         );
       } else {
-        // DEGRADED PATH (Codex P0 visibility): no compiled blend handle for
-        // this mode. We do NOT crash the 40 Hz loop; composite a host-side
-        // linear interpolation and record the error loudly (once per mode).
         this._recordBlendError(
           overlay.mode || '(empty mode)',
           `No compiled blend handle for mode '${overlay.mode}' on deck overlay '${overlay.id}'`,
         );
-        blended = this.blendedScratch;
-        for (let i = 0; i < blended.length; i++) {
-          blended[i] = Math.round(this.deckBuffer[i] + (this.channelBuffer[i] - this.deckBuffer[i]) * effFader);
-        }
+        throw new Error(`No compiled blend handle for mode '${overlay.mode}' on deck overlay '${overlay.id}'`);
       }
 
       commitBlendedLayerWithMask(this.deckBuffer, blended, overlay.compiledPixelMask, this.pixelCount);
@@ -3514,43 +3545,19 @@ export class PatternMixer {
         this._inactiveDeckChannel.fader > 0.001) {
       this.channelBuffer.fill(0);
       this._inactiveDeckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
-      // Operator review May 2026 #15 — TRANSITION END FLICKER.
-      // For the default 'trans_crossfade' path (steadyMode='blend_screen')
-      // the OLD pattern (deckBuffer) was always rendered at full
-      // strength and the NEW pattern (channelBuffer) was screen-blended
-      // on top scaled by fader. As fader → 1 the visible output is
-      // `1 - (1-old)*(1-new)` — OLD still contributes at the last
-      // mid-transition frame. Then handle-swap fires on the next
-      // beginFrame() and the renderer cuts to `deckBuffer = new
-      // pattern alone`. That's the visible "pop" at the tail.
-      //
-      // Fix: in the LAST ~3% of the transition force a direct replace
-      // (deckBuffer := channelBuffer). The new pattern is already at
-      // full opacity, so this is visually identical to the screen-
-      // blended version EXCEPT without the old pattern's residual
-      // contribution. Post-swap renders are pixel-identical to this
-      // tail window — zero discontinuity.
-      const TAIL_REPLACE_THRESHOLD = 0.97;
-      if (this._inactiveDeckChannel.fader >= TAIL_REPLACE_THRESHOLD) {
-        this.deckBuffer.set(this.channelBuffer);
-      } else {
-        const blendHandle = this.getBlendHandle(this._inactiveDeckChannel.mode);
-        if (blendHandle) {
-          const result = this.wasmHost.renderBlend6ch(
-            blendHandle, this.pixelCount,
-            this.deckBuffer, this.channelBuffer, this._inactiveDeckChannel.fader
-          );
-          this.deckBuffer.set(result);
-        } else {
-          // Last-resort linear crossfade if the blend script can't load.
-          // Keeps the swap visible-but-ugly rather than invisible.
-          const f = this._inactiveDeckChannel.fader;
-          const iv = 1 - f;
-          for (let i = 0; i < this.deckBuffer.length; i++) {
-            this.deckBuffer[i] = Math.round(this.deckBuffer[i] * iv + this.channelBuffer[i] * f);
-          }
-        }
+      // The selected transition owns every in-flight frame. Endpoint bypasses
+      // in WasmHost make p=0/p=1 exact, and completion promotes B atomically;
+      // there is no universal tail cut and no hidden linear fallback.
+      const blendHandle = this.getBlendHandle(this._inactiveDeckChannel.mode);
+      if (!blendHandle) {
+        throw new Error(`Deck transition '${this._inactiveDeckChannel.mode}' lost its compiled blend handle`);
       }
+      const result = this.wasmHost.renderBlend6ch(
+        blendHandle, this.pixelCount,
+        this.deckBuffer, this.channelBuffer, this._inactiveDeckChannel.fader,
+        this.deckBuffer,
+      );
+      if (result !== this.deckBuffer) this.deckBuffer.set(result);
       // Expose the inactive channel's vis under a stable id so anyone
       // debugging can see what's coming next. Backward-compat alias
       // '__deck_swap__' kept for any consumer that pinned the old
@@ -3671,26 +3678,12 @@ export class PatternMixer {
           this.mixerBuffer, this.channelBuffer, effFader
         );
       } else {
-        // DEGRADED PATH (Codex P0 visibility): the channel's blend mode has
-        // no compiled WASM handle — either the script is missing/failed to
-        // compile, or it's a brand-new mode that boot precompile didn't
-        // know about. We do NOT crash the 40 Hz loop (that would freeze the
-        // whole rig), and we still composite SOMETHING sane (host-side
-        // linear interpolation) so the operator isn't staring at black.
-        // But this is recorded as a render-health error so /status shows
-        // renderHealth.ok=false and logged loudly ONCE per mode — it must
-        // never be a silently-wrong fade. A precompile failure for a known
-        // blend was already recorded at boot; this catches runtime modes
-        // (e.g. a channel set to a typo'd mode name via the API).
         this._recordBlendError(
           channel.mode || '(empty mode)',
           `No compiled blend handle for mode '${channel.mode}' on channel ` +
           `'${channel.id}'`,
         );
-        blended = this.blendedScratch;
-        for (let i = 0; i < blended.length; i++) {
-          blended[i] = Math.round(this.mixerBuffer[i] + (this.channelBuffer[i] - this.mixerBuffer[i]) * effFader);
-        }
+        throw new Error(`No compiled blend handle for mode '${channel.mode}' on channel '${channel.id}'`);
       }
 
       commitBlendedLayerWithMask(this.mixerBuffer, blended, channel.compiledPixelMask, this.pixelCount);

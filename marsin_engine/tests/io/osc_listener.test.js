@@ -542,10 +542,11 @@ test('startAsync rejects with EADDRINUSE when port is already bound', async () =
     try { await listener.startAsync(); }
     catch (err) { caught = err; }
     assert.ok(caught, 'expected startAsync to reject');
-    assert.ok(
-      caught.code === 'EADDRINUSE' || /EADDRINUSE/.test(caught.message || ''),
-      `expected EADDRINUSE-flavoured error, got: ${caught && caught.message}`
-    );
+    const addressConflict = caught.code === 'EADDRINUSE'
+      || /EADDRINUSE/.test(caught.message || '')
+      || (process.platform === 'win32' && caught.code === 'EACCES');
+    assert.ok(addressConflict,
+      `expected address-conflict bind error, got: ${caught && caught.message}`);
     // And start() / stop() must NOT have left a half-open socket
     // around; calling stop() should be a no-op.
     listener.stop();

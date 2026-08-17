@@ -109,6 +109,7 @@ const TOPIC_BY_TYPE = Object.freeze({
   // uncleanly. Every surface needs to know the desk changed hands without
   // anyone touching it, or CaptainPad shows a state nobody chose.
   armRevert:                   TOPICS.CONTROL,
+  liveTouchForceDisarm:        TOPICS.CONTROL,
   // effects_v2 (project effects_v2_midi_layout): the engine-owned page VIEW
   // (0..3) over the 32 GEM slots. Broadcast on every PATCH /global-effects/page
   // so CaptainPad's page switcher + the VSN1 side buttons mirror the SAME page
@@ -155,6 +156,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   // change (mode/autopilot/program/cue fire). Low volume, operator-facing
   // — rides /ws/control next to scheduledTasks, replayed on connect.
   timelineState:               TOPICS.CONTROL,
+  // docs/52: the SPECIAL EVENTS runner (staged one-button shows; Baby Reveal is
+  // show #1). One small payload per transition plus a 1 Hz frame while a stage
+  // countdown is live — the same cadence and the same audience as timelineState,
+  // so it rides /ws/control beside it and is replayed on connect.
+  specialEvents:               TOPICS.CONTROL,
   // PARTY OVERRIDE (report 20260725_19): the operator's engine-owned party
   // policy — { enabled, playlist }. Broadcast on every PUT /party-config +
   // replayed on /ws/control connect so CaptainPad and the Audio Companion's
@@ -181,6 +187,13 @@ const TOPIC_BY_TYPE = Object.freeze({
   // recalled channel's params. Operator-driven, low volume → /ws/control next
   // to the snapshot library it semantically relates to.
   paramPresets:                TOPICS.CONTROL,
+  // docs/70 W4: the per-scene Live Touch preset PLAYLIST (one ordered
+  // store, `states/<scene>/live_touch_presets.yaml`). Broadcast on every
+  // create/rename/delete/reorder + replayed on /ws/control connect so a
+  // freshly connected pad renders the current playlist immediately.
+  // Operator-driven, low volume → /ws/control next to the snapshot/param-
+  // preset libraries it semantically relates to.
+  liveTouchPresets:             TOPICS.CONTROL,
   // round-2 #10: mixer UNDO ring depth/top. Broadcast on every push (a
   // destructive action snapshotted) + every undo so CaptainPad's global UNDO
   // button mirrors enable/label live. Operator-driven, low volume → /ws/control

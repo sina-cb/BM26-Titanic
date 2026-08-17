@@ -113,6 +113,15 @@ export function createBridgeHarness() {
   // later test to move it out from under a live arm.
   const benchStateRoot = freshStateRoot();
   process.env.BM26_BENCH_MIRROR_STATE_ROOT = benchStateRoot;
+  // The port-cleanup ARM INTERLOCK marker (report 20260815_233 F7). Same
+  // doctrine as the state root, and for a sharper reason: the production marker
+  // is the LIVE stack's claim, so a test arm that wrote it would overwrite — and
+  // on disarm delete — the operator's real one, silently unprotecting an armed
+  // bench. `tools/port_cleanup.cjs` refuses the production path under
+  // `node --test` outright, so forgetting this line is a loud failure, not a
+  // quiet one. Per-pid, exactly like the state root.
+  const armMarkerPath = path.join(benchStateRoot, 'bench_mirror_armed.json');
+  process.env.BM26_BENCH_MIRROR_ARM_MARKER = armMarkerPath;
   /** Every frame either bridge tried to put on the wire, by sender. */
   const sends = [];
   const senders = [];
@@ -491,6 +500,8 @@ export function createBridgeHarness() {
     simPorts,
     /** Where this process's bridge writes its remembered selections. */
     benchStateRoot,
+    /** Where this process's bridge publishes its port-cleanup arm interlock. */
+    armMarkerPath,
 
     // ── Fake classes + registries ──
     FakeSender, FakeEmitter, FakeReceiver, FakeClient, FakeWebSocketServer, FakeWebSocketClient,

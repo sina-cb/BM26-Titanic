@@ -20,6 +20,7 @@ import yaml from 'js-yaml';
 import { computeSunEvents } from './sun.js';
 import { anchorToMs, dateClockToEpochMs } from './triggers.js';
 import { festivalDateFor } from './festival.js';
+import { DECK_TRANSITION_MODES } from '../transition_modes.js';
 
 // Sun events a sun anchor / sun trigger may reference (mirrors sun.js output).
 export const SUN_EVENTS = Object.freeze([
@@ -41,12 +42,7 @@ const CUE_KINDS = Object.freeze(['program', 'mood', 'ambient']);
 // Mirrors the engine's deck transition-config `mode` (api_server.js) — the swap
 // runs as a soft double-buffer fade in this style. The cue editor exposes the
 // FULL blend set (all 16), matching the live deck's Deck TX picker.
-export const CUE_TRANSITION_MODES = Object.freeze([
-  'trans_crossfade', 'trans_flash', 'trans_color_burst', 'trans_dissolve',
-  'trans_wipe_right', 'trans_wipe_left', 'trans_wipe_down', 'trans_diagonal_wipe',
-  'trans_wave_sweep', 'trans_iris', 'trans_iris_close', 'trans_diamond_wipe',
-  'trans_split_horizontal', 'trans_split_vertical', 'trans_ripple_in', 'trans_morse_blink',
-]);
+export const CUE_TRANSITION_MODES = DECK_TRANSITION_MODES;
 // A playlist action's `overlays` field: enable (honor configured overlays) or
 // disable (turn ALL deck overlays off). Absent → no change (docs/38 §16.9).
 const CUE_OVERLAY_MODES = Object.freeze(['enable', 'disable']);

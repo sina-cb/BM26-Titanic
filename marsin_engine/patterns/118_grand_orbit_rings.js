@@ -5,11 +5,14 @@
   Three enormous oblique luminous hoops orbit the normalized 3D model. Each is
   a true circular tube in a moving plane, so the look reads from a distance as
   broad geometry wrapped around the whole ship rather than as travelling bars.
+  Broad penumbras and one slowly travelling illumination arc per tube make the
+  orbits visibly active while preserving their monumental ambient character.
   A palette-derived 10–20% safety floor keeps every pixel visible between hoops.
 
-  The pattern is portable: normalized XYZ is the load-bearing canvas. It uses
-  no authored views, section/group/controller ids, or required fixture roles.
-  TE signs are an optional accent where overlapping hoops form a brighter lens.
+  The pattern is portable across Titanic and test_bench: normalized XYZ is the
+  load-bearing canvas, with no authored views or model-specific ids. Both rigs'
+  TE signs use their matching fixture-local paths as paired miniature orbits,
+  giving both complete sign surfaces byte-identical motion and a reliable floor.
 
   AUDIO_MODULATION_V1:
     sliderLevel     <- micLow  range 0.30..1.00 curve ease  # luminous hoop energy
@@ -126,10 +129,11 @@ export function beforeRender(delta) {
   n2x = ct;          n2y = st * sin(b); n2z = st * cos(b);
   n3x = st * sin(c); n3y = st * cos(c); n3z = ct;
 
-  // Small center excursions make the hoops orbit rather than spin in place.
-  c1x = sin(b) * 0.075; c1y = cos(c) * 0.045; c1z = sin(a) * 0.055;
-  c2x = cos(c) * 0.060; c2y = sin(a) * 0.070; c2z = cos(b) * 0.040;
-  c3x = sin(a) * 0.050; c3y = cos(b) * 0.050; c3z = sin(c) * 0.070;
+  // Broad center excursions make the hoops travel through the complete model
+  // rather than merely changing orientation around its center.
+  c1x = sin(b) * 0.115; c1y = cos(c) * 0.070; c1z = sin(a) * 0.085;
+  c2x = cos(c) * 0.090; c2y = sin(a) * 0.110; c2z = cos(b) * 0.065;
+  c3x = sin(a) * 0.080; c3y = cos(b) * 0.080; c3z = sin(c) * 0.110;
 
   liveWidth = 0.055 + clamp01(ringWidth) * 0.170;
   liveSharp = 0.85 + clamp01(contrast) * 3.65;
@@ -171,32 +175,62 @@ export function render3D(index, x, y, z) {
   ring2 = pow(ring2 * ring2 * (3.0 - 2.0 * ring2), liveSharp);
   ring3 = pow(ring3 * ring3 * (3.0 - 2.0 * ring3), liveSharp);
 
+  // One broad bright arc advances around each complete tube on a different
+  // irrational clock. The 0.58 base preserves the monumental whole ring.
+  var arc1 = 0.58 + wave(atan2(y1, z1) / PI2
+                       + orbitB * 0.83 + orbitC * 0.17) * 0.42;
+  var arc2 = 0.58 + wave(atan2(z2, x2) / PI2
+                       - orbitC * 0.71 + orbitA * 0.23) * 0.42;
+  var arc3 = 0.58 + wave(atan2(x3, y3) / PI2
+                       + orbitA * 0.61 - orbitB * 0.19) * 0.42;
+  var lit1 = ring1 * arc1;
+  var lit2 = ring2 * arc2;
+  var lit3 = ring3 * arc3;
+
+  // Soft penumbras move model-wide around the narrow high-contrast cores.
+  // Ring Width controls both layers, so its original promise stays exact.
+  var haloWidth = width * 2.85;
+  var halo1 = 1.0 - clamp01(dist1 / haloWidth);
+  var halo2 = 1.0 - clamp01(dist2 / haloWidth);
+  var halo3 = 1.0 - clamp01(dist3 / haloWidth);
+  halo1 = halo1 * halo1;
+  halo2 = halo2 * halo2;
+  halo3 = halo3 * halo3;
+
   var intersection = clamp01(ring1 * ring2 + ring2 * ring3 + ring3 * ring1);
-  var ringEnergy = clamp01(max(ring1, max(ring2, ring3))
+  var haloEnergy = clamp01((halo1 + halo2 + halo3) * 0.16);
+  var ringEnergy = clamp01(max(lit1, max(lit2, lit3)) + haloEnergy
                          + intersection * (0.42 + livePulse * 0.58));
 
-  // Optional Identity lens: intersections refract gently along the sign path.
-  var signLens = 0.0;
+  // The two TE signs share identical fixture-local topology. This paired
+  // miniature-orbit composition therefore gives both signs exact equal energy,
+  // full-surface movement, and a floor independent of rare ring intersections.
+  var signOrbit = 0.0;
   if (fixtureType == FIX_TE_SIGN) {
-    var signPath = pixelLocalIndex * 0.01351351351;
-    signLens = wave(signPath * 0.73 + px * 0.31 - pz * 0.19
-                  + orbitC * 2.0) * intersection;
-    ringEnergy = clamp01(ringEnergy + intersection * 0.25
-                       + signLens * 0.18);
+    var signPath = pixelLocalIndex * 0.02564102564;
+    var signArc1 = wave(signPath * 1.00 - orbitA * 0.79
+                      + orbitC * 0.13);
+    var signArc2 = wave(signPath * 1.61803398875 + orbitB * 0.61
+                      - orbitC * 0.11);
+    signArc1 = signArc1 * signArc1 * signArc1;
+    signArc2 = signArc2 * signArc2 * signArc2 * signArc2;
+    signOrbit = clamp01(max(signArc1, signArc2 * 0.78));
+    var signFloor = 0.32 + wave(signPath * 0.50 + orbitC * 0.19) * 0.10;
+    ringEnergy = clamp01(signFloor + signOrbit * 0.48);
   }
 
   // Opposing hoops pull decisively toward opposite palette endpoints; the
   // third remains the refracted midpoint. The safety floor spans that same
   // palette line spatially instead of introducing a third colour.
-  var ringMix = clamp01(0.50 + (ring2 - ring1) * 0.62
-                       + (ring3 - (ring1 + ring2) * 0.50) * 0.20);
+  var ringMix = clamp01(0.50 + (lit2 - lit1) * 0.62
+                       + (lit3 - (lit1 + lit2) * 0.50) * 0.20);
   ringMix = ringMix * ringMix * (3.0 - 2.0 * ringMix);
   var floorMix = clamp01(((px + 0.5) * 0.65 + (pz + 0.5) * 0.35
                         - 0.18) * 1.56);
   floorMix = floorMix * floorMix * (3.0 - 2.0 * floorMix);
   var colorMix = floorMix + (ringMix - floorMix) * ringEnergy;
   if (fixtureType == FIX_TE_SIGN) {
-    colorMix = clamp01(colorMix + signLens * 0.12);
+    colorMix = clamp01(0.26 + signOrbit * 0.56);
   }
 
   var ringGain = 0.28 + liveLevel * 0.92;

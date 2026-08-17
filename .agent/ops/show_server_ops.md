@@ -75,6 +75,14 @@ python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it ba
   laptop-side health poll (only when the show LAN is unreachable — then
   confirm the lights yourself).
 
+- **Sanctioned stops only.** Ctrl+C in the launcher's terminal, `launcher.js
+  stop`, or a `-f` takeover — never a kill of the launcher's shell/task
+  wrapper. A detached sentinel (`tools/launcher_reaper.cjs`,
+  log `~/tmp/bm26_reaper.log`) reaps the stack if the launcher dies anyway, so
+  an unsanctioned kill is survivable but still costs the supervised blackout.
+  Full lifecycle runbook — sentinel, lock contents, and how to read a `stop`
+  that exits non-zero: `.agent/ops/stack_lifecycle.md`.
+
 ## Operator gates (never cross without an explicit go)
 
 - `deploy --restart-only` and any full prod deploy **blink the lights**

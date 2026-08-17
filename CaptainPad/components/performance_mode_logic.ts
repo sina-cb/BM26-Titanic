@@ -26,6 +26,17 @@ export interface DeckDirtyEntry {
   label: string | null;
 }
 
+/**
+ * WHO holds the engine-global edit session (docs/56 D3). The enum NAMES the
+ * engine's credential store already carries — `owner` (Sina), `collaborator`
+ * (Misha), `bringup` (Sailors) — never credential material, never a token.
+ * `null` means no edit session: either the show lock is on, or auth is
+ * disabled on this engine (in which case nothing is gated).
+ */
+export type EditPrincipal = 'owner' | 'collaborator' | 'bringup';
+
+const EDIT_PRINCIPALS: readonly string[] = ['owner', 'collaborator', 'bringup'];
+
 /** The performance-mode state the control renders. */
 export interface PerformanceModeState {
   active: boolean;
@@ -35,6 +46,19 @@ export interface PerformanceModeState {
   dirtyCount: number;
   /** Thin rows for the dirty entries, for naming them in the exit summary. */
   dirtyEntries: DeckDirtyEntry[];
+  /**
+   * The engine-global edit-session principal, or null. PERSISTENCE FOLLOWS
+   * THIS, not the pad: disk is global, so "is the engine saving" has exactly
+   * one answer for every connected CaptainPad (docs/56 D4).
+   */
+  editPrincipal: EditPrincipal | null;
+  /**
+   * Does this engine have privileged auth enabled? The engine says so directly
+   * because a null `editPrincipal` is ambiguous on its own: on a show engine it
+   * means "nobody has unlocked saving", on a bench it means "there is no gate
+   * at all". Deriving it client-side would guess; the engine knows.
+   */
+  authRequired: boolean;
 }
 
 /**
@@ -48,6 +72,10 @@ export const DEFAULT_PERFORMANCE_MODE: PerformanceModeState = {
   enteredAt: null,
   dirtyCount: 0,
   dirtyEntries: [],
+  editPrincipal: null,
+  // DEFAULT-OFF for the same reason `active` is: before the engine answers, the
+  // pad must not paint a "NOT SAVING" warning it cannot yet justify.
+  authRequired: false,
 };
 
 /** The three ways the operator can leave the mode. `keep-save` writes the
@@ -93,7 +121,8 @@ export function reconcilePerformanceMode(
   if (!patch || typeof patch !== 'object') return prev;
   const p = patch as {
     type?: unknown; active?: unknown; enteredAt?: unknown;
-    dirtyCount?: unknown; dirtyEntries?: unknown;
+    dirtyCount?: unknown; dirtyEntries?: unknown; editPrincipal?: unknown;
+    authRequired?: unknown;
   };
   // If a `type` is present it MUST be 'performanceMode' — a stray message of a
   // different type must never mutate this state.
@@ -107,12 +136,36 @@ export function reconcilePerformanceMode(
   const hasDirty = typeof p.dirtyCount === 'number' && Number.isFinite(p.dirtyCount);
   const dirtyCount = hasDirty ? (p.dirtyCount as number) : prevCount;
   const dirtyEntries = hasDirty ? normalizeDirtyEntries(p.dirtyEntries) : prevEntries;
+  // `editPrincipal` is present on every frame the engine sends since docs/56,
+  // and an explicit null is MEANINGFUL (the session ended). Only an ABSENT
+  // field preserves the previous value, so a pre-_228 engine — or a hand-rolled
+  // {active} echo — never invents or erases a principal. Unknown strings are
+  // rejected rather than rendered.
+  const prevPrincipal = normalizeEditPrincipal(prev.editPrincipal);
+  const editPrincipal = p.editPrincipal === undefined
+    ? prevPrincipal
+    : normalizeEditPrincipal(p.editPrincipal);
   return {
     active: p.active,
     enteredAt: p.active ? enteredAt : null,
     dirtyCount,
     dirtyEntries,
+    // There is never an edit session while the show lock is on (docs/56 D3) —
+    // pin it here too so a racing frame can't paint a chip over the lock.
+    editPrincipal: p.active ? null : editPrincipal,
+    // Only a real boolean adopts; an absent field keeps the previous answer, so
+    // a pre-_228 engine (or a bare {active} echo) never flips the gate story.
+    authRequired: typeof p.authRequired === 'boolean'
+      ? p.authRequired
+      : !!prev.authRequired,
   };
+}
+
+/** Coerce an unknown value into a known principal name, or null. */
+export function normalizeEditPrincipal(value: unknown): EditPrincipal | null {
+  return typeof value === 'string' && EDIT_PRINCIPALS.includes(value)
+    ? (value as EditPrincipal)
+    : null;
 }
 
 /** True iff a raw WS message should drive a performance-mode reconcile. */
@@ -174,7 +227,30 @@ export interface PerformanceExitChoice {
   label: string;
   hint: string;
   tone: 'default' | 'restore';
+  /**
+   * An extra qualifier line under the hint. Only `keep-save` carries one: the
+   * engine accepts it from the captain's passcode ALONE (docs/56 D7), and the
+   * client cannot pre-know which principal is being typed — that would mean
+   * verifying before submit — so the choice stays visible and a sailor gets the
+   * engine's 400 rendered in the sheet's error box.
+   */
+  caption?: string;
 }
+
+/** Shown under KEEP & SAVE TUNING. Pinned here so the wording can't drift. */
+export const KEEP_SAVE_OWNER_ONLY_CAPTION = 'Captain’s passcode only.';
+
+/**
+ * Shown under the exit sheet's passcode field whenever the engine gates the
+ * exit (report `_236`). It replaces the old, mute affordance where both exit
+ * buttons simply greyed out until something was typed — the operator tapped,
+ * nothing happened, and no sentence anywhere said why. The buttons are always
+ * live now; this line is the standing explanation, and an empty submit earns the
+ * engine's own 401 in the sheet's error box.
+ */
+export const PASSCODE_REQUIRED_HINT =
+  'This engine requires an operator passcode to leave performance mode. '
+  + 'Whoever types it owns what gets saved for the rest of the edit session.';
 
 export function performanceExitChoices(dirtyCount: number): PerformanceExitChoice[] {
   if (dirtyCount > 0) {
@@ -184,6 +260,7 @@ export function performanceExitChoices(dirtyCount: number): PerformanceExitChoic
         label: 'KEEP & SAVE TUNING',
         hint: 'Save your session tuning into the playlists, then leave performance mode.',
         tone: 'default',
+        caption: KEEP_SAVE_OWNER_ONLY_CAPTION,
       },
       {
         action: 'keep',
@@ -232,6 +309,140 @@ export function dirtyRestoreCaption(count: number): string {
   if (count <= 0) return '';
   const noun = count === 1 ? 'this session tweak' : `all ${count} tuned patterns`;
   return `RESTORE discards ${noun}.`;
+}
+
+// ── EDIT SESSION (docs/56 D5/D8) ────────────────────────────────────────────
+// WHO holds the session decides what the ENGINE writes to disk. The pad never
+// enforces this — every gate is engine-side, because any HTTP client could
+// otherwise walk around a client-only lock — but it must SAY so, loudly and
+// exactly once, so nobody spends a night tuning into a void.
+
+/**
+ * Will the engine persist what this session does? Mirrors the engine's
+ * `principalMaySave()` (api_server.js) term for term.
+ *
+ * `authRequired=false` (benches, isolated test engines) → every gate is inert
+ * and the answer is always yes, which is why a bench never shows a chip.
+ */
+export function editPrincipalMaySave(
+  principal: EditPrincipal | null,
+  authRequired: boolean,
+): boolean {
+  return !authRequired || principal === 'owner';
+}
+
+export interface EditSessionChip {
+  /** Short, all-caps chip label. */
+  label: string;
+  /** The one-line explanation behind a tap / for accessibility. */
+  detail: string;
+}
+
+/**
+ * The persistent session chip, or null when nothing needs saying.
+ *
+ * Null cases, all deliberate: the show lock is on (the perf control already
+ * dominates the sidebar and there IS no edit session), an owner session (normal
+ * is silent — a chip on every ordinary edit would train the eye to ignore it),
+ * and auth-disabled engines (no gate exists to warn about).
+ */
+export function editSessionChip(
+  principal: EditPrincipal | null,
+  performanceActive: boolean,
+  authRequired: boolean,
+): EditSessionChip | null {
+  if (performanceActive || !authRequired) return null;
+  if (principal === 'owner') return null;
+  if (principal === 'collaborator') {
+    return {
+      label: 'CREW SESSION — LIVE, NOT SAVING',
+      detail: 'Changes drive the rig right now but are not written to disk. '
+        + 'Tap to enter the captain’s passcode and start saving.',
+    };
+  }
+  if (principal === 'bringup') {
+    return {
+      label: 'SAILOR SESSION — LIVE, NOT SAVING',
+      detail: 'Changes drive the rig right now but are not written to disk. '
+        + 'Tap to enter the captain’s passcode and start saving.',
+    };
+  }
+  return {
+    label: 'NO EDIT SESSION — NOT SAVING',
+    detail: 'Nobody has unlocked saving on this engine. '
+      + 'Tap to enter the captain’s passcode and start saving.',
+  };
+}
+
+/** Copy for the escalation sheet the chip opens. States the D4 consequence
+ *  plainly: asserting the owner code BLESSES whatever is live right now. */
+export const ESCALATE_SHEET_TITLE = 'Start saving this session';
+export const ESCALATE_SHEET_DETAIL =
+  'Entering the captain’s passcode starts auto-saving the CURRENT live tuning — '
+  + 'including changes made earlier in this session. Any other passcode hands the '
+  + 'session over and keeps saving frozen.';
+
+// ── OFFLINE LOCAL VIEW OVERRIDE (report `_250`) ─────────────────────────────
+// Performance mode is owned by the ENGINE and the flip is an engine route
+// (`POST /performance-mode`). So when the control bus is DOWN the pad has no
+// way off the locked performance face — which is exactly the moment the
+// operator most needs CONFIG (the engine-address card, the boot-mode toggle).
+// docs/56 D1 + report `_228`: an auth-enabled engine BOOTS locked, so a pad
+// that cannot reach it sits on that face indefinitely. Operator order: "even
+// when engine is down, allow me to switch between edit and performance so I
+// can check the config".
+//
+// The answer is a CLIENT-LOCAL view override that exists ONLY while the engine
+// is unreachable. It is pure presentation: never sent to the engine, never
+// persisted, and discarded the instant the bus reconnects (the broadcast is
+// authoritative again). This function IS that rule, so vitest pins it:
+// a `connected` bus ignores the override outright.
+
+export interface LocalViewResolution {
+  /** The performance-mode value this pad should PRESENT right now. */
+  active: boolean;
+  /** True while the client-local override is the one being presented. */
+  localOverride: boolean;
+}
+
+/**
+ * Resolve what the pad shows: the engine's answer, unless the bus is down AND
+ * the operator has picked a local view (`override` non-null).
+ *
+ * `engineConnected === true` ⇒ the override NEVER applies, no matter what it
+ * holds. That is the reconnect guarantee in one line: engine truth wins the
+ * moment it is available, and it is never merged with the local pick.
+ */
+export function resolveLocalViewOverride(
+  engineActive: boolean,
+  engineConnected: boolean,
+  override: boolean | null,
+): LocalViewResolution {
+  const applies = !engineConnected && override !== null;
+  return {
+    active: applies ? (override as boolean) : engineActive,
+    localOverride: applies,
+  };
+}
+
+/** Standing caption under the mode chip whenever the control bus is down. */
+export const ENGINE_OFFLINE_BADGE = 'ENGINE OFFLINE';
+/** Added under it once the operator has taken a local view. Together the two
+ *  lines read "ENGINE OFFLINE — LOCAL VIEW". */
+export const LOCAL_VIEW_BADGE = 'LOCAL VIEW';
+
+/**
+ * Accessibility / long-form copy for the offline chip. NO PASSCODE is asked
+ * for here, deliberately: nothing can be verified without the engine (the
+ * credential ring lives there), and nothing engine-side can be affected by a
+ * local view pick. Every gate that matters — the perf-exit passcode (docs/56
+ * D2), the edit-session principal (D3) and the eight D6 persistence writers —
+ * is enforced ENGINE-SIDE on every request, so this weakens nothing.
+ */
+export function localViewChipAccessibilityLabel(effectiveActive: boolean): string {
+  return effectiveActive
+    ? 'Engine offline — show the edit view on this iPad only. Nothing on the rig changes.'
+    : 'Engine offline — show the performance view on this iPad only. Nothing on the rig changes.';
 }
 
 // ── Summon outcome (what a SOLO press DOES, given the dialog UI state) ─────
@@ -288,7 +499,7 @@ export function exitChoiceControllerHint(buttonName: string): string {
 // exit sheet open → close it. The pad never blind-toggles the engine — every
 // enter still goes through the confirm flow, and the keep-vs-restore choice is
 // answered on the iPad. Only the FIRST subscriber is notified: the
-// PerformanceModeControl is mounted in BOTH headers (deck + mixer) and RN's
+// PerformanceModeControl is mounted once in the app-wide sidebar and RN's
 // Modal overlays globally, so one handler is enough and two would stack
 // duplicate sheets. Pure module state (no React/transport imports) so vitest
 // pins the semantics in plain Node.

@@ -36,7 +36,9 @@ const h = createEngineHarness({
   portBase: 7420,
   portSpan: 60,
   // Black-hole sACN so the spawned engine can never reach the live sim bridge.
-  extraArgs: ['--dest', '127.0.0.9'],
+  // TEST-NET-1 (RFC 5737) — a loopback address is NOT a black hole: the sim's
+  // sACN receiver binds every local interface, so loopback frames reach it.
+  extraArgs: ['--dest', '192.0.2.9'],
 });
 const { api } = h;
 

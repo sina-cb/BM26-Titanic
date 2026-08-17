@@ -10,9 +10,11 @@
  * (the deck's only true dropdown: a tap-to-open <Modal transparent> list with
  * label+hint rows, current-item highlight, `▾` trigger). Two deliberate
  * departures from that source:
- *   1. Colours come from usePalette() tokens ONLY — the source hard-codes
- *      `rgba(95,35,199,…)` washes; per .agent/os/ui_design.md we take the wash
- *      from C.primaryContainer and never copy hex literals.
+ *   1. Colours come from usePalette() tokens ONLY — the source hard-coded
+ *      `rgba(95,35,199,…)` washes; per .agent/os/ui_design.md we never copy
+ *      hex literals. Since docs/54 both surfaces now use the SHARED
+ *      `accentWash(primary)` on-state, so the two dropdowns are one control
+ *      with two lists rather than two look-alikes.
  *   2. The trigger is `minHeight:44` (the deck's 44pt touch floor).
  *
  * Presentational only — props in, `onSelect(id)` out. The parent (index.tsx)
@@ -22,6 +24,8 @@
 import React, { useState } from 'react';
 import { Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
+import { accentWash, useGlobalStyles } from '@/styles/globalStyles';
+import { Radius } from '@/constants/theme';
 
 /** Per-profile display metadata. Keyed by the engine profile id. An id that is
  *  NOT in this table renders as its raw uppercased id (deterministic — NOT a
@@ -49,8 +53,10 @@ export function AutopilotProfilePicker({
   disabled?: boolean;
 }) {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
   const [open, setOpen] = useState(false);
   const currentMeta = metaFor(profile);
+  const on = accentWash(C.primary);
 
   return (
     <>
@@ -67,23 +73,23 @@ export function AutopilotProfilePicker({
           paddingHorizontal: 12,
           paddingVertical: 10,
           minHeight: 44,
-          borderRadius: 8,
+          borderRadius: Radius.control,
           borderWidth: 1,
-          borderColor: disabled ? C.ghostBorder : C.primary,
-          backgroundColor: disabled ? 'transparent' : C.primaryContainer,
+          borderColor: disabled ? C.ghostBorder : on.borderColor,
+          backgroundColor: disabled ? 'transparent' : on.backgroundColor,
           opacity: disabled ? 0.4 : 1,
           flex: 1,
         }}
       >
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: disabled ? C.icon : C.primary, letterSpacing: 0.8, flex: 1,
+          color: disabled ? C.icon : on.color, letterSpacing: 0.8, flex: 1,
         }}>
           {currentMeta.label}
         </Text>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: disabled ? C.icon : C.primary,
+          color: disabled ? C.icon : on.color,
         }}>▾</Text>
       </TouchableOpacity>
       <Modal transparent visible={open} animationType="fade" onRequestClose={() => setOpen(false)}>
@@ -93,11 +99,9 @@ export function AutopilotProfilePicker({
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
-            style={{
-              width: 320, maxHeight: '80%',
-              backgroundColor: C.surfaceContainerLowest, padding: 20,
-              borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
-            }}
+            // The shared `panel` recipe — same modal surface as every other
+            // overlay on the deck (docs/54 row 19).
+            style={[globalStyles.panel, { width: 320, maxHeight: '80%', padding: 20 }]}
           >
             <Text style={{
               fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14,
@@ -118,14 +122,14 @@ export function AutopilotProfilePicker({
                     style={{
                       paddingHorizontal: 14, paddingVertical: 12,
                       minHeight: 44, justifyContent: 'center',
-                      borderRadius: 8, marginBottom: 6,
-                      backgroundColor: active ? C.primaryContainer : 'transparent',
-                      borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+                      borderRadius: Radius.control, marginBottom: 6,
+                      backgroundColor: active ? on.backgroundColor : 'transparent',
+                      borderWidth: 1, borderColor: active ? C.borderStrong : C.ghostBorder,
                     }}
                   >
                     <Text style={{
                       fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13,
-                      color: active ? C.primary : C.text, letterSpacing: 0.8,
+                      color: active ? on.color : C.text, letterSpacing: 0.8,
                     }}>
                       {meta.label}
                     </Text>
