@@ -178,8 +178,8 @@ export function beforeRender(delta) {
   rotStep = floor(rotPhase);
 }
 
-export function render3D(index, xIn, yIn, zIn) {
-  var nx = clamp(xIn, 0.0, 1.0);
+export function render3D(index, x, y, z) {
+  var nx = clamp(x, 0.0, 1.0);
 
   // ── Which of the five colours does this pixel wear? ──────────────────────
   // Position gives five bands along the ship; sectionId offsets them so

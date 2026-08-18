@@ -47,9 +47,7 @@ import {
   DECK_WINDOW_TITLES,
   DECK_WORKSPACE_LAYOUT_KEY,
   DEFAULT_LAYOUT,
-  PERF_BAR_CAPTION,
   PERF_HIDDEN_WINDOWS,
-  PIXELS_BAR_CAPTION,
   PIXELS_SUPPRESSES,
   PROTECTED_WINDOW,
   effectiveOpenWindows,
@@ -344,7 +342,8 @@ export interface DeckWorkspaceBarProps {
   onOpen: (id: DeckSurfaceId) => void;
   onClose: (id: DeckSurfaceId) => void;
   /** Performance overlay active — PARAMETERS/AUTOPILOT chips are SUPPRESSED
-   *  and one static caption stands in their place (docs/55 D3). */
+   *  (docs/55 D3). Silently: report _308 removed the explainer caption that
+   *  used to stand in their place. */
   perfActive?: boolean;
   /** Rendered OUTSIDE the horizontal chip ScrollView, right-aligned, and
    *  never scrolled away or clipped (docs/63 §3.2) — this is where the
@@ -421,27 +420,12 @@ export const DeckWorkspaceBar = React.memo(function DeckWorkspaceBar(
         {rail.map((id) => (
           <WindowChip key={id} id={id} open={false} onPress={onOpen} />
         ))}
-        {/* D3: where the two suppressed chips were, ONE static caption. The
-            windows are deliberately unreachable during a show, so no chip
-            pretends otherwise — but "where did my windows go" still has an
-            answer on the same row they vanished from. */}
-        {perfActive ? (
-          <>
-            <View style={[styles.divider, { backgroundColor: C.borderStrong }]} />
-            <Text style={[styles.railCaption, { color: C.icon }]}>{PERF_BAR_CAPTION}</Text>
-          </>
-        ) : null}
-        {/* docs/63 §2.4: while PIXELS is effectively shown, the OUTPUT chip
-            is absent from BOTH the open row and the rail regardless of the
-            operator's persisted preference for it, so this caption's wording
-            is true either way — it renders on `pixelsShown` alone, and can
-            appear alongside the perf caption above. */}
-        {pixelsShown ? (
-          <>
-            <View style={[styles.divider, { backgroundColor: C.borderStrong }]} />
-            <Text style={[styles.railCaption, { color: C.icon }]}>{PIXELS_BAR_CAPTION}</Text>
-          </>
-        ) : null}
+        {/* Report _308, operator order: the perf-suppression and PIXELS-
+            suppression explainer captions that used to trail this row are
+            GONE. Both suppressions are silent — the chips leave the row and
+            nothing narrates their absence. The suppression logic itself
+            (`effectiveOpenWindows`/`effectiveShownBars`/`rail`, above) is
+            unchanged. */}
       </ScrollView>
       {trailing !== undefined ? <View style={styles.trailingCluster}>{trailing}</View> : null}
     </View>

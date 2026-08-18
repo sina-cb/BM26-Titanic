@@ -516,7 +516,7 @@ export const GLOBAL_EFFECT_LIBRARY = {
     singleton: true,
     safetySensitive: false,
     presets: {
-      hold:    { label: 'Hold',     params: { holdFadeMs: 0 },    defaultBehavior: 'toggle' },
+      hold:    { label: 'Hold',     params: { holdFadeMs: 0 },    defaultBehavior: 'hold' },
       fade_2s: { label: 'Fade 2s',  params: { holdFadeMs: 2000 }, defaultBehavior: 'toggle' },
       stutter: { label: 'Stutter',  params: { holdFadeMs: 0 },    defaultBehavior: 'toggle' },
     },

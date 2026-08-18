@@ -51,6 +51,11 @@ import {
 import { topicForType, TOPICS } from './ws_topic_routing.js';
 import { LOCKED_SIZE, SIZE_LOCK_KEY, SIZE_LOCK_REASON, SIZE_LOCK_MESSAGE } from './size_lock.js';
 import { TimelineService, buildOverview } from './timeline/timeline_service.js';
+import {
+  isReadOnlyTimelineBodyRequest,
+  isTimelineAuthorityMutation,
+} from './timeline/http_ownership.js';
+import { createTimelinePreemptionGate } from './timeline/timeline_preemption_gate.js';
 import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
 import { MoodSource } from './timeline/mood_source.js';
 import {
@@ -430,6 +435,8 @@ const autoGroupFields = (ap) => ({
 // so a "5 minute" or "1 ms" fade can never reach the render loop.
 export const DECK_TRANSITION_MIN_MS = 50;
 export const DECK_TRANSITION_MAX_MS = 30000;
+export const LIVE_TOUCH_PATTERN_TRANSITION_MS = 500;
+export const LIVE_TOUCH_PATTERN_TRANSITION_MODE = 'trans_crossfade';
 
 /**
  * Send a JSON error response that can NEVER write headers twice.
@@ -933,6 +940,37 @@ function reachableUrls(port) {
   return ips.map(ip => `http://${ip}:${port}`);
 }
 
+export function activeColorParamCenter(paramCenter, liveTouchSession) {
+  if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
+  if (!liveTouchSession || !liveTouchSession.getState().active) return paramCenter;
+  if (!liveTouchSession.paramCenter) {
+    throw new Error('active Live Touch session has no private ParamCenter');
+  }
+  return liveTouchSession.paramCenter;
+}
+
+export function seedColorAutopilotFromActiveSurface(
+  colorAutopilot,
+  paramCenter,
+  liveTouchSession,
+) {
+  const renderedParamCenter = activeColorParamCenter(paramCenter, liveTouchSession);
+  const params = {
+    colorPalette1: renderedParamCenter.get('colorPalette1'),
+    colorPalette2: renderedParamCenter.get('colorPalette2'),
+  };
+  colorAutopilot.seedCurrentParams(params);
+  return params;
+}
+
+// Version 2 requires the engine-owned canonical Performance catalog and
+// session overlay authority. Older engines must fail the panel handshake.
+export const LIVE_TOUCH_PROTOCOL_VERSION = 2;
+
+export function liveTouchProtocolStatus() {
+  return { liveTouchProtocolVersion: LIVE_TOUCH_PROTOCOL_VERSION };
+}
+
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
   const { mixer, wasmHost, paramRouter, paramCenter, model } = engineCore;
   const liveTouchSession = engineCore.liveTouchSession || null;
@@ -986,8 +1024,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the same millisecond producing the same `ch_<Date.now()>` id.
   let channelIdCounter = 0;
 
+  function isLiveTouchParamChannel(channel) {
+    return !!(channel && liveTouchSession
+      && (channel.id === 'live_touch' || channel.id === '__live_touch_swap__'));
+  }
+
   function onChannelCompiled(channel, source = null) {
-    const channelParamCenter = channel && channel.id === 'live_touch' && liveTouchSession
+    const channelParamCenter = isLiveTouchParamChannel(channel)
       ? liveTouchSession.paramCenter
       : paramCenter;
     if (channelParamCenter) {
@@ -1055,7 +1098,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     const { defaults, computed } = parsePatternDefaults(src);
     const sliderExports = wasmHost.getExports(channel.handle).filter(e => e.kind === 1);
-    const channelParamCenter = channel.id === 'live_touch' && liveTouchSession
+    const channelParamCenter = isLiveTouchParamChannel(channel)
       ? liveTouchSession.paramCenter
       : paramCenter;
     const noDefault = [];
@@ -1163,7 +1206,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    * wins over any per-pattern state.
    */
   function finalizeCpcValues(channel) {
-    const channelParamCenter = channel && channel.id === 'live_touch' && liveTouchSession
+    const channelParamCenter = isLiveTouchParamChannel(channel)
       ? liveTouchSession.paramCenter
       : paramCenter;
     if (channelParamCenter) {
@@ -5191,6 +5234,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         ownerId,
         ready: !!(live && live.handle),
         pattern: live ? live.pattern : null,
+        patternTransition: mixer.getLiveTouchPatternTransitionState
+          ? mixer.getLiveTouchPatternTransitionState()
+          : null,
+        sessionRevision: liveTouchSession
+          ? liveTouchSession.getState().revision
+          : null,
       },
     };
   }
@@ -5215,6 +5264,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   function installLiveTouchPattern(requestedPattern, entry = null) {
+    if (mixer.isLiveTouchPatternSwapInFlight()) {
+      const error = new Error('Live Touch base transition is already in flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
     const patternName = resolvePatternName(requestedPattern);
     const source = loadPattern(patternsDir, patternName);
     const compiled = wasmHost.compile(source);
@@ -5266,7 +5320,78 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return channel;
   }
 
+  function startRetainedLiveTouchPatternTransition(requestedPattern, entry = null) {
+    if (!liveTouchSession || !liveTouchSession.getState().active) {
+      throw new Error('Live Touch retained pattern transition requires an active session');
+    }
+    const patternName = resolvePatternName(requestedPattern);
+    const source = loadPattern(patternsDir, patternName);
+    const compiled = wasmHost.compile(source);
+    if (!compiled.ok) {
+      throw new Error(`Live Touch pattern '${patternName}' failed to compile: ${compiled.error}`);
+    }
+
+    let incoming = null;
+    let localControls = null;
+    let transitionId = null;
+    try {
+      incoming = mixer.prepareLiveTouchPatternSwap({
+        newHandle: compiled.handle,
+        patternName,
+      });
+      onChannelCompiled(incoming, source);
+      if (entry) {
+        playlistManager.applyEntryDefaults(
+          incoming,
+          entry,
+          wasmHost,
+          paramRouter,
+          liveTouchSession.paramCenter,
+        );
+      }
+      finalizeCpcValues(incoming);
+      localControls = playlistManager.captureDefaults(
+        incoming,
+        wasmHost,
+        liveTouchSession.paramCenter,
+      );
+      transitionId = mixer.startLiveTouchPatternSwap({
+        onComplete: () => {
+          const live = mixer.getLiveTouchChannel();
+          liveTouchSession.paramCenter.unregisterChannel('__live_touch_swap__');
+          liveTouchSession.unregisterLiveChannel();
+          liveTouchSession.registerLiveChannel(live, { apply: false });
+          liveTouchSession.notePatternStaged();
+        },
+        onCancel: () => {
+          liveTouchSession.paramCenter.unregisterChannel('__live_touch_swap__');
+        },
+      });
+    } catch (error) {
+      if (liveTouchSession && liveTouchSession.paramCenter) {
+        liveTouchSession.paramCenter.unregisterChannel('__live_touch_swap__');
+      }
+      if (mixer.getInactiveLiveTouchChannel && mixer.getInactiveLiveTouchChannel()) {
+        mixer.cancelLiveTouchPatternSwap();
+      }
+      throw error;
+    }
+
+    return {
+      channel: mixer.getLiveTouchChannel(),
+      incoming,
+      localControls,
+      transitionId,
+      transition: mixer.getLiveTouchPatternTransitionState(),
+    };
+  }
+
   mixer.onLayerSettingsChange = change => {
+    if (change.event === 'started' && change.state && change.state.transition
+        && change.state.transition.from === LAYER_SETTING_IDS.LIVE_TOUCH
+        && change.state.transition.to !== LAYER_SETTING_IDS.LIVE_TOUCH) {
+      mixer.cancelLiveTouchPatternSwap();
+    }
     if (change.event === 'completed' && change.detail &&
         change.detail.from === LAYER_SETTING_IDS.LIVE_TOUCH &&
         change.detail.to !== LAYER_SETTING_IDS.LIVE_TOUCH) {
@@ -5292,6 +5417,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // paint is never touched by this lifecycle.
       }
     }
+    broadcastLayerSettings(change.event !== 'progress');
+  };
+  mixer.onLiveTouchPatternSwapChange = change => {
     broadcastLayerSettings(change.event !== 'progress');
   };
 
@@ -5369,7 +5497,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     activateLiveBrightness(ownerId);
     if (liveTouchSession) {
       try {
-        liveTouchSession.begin(ownerId, paramCenter);
+        liveTouchSession.begin(ownerId, paramCenter, {
+          performanceModeActive: performanceMode.active,
+        });
       } catch (error) {
         resetLiveBrightness(ownerId);
         throw error;
@@ -5648,6 +5778,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    */
   function rejectTouchControlLeaseConflict(req, res) {
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return false;
+    if (isReadOnlyTimelineBodyRequest(req.method, req.url)) return false;
+    // Timeline authority was already arbitrated by the async preemption gate.
+    // A stale Touch header must not demote it to the generic 409 path.
+    if (isTimelineAuthorityMutation(req.method, req.url)) return false;
     if (TOUCH_CONTROL_EMERGENCY_PATHS.has(req.url)) return false;
 
     const rawOwner = req.headers[TOUCH_CONTROL_OWNER_HEADER];
@@ -5686,6 +5820,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    */
   function installLiveTouchTimelineActivityResponse(req, res) {
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
+    if (isReadOnlyTimelineBodyRequest(req.method, req.url)) return;
+    if (isTimelineAuthorityMutation(req.method, req.url)) return;
     if (TOUCH_CONTROL_EMERGENCY_PATHS.has(req.url)) return;
     const rawOwner = req.headers[TOUCH_CONTROL_OWNER_HEADER];
     const ownerId = Array.isArray(rawOwner) ? rawOwner[0] : rawOwner;
@@ -6200,7 +6336,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // onSchedule hook cover every config change).
   function writeColorPaletteParams(params) {
     if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
-    for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
+    for (const k in params) paramCenter.setColorAutopilotFrame(k, params[k]);
     // docs/70 §4.2 W3 fan-out (recon option A): an ARMED Live Touch session
     // renders from its OWN private ParamCenter, and ARM source-locks the
     // SHARED one above to 'api' for the whole armed session — so every
@@ -6220,7 +6356,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (liveTouchSession && liveTouchSession.getState().active) {
       const livePc = liveTouchSession.paramCenter;
       for (const k in params) {
-        const result = livePc.set(k, params[k], 'colorAutopilot');
+        const result = livePc.setColorAutopilotFrame(k, params[k]);
         // This private centre carries no source lock, so a refusal here is a
         // real bug, not the expected shared-CPC behaviour above — codex P0
         // says surface it, not swallow it. But this runs per tween frame
@@ -6350,10 +6486,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // that first slew would snap. Nothing in setState touches `_currentParams`,
     // so the palettes path is byte-identical either way.
     if (validated.active && paramCenter) {
-      colorAutopilot.seedCurrentParams({
-        colorPalette1: paramCenter.get('colorPalette1'),
-        colorPalette2: paramCenter.get('colorPalette2'),
-      });
+      seedColorAutopilotFromActiveSurface(colorAutopilot, paramCenter, liveTouchSession);
     }
     colorAutopilot.setState(validated);
     broadcastColorAutopilot();
@@ -6372,10 +6505,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   function timelineSetColorAutopilot(wire) {
     const out = setColorAutopilot(wire);
     if (wire && wire.active && paramCenter) {
-      colorAutopilot.seedCurrentParams({
-        colorPalette1: paramCenter.get('colorPalette1'),
-        colorPalette2: paramCenter.get('colorPalette2'),
-      });
+      seedColorAutopilotFromActiveSurface(colorAutopilot, paramCenter, liveTouchSession);
       // Fire-and-forget: the crossfade tween schedules its own frames. A throw
       // here (e.g. unknown palette) can't happen — the ids were validated above.
       colorAutopilot.triggerNext();
@@ -6838,6 +6968,57 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Always constructed: shows are scene DATA and the tab must be reachable
   // even on an engine with the timeline switched off. `timeline: null` in that
   // case simply means there is no plan to take over.
+  // Explicit Timeline mutations outrank an armed Live Touch desk. This gate is
+  // release-only by design: it clears and confirms the lower-priority ARM/source
+  // lock, then the original route performs the one requested Timeline operation.
+  // A blanket resume here would briefly apply the old plan before activate,
+  // travel, takeover, cue-fire, or AUTO OFF, and would double-run RESUME itself.
+  const timelinePreemptionGate = createTimelinePreemptionGate({
+    currentLiveTouchOwner: () => currentArmLeaseOwner(),
+    forceDisarmLiveTouch: operation => forceDisarmLiveTouchForTimeline(operation),
+    confirmLiveTouchReleased: () => armLease.size === 0 && currentArmLeaseOwner() === null,
+  });
+  let timelinePriorityDispatches = 0;
+
+  function holdTimelinePriorityUntilResponse(res) {
+    let released = false;
+    timelinePriorityDispatches += 1;
+    const release = () => {
+      if (released) return;
+      released = true;
+      timelinePriorityDispatches = Math.max(0, timelinePriorityDispatches - 1);
+    };
+    res.once('finish', release);
+    res.once('close', release);
+  }
+
+  async function rejectIfTimelinePreemptionFails(req, res) {
+    if (!isTimelineAuthorityMutation(req.method, req.url)) return false;
+    // Preserve the route's authoritative 503 timeline-disabled response without
+    // changing Live Touch state when no Timeline service can execute the request.
+    if (!timelineService) return false;
+
+    const heldBy = currentArmLeaseOwner();
+    try {
+      await timelinePreemptionGate.preempt(`${req.method} ${req.url}`);
+      // Keep the higher authority through body parsing and asynchronous route
+      // completion. Otherwise Live Touch could re-arm after confirmed release
+      // but before the original Timeline mutation actually commits.
+      holdTimelinePriorityUntilResponse(res);
+      return false;
+    } catch (error) {
+      console.error(`  [timelinePriority] PREEMPT FAILED for ${req.method} ${req.url}: ` +
+        `${error && error.message ? error.message : error}`);
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `Timeline could not take priority over Live Touch: ${error && error.message ? error.message : error}`,
+        code: 'TIMELINE_LIVE_TOUCH_PREEMPT_FAILED',
+        heldBy,
+      }));
+      return true;
+    }
+  }
+
   const specialEventsService = new SpecialEventsService({
     scene: opts.modelName || 'default',
     showsDir: resolveSpecialEventsDir(path.join(patternsDir, '..'), opts.modelName || 'default'),
@@ -7135,7 +7316,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }));
   }
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST, PATCH, DELETE');
     res.setHeader('Access-Control-Allow-Headers',
@@ -7150,6 +7331,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       || req.url === '/captainpad/auth/session'
       || req.url === '/captainpad/auth/logout';
     if (!captainPadAuthRoute) {
+      if (await rejectIfTimelinePreemptionFails(req, res)) return;
       if (rejectTouchControlLeaseConflict(req, res)) return;
       installLiveTouchTimelineActivityResponse(req, res);
     }
@@ -7272,6 +7454,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         getFrameIndex: engineCore.getFrameIndex,
         sharedGlobals: globalsState,
         serializeMixerState,
+        performanceModeActive: performanceMode.active,
       });
       if (handled) return;
     }
@@ -7327,6 +7510,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         service: 'marsin-engine',
+        ...liveTouchProtocolStatus(),
         name: 'MarsinEngine',
         version: '2.0',
         port: opts.port || 6968,
@@ -9925,7 +10109,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           localIndex: p.localIndex,
         });
       }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      });
       res.end(JSON.stringify({
         scene: opts.modelName || null,
         model: opts.modelName || null,
@@ -11327,7 +11514,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }));
       });
     } else if (req.method === 'GET' && req.url === '/layers/state') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      });
       res.end(JSON.stringify(buildLayerSettingsPayload()));
     } else if (req.method === 'POST' && req.url === '/layers/live_touch/prepare') {
       readBody(data => {
@@ -11370,6 +11560,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               getFrameIndex: engineCore.getFrameIndex,
               sharedGlobals: globalsState,
               serializeMixerState,
+              performanceModeActive: performanceMode.active,
             },
           );
 
@@ -11431,6 +11622,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             'LIVE_TOUCH_PREPARE_STALE_REVISION',
             'LIVE_TOUCH_SESSION_INACTIVE',
             'LIVE_TOUCH_NOT_READY',
+            'PERFORMANCE_MODE',
           ].includes(error.code)) status = 409;
           if (error && error.code === 'LIVE_TOUCH_SESSION_UNAVAILABLE') status = 503;
           if (error && [
@@ -11636,6 +11828,40 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             code: 'LIVE_TOUCH_PATTERN_INVALID',
           }));
         }
+        const wantsTransition = data.transition !== undefined;
+        if (wantsTransition) {
+          const transition = data.transition;
+          if (!transition || typeof transition !== 'object' || Array.isArray(transition)
+              || Object.keys(transition).some(key => !['mode', 'durationMs'].includes(key))
+              || transition.mode !== LIVE_TOUCH_PATTERN_TRANSITION_MODE
+              || transition.durationMs !== LIVE_TOUCH_PATTERN_TRANSITION_MS) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: "transition must be exactly {mode:'trans_crossfade',durationMs:500}",
+              code: 'LIVE_TOUCH_PATTERN_TRANSITION_INVALID',
+            }));
+          }
+          const layerState = mixer.getLayerSettingsState();
+          const sessionState = liveTouchSession ? liveTouchSession.getState() : null;
+          if (!sessionState || !sessionState.active
+              || layerState.active !== LAYER_SETTING_IDS.LIVE_TOUCH
+              || layerState.transition !== null) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch base transition requires an armed, steady Live Touch surface',
+              code: 'LIVE_TOUCH_PATTERN_TRANSITION_UNAVAILABLE',
+              current: buildLayerSettingsPayload(),
+            }));
+          }
+          if (mixer.isLiveTouchPatternSwapInFlight()) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch base transition is already in flight',
+              code: 'EBUSY',
+              current: buildLayerSettingsPayload(),
+            }));
+          }
+        }
         // Optional blessed-entry form: {pattern, playlist, entryId}. The two
         // must arrive together — one without the other is an incomplete
         // reference, not a partial request to guess at (codex P0: no
@@ -11666,8 +11892,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (entry._missing) {
               throw new Error(`Pattern missing for entry ${data.entryId}: ${entry.pattern}`);
             }
+            if (entry.pattern !== data.pattern) {
+              throw new Error(
+                `Pattern '${data.pattern}' does not match entry ${data.entryId}: ${entry.pattern}`,
+              );
+            }
           }
-          const channel = installLiveTouchPattern(data.pattern, entry);
+          const retained = wantsTransition
+            ? startRetainedLiveTouchPatternTransition(data.pattern, entry)
+            : null;
+          const channel = retained ? retained.channel : installLiveTouchPattern(data.pattern, entry);
           // Same session-vs-shared param centre idiom as installLiveTouchPattern
           // (channel registers with the SESSION's private centre while Live
           // Touch owns it) — reused here (not re-derived ad hoc) so the
@@ -11675,10 +11909,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const responseParamCenter = channel.id === 'live_touch' && liveTouchSession
             ? liveTouchSession.paramCenter
             : paramCenter;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            status: 'ok',
+          const payload = {
+            status: retained ? 'transitioning' : 'ok',
             pattern: channel.pattern,
+            targetPattern: retained ? retained.incoming.pattern : channel.pattern,
+            transitionId: retained ? retained.transitionId : null,
+            transition: retained ? retained.transition : null,
             sessionRevision: liveTouchSession
               ? liveTouchSession.getState().revision
               : null,
@@ -11688,13 +11924,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // values (the WASM VM has no get_var cwrap; see its handler),
             // so this is the only place a caller can observe what actually
             // landed on the channel.
-            localControls: playlistManager.captureDefaults(
-              channel, wasmHost, responseParamCenter,
-            ),
+            localControls: retained
+              ? retained.localControls
+              : playlistManager.captureDefaults(channel, wasmHost, responseParamCenter),
             timing: {
               stageMs: Number((performance.now() - stageStartedAt).toFixed(3)),
             },
-          }));
+          };
+          res.writeHead(retained ? 202 : 200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(payload));
         } catch (error) {
           // A rejected reference (bad playlist/entry, missing pair, compile
           // failure) is resolved/validated BEFORE installLiveTouchPattern
@@ -11706,10 +11944,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const errorParamCenter = existing && existing.id === 'live_touch' && liveTouchSession
             ? liveTouchSession.paramCenter
             : paramCenter;
-          res.writeHead(400, { 'Content-Type': 'application/json' });
+          const status = error && error.code === 'EBUSY' ? 409 : 400;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             error: String(error && error.message ? error.message : error),
-            code: 'LIVE_TOUCH_PATTERN_INVALID',
+            code: error && error.code ? error.code : 'LIVE_TOUCH_PATTERN_INVALID',
             localControls: existing && existing.handle
               ? playlistManager.captureDefaults(existing, wasmHost, errorParamCenter)
               : null,
@@ -11773,12 +12012,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // One ordered per-scene playlist of Live Touch presets. `state` is an
     // opaque blob the panel owns (palette/scheme/follow/groups/fx/spatial/
     // mode/background/colour) — this layer stores/returns it verbatim and
-    // never interprets it. List/create/rename/reorder/delete are NOT
-    // ARM-gated (docs/70 D11): a preset is a staging document, not a lease
-    // bypass — recall itself is a panel-local stage, and any engine WRITE a
-    // recall drives goes through the existing ARM-gated control routes
-    // above, never through this manager. No engine-side "apply preset"
-    // route exists here on purpose (see live_touch_preset_manager.js).
+    // never interprets it. Mutations pass through the global HTTP lease gate
+    // before this router: an armed desk requires its current owner header,
+    // while an unowned or stale request is refused without touching the
+    // document. Recall remains panel-local and any engine WRITE it drives goes
+    // through the existing ARM-gated control routes above. No engine-side
+    // "apply preset" route exists here on purpose (see
+    // live_touch_preset_manager.js).
     } else if (req.method === 'GET' && req.url === '/layers/live_touch/presets') {
       try {
         // Body BEFORE headers — list() reads+validates the whole store and
@@ -15119,6 +15359,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           let landing = null;
           let leaseMutationMs = 0;
           if (d.armed) {
+            if (timelinePreemptionGate.isPending() || timelinePriorityDispatches > 0) {
+              ws.send(JSON.stringify({
+                type: 'touchControlArmedRejected',
+                ownerId,
+                heldBy: 'timeline',
+                reason: 'Timeline priority handoff is in progress',
+              }));
+              return;
+            }
             // ONE DESK AT A TIME. Two panels both believing they are armed is
             // strictly worse than one being told someone else has it: they
             // fight over the same source lock, each disarm hands back state the

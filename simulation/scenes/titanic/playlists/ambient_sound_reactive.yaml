@@ -2472,3 +2472,351 @@ entries:
         curve: easeIn
     midiMappings: []
     notes: null
+  - id: e_crisp_01_orbiting_circle
+    pattern: crisp/01_orbiting_circle
+    label: Crisp - Orbiting Circle
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBodyRadius: 0.56
+      sliderCount: 0.5
+      sliderSpacing: 0.58
+      sliderTrail: 0.46
+      sliderSafetyFloor: 0
+    modulations:
+      - id: mod_sliderBodyRadius_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBodyRadius
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.56
+          - 0.72
+        curve: easeOut
+      - id: mod_sliderSpacing_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderSpacing
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.58
+          - 0.78
+        curve: linear
+      - id: mod_sliderCount_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderCount
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.5
+          - 1
+        curve: easeIn
+    midiMappings: []
+    notes: Nested orbital cartography with eclipse moats and paired sign planetariums.
+  - id: e_crisp_02_dimensional_slicer
+    pattern: crisp/02_dimensional_slicer
+    label: Crisp - Dimensional Slicer
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSliceCount: 0.78
+      sliderRotationPhase: 0.12
+      sliderSliceGap: 0.12
+      sliderKickOffset: 0
+      sliderAxisWarp: 0.22
+    modulations:
+      - id: mod_sliderSliceGap_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderSliceGap
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.12
+          - 0.5
+        curve: easeOut
+      - id: mod_sliderRotationPhase_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderRotationPhase
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.12
+          - 0.42
+        curve: linear
+      - id: mod_sliderKickOffset_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKickOffset
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.72
+        curve: easeIn
+    midiMappings: []
+    notes: Engraved rotating planes with bounded voids and razor-black kerfs.
+  - id: e_crisp_03_magnetic_field_collision
+    pattern: crisp/03_magnetic_field_collision
+    label: Crisp - Magnetic Field Collision
+    defaults:
+      sliderLocalSpeed: 0.2
+      sliderAttractionStrength: 0.56
+      sliderPoleSpacing: 0.62
+      sliderFieldWarp: 0.3
+      sliderCollisionKick: 0
+      sliderTensionStrength: 0
+    modulations:
+      - id: mod_sliderAttractionStrength_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAttractionStrength
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.56
+          - 0.82
+        curve: easeOut
+      - id: mod_sliderFieldWarp_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderFieldWarp
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.56
+        curve: easeOut
+      - id: mod_sliderCollisionKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderCollisionKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.82
+        curve: easeIn
+    midiMappings: []
+    notes: Calm opposing fields compress a black saddle between Cassini cages.
+  - id: e_crisp_06_impossible_corridor
+    pattern: crisp/06_impossible_corridor
+    label: Crisp - Impossible Corridor
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCorridorWidth: 0.48
+      sliderPerspectiveDepth: 0.58
+      sliderRoomScale: 0.42
+      sliderSplitWidth: 0.34
+      sliderSafetyFloor: 0
+    modulations:
+      - id: mod_sliderCorridorWidth_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderCorridorWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.48
+          - 0.68
+        curve: easeOut
+      - id: mod_sliderPerspectiveDepth_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderPerspectiveDepth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.58
+          - 0.74
+        curve: easeOut
+      - id: mod_sliderRoomScale_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderRoomScale
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.42
+          - 0.88
+        curve: easeIn
+    midiMappings: []
+    notes: A black corridor turns through an impossible fold, room, split, and rejoin.
+  - id: e_crisp_08_topology_knot
+    pattern: crisp/08_topology_knot
+    label: Crisp - Topology Knot
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderRibbonWidth: 0.4
+      sliderTightnessAmount: 0.62
+      sliderTwistAmount: 0.48
+      sliderDepthOrder: 0.6
+      sliderRelease: 0.16
+    modulations:
+      - id: mod_sliderRibbonWidth_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderRibbonWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.4
+          - 0.52
+        curve: easeOut
+      - id: mod_sliderTwistAmount_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderTwistAmount
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.48
+          - 0.84
+        curve: easeOut
+      - id: mod_sliderDepthOrder_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderDepthOrder
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.6
+          - 0.72
+        curve: linear
+    midiMappings: []
+    notes: Two contoured ribbons tie through three black undercut crossings.
+  - id: e_crisp_10_geometric_echo
+    pattern: crisp/10_geometric_echo
+    label: Crisp - Geometric Echo
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderEchoSpacing: 0.52
+      sliderShellWidth: 0.3
+      sliderOriginSpread: 0.4
+      sliderDeformationAmount: 0.36
+      sliderEchoPulse: 0
+    modulations:
+      - id: mod_sliderEchoPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderEchoPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: easeIn
+      - id: mod_sliderShellWidth_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderShellWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.58
+        curve: easeOut
+      - id: mod_sliderDeformationAmount_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderDeformationAmount
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.36
+          - 0.48
+        curve: linear
+    midiMappings: []
+    notes: A faceted birth scans through a finite archive of black-separated shells.

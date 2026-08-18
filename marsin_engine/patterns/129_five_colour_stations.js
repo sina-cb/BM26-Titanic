@@ -227,7 +227,7 @@ export function beforeRender(delta) {
   marchStep = floor(marchPhase);
 }
 
-export function render3D(index, xIn, yIn, zIn) {
+export function render3D(index, x, y, z) {
 
   // ── Which of the five colours does this pixel wear? ──────────────────────
   // Blocks of `blockPx` pixels along the strand each take the next colour, so

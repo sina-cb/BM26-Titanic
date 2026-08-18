@@ -82,15 +82,16 @@ describe('Live Touch native transport honesty', () => {
     expect(injectAt).toBeGreaterThan(gateAt);
   });
 
-  it('raises readiness on the panel ready event and clears it on every load start', () => {
+  it('raises readiness from either installed-hook signal and clears it on every load start', () => {
     const source = code(NATIVE_SURFACE);
 
-    expect(source).toMatch(
-      /message\.type === 'touch-control-theme-ready'\)\s*\{\s*panelReadyRef\.current = true;/,
-    );
+    expect(source).toMatch(/message\.type === 'touch-control-theme-ready'[\s\S]*?message\.type === 'touch-control-pixel-verifier-ready'/);
+    expect(source).toMatch(/if \(isPanelReadySignal\) \{[\s\S]*?panelReadyRef\.current = true;[\s\S]*?ready\(\);/);
     // The panel's own RELOAD button, RETRY, and the reload iOS performs after
     // reclaiming a backgrounded WebView all arrive here.
-    expect(source).toMatch(/onLoadStart=\{\(\)\s*=>\s*\{\s*panelReadyRef\.current = false;\s*\}\}/);
+    expect(source).toMatch(
+      /onLoadStart=\{\(\)\s*=>\s*\{[\s\S]*?panelReadyRef\.current = false;[\s\S]*?documentLoadedRef\.current = false;[\s\S]*?pendingReadyMessageRef\.current = null;/,
+    );
     expect(source).toMatch(/const retry = useCallback\(\(\) => \{\s*panelReadyRef\.current = false;/);
   });
 

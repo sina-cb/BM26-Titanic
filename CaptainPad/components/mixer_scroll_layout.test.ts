@@ -4,6 +4,7 @@ import { BAND_HEADER_HEIGHT, MIN_BAND_CANVAS_HEIGHT } from '@/components/mixer/p
 
 import {
   MIXER_BOUNDED_SCROLL_AREA,
+  MIXER_CHANNEL_CARD_MAX_ROW_FRACTION,
   MIXER_CHANNEL_CARD_TRACK,
   MIXER_CHANNEL_CARD_WIDTH,
   MIXER_LANDSCAPE_PARAMS_PANEL_COLLAPSED,
@@ -17,14 +18,14 @@ import {
   MIXER_COMPACT_PORTRAIT_MAX_STRIP_HEIGHT,
   isCompactMixerPortrait,
   mixerChannelContentLayout,
-  mixerChannelRowScrollEnabled,
+  mixerChannelRowSizing,
   mixerLandscapeMediaBandSlot,
   mixerMediaColumnMode,
   mixerParamsColumnMode,
 } from './mixer_scroll_layout';
 
 describe('Mixer channel row — uniform cards and reachable overflow', () => {
-  it('pins every card to the same narrow width without a flex shorthand', () => {
+  it('keeps the shipped 320pt track as the hard minimum without a flex shorthand', () => {
     expect(MIXER_CHANNEL_CARD_WIDTH).toBe(320);
     expect(MIXER_CHANNEL_CARD_TRACK).toEqual({
       width: 320,
@@ -37,17 +38,69 @@ describe('Mixer channel row — uniform cards and reachable overflow', () => {
     expect('flexBasis' in MIXER_CHANNEL_CARD_TRACK).toBe(false);
   });
 
-  it('enables the native row scroller at three cards and whenever COLORS joins the row', () => {
-    expect(mixerChannelRowScrollEnabled(false, 1, false)).toBe(false);
-    expect(mixerChannelRowScrollEnabled(false, 2, false)).toBe(false);
-    expect(mixerChannelRowScrollEnabled(false, 3, false)).toBe(true);
-    expect(mixerChannelRowScrollEnabled(false, 4, false)).toBe(true);
-    expect(mixerChannelRowScrollEnabled(false, 1, true)).toBe(true);
+  it('caps one channel at 50% and lets two fill the padded, gapped row', () => {
+    expect(MIXER_CHANNEL_CARD_MAX_ROW_FRACTION).toBe(0.5);
+    const one = mixerChannelRowSizing({
+      viewportWidth: 1440,
+      channelCount: 1,
+      horizontalPadding: 16,
+      gapWidths: [],
+      fixedItemWidths: [],
+    });
+    const two = mixerChannelRowSizing({
+      viewportWidth: 1440,
+      channelCount: 2,
+      horizontalPadding: 16,
+      gapWidths: [16],
+      fixedItemWidths: [],
+    });
+
+    expect(one.cardWidth).toBe(704);
+    expect(one.cardWidth).toBe(one.availableChannelWidth * 0.5);
+    expect(one.overflow).toBe(false);
+    expect(two.cardWidth).toBe(696);
+    expect(two.requiredContentWidth).toBe(1440);
+    expect(two.overflow).toBe(false);
   });
 
-  it('keeps the responsive portrait/web threshold at three cards', () => {
-    expect(mixerChannelRowScrollEnabled(true, 2, false)).toBe(false);
-    expect(mixerChannelRowScrollEnabled(true, 3, false)).toBe(true);
+  it('budgets explicit gaps, padding, fixed citizens, and group frames', () => {
+    const layout = mixerChannelRowSizing({
+      viewportWidth: 1600,
+      channelCount: 2,
+      horizontalPadding: 20,
+      gapWidths: [16, 12],
+      fixedItemWidths: [380, 18],
+    });
+
+    expect(layout.availableChannelWidth).toBe(1134);
+    expect(layout.cardWidth).toBe(567);
+    expect(layout.requiredContentWidth).toBe(1600);
+    expect(layout.cardTrack.width).toBe(layout.cardTrack.maxWidth);
+    expect(layout.cardTrack.width).toBe(layout.cardTrack.minWidth);
+  });
+
+  it('keeps all cards at the minimum and reports overflow when fit is too narrow', () => {
+    const layout = mixerChannelRowSizing({
+      viewportWidth: 1024,
+      channelCount: 4,
+      horizontalPadding: 16,
+      gapWidths: [16, 16, 16],
+      fixedItemWidths: [],
+    });
+
+    expect(layout.cardWidth).toBe(320);
+    expect(layout.requiredContentWidth).toBe(1360);
+    expect(layout.overflow).toBe(true);
+  });
+
+  it('fails loudly on malformed geometry', () => {
+    expect(() => mixerChannelRowSizing({
+      viewportWidth: 1024,
+      channelCount: 1.5,
+      horizontalPadding: 16,
+      gapWidths: [],
+      fixedItemWidths: [],
+    })).toThrow('channelCount must be an integer');
   });
 });
 

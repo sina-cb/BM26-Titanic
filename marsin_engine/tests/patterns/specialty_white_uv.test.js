@@ -50,6 +50,13 @@ const WHITE_PATTERNS = [
   '63_white_chase',
   '64_temple_warm_white',
 ];
+// Wave _312 (2026-08-17): 20 white-only conversions live in their own
+// directory and sit in the white_only playlist AFTER the 5 legacy entries.
+// They have their own harness; only the playlist-roster assertion below
+// includes them — the legacy per-pattern checks stay scoped to the 5 above.
+const WHITE_ONLY_WAVE = fs.readdirSync(path.join(PATTERNS_DIR, 'white_only'))
+  .filter((f) => f.endsWith('.js'))
+  .map((f) => `white_only/${f.slice(0, -3)}`);
 const UV_PATTERN = '65_uv_only';
 const ALL_NEW = [...WHITE_PATTERNS, UV_PATTERN];
 const MODELS = ['test_bench', 'titanic'];
@@ -58,11 +65,14 @@ const FRAMES = 60;
 // Fixtures whose channel map has no `u`, so a violet write is dropped by
 // sacn_mapper. Used only to document intent in the UV assertions.
 const SCENES = ['test_bench', 'titanic'];
-const SPECIALTY_PLAYLISTS = ['white_only', 'uv_test'];
-const THEMED_PLAYLISTS = [
-  'tutu_tuesday', 'white_wednesday', 'iceberg_ahead', 'first_class_1912',
-  'deep_sea', 'burn_night', 'temple_white',
-];
+const SPECIALTY_PLAYLISTS = ['white_only', 'uv_test', 'uv_only'];
+// The seven themed playlists from report _13 (tutu_tuesday, white_wednesday,
+// iceberg_ahead, first_class_1912, deep_sea, burn_night, temple_white) were
+// deliberately retired in commit 691f9c3c ("feat: prepare BM readiness
+// controls and show content") — deleted from BOTH scenes as show-content
+// curation. Recover any of them with:
+//   git show 691f9c3c^:simulation/scenes/<scene>/playlists/<name>.yaml
+const THEMED_PLAYLISTS = [];
 
 function readPattern(name) {
   return fs.readFileSync(path.join(PATTERNS_DIR, name + '.js'), 'utf8');
@@ -291,8 +301,8 @@ test('both scenes carry byte-identical copies of every specialty/themed playlist
 test('white_only holds exactly the WHITE family; uv_test holds ONLY the UV spike', () => {
   for (const scene of SCENES) {
     const white = yaml.load(fs.readFileSync(path.join(SCENES_DIR, scene, 'playlists', 'white_only.yaml'), 'utf8'));
-    assert.deepEqual(white.entries.map(e => e.pattern).sort(), [...WHITE_PATTERNS].sort(),
-      `${scene}/white_only.yaml must hold exactly the white family`);
+    assert.deepEqual(white.entries.map(e => e.pattern).sort(), [...WHITE_PATTERNS, ...WHITE_ONLY_WAVE].sort(),
+      `${scene}/white_only.yaml must hold exactly the white family (legacy 5 + wave _312)`);
 
     const uv = yaml.load(fs.readFileSync(path.join(SCENES_DIR, scene, 'playlists', 'uv_test.yaml'), 'utf8'));
     assert.deepEqual(uv.entries.map(e => e.pattern), [UV_PATTERN],
@@ -300,16 +310,20 @@ test('white_only holds exactly the WHITE family; uv_test holds ONLY the UV spike
   }
 });
 
-test('the UV spike is in NO playlist other than uv_test (operator go/no-go pending)', () => {
+test('the UV spike lives ONLY in uv_test and the uv_only program (wave _313)', () => {
+  // 2026-08-17: the operator ordered a full UV ONLY program (wave _313), which
+  // promotes the spike into the dedicated `uv_only` playlist alongside the 19
+  // new patterns/uv_only/* looks. It must still stay out of every OTHER
+  // program (ambient, party, themed) — UV remains a deliberate operator pick.
   for (const scene of SCENES) {
     const dir = path.join(SCENES_DIR, scene, 'playlists');
     for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.yaml'))) {
-      if (f === 'uv_test.yaml') continue;
+      if (f === 'uv_test.yaml' || f === 'uv_only.yaml') continue;
       const doc = yaml.load(fs.readFileSync(path.join(dir, f), 'utf8'));
       const hit = (doc.entries || []).some(e => e && e.pattern === UV_PATTERN);
       assert.equal(hit, false,
-        `${scene}/${f} contains ${UV_PATTERN} — the UV spike is EXPERIMENTAL and must stay out of every program ` +
-        'until the operator approves it on the real fixtures.');
+        `${scene}/${f} contains ${UV_PATTERN} — the UV family belongs only to uv_test/uv_only ` +
+        'until the operator promotes it into a themed program.');
     }
   }
 });

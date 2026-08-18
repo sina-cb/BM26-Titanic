@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <title>Touch Control — Titanic</title>
+<script src="touch_control_endpoint.js?v=2"></script>
+<script src="../../CaptainPad/shared/color_control_core_browser.js?v=1"></script>
 <!--
   TOUCH CONTROL v2 — LAYOUT PROTOTYPE (no rig wiring)
 
@@ -558,7 +560,20 @@ header .readout { font-size: var(--hdr-fs); min-width: 62px; }
    clears 44 on its own text; height does not), the same call already made
    for `.fx-pick`/`.aud-pick` in the effects section above when growing a
    REAL box collided with a budget this wave is not scoped to re-litigate. */
-.spatial-panel .panel-body { padding: 0 12px 8px; }
+.spatial-panel .panel-body {
+  padding: 0 12px 8px;
+  /* The body is the single deliberate scroll owner when expanded Brush rows
+     exceed a half-height panel. The pad keeps touch-action:none, so painting
+     never turns into a nested scroll gesture. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  height: 0;
+  flex: 1 1 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+.spatial-panel.is-spatial-fullscreen .panel-body { height: auto; }
 body.spatial-fullscreen-active { overflow: hidden; }
 .spatial-panel.is-spatial-fullscreen {
   position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh;
@@ -665,6 +680,16 @@ body.spatial-fullscreen-active { overflow: hidden; }
 .panel-body {
   padding: 0 12px 10px; flex: 1; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
+}
+/* Color Hub can share a short landscape row with Spatial. Its body, not a
+   card and not the page, owns the one vertical touch scroll range in that
+   constrained arrangement. */
+.colorhub-panel > .panel-body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 /* Inline constraint notes — these carry real, measured limits. */
@@ -924,7 +949,7 @@ body.spatial-fullscreen-active { overflow: hidden; }
 /* height:44px (not min-height) matches .color-actions above exactly — grid
    items stretch to fill it by default, which is what gives `.action-btn`
    its 44pt row here even though the class itself sets `min-height:0`. */
-.ch-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-bottom: 8px; height: 44px; }
+.ch-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 7px; margin-bottom: 8px; }
 
 .ch-ab-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .ch-ab {
@@ -1173,6 +1198,13 @@ body.spatial-fullscreen-active { overflow: hidden; }
 .brush-summary-val { flex: 1 1 auto; min-width: 0; text-align: left; font-size: .6rem; font-weight: 700; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brush-summary-chev { flex: 0 0 auto; transition: transform .15s ease; }
 .brush-summary[aria-expanded="true"] .brush-summary-chev { transform: rotate(180deg); }
+.brush-cluster {
+  grid-column: 1 / -1; min-width: 0; container-type: inline-size;
+}
+.brush-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px;
+  margin-top: 6px;
+}
 /* SIZE gets its own row: three cells, so the slider takes all the slack and is
    actually draggable on an iPad instead of being crushed by the mode buttons. */
 .draw-row.size-row { grid-template-columns: auto 1fr auto; margin-top: 8px; }
@@ -1221,6 +1253,11 @@ body.spatial-fullscreen-active { overflow: hidden; }
 /* DRAW and INK are no longer in this block — they flank the pad. */
 .sp-controls #xyRow, .sp-controls #recRow {
   grid-template-columns: 40px 1fr;
+}
+.sp-controls #recRow { grid-column: 1 / -1; grid-template-columns: 40px minmax(0,1fr) auto; }
+.sp-controls #recRow .readout {
+  display: block; min-width: 54px; max-width: 94px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: .54rem; text-align: right;
 }
 /* docs/66 W3 / §3.2: ON TIME and SPEED become full-width segmented rows.
    WAS: paired half-width like every other value row here (`.sp-controls` is
@@ -1301,6 +1338,36 @@ body.spatial-fullscreen-active { overflow: hidden; }
 .chips button.is-active {
   background: linear-gradient(180deg, var(--teal), #56cbb4);
   color: #04231d; border-color: transparent; box-shadow: var(--glow-cyan);
+}
+/* The expanded BRUSH editor is one responsive component, not five unrelated
+   auto-grid rows. Each parameter gets the same card, label and 44pt segmented
+   control. Container queries follow the panel's real allocation, including a
+   constrained split, instead of guessing from the viewport width. */
+.brush-grid .draw-row,
+.brush-grid .draw-row.size-row,
+.brush-grid #dutyRow,
+.brush-grid #speedRow {
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 44px;
+  gap: 5px; min-width: 0; min-height: 64px; margin: 0; padding: 6px;
+  align-items: stretch; border: 1px solid var(--border); border-radius: 9px;
+  background: rgba(255,255,255,.035);
+}
+.brush-grid .draw-cap {
+  min-width: 0; font-size: .58rem; line-height: 1.2; text-align: left;
+  letter-spacing: .08em;
+}
+.brush-grid .chips { width: 100%; min-width: 0; gap: 3px; }
+.brush-grid .chips button,
+.brush-grid #strobeDutyChips button,
+.brush-grid #zFaderChips button {
+  min-width: 0; min-height: 44px; height: 44px; padding: 4px 2px;
+  font-size: .56rem; line-height: 1; letter-spacing: .01em;
+}
+@container (min-width: 340px) {
+  .brush-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (min-width: 470px) {
+  .brush-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 /* LET THE GROUPS SHRINK. Half-width cells clipped CLASH and CLEAR off the
    right edge: a flex row will not shrink below its children unless both it and
@@ -1409,9 +1476,10 @@ body.spatial-fullscreen-active { overflow: hidden; }
    `#xyYMode` Y AXIS), which fell through to the same bare-text base rule. */
 .draw-modes button { padding: 5px 9px; font-size: .58rem; border: 1px solid var(--border); background: rgba(255,255,255,.04); }
 
-/* THE STROKE ON THE PAD. Same box as the pixel map so pad space and ink space
-   are identical and the ink lands exactly where the lights it drives are. */
-.ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* Gesture points still feed take/preset policy, but the former full-radius
+   canvas trail was a false second brush. Keep its compatibility node out of
+   rendering; the white contact marker and verified pixel projection are truth. */
+.ink { display: none; }
 
 .bpm-row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 12px; align-items: center; margin-top: 10px; }
 /* The capability line is the point of this picker: two of these three do NOT
@@ -1585,6 +1653,7 @@ body.spatial-fullscreen-active { overflow: hidden; }
    FLAT, not a gradient. A gradient has two ends, and the darker end is the one
    that fails contrast first - measured, the bottom of the gradient dropped the
    preset line to 3.0:1. One colour means one contrast figure to defend. */
+.fx-cell[hidden] { display: none !important; }
 .fx-cell.is-on {
   border-color: var(--live);
   background: var(--live);
@@ -1677,6 +1746,14 @@ select option:checked { background-color: #2a2050; color: #fff; }
 
 /* Audio binding: one signal per effect button and per group fader. */
 .aud-row { display: flex; gap: 3px; align-items: stretch; margin-top: 3px; }
+.aud-row.is-performance-locked,
+.fader-audio.is-performance-locked { opacity: .58; position: relative; }
+.aud-row.is-performance-locked::after,
+.fader-audio.is-performance-locked::after {
+  content: 'EDIT MODE REQUIRED'; position: absolute; inset: 0; display: grid; place-items: center;
+  pointer-events: none; font: 800 8px/1 system-ui,sans-serif; letter-spacing: .07em;
+  color: #ffd56b; text-shadow: 0 1px 2px #000;
+}
 .aud-pick {
   flex: 1 1 auto; min-width: 0; font: 700 8.5px/1 Inter, system-ui, sans-serif;
   letter-spacing: .02em; padding: 3px 2px; border-radius: 5px;
@@ -2923,6 +3000,67 @@ select option:checked { background-color: #2a2050; color: #fff; }
      `.prow`/`.prow > .panel` earlier in this query — same trap, same
      component this time. */
   .fader-strip { gap: 2px; padding: 1px 1px; min-height: 0; }
+
+  /* COLOR HUB (docs/70 W3/_289) landscape-11"-only compaction — W4 bugfix.
+     ROOT CAUSE: `.colorhub-panel` shares this SAME `.prow.prow-top` row as
+     SPATIAL (this block's own header comment above, "REAL box collided
+     with a budget this wave is not scoped to re-litigate"), which caps its
+     `.panel-body` at 367px real height at 1194x834 (MEASURED: panel-header
+     32 + `.ch-tabs` 66 + panel-body's own 6px bottom padding leave 367 for
+     the card). `_289` landed every `.ch-*` row's spacing UNCONDITIONALLY
+     (no media query touches this file's "COLOR HUB panel" block at all,
+     confirmed by grep) — sized for the roomier stacked-portrait layout,
+     never re-checked against this row's tighter landscape share the way
+     SPATIAL/legacy-color's own controls were in the rest of this query.
+     MEASURED (headless, hermetic harness, TWO COLOUR / PALETTE TURNS
+     card): content needs 375px against the 367px budget — an 8px
+     unconditional overrun before a single pixel of real-world variance.
+     The operator's reported defect ("HOLD row half-cut, nothing below it
+     reachable, no scroll") is this same overrun amplified: the DRIVING
+     strip (docs/61 §4.1, shown whenever a family runs from the OTHER
+     card) adds ~62px above the card, MEASURED to inflate the same stack
+     to 437px against the unchanged 367px budget - a 70px overrun that
+     swallows the FADE row and the RUN button whole. `.panel { overflow:
+     hidden }` (base rule, this file's universal panel-clip contract - see
+     the same rule's docstring near the top of the file) is what turns
+     that overrun into invisible, unreachable content instead of a scroll:
+     this file scrolls exactly two things on purpose - the whole page
+     below 900px width (`.content-grid { overflow: auto }`, that same
+     query) and the Groups fader bank's own `.bank-scroll-area` - neither
+     applies to a two-up landscape row, so FIT, not scroll, is the
+     sanctioned remedy here (docs/70 W4 brief).
+     THE FIX below only touches CHROME (margins/padding/gaps) and box
+     sizes on controls that already carry the file's own hit-region
+     `::after` recipe (docs/66 §2.1 - "hit region, not painted box",
+     the block comment directly above `.ch-strip` names this recipe by
+     name for every one of these controls) - every shrunk box's `::after`
+     inset grows by the same amount so the real tappable region never
+     drops below 44x44pt; nothing with a HARD real-box requirement
+     (`.ch-actions`'s 44px "not min-height" real row, `.ch-run`'s 44pt
+     primary action, `.ch-tabs`'s `.mode-toggle` 44pt real tab row) moves.
+     MEASURED total recovered: 76px, closing both the 8px unconditional
+     overrun and the 70px DRIVING-strip overrun with headroom to spare. */
+  .ch-strip { padding: 4px 10px; margin-bottom: 3px; }
+  .ch-tabs.mode-toggle { margin-bottom: 3px; }
+  .ch-hue-strip { height: 20px; margin-bottom: 3px; }
+  .ch-hue-strip::after { inset: -12px 0; }
+  /* `.ch-hue-handle` is a fixed 34px marker straddling the strip's own
+     28px box (`top:-3px`, 3px of grab-handle protruding top and bottom -
+     see its base rule). Shrinking the strip without shrinking the handle
+     to match would leave it hanging 8px further past the strip's new
+     bottom edge, into `.ch-ring`'s row below. 26px keeps the same 3px
+     top/bottom protrusion proportional to the smaller strip (26 = 20 + 2*3). */
+  .ch-hue-handle { height: 26px; }
+  .ch-ring { margin-bottom: 3px; }
+  .ch-swatch-btn { padding: 1px 2px; }
+  .ch-actions { margin-bottom: 3px; }
+  .ch-ab-row { margin-bottom: 3px; }
+  .ch-ab { min-height: 28px; }
+  .ch-ab::after { inset: -8px; }
+  .ch-timing-row { margin-bottom: 3px; }
+  .ch-chip { min-height: 24px; }
+  .ch-chip::after { inset: -10px; }
+  .ch-run { margin-top: 2px; }
 }
 
 /* docs/66 W3 — the SAME hard constraint, at 12.9" landscape (1366x1024).
@@ -2999,10 +3137,28 @@ html.theme-pending body { visibility: hidden; }
 .brand h1 { font-size: .92rem; }
 .pattern-pick {
   grid-area: pattern;
+  position: relative;
   width: 100%; height: 44px; min-height: 44px;
   padding: 0 10px; overflow: visible;
 }
 .pattern-pick .select { min-width: 180px; }
+.pattern-pick .select[aria-busy="true"] { padding-right: 116px; }
+.pattern-state {
+  position: absolute;
+  z-index: 2;
+  right: 34px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: color-mix(in srgb, var(--panel-solid) 88%, var(--accent));
+  color: var(--accent);
+  font: 800 8px/1 var(--sans);
+  letter-spacing: .09em;
+}
 .meter-nums { grid-area: note; justify-self: end; }
 .arm-control {
   grid-area: arm; justify-self: end;
@@ -3107,7 +3263,12 @@ html.theme-pending body { visibility: hidden; }
    changing their delegated handlers or slot safety rules. */
 .effects-panel:not(.is-editing) .fx-pick,
 .effects-panel:not(.is-editing) .aud-row { display: none; }
-.effects-panel:not(.is-editing) .effects-grid { gap: 8px; overflow: hidden; }
+.effects-panel:not(.is-editing) .effects-grid {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(56px, 1fr));
+  gap: 8px; overflow: hidden;
+}
+.effects-panel.is-performance-locked .fx-edit-toggle { display: none !important; }
 .effects-panel.is-editing .effects-grid {
   overflow-y: auto; grid-template-rows: repeat(4, minmax(148px, auto));
 }
@@ -3120,20 +3281,35 @@ html.theme-pending body { visibility: hidden; }
   background: rgba(5, 12, 24, .30);
 }
 .fx-face {
-  width: 100%; min-width: 0; min-height: 44px; position: relative;
+  width: 100%; min-width: 0; min-height: 56px; position: relative;
+  display: grid; grid-template-rows: 1fr auto; align-content: center;
+  padding: 17px 5px 7px; overflow: hidden; touch-action: manipulation;
   border: 0; background: transparent; color: var(--text);
   font-family: inherit;
 }
-.fx-name { color: var(--text); font-size: .78rem; }
-.fx-preset { color: var(--text-soft); font-size: .62rem; }
+.fx-name,
+.fx-preset {
+  display: block; min-width: 0; overflow: visible; text-overflow: clip;
+  white-space: normal; text-align: center;
+}
+.fx-name {
+  color: var(--text); font-size: .72rem; font-weight: 900;
+  line-height: .94; align-self: end;
+}
+.fx-preset { color: var(--text-soft); font-size: .58rem; align-self: start; }
 .fx-state {
   position: absolute; top: 5px; right: 6px;
   padding: 2px 5px; border-radius: 999px;
   border: 1px solid var(--border); color: var(--text-dim);
-  font: 900 7px/1 Inter, system-ui, sans-serif;
+  font: 900 8px/1 Inter, system-ui, sans-serif;
   letter-spacing: .08em;
 }
 .fx-state::before { content: 'OFF'; }
+.fx-cell.is-pending {
+  border-color: var(--yellow); background: rgba(255,216,77,.12);
+}
+.fx-cell.is-pending .fx-state { color: var(--yellow); border-color: rgba(255,216,77,.55); }
+.fx-cell.is-pending .fx-state::before { content: 'WAIT'; }
 .fx-cell.is-on .fx-state {
   border-color: rgba(7,26,20,.45); color: var(--live-ink);
   background: rgba(255,255,255,.48);
@@ -3141,7 +3317,7 @@ html.theme-pending body { visibility: hidden; }
 .fx-cell.is-on .fx-state::before { content: 'ON'; }
 .fx-family {
   position: absolute; left: 6px; top: 5px;
-  color: var(--text-dim); font: 900 7px/1 Inter, system-ui, sans-serif;
+  color: var(--text-dim); font: 900 8px/1 Inter, system-ui, sans-serif;
   letter-spacing: .08em;
 }
 .fx-cell.is-on .fx-family { color: var(--live-ink); }
@@ -3155,6 +3331,27 @@ html.theme-pending body { visibility: hidden; }
 .fx-edit-toggle::after { content: ''; position: absolute; inset: 0; }
 .fx-edit-toggle.is-active { color: #04231d; background: var(--teal); border-color: var(--teal); }
 
+/* GROUPS uses the same dense, horizontal control grammar as the workspace
+   row: one touch-safe toolbar and wide canonical-view faders. The default
+   "Show instruments" profile has five authored views, so it fits without
+   horizontal clipping at the 1024px iPad landscape viewport. */
+.groups-toolbar {
+  min-height: 44px; gap: 8px; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: thin; touch-action: pan-x;
+}
+.groups-toolbar .select,
+.groups-toolbar .chip-sm { height: 44px; min-height: 44px; flex: 0 0 auto; }
+#groupProfileSelect { min-width: 180px; flex: 1 1 220px; }
+.groups-panel.is-profile-mode .groups-toolbar .chip-sm { margin-left: 0; }
+#groupProfileGrid {
+  grid-template-columns: 44px repeat(var(--profile-columns, 5), minmax(72px, 1fr));
+  gap: 4px; overflow-x: auto;
+}
+#groupProfileGrid .fader-strip { padding: 5px 4px; gap: 5px; }
+#groupProfileGrid .fader-track { width: 44px; min-width: 44px; }
+#groupProfileGrid .fader-strip.is-master .fader-track { min-height: 44px; }
+#groupProfileGrid .fader-sw { min-height: 44px; }
+
 @media (max-width: 1120px) {
   :root { --header-h: 56px; }
   .topbar {
@@ -3166,6 +3363,17 @@ html.theme-pending body { visibility: hidden; }
   .brand { max-width: 150px; }
   .brand h1 { font-size: .82rem; }
   .pattern-pick { min-width: 0; }
+  .prow.prow-top { flex: 1.2 1 0; }
+  .prow.prow-bottom { flex: 1 1 0; }
+  .effects-panel:not(.is-editing) .fx-family { display: none; }
+  .effects-panel:not(.is-editing) .fx-name {
+    width: 100%; margin-left: 0; transform: none;
+    font-size: .58rem;
+  }
+  .effects-panel:not(.is-editing) .fx-preset { font-size: .55rem; }
+  #groupProfileGrid .profile-view-strip .fader-checks { display: none; }
+  #groupProfileGrid .profile-view-strip .fader-track { flex: 1 1 44px; min-height: 44px; }
+  #groupProfileGrid .link-count { display: none; }
 }
 
 @media (min-width: 1400px) {
@@ -3229,9 +3437,9 @@ if (window.parent !== window ||
              touch_control_wire.js's populateBackgroundPatternGroup(), which
              also carries the humanized-label fallback and the capability-tier
              label (see that file — this file may only touch this select and
-             its CSS). INSTRUMENTS (128-130) is unchanged (D6). A background
-             swap is a hard cut mid-ARM, same as an instrument swap — no
-             live-channel transition exists for either. -->
+             its CSS). INSTRUMENTS (128-130) is unchanged (D6). While ARMED,
+             either section uses the engine-retained 0.5 s crossfade and the
+             chooser lands only after the engine confirms the new base. -->
         <select class="select" id="patternSel">
           <optgroup label="BACKGROUNDS" id="patternBackgroundGroup">
           </optgroup>
@@ -3241,6 +3449,7 @@ if (window.parent !== window ||
             <option value="129">129 · Five Colour Stations</option>
           </optgroup>
         </select>
+        <span class="pattern-state" id="patternState" hidden></span>
       </div>
     <div class="top-actions">
       <!-- BPM is GLOBAL: tempo drives effects, patterns and the spatial pad
@@ -3469,7 +3678,7 @@ if (window.parent !== window ||
             <button data-rec="loop" title="Play it over and over until you stop it">⟲ LOOP</button>
             <button data-rec="clear" title="Throw the recording away">CLEAR</button>
           </div>
-          <span class="readout" id="recVal">empty</span>
+          <span class="readout" id="recVal" role="status" aria-live="polite">EMPTY</span>
         </div>
 
         <!-- SPEED (was the Z fader beside the pad). The operator asked to drop
@@ -3493,11 +3702,13 @@ if (window.parent !== window ||
              visibility moved, via the is-brush-collapsed class + the
              brushCluster script further down. Session-local only, no
              localStorage key: boot is always collapsed. -->
+        <div class="brush-cluster" id="brushCluster">
         <button type="button" class="brush-summary" id="brushSummary" aria-expanded="false" aria-controls="sizeRow powerRow fadeRow stepRow dutyRow speedRow" title="Show SIZE / POWER / FADE / STEP / ON TIME / SPEED">
           <span class="brush-summary-label">BRUSH</span>
           <span class="brush-summary-val" id="brushSummaryVal">—</span>
           <span class="brush-summary-chev">&#9662;</span>
         </button>
+        <div class="brush-grid" id="brushGrid">
 <div class="draw-row size-row is-brush-collapsed" id="sizeRow">
           <span class="draw-cap">SIZE</span>
           <div class="slider-h" id="brushSize" data-value="0.18"
@@ -3538,6 +3749,8 @@ if (window.parent !== window ||
           <span class="draw-cap">SPEED</span>
           <div class="slider-h" id="zFader" data-value="0.72"><i style="width:72%"></i></div>
           <span class="readout" id="zVal">72%</span>
+        </div>
+        </div>
         </div>
 
         <!-- W2 DECLUTTER (docs/65 §2.1/§2.2): the rows above collapse per
@@ -3589,9 +3802,7 @@ if (window.parent !== window ||
               <div class="xy-grid"></div>
               <div class="xy-cross"></div>
               <canvas class="pixmap" id="pixMap" aria-hidden="true"></canvas>
-              <div class="pixel-map-error" id="pixelMapError" role="alert">
-                PIXEL VIEW UNAVAILABLE — waiting for source and engine verification
-              </div>
+              <div class="pixel-map-error" id="pixelMapError" role="alert" hidden></div>
               <div class="xy-guide" id="guideH" style="left:0;right:0;height:1px;top:50%"></div>
               <div class="xy-guide" id="guideV" style="top:0;bottom:0;width:1px;left:50%"></div>
               <!-- THE STROKE, drawn on top of the pixel map so the operator can
@@ -3599,7 +3810,7 @@ if (window.parent !== window ||
                    rate the ship does. Under the handle so the live point still
                    reads clearly, pointer-events:none so it can never eat a drag. -->
               <canvas class="ink" id="inkTrail" aria-hidden="true"></canvas>
-              <div class="xy-handle" id="xyHandle" style="left:70%;top:35%"></div>
+              <div class="xy-handle" id="xyHandle" style="left:70%;top:35%" hidden></div>
               <!-- W2 DECLUTTER (docs/65 §2.3): VIEW/PAN/zoom/FIT moved here
                    from a sibling row above .xy-frame, so they can anchor to
                    the pad's own top-right corner and cost 0px in flow when
@@ -3905,7 +4116,16 @@ if (window.parent !== window ||
   <!-- ── Footer ─────────────────────────────────────────────────────────── -->
 </div>
 
-<script src="touch_control_pixel_views.js"></script>
+<script>
+/* The native iPad WebView may retain a same-URL script across a page reload.
+   Pixel verification and ARM must execute the same deployed lifecycle code as
+   this document, so the safety module is deliberately cache-busted just like
+   touch_control_wire.js at the end of the page. Its JSON/source reads remain
+   independently `cache:'no-store'`. */
+document.write('<script src="../../CaptainPad/shared/pixel_view_projection.js?v=1"><\/script>');
+document.write('<script src="touch_control_pixel_views.js?v=' + Date.now() + '"><\/script>');
+document.write('<script src="touch_control_take_state.js?v=' + Date.now() + '"><\/script>');
+</script>
 <script>
 /* Prototype interactions only — nothing here talks to the engine.
    Enough behaviour to judge whether the layout FEELS right under a finger. */
@@ -4081,19 +4301,61 @@ if (window.parent !== window ||
   var xyHandle = document.getElementById('xyHandle');
   var gh = document.getElementById('guideH');
   var gv = document.getElementById('guideV');
-  /* MULTI-TOUCH WITHOUT TELEPORTS. Each pointer gets a stable visual handle;
-     the wire and engine carry the same pointer ids with independent sweep
-     origins, so no sample can synthesize a line between two fingers. */
+  /* ONE PHYSICAL CONTACT. Multi-touch Spatial painting is deliberately deferred
+     until after field stability. Every page layer asks this gate about the same
+     raw pointer id, so the DOM marker, canonical preview and engine wire cannot
+     independently admit different fingers. */
+  var SPATIAL_PLAYBACK_CONTACT = 'take-playback';
+  var spatialPrimaryContact = null;
+  var spatialRefusedContacts = new Set();
+  function reportExtraSpatialContact(pointerId) {
+    if (spatialRefusedContacts.has(pointerId)) return;
+    spatialRefusedContacts.add(pointerId);
+    document.dispatchEvent(new CustomEvent('panelerror', {
+      detail: { message: 'SPATIAL accepts one contact; the extra touch was ignored' },
+    }));
+  }
+  window.TouchSpatialContactGate = {
+    begin: function (pointerId) {
+      if (typeof pointerId !== 'number' || Number.isNaN(pointerId)) return false;
+      if (spatialPrimaryContact === null) spatialPrimaryContact = pointerId;
+      if (spatialPrimaryContact === pointerId) return true;
+      reportExtraSpatialContact(pointerId);
+      return false;
+    },
+    owns: function (pointerId) { return spatialPrimaryContact === pointerId; },
+    beginPlayback: function () {
+      if (spatialPrimaryContact === null) spatialPrimaryContact = SPATIAL_PLAYBACK_CONTACT;
+      if (spatialPrimaryContact === SPATIAL_PLAYBACK_CONTACT) return true;
+      reportExtraSpatialContact(SPATIAL_PLAYBACK_CONTACT);
+      return false;
+    },
+    ownsPlayback: function () { return spatialPrimaryContact === SPATIAL_PLAYBACK_CONTACT; },
+    release: function (pointerId) {
+      if (spatialPrimaryContact === pointerId) spatialPrimaryContact = null;
+      spatialRefusedContacts.delete(pointerId);
+    },
+    releasePlayback: function () {
+      if (spatialPrimaryContact === SPATIAL_PLAYBACK_CONTACT) spatialPrimaryContact = null;
+      spatialRefusedContacts.delete(SPATIAL_PLAYBACK_CONTACT);
+    },
+    forgetRejected: function (pointerId) { spatialRefusedContacts.delete(pointerId); },
+    clear: function () {
+      spatialPrimaryContact = null;
+      spatialRefusedContacts.clear();
+    },
+    state: function () {
+      return {
+        primary: spatialPrimaryContact,
+        refusedCount: spatialRefusedContacts.size,
+      };
+    },
+  };
   var padPointers = new Map();
   function handleForPointer(pointerId) {
     var current = padPointers.get(pointerId);
     if (current && current.handle) return current.handle;
-    var handle = padPointers.size === 0 ? xyHandle : xyHandle.cloneNode(false);
-    if (handle !== xyHandle) {
-      handle.removeAttribute('id');
-      handle.classList.add('is-secondary');
-      pad.appendChild(handle);
-    }
+    var handle = xyHandle;
     handle.hidden = false;
     padPointers.set(pointerId, { handle: handle });
     return handle;
@@ -4108,6 +4370,7 @@ if (window.parent !== window ||
     gv.style.left = px + '%'; gh.style.top = py + '%';
   }
   pad.addEventListener('pointerdown', function (e) {
+    if (!window.TouchSpatialContactGate.begin(e.pointerId)) return;
     try { pad.setPointerCapture(e.pointerId); } catch (err) { /* capture is optional; the drag still works */ }
     movePointerHandle(e);
   });
@@ -4117,9 +4380,11 @@ if (window.parent !== window ||
   });
   function releasePointerHandle(e) {
     var current = padPointers.get(e.pointerId);
-    if (!current) return;
-    padPointers.delete(e.pointerId);
-    if (current.handle !== xyHandle) current.handle.remove();
+    if (current) {
+      padPointers.delete(e.pointerId);
+      current.handle.hidden = true;
+    }
+    window.TouchSpatialContactGate.forgetRejected(e.pointerId);
   }
   window.addEventListener('pointerup', releasePointerHandle);
   window.addEventListener('pointercancel', releasePointerHandle);
@@ -4289,6 +4554,12 @@ if (window.parent !== window ||
       y: Math.max(0.01, Math.min(2, rpx * per.y)),
     };
   };
+  window.padBrushWorldCanonical = function (target) {
+    if (!window.TouchPixelViews || typeof window.TouchPixelViews.worldBrushRadii !== 'function') {
+      throw new Error('canonical pixel view cannot provide verified brush geometry');
+    }
+    return window.TouchPixelViews.worldBrushRadii(brushPadFrac(), target);
+  };
   function brushWorldRadius() { return brushPadFrac(); }   /* pad-space, for drawing */
 
   /* The pad's width/height ratio. The wire needs it to make the brush ROUND ON
@@ -4302,15 +4573,14 @@ if (window.parent !== window ||
     return (r.height > 0) ? (r.width / r.height) : 1;
   };
 
-  /* Where to park the size ring, and until when. The ring is ALWAYS drawn while
-     a finger is down; after a SIZE change it also shows on its own for a beat so
-     the operator can size the brush without having to draw first. */
+  /* Retained as gesture state for take/preset compatibility. It is deliberately
+     not rendered: the white DOM marker is the only visual brush. */
   var ringAt = { u: 0.5, v: 0.5, until: 0, held: false };
 
   function inkKick() { if (!inkRAF) inkRAF = requestAnimationFrame(inkDraw); }
 
-  window.showBrushRing = function (ms) {
-    ringAt.until = performance.now() + (ms || 1400);
+  window.showBrushRing = function () {
+    ringAt.until = 0;
     inkKick();
   };
 
@@ -4403,6 +4673,10 @@ if (window.parent !== window ||
     }
     var p = take.pts[take.idx];
     if (p.d) {
+      if (!window.TouchSpatialContactGate.beginPlayback()) {
+        takeStop();
+        return;
+      }
       inkAdd('take', p.u, p.v); ringAt.held = true;
     } else {
       ringAt.held = false;
@@ -4433,6 +4707,9 @@ if (window.parent !== window ||
   }
 
   (function () {
+    if (!window.TouchTakeState) throw new Error('Spatial TAKE state machine did not load');
+    /* The deterministic state-machine adapter below owns TAKE listeners. */
+    return;
     var host = document.getElementById('recModes');
     if (!host) return;
     host.addEventListener('click', function (e) {
@@ -4452,6 +4729,133 @@ if (window.parent !== window ||
       takeStatus();
     });
     takeStatus();
+  })();
+
+  var takeAckSequence = 0;
+  var takeAcks = new Map();
+  var takeAction = null;
+  var takeMachine = null;
+
+  function takeEligibility(operation) {
+    if (typeof window.TouchTakeEligibility !== 'function') {
+      return { ok: false, reason: 'engine eligibility link is unavailable' };
+    }
+    return window.TouchTakeEligibility(operation);
+  }
+
+  function takeOutput(sample, meta) {
+    if (sample.down && !window.TouchSpatialContactGate.beginPlayback()) {
+      return Promise.reject(new Error('the single Spatial contact is already in use'));
+    }
+    var requestId = 'take-' + (++takeAckSequence);
+    return new Promise(function (resolve, reject) {
+      var timeout = setTimeout(function () {
+        takeAcks.delete(requestId);
+        reject(new Error('engine did not acknowledge TAKE sample ' + requestId));
+      }, 6500);
+      takeAcks.set(requestId, {
+        settle: function (detail) {
+          clearTimeout(timeout);
+          takeAcks.delete(requestId);
+          if (detail.ok) resolve(detail);
+          else reject(new Error(detail.error || 'engine rejected TAKE output'));
+        },
+      });
+      document.dispatchEvent(new CustomEvent('spatialplay', {
+        detail: {
+          requestId: requestId, u: sample.u, v: sample.v, down: sample.down,
+          generation: meta.generation, kind: meta.kind,
+        },
+      }));
+    });
+  }
+
+  document.addEventListener('spatialplayack', function (event) {
+    var detail = event.detail || {};
+    var pendingAck = takeAcks.get(detail.requestId);
+    if (pendingAck) pendingAck.settle(detail);
+  });
+
+  function paintTakeStatus(state) {
+    state = state || takeMachine.state();
+    var el = document.getElementById('recVal');
+    var host = document.getElementById('recModes');
+    if (!el || !host) return;
+    var seconds = (state.durationMs / 1000).toFixed(1) + 's';
+    if (state.phase === 'empty') el.textContent = 'EMPTY';
+    else if (state.phase === 'recording') el.textContent = 'REC · ' + state.count;
+    else if (state.phase === 'playing') el.textContent = 'PLAY · ' + (state.index + 1) + '/' + state.count;
+    else if (state.phase === 'looping') el.textContent = 'LOOP ' + (state.loopCount + 1) + ' · ' + (state.index + 1) + '/' + state.count;
+    else if (state.phase === 'settling') el.textContent = takeAction === 'clear' ? 'CLEARING' : 'STOPPING';
+    else if (state.phase === 'error') el.textContent = 'ERROR · ' + state.lastError;
+    else el.textContent = seconds;
+    el.title = el.textContent;
+    var eligible = takeEligibility('UI').ok === true;
+    host.querySelectorAll('button[data-rec]').forEach(function (button) {
+      var kind = button.dataset.rec;
+      var active = (kind === 'arm' && state.recording)
+        || (kind === 'play' && state.phase === 'playing')
+        || (kind === 'loop' && state.phase === 'looping')
+        || (kind === 'clear' && takeAction === 'clear');
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.setAttribute('aria-busy', String(state.phase === 'settling' && active));
+      if (kind === 'arm') button.disabled = !eligible && !state.recording;
+      else if (kind === 'play' || kind === 'loop') button.disabled = (!eligible || !state.count) && !active;
+      else if (kind === 'clear') button.disabled = state.phase === 'empty';
+    });
+    host.dataset.takePhase = state.phase;
+  }
+
+  takeMachine = window.TouchTakeState.create({
+    emitSample: takeOutput,
+    eligibility: takeEligibility,
+    onState: paintTakeStatus,
+    onError: function (error) {
+      document.dispatchEvent(new CustomEvent('panelerror', {
+        detail: { message: error.message },
+      }));
+    },
+  });
+  window.TouchTake = takeMachine;
+  window.takeGet = function () { return takeMachine.exportTake(); };
+  window.takeSet = function (list) { takeMachine.replace(list); };
+  window.takeRecordPoint = function (u, v, down) { return takeMachine.recordPoint(u, v, down); };
+  takeStop = function (reason) { return takeMachine.stop(reason || 'page-stop'); };
+
+  (function () {
+    var host = document.getElementById('recModes');
+    if (!host) return;
+    host.addEventListener('click', function (event) {
+      var button = event.target.closest('button[data-rec]');
+      if (!button || takeMachine.state().phase === 'settling') return;
+      var kind = button.dataset.rec;
+      var operation;
+      takeAction = kind;
+      if (kind === 'arm') {
+        operation = takeMachine.state().recording
+          ? Promise.resolve(takeMachine.stopRecording()) : takeMachine.startRecording();
+      } else if (kind === 'play') {
+        operation = takeMachine.state().phase === 'playing'
+          ? takeMachine.stop('play-toggle') : takeMachine.play(false);
+      } else if (kind === 'loop') {
+        operation = takeMachine.state().phase === 'looping'
+          ? takeMachine.stop('loop-toggle') : takeMachine.play(true);
+      } else if (kind === 'clear') {
+        operation = takeMachine.clear();
+      } else {
+        return;
+      }
+      Promise.resolve(operation).catch(function () {}).finally(function () {
+        takeAction = null;
+        paintTakeStatus();
+      });
+    });
+    new MutationObserver(function () { paintTakeStatus(); }).observe(document.getElementById('arm'), {
+      attributes: true, attributeFilter: ['aria-checked'],
+    });
+    document.addEventListener('touchtransportstate', function () { paintTakeStatus(); });
+    paintTakeStatus();
   })();
 
   function inkAdd(pointerId, u, v) {
@@ -4535,7 +4939,13 @@ if (window.parent !== window ||
     var w = ink.clientWidth, h = ink.clientHeight;
     if (!w || !h) return;
     var dpr = window.devicePixelRatio || 1;
-    if (ink.width !== Math.round(w * dpr)) { ink.width = Math.round(w * dpr); ink.height = Math.round(h * dpr); }
+    var pixelWidth = Math.round(w * dpr), pixelHeight = Math.round(h * dpr);
+    /* Compare both dimensions. A same-width iPad resize used to retain and
+       vertically stretch old brush stamps into the physical purple arcs. */
+    if (ink.width !== pixelWidth || ink.height !== pixelHeight) {
+      ink.width = pixelWidth;
+      ink.height = pixelHeight;
+    }
     inkCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     inkCtx.clearRect(0, 0, w, h);
 
@@ -4549,6 +4959,11 @@ if (window.parent !== window ||
       inkPts = inkPts.slice(inkHead);
       inkHead = 0;
     }
+
+    /* The stored points still serve take/preset policy, but drawing full-radius
+       stamps and a boundary ring created a second, false brush. The small white
+       DOM marker is the sole contact representation. Keep this canvas clear. */
+    return;
 
     /* The stroke wears COLOUR 1 — the same palette entry the pattern paints the
        pool with — so the ink is not a decorative colour of its own. */
@@ -4831,11 +5246,97 @@ if (window.parent !== window ||
     inkStrokePointers.delete(e.pointerId);
     ringAt.held = inkActiveRings.size > 0;
     if (!ringAt.held) takePointerId = null;
-    ringAt.until = performance.now() + 600;
-    inkKick();
+    ringAt.until = 0;
+    /* The white DOM marker is the sole contact preview. A lift/cancel must not
+       schedule one last obsolete canvas frame or retain a preset-restorable
+       ghost trail after the engine has received touch:false. */
+    if (!ringAt.held) {
+      if (inkRAF !== null) { cancelAnimationFrame(inkRAF); inkRAF = null; }
+      if (inkInputRAF !== null) { cancelAnimationFrame(inkInputRAF); inkInputRAF = null; }
+      inkInputs.clear();
+      inkPts = [];
+      inkHead = 0;
+      if (inkCtx) {
+        inkCtx.setTransform(1, 0, 0, 1, 0, 0);
+        inkCtx.clearRect(0, 0, ink.width, ink.height);
+      }
+    }
   }
   window.addEventListener('pointerup', padLift);
   window.addEventListener('pointercancel', padLift);
+  function clearSpatialPreviewContacts() {
+    window.TouchSpatialContactGate.clear();
+    padPointers.forEach(function (pointer) { pointer.handle.hidden = true; });
+    padPointers.clear();
+    xyHandle.hidden = true;
+    if (inkRAF !== null) {
+      cancelAnimationFrame(inkRAF);
+      inkRAF = null;
+    }
+    if (inkInputRAF !== null) {
+      cancelAnimationFrame(inkInputRAF);
+      inkInputRAF = null;
+    }
+    inkInputs.clear();
+    inkLastInputs.clear();
+    inkLastStamps.clear();
+    inkStrokePointers.clear();
+    inkActiveRings.clear();
+    inkPts = [];
+    inkHead = 0;
+    takePointerId = null;
+    ringAt.held = false;
+    ringAt.until = 0;
+    takeStop('spatial-lifecycle-clear').catch(function () {});
+    /* Clear synchronously: no stale canvas survives hide/background/resize even
+       when WebKit suppresses the next animation frame. */
+    if (inkCtx) {
+      var w = ink.clientWidth, h = ink.clientHeight;
+      var dpr = window.devicePixelRatio || 1;
+      var pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+      if (ink.width !== pw || ink.height !== ph) {
+        ink.width = pw;
+        ink.height = ph;
+      }
+      inkCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      inkCtx.clearRect(0, 0, w, h);
+    }
+  }
+  document.addEventListener('spatialcontactclear', clearSpatialPreviewContacts);
+  document.addEventListener('visibilitychange', function () {
+    clearSpatialPreviewContacts();
+    document.dispatchEvent(new CustomEvent('spatialcontactclearrequest', {
+      detail: { reason: document.hidden ? 'visibility-hidden' : 'visibility-visible' },
+    }));
+  });
+  ['captainpad:surface-blur', 'captainpad:surface-focus'].forEach(function (eventName) {
+    document.addEventListener(eventName, function () {
+      clearSpatialPreviewContacts();
+      document.dispatchEvent(new CustomEvent('spatialcontactclearrequest', {
+        detail: { reason: eventName },
+      }));
+    });
+  });
+  var padSize = null;
+  if (window.ResizeObserver) {
+    new ResizeObserver(function (entries) {
+      var rect = entries[0] && entries[0].contentRect;
+      if (!rect) return;
+      var next = { width: Math.round(rect.width), height: Math.round(rect.height) };
+      if (padSize && (padSize.width !== next.width || padSize.height !== next.height)) {
+        document.dispatchEvent(new CustomEvent('spatialcontactclearrequest', {
+          detail: { reason: 'spatial-resize' },
+        }));
+      }
+      padSize = next;
+    }).observe(pad);
+  }
+  window.addEventListener('pagehide', function () {
+    clearSpatialPreviewContacts();
+    document.dispatchEvent(new CustomEvent('spatialcontactclearrequest', {
+      detail: { reason: 'pagehide' },
+    }));
+  });
   /* Exposed so a preset can put a stroke back exactly as it was drawn. */
   window.inkGet = function () { return inkPts.slice(inkHead).map(function (p) { return [+p.u.toFixed(4), +p.v.toFixed(4)]; }); };
   window.inkSet = function (list) {
@@ -5375,36 +5876,36 @@ if (window.parent !== window ||
      {active:false} is an explicit STOP tap (the strip's, or a card's own
      RUN/START button turning into STOP while it is the one driving — both
      paths call the same chStop()). Grep gate for future readers: this
-     script must never call chStop() from a dock/hide/tab-blur handler. */
+  script must never call chStop() from a dock/hide/tab-blur handler. */
   (function () {
-    var CH_SCHEME_IDS = ['master', 'hue', 'complement', 'contrast'];
-    var CH_SCHEME_TITLES = { master: 'MASTER', hue: 'HUE', complement: 'COMPLEMENT', contrast: 'CONTRAST' };
-    var CH_MONO_STEPS = [1.0, 0.78, 0.58, 0.40, 0.25];
-    var CH_COMP_OFFSETS = [0, 60, 30, -30, -60];
-    var CH_SCHEME_MIN_V = 0.1;
+    var CH_CORE = window.ColorControlCore;
+    if (!CH_CORE || CH_CORE.CORE_API_VERSION !== 1) {
+      throw new Error('[colorhub] shared ColorControlCore v1 is unavailable');
+    }
+    var CH_SCHEME_IDS = CH_CORE.SCHEME_IDS.slice();
+    var CH_SCHEME_TITLES = {};
+    CH_SCHEME_IDS.forEach(function (id) {
+      CH_SCHEME_TITLES[id] = id.replace(/-/g, ' ').toUpperCase();
+    });
     var CH_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     /* docs/61 "one transport for both rings" — TWO COLOUR and PALETTE TURNS
        share one HOLD row and one FADE row. Presets ported verbatim from
        colors_window_logic.ts ROTATION_HOLD_PRESETS_S / ROTATION_FADE_PRESETS_S. */
     var CH_HOLD_PRESETS_S = [0, 1, 2, 5, 10, 30, 60];
     var CH_FADE_PRESETS_S = [0.4, 0.8, 1.5, 3];
-    var CH_MIN_CONT_FADE_S = 0.1;
     /* Ported from METHOD_HOLD_PRESETS_S / METHOD_FADE_PRESETS_S / NOTE_FADE_PRESETS_MS. */
     var CH_METHOD_HOLD_PRESETS_S = [0, 10, 30, 60, 120, 300];
     var CH_METHOD_FADE_PRESETS_S = [1.5, 3, 6, 10];
     var CH_NOTE_FADE_PRESETS_MS = [0, 400, 1000, 2000];
-    var CH_MIN_CONT_METHOD_FADE_S = 0.1;
 
-    function chRot(h, deg) { var d = ((deg % 360) + 360) % 360; return (h + d / 360) % 1; }
     function chWrap01(x) { return x >= 0 && x < 1 ? x : ((x % 1) + 1) % 1; }
     function chDegrees(h) { return Math.round(chWrap01(h) * 360); }
     function chHueOf(c) { return typeof c === 'number' ? c : c.h; }
-    function chAsHsv(c) { return typeof c === 'number' ? { h: c, s: 1, v: 1 } : { h: c.h, s: c.s, v: c.v }; }
-    /* WIRE MINIMIZATION (docs/55 §1 D2), ported: emit a plain hue number at
-       full saturation/brightness, an {h,s,v} object otherwise. */
-    function chChannelForWire(c) {
-      return Math.abs(c.s - 1) < 1e-6 && Math.abs(c.v - 1) < 1e-6 ? c.h : { h: c.h, s: c.s, v: c.v };
-    }
+    var chAsHsv = CH_CORE.asHsv;
+    var chGenerateScheme = CH_CORE.generateScheme;
+    var chOrbitPairs = CH_CORE.orbitPairs;
+    var chAssertRotationTiming = CH_CORE.assertRotationTiming;
+    var chAssertMethodTiming = CH_CORE.assertMethodTiming;
     function chHsvToRgb(h, s, v) {
       var hh = ((h % 1) + 1) % 1, i = Math.floor(hh * 6), f = hh * 6 - i;
       var p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
@@ -5421,16 +5922,6 @@ if (window.parent !== window ||
     function chNoteName(pc) {
       return (typeof pc === 'number' && Number.isInteger(pc) && pc >= 0 && pc < 12) ? CH_NOTE_NAMES[pc] : '—';
     }
-    function chGenerateScheme(id, baseH) {
-      switch (id) {
-        case 'master': return CH_MONO_STEPS.map(function () { return { h: baseH, s: 0.95, v: 1 }; });
-        case 'hue': return CH_MONO_STEPS.map(function (k) { return { h: baseH, s: 0.95, v: Math.max(CH_SCHEME_MIN_V, k) }; });
-        case 'complement': return CH_COMP_OFFSETS.map(function (d) { return { h: chRot(baseH, d), s: 0.95, v: 1 }; });
-        case 'contrast': return [0, 1, 2, 3, 4].map(function (i) { return { h: chRot(baseH, 72 * i), s: 0.95, v: 1 }; });
-        default: throw new Error('[colorhub] unknown scheme "' + id + '"');
-      }
-    }
-
     /* ── RotationKind (ported from colors_window_logic.ts, marker-free) ──── */
     function chIsChannel(v) {
       if (typeof v === 'number') return isFinite(v);
@@ -5567,32 +6058,6 @@ if (window.parent !== window ||
       if (prevKind === 'none' || prevKind === nextKind) return '';
       return chKindLabel(nextKind).toUpperCase() + ' replaced ' + chKindLabel(prevKind).toUpperCase() + '.';
     }
-    function chOrbitDistance(sel, n) {
-      var d = (((sel[1] - sel[0]) % n) + n) % n;
-      if (d === 0) throw new Error('COLOUR A and COLOUR B are on the same slot — pick a different one.');
-      return d;
-    }
-    function chOrbitPairs(colours, sel) {
-      var n = colours.length, d = chOrbitDistance(sel, n);
-      return colours.map(function (_, i) {
-        return { c1: chChannelForWire(colours[(sel[0] + i) % n]), c2: chChannelForWire(colours[(sel[0] + i + d) % n]) };
-      });
-    }
-    function chAssertRotationTiming(holdS, fadeS) {
-      if (!(holdS >= 0)) throw new Error('HOLD must be 0 (continuous) or a positive number of seconds.');
-      if (!(fadeS > 0)) throw new Error('FADE must be a positive number of seconds.');
-      if (holdS === 0 && fadeS < CH_MIN_CONT_FADE_S) {
-        throw new Error('CONT (no hold) needs a fade of at least ' + CH_MIN_CONT_FADE_S + 's — otherwise the rig hard-cuts on a spin loop.');
-      }
-    }
-    function chAssertMethodTiming(holdS, fadeS) {
-      if (!(holdS >= 0)) throw new Error('METHOD HOLD must be 0 (continuous) or a positive number of seconds.');
-      if (!(fadeS > 0)) throw new Error('METHOD FADE must be a positive number of seconds.');
-      if (holdS === 0 && fadeS < CH_MIN_CONT_METHOD_FADE_S) {
-        throw new Error('CONT (no method hold) needs a fade of at least ' + CH_MIN_CONT_METHOD_FADE_S + 's — otherwise the rig hard-cuts on a spin loop.');
-      }
-    }
-
     /* ── State ────────────────────────────────────────────────────────────
        The daemon transport state remains Color Hub-owned, but the five staged
        colours are shared with LEGACY COLOR through #slots.palettechange.
@@ -5607,7 +6072,7 @@ if (window.parent !== window ||
       holdS: CH_HOLD_PRESETS_S[2],
       fadeS: CH_FADE_PRESETS_S[1],
       follow: {
-        schemes: ['complement', 'contrast'],
+        schemes: ['complement', 'contrast', 'analogous', 'triadic', 'split', 'tetrad', 'golden'],
         methodHoldS: 60,
         methodFadeS: 3,
         noteFadeMs: 400,
@@ -5726,6 +6191,25 @@ if (window.parent !== window ||
       };
     }
     var CH_RING_UIS = [chMakeRingUI('two', 'Two'), chMakeRingUI('turns', 'Turns')];
+
+    function chBuildSchemeActions() {
+      CH_RING_UIS.forEach(function (ui) {
+        if (!ui.schemeActions) return;
+        ui.schemeActions.innerHTML = '';
+        CH_SCHEME_IDS.forEach(function (id) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'action-btn';
+          button.dataset.scheme = id;
+          button.title = 'Stage the shared ' + CH_SCHEME_TITLES[id] + ' five-colour scheme';
+          var label = document.createElement('b');
+          label.textContent = CH_SCHEME_TITLES[id];
+          button.appendChild(label);
+          ui.schemeActions.appendChild(button);
+        });
+      });
+    }
+    chBuildSchemeActions();
 
     function chRenderRingInto(ui) {
       if (!ui.ring) return;
@@ -5995,39 +6479,27 @@ if (window.parent !== window ||
     });
 
     function chBuildCrossfadePatch() {
-      chAssertRotationTiming(CH.holdS, CH.fadeS);
       var A = CH.ring[CH.sel[0]], B = CH.ring[CH.sel[1]];
-      return {
-        active: true, mode: 'palettes', shuffle: false,
-        delay_s: CH.holdS, transitionMs: Math.round(CH.fadeS * 1000),
-        palettes: [
-          { c1: chChannelForWire(A), c2: chChannelForWire(B) },
-          { c1: chChannelForWire(B), c2: chChannelForWire(A) },
-        ],
-      };
+      return Object.assign(
+        { mode: 'palettes' },
+        CH_CORE.rotationAutopilotPatch([A, B], CH.holdS, CH.fadeS),
+      );
     }
     function chBuildTurnsPatch() {
-      chAssertRotationTiming(CH.holdS, CH.fadeS);
-      return {
-        active: true, mode: 'palettes', shuffle: false,
-        delay_s: CH.holdS, transitionMs: Math.round(CH.fadeS * 1000),
-        palettes: chOrbitPairs(CH.ring, CH.sel),
-      };
+      return Object.assign(
+        { mode: 'palettes' },
+        CH_CORE.turnsAutopilotPatch(CH.ring, CH.holdS, CH.fadeS, CH.sel),
+      );
     }
     function chBuildFollowPatch() {
-      if (!CH.follow.schemes.length) throw new Error('The cycle needs at least one method.');
-      chAssertMethodTiming(CH.follow.methodHoldS, CH.follow.methodFadeS);
-      return {
-        active: true, mode: 'followNote',
-        followNote: {
-          schemes: CH.follow.schemes.slice(),
-          methodHoldS: CH.follow.methodHoldS,
-          methodFadeS: CH.follow.methodFadeS,
-          noteFadeMs: CH.follow.noteFadeMs,
-          sel: [0, 1],
-          shuffle: false,
-        },
-      };
+      return CH_CORE.followNoteAutopilotPatch({
+        schemes: CH.follow.schemes,
+        methodHoldS: CH.follow.methodHoldS,
+        methodFadeS: CH.follow.methodFadeS,
+        noteFadeMs: CH.follow.noteFadeMs,
+        sel: [0, 1],
+        shuffle: false,
+      });
     }
 
     if (elRunTwo) elRunTwo.addEventListener('click', function () {
@@ -6058,7 +6530,15 @@ if (window.parent !== window ||
        is the ONLY place CH.broadcast changes, so the panel always renders
        the rig's own account of what is running, never an optimistic guess. */
     document.addEventListener('colorautopilot', function (e) {
-      CH.broadcast = e.detail || null;
+      try {
+        CH.broadcast = CH_CORE.reduceColorControlState(
+          CH.broadcast || { active: false, mode: 'palettes', palettes: [] },
+          e.detail || {},
+        );
+      } catch (error) {
+        chSetMsg('Colour state refused — ' + error.message + '.');
+        return;
+      }
       chAdoptBroadcastRing(CH.broadcast);
       if (CH.broadcast && CH.broadcast.active && CH.broadcast.mode !== 'followNote') {
         chShareRingWithLegacy('color-hub-broadcast', true);
@@ -6234,9 +6714,111 @@ if (window.parent !== window ||
   var fxCount = document.getElementById('fxCount');
   var fxPanel = fxGrid.closest('.effects-panel');
   var fxEditToggle = document.getElementById('fxEditToggle');
+  var fxPerformanceModeKnown = false;
+  var fxPerformanceModeActive = true;
+  var performanceEffectSlots = null;
+  var canonicalEditGridSnapshot = null;
+
+  function snapshotCanonicalEditGrid() {
+    if (canonicalEditGridSnapshot === null && fxGrid && fxGrid.children.length) {
+      canonicalEditGridSnapshot = {
+        html: fxGrid.innerHTML,
+        /* select.value is a live property, not reliably reflected in
+           innerHTML. Preserve every selection before a sparse Performance
+           projection so leaving Performance restores the actual Edit look
+           without emitting a configuration write. */
+        selectValues: Array.prototype.map.call(fxGrid.querySelectorAll('select'), function (select) {
+          return select.value;
+        }),
+      };
+    }
+  }
+  function restoreCanonicalEditGrid() {
+    if (canonicalEditGridSnapshot === null) return;
+    fxGrid.innerHTML = canonicalEditGridSnapshot.html;
+    Array.prototype.forEach.call(fxGrid.querySelectorAll('select'), function (select, index) {
+      select.value = canonicalEditGridSnapshot.selectValues[index];
+    });
+    canonicalEditGridSnapshot = null;
+    performanceEffectSlots = null;
+  }
+
+  function closeFxEditing() {
+    fxPanel.classList.remove('is-editing');
+    fxEditToggle.classList.remove('is-active');
+    fxEditToggle.setAttribute('aria-pressed', 'false');
+    fxEditToggle.textContent = 'EDIT';
+  }
+
+  function projectFxPerformanceMode() {
+    var locked = !fxPerformanceModeKnown || fxPerformanceModeActive;
+    fxPanel.classList.toggle('is-performance-locked', locked);
+    fxEditToggle.disabled = locked;
+    fxEditToggle.hidden = locked;
+    if (locked) closeFxEditing();
+  }
+
+  projectFxPerformanceMode();
+  document.addEventListener('performancemode', function (event) {
+    var detail = event.detail || {};
+    if (typeof detail.active !== 'boolean') return;
+    fxPerformanceModeKnown = true;
+    fxPerformanceModeActive = detail.active;
+    if (!detail.active) restoreCanonicalEditGrid();
+    projectFxPerformanceMode();
+  });
+
+  function projectPerformanceEffectSlots(slots) {
+    if (!Array.isArray(slots) || slots.length !== FX_SLOTS.length) {
+      throw new Error('engine must supply all 16 canonical Performance effect slots');
+    }
+    snapshotCanonicalEditGrid();
+    var usable = slots.map(function (slot, index) {
+      var expectedSlotId = FX_SLOTS[index];
+      var expectedBinding = FX_DEFAULT[index];
+      if (!slot || !Number.isInteger(slot.slotId) || slot.slotId !== expectedSlotId
+          || slot.enabled !== true || typeof slot.effectId !== 'string' || typeof slot.presetId !== 'string'
+          || ['toggle', 'trigger', 'hold'].indexOf(slot.behavior) === -1
+          || (slot.effectId + '|' + slot.presetId) !== expectedBinding) {
+        throw new Error('engine Performance slot ' + expectedSlotId
+          + ' does not match canonical binding ' + expectedBinding);
+      }
+      var optionIndex = FX_OPTS.findIndex(function (option) {
+        return option.e === slot.effectId && option.p === slot.presetId && option.b === slot.behavior;
+      });
+      if (optionIndex < 0) {
+        throw new Error('Performance slot ' + slot.slotId + ' is absent from the authoritative effect catalog');
+      }
+      return { slot: slot, optionIndex: optionIndex };
+    });
+    var cells = Array.prototype.slice.call(fxGrid.querySelectorAll('.fx-cell'));
+    if (cells.length !== FX_SLOTS.length) {
+      throw new Error('Live Touch Edit grid is incomplete; Performance actions are refused');
+    }
+    cells.forEach(function (cell, index) {
+      var projection = usable[index];
+      cell.hidden = false;
+      cell.dataset.slot = String(projection.slot.slotId);
+      cell.dataset.performanceBound = 'true';
+      cell.querySelector('[data-role=fxpick]').value = String(projection.optionIndex);
+      assign(cell, projection.optionIndex);
+    });
+    refreshFxCount();
+  }
+
+  document.addEventListener('fxperformanceslots', function (event) {
+    performanceEffectSlots = event.detail && event.detail.slots;
+    try {
+      projectPerformanceEffectSlots(performanceEffectSlots);
+    } catch (error) {
+      restoreCanonicalEditGrid();
+      panelError('Performance effects refused: ' + error.message);
+    }
+  });
 
   if (fxEditToggle) {
     fxEditToggle.addEventListener('click', function () {
+      if (!fxPerformanceModeKnown || fxPerformanceModeActive) return;
       var editing = fxPanel.classList.toggle('is-editing');
       fxEditToggle.classList.toggle('is-active', editing);
       fxEditToggle.setAttribute('aria-pressed', String(editing));
@@ -6350,10 +6932,13 @@ if (window.parent !== window ||
      set, so the label, family stripe and dataset can never drift apart. */
   function assign(cell, i) {
     var o = FX_OPTS[i];
+    var pick = cell.querySelector('[data-role=fxpick]');
+    if (pick) pick.value = String(i);
     cell.dataset.opt = String(i);
     cell.dataset.fxkey = o.e;
     cell.dataset.preset = o.p;
     cell.dataset.fam = o.f;
+    cell.dataset.behavior = o.b;
     cell.className = 'fx-cell fam-' + o.f + (cell.classList.contains('is-on') ? ' is-on' : '');
     cell.title = FAM_HELP[o.f];
     var face = FX_SHORT[o.e + '|' + o.p];
@@ -6392,6 +6977,10 @@ if (window.parent !== window ||
       Object.keys(effects).forEach(function (id) {
         var eff = effects[id] || {};
         var presets = eff.presets || {};
+        var behaviorTypes = Array.isArray(eff.behaviorTypes) ? eff.behaviorTypes : [];
+        if (!behaviorTypes.length) {
+          throw new Error('effect "' + id + '" has no authoritative behaviorTypes');
+        }
         Object.keys(presets).forEach(function (p) {
           var preset = presets[p] || {};
           var key = id + '|' + p;
@@ -6399,10 +6988,16 @@ if (window.parent !== window ||
           var family = FAM_BY_CATEGORY[eff.category];
           if (!family) throw new Error('effect "' + id + '" has unsupported category "' + eff.category + '"');
           if (id === 'fogger') family = 'texture';
+          var behavior = preset.defaultBehavior;
+          if (behaviorTypes.indexOf(behavior) === -1
+              || ['toggle', 'trigger', 'hold'].indexOf(behavior) === -1) {
+            throw new Error('effect "' + key + '" has invalid defaultBehavior "' + behavior + '"');
+          }
           opts.push({
             e: id,
             p: p,
             f: family,
+            b: behavior,
             s: eff.singleton ? 1 : 0,
             l: (eff.name || id) + ' - ' + (preset.label || p),
           });
@@ -6432,10 +7027,13 @@ if (window.parent !== window ||
         fxGrid.appendChild(cell);
         assign(cell, defaultIndexes[n]);
       });
+      if (performanceEffectSlots) projectPerformanceEffectSlots(performanceEffectSlots);
       detail.accepted = true;
+      document.dispatchEvent(new CustomEvent('fxcatalogready', { detail: { ready: true } }));
       console.log('[touch-control] effect catalog accepted: ' + FX_OPTS.length + ' pair(s)');
     } catch (e) {
       detail.error = e;
+      document.dispatchEvent(new CustomEvent('fxcatalogready', { detail: { ready: false, error: e.message } }));
       fxGrid.textContent = 'EFFECT CATALOG UNAVAILABLE - ARM REFUSED';
       console.error('[touch-control] effect catalog rejected', e);
     }
@@ -6444,6 +7042,10 @@ if (window.parent !== window ||
   fxGrid.addEventListener('change', function (e) {
     var sel = e.target.closest('[data-role=fxpick]');
     if (!sel) return;
+    if (!fxPerformanceModeKnown || fxPerformanceModeActive) {
+      e.preventDefault();
+      return;
+    }
     var cell = sel.closest('.fx-cell');
     /* Re-pointing a button that is currently ON would leave the old effect
        running with nothing to stop it, so it is switched off first. */
@@ -6488,13 +7090,10 @@ if (window.parent !== window ||
     if (host) host.addEventListener('palettechange', refreshPaletteNote);
   }());
 
-  /* HOLD or TOGGLE, decided by how long the button is held.
-       tap  (< 350ms)  -> toggles, and stays as you left it
-       hold (>= 350ms) -> on while held, off the moment you let go
-     One button covers both a momentary hit and a latched look, which is what a
-     lighting desk's flash/latch key does, and it needs no mode switch. */
-  var HOLD_MS = 350;
-  var pressT0 = 0, pressWasOn = false, pressCell = null;
+  /* The catalog declares the control semantics. A toggle remains latched, a
+     trigger fires once and never latches, and only a catalog-declared hold
+     follows pointer down/up. The page must not invent a hidden hold gesture. */
+  var pressWasOn = false, pressCell = null, pressBehavior = null;
 
   function setCellOn(cell, on) {
     if (on === cell.classList.contains('is-on')) return;
@@ -6512,6 +7111,7 @@ if (window.parent !== window ||
       }
     }
     cell.classList.toggle('is-on', on);
+    cell.classList.add('is-pending');
     var face = cell.querySelector('[data-role=fxface]');
     if (face) {
       face.setAttribute('aria-pressed', String(on));
@@ -6523,6 +7123,7 @@ if (window.parent !== window ||
 
   function releaseCell(o) {
     o.classList.remove('is-on');
+    o.classList.add('is-pending');
     var face = o.querySelector('[data-role=fxface]');
     if (face) {
       face.setAttribute('aria-pressed', 'false');
@@ -6536,28 +7137,57 @@ if (window.parent !== window ||
   fxGrid.addEventListener('pointerdown', function (ev) {
     var face = ev.target.closest('[data-role=fxface]');
     if (!face) return;
+    var arm = document.getElementById('arm');
+    if (!arm || !arm.classList.contains('is-armed')) return;
     var cell = face.closest('.fx-cell');
+    var behavior = cell && cell.dataset.behavior;
+    if (['toggle', 'trigger', 'hold'].indexOf(behavior) === -1) {
+      panelError('effect control has no valid catalog behavior; refusing to send it');
+      return;
+    }
     pressCell = cell;
-    pressT0 = Date.now();
     pressWasOn = cell.classList.contains('is-on');
-    /* Light it immediately: a hold must take effect on the way DOWN, not on
-       release, or holding would do nothing until you let go. */
-    if (!pressWasOn) setCellOn(cell, true);
+    pressBehavior = behavior;
+    if (behavior === 'toggle') setCellOn(cell, !pressWasOn);
+    else setCellOn(cell, true);
     try { face.setPointerCapture(ev.pointerId); } catch (e) { /* capture optional */ }
   });
 
   fxGrid.addEventListener('pointerup', function (ev) {
     if (!pressCell) return;
-    var cell = pressCell, held = Date.now() - pressT0;
+    var cell = pressCell, behavior = pressBehavior;
     pressCell = null;
-    if (held >= HOLD_MS) { setCellOn(cell, false); return; }   /* momentary */
-    if (pressWasOn) setCellOn(cell, false);                     /* tap on a lit one */
-    /* a tap on a dark one leaves it latched ON */
+    pressBehavior = null;
+    if (behavior === 'hold') setCellOn(cell, false);
   });
 
   /* A pointer that leaves the surface must not strand a held button on. */
   fxGrid.addEventListener('pointercancel', function () {
-    if (pressCell) { setCellOn(pressCell, false); pressCell = null; }
+    if (pressCell && pressBehavior === 'hold') setCellOn(pressCell, false);
+    pressCell = null;
+    pressBehavior = null;
+  });
+
+  /* The local press is a request (WAIT), never engine truth. The wire projects
+     the controller readback after every action/refresh; only that event may
+     paint ON. A rejected request therefore returns to the last confirmed
+     state instead of leaving a convincing but false active card. */
+  document.addEventListener('fxconfirmedstate', function (event) {
+    var detail = event.detail || {};
+    if (!Array.isArray(detail.activeSlots)) return;
+    var active = {};
+    detail.activeSlots.forEach(function (slotId) { active[Number(slotId)] = true; });
+    Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell'), function (cell) {
+      var on = !!active[Number(cell.dataset.slot)];
+      cell.classList.toggle('is-on', on);
+      cell.classList.remove('is-pending');
+      var face = cell.querySelector('[data-role=fxface]');
+      if (!face) return;
+      face.setAttribute('aria-pressed', String(on));
+      face.setAttribute('aria-label', cell.querySelector('.fx-name').textContent + ' '
+        + cell.querySelector('.fx-preset').textContent + ', effect ' + (on ? 'on' : 'off'));
+    });
+    refreshFxCount();
   });
 
   refreshFxCount();
@@ -7331,10 +7961,29 @@ if (window.parent !== window ||
 
   /* The toolbar's ON count is LIVE. A static "24 on" next to checkboxes that
      actually toggle would be a readout that lies the moment it is used. */
+  var groupVisibilityFilter = document.getElementById('groupVisibilityFilter');
+  function applyGroupVisibilityFilter() {
+    if (!groupVisibilityFilter) return;
+    var selected = groupVisibilityFilter.selectedIndex;
+    Array.prototype.forEach.call(grid.querySelectorAll('.fader-strip:not(.is-master)'), function (strip) {
+      var power = strip.querySelector('[data-role=power]');
+      var on = !!(power && power.classList.contains('is-on'));
+      var holdingColour = !!strip.querySelector('.fader-num.is-own');
+      strip.hidden = (selected === 1 && !on)
+        || (selected === 2 && on)
+        || (selected === 3 && !holdingColour);
+    });
+  }
+
   function refreshOn() {
     var on = grid.querySelectorAll('.fader-sw.is-on').length;
     document.getElementById('tbOn').textContent = String(on);
     document.getElementById('groupCount').textContent = '24 groups · ' + on + ' on';
+    applyGroupVisibilityFilter();
+  }
+
+  if (groupVisibilityFilter) {
+    groupVisibilityFilter.addEventListener('change', applyGroupVisibilityFilter);
   }
 
   /* Canonical view profiles render a SMALL second fader bank, but the 24 real
@@ -7568,7 +8217,10 @@ if (window.parent !== window ||
      to it any more; it is not deleted, so a browser that still has it is
      never silently orphaned. */
   var PRESET_KEY = 'bm26_touch_presets_v1';
-  var PRESET_ENGINE_BASE = 'http://' + location.hostname + ':6968';
+  var PRESET_ENGINE_BASE = window.TouchControlEndpoint && window.TouchControlEndpoint.engineOrigin;
+  if (typeof PRESET_ENGINE_BASE !== 'string' || !PRESET_ENGINE_BASE) {
+    throw new Error('preset transport unavailable: TouchControlEndpoint.engineOrigin is required');
+  }
   var MIGRATE_DONE_KEY = 'bm26_touch_presets_migrated_v1_done';
   var pList = document.getElementById('presetList');
   var pSub = document.getElementById('presetSub');
@@ -7585,6 +8237,22 @@ if (window.parent !== window ||
   var activeRowId = null;
   var pendingRenameId = null;      /* a just-created row to drop straight into rename */
   var migrationAttempted = false;  /* run the one-time v1 import at most once per page load */
+  var presetFxCatalogReady = false;
+  var presetRecallInFlight = false;
+
+  function updatePresetControls() {
+    if (!pSaveBtn) return;
+    var ready = presetsStoreReady && !presetStoreErrorMsg && presetFxCatalogReady;
+    pSaveBtn.disabled = !ready;
+    pSaveBtn.title = ready
+      ? 'Snapshot the current look as a new preset, appended to the end of the playlist'
+      : 'Preset save is unavailable until the preset store and effect catalog are confirmed';
+  }
+
+  document.addEventListener('fxcatalogready', function (event) {
+    presetFxCatalogReady = !!(event.detail && event.detail.ready);
+    updatePresetControls();
+  });
 
   /* docs/70 W4 v4 capture — the main colour block. A SEPARATE mirror of the
      `colorautopilot` broadcast, kept independently of the COLOR panel's own
@@ -7603,9 +8271,16 @@ if (window.parent !== window ||
      JSON, loud on failure) scoped to exactly the four preset routes. */
   var PRESET_REQ_TIMEOUT_MS = 6000;
   function presetsReq(method, path, body) {
-    var opts = { method: method };
+    var opts = { method: method, headers: {} };
+    if (method === 'GET') opts.cache = 'no-store';
+    if (method !== 'GET' && window.__wire && window.__wire.phase === 'armed') {
+      if (typeof window.__wire.ownerId !== 'string' || !window.__wire.ownerId) {
+        return Promise.reject(new Error('Live Touch is armed without a lease owner; refusing preset mutation'));
+      }
+      opts.headers['X-Touch-Control-Owner'] = window.__wire.ownerId;
+    }
     if (body !== undefined) {
-      opts.headers = { 'Content-Type': 'application/json' };
+      opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
     var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
@@ -7659,9 +8334,10 @@ if (window.parent !== window ||
     Array.prototype.forEach.call(grid.querySelectorAll('.fader-strip'), function (st) {
       var pw = st.querySelector('[data-role=power]');
       var dot = wheelEl.querySelector('.wheel-dot[data-g="' + st.dataset.idx + '"]');
+      var isMaster = st.classList.contains('is-master');
       groups.push({
-        idx: st.dataset.idx,
-        master: st.classList.contains('is-master'),
+        idx: isMaster ? -1 : Number(st.dataset.idx),
+        master: isMaster,
         level: Number(st.dataset.level || 0),
         on: !pw || pw.classList.contains('is-on'),
         global: !!st.querySelector('[data-k=global].on-global'),
@@ -7675,11 +8351,13 @@ if (window.parent !== window ||
     var fx = [];
     var fg = document.getElementById('fxGrid');
     if (fg) {
+      var performanceFx = window.__wire && window.__wire.performanceModeActive === true;
       Array.prototype.forEach.call(fg.querySelectorAll('.fx-cell'), function (c) {
+        if (performanceFx && c.hidden) return;
         /* Store only the STABLE identity. A numeric catalog index can re-point
            after a registry change and must never substitute for a missing pair. */
         var oo = FX_OPTS[Number(c.dataset.opt)] || {};
-        fx.push({ slot: c.dataset.slot, e: oo.e, p: oo.p,
+        fx.push({ slot: Number(c.dataset.slot), e: oo.e, p: oo.p,
                   on: c.classList.contains('is-on') });
       });
     }
@@ -7761,21 +8439,170 @@ if (window.parent !== window ||
     };
   }
 
-  /* PUT IT BACK, then let the panel assert itself exactly as it does on ARM.
-     Order matters: identity/assignment first, then the derived paints, then
-     the events the wiring layer listens on. */
-  function restoreState(s) {
-    if (!s || !s.groups) return;
-    if (s.fx && s.fx.length) {
-      var badFx = s.fx.filter(function (saved) {
-        if (!saved.e || !saved.p) return true;
-        return !FX_OPTS.some(function (opt) { return opt.e === saved.e && opt.p === saved.p; });
-      });
-      if (badFx.length) {
-        panelError('preset effect identity is missing or absent from the engine catalog; refusing the entire recall');
+  function validatePresetState(s) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) {
+      throw new Error('preset state is missing or malformed');
+    }
+    if (![1, 2, 3, 4].includes(s.v)) {
+      throw new Error('preset version is missing or unsupported');
+    }
+    if (!Array.isArray(s.groups) || !s.groups.length) {
+      throw new Error('preset groups are missing or empty');
+    }
+    var expectedGroups = {};
+    Array.prototype.forEach.call(grid.querySelectorAll('.fader-strip:not(.is-master)'), function (strip) {
+      var index = Number(strip.dataset.idx);
+      if (!Number.isInteger(index)) throw new Error('current group surface has an invalid group index');
+      expectedGroups[index] = true;
+    });
+    var seenGroups = {};
+    var masterCount = 0;
+    s.groups.forEach(function (g) {
+      if (!g || typeof g.master !== 'boolean'
+          || typeof g.level !== 'number' || !isFinite(g.level) || g.level < 0 || g.level > 100
+          || typeof g.on !== 'boolean' || typeof g.global !== 'boolean'
+          || typeof g.own !== 'boolean' || typeof g.fx !== 'boolean'
+          || typeof g.locked !== 'boolean' || typeof g.scheme !== 'string'
+          || SCHEMES.indexOf(g.scheme) === -1) {
+        throw new Error('preset groups contain a malformed entry');
+      }
+      if (g.dot !== null && g.dot !== undefined) {
+        if (typeof g.dot !== 'string') throw new Error('preset group OWN dot is malformed');
+        var dot = g.dot.split(',').map(Number);
+        if (dot.length !== 3 || !dot.every(function (value) { return isFinite(value) && value >= 0 && value <= 1; })) {
+          throw new Error('preset group OWN dot is out of range');
+        }
+      }
+      if (g.master) {
+        var legacyMasterIndex = g.idx === undefined || g.idx === '';
+        var masterIndex = legacyMasterIndex ? -1 : Number(g.idx);
+        if (masterIndex !== -1 || masterCount) {
+          throw new Error('preset groups must contain exactly one master');
+        }
+        g.idx = -1;
+        masterCount += 1;
         return;
       }
+      var groupIndex = Number(g.idx);
+      if (!Number.isInteger(groupIndex) || !expectedGroups[groupIndex] || seenGroups[groupIndex]) {
+        throw new Error('preset groups contain an unknown, missing, or duplicate group');
+      }
+      g.idx = groupIndex; /* canonicalize legacy numeric-string group identities before mutation */
+      seenGroups[groupIndex] = true;
+    });
+    if (masterCount !== 1 || Object.keys(seenGroups).length !== Object.keys(expectedGroups).length) {
+      throw new Error('preset groups must contain one master and every current group exactly once');
     }
+    if (!s.base || ['h', 's', 'v'].some(function (key) {
+      return typeof s.base[key] !== 'number' || !isFinite(s.base[key])
+        || s.base[key] < 0 || s.base[key] > 1;
+    })) {
+      throw new Error('preset base colour is missing or out of range');
+    }
+    if (typeof s.gen !== 'string' || !GEN[s.gen] || typeof s.follow !== 'boolean') {
+      throw new Error('preset generator or follow state is missing or invalid');
+    }
+    if (!Array.isArray(s.fx)) throw new Error('preset effect assignments are missing');
+    var seenSlots = {};
+    var mountedSlots = {};
+    var performanceFx = window.__wire && window.__wire.performanceModeActive === true;
+    Array.prototype.forEach.call(document.querySelectorAll('#fxGrid .fx-cell'), function (cell) {
+      if (performanceFx && cell.hidden) return;
+      var mounted = Number(cell.dataset.slot);
+      if (!Number.isInteger(mounted) || mountedSlots[mounted]) throw new Error('current effect surface has invalid slot topology');
+      mountedSlots[mounted] = true;
+    });
+    s.fx.forEach(function (saved) {
+      var slot = Number(saved && saved.slot);
+      if (!saved || !Number.isInteger(slot) || slot < 9 || slot > 24 || seenSlots[slot]
+          || typeof saved.e !== 'string' || typeof saved.p !== 'string'
+          || typeof saved.on !== 'boolean') {
+        throw new Error('preset effect assignment is malformed or duplicated');
+      }
+      saved.slot = slot;
+      seenSlots[slot] = true;
+      if (!FX_OPTS.some(function (opt) { return opt.e === saved.e && opt.p === saved.p; })) {
+        throw new Error('preset effect identity is missing or absent from the engine catalog');
+      }
+      var savedOption = FX_OPTS.find(function (opt) { return opt.e === saved.e && opt.p === saved.p; });
+      if (saved.on && savedOption && (savedOption.b === 'trigger' || savedOption.b === 'hold')) {
+        throw new Error('preset cannot restore an active ' + savedOption.b + ' effect; use Edit to trigger it live');
+      }
+    });
+    if (s.v >= 4 && (Object.keys(seenSlots).length !== Object.keys(mountedSlots).length
+        || Object.keys(mountedSlots).some(function (slot) { return !seenSlots[slot]; }))) {
+      throw new Error('preset effect assignments must include every current effect slot exactly once');
+    }
+    if (s.mode !== undefined && s.mode !== 'spatial' && s.mode !== 'effect') {
+      throw new Error('preset mode is invalid');
+    }
+    if (s.background !== undefined) {
+      if (!s.background || typeof s.background.playlist !== 'string' || !s.background.playlist
+          || typeof s.background.entryId !== 'string' || !s.background.entryId) {
+        throw new Error('preset background is malformed');
+      }
+      var patternPicker = document.getElementById('patternSel');
+      var available = patternPicker && Array.prototype.some.call(patternPicker.options, function (option) {
+        return option.dataset.playlist === s.background.playlist
+          && option.dataset.entryId === s.background.entryId;
+      });
+      if (!available) throw new Error('preset background is missing from the current authoritative picker');
+    }
+    if (s.colour !== undefined && (!s.colour || typeof s.colour !== 'object' || Array.isArray(s.colour))) {
+      throw new Error('preset main colour block is malformed');
+    }
+    if (s.spatial !== undefined) {
+      if (!s.spatial || typeof s.spatial !== 'object' || Array.isArray(s.spatial)) {
+        throw new Error('preset spatial block is malformed');
+      }
+      var spatial = s.spatial;
+      var bounded = ['drawMode', 'brushSize', 'brushPower', 'inkStep', 'strobeDuty', 'speed'];
+      bounded.forEach(function (key) {
+        if (spatial[key] !== undefined
+            && (typeof spatial[key] !== 'number' || !isFinite(spatial[key])
+              || spatial[key] < 0 || spatial[key] > 1)) {
+          throw new Error('preset spatial ' + key + ' is out of range');
+        }
+      });
+      if (spatial.trailFade !== undefined && !isFadeSeconds(spatial.trailFade)) {
+        throw new Error('preset spatial trailFade is invalid');
+      }
+      if (spatial.inkScheme !== undefined
+          && (typeof spatial.inkScheme !== 'string'
+            || !document.querySelector('#inkModes button[data-ink="' + spatial.inkScheme + '"]'))) {
+        throw new Error('preset spatial inkScheme is invalid');
+      }
+      if (spatial.yAxis !== undefined
+          && (typeof spatial.yAxis !== 'string'
+            || !document.querySelector('#xyYMode button[data-yax="' + spatial.yAxis + '"]'))) {
+        throw new Error('preset spatial yAxis is invalid');
+      }
+      ['take', 'ink'].forEach(function (key) {
+        if (spatial[key] !== undefined && !Array.isArray(spatial[key])) {
+          throw new Error('preset spatial ' + key + ' must be an array');
+        }
+      });
+      if (Array.isArray(spatial.ink) && !spatial.ink.every(function (point) {
+        return Array.isArray(point) && point.length >= 2
+          && [point[0], point[1]].every(function (value) { return typeof value === 'number' && isFinite(value) && value >= 0 && value <= 1; });
+      })) throw new Error('preset spatial ink contains an invalid point');
+      if (Array.isArray(spatial.take) && !spatial.take.every(function (frame) {
+        return Array.isArray(frame) && frame.length >= 4
+          && typeof frame[0] === 'number' && isFinite(frame[0]) && frame[0] >= 0
+          && [frame[1], frame[2]].every(function (value) { return typeof value === 'number' && isFinite(value) && value >= 0 && value <= 1; })
+          && (frame[3] === 0 || frame[3] === 1 || frame[3] === false || frame[3] === true);
+      })) throw new Error('preset spatial take contains an invalid frame');
+    }
+  }
+
+  /* PUT IT BACK only after the whole stored look is structurally valid. */
+  function restoreState(s) {
+    validatePresetState(s);
+    if (window.__wire && window.__wire.performanceModeActive === true
+        && typeof window.__wire._stagePresetEffectIntent === 'function') {
+      window.__wire._stagePresetEffectIntent(s.fx);
+    }
+    var pendingWrites = [];
     BASE.h = s.base.h; BASE.s = s.base.s; BASE.v = s.base.v;
     wheel.dataset.hsv = BASE.h.toFixed(3) + ',' + BASE.s.toFixed(3) + ',' + BASE.v.toFixed(3);
     moveHandle({ h: BASE.h, s: BASE.s, v: BASE.v,
@@ -7783,8 +8610,10 @@ if (window.parent !== window ||
     lastGen = s.gen || 'master';
 
     s.groups.forEach(function (g) {
-      var st = grid.querySelector('.fader-strip[data-idx="' + g.idx + '"]');
-      if (!st) return;
+      var st = g.master
+        ? grid.querySelector('.fader-strip.is-master')
+        : grid.querySelector('.fader-strip[data-idx="' + g.idx + '"]');
+      if (!st) throw new Error('validated preset group no longer exists in the current surface');
       applyStripLevel(st, g.level);
       var pw = st.querySelector('[data-role=power]');
       if (pw) { pw.classList.toggle('is-on', g.on); st.classList.toggle('is-off', !g.on); }
@@ -7811,16 +8640,24 @@ if (window.parent !== window ||
     if (s.fx && s.fx.length) {
       var fg = document.getElementById('fxGrid');
       if (fg) {
+        var performance = window.__wire && window.__wire.performanceModeActive === true;
         s.fx.forEach(function (f) {
           var c = fg.querySelector('.fx-cell[data-slot="' + f.slot + '"]');
-          if (!c) return;
+          if (!c) throw new Error('validated preset effect slot no longer exists in the current surface');
           var want = -1;
           if (f.e && f.p) {
             for (var oi = 0; oi < FX_OPTS.length; oi++) {
               if (FX_OPTS[oi].e === f.e && FX_OPTS[oi].p === f.p) { want = oi; break; }
             }
           }
-          if (want >= 0 && String(want) !== c.dataset.opt) assign(c, want);
+          if (performance) {
+            if (c.dataset.fxkey !== f.e || c.dataset.preset !== f.p) {
+              throw new Error('preset effect slot ' + f.slot
+                + ' does not match the authoritative Performance binding; switch to Edit to change it');
+            }
+          } else if (want >= 0 && String(want) !== c.dataset.opt) {
+            assign(c, want);
+          }
           c.classList.toggle('is-on', !!f.on);
         });
       }
@@ -7983,10 +8820,19 @@ if (window.parent !== window ||
        posting it unconditionally here is not a lease bypass, it is the
        daemon's normal posture. */
     if (s.colour) {
+      var colourWrite = {
+        method: 'POST', path: '/deck/color-autopilot', body: s.colour,
+        label: 'Preset recall: main colour', promise: null,
+      };
       document.dispatchEvent(new CustomEvent('colorautopilotwrite', {
-        detail: { method: 'POST', path: '/deck/color-autopilot', body: s.colour, label: 'Preset recall: main colour' },
+        detail: colourWrite,
       }));
+      if (!colourWrite.promise || typeof colourWrite.promise.then !== 'function') {
+        throw new Error('preset main-colour transport did not acknowledge the requested write');
+      }
+      pendingWrites.push(colourWrite.promise);
     }
+    return Promise.all(pendingWrites);
   }
 
   /* ── THE PLAYLIST ITSELF (docs/70 W4 item 5) ──────────────────────────
@@ -8176,10 +9022,20 @@ if (window.parent !== window ||
       if (renameBtn) { beginRename(row); return; }
       if (deleteBtn) { handleDeleteTap(deleteBtn, id); return; }
       if (recallBtn) {
-        recallWithTransition(entry.state);
-        activeRowId = id;
-        Array.prototype.forEach.call(pList.querySelectorAll('.preset-row'), function (r) {
-          r.classList.toggle('is-active', r === row);
+        if (presetRecallInFlight) {
+          panelError('preset recall already in progress; wait for its engine confirmation');
+          return;
+        }
+        presetRecallInFlight = true;
+        row.classList.add('is-pending');
+        recallWithTransition(entry.state).then(function () {
+          activeRowId = id;
+          paintPresetList();
+        }).catch(function (error) {
+          panelError('preset recall failed: ' + error.message);
+        }).then(function () {
+          presetRecallInFlight = false;
+          row.classList.remove('is-pending');
         });
       }
     });
@@ -8187,6 +9043,10 @@ if (window.parent !== window ||
 
   if (pSaveBtn) {
     pSaveBtn.addEventListener('click', function () {
+      if (!presetsStoreReady || presetStoreErrorMsg || !presetFxCatalogReady) {
+        panelError('could not save preset: wait for the preset store and effect catalog to confirm');
+        return;
+      }
       var state = captureState();
       var name = 'Preset ' + (presetEntries.length + 1);
       presetsReq('POST', '/layers/live_touch/presets', { name: name, state: state })
@@ -8212,6 +9072,7 @@ if (window.parent !== window ||
     presetEntries = entries;
     presetsStoreReady = true;
     presetStoreErrorMsg = null;
+    updatePresetControls();
     paintPresetList();
     attemptMigration();
   }
@@ -8223,6 +9084,7 @@ if (window.parent !== window ||
     }).catch(function (e) {
       presetStoreErrorMsg = e.message;
       presetsStoreReady = false;
+      updatePresetControls();
       paintPresetList();
       panelError('Live Touch preset store: ' + e.message);
     });
@@ -8253,7 +9115,6 @@ if (window.parent !== window ||
     var already = false;
     try { already = localStorage.getItem(MIGRATE_DONE_KEY) === '1'; } catch (e) { /* treat as not-yet-migrated */ }
     if (already) return;
-    try { localStorage.setItem(MIGRATE_DONE_KEY, '1'); } catch (e) { /* best-effort only; worst case this pad re-offers once more */ }
     var migratedNames = [];
     var failures = [];
     var chain = Promise.resolve();
@@ -8277,6 +9138,12 @@ if (window.parent !== window ||
       if (failures.length) {
         panelError('preset migration: ' + failures.length + ' legacy preset(s) failed to import — ' + failures.join('; '));
       }
+      if (failures.length) {
+        migrationAttempted = false;
+        return;
+      }
+      try { localStorage.setItem(MIGRATE_DONE_KEY, '1'); }
+      catch (e) { console.error('[presets] could not mark completed migration:', e.message); }
     });
   }
 
@@ -8286,6 +9153,7 @@ if (window.parent !== window ||
     pMigrateNotice.hidden = false;
   }
 
+  updatePresetControls();
   loadPresetsInitial();
   paintPresetList();   // paint the "loading…" state immediately, before the GET resolves
 
@@ -8367,15 +9235,28 @@ if (window.parent !== window ||
   }
 
   function recallWithTransition(s2) {
-    if (xMode === 'FADE') {
-      fire('fade', { ms: xTime });
-      restoreState(s2);
-      /* Put the operator's own fade value back once the move has had time to
-         happen - not immediately, or the ease would be cancelled mid-flight. */
-      setTimeout(function () { fire('fade-restore', {}); }, xTime + 200);
-      return;
+    var restoreStarted = false;
+    try {
+      validatePresetState(s2);
+    } catch (error) {
+      panelError('preset recall refused: ' + error.message);
+      return Promise.reject(error);
     }
-    if (xMode === 'DIP') {
+    if (!window.__wire || typeof window.__wire._assertPresetRecallLease !== 'function'
+        || typeof window.__wire._settlePresetRecall !== 'function') {
+      var missingWire = new Error('Live Touch preset transport is unavailable');
+      panelError('preset recall refused: ' + missingWire.message);
+      return Promise.reject(missingWire);
+    }
+    return window.__wire._assertPresetRecallLease().then(function () {
+      restoreStarted = true;
+      if (xMode === 'FADE') {
+        fire('fade', { ms: xTime });
+        return restoreState(s2).then(function () {
+          setTimeout(function () { fire('fade-restore', {}); }, xTime + 200);
+        });
+      }
+      if (xMode !== 'DIP') return restoreState(s2);
       /* DIPS TO A FLOOR, NOT TO BLACK. This used to dip the grand master to 0,
          which extinguished the whole ship between two presets — and because the
          up-leg queues behind the restore writes, the measured gap was seconds
@@ -8385,7 +9266,8 @@ if (window.parent !== window ||
          if the up-leg is delayed or never arrives. */
       var half = Math.max(80, Math.round(xTime / 2));
       fire('dip', { target: DIP_FLOOR, ms: half });
-      setTimeout(function () {
+      return new Promise(function (resolve, reject) {
+        setTimeout(function () {
         /* THE UP-LEG IS ISSUED FIRST, BEFORE the restore writes.
            It used to come after restoreState(), which fires up to 24 writes in
            one go — and the browser only opens ~6 connections per host, so the
@@ -8396,11 +9278,18 @@ if (window.parent !== window ||
            costs nothing and the restore lands during the ramp rather than
            delaying it. */
         fire('dip', { target: presetMaster(s2), ms: half });
-        restoreState(s2);
+        restoreState(s2).then(resolve, reject);
       }, half + 60);            // +60ms so the swap starts from the floor, not mid-dip
-      return;
-    }
-    restoreState(s2);           // SNAP
+      });
+    }).then(function () {
+      return window.__wire._settlePresetRecall();
+    }).catch(function (error) {
+      if (restoreStarted) {
+        throw new Error('preset partially applied: ' + error.message
+          + '. DISARM Live Touch, then ARM and reapply a verified preset');
+      }
+      throw error;
+    });
   }
 
   /* ── AUTO-ADVANCE, IN BEATS ───────────────────────────────────────────
@@ -8469,9 +9358,16 @@ if (window.parent !== window ||
       nextEntry = presetEntries[at];
     }
     if (!nextEntry) return;
-    recallWithTransition(nextEntry.state);
-    activeRowId = nextEntry.id;
-    paintPresetList();
+    if (presetRecallInFlight) return;
+    presetRecallInFlight = true;
+    recallWithTransition(nextEntry.state).then(function () {
+      activeRowId = nextEntry.id;
+      paintPresetList();
+    }).catch(function (error) {
+      panelError('auto preset recall failed: ' + error.message);
+    }).then(function () {
+      presetRecallInFlight = false;
+    });
   }
 
   document.addEventListener('audiobeat', function (e) {
@@ -8737,6 +9633,11 @@ if (window.parent !== window ||
       setTimeout(function () { panel.classList.remove('dock-refused'); }, 420);
       return;
     }
+    if (panel.classList.contains('spatial-panel')) {
+      document.dispatchEvent(new CustomEvent('spatialcontactclearrequest', {
+        detail: { reason: 'panel-hide' },
+      }));
+    }
     panel.classList.add('is-docked');
     hiddenOrder = [panelKey(panel)].concat(hiddenOrder.filter(function (key) {
       return key !== panelKey(panel);
@@ -8760,6 +9661,17 @@ if (window.parent !== window ||
     }
     makeRoomIn(rowOf(target));
     target.classList.remove('is-docked');
+    if (target.classList.contains('spatial-panel')) {
+      document.dispatchEvent(new CustomEvent('spatialcontactclearrequest', {
+        detail: { reason: 'panel-reopen' },
+      }));
+      /* ResizeObserver is not a sufficient display:none -> visible signal in
+         WKWebView (or in the hermetic Chromium lifecycle test) when the canvas
+         never had a non-zero box. Schedule the canonical projection explicitly
+         now that layout can measure it; the first touch must never discover an
+         empty screen-glyph map. */
+      window.TouchPixelViews.refreshDisplayProjection();
+    }
     hiddenOrder = hiddenOrder.filter(function (key) { return key !== panelKey(target); });
     stampOpen(target);
     reflowRows();

@@ -17,8 +17,9 @@ node tools/playlist_gallery/generate.mjs --index-only
 ```
 
 Default clips are 10 seconds at 8 fps, a 100% pattern clock, and use exact saved values with no audio.
-Use `--global-speed 0.3` when the operator's review target is the Ambient
-30% global clock; the manifest and gallery header record that scale explicitly.
+The global-speed argument is a clock multiplier, not the CaptainPad fader value.
+For example, global control 0.64 is `0.25 * 16^0.64 = 1.4742692172911012`,
+so use `--global-speed 1.4742692172911012` for that live-parity review.
 Use `--variation sound` only when you intentionally want the pattern-authored
 audio suggestions. Use `--palette <id>` to apply an exact palette from
 `marsin_engine/config.yaml`; an unknown palette or a pattern without both

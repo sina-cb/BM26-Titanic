@@ -124,7 +124,7 @@ export async function createRenderContext(modelName) {
      *   trail/decay/accumulator patterns are measured in steady state.
      * @returns {{ ok: boolean, error?: string, frames?: Uint8Array[] }}
      */
-    render(source, controls, frames, warmup) {
+    render(source, controls, frames, warmup, frameTimeScale = 1) {
       const res = host.compile(source);
       if (!res.ok) return { ok: false, error: res.error };
       const handle = res.handle;
@@ -134,7 +134,7 @@ export async function createRenderContext(modelName) {
       const out = [];
       const total = warmup + frames;
       for (let f = 0; f < total; f++) {
-        host.beginFrame(handle, f * FRAME_DT);
+        host.beginFrame(handle, f * FRAME_DT * frameTimeScale);
         const buf = host.renderAll6ch(handle, scratch);
         if (f >= warmup) out.push(buf.slice());
       }
@@ -160,7 +160,8 @@ export async function createRenderContext(modelName) {
      * @param {number} periodFrames — full pulse period, in frames.
      * @returns {{ ok: boolean, error?: string, frames?: Uint8Array[] }}
      */
-    renderPulsed(source, controls, pulseId, frames, warmup, periodFrames) {
+    renderPulsed(source, controls, pulseId, frames, warmup, periodFrames,
+      frameTimeScale = 1) {
       const res = host.compile(source);
       if (!res.ok) return { ok: false, error: res.error };
       const handle = res.handle;
@@ -176,7 +177,7 @@ export async function createRenderContext(modelName) {
           const high = (f % periodFrames) < (periodFrames / 2);
           host.setControl(handle, pulseId, high ? 1.0 : 0.0, 0, 0);
         }
-        host.beginFrame(handle, f * FRAME_DT);
+        host.beginFrame(handle, f * FRAME_DT * frameTimeScale);
         const buf = host.renderAll6ch(handle, scratch);
         if (f >= warmup) out.push(buf.slice());
       }
@@ -202,7 +203,7 @@ export async function createRenderContext(modelName) {
      * @param {number} frames
      * @returns {{ ok: boolean, error?: string, frames?: Uint8Array[] }}
      */
-    renderBlend(source, controls, frames) {
+    renderBlend(source, controls, frames, frameTimeScale = 1) {
       const res = host.compile(source);
       if (!res.ok) return { ok: false, error: res.error };
       const handle = res.handle;
@@ -211,7 +212,7 @@ export async function createRenderContext(modelName) {
       }
       const out = [];
       for (let f = 0; f < frames; f++) {
-        host.beginFrame(handle, f * FRAME_DT);
+        host.beginFrame(handle, f * FRAME_DT * frameTimeScale);
         const progress = frames > 1 ? f / (frames - 1) : 0;
         out.push(host.renderBlend6ch(handle, loaded.pixelCount,
           blendFrom, blendTo, progress).slice());

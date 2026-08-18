@@ -34,6 +34,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -53,6 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # shares must not be published). deploy.py resolves it from $BM26_MACHINES and
 # fails loudly if unset (no repo-local fallback - codex P0). See manifest_path().
 MANIFEST_ENV = 'BM26_MACHINES'
+SECRETS_ENV = 'BM26_SECRETS'
 OVERLAYS_ROOT = REPO_ROOT / 'deploy' / 'overlays'
 # Overlay .yaml fragments are deep-merged with the engine's own js-yaml. node is
 # launched with cwd here so require('js-yaml') resolves against its node_modules.
@@ -86,10 +88,43 @@ if (frag === undefined || frag === null) {
 process.stdout.write(yaml.dump(deepMerge(base, frag), { lineWidth: -1, noRefs: true }));
 '''
 
+SECRETS_VALIDATE_JS = r'''
+const fs = require('fs');
+const yaml = require('js-yaml');
+let secrets;
+try {
+  secrets = yaml.load(fs.readFileSync(process.argv[1], 'utf8'));
+} catch {
+  process.stderr.write('private secrets YAML is unreadable or malformed (values redacted)\n');
+  process.exit(2);
+}
+const keys = ['SinaAuth', 'MishaAuth', 'MARITIME_TERM_FOR_SAILIOR_PASS'];
+const values = [];
+for (const key of keys) {
+  if (!secrets || typeof secrets[key] !== 'string' || secrets[key].length < 3) {
+    process.stderr.write(`private secrets YAML is missing a valid ${key} value\n`);
+    process.exit(3);
+  }
+  values.push(secrets[key]);
+}
+if (new Set(values).size !== values.length) {
+  process.stderr.write('private CaptainPad passphrases must be distinct\n');
+  process.exit(4);
+}
+process.stdout.write('BM26_SECRETS_VALID\n');
+'''
+
 # Server-owned paths never synced (docs/43): runtime state, backups, renders.
 # Relative to the repo root; excluded on BOTH sides of the /MIR so the server's
 # copies are neither overwritten nor deleted.
 SYNC_EXCLUDE_DIRS = [
+    # Production is a runtime artifact, not a development workspace. Git
+    # metadata is machine-local, unnecessary to the boot chain, and can carry
+    # protected per-file ACLs from whichever Windows account created an object.
+    # Robocopy must never enumerate either .git tree: one inaccessible object
+    # would otherwise abort the /L safety preview before a deploy can begin.
+    # Durable on-server work belongs in scratch; prod fetch is retired below.
+    '.git',
     'marsin_engine\\states',
     'simulation\\.scene_backups',
     '.agent_renders',
@@ -111,6 +146,7 @@ SYNC_EXCLUDE_DIRS = [
     'marsin_engine\\tests',
     'simulation\\tests',
     'control_podium\\tests',
+    'deploy\\tests',
     # AGENT WORKTREES - Claude Code session worktrees are FULL extra checkouts of
     # this repo (each with its own node_modules, .git, tests\ and
     # marsin_engine\states\). They are gitignored, so nothing but an explicit
@@ -125,7 +161,10 @@ SYNC_EXCLUDE_DIRS = [
 # $BM26_MACHINES) and is shipped explicitly by ship_manifest() AFTER the sync.
 # Both are excluded so /MIR neither deletes the server's copy nor tries to carry
 # a laptop copy that isn't in the tree.
-SYNC_EXCLUDE_FILES = ['deploy_info.yaml', 'machines.yaml']
+# `.git` is a directory in a primary checkout but a pointer file in a linked
+# worktree; exclude both representations so production never receives Git
+# metadata regardless of which sanctioned laptop checkout runs the deploy.
+SYNC_EXCLUDE_FILES = ['.git', 'deploy_info.yaml', 'machines.yaml']
 
 # Server-owned paths dropped from a scratch (tracked-file) sync. git ls-files
 # emits forward slashes, so these prefixes use forward slashes. The engine
@@ -195,11 +234,19 @@ def step(title: str) -> None:
 
 def run(cmd: list[str], check: bool = True, capture: bool = True,
         stdin=None, timeout: int = 600,
-        cwd: str | None = None) -> subprocess.CompletedProcess:
+        cwd: str | None = None,
+        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run a local command; on check=True a nonzero exit fails the deploy loudly."""
     try:
         proc = subprocess.run(
-            cmd, stdin=stdin, capture_output=capture, text=True, timeout=timeout, cwd=cwd)
+            cmd,
+            stdin=stdin,
+            capture_output=capture,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            env=env,
+        )
     except subprocess.TimeoutExpired:
         fail(f'command timed out after {timeout}s: {" ".join(cmd)}')
     if check and proc.returncode != 0:
@@ -276,6 +323,45 @@ def manifest_path() -> Path:
         fail(f'{MANIFEST_ENV} points at a file that does not exist: {path}\n'
              f'  fix: run setup_env.ps1 in your BM26-Firmware-Deployment checkout, '
              f'or set {MANIFEST_ENV} to the correct machines.yaml path.')
+    return path
+
+
+def secrets_path() -> Path:
+    """Resolve and validate the laptop's private BM26_SECRETS source path.
+
+    The path and file contents are never printed. Resolution mirrors
+    ``manifest_path`` so a long-running desktop app with a stale process
+    environment still reads the authoritative User-scope value written by the
+    private deployment repo's setup script.
+    """
+    raw = os.environ.get(SECRETS_ENV, '').strip()
+    from_registry = False
+    if not raw and os.name == 'nt':
+        raw = _read_user_env_registry(SECRETS_ENV)
+        from_registry = bool(raw)
+    if not raw:
+        fail(f'{SECRETS_ENV} is not set on the laptop. Run the private deployment '
+             'repo setup_env script and open a new terminal; no secret was copied.')
+    path = Path(raw)
+    if not path.is_file():
+        fail(f'{SECRETS_ENV} does not name a readable local file (path redacted). '
+             'Fix the private deployment source; no secret was copied.')
+    if from_registry:
+        print(f'  note: {SECRETS_ENV} came from the user registry because this '
+              "terminal's environment is stale; the private path remains redacted.")
+    try:
+        proc = subprocess.run(
+            ['node', '-e', SECRETS_VALIDATE_JS, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(MARSIN_ENGINE_DIR),
+        )
+    except subprocess.TimeoutExpired:
+        fail(f'local {SECRETS_ENV} validation timed out (path and values redacted)')
+    if proc.returncode != 0 or 'BM26_SECRETS_VALID' not in (proc.stdout or ''):
+        detail = (proc.stderr or 'validation returned no diagnostic').strip()
+        fail(f'local {SECRETS_ENV} validation failed (path and values redacted): {detail}')
     return path
 
 
@@ -382,6 +468,110 @@ def preflight_ssh(name: str, entry: dict) -> None:
     print(f'  ssh ok: {remote_host}, node {remote_node} (matches laptop)')
 
 
+def probe_runtime_secrets(entry: dict) -> tuple[bool, str]:
+    """Read-only probe of the scheduled-task account's persistent secret source."""
+    dest = entry['dest'].replace("'", "''")
+    script = (
+        "$user=[Environment]::GetEnvironmentVariable('BM26_SECRETS','User');"
+        "$machine=[Environment]::GetEnvironmentVariable('BM26_SECRETS','Machine');"
+        "$scope=if(-not [string]::IsNullOrWhiteSpace($user)){'User'}"
+        "elseif(-not [string]::IsNullOrWhiteSpace($machine)){'Machine'}else{$null};"
+        "if($null -eq $scope){Write-Output 'BM26_SECRETS_NOT_READY missing';exit 2};"
+        "$path=if($scope -eq 'User'){$user}else{$machine};"
+        "try{$item=Get-Item -LiteralPath $path -ErrorAction Stop;"
+        "if($item.PSIsContainer){throw 'not a file'};"
+        f"$repo=[IO.Path]::GetFullPath('{dest}').TrimEnd('\\')+'\\';"
+        "$full=[IO.Path]::GetFullPath($item.FullName);"
+        "if($full.StartsWith($repo,[StringComparison]::OrdinalIgnoreCase)){"
+        "Write-Output 'BM26_SECRETS_NOT_READY inside_repo';"
+        "exit 4};"
+        "$stream=[IO.File]::Open($item.FullName,[IO.FileMode]::Open,"
+        "[IO.FileAccess]::Read,[IO.FileShare]::Read);$stream.Dispose()}"
+        "catch{Write-Output 'BM26_SECRETS_NOT_READY unreadable';"
+        "exit 3};Write-Output ('BM26_SECRETS_READY scope='+$scope)"
+    )
+    command = f'powershell -NoProfile -Command "{script}"'
+    proc = ssh_run(entry, command, check=False, timeout=30)
+    output = (proc.stdout or '').strip()
+    if proc.returncode == 0 and 'BM26_SECRETS_READY scope=' in output:
+        return True, output
+    markers = ('missing', 'inside_repo', 'unreadable')
+    reason = next((marker for marker in markers if marker in output), 'probe_failed')
+    return False, reason
+
+
+def preflight_runtime_secrets(entry: dict) -> None:
+    """Fail unless the provisioned persistent secret source is readable."""
+    ready, status = probe_runtime_secrets(entry)
+    if not ready:
+        fail('remote runtime-secret verification failed after secure provisioning '
+             f'(reason={status}; path and values redacted). The stack was not stopped.')
+    print(f'  runtime secrets ok: {status}')
+
+
+def _remote_secret_paths(entry: dict) -> dict[str, str]:
+    """Return stable server paths for secure provisioning (never printed)."""
+    root = entry['share_root'].rstrip('\\')
+    private_dir = f'{root}\\private'
+    return {
+        'installer': f'{root}\\provision_runtime_secrets.ps1',
+        'destination': f'{private_dir}\\secrets.yaml',
+        'temporary': f'{private_dir}\\secrets.yaml.bm26-new',
+    }
+
+
+def _scp_redacted(local_path: Path, entry: dict, remote_path: str, label: str) -> None:
+    """Copy one file over encrypted SCP without logging either path."""
+    target = f"{entry['ssh_user']}@{entry['host']}"
+    remote = remote_path.replace('\\', '/')
+    try:
+        proc = subprocess.run(
+            ['scp', *SSH_OPTS, str(local_path), f'{target}:{remote}'],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        fail(f'encrypted {label} copy timed out (paths and values redacted); '
+             'the stack was not stopped')
+    if proc.returncode != 0:
+        fail(f'encrypted {label} copy failed with exit {proc.returncode} '
+             '(paths and values redacted); the stack was not stopped')
+
+
+def provision_runtime_secrets(entry: dict, source: Path) -> None:
+    """Securely provision BM26_SECRETS before any live-stack stop.
+
+    A public helper script is copied first. It protects the private directory,
+    then the validated YAML crosses encrypted SCP into that directory. The
+    helper converges the stable file, applies protected least-
+    privilege ACLs, persists Machine-scope BM26_SECRETS, and verifies a read.
+    """
+    paths = _remote_secret_paths(entry)
+    installer_source = REPO_ROOT / 'deploy' / 'setup' / 'provision_runtime_secrets.ps1'
+    _scp_redacted(installer_source, entry, paths['installer'], 'provisioner')
+    common = (f'-ExpectedUser "{entry["ssh_user"]}" '
+              f'-DestinationPath "{paths["destination"]}" '
+              f'-RepoRoot "{entry["dest"]}"')
+    prepare = (f'powershell -NoProfile -ExecutionPolicy Bypass '
+               f'-File "{paths["installer"]}" {common} -PrepareDirectory')
+    proc = ssh_run(entry, prepare, check=False, timeout=60)
+    if proc.returncode != 0 or 'BM26_SECRET_DIRECTORY_READY' not in (proc.stdout or ''):
+        fail('remote private-directory preparation failed (paths redacted); '
+             'the stack was not stopped')
+    _scp_redacted(source, entry, paths['temporary'], 'private secret')
+    finalize = (f'powershell -NoProfile -ExecutionPolicy Bypass '
+                f'-File "{paths["installer"]}" {common} '
+                f'-SourceTempPath "{paths["temporary"]}" -EnvironmentTarget Machine')
+    proc = ssh_run(entry, finalize, check=False, timeout=60)
+    if proc.returncode != 0 or 'BM26_SECRETS_PROVISIONED scope=Machine' not in (
+            proc.stdout or ''):
+        fail('remote runtime-secret finalization failed (paths and values redacted); '
+             'the stack was not stopped')
+    preflight_runtime_secrets(entry)
+    print('  runtime secrets securely provisioned: Machine scope, private ACL verified')
+
+
 def preflight_smb(name: str, entry: dict) -> str:
     """Assert the prod tree is reachable over SMB; return its UNC path."""
     unc = dest_unc(entry)
@@ -415,11 +605,36 @@ def robocopy_cmd(src: str, dst: str, list_only: bool) -> list[str]:
     return cmd
 
 
+def robocopy_failure(operation: str, proc: subprocess.CompletedProcess) -> None:
+    """Fail with an actionable diagnosis for a Robocopy error.
+
+    Access denied under ``.git`` is a deployment invariant violation: both
+    Git roots are explicitly excluded, so neither dry-run nor sync may inspect
+    them. This message prevents operators from reaching for /ZB or broad ACL
+    grants that would weaken the show server instead of fixing the command.
+    """
+    detail = (proc.stderr or proc.stdout or '').strip()
+    normalized = detail.replace('/', '\\').lower()
+    access_denied = 'error 5' in normalized or 'access is denied' in normalized
+    git_path = '\\.git\\' in normalized or normalized.endswith('\\.git')
+    if access_denied and git_path:
+        fail(f'{operation} attempted to read excluded prod .git metadata. '
+             'This is an internal exclusion invariant failure; do not use /ZB '
+             'or grant broad ACLs. The stack was not touched by preview.\n'
+             f'{detail}')
+    if access_denied:
+        fail(f'{operation} was denied access outside the excluded prod .git tree. '
+             'Repair the named destination path ACL for the registered deployment '
+             'identity, then rerun the dry-run. No ACL fallback is attempted.\n'
+             f'{detail}')
+    fail(f'{operation} failed (exit {proc.returncode}):\n{detail}')
+
+
 def show_sync_preview(unc: str) -> None:
     """Print what a real sync would change (robocopy /L), capped for readability."""
     proc = run(robocopy_cmd(str(REPO_ROOT), unc, list_only=True), check=False, timeout=1800)
     if proc.returncode >= ROBOCOPY_FAIL_THRESHOLD:
-        fail(f'robocopy /L preview failed (exit {proc.returncode}):\n{proc.stderr or proc.stdout}')
+        robocopy_failure('robocopy /L preview', proc)
     lines = [l.rstrip() for l in proc.stdout.splitlines() if l.strip()]
     # Keep summary/banner noise out, but NEVER filter '*EXTRA Dir' - a directory
     # deletion is the most destructive delta and must show in the preview.
@@ -510,7 +725,7 @@ def sync_prod(unc: str) -> None:
     """robocopy /MIR the laptop tree onto the prod dest (exclusions per docs/43)."""
     proc = run(robocopy_cmd(str(REPO_ROOT), unc, list_only=False), check=False, timeout=3600)
     if proc.returncode >= ROBOCOPY_FAIL_THRESHOLD:
-        fail(f'robocopy sync FAILED (exit {proc.returncode}):\n{proc.stderr or proc.stdout}')
+        robocopy_failure('robocopy sync', proc)
     tail = [l for l in proc.stdout.splitlines() if l.strip()][-8:]
     for line in tail:
         print(f'  {line.strip()}')
@@ -582,6 +797,39 @@ def ship_manifest(unc: str) -> None:
     print(f'  shipped machines.yaml -> {dest}')
 
 
+def install_desktop_shortcuts(entry: dict, plan: dict) -> None:
+    """Install and verify the operator URL shortcuts as the SSH identity.
+
+    The setup script resolves that user's Windows Known Folder desktop, writes
+    only ``.url`` files, and verifies their exact offline localhost targets.
+    Running it after the sync guarantees new and existing servers use the
+    version shipped by this deployment.
+    """
+    script = f'{entry["dest"]}\\deploy\\setup\\install_desktop_shortcuts.ps1'
+    user = entry['ssh_user']
+    root = entry['share_root'].rstrip('\\')
+    assets = f'{root}\\operator_shortcuts\\icons'
+    command = (f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
+               f'-ExpectedUser "{user}" -RepoRoot "{entry["dest"]}" '
+               f'-LauncherProfile "{plan["launcherProfile"]}" '
+               f'-Scene "{plan["scene"]}" -AssetsPath "{assets}" '
+               f'-ExpectedPlanHash "{plan["hash"]}"')
+    proc = ssh_run(entry, command, check=False, timeout=60)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or '').strip()
+        fail(f'desktop shortcut installation failed for SSH identity {user!r}:\n{detail}')
+    output = (proc.stdout or '').strip()
+    if 'DESKTOP SHORTCUTS VERIFIED' not in output:
+        fail('desktop shortcut installer exited zero without its verification banner - '
+             f'refusing an unproven install:\n{output}')
+    if f'plan={plan["hash"]}' not in output:
+        fail('desktop shortcut installer verified a different machine/profile plan; '
+             'refusing drift between laptop preview and deployed settings')
+    for line in output.splitlines():
+        if line.strip():
+            print(f'  {line.strip()}')
+
+
 def merge_yaml_fragment(base: Path, fragment: Path) -> str:
     """Deep-merge one YAML overlay fragment over its tracked base file.
 
@@ -599,6 +847,70 @@ def merge_yaml_fragment(base: Path, fragment: Path) -> str:
         fail(f'YAML overlay merge FAILED for {fragment.name} (node exit '
              f'{proc.returncode}):\n{(proc.stderr or proc.stdout).strip()}')
     return proc.stdout
+
+
+def resolve_shortcut_plan(name: str, entry: dict, scene: str) -> dict:
+    """Resolve exact operator URLs from launcher profile + effective config.
+
+    A machine overlay may replace simulation/config.yaml after the mirror. For
+    preview parity, merge that one fragment into an isolated ~/tmp file and
+    point the same Node resolver used on the server at that effective config.
+    """
+    base = REPO_ROOT / 'simulation' / 'config.yaml'
+    fragment = OVERLAYS_ROOT / name / 'simulation' / 'config.yaml'
+    effective = base
+    temporary = None
+    if fragment.is_file():
+        scratch = Path.home() / 'tmp'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', suffix='.yaml',
+                prefix='bm26_shortcut_config_', dir=scratch, delete=False) as handle:
+            handle.write(merge_yaml_fragment(base, fragment))
+            temporary = Path(handle.name)
+        effective = temporary
+    planner = REPO_ROOT / 'deploy' / 'setup' / 'shortcut_plan.cjs'
+    environment = os.environ.copy()
+    environment['BM26_SIM_CONFIG'] = str(effective)
+    try:
+        proc = run(
+            ['node', str(planner), str(REPO_ROOT), entry['profile'], scene],
+            check=False,
+            timeout=30,
+            cwd=str(REPO_ROOT),
+            env=environment,
+        )
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        fail('operator shortcut plan resolution failed before stack stop: '
+             f'{(proc.stderr or proc.stdout).strip()}')
+    raw = (proc.stdout or '').strip()
+    try:
+        plan = json.loads(raw)
+    except json.JSONDecodeError:
+        fail('operator shortcut planner returned malformed JSON before stack stop')
+    required = {
+        'scene', 'launcherProfile', 'lightingProfile',
+        'simulation', 'audio', 'captainpad',
+    }
+    if set(plan) != required:
+        fail('operator shortcut planner returned an incomplete or unknown schema')
+    for key in ('simulation', 'audio', 'captainpad'):
+        if not plan[key].startswith('http://localhost:'):
+            fail(f'operator shortcut {key} URL is not an offline localhost target')
+    plan['hash'] = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    return plan
+
+
+def print_shortcut_plan(plan: dict) -> None:
+    """Print the exact non-secret URL plan during preflight and dry-run."""
+    print(f'  shortcut plan: scene={plan["scene"]}, launcher={plan["launcherProfile"]}, '
+          f'lighting={plan["lightingProfile"]}')
+    print(f'    Titanic Simulation -> {plan["simulation"]}')
+    print(f'    Audio Companion -> {plan["audio"]}')
+    print(f'    CaptainPad Web -> {plan["captainpad"]}')
 
 
 def apply_overlay(unc: str, name: str) -> None:
@@ -658,6 +970,14 @@ def start_stack(entry: dict) -> None:
     """Start the boot task - the stack must run in titanic's logged-on session
     (audio/devices), NEVER directly inside this SSH session.
     """
+    boot_script = f'{entry["dest"]}\\deploy\\boot_server.ps1'
+    launch_contract = "$launchArgs = @($launcher, $profile, '--scene', $scene, '--no-launch')"
+    ssh_run(
+        entry,
+        f'findstr /L /C:"{launch_contract}" "{boot_script}"',
+        timeout=30,
+    )
+    print('  boot contract ok: launcher invocation includes --no-launch')
     ssh_run(entry, f'schtasks /Run /TN {BOOT_TASK}', timeout=60)
     print(f'  schtasks /Run {BOOT_TASK} -> ok')
 
@@ -888,12 +1208,23 @@ def deploy_prod(name: str, entry: dict, args: argparse.Namespace) -> None:
     info = git_info()
     step(f'1/8 preflight ({name} = prod, laptop {info["head"]} on {info["branch"]}, '
          f'{info["dirty_count"]} dirty)')
+    local_secrets = secrets_path()
+    print('  local runtime secrets valid (path and values redacted)')
     preflight_ssh(name, entry)
     expected_scene = args.scene or entry['scene']
-    # Validate --scene NOW, before anything is stopped: a typo must fail while the
-    # stack is still up, not leave the show dark after the stop phase.
+    # Validate --scene before any remote mutation: a typo must fail while the
+    # current stack and its private deployment state are both untouched.
     if args.scene:
         validate_scene(args.scene)
+    shortcut_plan = resolve_shortcut_plan(name, entry, expected_scene)
+    print_shortcut_plan(shortcut_plan)
+    if args.dry_run:
+        ready, status = probe_runtime_secrets(entry)
+        state = status if ready else f'not ready ({status})'
+        print(f'  runtime secrets currently {state}; a real deploy would securely '
+              'refresh the private file + ACL + Machine-scope path before stack stop')
+    else:
+        provision_runtime_secrets(entry, local_secrets)
     if not args.restart_only:
         unc = preflight_smb(name, entry)
         show_sync_preview(unc)
@@ -910,7 +1241,7 @@ def deploy_prod(name: str, entry: dict, args: argparse.Namespace) -> None:
     else:
         step('3/8 sync working tree (robocopy /MIR)')
         sync_prod(unc)
-        step('4/8 boot scene + ship manifest')
+        step('4/8 boot scene + manifest')
         if args.scene:
             write_boot_scene(name, args.scene)
         else:
@@ -918,8 +1249,9 @@ def deploy_prod(name: str, entry: dict, args: argparse.Namespace) -> None:
         # Ship the private machines.yaml LAST (after any --scene edit to the
         # source of truth), so the server's derived copy matches the laptop.
         ship_manifest(unc)
-        step('5/8 apply overlay')
+        step('5/8 apply overlay + operator shortcuts')
         apply_overlay(unc, name)
+        install_desktop_shortcuts(entry, shortcut_plan)
         step('6/8 stamp deploy_info.yaml')
         stamp_deploy_info(unc, name, info)
     step('7/8 start stack')
@@ -1101,12 +1433,16 @@ def deploy_scratch(name: str, entry: dict, args: argparse.Namespace) -> None:
 # ── Fetch ───────────────────────────────────────────────────────────────────
 
 def fetch_tree(name: str, entry: dict, source: str) -> None:
-    """Bundle one server tree's branches over SSH and fetch them into
+    """Bundle the server scratch tree's branches over SSH and fetch them into
     refs/remotes/<machine>-<source>/* on the laptop. Never merges anything.
     The bundle file on the server (C:\\titanic\\fetch_<source>.bundle) is the
     only server-side write - outside both trees, overwritten per fetch.
     """
-    tree = entry['dest'] if source == 'prod' else entry['scratch_dest']
+    if source != 'scratch':
+        fail('prod git fetch is retired: production .git is excluded from deploys '
+             'and may be stale. Make durable server-side commits in scratch, then '
+             'fetch with --source scratch. Runtime state remains available via --state.')
+    tree = entry['scratch_dest']
     remote_bundle = f'C:\\titanic\\fetch_{source}.bundle'
     step(f'fetch {source} ({tree})')
     ssh_run(entry, f'cd /d "{tree}" && git bundle create {remote_bundle} --branches',
@@ -1147,7 +1483,7 @@ def fetch_state(name: str, entry: dict) -> None:
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
-    """CLI: deploy (prod|scratch), fetch (prod|scratch|both), stop, start (docs/43)."""
+    """CLI: deploy (prod|scratch), fetch scratch/state, stop, start (docs/43)."""
     parser = argparse.ArgumentParser(
         prog='deploy.py', description='BM26 show-server deploy/fetch/lifecycle (docs/43 Phase 2)')
     sub = parser.add_subparsers(dest='op', required=True)
@@ -1163,7 +1499,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help='(scratch) overwrite a dirty scratch tree')
     fet = sub.add_parser('fetch', help='collect on-server git work / runtime state')
     fet.add_argument('--machine', required=True, help='machine key in the $BM26_MACHINES manifest')
-    fet.add_argument('--source', choices=['prod', 'scratch', 'both'], default='both')
+    # Keep the retired spellings parseable so old field commands receive the
+    # explicit migration error in main(), not argparse's context-free rejection.
+    fet.add_argument('--source', choices=['prod', 'scratch', 'both'], default='scratch')
     fet.add_argument('--state', action='store_true',
                      help='also snapshot prod runtime state into ~/tmp')
     stp = sub.add_parser('stop', help="stop a machine's running stack (lights OFF)")
@@ -1204,10 +1542,12 @@ def main() -> None:
         entry = get_machine(args.machine, required=['host', 'ssh_user', 'scratch_dest'])
         deploy_scratch(args.machine, entry, args)
         return
-    sources = ['prod', 'scratch'] if args.source == 'both' else [args.source]
-    required = ['host', 'ssh_user'] + (['dest'] if 'prod' in sources else [])
-    if 'scratch' in sources:
-        required.append('scratch_dest')
+    if args.source != 'scratch':
+        fail('prod git fetch is retired because production .git is no longer deployed. '
+             'Use --source scratch for durable on-server work; add --state to snapshot '
+             'production runtime state.')
+    sources = ['scratch']
+    required = ['host', 'ssh_user', 'scratch_dest']
     # --state snapshots prod runtime state (fetch_state reads entry['dest']), so
     # it needs 'dest' even when the git source is scratch-only.
     if args.state and 'dest' not in required:

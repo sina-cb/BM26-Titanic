@@ -375,6 +375,32 @@ export class ParamCenter {
   }
 
   /**
+   * Apply one already-interpolated ColorAutopilot frame without arming the
+   * operator's independent `colorTransitionMs` ramp a second time.
+   *
+   * Manual/API writes must continue through set(); this deliberately narrow
+   * method accepts only the two palette keys and pins the source name so no
+   * other caller can silently bypass CPC transition policy.
+   */
+  setColorAutopilotFrame(key, value, origin = null) {
+    if (key !== 'colorPalette1' && key !== 'colorPalette2') {
+      throw new RangeError(
+        `ColorAutopilot frames may only write colorPalette1/2, got '${key}'`,
+      );
+    }
+    const result = this._setNoFire(key, value, 'colorAutopilot', origin);
+    if (result.status !== 'ok') return result;
+
+    this._rendered[key] = deepCopy(this._store[key].value);
+    this._rampFrom[key] = null;
+    this._rampStartMs[key] = null;
+    this._rampSample[key] = null;
+    this._store[key].dirty = true;
+    this._fireOnChange([key]);
+    return result;
+  }
+
+  /**
    * Internal single-write that does NOT fire onChange. Used by both
    * the public set() (which fires after) and setMany() (which fires
    * once after the whole batch). Same return shape as set().

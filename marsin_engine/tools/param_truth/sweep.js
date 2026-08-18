@@ -49,6 +49,18 @@ const VERDICT_RANK = {
  * and well above the 0 of a genuinely still frame.
  */
 const FROZEN_RATE = 0.002;
+const MEASUREMENT_TIME_SCALE = Object.freeze({
+  // Preserve the established geometric phase span after these saved clocks
+  // were deliberately slowed. Frame count and all absolute verdict thresholds
+  // remain unchanged; only representative in-pattern time coverage is held
+  // constant for their parameter sweeps.
+  'crisp/03_magnetic_field_collision':
+    (0.05 + Math.pow(2, (0.3 - 0.5) * 4) * 0.04)
+      / (0.014 + 0.2 * 0.020),
+  'crisp/06_impossible_corridor':
+    (0.06 + Math.pow(2, (0.3 - 0.5) * 4) * 0.22)
+      / (0.018 + 0.3 * 0.036),
+});
 
 
 /** True when two frame sequences are byte-identical. */
@@ -86,11 +98,12 @@ function noiseFloor(v1, v2) {
  *
  * @returns {{ responds: boolean, feature: string, change: number }}
  */
-function triggerProbe(ctx, axisBins, source, baseControls, pulseId, noise) {
+function triggerProbe(ctx, axisBins, source, baseControls, pulseId, noise,
+  frameTimeScale) {
   const still = ctx.renderPulsed(source, baseControls, null,
-    MEASURE_FRAMES, WARMUP_FRAMES, PULSE_PERIOD_FRAMES);
+    MEASURE_FRAMES, WARMUP_FRAMES, PULSE_PERIOD_FRAMES, frameTimeScale);
   const pulsed = ctx.renderPulsed(source, baseControls, pulseId,
-    MEASURE_FRAMES, WARMUP_FRAMES, PULSE_PERIOD_FRAMES);
+    MEASURE_FRAMES, WARMUP_FRAMES, PULSE_PERIOD_FRAMES, frameTimeScale);
   if (!still.ok || !pulsed.ok) {
     throw new Error(`trigger probe render failed: ${still.error || pulsed.error}`);
   }
@@ -135,15 +148,16 @@ function midrangeProbe(ctx, axisBins, source, sliders, target, noise, doRender) 
  *
  * @returns {{ rows: object[], baseline: object, frozen: boolean }}
  */
-function sweepContext(ctx, axisBins, source, sliders, contextName, pinned, only = null) {
+function sweepContext(ctx, axisBins, source, sliders, contextName, pinned,
+  only = null, frameTimeScale = 1) {
   // A blend/transition script never runs `renderAll` — the mixer drives it
   // through `renderBlend6ch` with two source buffers and a progress fader.
   // Measuring it any other way pins progress at 0 and reports every edge
   // control as dead.
   const blend = isBlendPattern(source);
   const doRender = (controls, frames, warmup) => (blend
-    ? ctx.renderBlend(source, controls, frames)
-    : ctx.render(source, controls, frames, warmup));
+    ? ctx.renderBlend(source, controls, frames, frameTimeScale)
+    : ctx.render(source, controls, frames, warmup, frameTimeScale));
 
   const controlsAt = (overrideId, value) => {
     const m = new Map();
@@ -214,7 +228,9 @@ function sweepContext(ctx, axisBins, source, sliders, contextName, pinned, only 
     // `kick >= 0.5 && prevKick < 0.5`). Ask the dynamic question before
     // reporting it as wired to nothing. Only DEAD rows pay for this.
     if (verdict.verdict === VERDICT.DEAD && !blend) {
-      const probe = triggerProbe(ctx, axisBins, source, controlsAt(s.id, 0), s.id, noise);
+      const probe = triggerProbe(
+        ctx, axisBins, source, controlsAt(s.id, 0), s.id, noise, frameTimeScale,
+      );
       if (probe.responds) {
         verdict.verdict = VERDICT.TRUE;
         verdict.reason = 'responds_to_edges_not_to_level';
@@ -318,14 +334,19 @@ export function sweepPattern(ctx, axisBins, id, only = null) {
     };
   }
 
-  const first = sweepContext(ctx, axisBins, source, sliders, 'default', new Map(), only);
+  const frameTimeScale = MEASUREMENT_TIME_SCALE[id] || 1;
+  const first = sweepContext(
+    ctx, axisBins, source, sliders, 'default', new Map(), only, frameTimeScale,
+  );
   let chosen = first.rows;
   let secondBaseline = null;
 
   const directionSliders = sliders.filter(s => claimOf(s.name).family === FAMILY.DIRECTION);
   if (first.frozen && directionSliders.length > 0) {
     const pinned = new Map(directionSliders.map(s => [s.id, 1.0]));
-    const second = sweepContext(ctx, axisBins, source, sliders, 'motion', pinned, only);
+    const second = sweepContext(
+      ctx, axisBins, source, sliders, 'motion', pinned, only, frameTimeScale,
+    );
     secondBaseline = second.baseline;
     chosen = first.rows.map((row, i) => {
       const alt = second.rows[i];
@@ -346,6 +367,7 @@ export function sweepPattern(ctx, axisBins, id, only = null) {
     blend: first.blend,
     baseline: first.baseline,
     baselineFrozen: first.frozen,
+    frameTimeScale,
     motionBaseline: secondBaseline,
     params,
   };

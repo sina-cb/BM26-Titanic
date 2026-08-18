@@ -13,6 +13,7 @@
  * checks (a phase-trigger's phase, a look-action's look, a mood whenPhase must
  * all be defined in the plan) fail loud on a dangling reference.
  */
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
 import yaml from 'js-yaml';
@@ -945,10 +946,34 @@ export function loadShowPlan(filePath) {
   return validateShowPlan(parsed);
 }
 
-/** Validate-then-write a plan to disk (never persist an invalid plan). */
+/**
+ * Validate, then atomically replace the authored plan on disk.
+ *
+ * A unique sibling temp file keeps overlapping writers from sharing partial
+ * output. renameSync is the commit point: until it succeeds, the previous plan
+ * remains intact and callers receive a thrown error rather than a false save.
+ */
 export function saveShowPlan(plan, filePath) {
   const normalized = validateShowPlan(plan);
-  fs.writeFileSync(filePath, dumpShowPlan(normalized), 'utf8');
+  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, dumpShowPlan(normalized), 'utf8');
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    let cleanupError = null;
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch (cleanupErr) {
+      if (cleanupErr?.code !== 'ENOENT') cleanupError = cleanupErr;
+    }
+    const cleanupMessage = cleanupError
+      ? `; temporary-file cleanup also failed: ${cleanupError.message}`
+      : '';
+    throw new Error(
+      `show plan write failed (${filePath}): ${err.message}${cleanupMessage}`,
+      { cause: err },
+    );
+  }
   return normalized;
 }
 

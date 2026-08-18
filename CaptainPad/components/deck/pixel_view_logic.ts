@@ -41,14 +41,11 @@
  * ON TOP OF EACH OTHER. That is exactly what the operator saw: FRONT squeezed
  * into a band, TE SIGN a meaningless cloud of dots.
  *
- * `layoutView()` is therefore built on the canonical consumer's arithmetic,
- * `docs/ui/touch_control_pixel_views.js` (`panelSubRects` + `panelTransform` +
- * `reprojectView`): split the viewport into weighted strips separated by
- * `design.panelGap`, letterbox the design space into each strip, then fit the
- * whole composite to the viewport at `FIT_FILL`. The one addition is that a
- * multi-panel view is arranged along whichever AXIS measures bigger, because a
- * deck window can be any shape where the Live Touch pad is always wide — see
- * `layoutView`'s own note for the measured numbers.
+ * `layoutView()` delegates to `shared/pixel_view_projection.js`, the one final
+ * viewport projection executed by Deck and Live Touch. It splits the viewport
+ * into weighted strips, letterboxes the shared glyph bounds, fits the composite
+ * at `FIT_FILL`, and chooses the axis that measures larger. The two surfaces
+ * therefore cannot drift into different panel layouts.
  *
  * The one thing deliberately NOT ported is `view.framing` (zoom / panX / panY).
  * Those are the operator's framing of the LIVE TOUCH PAD, in that surface's
@@ -88,6 +85,12 @@
  * engine said nothing about — every pixel's colour is a real byte the engine
  * really sent, at worst shared with its neighbours.
  */
+
+import {
+  FIT_FILL as SHARED_FIT_FILL,
+  arrangePanels as arrangeSharedPixelPanels,
+  layoutView as layoutSharedPixelView,
+} from '@/shared/pixel_view_projection';
 
 /** Schema version this module speaks. A mismatch is a HARD refusal: the
  *  artifact's shape is the contract, and rendering a v5 tree with v4 rules
@@ -396,7 +399,7 @@ export function flattenView(view: PixelViewDef): FlatPixelView {
  * value (`docs/ui/touch_control_pixel_views.js` → `FIT_FILL`), so the deck
  * window and the Live Touch pad leave the same breathing room.
  */
-export const FIT_FILL = 0.92;
+export const FIT_FILL = SHARED_FIT_FILL;
 
 export interface ViewTransform {
   /** design units → CSS px. */
@@ -414,10 +417,8 @@ export interface ViewTransform {
 export type PanelAxis = 'columns' | 'rows';
 
 /**
- * Arrange + fit a view along ONE axis. Three steps, the first two lifted
- * straight from `docs/ui/touch_control_pixel_views.js` (`panelSubRects` →
- * `panelTransform`), the third from the bounds re-fit at the end of its
- * `reprojectView`:
+ * Arrange + fit a view along ONE axis. The executable arithmetic lives in the
+ * shared Deck/Live projection module; this typed adapter preserves the Deck API:
  *
  *   1. Split the viewport into strips along `axis`, sized proportionally to
  *      panel weight and separated by `design.panelGap` (no gap for a single
@@ -450,66 +451,7 @@ export function arrangePanels(
   viewportH: number,
   axis: PanelAxis,
 ): { transforms: ViewTransform[]; glyphScale: number } {
-  const n = flat.panels.length;
-  const gap = n > 1 ? design.panelGap : 0;
-  const along = axis === 'columns' ? viewportW : viewportH;
-  let totalWeight = 0;
-  for (const panel of flat.panels) totalWeight += panel.weight;
-  const inner = Math.max(1e-6, along - gap * (n - 1));
-
-  // Steps 1 + 2 — each panel's own letterbox of the view's common box.
-  const boxW = Math.max(1e-6, flat.bounds.maxX - flat.bounds.minX);
-  const boxH = Math.max(1e-6, flat.bounds.maxY - flat.bounds.minY);
-  const base: ViewTransform[] = [];
-  let cursor = 0;
-  for (const panel of flat.panels) {
-    const share = inner * (panel.weight / totalWeight);
-    const stripW = axis === 'columns' ? share : viewportW;
-    const stripH = axis === 'columns' ? viewportH : share;
-    const scale = Math.max(0, Math.min(stripW / boxW, stripH / boxH));
-    const padX = (stripW - boxW * scale) / 2 - flat.bounds.minX * scale;
-    const padY = (stripH - boxH * scale) / 2 - flat.bounds.minY * scale;
-    base.push({
-      scale,
-      offsetX: (axis === 'columns' ? cursor : 0) + padX,
-      offsetY: (axis === 'columns' ? 0 : cursor) + padY,
-    });
-    cursor += share + gap;
-  }
-
-  // Step 3 — the composite's true extents, then one uniform fit.
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  flat.panels.forEach((panel, i) => {
-    const t = base[i];
-    const x0 = panel.bounds.minX * t.scale + t.offsetX;
-    const x1 = panel.bounds.maxX * t.scale + t.offsetX;
-    const y0 = panel.bounds.minY * t.scale + t.offsetY;
-    const y1 = panel.bounds.maxY * t.scale + t.offsetY;
-    if (x0 < minX) minX = x0;
-    if (x1 > maxX) maxX = x1;
-    if (y0 < minY) minY = y0;
-    if (y1 > maxY) maxY = y1;
-  });
-  const fit = Math.min(
-    (viewportW * FIT_FILL) / Math.max(1e-6, maxX - minX),
-    (viewportH * FIT_FILL) / Math.max(1e-6, maxY - minY),
-  );
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-
-  return {
-    // How big a design unit ends up on screen — the number to maximise, and
-    // the only thing an operator perceives as "the view fits properly".
-    glyphScale: base[0].scale * fit,
-    transforms: base.map((t) => ({
-      scale: t.scale * fit,
-      offsetX: (t.offsetX - centerX) * fit + viewportW / 2,
-      offsetY: (t.offsetY - centerY) * fit + viewportH / 2,
-    })),
-  };
+  return arrangeSharedPixelPanels(flat, design, viewportW, viewportH, axis);
 }
 
 /**
@@ -541,13 +483,7 @@ export function layoutView(
   viewportW: number,
   viewportH: number,
 ): ViewTransform[] {
-  if (!(viewportW > 0) || !(viewportH > 0)) {
-    fail(`viewport must be positive, got ${viewportW}×${viewportH}`);
-  }
-  const columns = arrangePanels(flat, design, viewportW, viewportH, 'columns');
-  if (flat.panels.length < 2) return columns.transforms;
-  const rows = arrangePanels(flat, design, viewportW, viewportH, 'rows');
-  return rows.glyphScale > columns.glyphScale ? rows.transforms : columns.transforms;
+  return layoutSharedPixelView(flat, design, viewportW, viewportH);
 }
 
 /** One panel's own box aspect (width:height of its tight glyph bounds). */

@@ -58,18 +58,26 @@ import {
   COLORS_WINDOW_BOUNDARY_STYLE,
 } from '@/components/deck/colors_window_layout';
 import {
+  PALETTE_LIBRARY_ACTIONS_STYLE,
+  PALETTE_LIBRARY_CHIP_LABEL_STYLE,
+  PALETTE_LIBRARY_CHIP_STYLE,
+  PALETTE_LIBRARY_GRID_STYLE,
+  PALETTE_LIBRARY_HEADER_STYLE,
+  PALETTE_LIBRARY_TITLE_STYLE,
+} from '@/components/color_preset_library_layout';
+import {
   getCachedColorPalettes, warmColorPalettesCache,
   updateParamCenter, fetchColorPairs, fetchColorPaletteVisibility, saveColorPairs,
 } from '@/utils/api';
 import type { DeckColorAutopilotConfig } from '@/utils/api';
-import { opError, opPrompt } from '@/utils/op_dialog';
+import { opConfirm, opError, opPrompt } from '@/utils/op_dialog';
 import {
   type Hsv, type SchemeId, type PairChannel, type SchemePairSel,
   type RotationCursor, type PalettePreset,
   colour, pinned, hueCss, hsvCss, mixHsv, degrees,
   LIVE_TOUCH_SWATCHES, slotIndexFor, pairIsLive, type LiveTouchSwatch,
   lerpHue, blendFromBroadcast, blendLabel,
-  isTurnsConfig, turnsOrbit, rotationCursor, cursorRailSegments,
+  turnsOrbit, rotationCursor, cursorRailSegments,
   orbitPhase, orbitDistance, orbitWindowSlots, ORBIT_DISTANCE_DEFAULT,
   turnsAutopilotPatch, manualWriteGate,
   paletteWritePayload, normalizeColorPairs, addPalettePreset, removeColorPairAt,
@@ -77,7 +85,7 @@ import {
   TURNS_SLOT_COUNT, COLOR_PAIRS_MAX,
   SCHEME_IDS, SCHEME_TITLES, generateScheme,
   SCHEME_PAIR_DEFAULT, PAIR_CHANNEL_LABELS, selectSchemePair, schemePairColours,
-  rotationKind, schemeTapOutcome, crossfadeAutopilotPatch, hueOf,
+  rotationKind, schemeTapOutcome, crossfadeAutopilotPatch,
   type ColorsCard, cardForKind, yieldDecision, YIELD_SAY, YIELD_FAIL_SAY,
   drivingStripModel, takeoverNote,
   ROTATION_HOLD_PRESETS_S, ROTATION_FADE_PRESETS_S,
@@ -86,10 +94,13 @@ import {
   FOLLOW_NOTE_DEFAULT_SCHEMES, METHOD_HOLD_PRESETS_S, METHOD_HOLD_DEFAULT_S,
   METHOD_FADE_PRESETS_S, METHOD_FADE_DEFAULT_S,
   NOTE_FADE_PRESETS_MS, NOTE_FADE_DEFAULT_MS,
-  type RetuneField,
+  type RetuneField, type RotationKind,
+  colourGestureOutcome, type ColourGestureOutcome,
+  crossfadeRetargetRing, turnsRetargetRing,
 } from '@/components/deck/colors_window_logic';
 import { accentWash } from '@/styles/globalStyles';
 import { filterCuratedColorPaletteMenu } from '@/components/color_preset_library';
+import { crossfadeEndpoints } from '@/components/deck/colors_window_crossfade_endpoints';
 
 // Live-apply throttle — the SAME 33 ms the COLORS picker modal uses, matched to
 // the engine's sharedParams broadcast debounce.
@@ -119,6 +130,55 @@ const NO_STRIP: string[] = [];
 const PAIR_WHEEL_LABELS: string[] = ['A', 'B'];
 const TURNS_WHEEL_LABELS: string[] = ['1', '2', '3', '4', '5'];
 
+/**
+ * docs/75 §5 — WHAT A TWO-ENGINE-SLOT COLOUR GESTURE DOES, given the running
+ * kind AND which retarget-capable family this gesture's ring shape actually
+ * belongs to. `colourGestureOutcome` (colors_window_logic.ts) is KIND-ONLY —
+ * for `kind === 'crossfade'` OR `kind === 'turns'` it always answers
+ * `'retarget'`, on the documented assumption that a colour gesture only ever
+ * fires from its own family's card. That assumption holds for the gestures
+ * `colourGestureOutcome` was written for (the TURNS draft's own per-slot
+ * wheel; the crossfade's own A/B pair) — but NOT for every call site in this
+ * file: the two-colour A/B wheel (`setSlot`) is shared by the TWO COLOUR AND
+ * FOLLOW NOTE cards (`pairSurface`), so it stays reachable while PALETTE
+ * TURNS drives the rig from a card the operator has simply navigated away
+ * from (crossfade/turns are D2 "persist on every navigation" — no yield).
+ * A 2-hue edit has no valid mapping onto a running 5-colour TURNS ring (or
+ * vice versa for a TURNS-only edit while crossfade drives), so a `'retarget'`
+ * answer for the WRONG family is not safe to trust blindly: it would PATCH a
+ * ring shape the running config was never built for, flipping `kind` out
+ * from under the operator (a PATCH cannot change `active`/`mode`, but IT CAN
+ * change a config's length, and `rotationKind` reads the length straight back
+ * off the wire). This wrapper adds that missing family check: `'retarget'` is
+ * only ever returned when the running kind IS this gesture's own `family`;
+ * every other running kind (including the OTHER retarget-capable one) falls
+ * back to the exact refusal `manualWriteGate` has always produced.
+ */
+/** `manualWriteGate`'s refusal sentence for a kind that is definitely not
+ *  writable — narrows the `WriterGate` union so `.reason` type-checks. THROWS
+ *  if the gate unexpectedly allows the write (a caller bug: every call site
+ *  below only reaches this after deciding a refusal IS the answer). */
+function writeRefusalReason(disabled: boolean, kind: RotationKind): string {
+  const g = manualWriteGate(disabled, kind);
+  if (g.canWrite) throw new Error('[colors_window] writeRefusalReason called on a writable gate');
+  return g.reason;
+}
+
+// Exported (alongside the `ColorsWindow` mount, not instead of it — the
+// MOUNT CONTRACT docblock at the top of this file is unchanged) so the
+// colocated test file can exercise this routing table directly rather than
+// only by scanning source text for call-site patterns.
+export function pairGestureOutcome(
+  disabled: boolean, kind: RotationKind, surface: ColorsCard, family: 'crossfade' | 'turns',
+): ColourGestureOutcome {
+  if (disabled) return { action: 'refuse', reason: writeRefusalReason(disabled, kind) };
+  const outcome = colourGestureOutcome(kind, surface);
+  if (outcome.action === 'retarget' && kind !== family) {
+    return { action: 'refuse', reason: writeRefusalReason(disabled, kind) };
+  }
+  return outcome;
+}
+
 export interface ColorsWindowProps {
   /** Offline or under the soft PLAN lock — every control renders read-only
    *  (the PlanLockScrim also blankets it while a plan is driving). */
@@ -137,8 +197,13 @@ export interface ColorsWindowProps {
   /** LIVE RETUNE (docs/59 §5.2): PATCH one field of the RUNNING rotation
    *  instead of re-POSTing the whole config. A POST is a full replace — it
    *  restarts the rotation under the operator's finger — so every pill that
-   *  can move while something is running routes here instead. */
-  onColorAutopilotRetune?: (patch: Record<string, unknown>) => void;
+   *  can move while something is running routes here instead. The optional
+   *  `failNote` (docs/75 §5, widened alongside `onColorAutopilotChange`'s
+   *  own W3 narration) names WHICH selection a rejected PATCH refused — a
+   *  scheme retune and a wheel-drag retarget both land here, and a bare
+   *  "couldn't retune" sentence would not tell the operator which gesture
+   *  the rig actually rejected. */
+  onColorAutopilotRetune?: (patch: Record<string, unknown>, failNote?: string) => void;
   /** The deck workspace's `isOpen('colors')` — the COLORS window is never
    *  unmounted (`display:'none'`, `_208`), so this is the only signal a
    *  false→true transition (§4.3 entry auto-select) can read. Defaults to
@@ -198,13 +263,23 @@ export function ColorsWindow({
    * in the render section, so the write happens there (the same
    * assign-during-render idiom `hue_wheel.tsx` uses for its `stateRef`); every
    * reader is an event handler, which by definition runs after that render.
+   *
+   * `kind` rides along too (docs/75 §5, pin trap 2): `setSlot`'s dependency
+   * array is regex-pinned to exactly `[writeThrottled, writeNow]`, so it
+   * cannot close over — or list as a dep — the running `RotationKind` it
+   * needs to decide write vs. retarget. Reading `liveRef.current.kind`
+   * instead keeps that decision live without growing the pinned array.
    */
-  const liveRef = useRef({ pairSurface: true, h1: engineH1, h2: engineH2 });
+  const liveRef = useRef({ pairSurface: true, h1: engineH1, h2: engineH2, kind: 'none' as RotationKind });
 
   // ── Mode + armed slot ─────────────────────────────────────────────────
   const [mode, setMode] = useState<Mode>('two');
   const [armedTwo, setArmedTwo] = useState(0);
-  const [armedTurn, setArmedTurn] = useState(0);
+  // The RAW setter (docs/75 §5 D5 / pin trap 1): `setArmedTurn` itself
+  // becomes a ROUTER further down, once `armedPairChannel`/`onPickTurnsPairSlot`
+  // exist to route to. Every call site that means "arm this slot for the
+  // wheel/for a chip load" — never the D5 pick — reads THIS setter.
+  const [armedTurn, setArmedTurnState] = useState(0);
   const [message, setMessage] = useState<{ text: string; warn: boolean } | null>(null);
   const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const say = useCallback((text: string, warn = false) => {
@@ -333,17 +408,37 @@ export function ColorsWindow({
     }
   }, [writeNow]);
 
-  /** Set ONE slot and write BOTH (the unarmed slot keeps its value). */
+  /**
+   * Set ONE slot. docs/75 §5: while CROSSFADE is the running kind (this
+   * gesture's own family — `pairGestureOutcome` above has already told the
+   * caller so), the write becomes a sparse `{palettes: […]}` PATCH of the
+   * running 2-entry ring instead of the old `/param-center` POST — never a
+   * refusal, never a full write. Every other kind (including TURNS, whose
+   * 5-colour ring a 2-hue edit cannot stand in for) falls through to the
+   * ordinary write, which is exactly what happens when nothing is running.
+   *
+   * PIN TRAP 2: this dependency array is regex-pinned to exactly
+   * `[writeThrottled, writeNow]`. The running `kind` and the retune
+   * functions are therefore read through `liveRef`/the ref-mirrors below,
+   * never added here.
+   */
   const setSlot = useCallback((index: number, hue: number, throttled = true) => {
     // The UNARMED slot's current value comes from `liveRef`, not from a
     // closure: closing over `h1`/`h2` gave this callback — and every callback
     // built on it — a new identity on every broadcast frame (_279). Same
     // values, read a moment later.
-    const { h1: cur1, h2: cur2 } = liveRef.current;
+    const { h1: cur1, h2: cur2, kind: liveKind } = liveRef.current;
     const a = index === 0 ? hue : cur1;
     const b = index === 1 ? hue : cur2;
     settleUntilRef.current = Date.now() + LOCAL_SETTLE_MS;
     if (index === 0) setH1(hue); else setH2(hue);
+    if (liveKind === 'crossfade') {
+      const ring = crossfadeRetargetRing(a, b);
+      const note = `COLOUR ${PAIR_CHANNEL_LABELS[index]} pick`;
+      if (throttled) retuneThrottledRef.current('palettes', ring, note);
+      else retuneRef.current('palettes', ring, note);
+      return;
+    }
     if (throttled) writeThrottled(a, b); else writeNow(a, b);
   }, [writeThrottled, writeNow]);
 
@@ -356,25 +451,88 @@ export function ColorsWindow({
 
   // The gate itself is a pure, unit-tested function, so "TURNS is running →
   // manual writes are refused, visibly" is a rule the suite checks rather than
-  // a condition buried in a handler.
-  const gate = manualWriteGate(disabled, kind);
+  // a condition buried in a handler. (`gate.canWrite` used to be read directly
+  // by the load helpers below; docs/75 §5 replaced those reads with the
+  // family-matched `pairGesture`/`turnsGesture` outcomes, so only `refuse`'s
+  // own narration path — the wheel's `onRefused`, and the START buttons'
+  // disabled-guard — still calls `manualWriteGate` here.)
   const refuse = useCallback(() => {
     const g = manualWriteGate(disabled, kind);
     if (!g.canWrite) say(g.reason, true);
   }, [kind, disabled, say]);
+
+  // docs/75 §5 — the two colour-gesture families this window can RETARGET
+  // rather than refuse, computed once so every handler below reads the same
+  // answer instead of re-deriving it. `pairGestureOutcome` (module scope,
+  // above) is the family-matched wrapper around `colourGestureOutcome` — see
+  // its doc comment for why a bare `colourGestureOutcome(kind, mode)` is not
+  // safe to trust for the shared two-colour surface.
+  const pairGesture = useMemo(
+    () => pairGestureOutcome(disabled, kind, mode, 'crossfade'), [disabled, kind, mode],
+  );
+  const turnsGesture = useMemo(
+    () => pairGestureOutcome(disabled, kind, mode, 'turns'), [disabled, kind, mode],
+  );
 
   /**
    * SEND A RETUNE. While the matching family is running the moved field goes
    * out as a sparse PATCH — cadence, phase and the in-flight fade all survive.
    * When nothing (or a different family) is running the value is staged
    * locally and the START button carries it, which is exactly the behaviour
-   * the pills have always had.
+   * the pills have always had. `note` (docs/75 §5 item C) names WHICH
+   * selection this retune came from, so a refusal on the message line says
+   * more than "couldn't retune" — it says what the rig rejected.
    */
-  const retune = useCallback((field: RetuneField, value: unknown) => {
+  const retune = useCallback((field: RetuneField, value: unknown, note?: string) => {
     if (!retunableLive(kind, field)) return;
     if (!onColorAutopilotRetune) { say('Engine autopilot control is not wired here.', true); return; }
-    onColorAutopilotRetune(rotationRetunePatch(kind, { [field]: value }));
+    onColorAutopilotRetune(rotationRetunePatch(kind, { [field]: value }), note);
   }, [kind, onColorAutopilotRetune, say]);
+
+  // `retune`'s identity changes whenever `kind`/`onColorAutopilotRetune`/`say`
+  // does — fine for most callers, but `setSlot` above (and `setTurnSlot`
+  // below) cannot add it to a pinned or performance-sensitive dependency
+  // array. Mirrored into a ref, same idiom as `liveRef`, so a pinned callback
+  // can always reach the CURRENT `retune` without depending on it.
+  const retuneRef = useRef(retune);
+  retuneRef.current = retune;
+
+  // ── THROTTLE #2 — drag-driven RETARGETS (docs/75 §5 item B / D6) ───────
+  // A latched TURNS scheme-drag used to restage via a full POST on EVERY
+  // drag sample — a POST storm that restarted the rotation under the
+  // operator's finger. The retarget PATCH this wave replaces it with must
+  // not simply trade "POST storm" for "PATCH storm": this is the SAME
+  // leading+trailing recipe as `writeThrottled` above, at the SAME cadence
+  // (`LIVE_THROTTLE_MS`), so the engine sees the running ring change no
+  // faster than the old manual write path ever wrote colorPalette1/2.
+  const retuneThrottleRef = useRef<{
+    last: number; timer: ReturnType<typeof setTimeout> | null;
+    pending: { field: RetuneField; value: unknown; note?: string } | null;
+  }>({ last: 0, timer: null, pending: null });
+  useEffect(() => () => { if (retuneThrottleRef.current.timer) clearTimeout(retuneThrottleRef.current.timer); }, []);
+
+  const retuneThrottled = useCallback((field: RetuneField, value: unknown, note?: string) => {
+    const t = retuneThrottleRef.current;
+    t.pending = { field, value, note };
+    const now = Date.now();
+    const remaining = LIVE_THROTTLE_MS - (now - t.last);
+    if (remaining <= 0) {
+      t.last = now;
+      retune(field, value, note);
+    } else if (!t.timer) {
+      t.timer = setTimeout(() => {
+        t.last = Date.now();
+        t.timer = null;
+        if (t.pending) retune(t.pending.field, t.pending.value, t.pending.note);
+      }, remaining);
+    }
+  }, [retune]);
+
+  // Same ref-mirror reason as `retuneRef`: `setSlot`'s pinned deps cannot
+  // list `retuneThrottled` either, even though its own identity is no more
+  // volatile than `retune`'s.
+  const retuneThrottledRef = useRef(retuneThrottled);
+  retuneThrottledRef.current = retuneThrottled;
 
 
   // ── ONE SHARED TRANSPORT (_224 order 1) ───────────────────────────────
@@ -530,9 +688,13 @@ export function ColorsWindow({
   // operator did not pick for TURNS.
   const livePalettes = colorAutopilot?.palettes;
   const turnsLive = kind === 'turns';
-  const liveOrbit = useMemo(() => (turnsLive ? turnsOrbit(livePalettes) : null), [turnsLive, livePalettes]);
+  const liveOrbit = useMemo(
+    () => (turnsLive ? turnsOrbit(livePalettes, turnDraft) : null),
+    [turnsLive, livePalettes, turnDraft],
+  );
   const liveRing = useMemo(() => liveOrbit?.ring ?? [], [liveOrbit]);
   const liveDistance = liveOrbit?.distance ?? ORBIT_DISTANCE_DEFAULT;
+  const liveStep = liveOrbit?.step ?? 1;
   // WHERE the wire's ring starts inside the staged one. The ring is posted
   // beginning at COLOUR A, so a non-default pick puts a ROTATION of the five
   // staged colours on the wire; recovering the phase is what keeps the
@@ -567,11 +729,27 @@ export function ColorsWindow({
     }
   }, [ringLive, liveDelay, liveTransitionMs]);
 
-  /** Set ONE draft slot's HUE, keeping its saturation/brightness — dragging a
-   *  HUE ring's third slot must not silently blow its brightness back to 1. */
+  /**
+   * Set ONE draft slot's HUE, keeping its saturation/brightness — dragging a
+   * HUE ring's third slot must not silently blow its brightness back to 1.
+   *
+   * docs/75 §5: while TURNS is the running kind, an un-latched per-slot edit
+   * is one of the "every draft edit rebuilds the ring and PATCHes it"
+   * gestures — rebuild the 5-entry ring from the just-edited draft and send
+   * it as a throttled retarget (this fires on every drag sample, same as the
+   * two-colour wheel). While a DIFFERENT kind is running (or nothing is),
+   * this stays exactly what it always was: a draft-only edit with no write
+   * at all — the turns wheel's own `readOnly` is `disabled` alone, never
+   * gated by `kind`, so there is nothing here for a mismatched family to
+   * refuse.
+   */
   const setTurnSlot = useCallback((index: number, hue: number) => {
-    setTurnDraft((prev) => prev.map((c, i) => (i === index ? colour(hue, c.s, c.v) : c)));
-  }, []);
+    const next = turnDraft.map((c, i) => (i === index ? colour(hue, c.s, c.v) : c));
+    setTurnDraft(next);
+    if (kind === 'turns') {
+      retuneThrottled('palettes', turnsRetargetRing(next, pairSel), `T${index + 1} edit`);
+    }
+  }, [turnDraft, kind, pairSel, retuneThrottled]);
 
   const startTurns = useCallback(() => {
     if (!onColorAutopilotChange) { say('Engine autopilot control is not wired here.', true); return; }
@@ -612,17 +790,13 @@ export function ColorsWindow({
   // which card is on screen (the strip names the cause).
   const followInert = kind === 'follow-note';
 
-  // The ENDPOINTS of the crossfade: pair 0 of the live crossfade config when
-  // one exists (a STOPPED config stays in the broadcast, so the scrubber keeps
-  // its track), else the live A/B slots.
-  const [endA, endB] = useMemo<[number, number]>(() => {
-    const p = colorAutopilot?.palettes;
-    if (Array.isArray(p) && p.length === 2 && isTurnsConfig(p)) {
-      const first = p[0] as { c1: number | Hsv; c2: number | Hsv };
-      return [hueOf(first.c1), hueOf(first.c2)];
-    }
-    return [h1, h2];
-  }, [colorAutopilot?.palettes, h1, h2]);
+  // A stale stopped ring is never allowed to win over the colours the
+  // operator just selected. The running crossfade is the only case whose
+  // stored endpoints still own the live readout and scrubber.
+  const [endA, endB] = useMemo(
+    () => crossfadeEndpoints(kind, colorAutopilot?.palettes, h1, h2),
+    [kind, colorAutopilot?.palettes, h1, h2],
+  );
 
   // WHERE THE RIG IS, read off the broadcast. null = the live palette is not on
   // the A→B arc at all, which the card says with "—" rather than a confident
@@ -740,22 +914,51 @@ export function ColorsWindow({
   useEffect(() => { void loadPairs(); }, [loadPairs]);
 
   const persistPairs = useCallback(async (next: PalettePreset[], okMessage: string) => {
-    const previous = pairs;
-    setPairs(next);
     const res = await saveColorPairs(next);
     if (!res.ok) {
-      setPairs(previous);
-      say(`Not saved: ${res.error || 'engine unreachable'}. Reverted.`, true);
+      say(`Not saved: ${res.error || 'engine unreachable'}. Nothing changed.`, true);
       return;
     }
-    setPairsError(null);
-    setPairs(normalizeColorPairs(res.data));
-    say(okMessage);
-  }, [pairs, say]);
+    try {
+      // The engine reply is the authority. A palette never vanishes locally
+      // before that exact saved list has been confirmed and decoded.
+      setPairs(normalizeColorPairs(res.data));
+      setPairsError(null);
+      say(okMessage);
+    } catch (e: any) {
+      setPairsError(e?.message || String(e));
+      say(`Saved, but the authoritative palette reply could not be displayed: ${e?.message || String(e)}.`, true);
+    }
+  }, [say]);
 
-  const onDeletePair = useCallback((index: number) => {
-    void persistPairs(removeColorPairAt(pairs, index), 'Deleted.');
-  }, [pairs, persistPairs]);
+  const onDeletePair = useCallback(async (index: number, preset: PalettePreset) => {
+    // A saved palette has no independent active-selection state. Deleting it
+    // changes the shared menu only; the live A/B rig colours stay untouched.
+    if (pairs[index] !== preset) {
+      say('Palette list changed. Reopen COLORS and try again.', true);
+      return;
+    }
+    let confirmed = false;
+    try {
+      confirmed = await opConfirm({
+        title: 'Delete saved palette?',
+        message: `Delete "${presetDescription(preset)}" from the shared palette library on every iPad? Current rig colours will not change.`,
+        confirmLabel: 'DELETE',
+      });
+    } catch (e: any) {
+      opError('Could not confirm palette deletion', e?.message || String(e));
+      return;
+    }
+    if (!confirmed) return;
+    if (pairs[index] !== preset) {
+      say('Palette list changed while confirmation was open. Nothing was deleted.', true);
+      return;
+    }
+    await persistPairs(
+      removeColorPairAt(pairs, index),
+      `Deleted "${presetLabel(preset)}". Current rig colours are unchanged.`,
+    );
+  }, [pairs, persistPairs, say]);
 
   // ── Show palette (the curated config.yaml library) ────────────────────
   const [showLibrary, setShowLibrary] = useState(false);
@@ -838,9 +1041,13 @@ export function ColorsWindow({
   /**
    * Stage a scheme's five colours and do whatever §2.6 says for the rotation
    * that is currently running. `announce` is off for the wheel-drag re-theme
-   * (a drag would otherwise spam the message line every frame).
+   * (a drag would otherwise spam the message line every frame). `throttle`
+   * (docs/75 §5 item B/D6) is on for that SAME drag path: it is the only
+   * caller that fires once per drag sample rather than once per discrete tap.
    */
-  const applyScheme = useCallback((scheme: SchemeId, base: number, sel: SchemePairSel, announce = true) => {
+  const applyScheme = useCallback((
+    scheme: SchemeId, base: number, sel: SchemePairSel, announce = true, throttle = false,
+  ) => {
     const colours = generateScheme(scheme, base);
     setTurnDraft(colours);
     const title = SCHEME_TITLES[scheme];
@@ -858,7 +1065,7 @@ export function ColorsWindow({
       // methodFadeS, so on the rig it is indistinguishable from a timer-driven
       // advance, which is exactly what it should look like.
       if (onColorAutopilotRetune) {
-        onColorAutopilotRetune(rotationRetunePatch('follow-note', { method: scheme }));
+        onColorAutopilotRetune(rotationRetunePatch('follow-note', { method: scheme }), `${title} method override`);
         if (announce) say(outcome.message);
       } else if (announce) {
         say('Engine autopilot control is not wired here.', true);
@@ -866,20 +1073,30 @@ export function ColorsWindow({
       return;
     }
     if (outcome.action === 'restage') {
-      // ONE-TAP RESTAGE: a config write through the daemon's own front door, so
-      // the daemon stays the single palette writer throughout. Cadence and
-      // fade are kept; the engine's setState re-cycles cleanly and the next
-      // fade ramps from wherever the rig currently is.
-      if (onColorAutopilotChange) {
-        // The restage carries the SELECTION, so the ring the daemon adopts is
-        // the operator's pair at their spacing, starting on the pair already
-        // lit — a cursor-resetting setState then plays that pair first and the
-        // rig moves to the pick instead of jumping past it.
-        onColorAutopilotChange(turnsAutopilotPatch(colours, holdS, fadeS, sel));
-        if (announce) say(outcome.message);
-      } else if (announce) {
-        say('Engine autopilot control is not wired here.', true);
-      }
+      // docs/75 §5: what used to be a full POST (`turnsAutopilotPatch`,
+      // restarting the rotation's generation/cursor/hold on every tap and,
+      // worse, on every latched-drag SAMPLE) is now a sparse `{palettes}`
+      // PATCH of the running ring — the daemon stays the single palette
+      // writer, but cadence and phase now survive the restage instead of
+      // resetting, closing the restart the old comment here apologized for.
+      const ring = turnsRetargetRing(colours, sel);
+      const note = `${title} restage`;
+      if (throttle) retuneThrottled('palettes', ring, note); else retune('palettes', ring, note);
+      if (announce) say(outcome.message);
+      return;
+    }
+    if (outcome.action === 'retarget') {
+      // docs/75 §5: the crossfade's only outcome row — a scheme tap while the
+      // crossfade runs rebuilds its running 2-entry ring from the SELECTED
+      // two of the tapped scheme's five colours (the same `sel` the stage-
+      // and-write branch below uses) and PATCHes it in place. The kind can
+      // never change this way: a PATCH cannot touch `active`/`mode`, and the
+      // ring stays length 2.
+      const [a, b] = schemePairColours(colours, sel);
+      const ring = crossfadeRetargetRing(a.h, b.h);
+      const note = `${title} retune`;
+      if (throttle) retuneThrottled('palettes', ring, note); else retune('palettes', ring, note);
+      if (announce) say(outcome.message);
       return;
     }
     if (outcome.action === 'stage-only') {
@@ -897,8 +1114,8 @@ export function ColorsWindow({
     setBothSlots(a.h, b.h);
     if (announce) say(outcome.message);
   }, [colorAutopilot?.active, colorAutopilot?.palettes, colorAutopilot?.mode,
-    onColorAutopilotChange, onColorAutopilotRetune, holdS, fadeS,
-    disabled, kind, mode, setBothSlots, say]);
+    onColorAutopilotRetune,
+    disabled, kind, mode, setBothSlots, say, retune, retuneThrottled]);
 
   const onSchemeTap = useCallback((scheme: SchemeId) => {
     setLatched({ scheme, base: baseHue });
@@ -924,41 +1141,138 @@ export function ColorsWindow({
     // what the gate can refuse is the WRITE. Refusing both would lose the pick
     // silently the moment the rotation stopped.
     setPairSel(res.sel);
-    const g = manualWriteGate(disabled, kind);
-    if (!g.canWrite) { say(g.reason, true); return; }
-    // The LATCH's own base, never the armed slot's hue: A and B are scheme
-    // slots now, so reading the base back off one of them would re-theme the
-    // ring underneath the very pick being made.
+    // docs/75 §5: the WRITE half is `applyScheme`'s own job now — it already
+    // knows the full §2.6 outcome table (write / retarget / restage /
+    // stage-only / method-override) for `latched.scheme` under the CURRENT
+    // kind, called from this card (`mode` is always 'two' here — this pick
+    // surface only renders under `showSchemeSlots`, i.e. `isTwo`). Pre-
+    // checking with the OLD `manualWriteGate` here would re-introduce a flat
+    // refusal for `kind === 'crossfade'`, exactly the case docs/75 §5 opens
+    // up. `announce` stays off so THIS handler's own "COLOUR X is now TN"
+    // line wins the message row for the success paths; a genuine 'stage-only'
+    // mismatch (a different family driving from elsewhere) is checked for
+    // separately so that warning is never silently swallowed by it.
+    const title = SCHEME_TITLES[latched.scheme];
+    const outcome = schemeTapOutcome(kind, title, mode);
+    if (outcome.action === 'stage-only') {
+      // NEVER a silent auto-pause: name the driver, same as a scheme tap.
+      say(outcome.message, true);
+      return;
+    }
     applyScheme(latched.scheme, latched.base, res.sel, false);
     say(`COLOUR ${PAIR_CHANNEL_LABELS[channel]} is now T${index + 1}.`);
-  }, [latched, armedTwo, pairSel, applyScheme, disabled, kind, say]);
+  }, [latched, armedTwo, pairSel, kind, mode, applyScheme, say]);
+
+  // ── D5 — A/B PICK ON THE TURNS CARD (docs/75 §5) ────────────────────────
+  // "select two, and the window will move both in a rotating window queue
+  // style" needs somewhere to MAKE that pick from the card that plays it —
+  // today the T1..T5 badges are read-only, with the comment "the pick is
+  // made with the arm-then-tap grammar on the TWO COLOUR card" pointing the
+  // operator at a different card entirely. D5 gives the TURNS card the SAME
+  // grammar, natively: COLOUR A / COLOUR B arm chips, then a tap on a T-slot
+  // assigns it — reusing `selectSchemePair`'s refusals and `onPickPairSlot`'s
+  // sentence style verbatim.
+  //
+  // ARMED INDEPENDENTLY of `armedTurn` (which slot the WHEEL drags): "arm a
+  // channel to pick" and "arm a slot to drag" are two different grammars
+  // that happen to share the same five buttons. `null` means no channel is
+  // armed — the ORIGINAL "tap a T-slot to arm it for the wheel" behaviour.
+  const [armedPairChannel, setArmedPairChannel] = useState<PairChannel | null>(null);
+
+  /** Arm a COLOUR A/B chip for the D5 pick. PERSISTS (not one-shot), matching
+   *  the TWO COLOUR card's own `armedTwo` arm-then-tap idiom: the operator
+   *  can tap several T-slots into the SAME channel before arming the other
+   *  one. */
+  const armTurnsPairChannel = useCallback((channel: PairChannel) => {
+    setArmedPairChannel(channel);
+  }, []);
+
+  /**
+   * THE D5 PICK ITSELF. Same shape as `onPickPairSlot` above, aimed at the
+   * TURNS draft/ring instead of a latched scheme's five faces — there is no
+   * latch requirement here, because on this card the five staged slots ARE
+   * the ring already. While TURNS is the running kind this PATCHes the
+   * re-ordered ring (docs/75 §5: "PATCHes the re-ordered ring instead of
+   * refusing"); otherwise the pick is recorded locally only, exactly like
+   * every other draft-only TURNS edit before START.
+   */
+  const onPickTurnsPairSlot = useCallback((index: number) => {
+    if (armedPairChannel === null) return;
+    const res = selectSchemePair(pairSel, armedPairChannel, index, TURNS_SLOT_COUNT);
+    if (!res.ok) { say(res.reason, true); return; }
+    setPairSel(res.sel);
+    if (kind === 'turns') {
+      retune('palettes', turnsRetargetRing(turnDraft, res.sel), 'turns A/B pick');
+    }
+    say(`COLOUR ${PAIR_CHANNEL_LABELS[armedPairChannel]} is now T${index + 1}.`);
+  }, [armedPairChannel, pairSel, kind, turnDraft, retune, say]);
+
+  /**
+   * PIN TRAP 1 (docs/75 §5): `colors_window_wiring.test.ts` requires
+   * `onPress={setArmedTurn}` to remain LITERALLY present on the T-row's
+   * `SlotButton`s, and those `SlotButton`s are `React.memo`'d — so the D5
+   * pick cannot be wired by swapping in a fresh handler. `setArmedTurn`
+   * therefore becomes a ROUTER instead of the raw state setter: while a
+   * COLOUR A/B chip is armed, a tap on a T-slot is the D5 pick; otherwise it
+   * is the ORIGINAL "arm this slot for the wheel" gesture. The pinned JSX
+   * text and the `SlotButton` prop's identity both survive unchanged. Every
+   * OTHER call site that means "just arm the slot" (`onWheelArm`,
+   * `loadPair`'s step-on) reads `setArmedTurnState`, the raw setter, so
+   * those gestures can never accidentally route through the picker.
+   */
+  const setArmedTurn = useCallback((index: number) => {
+    if (armedPairChannel !== null) { onPickTurnsPairSlot(index); return; }
+    setArmedTurnState(index);
+  }, [armedPairChannel, onPickTurnsPairSlot]);
 
   // ── Load helpers shared by every preset surface ───────────────────────
   // Loading ANY non-scheme selection clears the latch: the ring is then no
   // longer the scheme, and keeping the latch would re-theme a ring the
   // operator just personalised on the next wheel drag.
+  /**
+   * docs/75 §5: a chip tap is one of the "saved-pair load" gestures every
+   * per-mode bullet names. `setSlot`/`setTurnSlot` already carry the retarget
+   * logic (family-matched via `liveRef.current.kind` / `kind` respectively),
+   * so this handler's OWN job is just picking which family's refusal/gesture
+   * table applies — `pairGesture` for the shared A/B surface, `turnsGesture`
+   * for the TURNS draft — instead of the old blanket `gate.canWrite`, which
+   * refused every kind including the two this wave opens up.
+   */
   const loadIntoArmed = useCallback((c: Hsv) => {
-    if (!gate.canWrite) { refuse(); return; }
+    const outcome = mode !== 'turns' ? pairGesture : turnsGesture;
+    if (outcome.action === 'refuse') { say(outcome.reason!, true); return; }
     setLatched(null);
     setPairSel(SCHEME_PAIR_DEFAULT);
     const p = pinned(c);
     if (mode !== 'turns') setSlot(armedTwo, p.h, false);
     else setTurnSlot(armedTurn, p.h);
-  }, [gate.canWrite, refuse, mode, armedTwo, armedTurn, setSlot, setTurnSlot]);
+  }, [mode, pairGesture, turnsGesture, say, armedTwo, armedTurn, setSlot, setTurnSlot]);
 
   const loadPair = useCallback((c1: number, c2: number) => {
-    if (!gate.canWrite) { refuse(); return; }
+    const outcome = mode !== 'turns' ? pairGesture : turnsGesture;
+    if (outcome.action === 'refuse') { say(outcome.reason!, true); return; }
     setLatched(null);
     setPairSel(SCHEME_PAIR_DEFAULT);
-    if (mode !== 'turns') { setBothSlots(c1, c2); return; }
+    if (mode !== 'turns') {
+      setBothSlots(c1, c2);
+      if (outcome.action === 'retarget') retune('palettes', crossfadeRetargetRing(c1, c2), 'pair load');
+      return;
+    }
     // TURNS: fill the armed slot and the one after it, then step on — three
     // taps fill all five and both hues of a pair stay reachable (prototype
     // behaviour, stated on the face of the pane rather than discovered).
     const next = (armedTurn + 1) % TURNS_SLOT_COUNT;
-    setTurnDraft((prev) => prev.map((v, i) => (
-      i === armedTurn ? colour(c1, 1, 1) : i === next ? colour(c2, 1, 1) : v)));
-    setArmedTurn((armedTurn + 2) % TURNS_SLOT_COUNT);
-  }, [gate.canWrite, refuse, mode, armedTurn, setBothSlots]);
+    const nextDraft = turnDraft.map((v, i) => (
+      i === armedTurn ? colour(c1, 1, 1) : i === next ? colour(c2, 1, 1) : v));
+    setTurnDraft(nextDraft);
+    if (outcome.action === 'retarget') {
+      retune('palettes', turnsRetargetRing(nextDraft, SCHEME_PAIR_DEFAULT), 'pair load');
+    }
+    // The RAW state setter, never the D5 router — this steps the ARMED SLOT
+    // for the next chip tap, which has nothing to do with the COLOUR A/B
+    // pick grammar (docs/75 §5 pin trap 1).
+    setArmedTurnState((armedTurn + 2) % TURNS_SLOT_COUNT);
+  }, [mode, pairGesture, turnsGesture, say, armedTurn, turnDraft, setBothSlots, retune]);
 
   // ── SAVE A PALETTE (_242 orders 2 + 4) ────────────────────────────────
   //
@@ -1024,15 +1338,24 @@ export function ColorsWindow({
    */
   const loadPreset = useCallback((p: PalettePreset) => {
     if (!p.ring || !p.sel) { loadPair(p.c1, p.c2); return; }
-    if (!gate.canWrite) { refuse(); return; }
-    setTurnDraft(p.ring.map((c) => colour(c.h, c.s, c.v)));
-    setPairSel([p.sel[0], p.sel[1]]);
+    const outcome = mode !== 'turns' ? pairGesture : turnsGesture;
+    if (outcome.action === 'refuse') { say(outcome.reason!, true); return; }
+    const ring = p.ring.map((c) => colour(c.h, c.s, c.v));
+    const sel: SchemePairSel = [p.sel[0], p.sel[1]];
+    setTurnDraft(ring);
+    setPairSel(sel);
     setLatched(p.scheme !== undefined && p.base !== undefined
       ? { scheme: p.scheme, base: p.base }
       : null);
     setBothSlots(p.c1, p.c2);
+    if (outcome.action === 'retarget') {
+      const retargetRing = mode !== 'turns'
+        ? crossfadeRetargetRing(p.c1, p.c2)
+        : turnsRetargetRing(ring, sel);
+      retune('palettes', retargetRing, 'palette load');
+    }
     say(`Loaded ${presetDescription(p)}.`);
-  }, [loadPair, gate.canWrite, refuse, setBothSlots, say]);
+  }, [loadPair, mode, pairGesture, turnsGesture, say, setBothSlots, retune]);
 
   /**
    * WHEEL PICK. While a scheme is LATCHED the drag re-runs the scheme from the
@@ -1043,22 +1366,50 @@ export function ColorsWindow({
     if (latched) {
       // A drag IS the re-base — the latch follows the finger (Live Touch's
       // applyWheel → groupSchemeSync), and the whole staged ring re-themes.
+      // docs/75 §5/D6: this fires on every drag sample, so it is the
+      // THROTTLED retarget call (`applyScheme`'s 5th arg) — the POST-storm
+      // restage this replaces used to restart the running TURNS rotation on
+      // every sample.
       setLatched({ scheme: latched.scheme, base: hue });
-      applyScheme(latched.scheme, hue, pairSel, false);
+      applyScheme(latched.scheme, hue, pairSel, false, true);
       return;
     }
     if (mode !== 'turns') setSlot(i, hue); else setTurnSlot(i, hue);
   }, [latched, applyScheme, pairSel, mode, setSlot, setTurnSlot]);
 
-  /** ARM a dial handle. Identity depends on the CARD, not on any live value. */
+  /**
+   * ARM a dial handle. Identity depends on the CARD, not on any live value.
+   * Grabbing the WHEEL always arms that slot for the NEXT drag — a distinct
+   * gesture from the T-row's own tap, so this reads the RAW setter, never
+   * the D5 router (docs/75 §5 pin trap 1): arming the wheel while a COLOUR
+   * A/B chip happens to be armed must not silently reroute into a pick.
+   */
   const onWheelArm = useCallback((i: number) => {
-    if (mode === 'two') setArmedTwo(i); else setArmedTurn(i);
+    if (mode === 'two') setArmedTwo(i); else setArmedTurnState(i);
   }, [mode]);
-  /** Flush the drag's final value. Reads the hues at RELEASE time out of the
-   *  ref, which is fresher than a render-time closure would have been. */
+  /**
+   * Flush the drag's final value. Reads the hues (and the running `kind`) at
+   * RELEASE time out of the ref, which is fresher than a render-time closure
+   * would have been.
+   *
+   * docs/75 §5 item B: the trailing half of the leading+trailing throttle —
+   * an UNTHROTTLED retune/write of the drag's last sample, so release never
+   * waits out the throttle window for the final value to land. Mirrors the
+   * two-colour `writeNow` flush exactly, just aimed at a retarget PATCH when
+   * CROSSFADE is the running (matching) kind instead of a `/param-center`
+   * write. TURNS drags flush through `setTurnSlot`/`applyScheme` themselves
+   * (their throttle already carries a pending write that lands within one
+   * `LIVE_THROTTLE_MS` tick), so only the pairSurface branch needs a flush
+   * here — matching the ORIGINAL `if (s.pairSurface)` guard.
+   */
   const onWheelDragEnd = useCallback(() => {
     const s = liveRef.current;
-    if (s.pairSurface) writeNow(s.h1, s.h2);
+    if (!s.pairSurface) return;
+    if (s.kind === 'crossfade') {
+      retuneRef.current('palettes', crossfadeRetargetRing(s.h1, s.h2), 'COLOUR drag release');
+      return;
+    }
+    writeNow(s.h1, s.h2);
   }, [writeNow]);
 
   // ── Render ────────────────────────────────────────────────────────────
@@ -1086,7 +1437,7 @@ export function ColorsWindow({
   // over per render — the SAME stale-closure discipline `hue_wheel.tsx` uses
   // internally. `onDragEnd` closing over `h1`/`h2` directly would have given the
   // dial a fresh prop on every broadcast frame and defeated its memo.
-  liveRef.current = { pairSurface, h1, h2 };
+  liveRef.current = { pairSurface, h1, h2, kind };
   // The list the Live Touch chips compare their hue against for the A/B/T
   // badge. The TURNS side used to be rebuilt INSIDE the chip loop — one fresh
   // five-colour array per chip per render (_279).
@@ -1098,9 +1449,9 @@ export function ColorsWindow({
   // a ring that is not the staged five at all.
   const litWindow = useMemo(
     () => (turnsLive && cursor && ringPhase !== null
-      ? orbitWindowSlots(cursor.index, liveDistance, ringPhase, TURNS_SLOT_COUNT)
+      ? orbitWindowSlots(cursor.index, liveDistance, ringPhase, TURNS_SLOT_COUNT, liveStep)
       : null),
-    [turnsLive, cursor, liveDistance, ringPhase],
+    [turnsLive, cursor, liveDistance, liveStep, ringPhase],
   );
   const litIndex = litWindow ? litWindow[0] : -1;
   const litNext = litWindow ? litWindow[1] : -1;
@@ -1187,7 +1538,11 @@ export function ColorsWindow({
           // the dial that is what keeps it jump-free when A is not ring slot 1.
           dialValue={latched ? latched.base : undefined}
           onDragEnd={onWheelDragEnd}
-          readOnly={pairSurface ? !gate.canWrite : disabled}
+          // docs/75 §5: the two-colour surface is writable while nothing is
+          // running (the old rule) OR while CROSSFADE — its own matching
+          // family — is (the new retarget path); every other kind, matched
+          // or not, stays exactly as refused as `gate.canWrite` always said.
+          readOnly={pairSurface ? pairGesture.action === 'refuse' : disabled}
           onRefused={refuse}
           handleStroke={C.ghostBorder}
           armedStroke={C.primary}
@@ -1263,9 +1618,11 @@ export function ColorsWindow({
               swatch={hsvCss(c)}
               armed={armedTurn === i}
               lit={i === litIndex || i === litNext}
-              // WHICH TWO ARE THE ORBITING PAIR. Read-only here — the pick is
-              // made with the arm-then-tap grammar on the TWO COLOUR card — but
-              // the ring that plays has to be legible on the card that plays it.
+              // WHICH TWO ARE THE ORBITING PAIR — legible on the card that
+              // plays it. D5 (docs/75 §5): pickable HERE now too, not only on
+              // the TWO COLOUR card — arm a COLOUR A/B chip below, then tap a
+              // slot. `onPress={setArmedTurn}` ROUTES: with no channel armed
+              // this is still the original "arm this slot for the wheel" tap.
               badge={pairSel[0] === i ? PAIR_CHANNEL_LABELS[0]
                 : pairSel[1] === i ? PAIR_CHANNEL_LABELS[1] : null}
               compact
@@ -1274,6 +1631,31 @@ export function ColorsWindow({
           ))}
         </View>
       )}
+
+      {/* ── D5 — A/B PICK, TURNS CARD (docs/75 §5) ────────────────────────
+          "select two, and the window will move both in a rotating window
+          queue style" — the same arm-then-tap grammar the TWO COLOUR card's
+          scheme slots use, natively on the card that plays the pair. Arm
+          COLOUR A or COLOUR B, then tap a T-slot above; `selectSchemePair`'s
+          refusals and `onPickPairSlot`'s sentence style are reused verbatim
+          via `onPickTurnsPairSlot`. */}
+      {isTurns ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {label('Pick A/B ·', C.icon)}
+          <PaneButton
+            label={`COLOUR A${armedPairChannel === 0 ? ' (armed)' : ''}`}
+            active={armedPairChannel === 0}
+            disabled={disabled}
+            onPress={() => armTurnsPairChannel(0)}
+          />
+          <PaneButton
+            label={`COLOUR B${armedPairChannel === 1 ? ' (armed)' : ''}`}
+            active={armedPairChannel === 1}
+            disabled={disabled}
+            onPress={() => armTurnsPairChannel(1)}
+          />
+        </View>
+      ) : null}
 
       {/* ── The rotation's live WINDOW (_224 order 2) ────────────────────
           A 5-cell rail with the orbiting pair's two cells sitting exactly
@@ -1286,6 +1668,7 @@ export function ColorsWindow({
           cursor={cursor}
           ringLength={turnDraft.length}
           distance={liveDistance}
+          step={liveStep}
           phase={ringPhase}
         />
       ) : null}
@@ -1451,13 +1834,13 @@ export function ColorsWindow({
             The rotation runs in the ENGINE — it keeps going if this iPad sleeps.
           </Text>
           {/* THE ORBIT (operator: "keep their distance, and rotate them in a
-              window to the right, and then loop back"). The pair is picked with
-              the arm-then-tap grammar on the TWO COLOUR card while a scheme is
-              latched; this line states what that pick means HERE. */}
+              window to the right, and then loop back"). D5 (docs/75 §5): the
+              pair is now picked HERE too — COLOUR A/COLOUR B chips above the
+              slot row — as well as with the arm-then-tap grammar on the TWO
+              COLOUR card while a scheme is latched; this line states what
+              that pick means. */}
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.icon }}>
-            {`COLOUR A is T${pairSel[0] + 1}, COLOUR B is T${pairSel[1] + 1} — ${orbitDistance(pairSel, TURNS_SLOT_COUNT)} slot(s) apart. `}
-            Both step one slot right per turn and keep that distance, looping past T5 back to T1.
-            {' '}Pick the two on the TWO COLOUR card with a scheme latched.
+            {`COLOUR A is T${pairSel[0] + 1}, COLOUR B is T${pairSel[1] + 1} — ${orbitDistance(pairSel, TURNS_SLOT_COUNT)} slot(s) apart, keeping that distance and looping past T5 back to T1.`}
           </Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <TouchableOpacity
@@ -1698,9 +2081,11 @@ export function ColorsWindow({
             is the operator's name when they gave one, and the two angles when
             they deliberately did not (_242 order 4). */}
         <View style={{ gap: 6 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            {label(`Saved palettes · ${pairs.length}/${COLOR_PAIRS_MAX}`)}
-            <View style={{ flexDirection: 'row', gap: 6 }}>
+          <View style={PALETTE_LIBRARY_HEADER_STYLE}>
+            <View style={PALETTE_LIBRARY_TITLE_STYLE}>
+              {label(`Saved palettes · ${pairs.length}/${COLOR_PAIRS_MAX}`)}
+            </View>
+            <View style={PALETTE_LIBRARY_ACTIONS_STYLE}>
               <PaneButton label="SAVE PALETTE" onPress={() => { void onSavePreset(); }} disabled={disabled} />
               <PaneButton
                 label={pairsEditing ? 'DONE' : 'EDIT'}
@@ -1725,7 +2110,7 @@ export function ColorsWindow({
                   : 'Loading saved palettes…'}
             </Text>
           ) : (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            <View style={PALETTE_LIBRARY_GRID_STYLE}>
               {pairs.map((p, i) => (
                 // `pairIsLive` still runs every render — it is a couple of
                 // numeric compares — but the CHIP is memoized on its BOOLEAN
@@ -1850,27 +2235,29 @@ const PresetChip = React.memo(function PresetChip({
   index, preset, live, editing, onLoad, onDelete,
 }: {
   index: number; preset: PalettePreset; live: boolean; editing: boolean;
-  onLoad: (p: PalettePreset) => void; onDelete: (index: number) => void;
+  onLoad: (p: PalettePreset) => void; onDelete: (index: number, preset: PalettePreset) => void;
 }) {
   const C = usePalette();
   return (
     <TouchableOpacity
-      onPress={() => (editing ? onDelete(index) : onLoad(preset))}
+      onPress={() => (editing ? void onDelete(index, preset) : onLoad(preset))}
       accessibilityRole="button"
       accessibilityLabel={editing
         ? `Delete ${presetDescription(preset)}`
         : `Load ${presetDescription(preset)}`}
-      style={{
+      style={[PALETTE_LIBRARY_CHIP_STYLE, {
         flexDirection: 'row', alignItems: 'center', gap: 6,
         paddingHorizontal: 8, paddingVertical: 7, borderRadius: 8,
         borderWidth: live ? 2 : 1,
         borderColor: editing ? C.error : live ? C.primary : C.ghostBorder,
         backgroundColor: C.surface,
-      }}
+      }]}
     >
       <PresetIcon colours={presetIconColours(preset)} size={20} borderColor={C.ghostBorder} />
       <Text
-        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.text, maxWidth: 96 }}
+        style={[PALETTE_LIBRARY_CHIP_LABEL_STYLE, {
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.text, maxWidth: 96,
+        }]}
         numberOfLines={1}
       >
         {presetLabel(preset)}
@@ -2049,15 +2436,15 @@ function MethodChip({ title, on, running, disabled, onPress }: {
  * Every position comes from `rotationCursor`, i.e. from a broadcast palette.
  * There is no timer here; when the rig stops moving, so does this.
  */
-function WindowRail({ cursor, ringLength, distance, phase }: {
-  cursor: RotationCursor | null; ringLength: number; distance: number; phase: number | null;
+function WindowRail({ cursor, ringLength, distance, step, phase }: {
+  cursor: RotationCursor | null; ringLength: number; distance: number; step: number; phase: number | null;
 }) {
   const C = usePalette();
   if (ringLength < 2) return null;
   // No phase means the engine is rotating a ring these cells do not name, so
   // the rail stays dark rather than lighting a window that is not this one.
   const segments = cursor && phase !== null
-    ? cursorRailSegments(cursor, ringLength, distance, phase)
+    ? cursorRailSegments(cursor, ringLength, distance, phase, step)
     : [];
   const pct = (x: number): DimensionValue => `${(x / ringLength) * 100}%` as DimensionValue;
   return (

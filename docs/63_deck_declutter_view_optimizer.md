@@ -151,10 +151,14 @@ Why derived and not "outputBar just defaults hidden":
   while PIXELS is closed, it stays hidden after PIXELS opens and closes.
 
 Chip behavior while suppressed (docs/53 §3.1 — no affordance that always
-refuses): the OUTPUT chip leaves both the open row and the rail, and ONE
-static micro-caption (`PIXELS_BAR_CAPTION`, same recipe as
-`PERF_BAR_CAPTION`) appears after a divider. Closing PIXELS restores chip
-and bar to the persisted truth.
+refuses): the OUTPUT chip leaves both the open row and the rail. Closing
+PIXELS restores chip and bar to the persisted truth.
+
+> **AMENDED — operator order, report _308.** `PIXELS_BAR_CAPTION` (and the
+> deck's `PERF_BAR_CAPTION`) are **removed**, along with the divider +
+> micro-caption this section and the §2.4 code block above once specified.
+> The suppression is silent. The bullet above that says "the bar chip row
+> narrates it" no longer holds — the chip simply leaves.
 
 ### 2.5 Performance overlay interaction
 
@@ -357,8 +361,9 @@ product code. Output: numbers in the landing report.
   `isDeckSurfaceId`; reducer over the union (patterns still refuses).
 - Normalizer: §2.3 generalized unknown-id rule; `serializeLayout` writes the
   7-id `known`.
-- Selectors of §2.2 + `effectiveShownBars` + `PIXELS_SUPPRESSES` +
-  `PIXELS_BAR_CAPTION` (§2.4). Window-only selectors keep their signatures.
+- Selectors of §2.2 + `effectiveShownBars` + `PIXELS_SUPPRESSES` (§2.4;
+  `PIXELS_BAR_CAPTION` removed by report _308). Window-only selectors keep
+  their signatures.
 - Tests (extend the existing suite; keep every current case green):
   upgrade matrix — no-`known` legacy store, 4-id `known`, 5-id `known`
   (current builds), 7-id `known`, corrupt, `{closed:[]}` — each asserting

@@ -13,6 +13,8 @@ views:
           - group: Right Small SmokeStack
           - group: Left Auditorium
           - group: Right Auditorium
+          - group: Left Back Rails
+          - group: Right Back Rails
         layout: spatial
         label: Bars + Strands + Stacks + Auditoriums
         exclude:
@@ -30,6 +32,9 @@ views:
       ShehdsBar:
         sizeX: 14
         sizeY: 14
+      VintageLed:
+        sizeX: 16
+        sizeY: 16
     framing:
       zoom: 0.7117802478134119
       panX: -11.743754856816679

@@ -79,12 +79,17 @@ test('an unclassified pattern subdirectory fails loudly instead of vanishing', (
     // Every REGISTERED directory must exist or listPatterns throws (that is the
     // other half of the policy), so the fixture is derived from the registry
     // rather than hard-coding today's members — registering a new family must
-    // not break this test.
+    // not break this test. The example that gets a file is likewise picked from
+    // the registry itself (its first entry) instead of a hard-coded name, so a
+    // future rename/retirement of any one registered directory (as happened to
+    // `baby`, docs/73) cannot make this fixture reference a directory the loop
+    // above no longer creates.
     for (const dir of MANIFEST_PATTERN_DIRS) fs.mkdirSync(path.join(sandbox, dir));
-    fs.writeFileSync(path.join(sandbox, 'baby', '01_thing.js'), '// pattern\n');
+    const exampleDir = MANIFEST_PATTERN_DIRS[0];
+    fs.writeFileSync(path.join(sandbox, exampleDir, '01_thing.js'), '// pattern\n');
     // Baseline: the classified tree generates cleanly, root first then qualified;
     // the other registered dirs are empty and contribute nothing.
-    assert.deepEqual(listPatterns(sandbox), ['00_root', 'baby/01_thing']);
+    assert.deepEqual(listPatterns(sandbox), ['00_root', `${exampleDir}/01_thing`]);
 
     // A brand-new family nobody classified must NOT be silently dropped.
     fs.mkdirSync(path.join(sandbox, 'brand_new_family'));

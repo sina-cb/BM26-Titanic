@@ -684,6 +684,13 @@ export class PatternMixer {
     this._swapTransition = null;
     this.onDeckSwapComplete = null; // Callback: ({ pattern, transitionId }) => void
     this.onDeckSwapCancelled = null; // Callback: ({ transitionId }) => void
+
+    // Live Touch base swaps use their own retained sibling. This is deliberately
+    // separate from the Deck sibling: Live owns a private ParamCenter and its
+    // complete effects/spatial stage runs after this base-only blend.
+    this._inactiveLiveTouchChannel = null;
+    this._liveTouchSwapTransition = null;
+    this.onLiveTouchPatternSwapChange = null;
   }
 
   // ── patternsDir: setting it triggers a one-time blend precompile ─────
@@ -1033,6 +1040,7 @@ export class PatternMixer {
   }
 
   removeLiveTouchChannel() {
+    this.cancelLiveTouchPatternSwap();
     const channel = this.liveTouchChannel;
     this.liveTouchChannel = null;
     return channel;
@@ -3107,6 +3115,163 @@ export class PatternMixer {
     }
   }
 
+  /**
+   * Prepare pattern B without changing the authoritative Live Touch base A.
+   * The caller may seed code/playlist/CPC defaults on the returned channel,
+   * then start the exact retained transition with startLiveTouchPatternSwap().
+   */
+  prepareLiveTouchPatternSwap({ newHandle, patternName } = {}) {
+    if (!this.liveTouchChannel || !this.liveTouchChannel.handle) {
+      if (newHandle) this.wasmHost.destroy(newHandle);
+      throw new Error('cannot prepare Live Touch transition without an active base pattern');
+    }
+    if (this._liveTouchSwapTransition || this._inactiveLiveTouchChannel) {
+      if (newHandle) this.wasmHost.destroy(newHandle);
+      const error = new Error('live-touch-swap-already-in-flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    if (!newHandle) {
+      throw new Error('Live Touch transition requires a compiled incoming handle');
+    }
+    if (typeof patternName !== 'string' || patternName.length === 0) {
+      this.wasmHost.destroy(newHandle);
+      throw new Error('Live Touch transition patternName must be a non-empty string');
+    }
+    if (!this.getBlendHandle('trans_crossfade')) {
+      this.wasmHost.destroy(newHandle);
+      throw new Error("Live Touch transition 'trans_crossfade' is missing or failed to compile");
+    }
+
+    this._inactiveLiveTouchChannel = new PatternChannel({
+      id: '__live_touch_swap__',
+      name: 'Live Touch Incoming',
+      pattern: patternName,
+      handle: newHandle,
+      mode: 'trans_crossfade',
+      fader: 0,
+      enabled: true,
+      viewSelection: this.liveTouchChannel.viewSelection,
+    });
+    this.recompileChannelMask(this._inactiveLiveTouchChannel);
+    return this._inactiveLiveTouchChannel;
+  }
+
+  /** Start the one authored Live Touch base transition: trans_crossfade / 500ms. */
+  startLiveTouchPatternSwap({ onComplete = null, onCancel = null } = {}) {
+    if (this._liveTouchSwapTransition) {
+      const error = new Error('live-touch-swap-already-in-flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    if (!this._inactiveLiveTouchChannel || !this._inactiveLiveTouchChannel.handle) {
+      throw new Error('Live Touch transition has no prepared incoming pattern');
+    }
+    const id = `live_touch_${++this.transitionGroupCounter}_${Date.now()}`;
+    this._liveTouchSwapTransition = {
+      id,
+      startTime: performance.now(),
+      durationMs: 500,
+      onComplete,
+      onCancel,
+    };
+    this._emitLiveTouchPatternSwap('started');
+    return id;
+  }
+
+  getInactiveLiveTouchChannel() {
+    return this._inactiveLiveTouchChannel;
+  }
+
+  isLiveTouchPatternSwapInFlight() {
+    return !!(this._liveTouchSwapTransition && this._inactiveLiveTouchChannel);
+  }
+
+  getLiveTouchPatternTransitionState() {
+    if (!this.isLiveTouchPatternSwapInFlight()) return null;
+    const transition = this._liveTouchSwapTransition;
+    return {
+      id: transition.id,
+      fromPattern: this.liveTouchChannel ? this.liveTouchChannel.pattern : null,
+      toPattern: this._inactiveLiveTouchChannel.pattern,
+      progress: this._inactiveLiveTouchChannel.fader,
+      durationMs: transition.durationMs,
+      mode: 'trans_crossfade',
+    };
+  }
+
+  cancelLiveTouchPatternSwap() {
+    const transition = this._liveTouchSwapTransition;
+    const incoming = this._inactiveLiveTouchChannel;
+    if (!transition && !incoming) return false;
+    this._liveTouchSwapTransition = null;
+    this._inactiveLiveTouchChannel = null;
+    if (incoming && incoming.handle) this.wasmHost.destroy(incoming.handle);
+    if (transition && transition.onCancel) {
+      try {
+        transition.onCancel({ transitionId: transition.id });
+      } catch (error) {
+        console.warn(`[Mixer] Live Touch swap onCancel threw: ${error.message}`);
+      }
+    }
+    this._emitLiveTouchPatternSwap('cancelled', {
+      transitionId: transition ? transition.id : null,
+    });
+    return true;
+  }
+
+  updateLiveTouchPatternSwap(now = performance.now()) {
+    if (!this.isLiveTouchPatternSwapInFlight()) return false;
+    const transition = this._liveTouchSwapTransition;
+    const incoming = this._inactiveLiveTouchChannel;
+    const linear = Math.max(0, Math.min(1, (now - transition.startTime) / transition.durationMs));
+    incoming.fader = linear * linear * (3 - 2 * linear);
+    if (linear < 1) {
+      this._emitLiveTouchPatternSwap('progress');
+      return true;
+    }
+
+    incoming.fader = 1;
+    const active = this.liveTouchChannel;
+    const outgoingHandle = active.handle;
+    active.handle = incoming.handle;
+    active.pattern = incoming.pattern;
+    active.localControls = incoming.localControls;
+    active._phaseSeconds = incoming._phaseSeconds;
+    active._lastPhaseElapsed = incoming._lastPhaseElapsed;
+    active.compiledPixelMask = incoming.compiledPixelMask;
+    this._liveTouchSwapTransition = null;
+    this._inactiveLiveTouchChannel = null;
+    this.wasmHost.destroy(outgoingHandle);
+
+    if (transition.onComplete) {
+      try {
+        transition.onComplete({ pattern: active.pattern, transitionId: transition.id });
+      } catch (error) {
+        console.warn(`[Mixer] Live Touch swap onComplete threw: ${error.message}`);
+      }
+    }
+    this._emitLiveTouchPatternSwap('completed', {
+      pattern: active.pattern,
+      transitionId: transition.id,
+    });
+    return true;
+  }
+
+  _emitLiveTouchPatternSwap(event, detail = null) {
+    if (!this.onLiveTouchPatternSwapChange) return;
+    try {
+      this.onLiveTouchPatternSwapChange({
+        event,
+        detail,
+        transition: this.getLiveTouchPatternTransitionState(),
+        pattern: this.liveTouchChannel ? this.liveTouchChannel.pattern : null,
+      });
+    } catch (error) {
+      console.warn(`[Mixer] Live Touch swap observer threw: ${error.message}`);
+    }
+  }
+
   updateTransitions(now = performance.now()) {
     if (this.transitions.length === 0) return false;
 
@@ -3218,6 +3383,7 @@ export class PatternMixer {
     // Deck-swap shadow runs on the same clock so its fader animation
     // visibly matches the existing overlay-fade animations.
     this.updateDeckSwapTransition(now);
+    this.updateLiveTouchPatternSwap(now);
     // Tick only participating settings. Inactive clocks are suspended: update
     // their phase baseline without entering WASM so they resume without a
     // catch-up jump. Muted channels inside an active setting still advance so
@@ -3274,6 +3440,23 @@ export class PatternMixer {
       );
     } else if (this.liveTouchChannel) {
       this.liveTouchChannel._lastPhaseElapsed = elapsedSeconds;
+    }
+    if (renderLiveTouch && this.isLiveTouchPatternSwapInFlight()) {
+      const incoming = this._inactiveLiveTouchChannel;
+      const localSpeed = this.liveTouchPhaseSpeedProvider
+        ? this.liveTouchPhaseSpeedProvider(incoming)
+        : 1;
+      if (typeof localSpeed !== 'number' || !Number.isFinite(localSpeed) || localSpeed <= 0) {
+        throw new Error(`Live Touch incoming phase speed is invalid: '${localSpeed}'`);
+      }
+      incoming.beginFrame(
+        this.wasmHost,
+        elapsedSeconds,
+        true,
+        this._effectiveSpeed(incoming) * localSpeed,
+      );
+    } else if (this._inactiveLiveTouchChannel) {
+      this._inactiveLiveTouchChannel._lastPhaseElapsed = elapsedSeconds;
     }
   }
 
@@ -3710,6 +3893,32 @@ export class PatternMixer {
       if (live.compiledPixelMask) {
         applyPreviewMaskBlackout(this.liveTouchBuffer, live.compiledPixelMask, this.pixelCount);
       }
+      // Pattern A and prepared B are blended as the BASE look. The complete
+      // Live creative processor runs exactly once below, so spatial ink/effects
+      // remain one stable overlay instead of being duplicated or crossfaded.
+      if (this.isLiveTouchPatternSwapInFlight()
+          && this._inactiveLiveTouchChannel.fader > 0.001) {
+        const incoming = this._inactiveLiveTouchChannel;
+        this.channelBuffer.fill(0);
+        incoming.renderInto(this.wasmHost, this.channelBuffer, true);
+        if (incoming.hue) applyHueShift6chU8(this.channelBuffer, this.pixelCount, incoming.hue);
+        if (incoming.compiledPixelMask) {
+          applyPreviewMaskBlackout(this.channelBuffer, incoming.compiledPixelMask, this.pixelCount);
+        }
+        const blendHandle = this.getBlendHandle('trans_crossfade');
+        if (!blendHandle) {
+          throw new Error("Live Touch transition 'trans_crossfade' lost its compiled handle");
+        }
+        const result = this.wasmHost.renderBlend6ch(
+          blendHandle,
+          this.pixelCount,
+          this.liveTouchBuffer,
+          this.channelBuffer,
+          incoming.fader,
+          this.liveTouchBuffer,
+        );
+        if (result !== this.liveTouchBuffer) this.liveTouchBuffer.set(result);
+      }
       if (this.liveTouchOutputProcessor) {
         this.liveTouchOutputProcessor(this.liveTouchBuffer);
       }
@@ -3896,6 +4105,9 @@ export class PatternMixer {
   destroy() {
     if (this.deckChannel) this.deckChannel.destroy(this.wasmHost);
     if (this.liveTouchChannel) this.liveTouchChannel.destroy(this.wasmHost);
+    if (this._inactiveLiveTouchChannel && this._inactiveLiveTouchChannel.handle) {
+      this.wasmHost.destroy(this._inactiveLiveTouchChannel.handle);
+    }
     for (const channel of this.mixerChannels) {
       channel.destroy(this.wasmHost);
     }
@@ -3912,6 +4124,8 @@ export class PatternMixer {
     }
     this._inactiveDeckChannel = null;
     this._swapTransition = null;
+    this._inactiveLiveTouchChannel = null;
+    this._liveTouchSwapTransition = null;
     // Destroy blend handles
     for (const [name, handle] of Object.entries(this.blendHandles)) {
       if (handle) this.wasmHost.destroy(handle);
@@ -3923,6 +4137,7 @@ export class PatternMixer {
     this.layerSettingOutputProcessors.clear();
     this.liveTouchPhaseSpeedProvider = null;
     this.liveTouchOutputProcessor = null;
+    this.onLiveTouchPatternSwapChange = null;
     // WAVE 15: drop group registry + transient solo on teardown so a
     // re-init doesn't inherit ghost groups / phantom solos.
     this.mixGroups = [];

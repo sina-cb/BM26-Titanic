@@ -697,6 +697,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     controller,
     signals,
     brightnessController = null,
+    liveTouchOverlayPattern = null,
   ) => {
     applyLayerSettingCreativeBuffer({
       buffer6ch,
@@ -707,6 +708,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       frameIndex: creativeFrameIndex,
       nowMs: creativeNowMs,
       signals,
+      liveTouchOverlayPattern,
     });
   };
 
@@ -729,6 +731,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       liveTouchSession.effectsController,
       liveCreativeSignals,
       intensityController.liveBrightness,
+      liveTouchSession.overlayPattern,
     );
   });
   mixer.setLiveTouchPhaseSpeedProvider(channel => {

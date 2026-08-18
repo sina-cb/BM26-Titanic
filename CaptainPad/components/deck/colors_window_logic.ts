@@ -31,6 +31,42 @@
  *      without writing — the freeze is native, not simulated.
  */
 
+import {
+  ANALOGOUS_STEPS as CORE_ANALOGOUS_STEPS,
+  COMP_OFFSETS as CORE_COMP_OFFSETS,
+  COLOUR_EPS as CORE_COLOUR_EPS,
+  GOLDEN_ANGLE_DEG as CORE_GOLDEN_ANGLE_DEG,
+  MIN_CONTINUOUS_FADE_S as CORE_MIN_CONTINUOUS_FADE_S,
+  MIN_CONTINUOUS_METHOD_FADE_S as CORE_MIN_CONTINUOUS_METHOD_FADE_S,
+  MONO_STEPS as CORE_MONO_STEPS,
+  SCHEME_BASE_S as CORE_SCHEME_BASE_S,
+  SCHEME_IDS as CORE_SCHEME_IDS,
+  SCHEME_MIN_V as CORE_SCHEME_MIN_V,
+  SCHEME_ROTATION_MIN_V as CORE_SCHEME_ROTATION_MIN_V,
+  SPLIT_STEPS as CORE_SPLIT_STEPS,
+  TETRAD_STEPS as CORE_TETRAD_STEPS,
+  TRIADIC_STEPS as CORE_TRIADIC_STEPS,
+  asHsv as coreAsHsv,
+  assertMethodTiming as coreAssertMethodTiming,
+  assertRotationTiming as coreAssertRotationTiming,
+  assertSchemeSubset as coreAssertSchemeSubset,
+  channelForWire as coreChannelForWire,
+  crossfadeAutopilotPatch as coreCrossfadeAutopilotPatch,
+  followNoteAutopilotPatch as coreFollowNoteAutopilotPatch,
+  generateScheme as coreGenerateScheme,
+  orbitDistance as coreOrbitDistance,
+  orbitStep as coreOrbitStep,
+  orbitPairs as coreOrbitPairs,
+  paletteWritePayload as corePaletteWritePayload,
+  reduceColorControlState as coreReduceColorControlState,
+  rotateHue as coreRotateHue,
+  rotationAutopilotPatch as coreRotationAutopilotPatch,
+  schemeFromSteps as coreSchemeFromSteps,
+  turnsAutopilotPatch as coreTurnsAutopilotPatch,
+  turnsPairs as coreTurnsPairs,
+  type ColorAutopilotState as CoreColorAutopilotState,
+} from '../../shared/color_control_core.js';
+
 // ── Colours ─────────────────────────────────────────────────────────────────
 
 export type Hsv = { h: number; s: number; v: number };
@@ -60,7 +96,7 @@ export function hueOf(c: ColorChannel): number {
 
 /** A channel as a full colour. A bare hue means the engine's pinned s=v=1. */
 export function asHsv(c: ColorChannel): Hsv {
-  return typeof c === 'number' ? { h: c, s: 1, v: 1 } : { h: c.h, s: c.s, v: c.v };
+  return coreAsHsv(c);
 }
 
 /**
@@ -70,7 +106,7 @@ export function asHsv(c: ColorChannel): Hsv {
  * changes shape just because the schema widened.
  */
 export function channelForWire(c: Hsv): ColorChannel {
-  return Math.abs(c.s - 1) < COLOUR_EPS && Math.abs(c.v - 1) < COLOUR_EPS ? c.h : { h: c.h, s: c.s, v: c.v };
+  return coreChannelForWire(c);
 }
 
 export function colour(h: number, s: number, v: number): Hsv {
@@ -78,7 +114,7 @@ export function colour(h: number, s: number, v: number): Hsv {
 }
 
 /** Two colours are the same when every channel matches to within ε. */
-export const COLOUR_EPS = 1e-6;
+export const COLOUR_EPS = CORE_COLOUR_EPS;
 export function sameColour(a: Hsv, b: Hsv): boolean {
   return Math.abs(a.h - b.h) < COLOUR_EPS
     && Math.abs(a.s - b.s) < COLOUR_EPS
@@ -571,25 +607,21 @@ export function blendLabel(t: number): string {
 // looking color duos or 5 samples") — classic colour-wheel constructions, each
 // shaped into FIVE slots that also read well as the adjacent DUOS a rotation
 // puts on the rig two at a time.
-export const SCHEME_IDS = [
-  'master', 'hue', 'complement', 'contrast',
-  'analogous', 'triadic', 'split', 'tetrad', 'golden',
-] as const;
+export const SCHEME_IDS = CORE_SCHEME_IDS;
 export type SchemeId = (typeof SCHEME_IDS)[number];
 
 /** Live Touch `BASE.s`. The wheel is hue-only, so S comes from here. */
-export const SCHEME_BASE_S = 0.95;
+export const SCHEME_BASE_S = CORE_SCHEME_BASE_S;
 /** Live Touch `MONO_STEPS` — the HUE scheme's five brightnesses. */
-export const MONO_STEPS: readonly number[] = [1.0, 0.78, 0.58, 0.40, 0.25];
+export const MONO_STEPS = CORE_MONO_STEPS;
 /** Live Touch `COMP_OFFSETS`, in DEGREES. */
-export const COMP_OFFSETS: readonly number[] = [0, 60, 30, -30, -60];
+export const COMP_OFFSETS = CORE_COMP_OFFSETS;
 /** Live Touch's `v` floor on the HUE ramp — a slot never goes fully dark. */
-export const SCHEME_MIN_V = 0.1;
+export const SCHEME_MIN_V = CORE_SCHEME_MIN_V;
 
 /** Live Touch `rot(h, deg)`: rotate a hue by whole degrees, wrapping. */
 export function rotateHue(h: number, deg: number): number {
-  const d = ((deg % 360) + 360) % 360;
-  return (h + d / 360) % 1;
+  return coreRotateHue(h, deg);
 }
 
 // ── The _224 generators (operator: "a few more technique to sample nice
@@ -619,42 +651,33 @@ export function rotateHue(h: number, deg: number): number {
 // four Live Touch ports above keep their own verbatim `SCHEME_MIN_V = 0.1`
 // floor: they are a port, and quietly re-flooring a ported algorithm would make
 // the Deck and Live Touch disagree about what MASTER/HUE mean.
-export const SCHEME_ROTATION_MIN_V = 0.25;
+export const SCHEME_ROTATION_MIN_V = CORE_SCHEME_ROTATION_MIN_V;
 
 /** `[degreesFromBase, brightness]` — the shape every _224 generator is built from. */
 export type SchemeStep = readonly [number, number];
 
 /** ANALOGOUS — a tight ±30° family: one mood, five shades of it. The order
  *  alternates sides of the base so no two neighbours are 60° apart. */
-export const ANALOGOUS_STEPS: readonly SchemeStep[] = [
-  [0, 1], [15, 1], [-15, 1], [30, 1], [-30, 1],
-];
+export const ANALOGOUS_STEPS = CORE_ANALOGOUS_STEPS;
 /** TRIADIC — the even 120° triad, then its first two arms again at half
  *  brightness. Five distinct turns out of a three-colour construction. */
-export const TRIADIC_STEPS: readonly SchemeStep[] = [
-  [0, 1], [120, 1], [240, 1], [0, 0.55], [120, 0.55],
-];
+export const TRIADIC_STEPS = CORE_TRIADIC_STEPS;
 /** SPLIT-COMPLEMENT — the base plus the two colours flanking its complement
  *  (150° / 210°), which reads as contrast without the flat tension of a true
  *  180°. The two flanks return dimmed. */
-export const SPLIT_STEPS: readonly SchemeStep[] = [
-  [0, 1], [150, 1], [210, 1], [150, 0.55], [210, 0.55],
-];
+export const SPLIT_STEPS = CORE_SPLIT_STEPS;
 /** TETRAD — the 90° square, plus the base once more at half brightness so the
  *  wrap turn is a beat rather than a repeat of T1. */
-export const TETRAD_STEPS: readonly SchemeStep[] = [
-  [0, 1], [90, 1], [180, 1], [270, 1], [0, 0.55],
-];
+export const TETRAD_STEPS = CORE_TETRAD_STEPS;
 /** GOLDEN — five steps of the golden angle (137.5°). Nothing lands on a
  *  symmetry, so the spread reads organic rather than constructed: the hues come
  *  out at 0 / 137.5 / 275 / 52.5 / 190 degrees from the base. */
-export const GOLDEN_ANGLE_DEG = 137.5;
+export const GOLDEN_ANGLE_DEG = CORE_GOLDEN_ANGLE_DEG;
 
 /** Five `[deg, v]` steps → five colours from a base hue, at the shared base
  *  saturation and under the night-visibility floor. */
 export function schemeFromSteps(steps: readonly SchemeStep[], baseH: number): Hsv[] {
-  return steps.map(([deg, v]) => colour(
-    rotateHue(baseH, deg), SCHEME_BASE_S, Math.max(SCHEME_ROTATION_MIN_V, v)));
+  return coreSchemeFromSteps(steps, baseH);
 }
 
 /**
@@ -663,30 +686,7 @@ export function schemeFromSteps(steps: readonly SchemeStep[], baseH: number): Hs
  * button that quietly painted nothing would be indistinguishable from broken.
  */
 export function generateScheme(scheme: SchemeId, baseH: number): Hsv[] {
-  const S = SCHEME_BASE_S;
-  switch (scheme) {
-    case 'master':
-      return MONO_STEPS.map(() => colour(baseH, S, 1));
-    case 'hue':
-      return MONO_STEPS.map((k) => colour(baseH, S, Math.max(SCHEME_MIN_V, k)));
-    case 'complement':
-      return COMP_OFFSETS.map((d) => colour(rotateHue(baseH, d), S, 1));
-    case 'contrast':
-      return [0, 1, 2, 3, 4].map((i) => colour(rotateHue(baseH, 72 * i), S, 1));
-    case 'analogous':
-      return schemeFromSteps(ANALOGOUS_STEPS, baseH);
-    case 'triadic':
-      return schemeFromSteps(TRIADIC_STEPS, baseH);
-    case 'split':
-      return schemeFromSteps(SPLIT_STEPS, baseH);
-    case 'tetrad':
-      return schemeFromSteps(TETRAD_STEPS, baseH);
-    case 'golden':
-      return schemeFromSteps(
-        [0, 1, 2, 3, 4].map((i) => [GOLDEN_ANGLE_DEG * i, 1] as SchemeStep), baseH);
-    default:
-      throw new Error(`[colors_window] unknown scheme '${scheme}'`);
-  }
+  return coreGenerateScheme(scheme, baseH);
 }
 
 /** Operator-facing scheme names, in row order. */
@@ -720,71 +720,103 @@ export const ORBIT_DISTANCE_DEFAULT = 1;
  * orbit of distance zero would spend five turns crossfading a colour to itself.
  */
 export function orbitDistance(sel: SchemePairSel, ringLength: number): number {
-  for (const i of [sel[0], sel[1]]) {
-    if (!Number.isInteger(i) || i < 0 || i >= ringLength) {
-      throw new Error(
-        `[colors_window] orbit selection [${sel[0]}, ${sel[1]}] is outside a ring of ${ringLength}`);
-    }
-  }
-  const d = (((sel[1] - sel[0]) % ringLength) + ringLength) % ringLength;
-  if (d === 0) {
-    throw new Error(
-      '[colors_window] COLOUR A and COLOUR B are on the same slot — an orbit of distance 0 would crossfade a colour to itself');
-  }
-  return d;
+  return coreOrbitDistance(sel, ringLength);
+}
+
+/**
+ * THE ORBIT'S STEP (docs/75 §4, D1/D2) — how many slots the WINDOW ITSELF
+ * advances each turn, as distinct from `distance` (`d`): `d` is the fixed
+ * spacing between COLOUR A and COLOUR B, `s` is how far the WHOLE WINDOW
+ * jumps to reach the next turn.
+ *
+ * OPERATOR ORDER: *"in the turning style, the colors aren't window turning
+ * correctly. We need to select two, and the window will move both in a
+ * rotating window queue style."* Named, the defect was this: at `s = 1` (the
+ * only step TURNS had ever used) turn *k+1*'s LEADING channel is turn *k*'s
+ * TRAILING channel — every turn, one channel merely inherits what the other
+ * channel just showed, so the pair reads on the rig as a one-colour shift
+ * register, not two colours turning.
+ *
+ * THE FIX is the smallest `s >= 1` for which two CONSECUTIVE windows never
+ * share a staged slot — `{0, d} ∩ {s, s+d} = ∅ (mod n)` — so every turn lands
+ * BOTH channels on colours neither channel just showed. `gcd(s, n) === 1` is
+ * required alongside it, so one lap of `n` turns still visits every staged
+ * slot exactly once and wraps cleanly rather than orbiting a subset forever.
+ * D1/D2 (docs/75 §9): this applies to the DEFAULT `sel = [0,1]` too — the
+ * adjacent pick is not special-cased away from the fix, because the operator's
+ * complaint was filed against exactly that default. For a 5-slot ring this
+ * works out to `s = 2` for an ADJACENT pick (`d` = 1 or 4) and `s = 1` for a
+ * SPACED one (`d` = 2 or 3, already disjoint — untouched).
+ *
+ * When no disjoint `s` exists at all — the crossfade's 2-slot ring, or any
+ * ring too short for a window to dodge itself — the search returns `1`:
+ * today's behaviour, because there is nothing to fix. That is what keeps the
+ * crossfade wire, and any ring shorter than 5, byte-identical to before this
+ * change.
+ */
+export function orbitStep(distance: number, ringLength: number): number {
+  return coreOrbitStep(distance, ringLength);
 }
 
 /**
  * THE RING THE ENGINE ROTATES: the operator's A/B pair ORBITING the staged
- * colours at constant spacing.
+ * colours at constant spacing, the window itself advancing by the STEP
+ * `orbitStep` computes.
  *
  * OPERATOR ORDER: *"for the PALETTE TURNS we have 2 selected colors — keep their
  * distance, and rotate them in a window to the right, and then loop back when
- * going over the end."*
+ * going over the end."* Then, once the shipped `s = 1` window turned out to
+ * read as a shift register rather than two colours turning: *"in the turning
+ * style, the colors aren't window turning correctly. We need to select two,
+ * and the window will move both in a rotating window queue style."*
  *
  * With two engine slots, the honest rendering of a five-colour rotation is a
  * WINDOW over the ring. What the operator's A/B pick decides is how WIDE that
- * window is and where it STARTS: turn i shows slots `selA+i` and `selA+i+d`
- * (mod n, `d` from `orbitDistance`), so both ends step one slot right per turn,
- * the spacing never changes, and after n turns the window is back where it
- * began. Every chosen colour still reaches the rig — n turns, n windows — it is
- * simply blended with the colour d slots along instead of always its neighbour.
+ * window is (`d`, `orbitDistance`) and where it STARTS; the STEP (`s`,
+ * `orbitStep`) decides how far the window jumps each turn so both ends keep
+ * landing on FRESH colours: turn *k* shows slots `selA + k·s` and
+ * `selA + k·s + d` (mod n). The spacing `d` never changes turn to turn, and
+ * because `s` and `n` are coprime, after n turns the window is back where it
+ * began having visited every staged slot exactly once per channel.
  *
- *   sel (T1,T2) → d 1:  (T1,T2) (T2,T3) (T3,T4) (T4,T5) (T5,T1)
- *   sel (T1,T3) → d 2:  (T1,T3) (T2,T4) (T3,T5) (T4,T1) (T5,T2)
- *   sel (T3,T5) → d 2:  (T3,T5) (T4,T1) (T5,T2) (T1,T3) (T2,T4)
+ *   sel (T1,T2) → d 1, s 2:  (T1,T2) (T3,T4) (T5,T1) (T2,T3) (T4,T5)
+ *   sel (T1,T3) → d 2, s 1:  (T1,T3) (T2,T4) (T3,T5) (T4,T1) (T5,T2)
+ *   sel (T3,T5) → d 2, s 1:  (T3,T5) (T4,T1) (T5,T2) (T1,T3) (T2,T4)
+ *
+ * The adjacent pick (T1,T2) — also the DEFAULT selection, `orbitDistance` = 1
+ * — is the case the operator's complaint was about, and D2 (docs/75 §9)
+ * deliberately does not special-case it back to the old `s = 1` slide: the
+ * queue steps by 2 there too, retiring the `_224` adjacent behaviour for
+ * everyone. A SPACED pick (`d` = 2 or 3 on a 5-ring) was already disjoint at
+ * `s = 1`, so `orbitStep` reports 1 there and the wire is unchanged.
  *
  * IT STARTS WHERE THE OPERATOR IS. The ring is posted BEGINNING at COLOUR A's
  * slot, not at T1, because a restage resets the daemon's cursor and the first
  * window it plays is entry 0 — so starting at A is what makes START TURNS, and a
  * mid-rotation A/B pick, both land on the pair already lit instead of jumping to
  * a different one. At the default (T1,T2) that start is T1 and the whole list is
- * byte-identical to the adjacent ring TURNS has always posted.
+ * byte-identical to the adjacent ring TURNS has always posted, EXCEPT for the
+ * step: entries 1.. now land on the `s = 2` slots rather than sliding by one.
  *
  * THE ENGINE IS UNCHANGED AND UNAWARE. `colorAutopilot.palettes` is validated
  * entry by entry and cycled sequentially with a lerp between consecutive
- * entries; nothing in the daemon ever asks whether two pairs share a colour. The
- * orbit is a client-side construction of the SAME wire.
+ * entries; nothing in the daemon ever asks whether two pairs share a colour, or
+ * how far apart consecutive entries' colours are. The stepped orbit is a
+ * client-side construction of the SAME wire shape TURNS has always posted.
  */
 export function orbitPairs(colours: Hsv[], sel: SchemePairSel): ColorPair[] {
-  if (colours.length < 2) {
-    throw new Error(`orbitPairs needs at least 2 colours, got ${colours.length}`);
-  }
-  const n = colours.length;
-  const d = orbitDistance(sel, n);
-  return colours.map((_, i) => ({
-    c1: channelForWire(colours[(sel[0] + i) % n]),
-    c2: channelForWire(colours[(sel[0] + i + d) % n]),
-  }));
+  return coreOrbitPairs(colours, sel);
 }
 
 /**
- * The ADJACENT ring — `orbitPairs` at the default (T1,T2) selection, which is
- * the degenerate d = 1 orbit. Kept as its own name because the CROSSFADE is a
- * two-entry adjacent ring with no A/B selection of its own to speak of.
+ * The DEFAULT-SELECTION ring — `orbitPairs` at (T1,T2), which is the
+ * degenerate `d = 1` orbit. Kept as its own name because the CROSSFADE is a
+ * two-entry ring with no A/B selection of its own to speak of — its `d = 1`
+ * orbit over a 2-slot ring has no disjoint step (`orbitStep` returns 1), so
+ * this stays the exact chained pair the crossfade has always posted.
  */
 export function turnsPairs(colours: Hsv[]): ColorPair[] {
-  return orbitPairs(colours, [0, 1]);
+  return coreTurnsPairs(colours);
 }
 
 // ── ONE TRANSPORT FOR BOTH RINGS (_224, operator order 1) ───────────────────
@@ -815,7 +847,7 @@ export const ROTATION_HOLD_PRESETS_S: readonly number[] = [0, 1, 2, 5, 10, 30, 6
 export const ROTATION_FADE_PRESETS_S: readonly number[] = [0.4, 0.8, 1.5, 3];
 /** The engine's CONT floor (`MIN_CONTINUOUS_TRANSITION_MS`), mirrored so the
  *  client refuses exactly what the engine would refuse. */
-export const MIN_CONTINUOUS_FADE_S = 0.1;
+export const MIN_CONTINUOUS_FADE_S = CORE_MIN_CONTINUOUS_FADE_S;
 
 /**
  * The timing contract both rings obey, in one place. THROWS rather than clamps
@@ -825,16 +857,7 @@ export const MIN_CONTINUOUS_FADE_S = 0.1;
  * a rejected POST.
  */
 export function assertRotationTiming(holdS: number, fadeS: number): void {
-  if (!(holdS >= 0)) {
-    throw new Error(`HOLD must be 0 (continuous) or a positive number of seconds, got ${holdS}`);
-  }
-  if (!(fadeS > 0)) {
-    throw new Error(`FADE must be a positive number of seconds, got ${fadeS}`);
-  }
-  if (holdS === 0 && fadeS < MIN_CONTINUOUS_FADE_S) {
-    throw new Error(
-      `CONT (no hold) needs a fade of at least ${MIN_CONTINUOUS_FADE_S}s — otherwise the rig hard-cuts on a spin loop.`);
-  }
+  coreAssertRotationTiming(holdS, fadeS);
 }
 
 /**
@@ -853,14 +876,7 @@ export function assertRotationTiming(holdS: number, fadeS: number): void {
 export function rotationAutopilotPatch(
   colours: Hsv[], holdS: number, fadeS: number, sel?: SchemePairSel,
 ) {
-  assertRotationTiming(holdS, fadeS);
-  return {
-    active: true as const,
-    shuffle: false as const,
-    delay_s: holdS,
-    transitionMs: Math.round(fadeS * 1000),
-    palettes: sel ? orbitPairs(colours, sel) : turnsPairs(colours),
-  };
+  return coreRotationAutopilotPatch(colours, holdS, fadeS, sel);
 }
 
 /**
@@ -870,7 +886,7 @@ export function rotationAutopilotPatch(
 export function turnsAutopilotPatch(
   colours: Hsv[], holdS: number, fadeS: number, sel?: SchemePairSel,
 ) {
-  return rotationAutopilotPatch(colours, holdS, fadeS, sel);
+  return coreTurnsAutopilotPatch(colours, holdS, fadeS, sel);
 }
 
 // ── FOLLOW NOTE (docs/59) ───────────────────────────────────────────────────
@@ -923,7 +939,7 @@ export const NOTE_FADE_PRESETS_MS: readonly number[] = [0, 400, 1000, 2000];
 export const NOTE_FADE_DEFAULT_MS = 400;
 /** The engine's continuous-method floor, mirrored so the client refuses exactly
  *  what the engine would refuse (and shows the sentence instead of a 400). */
-export const MIN_CONTINUOUS_METHOD_FADE_S = 0.1;
+export const MIN_CONTINUOUS_METHOD_FADE_S = CORE_MIN_CONTINUOUS_METHOD_FADE_S;
 
 /** Pitch class 0-11 → letter. The companion's own table
  *  (`audio/signals/note_estimator.js:44`), so the card says the same letter the
@@ -963,16 +979,7 @@ export type FollowNoteConfig = {
  * timer resolution, and the engine refuses exactly this.
  */
 export function assertMethodTiming(holdS: number, fadeS: number): void {
-  if (!(holdS >= 0)) {
-    throw new Error(`METHOD HOLD must be 0 (continuous) or a positive number of seconds, got ${holdS}`);
-  }
-  if (!(fadeS > 0)) {
-    throw new Error(`METHOD FADE must be a positive number of seconds, got ${fadeS}`);
-  }
-  if (holdS === 0 && fadeS < MIN_CONTINUOUS_METHOD_FADE_S) {
-    throw new Error(
-      `CONT (no method hold) needs a fade of at least ${MIN_CONTINUOUS_METHOD_FADE_S}s — otherwise the rig hard-cuts on a spin loop.`);
-  }
+  coreAssertMethodTiming(holdS, fadeS);
 }
 
 /**
@@ -991,46 +998,12 @@ export function followNoteAutopilotPatch(args: {
   sel: SchemePairSel;
   shuffle?: boolean;
 }) {
-  const schemes = assertSchemeSubset(args.schemes);
-  assertMethodTiming(args.methodHoldS, args.methodFadeS);
-  if (!(args.noteFadeMs >= 0) || !Number.isFinite(args.noteFadeMs)) {
-    throw new Error(`NOTE FADE must be 0 (snap) or a positive number of milliseconds, got ${args.noteFadeMs}`);
-  }
-  if (args.sel[0] === args.sel[1]) {
-    throw new Error(`T${args.sel[0] + 1} cannot feed BOTH A and B — pick a different slot for one of them.`);
-  }
-  return {
-    active: true as const,
-    mode: 'followNote' as const,
-    followNote: {
-      schemes,
-      methodHoldS: args.methodHoldS,
-      methodFadeS: args.methodFadeS,
-      noteFadeMs: args.noteFadeMs,
-      sel: [args.sel[0], args.sel[1]] as [number, number],
-      shuffle: args.shuffle === true,
-    },
-  };
+  return coreFollowNoteAutopilotPatch(args);
 }
 
 /** A method subset the engine would accept: non-empty, no repeats, known ids. */
 export function assertSchemeSubset(schemes: readonly SchemeId[]): SchemeId[] {
-  // Deliberately NOT `Array.isArray`: on a `readonly T[]` that narrowing widens
-  // the element type to `any` and silently disables every check below it. A
-  // length test covers the real failure (an empty subset, one tap away) and
-  // still throws loudly on a non-array from an untyped caller.
-  if (!schemes || schemes.length === 0) {
-    throw new Error('The cycle needs at least one method.');
-  }
-  const seen = new Set<SchemeId>();
-  for (const id of schemes) {
-    if (!(SCHEME_IDS as readonly string[]).includes(id)) {
-      throw new Error(`"${id}" is not a known method.`);
-    }
-    if (seen.has(id)) throw new Error(`The cycle lists ${SCHEME_TITLES[id]} twice — it is a SET of methods.`);
-    seen.add(id);
-  }
-  return [...schemes];
+  return coreAssertSchemeSubset(schemes);
 }
 
 /** Toggle one generator in the cycle subset. Refuses to empty it, with the
@@ -1201,7 +1174,7 @@ export function rotationRetunePatch(
  * `_217` crossfade wire.
  */
 export function crossfadeAutopilotPatch(hA: number, hB: number, holdS: number, fadeS: number) {
-  return rotationAutopilotPatch([colour(hA, 1, 1), colour(hB, 1, 1)], holdS, fadeS);
+  return coreCrossfadeAutopilotPatch(hA, hB, holdS, fadeS);
 }
 
 /**
@@ -1265,6 +1238,98 @@ export function manualWriteGate(disabled: boolean, kind: RotationKind): WriterGa
   return { canWrite: true };
 }
 
+// ── docs/75 §5 — the gate becomes a ROUTER for colour gestures ──────────────
+//
+// OPERATOR ORDER: *"selecting a new contrast or split or whatever method or
+// color in the UI should update the ongoing program when it's running — right
+// now I have to stop the program then start again to take the new changes."*
+//
+// `manualWriteGate` answers ONE question — "may a manual write go out at
+// all?" — with two outcomes: yes, or the same refusal sentence for anyone who
+// asks. That was honest while every colour edit was a full `/param-center`
+// POST, because a POST while a family runs really would fight the daemon's
+// own ticks. It stopped being honest the moment `ColorAutopilot.patchState`
+// shipped a phase-preserving PATCH front door (docs/59 §5.1) that `crossfade`
+// and `turns` already listed as accepting `palettes` live (`retunableLive`)
+// — nothing had ever spent that acceptance. `colourGestureOutcome` is what
+// spends it: a THIRD outcome, `'retarget'`, for the two families whose
+// running ring a colour gesture can rebuild and PATCH in place instead of
+// being refused.
+export type ColourGestureAction = 'write' | 'retarget' | 'refuse';
+export type ColourGestureOutcome = { action: ColourGestureAction; reason?: string };
+
+/**
+ * WHAT A COLOUR GESTURE DOES (wheel drag, chip tap, saved-pair load, A/B
+ * pick — every write that used to go straight at `manualWriteGate`), given
+ * only WHICH FAMILY is currently running:
+ *
+ *   none                    → 'write' — the ordinary manual path, unchanged.
+ *   crossfade                 'retarget' — rebuild the 2-entry ring from the
+ *                              new A/B and PATCH `{palettes: […]}`. A PATCH
+ *                              can never touch `active`/`mode`, so the ring
+ *                              staying length 2 keeps the kind `crossfade`
+ *                              — there is no path from here to a 5-entry
+ *                              takeover, which is exactly why this is safe
+ *                              to do unconditionally instead of behind a
+ *                              confirmation.
+ *   turns                     'retarget' — rebuild the 5-entry ring from the
+ *                              edited draft and PATCH it. Cadence, cursor and
+ *                              generation all survive (`patchState` again),
+ *                              closing the restart the old full-POST restage
+ *                              apologized for in its own comment.
+ *   follow-note              → 'refuse', with the EXISTING `manualWriteGate`
+ *                              sentence for `'follow-note'` (D7 — the note
+ *                              owns the hue; the only live levers for this
+ *                              family are `sel`/`method`/`schemes`, already
+ *                              wired through `retunableLive`).
+ *   palette-set               'refuse', with the EXISTING `manualWriteGate`
+ *                              sentence for `'palette-set'` (the config
+ *                              belongs to the AUTOPILOT window; docs/61 §5).
+ *
+ * `surface` is accepted, not branched on: every colour gesture this answers
+ * for already arrives from its own family's card by construction — the A/B
+ * wheel exists only on the TWO COLOUR card, the per-slot wheel only on the
+ * TURNS card — so there is no "wrong card" reading to disambiguate the way
+ * `schemeTapOutcome` needs to (a scheme tap's CONTRAST/SPLIT/… row exists on
+ * all three cards at once). It is kept in the signature for parity with that
+ * function and so a future gesture that genuinely is cross-card has
+ * somewhere to plug in without a signature break.
+ *
+ * OFFLINE / PLAN-LOCKED is deliberately NOT this function's business — that
+ * check is orthogonal to which family is running and stays exactly where it
+ * has always lived, in `manualWriteGate(disabled, kind)`. `colourGestureOutcome`
+ * is KIND-ONLY: callers check `disabled` themselves (offline wins first, the
+ * same order `manualWriteGate` has always enforced) and consult this table
+ * only once they know the surface is live.
+ *
+ * Reuses `manualWriteGate`'s own sentences (never restates them) so the two
+ * can never drift — the operator reads the identical refusal whichever path
+ * produced it. THROWS on an unknown kind, matching `schemeTapOutcome` and
+ * `manualWriteGate`'s own `default:` arm (codex P0): a colour gesture that
+ * quietly did nothing would be indistinguishable from a broken control.
+ */
+export function colourGestureOutcome(kind: RotationKind, surface: ColorsCard): ColourGestureOutcome {
+  switch (kind) {
+    case 'none':
+      return { action: 'write' };
+    case 'crossfade':
+    case 'turns': {
+      void surface; // accepted for signature parity — see doc comment above.
+      return { action: 'retarget' };
+    }
+    case 'follow-note':
+    case 'palette-set': {
+      const gate = manualWriteGate(false, kind);
+      if (gate.canWrite) {
+        throw new Error(`[colors_window] colourGestureOutcome expected '${kind}' to be refused`);
+      }
+      return { action: 'refuse', reason: gate.reason };
+    }
+    default:
+      throw new Error(`[colors_window] unknown rotation kind '${kind}'`);
+  }
+}
+
 /**
  * WHAT A SCHEME TAP DOES, given what the daemon is currently running AND
  * WHICH CARD the operator tapped from (docs/61 §5, fixing C3). A pure
@@ -1276,18 +1341,39 @@ export function manualWriteGate(disabled: boolean, kind: RotationKind): WriterGa
  *                                               write through the daemon's
  *                                               own front door, so the single
  *                                               writer never changes hands.
+ *                                               docs/75 §5 changed WHAT that
+ *                                               write is — a sparse PATCH
+ *                                               `{palettes: […]}`, not the
+ *                                               full POST this restage used
+ *                                               to send — so cadence and the
+ *                                               running cursor now survive
+ *                                               the tap instead of resetting;
+ *                                               see `turnsRetargetRing`.
  *   follow-note, tapped from the 'follow' card → METHOD OVERRIDE (below).
  *   turns / follow-note, any OTHER card       → stage only — a tap on the
  *                                               TWO COLOUR card while TURNS
  *                                               or FOLLOW NOTE drives from
  *                                               elsewhere must never be read
  *                                               as "restage"/"override".
- *   crossfade                                 → stage only, on every card. A
- *                                               restage here would silently
- *                                               change the rotation KIND
- *                                               (2 entries → 5); that
- *                                               takeover stays behind the
- *                                               explicit START TURNS button.
+ *   crossfade                                 → RETARGET (docs/75 §5,
+ *                                               superseding docs/61 §5's
+ *                                               "crossfade → stage-only on
+ *                                               every card"): a scheme tap
+ *                                               while the crossfade runs
+ *                                               rebuilds the 2-entry ring
+ *                                               from the tapped scheme's
+ *                                               first two colours and PATCHes
+ *                                               it in place. The kind still
+ *                                               cannot change — a PATCH never
+ *                                               touches `active`/`mode`, and
+ *                                               the ring stays length 2 — so
+ *                                               the old worry (a restage here
+ *                                               would silently take the
+ *                                               rotation from 2 entries to 5)
+ *                                               no longer applies; that
+ *                                               5-entry takeover still lives
+ *                                               only behind the explicit
+ *                                               START TURNS button.
  *   palette-set                               → stage only, on every card.
  *                                               The config belongs to the
  *                                               AUTOPILOT window; overwriting
@@ -1298,7 +1384,7 @@ export function manualWriteGate(disabled: boolean, kind: RotationKind): WriterGa
  * NOTHING here ever auto-pauses the daemon (_211 §D): every stage-only case
  * names the driver AND the button that WOULD take over, on the message line.
  */
-export type SchemeTapAction = 'stage-and-write' | 'restage' | 'stage-only' | 'method-override';
+export type SchemeTapAction = 'stage-and-write' | 'restage' | 'retarget' | 'stage-only' | 'method-override';
 export function schemeTapOutcome(
   kind: RotationKind, schemeTitle: string, surface: ColorsCard,
 ): { action: SchemeTapAction; message: string } {
@@ -1328,9 +1414,11 @@ export function schemeTapOutcome(
         message: `${kindLabel(kind)} is driving — this stages only. STOP it (strip above) to write A/B.`,
       };
     case 'crossfade':
+      // docs/75 §5: a PATCH retarget, not the stage-only refusal docs/61 §5
+      // shipped — see the table comment above for why the kind is safe.
       return {
-        action: 'stage-only',
-        message: 'Crossfade is driving A/B — STOP it or START TURNS to run the scheme.',
+        action: 'retarget',
+        message: `${schemeTitle} retunes the running crossfade — from the next fade.`,
       };
     case 'palette-set':
       return {
@@ -1340,6 +1428,28 @@ export function schemeTapOutcome(
     default:
       throw new Error(`[colors_window] unknown rotation kind '${kind}'`);
   }
+}
+
+/**
+ * RETARGET BUILDERS (docs/75 §5) — the small pure helpers a colour handler
+ * uses to build the ring half of a `rotationRetunePatch(kind, { palettes })`
+ * call once `colourGestureOutcome` says `'retarget'`. Both are exactly
+ * `orbitPairs` at the shape each family's ring already has; kept as named
+ * wrappers so a call site reads "build the crossfade's retarget ring" rather
+ * than repeating the `orbitPairs([...], [0,1])` construction inline.
+ *
+ * Nothing else is required to make the retarget land: `retunableLive` already
+ * lists `palettes` as live on both `crossfade` and `turns`, so
+ * `rotationRetunePatch(kind, { palettes: ring })` already produces the
+ * correct sparse `{palettes: […]}` PATCH body for either — that unused row is
+ * the whole feature docs/75 §1 points at.
+ */
+export function crossfadeRetargetRing(hA: number, hB: number): ColorPair[] {
+  return orbitPairs([colour(hA, 1, 1), colour(hB, 1, 1)], [0, 1]);
+}
+
+export function turnsRetargetRing(colours: Hsv[], sel: SchemePairSel): ColorPair[] {
+  return orbitPairs(colours, sel);
 }
 
 // ── WHICH TWO OF THE FIVE FEED A AND B (_224, operator order 3) ─────────────
@@ -1430,38 +1540,95 @@ function sameChannel(a: ColorChannel, b: ColorChannel): boolean {
 }
 
 /** A live TURNS config, read back off the wire: the ring of chosen colours (the
- *  pairs' first channels, in wire order) and the spacing the pair orbits at. */
-export type TurnsOrbit = { ring: Hsv[]; distance: number };
+ *  pairs' first channels, de-stepped back into staged order) and the spacing
+ *  and step the pair orbits at. */
+export type TurnsOrbit = { ring: Hsv[]; distance: number; step: number };
+
+function gcdLocal(a: number, b: number): number {
+  return b === 0 ? a : gcdLocal(b, a % b);
+}
 
 /**
- * Is the live colour-autopilot config a TURNS ORBIT, and at what spacing?
+ * Is the live colour-autopilot config a TURNS ORBIT, and at what spacing AND
+ * step?
  *
- * True iff every entry is an inline pair AND ONE distance `d` describes all of
- * them: `pairs[i].c2` is `pairs[i+d].c1` for every i, wrapping — exactly the
- * structure `orbitPairs` builds. At d = 1 that is the old CHAIN test (each c2 is
- * the NEXT entry's c1) unchanged, so every ring TURNS has ever posted still
- * reads as a ring and nothing on the wire had to move.
+ * GENERALIZED for the stepped queue (docs/75 §4): a d = 1 pick now posts at
+ * `s = 2`, so the old s = 1-only CHAIN test (`pairs[i].c2` is `pairs[i+d].c1`)
+ * no longer recognizes every ring TURNS posts — it would read the daemon's own
+ * s = 2 wire as `palette-set` and the window would lose the ring it is
+ * rotating.
  *
- * The SMALLEST such d wins. A MASTER ring is five copies of one colour, so every
- * spacing fits it; reporting 1 there keeps the readout byte-identical to what it
- * has always been rather than picking an arbitrary larger window.
+ * THE SEARCH IS `d` OUTER, ascending from 1, and for each `d` it tries only
+ * the step(s) that `orbitPairs` could actually have built AT THAT `d`:
+ * `s = 1` always (the unstepped chain), and — when `orbitStep(d, n)` differs
+ * from 1 — that builder step too. This is a correction to the CONTRACT's
+ * literal "try s = 1 first, then s = 2" phrasing (docs/75 §4), which reads as
+ * `s` OUTER, `d` inner: **that ordering is wrong** and _315 review caught it.
+ * Concretely, on a 5-ring with a real `d = 1, s = 2` wire (the operator's
+ * default pick), trying `s = 1` across ALL `d` before ever trying `s = 2`
+ * finds a FALSE match at `d = 3` — the de-stepped `s = 1` ring at `d = 3`
+ * happens to satisfy the chain test too, because a step-2 wire IS a step-1
+ * chain of a differently-ordered ring. Reading `d` first and asking "what
+ * step would THIS `d` have used" never reaches that alias: `d = 1` is tried
+ * before `d = 3` regardless of which step recognizes it, so the genuine
+ * `(1, 2)` match wins outright and the spurious `(3, 1)` reading (a REORDERED
+ * ring — exactly the "Adoption hazard" docs/75 §4 names) is never returned.
  *
- * Anything else (library ids, a hand-posted set of unrelated pairs) is the
- * ordinary palette-set autopilot and TURNS must not claim it: the window would
- * then show a ring the engine is not rotating.
+ * For each candidate the wire is DE-STEPPED back into staged order first:
+ * wire entry `k` holds staged slot `k·s mod n` (by construction, `orbitPairs`
+ * builds `c1` from exactly that slot), so `ring[(k·s) % n] = pairs[k].c1`
+ * recovers the candidate ring directly, with no division or modular inverse
+ * required. The candidate is valid iff every entry's `c2` lands on the
+ * recovered ring's `d`-th-along slot: `pairs[k].c2 === ring[(k·s + d) % n]`
+ * for every k — precisely the structure `orbitPairs` builds, read backwards.
+ *
+ * Trying `s = 1` before the builder step at EVERY `d` (not just d = 1) is
+ * what keeps a MASTER ring (five copies of one colour) reporting
+ * `{distance: 1, step: 1}`: every candidate fits a ring where every colour is
+ * identical, so the first one tried — `d = 1, s = 1` — wins, exactly the
+ * byte-identical readout TURNS has always shown for MASTER. A SPACED pick
+ * (`d` = 2 or 3, posted at `s = 1` because `orbitStep` found it already
+ * disjoint) is recognized on `d`'s own `s = 1` pass with no second step to
+ * try. An ADJACENT pick (`d` = 1 or 4) fails at `s = 1` for any real
+ * (non-degenerate) ring and resolves on that `d`'s `s = 2` pass instead.
+ *
+ * `staged`, when given, disambiguates equivalent wire aliases: only a
+ * de-stepped ring that is a rotation of the operator's staged ring may win.
+ * Without that context, a permuted ring can describe the same pairs at a
+ * different distance.
+ *
+ * `gcd(s, n) !== 1` candidates are skipped outright: `orbitPairs` never posts
+ * a step that is not coprime with the ring length (a lap would then miss
+ * slots), so such a step could never be what is on the wire.
+ *
+ * Anything that never validates at any `d` (library ids, a hand-posted set of
+ * unrelated pairs) is the ordinary palette-set autopilot and TURNS must not
+ * claim it: the window would then show a ring the engine is not rotating.
  *
  * The test compares FULL COLOURS, not just hues (D2): a HUE-scheme ring is five
  * entries at one hue and five brightnesses, so a hue-only comparison would call
  * any five of them an orbit.
  */
-export function turnsOrbit(palettes: readonly PaletteEntry[] | undefined): TurnsOrbit | null {
+export function turnsOrbit(
+  palettes: readonly PaletteEntry[] | undefined,
+  staged?: readonly Hsv[],
+): TurnsOrbit | null {
   if (!Array.isArray(palettes) || palettes.length < 2) return null;
   if (!palettes.every(isInlinePair)) return null;
   const pairs = palettes as ColorPair[];
   const n = pairs.length;
   for (let d = 1; d < n; d++) {
-    if (pairs.every((p, i) => sameChannel(p.c2, pairs[(i + d) % n].c1))) {
-      return { ring: pairs.map((p) => asHsv(p.c1)), distance: d };
+    const builderStep = orbitStep(d, n);
+    const candidateSteps = builderStep === 1 ? [1] : [1, builderStep];
+    for (const s of candidateSteps) {
+      if (s >= n || gcdLocal(s, n) !== 1) continue;
+      const ring: ColorChannel[] = new Array(n);
+      for (let k = 0; k < n; k++) ring[(k * s) % n] = pairs[k].c1;
+      if (pairs.every((p, k) => sameChannel(p.c2, ring[(k * s + d) % n]))) {
+        const hsvRing = ring.map(asHsv);
+        if (staged && orbitPhase(staged, hsvRing) === null) continue;
+        return { ring: hsvRing, distance: d, step: s };
+      }
     }
   }
   return null;
@@ -1475,8 +1642,11 @@ export function isTurnsConfig(palettes: readonly PaletteEntry[] | undefined): bo
 /** The ring of chosen COLOURS behind a TURNS config, in WIRE order — which
  *  begins at COLOUR A's slot, not necessarily at the staged T1 (`orbitPhase`
  *  recovers the offset). Supersedes the hue-only `turnsHues`. */
-export function turnsColors(palettes: readonly PaletteEntry[] | undefined): Hsv[] {
-  return turnsOrbit(palettes)?.ring ?? [];
+export function turnsColors(
+  palettes: readonly PaletteEntry[] | undefined,
+  staged?: readonly Hsv[],
+): Hsv[] {
+  return turnsOrbit(palettes, staged)?.ring ?? [];
 }
 
 /**
@@ -1505,16 +1675,23 @@ export function orbitPhase(staged: readonly Hsv[], wire: readonly Hsv[]): number
 /**
  * The two STAGED slots a live orbit's pair `pairIndex` lights up — the wire's
  * window mapped back through `orbitPhase` into the operator's own numbering.
- * At phase 0 / distance 1 this is `[i, i+1]`, the adjacent window the card has
- * always highlighted.
+ *
+ * `step` (docs/75 §4, defaulting to 1 — the pre-orbit identity) is how many
+ * staged slots the window's LEADING end travels for each turn `pairIndex`
+ * advances: `a = (phase + pairIndex·step) mod n`. At `step = 1` this reduces
+ * exactly to the original adjacent-slide formula — every caller that has not
+ * been updated to pass the daemon's actual step keeps compiling and keeps
+ * behaving exactly as before. At `step = 2` (the queue's default for an
+ * adjacent pick) turn *k*'s leading slot jumps two staged slots ahead of turn
+ * *k-1*'s, matching the fresh-every-turn wire `orbitPairs` now posts.
  */
 export function orbitWindowSlots(
-  pairIndex: number, distance: number, phase: number, ringLength: number,
+  pairIndex: number, distance: number, phase: number, ringLength: number, step: number = 1,
 ): [number, number] {
   if (!(ringLength >= 2)) {
     throw new Error(`[colors_window] an orbit window needs a ring of at least 2, got ${ringLength}`);
   }
-  const a = (((phase + pairIndex) % ringLength) + ringLength) % ringLength;
+  const a = (((phase + pairIndex * step) % ringLength) + ringLength) % ringLength;
   return [a, (a + distance) % ringLength];
 }
 
@@ -1646,17 +1823,28 @@ export function rotationCursor(
 
 /**
  * The window's LEADING end as a fraction of the ring, for the sliding rail: pair
- * `index` puts COLOUR A on staged slot `phase + index`, and a fade toward it is
- * that end travelling from `phase + index - 1`. Returns the left edge in ring
- * units (0..n), which the rail divides by n. Kept here, not in the component,
- * because "where the highlight sits" is a rule about the engine's cursor.
+ * `index` puts COLOUR A on staged slot `phase + index·step`, and a fade toward
+ * it is that end travelling from `phase + (index-1)·step`. Returns the left
+ * edge in ring units (0..n), which the rail divides by n. Kept here, not in
+ * the component, because "where the highlight sits" is a rule about the
+ * engine's cursor.
  *
  * `phase` is `orbitPhase`'s offset between the wire's ring and the staged one;
  * it defaults to 0, which is both the pre-orbit behaviour and what a
  * default-selection ring reports.
+ *
+ * `step` (docs/75 §4) is how many staged slots the window's leading end
+ * travels per turn — `raw = (index - 1 + t)·step + phase`, so the fraction
+ * `t` through a fade scales by the SAME step as a whole turn does, and the
+ * rail's highlight covers `step` cells of ground during each fade rather than
+ * one. Defaults to 1, the pre-orbit identity: every existing caller that has
+ * not been updated to pass the daemon's actual step keeps compiling and keeps
+ * animating exactly as before.
  */
-export function cursorRailOffset(cursor: RotationCursor, ringLength: number, phase = 0): number {
-  const raw = cursor.index - 1 + cursor.t + phase;
+export function cursorRailOffset(
+  cursor: RotationCursor, ringLength: number, phase = 0, step: number = 1,
+): number {
+  const raw = (cursor.index - 1 + cursor.t) * step + phase;
   return ((raw % ringLength) + ringLength) % ringLength;
 }
 
@@ -1676,11 +1864,16 @@ export type RailSegment = { left: number; width: number };
  * Past that the two lit cells are genuinely separated and the rail says so with
  * two 1-cell segments, which is the whole point of the orbit: the operator can
  * see the spacing being kept as the window travels.
+ *
+ * `step` (docs/75 §4) passes straight through to `cursorRailOffset` — it only
+ * changes WHERE the window's leading edge sits and how far it travels per
+ * turn, never the two-cells-vs-capsule shape rule above, which is purely a
+ * function of `distance`. Defaults to 1, the pre-orbit identity.
  */
 export function cursorRailSegments(
-  cursor: RotationCursor, ringLength: number, distance: number, phase = 0,
+  cursor: RotationCursor, ringLength: number, distance: number, phase = 0, step: number = 1,
 ): RailSegment[] {
-  const a = cursorRailOffset(cursor, ringLength, phase);
+  const a = cursorRailOffset(cursor, ringLength, phase, step);
   if (distance === 1) return [{ left: a, width: 2 }];
   return [{ left: a, width: 1 }, { left: a + distance, width: 1 }];
 }
@@ -1695,10 +1888,15 @@ export function cursorRailSegments(
  * `colorTransitionMs`.
  */
 export function paletteWritePayload(h1: number, h2: number) {
-  return {
-    colorPalette1: { h: h1, s: 1, v: 1 },
-    colorPalette2: { h: h2, s: 1, v: 1 },
-  };
+  return corePaletteWritePayload(h1, h2);
+}
+
+/** Canonical GET/WS reconciliation shared with non-React colour surfaces. */
+export function reduceColorControlState<T extends CoreColorAutopilotState>(
+  previous: T,
+  payload: Record<string, unknown>,
+): T {
+  return coreReduceColorControlState(previous, payload);
 }
 
 // ── The saved colour-pair gallery ───────────────────────────────────────────

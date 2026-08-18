@@ -288,6 +288,10 @@ export class TimelineService {
     this.bootError = null;
     this.lastError = null;
     this.cueErrors = {};        // cueId → last error string
+    // Active-plan save/activate both hot-reload through awaited device work.
+    // Serialize them so overlapping HTTP requests cannot interleave two plans
+    // across disk, memory, and catch-up execution.
+    this._planMutationTail = Promise.resolve();
     // The EVENT LOG ring (docs/38 §15.2). Field name kept `recentFires` for
     // wire compat; entries are { kind:'fire'|'lifecycle', cueId?, label,
     // reason, source, atMs }. 'fire' = a cue application; 'lifecycle' = a
@@ -3154,6 +3158,12 @@ export class TimelineService {
 
   // ── plan library CRUD (backs the CaptainPad maker) ────────────────────────
 
+  _serializePlanMutation(operation) {
+    const result = this._planMutationTail.then(operation);
+    this._planMutationTail = result.catch(() => undefined);
+    return result;
+  }
+
   _assertPlanName(name) {
     if (typeof name !== 'string' || !PLAN_NAME_RE.test(name)) {
       throw new Error(`invalid plan name "${name}" (must match ${PLAN_NAME_RE})`);
@@ -3177,23 +3187,59 @@ export class TimelineService {
 
   /** Validate-then-write an authored plan. THROWS on an invalid plan (no fallback). */
   async savePlan(plan) {
+    return this._serializePlanMutation(() => this._savePlan(plan));
+  }
+
+  async _savePlan(plan) {
     if (!plan || typeof plan !== 'object') throw new Error('savePlan: plan must be an object');
     const normalized = validateShowPlan(plan);
     this._assertPlanName(normalized.name);
     if (!fs.existsSync(this.sceneDir)) fs.mkdirSync(this.sceneDir, { recursive: true });
-    saveShowPlan(normalized, this._planPath(normalized.name));
+    const planPath = this._planPath(normalized.name);
+    const updatesActivePlan = normalized.name === this.activePlan;
+    const priorPlan = updatesActivePlan ? this.plan : null;
+
+    // An active-plan save must later persist the re-derived runtime state. Prove
+    // that commit path BEFORE replacing authored YAML; otherwise a broken/full
+    // state directory makes the endpoint report failure after the plan file has
+    // already landed (a false NOT SAVED response in CaptainPad).
+    if (updatesActivePlan) saveTimelineState(this.state, this.stateDir);
+    saveShowPlan(normalized, planPath);
     // Saving OVER the ACTIVE plan hot-reloads it. Previously the engine kept
     // running the stale in-memory copy until re-activate (disk/memory
     // divergence), which also left freshly-saved cues invisible to the live
     // overview — the maker's FIRE buttons stayed dead after SAVE. Swap the
     // plan in place (the event ring is PRESERVED — unlike activatePlan) and
     // catchUp so cue windows / baseline re-derive from the new content.
-    if (normalized.name === this.activePlan) {
-      this._cancelSequence('active plan was updated');
-      this.plan = normalized;
-      this._lintActivePlan();   // FIX 4 (_98): re-surface authoring findings on every save
-      this._recordLifecycle(`Plan updated (live): ${normalized.name}`, 'save', { source: 'manual' });
-      await this._catchUp();
+    if (updatesActivePlan) {
+      try {
+        this._cancelSequence('active plan was updated');
+        this.plan = normalized;
+        this._lintActivePlan();   // FIX 4 (_98): re-surface authoring findings on every save
+        await this._catchUp();
+        this._recordLifecycle(`Plan updated (live): ${normalized.name}`, 'save', { source: 'manual' });
+      } catch (error) {
+        const rollbackFailures = [];
+        try {
+          saveShowPlan(priorPlan, planPath);
+        } catch (rollbackWriteError) {
+          rollbackFailures.push(`authored plan: ${rollbackWriteError.message}`);
+        }
+        this._cancelSequence('active plan update failed and was rolled back');
+        this.plan = priorPlan;
+        this._lintActivePlan();
+        try {
+          await this._catchUp();
+        } catch (rollbackRuntimeError) {
+          rollbackFailures.push(`runtime restore: ${rollbackRuntimeError.message}`);
+        }
+        const rollbackDetail = rollbackFailures.length > 0
+          ? `; rollback failures: ${rollbackFailures.join('; ')}`
+          : '; prior authored and runtime plan restored';
+        this.lastError = `active plan update failed: ${error.message}${rollbackDetail}`;
+        this._broadcastState();
+        throw new Error(this.lastError, { cause: error });
+      }
     }
     return normalized;
   }
@@ -3208,6 +3254,10 @@ export class TimelineService {
 
   /** Switch to a different plan name (reload + re-run catchUp). */
   async activatePlan(name) {
+    return this._serializePlanMutation(() => this._activatePlan(name));
+  }
+
+  async _activatePlan(name) {
     this._assertPlanName(name);
     const planPath = this._planPath(name);
     if (!fs.existsSync(planPath)) throw new Error(`plan "${name}" not found in ${this.sceneDir}`);

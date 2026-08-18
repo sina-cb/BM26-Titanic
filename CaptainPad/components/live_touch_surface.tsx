@@ -17,8 +17,9 @@
  *
  * In: `injectJavaScript` calls `window.__captainpadDeliver(...)`, which the
  * page installs BEFORE it posts `touch-control-theme-ready`. This host marks
- * itself ready on that event — NOT on `onLoadEnd` — so the host can never
- * inject a call to a function that does not exist yet. `webViewRef.postMessage`
+ * itself ready only after both that event and the current document's
+ * `onLoadEnd`, so a slow/remounted WebView cannot receive host injection into
+ * a half-loaded JS world. `webViewRef.postMessage`
  * is deliberately unused: its delivery target ('message' on `window` vs on
  * `document`) has differed across react-native-webview versions, while an
  * injected call is deterministic.
@@ -52,6 +53,7 @@ import type { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
   canDeliverToNativePanel,
+  nativePanelDocumentUrl,
   parseTouchControlBridgeMessage,
   type TouchControlBridgeMessage,
 } from '@/utils/live_touch_bridge';
@@ -97,15 +99,24 @@ export function LiveTouchSurface({
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
   const webViewRef = useRef<WebView>(null);
-  /* Whether `window.__captainpadDeliver` exists in the page RIGHT NOW. Set by
-     the panel's own `touch-control-theme-ready` (posted after it installs the
-     hook) and cleared by every main-frame load start — the panel's RELOAD
-     button, a RETRY remount, and the reload iOS performs when it reclaims a
-     backgrounded WebView's content process all pass through there. */
+  /* Whether `window.__captainpadDeliver` exists in the page RIGHT NOW. Both
+     page-ready signals are emitted after that hook exists: theme-ready is the
+     early one-shot, while pixel-verifier-ready is the fully-mounted replay.
+     Accepting either prevents a lost early WKWebView message from permanently
+     disabling host injection. Every main-frame load clears this proof. */
   const panelReadyRef = useRef(false);
+  const documentLoadedRef = useRef(false);
+  const pendingReadyMessageRef = useRef<TouchControlBridgeMessage | null>(null);
+  const [mountToken] = useState(
+    () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+  );
   const [reloadToken, setReloadToken] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const documentUrl = useMemo(
+    () => nativePanelDocumentUrl(url, `${mountToken}-${reloadToken}`),
+    [mountToken, reloadToken, url],
+  );
 
   const callbacksRef = useRef({ onSender, onReady, onMessage, onBridgeError });
   callbacksRef.current = { onSender, onReady, onMessage, onBridgeError };
@@ -152,11 +163,18 @@ export function LiveTouchSurface({
     const { onMessage: deliver, onBridgeError: refuse, onReady: ready } = callbacksRef.current;
     try {
       const message = parseTouchControlBridgeMessage(JSON.parse(event.nativeEvent.data));
-      // Ready BEFORE the message is forwarded: the screen's theme send is what
-      // this event exists to unblock, and the screen's own duplicate guard
-      // (`shouldSendLiveTouchThemeOnReady`) then sees the request already in
-      // flight — exactly the ordering the iframe's load event produces.
-      if (message.type === 'touch-control-theme-ready') {
+      // Ready BEFORE the message is forwarded: the screen immediately sends
+      // theme/focus/verifier state, and must see an injection-capable surface.
+      const isPanelReadySignal = message.type === 'touch-control-theme-ready'
+        || message.type === 'touch-control-pixel-verifier-ready';
+      if (isPanelReadySignal) {
+        /* Either signal can beat main-frame onLoadEnd on a slow iPad. Hold the
+           newest proof until this exact document is complete. The verifier
+           signal repeats, so losing the early theme signal is recoverable. */
+        if (!documentLoadedRef.current) {
+          pendingReadyMessageRef.current = message;
+          return;
+        }
         panelReadyRef.current = true;
         ready();
       }
@@ -167,12 +185,17 @@ export function LiveTouchSurface({
   }, []);
 
   const fail = useCallback((message: string) => {
+    panelReadyRef.current = false;
+    documentLoadedRef.current = false;
+    pendingReadyMessageRef.current = null;
     setLoading(false);
     setLoadError(message);
   }, []);
 
   const retry = useCallback(() => {
     panelReadyRef.current = false;
+    documentLoadedRef.current = false;
+    pendingReadyMessageRef.current = null;
     setLoadError(null);
     setLoading(true);
     setReloadToken((current) => current + 1);
@@ -182,8 +205,14 @@ export function LiveTouchSurface({
     <View style={[styles.host, { backgroundColor }]}>
       <WebView
         ref={webViewRef}
-        key={`${url}:${reloadToken}`}
-        source={{ uri: url }}
+        key={documentUrl}
+        source={{ uri: documentUrl }}
+        /* Live Touch carries safety gates in its served HTML/JS. A native
+         * WebView must not resurrect an older same-URL ARM lifecycle after the
+         * launcher publishes a corrected surface. Subresources that require
+         * independent freshness also use explicit cache-busting/no-store. */
+        cacheEnabled={false}
+        cacheMode="LOAD_NO_CACHE"
         style={styles.surface}
         originWhitelist={['http://*']}
         javaScriptEnabled
@@ -192,8 +221,21 @@ export function LiveTouchSurface({
         /* Every main-frame load discards the page's JS world, hook included.
            The panel re-announces readiness when the new document has installed
            it; until then this surface must refuse to pretend it can deliver. */
-        onLoadStart={() => { panelReadyRef.current = false; }}
-        onLoadEnd={() => setLoading(false)}
+        onLoadStart={() => {
+          panelReadyRef.current = false;
+          documentLoadedRef.current = false;
+          pendingReadyMessageRef.current = null;
+        }}
+        onLoadEnd={() => {
+          documentLoadedRef.current = true;
+          setLoading(false);
+          const pendingReady = pendingReadyMessageRef.current;
+          if (!pendingReady) return;
+          pendingReadyMessageRef.current = null;
+          panelReadyRef.current = true;
+          callbacksRef.current.onReady();
+          callbacksRef.current.onMessage(pendingReady);
+        }}
         onError={(event) => {
           fail(`Live Touch could not load — ${event.nativeEvent.description}`);
         }}

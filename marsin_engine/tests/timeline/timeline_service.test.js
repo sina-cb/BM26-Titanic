@@ -256,6 +256,40 @@ test('savePlan rejects an invalid plan (fail loud)', async () => {
   await assert.rejects(() => svc.savePlan({ schemaVersion: 1, name: 'bad' }), /location|cues/);
 });
 
+test('overlapping active-plan saves serialize disk, memory, and catch-up execution', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  let signalFirstEntered;
+  const firstEntered = new Promise((resolve) => { signalFirstEntered = resolve; });
+  let blocked = false;
+  svc.deps.loadPlaylist = async () => {
+    if (blocked) return;
+    blocked = true;
+    signalFirstEntered();
+    await firstGate;
+  };
+
+  const firstPlan = makePlan();
+  firstPlan.autopilot.delay_s = 46;
+  const secondPlan = makePlan();
+  secondPlan.autopilot.delay_s = 47;
+  const firstSave = svc.savePlan(firstPlan);
+  await firstEntered;
+  const secondSave = svc.savePlan(secondPlan);
+  await Promise.resolve();
+
+  assert.equal(svc.plan.autopilot.delay_s, 46,
+    'the second active plan entered while the first catch-up was still running');
+  releaseFirst();
+  await Promise.all([firstSave, secondSave]);
+  assert.equal(svc.plan.autopilot.delay_s, 47);
+  assert.equal(svc.getPlan('test_plan').autopilot.delay_s, 47);
+});
+
 test('setAutopilotEnabled(false) → controller manual, autopilot off', async () => {
   const { svc, calls } = setup();
   await svc.start();

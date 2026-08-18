@@ -17,9 +17,21 @@ const TARGET = { channel: 'deck', id: null };
 // same two words survive only as COLOUR PALETTE ids in config.yaml, which is
 // why the palette assertions below still name them).
 const TEASE_PLAYLIST = 'baby_tease';
-const BOY_PLAYLIST = 'baby_boy';
-const GIRL_PLAYLIST = 'baby_girl';
-const TEASE_ENTRY = 'e_baby_reveal_orbit_question';
+// ONE answer playlist now serves both outcomes (docs/73). `baby_boy` and
+// `baby_girl` are retired: the family is carried by `colorPalette1` — the
+// colour the patterns render and derive their dark tone from — not by which
+// playlist fires. The two names below are kept as aliases only so the fixtures
+// below read as "the answer", whichever side fired it.
+const REVEAL_PLAYLIST = 'baby_reveal';
+// The hero (docs/73 §5 K06): the look that rises under the white bloom, pinned
+// by entryId so playlist order and later curation cannot move it.
+const REVEAL_ENTRY = 'e_baby_reveal_diamond_quilt';
+const BOY_PLAYLIST = REVEAL_PLAYLIST;
+const GIRL_PLAYLIST = REVEAL_PLAYLIST;
+// Was `e_baby_tease_two_color_world_walk` until the tease redesign (`_300`)
+// retired that look; `_305` §2.4 catalogued the resulting dangling cue. The
+// shipped plan now pins the tease arc's own calm opener.
+const TEASE_ENTRY = 'e_baby_tease_bullseye_tide';
 
 function playlistAction(entryId, palette, celebration = false) {
   return {
@@ -173,7 +185,7 @@ test('sequence schema preserves exact entries and rejects decreasing offsets', (
 // a dangling name is silent until the cue fires in front of the crowd. The
 // on-disk assertion at the end of this test is that missing guard, standing in
 // until the timeline grows a load-time one of its own.
-test('shipped Titanic plan drives the three canonical Baby playlists, and they exist', () => {
+test('shipped Titanic plan drives the two canonical Baby playlists, and they exist', () => {
   const engineDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const repoRoot = path.resolve(engineDir, '..');
   const config = yaml.load(fs.readFileSync(path.join(engineDir, 'config.yaml'), 'utf8'));
@@ -199,10 +211,41 @@ test('shipped Titanic plan drives the three canonical Baby playlists, and they e
   assert.equal(pink.action.steps[0].action.palette, 'baby_reveal_duet');
   assert.equal(blue.action.steps[0].action.palette, 'baby_reveal_duet');
 
-  assert.equal(pink.action.steps[1].action.name, GIRL_PLAYLIST);
-  assert.equal(pink.action.steps[1].action.palette, 'baby_pink');
-  assert.equal(blue.action.steps[1].action.name, BOY_PLAYLIST);
-  assert.equal(blue.action.steps[1].action.palette, 'baby_blue');
+  // THE ANSWER IS A COLOUR NOW, NOT A PLAYLIST (docs/73, PALETTE CONTRACT v2).
+  // Both cues fire the SAME `baby_reveal` list, pinned to the hero entry; what
+  // differs is `colorPalette1`, which IS the answer — the patterns render that
+  // colour and derive their own dark tone from it. A curated `palette:` id
+  // cannot carry it: those are hue-only (s=1, v=1) and would OVERWRITE
+  // colorPalette1, i.e. change the answer's colour. So the answer rides in the
+  // step's `globals`, and this is the assertion that stops someone
+  // "simplifying" it back to a `palette:` key.
+  assert.equal(pink.action.steps[1].action.name, REVEAL_PLAYLIST);
+  assert.equal(blue.action.steps[1].action.name, REVEAL_PLAYLIST);
+  assert.equal(pink.action.steps[1].action.entryId, REVEAL_ENTRY,
+    'the answer step pins the hero entry, not whatever the playlist happens to open on');
+  assert.equal(blue.action.steps[1].action.entryId, REVEAL_ENTRY,
+    'the answer step pins the hero entry, not whatever the playlist happens to open on');
+  assert.equal(pink.action.steps[1].action.palette, undefined,
+    'a curated palette on the answer step would overwrite colorPalette1 — the ANSWER\'S COLOUR');
+  assert.equal(blue.action.steps[1].action.palette, undefined,
+    'a curated palette on the answer step would overwrite colorPalette1 — the ANSWER\'S COLOUR');
+
+  const darkK = 0.28;
+  for (const [cue, hue, sat] of [[pink, 0.943869, 0.965], [blue, 0.594795, 0.967]]) {
+    const globals = cue.action.steps[1].action.globals;
+    assert.ok(globals, `${cue.id}: the answer step must write the palette in its globals`);
+    assert.equal(globals.colorTransitionMs, 0,
+      `${cue.id}: the palette must SNAP — a slewed palette crosses the wheel through an `
+      + 'INTERMEDIATE HUE, showing a wrong colour on the ship during the reveal');
+    assert.deepEqual(globals.colorPalette1, { h: hue, s: sat, v: 1.0 },
+      `${cue.id}: colorPalette1 IS the answer — a Baby family hue at full value`);
+    assert.deepEqual(globals.colorPalette2, { h: hue, s: sat, v: darkK },
+      `${cue.id}: slot 2 mirrors the same hue at the dark tone. The patterns do NOT read it — it `
+      + 'is written so the global palette pair matches the tones the ship is showing');
+  }
+  // The two cues must never write each other's family.
+  assert.notEqual(pink.action.steps[1].action.globals.colorPalette1.h,
+    blue.action.steps[1].action.globals.colorPalette1.h);
   assert.equal(pink.action.steps[1].afterSec, 992);
   assert.equal(blue.action.steps[1].afterSec, 992);
 

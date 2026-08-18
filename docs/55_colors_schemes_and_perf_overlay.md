@@ -128,6 +128,12 @@ neither as open chips nor on the HIDDEN rail — and the bar shows one static
 caption in their place: `PERFORMANCE — PARAMS & AUTOPILOT HIDDEN` (microCaps,
 `C.icon`, same recipe as the HIDDEN caption).** Rationale:
 
+> **AMENDED — operator order, report _308.** The CHIP suppression below is
+> unchanged and remains the contract. The replacement CAPTION is **removed**:
+> the bar renders no explainer label, perf mode included. The rationale
+> bullets that follow still justify why the chips leave the row; they no
+> longer justify any text standing in their place.
+
 - A chip that cannot restore its window is exactly docs/53 §3.1's "an
   affordance that always refuses should not exist" — the silently-dead chip
   is the named failure mode, and a tap-to-temporarily-reveal variant
@@ -575,6 +581,7 @@ engine-read transcripts under `~/tmp/fix_<report>/`.
 2. **Crossfade HOLD default:** CONT (continuous triangle, prototype feel).
    Alternative: a short hold (1–2 s) reads calmer on some patterns.
 3. **Perf caption wording:** `PERFORMANCE — PARAMS & AUTOPILOT HIDDEN`.
+   *Settled by report _308: the caption is removed entirely — no wording.*
 
 ---
 

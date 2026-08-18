@@ -27,7 +27,14 @@
 (function () {
   'use strict';
 
-  var ENGINE = 'http://' + location.hostname + ':6968';
+  var ENDPOINT = window.TouchControlEndpoint;
+  if (!ENDPOINT) {
+    throw new Error('Live Touch engine endpoint contract is unavailable: '
+      + ((window.TouchControlEndpointError && window.TouchControlEndpointError.message)
+        || 'CaptainPad did not provide a validated engine origin and protocol version'));
+  }
+  var ENGINE = ENDPOINT.engineOrigin;
+  var ENGINE_WS = ENDPOINT.webSocketOrigin;
   var FLUSH_MS = 100;          /* 10 writes/sec ceiling per key */
   /* Drawing is a FINGER, not a fader — see sendDraw(). 33 ms is ~30 samples a
      second, just under the engine's 40 fps, so nothing is generated that the
@@ -76,17 +83,32 @@
     liveEffectiveCaps: {},
     sessionRevision: null,
     groupProfilesReady: false,
+    performanceModeActive: null,
+    engineProtocolReady: false,
     lastError: null,
+    lastErrorDetail: null,
+    lastErrorCode: null,
   };
+  /* Installed by the Spatial block once the pad exists. Pattern/lifecycle
+     handlers are registered earlier in this file but run only after the whole
+     script has installed, so they all converge on this one contact owner. */
+  var clearTransientSpatialContacts = null;
+  /* Verification-only, like clearTransientSpatialContacts above: installed by
+     the Spatial block so a headless harness can inspect the exact compact
+     stroke-slot bookkeeping (never the raw pointerId) without seizing the
+     live engine. */
+  var spatialPayloadForTest = null;
+  var spatialPointerSlotForTest = null;
 
   /* ── status pill ────────────────────────────────────────────────────── */
   var pill = document.createElement('div');
   pill.id = 'wireStatus';
   pill.style.cssText =
     'position:fixed;left:10px;bottom:10px;z-index:9999;padding:5px 11px;' +
-    'border-radius:999px;font:700 11px/1.2 Inter,system-ui,sans-serif;' +
+    'max-width:min(760px,calc(100vw - 20px));border-radius:12px;' +
+    'font:700 11px/1.2 Inter,system-ui,sans-serif;' +
     'letter-spacing:.04em;border:1px solid rgba(255,255,255,.18);' +
-    'background:rgba(8,13,24,.94);color:#8fa3c4;pointer-events:none;white-space:nowrap';
+    'background:rgba(8,13,24,.94);color:#8fa3c4;pointer-events:none;white-space:normal';
   /* ATTACHED ONLY WHILE SOMETHING IS WRONG.
      This pill used to be permanently on screen, restating a state the ARM
      control already says in words in the header, and the operator had it
@@ -109,12 +131,34 @@
     pillAttached = on;
   }
 
+  function publishTouchTransportState() {
+    document.dispatchEvent(new CustomEvent('touchtransportstate', { detail: {
+      online: state.online === true,
+      phase: state.phase,
+      armed: state.armed === true,
+      leaseAcquired: armLeaseAcquired === true,
+    } }));
+  }
+
   function setStatus() {
+    publishTouchTransportState();
     if (state.lastError) {
       /* ONLY the error. The header already carries armed/engine state, and a
          toast that buries the fault among three other fields is one the
          operator learns to ignore. */
-      pill.textContent = '⚠ ' + state.lastError;
+      pill.replaceChildren();
+      var primary = document.createElement('span');
+      primary.textContent = '⚠ ' + state.lastError;
+      pill.appendChild(primary);
+      if (state.lastErrorDetail) {
+        var detail = document.createElement('span');
+        detail.textContent = state.lastErrorDetail;
+        detail.style.cssText = 'display:block;margin:2px 0 0 17px;font-weight:600;opacity:.86;letter-spacing:.015em';
+        pill.appendChild(detail);
+        pill.title = state.lastErrorDetail;
+      } else {
+        pill.removeAttribute('title');
+      }
       pill.style.color = '#ff8f8f';
       pill.style.borderColor = 'rgba(255,120,120,.5)';
       pill.style.background = 'rgba(40,8,12,.96)';
@@ -136,7 +180,11 @@
 
   var lastFailAt = 0;
   function fail(what, err) {
-    state.lastError = what + ': ' + (err && err.message ? err.message : err);
+    state.lastError = err && err.operatorMessage
+      ? err.operatorMessage
+      : what + ': ' + (err && err.message ? err.message : err);
+    state.lastErrorDetail = err && err.diagnostic ? err.diagnostic : null;
+    state.lastErrorCode = err && err.code ? err.code : null;
     lastFailAt = Date.now();
     console.error('[wire]', what, err);
     setStatus();
@@ -149,7 +197,18 @@
   function clearError() {
     if (!state.lastError) return;
     if (Date.now() - lastFailAt < 5000) return;
-    state.lastError = null; setStatus();
+    state.lastError = null;
+    state.lastErrorDetail = null;
+    state.lastErrorCode = null;
+    setStatus();
+  }
+
+  function clearProtocolError() {
+    if (state.lastErrorCode !== 'LIVE_TOUCH_PROTOCOL') return;
+    state.lastError = null;
+    state.lastErrorDetail = null;
+    state.lastErrorCode = null;
+    setStatus();
   }
 
   document.addEventListener('panelerror', function (event) {
@@ -181,6 +240,13 @@
 
   function requestJson(method, path, body, ownerTagged, passcode) {
     var opts = { method: method, headers: {} };
+    /* WKWebView keeps an HTTP cache independent of Safari. Live Touch's two
+       ARM gates (`/layers/state` and `/model/pixel-layout`) must never be
+       answered from an older native session: a cached topology makes a valid
+       Titanic artifact look mismatched, while a cached pre-schema layer state
+       produces the observed "invalid layerSettings" refusal. This is the
+       request half of the server's matching `Cache-Control: no-store`. */
+    if (method === 'GET') opts.cache = 'no-store';
     if (ownerTagged) opts.headers['X-Touch-Control-Owner'] = OWNER;
     /* PERFORMANCE-MODE TAKEOVER PASSCODE (operator ruling 2026-08-14).
        The value arrives as an argument, is written straight into THIS
@@ -371,7 +437,7 @@
   var drawInFlight = false;
   function scheduleDrawPump() {
     if (drawFrame !== null || drawTimer !== null || !drawPending || drawInFlight) return;
-    drawFrame = requestAnimationFrame(function () {
+    var run = function () {
       drawFrame = null;
       if (!drawPending || drawInFlight) return;
       var wait = DRAW_FLUSH_MS - (performance.now() - drawLastSentAt);
@@ -393,20 +459,39 @@
       }
       Promise.resolve(promise).then(function () {
         drawInFlight = false;
+        if (item.settled) item.settled(null);
         scheduleDrawPump();
       }, function (error) {
         drawInFlight = false;
         fail('spatial draw', error);
+        if (item.settled) item.settled(error);
         scheduleDrawPump();
       });
-    });
+    };
+    /* A lift/cancel is safety state, not animation. requestAnimationFrame is
+       suspended when WKWebView backgrounds, which used to strand the last
+       touch:true until the engine deadman. Final samples run in a microtask;
+       ordinary moves stay frame-coalesced. */
+    if (drawPending.final) {
+      drawFrame = -1;
+      Promise.resolve().then(run);
+    } else {
+      drawFrame = requestAnimationFrame(run);
+    }
   }
 
-  function sendDraw(fn, finalSample) {
-    drawPending = { fn: fn, final: finalSample === true };
+  function sendDraw(fn, finalSample, settled) {
+    if (drawPending && drawPending.settled) {
+      drawPending.settled(new Error('spatial sample was superseded by newer contact state'));
+    }
+    drawPending = { fn: fn, final: finalSample === true, settled: settled || null };
     if (finalSample && drawTimer !== null) {
       clearTimeout(drawTimer);
       drawTimer = null;
+    }
+    if (finalSample && drawFrame !== null && drawFrame !== -1) {
+      cancelAnimationFrame(drawFrame);
+      drawFrame = null;
     }
     scheduleDrawPump();
   }
@@ -416,11 +501,94 @@
      live engine pixel identity + coordinate before ARM can take control. */
   var chartDriftVerified = false;
   var chartDriftInFlight = null;
+  var chartDriftLastError = null;
+  var chartDriftPhase = 'wire-ready';
+  var nativePixelEmbed = window.CaptainPadEmbed && window.CaptainPadEmbed.mode === 'native';
+  var nativePixelDocumentId = nativePixelEmbed
+    ? 'pixel-document-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
+    : null;
+  var nativePixelStarted = !nativePixelEmbed;
+  var nativePixelRequestId = null;
+  var nativeVerifierReadyTimer = null;
+  var resolveNativePixelStart = null;
+  var nativePixelStart = nativePixelEmbed ? new Promise(function (resolve) {
+    resolveNativePixelStart = resolve;
+  }) : Promise.resolve();
+
+  function nativePixelState() {
+    return window.TouchPixelViews && typeof window.TouchPixelViews.state === 'function'
+      ? window.TouchPixelViews.state() : null;
+  }
+
+  function announceNativePixelVerifierReady() {
+    if (!nativePixelEmbed || nativePixelStarted || !window.CaptainPadEmbed) return;
+    var pixelState = nativePixelState();
+    window.CaptainPadEmbed.post({
+      type: 'touch-control-pixel-verifier-ready',
+      version: 1,
+      documentId: nativePixelDocumentId,
+      phase: chartDriftPhase,
+      staticVerified: !!(pixelState && pixelState.staticVerified),
+      engineVerified: !!(pixelState && pixelState.engineVerified),
+      readyStatus: pixelState && typeof pixelState.readyStatus === 'string'
+        ? pixelState.readyStatus : 'unavailable',
+    });
+  }
+
+  function publishPixelVerification(status, error) {
+    if (!nativePixelEmbed || !window.CaptainPadEmbed) return;
+    var pixelState = nativePixelState();
+    window.CaptainPadEmbed.post({
+      type: 'touch-control-pixel-verification',
+      version: 1,
+      documentId: nativePixelDocumentId,
+      requestId: nativePixelRequestId,
+      status: status,
+      phase: chartDriftPhase,
+      staticVerified: !!(pixelState && pixelState.staticVerified),
+      engineVerified: !!(pixelState && pixelState.engineVerified),
+      readyStatus: pixelState && typeof pixelState.readyStatus === 'string'
+        ? pixelState.readyStatus : 'unavailable',
+      error: error ? String(error.message || error).slice(0, 500) : null,
+    });
+  }
+
+  function acceptPerformanceModeState(active) {
+    if (typeof active !== 'boolean') {
+      throw new Error('engine status omitted authoritative performanceMode.active');
+    }
+    state.performanceModeActive = active;
+    document.dispatchEvent(new CustomEvent('performancemode', {
+      detail: { active: active },
+    }));
+    projectAudioPerformanceLock();
+    if (active) {
+      projectPerformanceEffectSlots().catch(function (error) {
+        fail('performance effects', error);
+      });
+    }
+  }
+
   function chartDriftCheck() {
-    if (chartDriftVerified) return Promise.resolve(true);
+    if (chartDriftVerified && window.TouchPixelViews && window.TouchPixelViews.canArm()) {
+      publishPixelVerification('ready', null);
+      return Promise.resolve(true);
+    }
+    chartDriftVerified = false;
+    /* Native verification is protocol-gated, not timing-gated. The page
+       repeatedly announces verifier-ready only after this wire and the pixel
+       reader are mounted; CaptainPad answers with a correlated start request.
+       ARM joins that promise. A lost/reordered theme-ready, focus injection or
+       onLoadEnd can no longer strand the verifier in a false pre-mount state. */
+    if (!nativePixelStarted) {
+      return nativePixelStart.then(function () { return chartDriftCheck(); });
+    }
     if (chartDriftInFlight) return chartDriftInFlight;
     if (!window.TouchPixelViews) {
-      fail('chart', 'PIXEL VIEW UNAVAILABLE: canonical view reader did not load');
+      chartDriftPhase = 'wire-mount';
+      chartDriftLastError = new Error('PIXEL VIEW UNAVAILABLE: canonical view reader did not load');
+      fail('chart', chartDriftLastError);
+      publishPixelVerification('failed', chartDriftLastError);
       return Promise.resolve(false);
     }
     /* Verification hashes the generated view plus the engine's complete
@@ -429,16 +597,26 @@
        so the ARM caller skipped the in-flight check, observed canArm=false,
        and aborted with "pixel view has not verified" even though verification
        completed moments later. Share the real promise; verified means done. */
-    chartDriftInFlight = Promise.all([
-      window.TouchPixelViews.ready(),
-      req('GET', '/model/pixel-layout'),
-    ]).then(function (results) {
-      return window.TouchPixelViews.verifyEngineLayout(results[1]);
+    chartDriftPhase = 'canonical-source';
+    publishPixelVerification('checking', null);
+    chartDriftInFlight = window.TouchPixelViews.ready().then(function () {
+      chartDriftPhase = 'engine-layout-fetch';
+      publishPixelVerification('checking', null);
+      return req('GET', '/model/pixel-layout');
+    }).then(function (layout) {
+      chartDriftPhase = 'engine-layout-compare';
+      publishPixelVerification('checking', null);
+      return window.TouchPixelViews.verifyEngineLayout(layout);
     }).then(function () {
       chartDriftVerified = true;
+      chartDriftLastError = null;
+      chartDriftPhase = 'complete';
+      publishPixelVerification('ready', null);
       return true;
     }).catch(function (error) {
+      chartDriftLastError = error;
       fail('chart', error);
+      publishPixelVerification('failed', error);
       return false;
     }).then(function (verified) {
       chartDriftInFlight = null;
@@ -449,6 +627,24 @@
 
   /* ── boot: learn the model and Live Touch's isolated channel ────────── */
   var refreshInFlight = null;
+  function acceptEngineProtocolStatus(status) {
+    var actual = status && status.liveTouchProtocolVersion;
+    var result = window.TouchControlEndpointContract.engineProtocolStatus(
+      ENDPOINT.protocolVersion,
+      actual
+    );
+    if (!result.compatible) {
+      state.engineProtocolReady = false;
+      var error = new Error(result.diagnostic);
+      error.operatorMessage = result.headline;
+      error.diagnostic = result.diagnostic;
+      error.code = 'LIVE_TOUCH_PROTOCOL';
+      throw error;
+    }
+    state.engineProtocolReady = true;
+    clearProtocolError();
+  }
+
   function refresh() {
     /* Native WebViews can pause timers/network work while the app is briefly
        backgrounded. The 2 s poll used to start another four-request refresh
@@ -463,10 +659,12 @@
       req('GET', '/layers/state'),
     ]).then(function (r) {
       var status = r[0], groups = r[1], dimmers = r[2], layerState = requireLayerState(r[3]);
+      acceptEngineProtocolStatus(status);
       state.online = true;
       state.sectionIds = groups || {};
       state.dimmers = dimmers || {};
-      state.channelPattern = layerState.liveTouch && layerState.liveTouch.pattern;
+      acceptPerformanceModeState(status && status.performanceMode && status.performanceMode.active);
+      acceptPatternLayerState(layerState);
       if (!(layerState.liveTouch && layerState.liveTouch.ready)) {
         /* A fresh, DISARMED engine intentionally has no Live channel yet.
            Focusing the tab stays passive and online; ARM stages the selected
@@ -475,11 +673,14 @@
       }
       chartDriftCheck();
       return loadSlots(false).then(function () {
+        return publishEffectTruth();
+      }).then(function () {
         setStatus();
         return status;
       });
     }).catch(function (e) {
       state.online = false;
+      state.engineProtocolReady = false;
       fail('refresh', e);
     });
     refreshInFlight = refreshInFlight.then(
@@ -536,6 +737,7 @@
      this page neither captures nor mutates them. */
   var armAsserts = [];          /* awaited on arm: make the rig match the panel */
   var fxCatalogReady = false;   /* engine registry is authoritative; no stale built-in list */
+  var fxCatalogPromise = null;
   /* ONE HANDBACK STEP. Reports loudly, then RESOLVES so the handback continues.
 
      Why this exists: the disarm handback was a bare Promise.all of six req()s
@@ -606,8 +808,18 @@
 
   function requireLayerState(value) {
     var ids = { deck: true, mixer: true, live_touch: true };
-    if (!value || value.type !== 'layerSettings' || !ids[value.active] || !ids[value.target]) {
-      throw new Error('engine returned an invalid layerSettings state');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('engine returned a non-object layerSettings state');
+    }
+    if (value.type !== 'layerSettings') {
+      throw new Error('engine returned layerSettings type ' + JSON.stringify(value.type)
+        + ' instead of "layerSettings"');
+    }
+    if (!ids[value.active]) {
+      throw new Error('engine returned invalid layerSettings.active ' + JSON.stringify(value.active));
+    }
+    if (!ids[value.target]) {
+      throw new Error('engine returned invalid layerSettings.target ' + JSON.stringify(value.target));
     }
     if (value.queued !== null && !ids[value.queued]) {
       throw new Error('engine returned an invalid queued layer setting');
@@ -623,6 +835,17 @@
       || typeof value.liveTouch.ready !== 'boolean'
       || (value.liveTouch.pattern !== null && typeof value.liveTouch.pattern !== 'string')) {
       throw new Error('engine returned an invalid Live Touch layer state');
+    }
+    var patternTransition = value.liveTouch.patternTransition;
+    if (patternTransition !== undefined && patternTransition !== null
+        && (typeof patternTransition.id !== 'string' || !patternTransition.id
+          || typeof patternTransition.fromPattern !== 'string'
+          || typeof patternTransition.toPattern !== 'string'
+          || typeof patternTransition.progress !== 'number'
+          || patternTransition.progress < 0 || patternTransition.progress > 1
+          || patternTransition.durationMs !== 500
+          || patternTransition.mode !== 'trans_crossfade')) {
+      throw new Error('engine returned an invalid Live Touch base-pattern transition');
     }
     return value;
   }
@@ -668,18 +891,25 @@
   function stageSelectedLivePattern() {
     var staged = selectedPatternStagePayload();
     if (!staged) throw new Error('Live Touch has no valid selected pattern');
-    return req('PUT', '/layers/live_touch/pattern', staged.body).then(function (response) {
-      if (!response || !Number.isInteger(response.sessionRevision)) {
-        throw new Error('Live Touch pattern stage returned no session revision');
+    if (typeof clearTransientSpatialContacts !== 'function') {
+      throw new Error('Live Touch spatial contact owner did not install');
+    }
+    return clearTransientSpatialContacts('pattern-stage', false).then(function () {
+      return req('PUT', '/layers/live_touch/pattern', staged.body);
+    }).then(function (response) {
+      if (!response || response.status !== 'ok' || response.pattern !== staged.pattern
+          || !Number.isInteger(response.sessionRevision)) {
+        throw new Error('Live Touch pattern stage returned an invalid acknowledgement');
       }
       state.sessionRevision = response.sessionRevision;
-      state.channelPattern = staged.pattern;
+      state.channelPattern = response.pattern;
+      syncPatternSelection(response.pattern);
       /* Parameters are never rendered for a background pattern (docs/70
          §3.2): the panel learns local controls ONLY from
          GET /layers/live_touch/exports, so ARM simply never makes that call
-         for a background — hiding is free and total. A background swap
-         mid-ARM is a hard cut; no live-channel transition exists for it,
-         same as for an instrument. */
+         for a background — hiding is free and total. This stage runs while
+         DISARMED, before the Live layer is activated; changes to an already
+         running base use the retained transition path below. */
       if (staged.isBackground) {
         /* A background deliberately has no pattern-local parameter surface.
            Clear the prior instrument's export ids as part of the same stage:
@@ -715,15 +945,43 @@
   }
 
   function verifyArmReadiness() {
-    if (!fxCatalogReady) {
+    /* Catalog loads are authoritative boot dependencies. Join them instead of
+       treating a quick ARM tap as evidence that the surface is in Edit mode. */
+    return Promise.all([
+      fxCatalogPromise || Promise.reject(new Error('the engine effect catalog is unavailable')),
+      backgroundCatalogPromise || Promise.reject(new Error('the authoritative background catalog is unavailable')),
+    ]).then(function () {
+      if (!fxCatalogReady) throw new Error('the engine effect catalog is unavailable, so effect buttons cannot be trusted');
+      if (!backgroundCatalogReady) throw backgroundCatalogError || new Error('the authoritative background catalog is unavailable, so ARM is refused');
+      return refresh();
+    }).then(function () {
+      if (!state.engineProtocolReady) {
+        throw new Error('engine Live Touch protocol has not been verified; ARM is refused');
+      }
+      if (typeof state.performanceModeActive !== 'boolean') {
+        throw new Error('engine performance-mode status is unavailable; ARM is refused');
+      }
+      return verifyPixelViewArmReadiness();
+    }).catch(function (error) {
       forceDisarmedUi();
-      return Promise.reject(new Error(
-        'the engine effect catalog is unavailable, so effect buttons cannot be trusted'
-      ));
-    }
+      throw error;
+    });
+  }
+
+  function verifyPixelViewArmReadiness() {
     return chartDriftCheck().then(function (verified) {
-      if (!verified || !window.TouchPixelViews || !window.TouchPixelViews.canArm()) {
-        throw new Error('the canonical pixel view has not verified the current engine model');
+      if (!verified) {
+        throw new Error('canonical pixel-view verification failed: '
+          + (chartDriftLastError ? chartDriftLastError.message : 'the verification step returned false'));
+      }
+      if (!window.TouchPixelViews || !window.TouchPixelViews.canArm()) {
+        var pixelState = window.TouchPixelViews && typeof window.TouchPixelViews.state === 'function'
+          ? window.TouchPixelViews.state() : null;
+        var readinessError = new Error('canonical pixel-view verification completed without ARM readiness'
+          + (pixelState ? ' (source=' + pixelState.staticVerified
+            + ', engine=' + pixelState.engineVerified + ', load=' + pixelState.readyStatus + ')' : ''));
+        publishPixelVerification('failed', readinessError);
+        throw readinessError;
       }
     });
   }
@@ -793,7 +1051,40 @@
       return Promise.reject(new Error('a second Live Touch cleanup started concurrently'));
     }
     handbackFailures = [];
-    var openingSteps = [
+    function readEffectStatus() {
+      return req('GET', '/global-effect-slots/status').then(function (status) {
+        if (!status || !Array.isArray(status.slots)) {
+          throw new Error('engine effect cleanup readback did not include slots');
+        }
+        return status;
+      });
+    }
+    function deactivateActiveOverlays() {
+      return readEffectStatus().then(function (status) {
+        var activeOverlaySlots = status.slots.filter(function (slot) {
+          return slot && slot.effectId === 'movementTrace' && slot.active === true;
+        });
+        return runSeries(activeOverlaySlots.map(function (slot) {
+          return function () {
+            return handbackStep('overlay-slot/' + slot.slotId,
+              req('POST', '/global-effect-slots/' + slot.slotId + '/deactivate', {}));
+          };
+        }));
+      });
+    }
+    function verifyEffectsCleared() {
+      return readEffectStatus().then(function (status) {
+        var activeSlots = status.slots.filter(function (slot) {
+          return slot && slot.active === true;
+        }).map(function (slot) { return slot.slotId; });
+        var overlay = status.liveTouchOverlayPattern;
+        if (activeSlots.length || (overlay && overlay.requestedActive === true)) {
+          throw new Error('engine still reports active effect slots: '
+            + (activeSlots.length ? activeSlots.join(',') : 'overlay'));
+        }
+      });
+    }
+    var openingSteps = state.performanceModeActive === true ? [] : [
       function () { return handbackStep('audio-bindings', req('POST', '/audio-bindings/clear', {})); },
       function () { return handbackStep('effect-groups', req('PUT', '/effect-groups', { groups: null })); },
       function () { return handbackStep('parked-groups', req('PUT', '/parked-groups', { groups: null })); },
@@ -805,15 +1096,11 @@
         return handbackStep('spatial-clear',
           req('POST', '/spatial-paint', { enabled: false, touch: false, clear: true }));
       }];
-      /* STOP THE XY STROBE AND WALK (audit H5). They run under presetId
-         'xy_pad' with no slot, so the disable-all below cannot see them —
-         disarming mid-strobe used to hand the automatic show back permanently
-         strobing. handbackStep so one failure cannot cancel the chain. */
+      /* XY strobe remains a dedicated transient. Movement generators are now
+         authoritative overlay slots and are cleared through their slot actions
+         below; cleanup must never call the retired /movement-rate path. */
       cleanupTasks.push(function () {
         return handbackStep('xy-strobe', req('POST', '/strobe-rate', { active: false }));
-      });
-      cleanupTasks.push(function () {
-        return handbackStep('xy-walk', req('POST', '/movement-rate', { active: false }));
       });
       forgetSpatialCfg();   /* the engine no longer holds what we cached */
       /* Drop every painted group — the paint only exists because we armed. */
@@ -827,9 +1114,16 @@
       });
       return runSeries(cleanupTasks);
     }).then(function () {
+      /* Clear every logically active 2-colour, 5-colour and by-group overlay
+         through the engine-owned slot identity. An already-clean retry is a
+         successful no-op. */
+      return handbackStep('overlay-slots', deactivateActiveOverlays());
+    }).then(function () {
       /* Stop everything this panel started. Effects only run because the panel
          is armed, so releasing control must not leave them playing. */
       return handbackStep('disable-all', req('POST', '/global-effects/disable-all', {}));
+    }).then(function () {
+      return handbackStep('effect-readback', verifyEffectsCleared());
     }).then(function () {
       /* Restore the seeded Live-session slot values before release. Durable
          Deck/Mixer/global presets are never touched by these owner-tagged calls. */
@@ -859,6 +1153,9 @@
 
   function setArmUiPhase(phase) {
     var armed = phase === 'armed';
+    if (!armed && typeof clearTransientSpatialContacts === 'function') {
+      clearTransientSpatialContacts('arm-' + phase, false);
+    }
     state.phase = phase;
     state.armed = armed;
     if (armEl) {
@@ -887,6 +1184,9 @@
 
   function collectEffectSlotBuildOperations() {
     if (!fxGrid) return Promise.reject(new Error('effect grid is missing'));
+    if (state.performanceModeActive === true) {
+      return projectPerformanceEffectSlots().then(function () { return publishEffectTruth(); });
+    }
     var cells = Array.prototype.slice.call(fxGrid.querySelectorAll('.fx-cell'));
     var mine = {};
     cells.forEach(function (cell) { mine[Number(cell.dataset.slot)] = true; });
@@ -931,22 +1231,29 @@
     if (!window.TouchPixelViews || typeof window.TouchPixelViews.currentViewSpec !== 'function') {
       throw new Error('canonical pixel view cannot describe its engine projection');
     }
+    if (typeof window.padBrushWorldCanonical !== 'function') {
+      throw new Error('canonical pixel view cannot provide verified brush geometry');
+    }
     var spec = window.TouchPixelViews.currentViewSpec();
     var fadeElement = document.getElementById('trailFade');
     var fadeSeconds = fadeElement ? Number(fadeElement.dataset.value) : NaN;
     if ([0.1, 0.5, 1, 1.5].indexOf(fadeSeconds) === -1) {
       throw new Error('FADE must be 0.1, 0.5, 1.0, or 1.5 seconds');
     }
-    var brush = brushPatch();
     var amount = brushAmount();
     var modeElement = document.querySelector('#drawModes button.is-active');
     var modeValue = modeElement ? Number(modeElement.dataset.dm) : NaN;
-    if (!brush || amount === null || !isFinite(modeValue)) {
+    if (amount === null || !isFinite(modeValue)) {
       throw new Error('spatial brush controls are incomplete');
     }
     var ink = typeof window.inkColour === 'function' ? window.inkColour() : null;
     if (!ink || !isFinite(ink.h) || !isFinite(ink.s) || !isFinite(ink.v)) {
       throw new Error('spatial ink colour is unavailable');
+    }
+    var radius = window.padBrushWorldCanonical();
+    if (!radius || !isFinite(radius.x) || radius.x <= 0 ||
+        !isFinite(radius.y) || radius.y <= 0) {
+      throw new Error('canonical pixel view returned invalid brush geometry');
     }
     return {
       enabled: true,
@@ -954,18 +1261,23 @@
       clear: true,
       mode: DRAW_MODES[Math.round(Math.min(Math.max(modeValue, 0), 1) * 3)],
       fadeSeconds: fadeSeconds,
-      radius: brush.radius,
-      radiusY: brush.radiusY,
       amount: amount,
       color: hsvToRgb6(ink.h, ink.s, ink.v),
       colorAlt: hsvToRgb6((ink.h + 0.5) % 1, Math.max(ink.s, 0.85), Math.max(ink.v, 0.9)),
       axisX: spec.axisX,
       axisY: spec.axisY,
       pixelIndices: spec.pixelIndices,
+      radius: Math.min(1, radius.x),
+      radiusY: Math.min(2, radius.y),
     };
   }
 
   function verifyPreparedSlots() {
+    if (state.performanceModeActive === true) {
+      /* Performance ARM never configures slots. Re-project the authoritative
+         action catalog instead of comparing the hidden Edit grid against it. */
+      return projectPerformanceEffectSlots().then(function () { return publishEffectTruth(); });
+    }
     return loadSlots(true).then(function () {
       Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell'), function (cell) {
         var slotId = Number(cell.dataset.slot);
@@ -998,12 +1310,17 @@
         }
         prepareOperations = [];
       })
-      .then(function () { return req('POST', '/global-effects/disable-all', {}); })
-      .then(function () { return req('POST', '/audio-bindings/clear', {}); })
-      .then(collectEffectSlotBuildOperations)
-      .then(function () { return pushPalette(true); })
-      .then(function () { return pushEffectColours(true); })
-      .then(function () { return reconcileEffects(true); })
+      .then(function () {
+        if (state.performanceModeActive === true) {
+          return collectEffectSlotBuildOperations();
+        }
+        return req('POST', '/global-effects/disable-all', {})
+          .then(function () { return req('POST', '/audio-bindings/clear', {}); })
+          .then(collectEffectSlotBuildOperations)
+          .then(function () { return pushPalette(true); })
+          .then(function () { return pushEffectColours(true); })
+          .then(function () { return reconcileEffects(true); });
+      })
       .then(function () {
         return runSeries(armAsserts.map(function (fn) {
           return function () { return fn(true); };
@@ -1205,7 +1522,37 @@
   });
 
   document.addEventListener('captainpad:surface-focus', function () {
-    /* Focusing this tab is passive. Only the ARM control activates Live Touch. */
+    /* Focusing this tab is output-passive. Native verifier startup has its own
+       acknowledged protocol and deliberately does not depend on this
+       fire-and-forget message. */
+  });
+
+  document.addEventListener('captainpad:pixel-verification-start', function (event) {
+    if (!nativePixelEmbed) return;
+    var detail = event.detail || {};
+    if (typeof detail.documentId !== 'string' || detail.documentId !== nativePixelDocumentId
+        || typeof detail.requestId !== 'string' || !detail.requestId) {
+      /* Do not emit an uncorrelated failure that the host cannot safely
+         attribute. Re-advertise this live document and wait for its exact ack. */
+      announceNativePixelVerifierReady();
+      return;
+    }
+    if (nativePixelStarted && nativePixelRequestId !== detail.requestId) {
+      /* A remounted host may issue a new correlated request. It does not reset
+         a valid gate; it only gives subsequent diagnostics the live request. */
+      nativePixelRequestId = detail.requestId;
+      chartDriftCheck();
+      return;
+    }
+    nativePixelRequestId = detail.requestId;
+    if (!nativePixelStarted) {
+      nativePixelStarted = true;
+      if (nativeVerifierReadyTimer !== null) clearInterval(nativeVerifierReadyTimer);
+      nativeVerifierReadyTimer = null;
+      if (resolveNativePixelStart) resolveNativePixelStart();
+      resolveNativePixelStart = null;
+    }
+    chartDriftCheck();
   });
 
   /* A hard page exit cannot await the normal parent handshake. Start the same
@@ -1271,6 +1618,9 @@
      file on disk; the timeline's cue kind `ambient` is a homonym this
      surface must not echo (docs/70 §3.2 last bullet). */
   var BACKGROUND_PLAYLIST_NAME = 'ambient';
+  var backgroundCatalogReady = false;
+  var backgroundCatalogError = null;
+  var backgroundCatalogPromise = null;
 
   /* Capability tier for EVERY background pattern entry, not a per-entry
      trait: none of the ambient patterns export sliderHue3/4/5 (five-colour
@@ -1314,23 +1664,134 @@
       if (!entries.length) {
         throw new Error('the "' + BACKGROUND_PLAYLIST_NAME + '" playlist has no background patterns');
       }
-      entries.forEach(function (entry) {
-        if (!entry || typeof entry.id !== 'string' || typeof entry.pattern !== 'string') return;
+      var seenIds = {};
+      var seenPatterns = {};
+      var options = [];
+      entries.forEach(function (entry, index) {
+        if (!entry || typeof entry.id !== 'string' || !entry.id
+            || typeof entry.pattern !== 'string' || !entry.pattern) {
+          throw new Error('background entry ' + (index + 1)
+            + ' must provide non-empty id and pattern strings');
+        }
+        if (seenIds[entry.id]) {
+          throw new Error('background playlist repeats entry id ' + JSON.stringify(entry.id));
+        }
+        if (seenPatterns[entry.pattern]) {
+          throw new Error('background playlist repeats pattern ' + JSON.stringify(entry.pattern));
+        }
+        seenIds[entry.id] = true;
+        seenPatterns[entry.pattern] = true;
         var option = document.createElement('option');
         option.value = entry.id;
         option.textContent = backgroundEntryLabel(entry);
         option.dataset.pattern = entry.pattern;
         option.dataset.playlist = BACKGROUND_PLAYLIST_NAME;
         option.dataset.entryId = entry.id;
-        group.appendChild(option);
+        options.push(option);
       });
+      /* Commit only after every authoritative record validated. A partial
+         chooser is a lie: it makes a corrupt catalog look merely shorter. */
+      group.textContent = '';
+      var fragment = document.createDocumentFragment();
+      options.forEach(function (option) { fragment.appendChild(option); });
+      group.appendChild(fragment);
+      backgroundCatalogReady = true;
+      backgroundCatalogError = null;
+      syncPatternSelection(state.channelPattern);
     }).catch(function (error) {
+      backgroundCatalogReady = false;
+      backgroundCatalogError = error;
+      group.textContent = '';
       fail('pattern', new Error('background patterns did not load: ' + error.message));
+      throw error;
     });
   }
 
   var patSel = document.getElementById('patternSel');
-  populateBackgroundPatternGroup();
+  var patternChangeInFlight = null;
+  var patternSettlementInFlight = null;
+  var presetEffectIntent = null;
+
+  function patternForOption(option) {
+    if (!option) return null;
+    if (option.dataset && option.dataset.pattern) return option.dataset.pattern;
+    return PATTERN_FILES[option.value] || null;
+  }
+
+  function syncPatternSelection(pattern) {
+    if (!patSel || typeof pattern !== 'string' || !pattern) return false;
+    for (var i = 0; i < patSel.options.length; i++) {
+      if (patternForOption(patSel.options[i]) !== pattern) continue;
+      patSel.selectedIndex = i;
+      patSel.dataset.confirmedPattern = pattern;
+      return true;
+    }
+    fail('pattern', 'engine-confirmed pattern ' + JSON.stringify(pattern)
+      + ' is not present in the Live Touch chooser');
+    return false;
+  }
+
+  function setPatternPending(pending, label) {
+    if (!patSel) return;
+    patSel.disabled = !!pending;
+    patSel.setAttribute('aria-busy', String(!!pending));
+    var status = document.getElementById('patternState');
+    if (!status) return;
+    status.hidden = !pending;
+    status.textContent = pending ? (label || 'PREPARING') : '';
+  }
+
+  function patternTransitionLabel(phase, fromPattern, toPattern) {
+    var from = typeof fromPattern === 'string' && fromPattern ? fromPattern : 'CURRENT';
+    var to = typeof toPattern === 'string' && toPattern ? toPattern : 'TARGET';
+    return phase + ' ' + from + ' \u2192 ' + to;
+  }
+
+  function acceptPatternLayerState(layerState) {
+    var live = layerState.liveTouch;
+    state.channelPattern = live.pattern;
+    if (live.patternTransition) {
+      setPatternPending(true, patternTransitionLabel('CROSSFADING',
+        live.patternTransition.fromPattern || live.pattern,
+        live.patternTransition.toPattern));
+      return;
+    }
+    if (!patternChangeInFlight) {
+      syncPatternSelection(live.pattern);
+      setPatternPending(false);
+    }
+  }
+
+  function waitForPatternLanding(pattern, transitionId, timeoutMs) {
+    var startedAt = Date.now();
+    return new Promise(function (resolve, reject) {
+      (function poll() {
+        req('GET', '/layers/state').then(requireLayerState).then(function (layerState) {
+          acceptPatternLayerState(layerState);
+          var live = layerState.liveTouch;
+          if (live.pattern === pattern && live.patternTransition === null) {
+            resolve(layerState);
+            return;
+          }
+          if (live.patternTransition && live.patternTransition.id !== transitionId) {
+            reject(new Error('Live Touch base transition was superseded by '
+              + live.patternTransition.id));
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            reject(new Error('Live Touch base pattern did not land within ' + timeoutMs + 'ms'));
+            return;
+          }
+          setTimeout(poll, 50);
+        }).catch(reject);
+      }());
+    });
+  }
+
+  backgroundCatalogPromise = populateBackgroundPatternGroup().catch(function () {
+    /* The status pill contains the actionable error; readiness refuses ARM. */
+    return null;
+  });
 
   /* A BACKGROUND option carries dataset.entryId (stamped by
      populateBackgroundPatternGroup above); an INSTRUMENT option does not,
@@ -1355,9 +1816,44 @@
     patSel.addEventListener('change', function () {
       var staged = selectedPatternStagePayload();
       if (!staged) return fail('pattern', 'no file mapped for ' + patSel.value);
-      write('PUT', '/layers/live_touch/pattern', staged.body).then(function (result) {
-        if (result === null) return null; /* disarmed or already reported */
-        state.channelPattern = staged.pattern;
+      if (state.phase !== 'armed') {
+        syncPatternSelection(state.channelPattern);
+        fail('pattern', 'ARM Live Touch before changing the running base pattern');
+        return;
+      }
+      if (patternChangeInFlight) {
+        syncPatternSelection(state.channelPattern);
+        fail('pattern', 'a Live Touch base-pattern transition is already in progress');
+        return;
+      }
+      /* Keep B in the native chooser while the engine still confirms A. The
+         separate confirmedPattern dataset and explicit A → B state make this
+         intent visible without presenting it as an accomplished swap. */
+      setPatternPending(true, patternTransitionLabel('PREPARING', state.channelPattern, staged.pattern));
+      var requestBody = Object.assign({}, staged.body, {
+        transition: { mode: 'trans_crossfade', durationMs: 500 },
+      });
+      var transition = clearTransientSpatialContacts('pattern-switch', true)
+        .then(function () { return req('PUT', '/layers/live_touch/pattern', requestBody); })
+        .then(function (result) {
+        if (!result || result.status !== 'transitioning'
+            || result.pattern !== state.channelPattern
+            || result.targetPattern !== staged.pattern
+            || !result.transition || result.transition.id !== result.transitionId
+            || result.transition.fromPattern !== state.channelPattern
+            || result.transition.toPattern !== staged.pattern
+            || result.transition.mode !== 'trans_crossfade'
+            || result.transition.durationMs !== 500
+            || !Number.isInteger(result.sessionRevision)) {
+          throw new Error('Live Touch base transition returned an invalid acknowledgement');
+        }
+        state.sessionRevision = result.sessionRevision;
+        setPatternPending(true, patternTransitionLabel('CROSSFADING',
+          result.transition.fromPattern, result.transition.toPattern));
+        return waitForPatternLanding(staged.pattern, result.transitionId, 6000);
+      }).then(function (layerState) {
+        state.channelPattern = layerState.liveTouch.pattern;
+        syncPatternSelection(state.channelPattern);
         /* Parameters are never rendered for a background pattern (docs/70
            §3.2): the panel learns local controls ONLY from
            GET /layers/live_touch/exports, so a background selection simply
@@ -1373,7 +1869,18 @@
              palette the surface still shows before accepting another gesture. */
           return pushPalette(true);
         });
-      }).catch(function (error) { fail('pattern', error); });
+      });
+      patternSettlementInFlight = transition;
+      patternChangeInFlight = transition.then(function () {
+        patternChangeInFlight = null;
+        setPatternPending(false);
+        clearError();
+      }).catch(function (error) {
+        patternChangeInFlight = null;
+        setPatternPending(false);
+        syncPatternSelection(state.channelPattern);
+        fail('pattern', error);
+      });
     });
   }
 
@@ -1428,7 +1935,7 @@
   }
 
   function pushMovementColours() {
-    if (!state.armed || !fxGrid) return;
+    if (!state.armed || state.performanceModeActive === true || !fxGrid) return;
     var cells = fxGrid.querySelectorAll('.fx-cell.is-on[data-fxkey=movementTrace]');
     if (!cells.length) return;
     var colors = paletteRgb6();
@@ -1449,7 +1956,7 @@
   }
 
   function pushMovementFade() {
-    if (!state.armed || !fxGrid) return;
+    if (!state.armed || state.performanceModeActive === true || !fxGrid) return;
     var cells = fxGrid.querySelectorAll('.fx-cell.is-on[data-fxkey=movementTrace]');
     if (!cells.length) return;
     var span = movementFadeSpan();
@@ -1463,7 +1970,7 @@
     });
   }
 
-  function pushPalette(strict) {
+  function pushPalette(strict, skipEnginePair) {
     if (!slotsEl) return strict ? Promise.reject(new Error('palette slots are missing')) : Promise.resolve();
     var pal;
     try { pal = JSON.parse(slotsEl.dataset.palette || '[]'); }
@@ -1475,9 +1982,11 @@
 
     if (strict) {
       var tasks = [];
-      var body = { colorPalette1: pal[0] };
-      if (pal[1]) body.colorPalette2 = pal[1];
-      tasks.push(function () { return strictWrite('POST', '/param-center', body); });
+      if (!skipEnginePair) {
+        var body = { colorPalette1: pal[0] };
+        if (pal[1]) body.colorPalette2 = pal[1];
+        tasks.push(function () { return strictWrite('POST', '/param-center', body); });
+      }
       [3, 4, 5].forEach(function (n) {
         var c = pal[n - 1];
         if (!c) return;
@@ -1493,12 +2002,17 @@
       return runSeries(tasks);
     }
 
-    /* Slots 1 and 2 are the ENGINE palette — every pattern sees them. */
-    send('palette', function () {
-      var body = { colorPalette1: pal[0] };
-      if (pal[1]) body.colorPalette2 = pal[1];
-      write('POST', '/param-center', body);
-    });
+    /* Slots 1 and 2 are the ENGINE palette — every pattern sees them. A
+       daemon broadcast has already written this pair through its one timing
+       owner, so it skips only this duplicate write. Slots 3-5 below still
+       have to reach five-colour Live instruments. */
+    if (!skipEnginePair) {
+      send('palette', function () {
+        var body = { colorPalette1: pal[0] };
+        if (pal[1]) body.colorPalette2 = pal[1];
+        write('POST', '/param-center', body);
+      });
+    }
 
     /* Slots 3-5 are PATTERN-LOCAL: hue AND value, resolved by name because they
        only exist on patterns that support five-colour mode. */
@@ -1532,6 +2046,7 @@
      slot 1: with COMPLEMENT or CONTRAST loaded, several live effects then carry
      the different colours of the scheme instead of flattening to one. */
   function pushEffectColours(strict) {
+    if (state.performanceModeActive === true) return Promise.resolve();
     if (!liveStateCanWrite(strict) || !fxGrid) return Promise.resolve();
     var pal;
     try { pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]'); }
@@ -1587,7 +2102,7 @@
        bus. A daemon-owned palette update must still recolour Live Touch's
        effects and movement brushes, but must not issue a competing static
        /param-center write underneath the running crossfade/turns transport. */
-    if (!(event.detail && event.detail.skipPaletteWrite)) pushPalette();
+    pushPalette(false, !!(event.detail && event.detail.skipPaletteWrite));
     pushEffectColours();
     pushMovementColours();
     /* IN SPATIAL MODE THE WHEEL PICKS THE INK, IT DOES NOT REPAINT THE SHIP.
@@ -1828,14 +2343,110 @@
     var lastSpatialMode = null;
     var lastStrokeColor = null;
     var lastStrokeAlt = null;
-    var TAKE_POINTER_ID = 0x7ffffffe;
+    /* THE PLAYBACK CONTACT IS NOT A POINTER ID. A replayed TAKE runs through
+       the same code as a real finger, so it owns a real spatialPointers entry
+       — but the key it used to claim (0x7ffffffe) lived in the SAME namespace
+       as real DOM pointer ids. A device that ever handed back that number
+       would have painted into the playback contact instead of its own. A
+       string can never equal a `pointerId`, which is always a number, so that
+       collision class is gone by construction rather than by improbability.
+       Synthetic playback samples now DECLARE themselves (see
+       spatialContactKey) instead of being recognised by the shape of an id. */
+    var TAKE_CONTACT_KEY = 'take-playback';
+
+    /* WHICH CONTACT DOES THIS SAMPLE BELONG TO? Read from what the event
+       declares, never inferred.
+
+       This used to run the incoming id through Number.isInteger and hand
+       anything that failed to the playback key — "is an integer" standing in
+       for "is a real pointer". That proxy is gone, and the pin in
+       marsin_engine/tests/effects/touch_control_wire_layers_contract.test.js
+       forbids it coming back.
+       WKWebView derives pointer ids from iOS touch identifiers and can hand
+       back a non-integer double, and such a finger resolved to the PLAYBACK
+       entry: its `current` was never set, so it vanished from
+       spatialPayload()'s strokes[] and painted nothing, with no error
+       anywhere. That is a silent fallback, which this project forbids.
+
+       pointerdown, pointermove and liftBrush all key spatialPointers on the
+       RAW e.pointerId; this was the one place that re-derived it, so it now
+       agrees with them. A sample that is neither a declared playback frame nor
+       a numeric pointer id is refused LOUDLY rather than resolved to whatever
+       entry happens to be nearby. */
+    function spatialContactKey(e) {
+      if (e.spatialPlayback === true) return TAKE_CONTACT_KEY;
+      if (typeof e.pointerId === 'number' && !Number.isNaN(e.pointerId)) return e.pointerId;
+      fail('spatial touch', 'a spatial sample carried no usable pointerId ('
+        + String(e.pointerId) + ') and no playback marker; refusing it');
+      return undefined;
+    }
+
+    /* The wire must never carry the raw DOM pointerId as a stroke id.
+       WKWebView on iPad hands back pointer ids derived from iOS touch
+       identifiers that can be huge integers (e.g. 0x80000001) or large
+       non-integer doubles, well outside the engine's setSpatialPaint
+       contract (integer, 0..0x7fffffff). Each live spatialPointers entry
+       instead gets a SLOT — the smallest free integer in 0..9 — and the
+       slot, never the raw id, is what spatialPayload() puts on the wire.
+       pointer.id keeps being the raw pointerId so the Map key and
+       commitSpatialPayload's lookup are untouched. */
+    var spatialSlotUsed = [false, false, false, false, false, false, false, false, false, false];
+    function allocateSpatialSlot() {
+      for (var i = 0; i < spatialSlotUsed.length; i++) {
+        if (!spatialSlotUsed[i]) { spatialSlotUsed[i] = true; return i; }
+      }
+      /* spatialPointers.size >= 10 is the real gate at every creation site;
+         reaching here means that gate and this pool disagreed. No fallback
+         to the raw pointerId — fail loudly instead. */
+      throw new Error('setSpatialPaint: no free stroke slot (0-9) is available');
+    }
+    function releaseSpatialSlot(slot) {
+      if (slot === undefined || slot === null) return;
+      spatialSlotUsed[slot] = false;
+    }
+
+    clearTransientSpatialContacts = function (reason, transmit) {
+      spatialPointers.forEach(function (pointer) { releaseSpatialSlot(pointer.slot); });
+      spatialPointers.clear();
+      wirePointer = null;
+      wirePadRect = null;
+      lastSpatial = null;
+      document.dispatchEvent(new CustomEvent('spatialcontactclear', {
+        detail: { reason: reason || 'unspecified' },
+      }));
+      if (!transmit || state.phase !== 'armed') return Promise.resolve(null);
+      return new Promise(function (resolve, reject) {
+        sendDraw(function () {
+          /* Clear contacts only. Heat/ink belongs to the independent overlay
+             and must survive a base-pattern transition. */
+          return req('POST', '/spatial-paint', {
+            enabled: true,
+            touch: false,
+            strokes: [],
+          });
+        }, true, function (error) {
+          if (error) reject(error); else resolve(null);
+        });
+      });
+    };
+
+    document.addEventListener('spatialcontactclearrequest', function (event) {
+      var detail = event.detail || {};
+      clearTransientSpatialContacts(detail.reason || 'page-request', true)
+        .catch(function (error) { fail('spatial clear', error); });
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) return;
+      clearTransientSpatialContacts('background', true)
+        .catch(function (error) { fail('spatial background clear', error); });
+    });
 
     function spatialPayload(includeRetiring) {
       var snapshots = [];
       spatialPointers.forEach(function (pointer) {
         if (!pointer.current || (pointer.retiring && !includeRetiring)) return;
         var stroke = {
-          id: pointer.id,
+          id: pointer.slot,
           targetX: pointer.current.targetX,
           targetY: pointer.current.targetY,
           color: pointer.color,
@@ -1862,6 +2473,11 @@
       if (lastStrokeAlt) body.colorAlt = lastStrokeAlt;
       return { body: body, snapshots: snapshots };
     }
+    spatialPayloadForTest = function () { return spatialPayload(false).body; };
+    spatialPointerSlotForTest = function (pointerId) {
+      var pointer = spatialPointers.get(pointerId);
+      return pointer ? pointer.slot : undefined;
+    };
 
     function commitSpatialPayload(payload) {
       payload.snapshots.forEach(function (snapshot) {
@@ -1871,34 +2487,38 @@
       });
     }
 
-    function queueSpatialTouches(finalSample) {
+    function queueSpatialTouches(finalSample, settled) {
       sendDraw(function () {
-        var first = spatialPayload(true);
-        var retiring = first.snapshots.filter(function (snapshot) {
-          return snapshot.pointer.retiring;
+        /* One event state, one command. Pointerdown/move already delivered the
+           last live coordinate; lift publishes only the canonical remaining
+           contact set instead of a touch:true stamp followed by touch:false. */
+        var payload = spatialPayload(false);
+        var spatialWrite = settled ? req : write;
+        return spatialWrite('POST', '/spatial-paint', payload.body).then(function (response) {
+          commitSpatialPayload(payload);
+          /* A retiring contact and its gate claim remain authoritative until
+             the engine ACKs the lift. If the request is rejected, TAKE retries
+             the same up against this retained entry instead of falsely ACKing
+             an already-forgotten contact. */
+          if (finalSample) {
+            spatialPointers.forEach(function (pointer, pointerId) {
+              if (!pointer.retiring) return;
+              releaseSpatialSlot(pointer.slot);
+              spatialPointers.delete(pointerId);
+              if (pointerId === TAKE_CONTACT_KEY) {
+                window.TouchSpatialContactGate.releasePlayback();
+              } else {
+                window.TouchSpatialContactGate.release(pointerId);
+              }
+            });
+          }
+          if (spatialPointers.size === 0) wirePadRect = null;
+          return response;
         });
-        return write('POST', '/spatial-paint', first.body).then(function (response) {
-          commitSpatialPayload(first);
-          retiring.forEach(function (snapshot) {
-            if (spatialPointers.get(snapshot.pointer.id) === snapshot.pointer) {
-              spatialPointers.delete(snapshot.pointer.id);
-            }
-          });
-          if (!retiring.length) return response;
-          /* A released finger is stamped once at its final coordinate, then a
-             second ordered state removes only that finger. Other fingers stay
-             down throughout; one lift can never cancel the whole gesture. */
-          var landed = spatialPayload(false);
-          return write('POST', '/spatial-paint', landed.body).then(function (nextResponse) {
-            commitSpatialPayload(landed);
-            if (spatialPointers.size === 0) wirePadRect = null;
-            return nextResponse;
-          });
-        });
-      }, finalSample);
+      }, finalSample, settled);
     }
 
-    var pushXY = function (e) {
+    var pushXY = function (e, settled) {
       var r = wirePadRect || xyPad.getBoundingClientRect();
       var x = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
       var y = Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1);
@@ -1937,13 +2557,11 @@
           if (dmB) {
             var dv = Math.min(Math.max(parseFloat(dmB.dataset.dm) || 0, 0), 1);
             lastSpatialMode = DRAW_MODES[Math.round(dv * 3)];
-            assertSpatial({ mode: lastSpatialMode });
           }
           var brush = brushPatch(sp);
           var amount = brushAmount();
           if (!brush || amount === null) return;
           brush.amount = amount;
-          assertSpatial(brush);
           /* THE COLOUR TRAVELS WITH THE POSITION, in one body.
              It used to go on the config queue (100 ms) while the position went
              on the drawing queue (33 ms), so a colour change could arrive up to
@@ -1966,7 +2584,8 @@
             fail('spatial colour', 'the page supplied no valid ink colour; refusing the stroke');
             return;
           }
-          var pointerId = Number.isInteger(e.pointerId) ? e.pointerId : TAKE_POINTER_ID;
+          var pointerId = spatialContactKey(e);
+          if (pointerId === undefined) return;              /* refused, reported */
           var pointer = spatialPointers.get(pointerId);
           if (!pointer || pointer.retiring) return;
           pointer.current = sp;
@@ -1976,35 +2595,14 @@
           lastSpatialBrush = brush;
           lastStrokeColor = strokeCol;
           lastStrokeAlt = strokeAlt;
-          queueSpatialTouches(false);
+          queueSpatialTouches(false, settled);
         }
-        /* The Live pattern's OWN position sliders are also driven when it
-           exposes them (130_spatial_paint), so that pattern keeps its
-           richer pool on top. Absent everywhere else, which is now harmless. */
-        var idX = state.exports.sliderTargetX, idY = state.exports.sliderTargetY;
-        /* Pattern 130 is authored in nx/nz. The owner-scoped global brush is
-           projection-aware; do not feed Front or Sign coordinates into a
-           top-plane pattern export and create a second, misplaced stroke. */
-        if (!sp || sp.axisX !== 'nx' || sp.axisY !== 'nz') return;
-        if (idX === undefined || idY === undefined) return;
-        /* RECTIFY PAD → SHIP. The pad shows the sim's COMPRESSED top-down map,
-           but the pattern is fed WORLD nx/nz. Sending the raw pad fraction
-           would aim the light at the wrong place on a hull that runs diagonally
-           and is 73.6% empty in this plane (docs/44 §2.5) — the operator would
-           draw on one part of the map and watch a different part light up.
-           The page owns the geometry and exposes the lookup. If it is absent,
-           refuse the stroke: raw panel fractions are not ship coordinates. */
-        if (typeof window.padToWorld !== 'function') {
-          return fail('spatial', 'canonical pixel projection is unavailable');
-        }
-        var wpt = sp;
-        var wx = wpt.targetX, wy = wpt.targetY;
-        send('xy', function () {
-          write('POST', '/layers/live_touch/control', { id: idX, v0: wx });
-          write('POST', '/layers/live_touch/control', { id: idY, v0: wy });
-          var t = state.exports.sliderTouch;
-          if (t !== undefined) write('POST', '/layers/live_touch/control', { id: t, v0: 1 });
-        });
+        /* ONE CONTACT OWNER. Pattern 130 previously received this same finger
+           again through sliderTargetX/Y/sliderTouch after /spatial-paint had
+           already accepted it. Its private wrapped pool then rendered beside
+           the canonical projected brush: one physical finger, two footprints
+           and two command paths. The retained owner-scoped spatial stage is
+           the independent overlay for every base pattern, including 130. */
       } else {
         /* XY MODE = BRIGHTNESS x STROBE SPEED (operator ruling). Y used to drive
            the pattern's rotate, which is a look-tweak rather than a performance
@@ -2067,36 +2665,39 @@
         });
       }
     };
-    /* DRAW IN THE COLOUR THE OPERATOR PICKED.
-       The pattern paints its pool with cp1, which is the engine's palette
-       colour 1 — so "draw with slot 3" means putting slot 3's colour into
-       colorPalette1 for the duration of the stroke. Sent on pointer DOWN only,
-       not per move: it is one value per stroke, and the pad already writes two
-       control messages per sample.
-       The pad ink reads the same slot (window.inkColour), so what the operator
-       sees under their finger and what the hull does cannot disagree. */
-    xyPad.addEventListener('pointerdown', function () {
-      if (!spatialMode()) return;
-      if (typeof window.inkColour !== 'function') {
-        fail('draw colour', 'the page did not export inkColour; refusing the stroke');
-        return;
-      }
-      var c = window.inkColour();
-      if (!c) {
-        fail('draw colour', 'the page supplied no valid ink colour; refusing the stroke');
-        return;
-      }
-      send('drawColour', function () {
-        write('POST', '/param-center', { colorPalette1: { h: c.h, s: c.s, v: c.v } });
-      });
-    });
+    /* Stroke colour belongs to the canonical /spatial-paint contact body.
+       A former pointerdown listener also wrote colorPalette1 through the
+       shared ParamCenter, creating a second outbound path before the first
+       contact sample. One physical contact now has one spatial command. */
     /* A REPLAYED TAKE IS A FINGER. The page owns the recording and the pad; it
        emits 'spatialplay' per frame and this hands it to the SAME code the live
        pad uses, so a played-back stroke cannot behave differently from the one
        that was performed. Only the pen-up is special-cased, because there is no
        pointerup event to hang it on. */
+    window.TouchTakeEligibility = function () {
+      if (!spatialMode()) return { ok: false, reason: 'SPATIAL mode is not active' };
+      if (state.phase !== 'armed' || !state.armed) {
+        return { ok: false, reason: 'ARM is not confirmed' };
+      }
+      if (!state.online) return { ok: false, reason: 'engine connection is offline' };
+      if (!armLeaseAcquired) return { ok: false, reason: 'Live Touch lease is not confirmed' };
+      return { ok: true };
+    };
+    function settleTakeSample(requestId, error) {
+      document.dispatchEvent(new CustomEvent('spatialplayack', {
+        detail: {
+          requestId: requestId,
+          ok: !error,
+          error: error ? error.message : null,
+        },
+      }));
+    }
     document.addEventListener('spatialplay', function (ev) {
       var d = ev.detail || {};
+      if (typeof d.requestId !== 'string' || !d.requestId) {
+        fail('spatial playback', 'TAKE sample has no acknowledgement identity');
+        return;
+      }
       /* PEN-UP IS UNCONDITIONAL (audit H9). This guard used to sit above the
          !d.down branch, so switching to XY mode mid-playback dropped the final
          touch:false and left the engine re-stamping heat at the last point
@@ -2104,26 +2705,47 @@
          critical, reachable without a crash. Lifting a brush is always safe;
          only laying paint DOWN needs the mode check. */
       if (!d.down) {
-        var playback = spatialPointers.get(TAKE_POINTER_ID);
-        if (playback && !playback.retiring) {
-          playback.retiring = true;
-          queueSpatialTouches(true);
+        var playback = spatialPointers.get(TAKE_CONTACT_KEY);
+        if (playback) {
+          if (!playback.retiring) playback.retiring = true;
+          queueSpatialTouches(true, function (error) { settleTakeSample(d.requestId, error); });
+        } else {
+          /* Absence is not proof that the engine is lifted: lifecycle cleanup
+             can forget the local entry before its own clear write settles.
+             Duplicate empty-stroke lifts are safe, so require an authoritative
+             ACK here too and retain the page gate across any rejection. */
+          queueSpatialTouches(true, function (error) {
+            if (!error) window.TouchSpatialContactGate.releasePlayback();
+            settleTakeSample(d.requestId, error);
+          });
         }
         return;
       }
-      if (!spatialMode()) return;
-      if (!spatialPointers.has(TAKE_POINTER_ID)) {
-        if (spatialPointers.size >= 10) {
-          fail('spatial playback', 'ten live touches are already active');
+      var eligibility = window.TouchTakeEligibility();
+      if (!eligibility.ok) {
+        var eligibilityError = new Error(eligibility.reason);
+        fail('spatial playback', eligibilityError);
+        settleTakeSample(d.requestId, eligibilityError);
+        return;
+      }
+      if (!spatialPointers.has(TAKE_CONTACT_KEY)) {
+        if (!window.TouchSpatialContactGate ||
+            !window.TouchSpatialContactGate.beginPlayback()) {
+          var contactError = new Error('the single Spatial contact is already in use');
+          fail('spatial playback', contactError);
+          settleTakeSample(d.requestId, contactError);
           return;
         }
-        spatialPointers.set(TAKE_POINTER_ID, {
-          id: TAKE_POINTER_ID, current: null, sent: null, retiring: false,
+        spatialPointers.set(TAKE_CONTACT_KEY, {
+          id: TAKE_CONTACT_KEY, slot: allocateSpatialSlot(), current: null, sent: null, retiring: false,
         });
       }
       var r = xyPad.getBoundingClientRect();
-      pushXY({ pointerId: TAKE_POINTER_ID,
-        clientX: r.left + d.u * r.width, clientY: r.top + d.v * r.height });
+      /* The marker — not a reserved number — is what routes this sample to the
+         playback contact, so no real finger can ever be mistaken for it. */
+      pushXY({ spatialPlayback: true,
+        clientX: r.left + d.u * r.width, clientY: r.top + d.v * r.height },
+      function (error) { settleTakeSample(d.requestId, error); });
     });
 
     /* SWITCHING WHAT Y DRIVES must stop the other one, or it keeps running with
@@ -2136,18 +2758,18 @@
       });
     });
 
-    /* Spatial mode accepts independent simultaneous pointers. XY mode remains
-       a single master/strobe control: two fingers cannot both own one scalar. */
+    /* Post-stability multi-touch is deliberately deferred. The shared gate
+       admits exactly one raw contact across marker, preview and engine wire. */
     var wirePointer = null;
     xyPad.addEventListener('pointerdown', function (e) {
       if (spatialMode()) {
         if (spatialPointers.has(e.pointerId)) return;
-        if (spatialPointers.size >= 10) {
-          fail('spatial touch', 'a maximum of ten simultaneous touches is supported');
+        if (!window.TouchSpatialContactGate ||
+            !window.TouchSpatialContactGate.begin(e.pointerId)) {
           return;
         }
         spatialPointers.set(e.pointerId, {
-          id: e.pointerId, current: null, sent: null, retiring: false,
+          id: e.pointerId, slot: allocateSpatialSlot(), current: null, sent: null, retiring: false,
         });
       } else {
         if (wirePointer !== null && e.pointerId !== wirePointer) return;
@@ -2155,7 +2777,10 @@
       }
       wirePadRect = xyPad.getBoundingClientRect();
       try { xyPad.setPointerCapture(e.pointerId); } catch (error) {
+        var failedSpatialPointer = spatialPointers.get(e.pointerId);
+        if (failedSpatialPointer) releaseSpatialSlot(failedSpatialPointer.slot);
         spatialPointers.delete(e.pointerId);
+        window.TouchSpatialContactGate.release(e.pointerId);
         if (wirePointer === e.pointerId) wirePointer = null;
         if (!spatialPointers.size && wirePointer === null) wirePadRect = null;
         fail('spatial pointer capture', error);
@@ -2187,22 +2812,12 @@
         pushXY(e);
         spatialPointer.retiring = true;
         queueSpatialTouches(true);
-        var remaining = Array.from(spatialPointers.values()).filter(function (pointer) {
-          return !pointer.retiring;
-        });
-        var spatialTouch = state.exports.sliderTouch;
-        if (!remaining.length && spatialTouch !== undefined) {
-          send('touch', function () {
-            write('POST', '/layers/live_touch/control', { id: spatialTouch, v0: 0 });
-          });
-        }
         return;
       }
       if (wirePointer === null || pointerId !== wirePointer) return;
       wirePointer = null;
+      window.TouchSpatialContactGate.release(pointerId);
       if (!spatialPointers.size) wirePadRect = null;
-      var t = state.exports.sliderTouch;
-      if (t !== undefined) send('touch', function () { write('POST', '/layers/live_touch/control', { id: t, v0: 0 }); });
       /* LIFT THE BRUSH on the Live spatial stage too, or it keeps painting the last
          point forever and the trail never starts cooling.
 
@@ -2245,9 +2860,7 @@
       }
       currentPixelViewId = spec.viewId;
       relabelPadAxes();
-      lastSpatial = null;
-      spatialPointers.clear();
-      wirePadRect = null;
+      clearTransientSpatialContacts('view-change', false);
       if (state.phase !== 'armed') {
         forgetSpatialCfg();
         return;
@@ -2288,14 +2901,14 @@
       return;
     }
     var topPlane = currentPixelViewId === 'top_down' || currentPixelViewId === 'strands';
-    if (top) top.textContent = topPlane ? 'Z+ SHIP FORWARD' : 'Y+ UP';
-    if (bot) bot.textContent = topPlane ? 'Z− SHIP AFT' : 'Y− DOWN';
+    if (top) top.textContent = topPlane ? 'Z+ FRONT' : 'Y+ UP';
+    if (bot) bot.textContent = topPlane ? 'Z− BACK' : 'Y− DOWN';
     if (currentPixelViewId === 'te_sign') {
-      if (lft) lft.innerHTML = '<b>Z−</b>AFT';
-      if (rgt) rgt.innerHTML = '<b>Z+</b>FORWARD';
+      if (lft) lft.innerHTML = '<b>Z−</b>BACK';
+      if (rgt) rgt.innerHTML = '<b>Z+</b>FRONT';
     } else {
-      if (lft) lft.innerHTML = '<b>X−</b>STARBOARD';
-      if (rgt) rgt.innerHTML = '<b>X+</b>PORT';
+      if (lft) lft.innerHTML = '<b>X−</b>LEFT';
+      if (rgt) rgt.innerHTML = '<b>X+</b>RIGHT';
     }
   }
 
@@ -2305,16 +2918,8 @@
       setTimeout(function () {
         relabelPadAxes();
         applyCapability();
-        if (!spatialMode() && spatialPointers.size) {
-          spatialPointers.forEach(function (pointer) { pointer.retiring = true; });
-          queueSpatialTouches(true);
-          var touchId = state.exports.sliderTouch;
-          if (touchId !== undefined) {
-            send('touch', function () {
-              write('POST', '/layers/live_touch/control', { id: touchId, v0: 0 });
-            });
-          }
-        }
+        clearTransientSpatialContacts('mode-switch', true)
+          .catch(function (error) { fail('spatial mode clear', error); });
         /* DELIBERATELY NO PATTERN AUTO-LOAD HERE. Mode changes never stage a
            pattern or touch Deck; only explicit ARM stages the selected Live
            pattern, and the isolated spatial stage works across that channel. */
@@ -2367,6 +2972,10 @@
      doing always matches what the surface shows, rather than whatever was last
      written to it. */
   function pushAllAudioBindings(strict) {
+    /* Performance projects read-only binding state. ARM reassertion is a
+       programmatic lifecycle step, not an operator attempt, so it must be a
+       quiet no-op here rather than flooding the error surface once per row. */
+    if (state.performanceModeActive === true) return Promise.resolve();
     var tasks = [];
     if (bank) {
       Array.prototype.forEach.call(bank.querySelectorAll('.fader-audio'), function (w) {
@@ -2548,6 +3157,23 @@
     return pumpLiveBrightness();
   }
 
+  /* Preset recall is not a normal coalesced gesture: success must mean every
+     restored strip has reached the owner-scoped engine state.  `write()` is
+     deliberately forgiving for live dragging, so use raw req()+readback here. */
+  function commitPresetBrightness() {
+    if (liveBrightnessTimer) { cancelAnimationFrame(liveBrightnessTimer); liveBrightnessTimer = null; }
+    liveBrightnessPending = { master: null, groups: {} };
+    liveBrightnessPendingFade = null;
+    var body = collectLiveBrightness();
+    if (!Number.isInteger(state.liveBrightnessRevision)) {
+      return Promise.reject(new Error('preset brightness has no active Live Touch revision'));
+    }
+    body.expectedRevision = state.liveBrightnessRevision;
+    return req('PATCH', '/touch-control/brightness', body).then(function (payload) {
+      return acceptLiveBrightness(payload, true);
+    });
+  }
+
   function queueLiveMasterFade(target, durationMs) {
     if (state.phase !== 'armed') return;
     liveBrightnessPendingFade = { target: target, durationMs: durationMs };
@@ -2612,6 +3238,7 @@
      paint, which fires on every dot drag. */
   var lastFxGroups = null;
   function pushEffectGroups(strict) {
+    if (state.performanceModeActive === true) return Promise.resolve();
     var names = groupModes()
       .filter(function (m) { return m && m.fx; })
       .map(function (m) { return m.name; });
@@ -2776,19 +3403,27 @@
      or the slot's amount/mode are wiped along with the colour. */
   var slotBehavior = {};        /* slotId -> 'toggle' | 'trigger' | 'hold' */
   var slotBinding = {};         /* slotId -> 'effectId|presetId' actually bound */
+  var slotRecords = {};         /* slotId -> authoritative engine slot record */
   var presetOverride = {};      /* slotId -> its ORIGINAL override, captured once */
   var liveOverride = {};        /* slotId -> its current override */
 
   var loadSlotsInFlight = null;
-  function loadSlots(strict) {
+  function loadSlots(strict, force) {
     /* Share the physical GET while preserving each caller's error contract:
        passive refresh reports and resolves; atomic ARM verification reports
        and rethrows. The raw shared promise stays rejecting so a passive caller
        cannot accidentally turn a concurrent strict verification into success. */
+    if (force) {
+      return Promise.resolve(loadSlotsInFlight).catch(function () {}).then(function () {
+        return loadSlots(strict, false);
+      });
+    }
     if (!loadSlotsInFlight) {
       loadSlotsInFlight = req('GET', '/global-effect-slots').then(function (r) {
       slotOf = {};
+      slotRecords = {};
       (r.slots || []).forEach(function (sl) {
+        slotRecords[sl.slotId] = sl;
         if (sl.effectId) slotOf[sl.effectId + '|' + sl.presetId] = sl.slotId;
         slotBehavior[sl.slotId] = sl.behavior || 'toggle';
         slotBinding[sl.slotId] = sl.effectId ? (sl.effectId + '|' + sl.presetId) : null;
@@ -2813,11 +3448,59 @@
     });
   }
 
-  /* Effects that are momentary rather than latching, per the library's
-     behaviorTypes. Everything else is a toggle. */
-  var TRIGGER_EFFECTS = ['dropHit'];
   var OURS_FROM = 9;          /* slots 1-8 belong to the Deck + VSN1 */
   var MAX_SLOTS = 32;         /* global_effect_slot_manager.MAX_SLOTS */
+  /* Performance is an action surface over the same approved 16 bindings as
+     Edit. The session seeds these records before it reports Performance ready;
+     never manufacture a partial grid from whichever slots happened to survive
+     an earlier session. */
+  var CANONICAL_PERFORMANCE_EFFECTS = [
+    'movementTrace|pulse_slow_fade',
+    'movementTrace|every_other_repeat',
+    'movementTrace|every_other_reverse',
+    'movementTrace|every_other_two_tone',
+    'movementTrace|one_per_color_repeat',
+    'movementTrace|one_per_color_reverse',
+    'movementTrace|one_per_color_double',
+    'movementTrace|whole_group_repeat',
+    'movementTrace|whole_group_reverse',
+    'strobe|sync_4hz',
+    'beatPump|soft',
+    'breath|calm',
+    'feedbackTrails|soft_afterimage',
+    'feedbackTrails|ghost_ship',
+    'waterlineSweep|shadow_pass',
+    'freeze|hold'
+  ];
+
+  function projectPerformanceEffectSlots() {
+    return (fxCatalogPromise || Promise.reject(new Error('effect catalog is still loading'))).then(function () {
+      if (!fxCatalogReady) throw new Error('effect catalog is unavailable for Performance actions');
+      return loadSlots(true, true);
+    }).then(function () {
+      var slots = Object.keys(slotRecords).map(function (id) { return slotRecords[id]; })
+        .filter(function (slot) {
+          return slot && slot.enabled === true && Number.isInteger(slot.slotId)
+            && slot.slotId >= OURS_FROM && slot.slotId <= 24
+            && typeof slot.effectId === 'string' && slot.effectId
+            && typeof slot.presetId === 'string' && slot.presetId
+            && ['toggle', 'trigger', 'hold'].indexOf(slot.behavior) !== -1;
+        }).sort(function (a, b) { return a.slotId - b.slotId; });
+      if (slots.length !== CANONICAL_PERFORMANCE_EFFECTS.length) {
+        throw new Error('engine must expose the complete canonical 16 Live Touch Performance slots 9-24');
+      }
+      slots.forEach(function (slot, index) {
+        var expectedSlotId = OURS_FROM + index;
+        var expectedBinding = CANONICAL_PERFORMANCE_EFFECTS[index];
+        if (slot.slotId !== expectedSlotId || (slot.effectId + '|' + slot.presetId) !== expectedBinding) {
+          throw new Error('engine Performance slot ' + expectedSlotId
+            + ' must retain canonical binding ' + expectedBinding);
+        }
+      });
+      document.dispatchEvent(new CustomEvent('fxperformanceslots', { detail: { slots: slots } }));
+      return slots;
+    });
+  }
 
   /* Provision a real engine slot for every grid cell that has none, so the
      whole grid is live instead of 7 of 25 buttons.
@@ -2832,6 +3515,9 @@
      the Deck's or the VSN1's 1-8. */
   function provisionCell(cell) {
     if (!liveStateCanWrite(true)) return Promise.reject(new Error('cannot provision effects without a Live lease'));
+    if (state.performanceModeActive === true) {
+      return Promise.reject(new Error('Performance effects are action-only; slot configuration is refused'));
+    }
     var id = Number(cell.dataset.slot);
     if (!(id >= OURS_FROM && id <= MAX_SLOTS)) {
       var slotError = new Error('button has slot ' + id + ', outside 9..32');
@@ -2839,12 +3525,16 @@
       return Promise.reject(slotError);
     }
     var eff = cell.dataset.fxkey;
+    var behavior = cell.dataset.behavior;
+    if (behavior !== 'toggle' && behavior !== 'trigger' && behavior !== 'hold') {
+      return Promise.reject(new Error('effect button has no authoritative behavior'));
+    }
     var body = {
       enabled: true,
       label: cell.querySelector('.fx-name').textContent,
       effectId: eff,
       presetId: cell.dataset.preset,
-      behavior: TRIGGER_EFFECTS.indexOf(eff) !== -1 ? 'trigger' : 'toggle',
+      behavior: behavior,
     };
     /* ALWAYS send an explicit paramsOverride. patchSlot only replaces the
        object when the key is present, so omitting it left a STALE `color` from
@@ -2966,6 +3656,16 @@
     });
   }
 
+  function publishEffectTruth() {
+    if (!fxGrid) return Promise.resolve({});
+    return engineOnSlots().then(function (on) {
+      document.dispatchEvent(new CustomEvent('fxconfirmedstate', {
+        detail: { activeSlots: Object.keys(on).map(Number) },
+      }));
+      return on;
+    });
+  }
+
   /* RECONCILE the engine to what the grid shows.
 
      The old handler pressed ONLY the tapped slot. That is wrong the moment a
@@ -2991,6 +3691,27 @@
      until its new state is actually observable. */
   var SETTLE_MS = 1800;
   var lastPress = {};
+  var holdChains = {};
+
+  function cellBehavior(cell, slotId) {
+    return (cell && cell.dataset && cell.dataset.behavior) || slotBehavior[slotId] || null;
+  }
+
+  function dispatchHoldEdge(slotId, edge) {
+    var previous = holdChains[slotId] || Promise.resolve();
+    var task = previous.catch(function () {}).then(function () {
+      return req('POST', '/global-effect-slots/' + slotId + '/' + edge);
+    }).then(function () {
+      return publishEffectTruth();
+    }).catch(function (error) {
+      fail('effect hold ' + edge, error);
+      return publishEffectTruth().catch(function (truthError) {
+        fail('effect hold readback', truthError);
+      }).then(function () { throw error; });
+    });
+    holdChains[slotId] = task.catch(function () {});
+    return task;
+  }
 
   function reconcileEffects(strict) {
     strict = strict === true;
@@ -3034,7 +3755,9 @@
            pressed it again on every tick, firing a whiteout every couple of
            seconds. MEASURED: dropHit fired 3 times in 7s with nobody touching
            it. Triggers fire once, from the tap, and nowhere else. */
-        if (slotBehavior[id] === 'trigger') return;
+        var cell = cellFor(Number(id));
+        var behavior = cellBehavior(cell, Number(id));
+        if (behavior === 'trigger' || behavior === 'hold') return;
         if (!!on[id] === !!want[id]) return;            /* already agrees */
         pressOnce(id);
       });
@@ -3044,10 +3767,16 @@
          problem. This only ever turns those slots OFF; it never binds or
          re-provisions them, so the Deck's and the VSN1's own bindings survive. */
       Object.keys(on).forEach(function (id) {
-        if (want[id] || slotBehavior[id] === 'trigger') return;
+        var cell = cellFor(Number(id));
+        var behavior = cellBehavior(cell, Number(id));
+        if (want[id] || behavior === 'trigger' || behavior === 'hold') return;
         pressOnce(id);
       });
-      return runSeries(tasks);
+      return runSeries(tasks).then(function () {
+        return new Promise(function (resolve) {
+          setTimeout(function () { resolve(publishEffectTruth()); }, 75);
+        });
+      });
     }).then(function () {
       rcBusy = false;
       if (!rcAgain) return;
@@ -3056,6 +3785,7 @@
     }).catch(function (e) {
       rcBusy = false;
       fail('effects', e);
+      publishEffectTruth().catch(function (truthError) { fail('effects readback', truthError); });
       if (strict) throw e;
     });
   }
@@ -3070,6 +3800,13 @@
          state, not operator intent, so it must not attempt owner-tagged slot
          provisioning until ARM has acquired the Live session. */
       if (!liveStateCanWrite(false)) return;
+      if (state.performanceModeActive === true) {
+        if (cell.dataset.performanceBound === 'true') return;
+        projectPerformanceEffectSlots().then(publishEffectTruth).catch(function (error) {
+          fail('performance effects', error);
+        });
+        return;
+      }
       provisionCell(cell).then(loadSlots).then(function () {
         pushEffectColours();
         return reconcileEffects();
@@ -3080,10 +3817,26 @@
        wire reconciles after EITHER edge rather than on click. */
     ['pointerdown', 'pointerup', 'pointercancel'].forEach(function (evt) {
       fxGrid.addEventListener(evt, function (e) {
-        if (!e.target.closest('[data-role=fxface]')) return;
+        var face = e.target.closest('[data-role=fxface]');
+        if (!face) return;
+        var cell = face.closest('.fx-cell');
+        var slotId = Number(cell && cell.dataset.slot);
+        if (cellBehavior(cell, slotId) === 'hold') {
+          if (state.phase !== 'armed') {
+            fail('effect hold', 'ARM Live Touch before using a hold effect');
+            return;
+          }
+          if (!(slotId >= 9)) {
+            fail('effect hold', 'hold button has no valid slot');
+            return;
+          }
+          dispatchHoldEdge(slotId, evt === 'pointerdown' ? 'down' : 'up').catch(function () {});
+          return;
+        }
         setTimeout(function () {
           reconcileEffects();
           applyStatic();
+          if (state.performanceModeActive === true) return;
           /* A movement button that has just been lit must start on the CURRENT
              palette and the CURRENT fade. Both are only pushed to lit cells, so
              without this a button turned on later ran with whatever it was
@@ -3099,6 +3852,7 @@
       var cell = e.target.closest('.fx-cell');
       if (!cell || e.target.closest('[data-role=fxpick]')) return;
       var id = Number(cell.dataset.slot);
+      if (cellBehavior(cell, id) === 'hold') return;
       /* MOMENTARY: a trigger fires on the tap and immediately un-latches, so it
          never sits lit waiting to be "turned off" — there is nothing running to
          turn off. The brief flash of the lit cell is the feedback. */
@@ -3114,6 +3868,7 @@
       setTimeout(function () {
           reconcileEffects();
           applyStatic();
+          if (state.performanceModeActive === true) return;
           /* A movement button that has just been lit must start on the CURRENT
              palette and the CURRENT fade. Both are only pushed to lit cells, so
              without this a button turned on later ran with whatever it was
@@ -3332,10 +4087,6 @@
   var STATIC_MS = 500;              /* repaint no faster than twice a second */
   var staticTimer = null, staticWanted = null;
 
-  function anyEffectChosen() {
-    return !!(fxGrid && fxGrid.querySelector('.fx-cell.is-on'));
-  }
-
   function groupStrips() {
     if (!bank) return [];
     return Array.prototype.filter.call(bank.querySelectorAll('.fader-strip'), function (st) {
@@ -3350,37 +4101,17 @@
     catch (e) { return []; }
   }
 
-  /* What SHOULD be painted right now: name -> rgb6.
+  /* What SHOULD receive the explicit post-pattern fixed-colour compositor.
    *
-   * Painted or not IS the mode, because of where the engine applies this:
-   * applyGroupFixedColors runs AFTER applyMacros, so a painted group cannot be
-   * touched by an effect, and an unpainted one shows whatever the effect chain
-   * and the pattern are doing. So
-   *
-   *   OWN            -> painted from that group's own wheel dot. The palette
-   *                     cannot reach it - that is what OWN means - and neither
-   *                     can an effect.
-   *   GLOBAL         -> painted from the five-colour palette (group i takes
-   *                     palette[i % 5]) while no effect is chosen, and
-   *                     RELEASED the moment one is, so the effect shows there.
-   *   neither        -> stays painted whatever is running: an opted-out group.
-   *
-   * The FX flag that used to appear on this line was REMOVED on operator
-   * request: it was OR'd with GLOBAL here and read nowhere else, so the two
-   * were indistinguishable, and it never routed an effect to a group - effects
-   * are global and the engine has no per-group mask.
-   *
-   * A group on OWN still cannot show an effect. That is an ENGINE property
-   * (group_fixed_color repaints after the chain), not a checkbox, and the
-   * panel says so in the groups header rather than silently picking. */
+   * GLOBAL is palette AUTHORITY, not a paint mode. It feeds the active Live
+   * pattern through ParamCenter and the pattern's local five-colour exports;
+   * installing a group-fixed colour for GLOBAL would flatten the animated
+   * background after it rendered. OWN is the only explicit request for that
+   * post-pattern compositor. Anything else has no fixed override. */
   function desiredStatic(strict) {
     var out = {};
     if (!liveStateCanWrite(strict)) return out;
-    var pal;
-    try { pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]'); }
-    catch (e) { return out; }
     var modes = groupModes();
-    var fxOn = anyEffectChosen();
     groupStrips().forEach(function (st, i) {
       var nameEl = st.querySelector('.fader-name');
       if (!nameEl) return;
@@ -3401,20 +4132,7 @@
             ? m.colors.map(function (c) { return hsvToRgb6(c.h, c.s, c.v); })
             : null,
         };
-        return;
       }
-      /* TWO GATES, BOTH REQUIRED, and FX has to open both.
-         1. the ENGINE must be allowed to touch the group  -> PUT /effect-groups
-         2. the PANEL must not paint over it afterwards    -> this line
-         group_fixed_color runs AFTER the effect chain, so a painted group hides
-         whatever the effect just did. Marking FX aimed the engine correctly but
-         left the paint in place, so the operator saw NOTHING change and only
-         GLOBAL appeared to work - reported from the rig, and right.
-         GLOBAL still releases too: it means "follow the show". */
-      if (fxOn && (m.fx || m.global)) return;              /* let the effect through */
-      if (!pal.length) return;
-      var c = pal[i % pal.length];
-      out[nameEl.textContent] = { color: hsvToRgb6(c.h, c.s, c.v), colors: null };
     });
     return out;
   }
@@ -3577,8 +4295,27 @@
     return row;
   }
 
+  function projectAudioPerformanceLock() {
+    var locked = state.performanceModeActive === true;
+    Array.prototype.forEach.call(document.querySelectorAll(
+      '[data-role=audpick], [data-role=audmode], [data-role=faudpick], [data-role=faudlock]'
+    ), function (control) {
+      if (!control.dataset.editTitle) control.dataset.editTitle = control.title;
+      control.disabled = locked;
+      control.title = locked
+        ? 'Edit mode required — audio bindings are unavailable in Performance'
+        : control.dataset.editTitle;
+      var row = control.closest('.aud-row, .fader-audio');
+      if (row) row.classList.toggle('is-performance-locked', locked);
+    });
+  }
+
   function audWrite(row, strict) {
     strict = strict === true;
+    if (state.performanceModeActive === true) {
+      fail('audio binding', 'Edit mode required — Performance never changes audio bindings');
+      return Promise.resolve(null);
+    }
     var sel = row.querySelector('[data-role=audpick]');
     var btn = row.querySelector('[data-role=audmode]');
     var scope = row.dataset.scope;
@@ -3683,6 +4420,10 @@
 
   function faderAudioWrite(wrap, strict) {
     strict = strict === true;
+    if (state.performanceModeActive === true) {
+      fail('fader audio', 'Edit mode required — Performance never changes audio bindings');
+      return Promise.resolve(null);
+    }
     paintFaderAudio(wrap);
     var sel = wrap.querySelector('[data-role=faudpick]');
     var list = [];
@@ -3722,6 +4463,10 @@
   document.addEventListener('click', function (e) {
     var b = e.target.closest && e.target.closest('[data-role=faudlock]');
     if (!b) return;
+    if (state.performanceModeActive === true) {
+      fail('fader audio', 'Edit mode required — Performance never changes audio bindings');
+      return;
+    }
     e.stopPropagation();
     var strip = b.closest('.fader-strip');
     var locked = !strip.classList.contains('is-locked');
@@ -4018,6 +4763,9 @@
     disarmAckPending = false;
     armLeaseRequested = false;
     armLeaseAcquired = false;
+    if (typeof clearTransientSpatialContacts === 'function') {
+      clearTransientSpatialContacts('force-disarm', false);
+    }
     state.phase = 'idle';
     state.armed = false;
     state.liveBrightnessRevision = null;
@@ -4042,7 +4790,7 @@
   }
 
   function openControlSocket() {
-    var url = 'ws://' + location.hostname + ':6968/ws/control';
+    var url = ENGINE_WS + '/ws/control';
     var ws;
     try { ws = new WebSocket(url); } catch (e) {
       /* A constructor throw must retry like a close does (audit low): fail()
@@ -4080,7 +4828,13 @@
       var m;
       try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (!m) return;
-      if (m.type === 'touchControlArmedAck') {
+      if (m.type === 'performanceMode') {
+        try { acceptPerformanceModeState(m.active); }
+        catch (error) { fail('performance mode', error); }
+      } else if (m.type === 'layerSettings') {
+        try { acceptPatternLayerState(requireLayerState(m)); }
+        catch (error) { fail('layer settings', error); }
+      } else if (m.type === 'touchControlArmedAck') {
         if (m.ownerId !== OWNER) return;
         if (m.requestedArmed === true && m.armed === true) {
           if (!Number.isInteger(m.sessionRevision) || m.sessionRevision < 0) {
@@ -4093,12 +4847,14 @@
           armLeaseRequested = true;
           armLeaseAcquired = true;
           armAckPending = false;
+          publishTouchTransportState();
           clearError();
         } else if (m.requestedArmed === false && m.armed === false) {
           state.sessionRevision = null;
           armLeaseRequested = false;
           armLeaseAcquired = false;
           disarmAckPending = false;
+          publishTouchTransportState();
           clearError();
         }
       } else if (m.type === 'touchControlBrightness') {
@@ -4213,7 +4969,9 @@
 
   document.addEventListener('colorautopilotwrite', function (event) {
     var detail = event.detail || {};
-    colorHubRequest(detail.method, detail.path || '/deck/color-autopilot', detail.body).then(function (out) {
+    var request = colorHubRequest(detail.method, detail.path || '/deck/color-autopilot', detail.body);
+    detail.promise = request;
+    request.then(function (out) {
       document.dispatchEvent(new CustomEvent('colorautopilotwriteok', { detail: { label: detail.label, state: out } }));
     }).catch(function (error) {
       fail('color', error);
@@ -4252,7 +5010,7 @@
 
   function openMeterSocket() {
     buildMeter();
-    var url = 'ws://' + location.hostname + ':6968/ws/signals';
+    var url = ENGINE_WS + '/ws/signals';
     var ws;
     try { ws = new WebSocket(url); } catch (e) {
       fail('meter socket', e);
@@ -4299,6 +5057,7 @@
           targets.push(1);
         });
       }
+      projectAudioPerformanceLock();
       return targets.length;
     }).catch(function (e) { fail('audio sources', e); return 0; });
   }
@@ -4319,7 +5078,7 @@
 
   /* Effect binding rows depend on the catalog-created cells. Do not race the
      page's catalog validation, and do not synthesize an empty effect surface. */
-  publishFxCatalog()
+  fxCatalogPromise = publishFxCatalog()
     .then(function () { return buildAudioBindings(); })
     .catch(function () { /* publishFxCatalog already failed loudly and ARM is gated */ });
 
@@ -4332,8 +5091,155 @@
   }, POLL_MS);
 
   window.__wire = state;   /* for headless verification only */
+  /* Read-only owner exposure lets the preset playlist use the same lease
+     identity as every other Live mutation. It never creates or renews a lease. */
+  state.ownerId = OWNER;
+  /* Verification/recovery hook: a catalog request may be retried after an
+     explicit transport recovery, but no caller may synthesize catalog truth. */
+  state._loadFxCatalog = function () {
+    fxCatalogPromise = publishFxCatalog();
+    return fxCatalogPromise;
+  };
+  state._loadBackgroundCatalog = function () {
+    var request = populateBackgroundPatternGroup();
+    backgroundCatalogPromise = request.catch(function () { return null; });
+    return request;
+  };
+  state._verifyArmReadiness = verifyArmReadiness;
+  state._refresh = refresh;
+  state._assertPresetRecallLease = function () {
+    if (state.phase !== 'armed') {
+      return Promise.reject(new Error('ARM Live Touch before recalling a preset'));
+    }
+    if (patternChangeInFlight) {
+      return Promise.reject(new Error('wait for the current Live Touch base-pattern transition before recalling a preset'));
+    }
+    /* A manual transition has already reached a terminal UI state. It must
+       not become a latent failure for a later, unrelated recall. A recall
+       that changes its background installs its own settlement synchronously
+       during restoreState and _settlePresetRecall consumes that exact promise. */
+    patternSettlementInFlight = null;
+    presetEffectIntent = null;
+    return Promise.resolve();
+  };
+  state._stagePresetEffectIntent = function (effects) {
+    if (!Array.isArray(effects)) throw new Error('preset effect intent is missing');
+    presetEffectIntent = {};
+    effects.forEach(function (effect) {
+      if (!effect || !Number.isInteger(Number(effect.slot)) || typeof effect.on !== 'boolean') {
+        throw new Error('preset effect intent is malformed');
+      }
+      presetEffectIntent[Number(effect.slot)] = effect.on;
+    });
+  };
+  function settlePerformancePresetEffects(intent) {
+    if (!fxGrid) return Promise.reject(new Error('Performance effect surface is unavailable'));
+    var desired = {};
+    Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell:not([hidden])'), function (cell) {
+      var slotId = Number(cell.dataset.slot);
+      if (Number.isInteger(slotId) && cellBehavior(cell, slotId) === 'toggle') {
+        if (!intent || !Object.prototype.hasOwnProperty.call(intent, slotId)) {
+          throw new Error('Performance preset is missing projected toggle slot ' + slotId);
+        }
+        desired[slotId] = intent[slotId];
+      }
+    });
+    return engineOnSlots().then(function (on) {
+      var presses = [];
+      Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell:not([hidden])'), function (cell) {
+        var slotId = Number(cell.dataset.slot);
+        var behavior = cellBehavior(cell, slotId);
+        if (!Number.isInteger(slotId) || slotId < 9 || behavior !== 'toggle') return;
+        if (!!on[slotId] !== desired[slotId]) {
+          presses.push(function () { return strictWrite('POST', '/global-effect-slots/' + slotId + '/press'); });
+        }
+      });
+      return runSeries(presses);
+    }).then(function () {
+      return publishEffectTruth().then(function (on) {
+        var mismatch = Object.keys(desired).some(function (slotId) {
+          return !!on[slotId] !== desired[slotId];
+        });
+        if (mismatch) throw new Error('Performance effect toggle readback did not match the recalled preset');
+        return on;
+      });
+    });
+  }
+  state._settlePresetRecall = function () {
+    var patternSettlement = patternSettlementInFlight;
+    var effectIntent = presetEffectIntent;
+    patternSettlementInFlight = null;
+    presetEffectIntent = null;
+    return Promise.resolve(patternSettlement).then(function () {
+      /* Reassert every restored write through rejecting transport paths. The
+         ordinary UI queues intentionally absorb a failed drag; a preset must
+         never report active after one of those mutations was rejected. */
+      return pushPalette(true);
+    }).then(function () {
+      return state.performanceModeActive === true ? null : pushEffectColours(true);
+    }).then(function () {
+      if (state.performanceModeActive === true) return null;
+      lastFxGroups = null;
+      return pushEffectGroups(true);
+    }).then(function () {
+      return applyStatic(true);
+    }).then(function () {
+      return commitPresetBrightness();
+    }).then(function () {
+      var spatial = initialSpatialPrepareBody();
+      /* The preset's restored ink remains; this is an acknowledged config
+         reassertion, not the ARM prepare clear. */
+      delete spatial.clear;
+      return strictWrite('POST', '/spatial-paint', spatial);
+    }).then(function () {
+      if (state.performanceModeActive === true) {
+        return projectPerformanceEffectSlots().then(function () { return settlePerformancePresetEffects(effectIntent); });
+      }
+      return buildEffectSlots().then(function () { return reconcileEffects(true); });
+    }).then(function () {
+      return publishEffectTruth();
+    });
+  };
   /* The cache-forget the arm chain runs (audit H8) — exposed so a harness can
      exercise the REAL function without seizing the live engine's arm lease by
      clicking the real ARM button. Verification only, like __wire itself. */
   state._forgetSpatialCfg = forgetSpatialCfg;
+  state._clearTransientSpatialContacts = function (reason, transmit) {
+    if (typeof clearTransientSpatialContacts !== 'function') {
+      return Promise.reject(new Error('Live Touch spatial contact owner did not install'));
+    }
+    return clearTransientSpatialContacts(reason, transmit);
+  };
+  state._acceptPatternLayerState = acceptPatternLayerState;
+  state._acceptPerformanceMode = acceptPerformanceModeState;
+  state._refresh = refresh;
+  state._verifyPixelViewArmReadiness = verifyPixelViewArmReadiness;
+  state._resetPixelViewVerificationForTest = function () {
+    chartDriftVerified = false;
+    chartDriftInFlight = null;
+    chartDriftLastError = null;
+  };
+  state._initialSpatialPrepareBody = initialSpatialPrepareBody;
+  /* Compact stroke-slot bookkeeping (docs/ui readiness W2): verification-only,
+     like the hooks above. Lets a harness prove the wire never carries a raw
+     pointerId as strokes[].id without seizing the live engine's arm lease. */
+  state._spatialPayloadForTest = function () {
+    if (typeof spatialPayloadForTest !== 'function') {
+      throw new Error('Live Touch spatial contact owner did not install');
+    }
+    return spatialPayloadForTest();
+  };
+  state._spatialPointerSlot = function (pointerId) {
+    if (typeof spatialPointerSlotForTest !== 'function') {
+      throw new Error('Live Touch spatial contact owner did not install');
+    }
+    return spatialPointerSlotForTest(pointerId);
+  };
+  /* Separate from theme-ready by design: this fires only after every wire
+     listener and the pixel reader's mount call exist. Repeat until CaptainPad
+     answers so a dropped WKWebView message cannot permanently block ARM. */
+  if (nativePixelEmbed) {
+    announceNativePixelVerifierReady();
+    nativeVerifierReadyTimer = setInterval(announceNativePixelVerifierReady, 250);
+  }
 })();

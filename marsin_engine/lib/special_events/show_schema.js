@@ -327,11 +327,45 @@ export function validateAction(action, label) {
       if (!isPlainObject(action.set) || Object.keys(action.set).length === 0) {
         throw new Error(`${label}.set must be a non-empty object of ParamCenter key → value`);
       }
+      // A `globals` value is EITHER a plain finite number (the common case —
+      // SPEED, size, etc.) OR an HSV object `{ h, s, v }`, each channel a
+      // finite number in [0, 1] — the shape ParamCenter's `hsv`-typed params
+      // (colorPalette1 / colorPalette2, param_center.js) actually carry.
+      //
+      // This is an AUTHORING-VALIDATOR widening only. Nothing downstream
+      // changes: `setGlobals` in api_server.js already forwards every value
+      // verbatim to `paramCenter.set(key, value, 'special_event')`, which
+      // dispatches on the param's declared `type` and already knows how to
+      // write an `hsv` value — proof being that the END-OF-SHOW restore path
+      // (`captureGlobals` / the runner's FINISH/ABORT morph) round-trips
+      // HSV objects through this exact same `setGlobals` today, for any show
+      // that pins colorPalette1/2 mid-show. The gap was purely that a show
+      // AUTHOR could not declare `colorPalette1: { h, s, v }` in a `globals`
+      // action without this loader rejecting the file at load time, before
+      // `setGlobals` ever ran.
       for (const [key, value] of Object.entries(action.set)) {
         assertString(key, `${label}.set key`);
-        if (typeof value !== 'number' || !Number.isFinite(value)) {
+        if (isPlainObject(value)) {
+          const hsvKeys = Object.keys(value).sort();
+          const expectedKeys = ['h', 's', 'v'];
+          if (hsvKeys.length !== 3 || !expectedKeys.every((k) => hsvKeys.includes(k))) {
+            throw new Error(
+              `${label}.set['${key}'] must be a finite number or an HSV object with exactly ` +
+              `the keys h, s, v — got keys [${hsvKeys.join(', ')}]`);
+          }
+          for (const channel of expectedKeys) {
+            const channelValue = value[channel];
+            if (typeof channelValue !== 'number' || !Number.isFinite(channelValue)
+              || channelValue < 0 || channelValue > 1) {
+              throw new Error(
+                `${label}.set['${key}'].${channel} must be a finite number in [0, 1], ` +
+                `got ${JSON.stringify(channelValue)}`);
+            }
+          }
+        } else if (typeof value !== 'number' || !Number.isFinite(value)) {
           throw new Error(
-            `${label}.set['${key}'] must be a finite number, got ${JSON.stringify(value)}`);
+            `${label}.set['${key}'] must be a finite number or an HSV { h, s, v } object, ` +
+            `got ${JSON.stringify(value)}`);
         }
       }
       return { type: 'globals', delayMs, set: { ...action.set } };

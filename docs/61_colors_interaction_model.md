@@ -277,6 +277,22 @@ retunes never bump generation. On top of that:
 | Navigation gestures | §2.1 / §3. |
 | A palettes-shaped POST from an old surface (C6) | Accepted by design (`inferMode` back-compat). This iPad's strip/chip flip to the new truth on the next broadcast — visibility is the mitigation, the wire is not changed. |
 
+> **SUPERSEDED by docs/75 §5 (`_315`), for `crossfade` and `turns` only.** Two
+> rows above described the world before the retarget rule existed. While a
+> **crossfade** or **TURNS** ring is running, a colour selection is no longer
+> refused or staged — it is a sparse `PATCH {palettes: <new ring>}` through the
+> daemon's own front door, landing from the next transition (docs/59 §5.1), with
+> generation, cursor, phase and the in-flight fade all preserved. Concretely:
+> row 2 ("Manual wheel / dial / scrub / chip / pair") now **retargets** for those
+> two kinds — the blend SCRUB alone stays refused (it writes a fade *position*,
+> not a config; docs/75 D3) — and `schemeTapOutcome`'s `crossfade` row is
+> `retarget`, not `stage-only`, on every card. The refusals for **follow-note**
+> (the note owns the hue; D7), **palette-set** (the AUTOPILOT window owns that
+> config) and the offline / plan-locked case are **unchanged**, and `active` /
+> `mode` remain POST-only takeovers. The gesture table is now decided by the pure
+> `colourGestureOutcome(kind, surface)` in `colors_window_logic.ts`, so it is
+> checked by the suite rather than eyeballed here.
+
 ## 6. What must NOT change
 
 - **The `_242` dial** — jog model, `DIAL_GAIN`, dead radius, anchor-not-set.

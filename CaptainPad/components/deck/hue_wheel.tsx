@@ -84,6 +84,7 @@ import {
   type DialGrip,
 } from '@/components/deck/colors_window_logic';
 import { acquireScrollLock, type ScrollLockHandle } from '@/components/ui/scroll_lock';
+import { layoutWheelMarkers, type WheelMarker } from '@/components/deck/wheel_marker_layout';
 
 // Ring resolution. 90 arcs = 4° per segment: continuous to the eye at every
 // size we render, and cheap enough to rebuild on a theme change (it never
@@ -185,6 +186,12 @@ export const HueWheel = React.memo(function HueWheel({
   const rw = ringWidth ?? Math.max(18, Math.round(size * 0.16));
   const rMid = cx - rw / 2 - 2;
   const rInner = rMid - rw / 2;
+  // Semantic colour values remain raw `hues`; only coincident marker geometry
+  // spreads so every staged slot stays readable on the wheel.
+  const markers = useMemo(() => layoutWheelMarkers(hues, {
+    radius: rMid,
+    markerDiameter: 30,
+  }), [hues, rMid]);
 
   // The ring: RING_SEGMENTS stroked arcs. Memoized on geometry only — a hue
   // drag never rebuilds it.
@@ -250,10 +257,10 @@ export const HueWheel = React.memo(function HueWheel({
   // rebuilt responder mid-drag drops the gesture), so it reads everything
   // through refs — the same stale-closure discipline HorizontalFader uses.
   const stateRef = useRef({
-    hues, armed, readOnly, dialValue, onArm, onPick, onDragStart, onDragEnd, onRefused, cx, cy, rMid,
+    hues, markers, armed, readOnly, dialValue, onArm, onPick, onDragStart, onDragEnd, onRefused, cx, cy, rMid,
   });
   stateRef.current = {
-    hues, armed, readOnly, dialValue, onArm, onPick, onDragStart, onDragEnd, onRefused, cx, cy, rMid,
+    hues, markers, armed, readOnly, dialValue, onArm, onPick, onDragStart, onDragEnd, onRefused, cx, cy, rMid,
   };
   // Page-space origin of the wheel, captured on grant so MOVE (which only has
   // page coordinates) can be converted back into wheel space.
@@ -302,12 +309,11 @@ export const HueWheel = React.memo(function HueWheel({
     const s = stateRef.current;
     let best = -1;
     let bestD = GRAB_PX;
-    for (let i = 0; i < s.hues.length; i++) {
-      const u = unitPointForHue(s.hues[i]);
-      const hx = s.cx + u.x * s.rMid;
-      const hy = s.cy + u.y * s.rMid;
+    for (const marker of s.markers) {
+      const hx = s.cx + marker.position.x;
+      const hy = s.cy + marker.position.y;
       const d = Math.hypot(x - hx, y - hy);
-      if (d < bestD) { bestD = d; best = i; }
+      if (d < bestD) { bestD = d; best = marker.index; }
     }
     if (best >= 0 && best !== s.armed) {
       s.onArm(best);
@@ -440,18 +446,31 @@ export const HueWheel = React.memo(function HueWheel({
         />
         {knurls}
 
-        {hues.map((h, i) => {
-          const u = unitPointForHue(h);
-          const hx = cx + u.x * rMid;
-          const hy = cy + u.y * rMid;
-          const isArmed = i === armed;
+        {markers.map((marker: WheelMarker) => {
+          const hx = cx + marker.position.x;
+          const hy = cy + marker.position.y;
+          const anchorX = cx + marker.anchor.x;
+          const anchorY = cy + marker.anchor.y;
+          const isArmed = marker.index === armed;
           return (
-            <G key={i}>
+            <G key={marker.key}>
+              {marker.displayHue !== marker.hue ? (
+                <Line
+                  x1={anchorX}
+                  y1={anchorY}
+                  x2={hx}
+                  y2={hy}
+                  stroke={handleStroke}
+                  strokeWidth={1.5}
+                  opacity={0.8}
+                  strokeLinecap="round"
+                />
+              ) : null}
               <Circle
                 cx={hx}
                 cy={hy}
                 r={isArmed ? 15 : 12}
-                fill={hueCss(h)}
+                fill={hueCss(marker.hue)}
                 stroke={isArmed ? armedStroke : handleStroke}
                 strokeWidth={isArmed ? 4 : 2}
               />
@@ -463,7 +482,7 @@ export const HueWheel = React.memo(function HueWheel({
                 fill={centerFill}
                 textAnchor="middle"
               >
-                {labels[i]}
+                {labels[marker.index]}
               </SvgText>
             </G>
           );

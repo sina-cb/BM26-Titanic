@@ -4,6 +4,7 @@ import yaml from 'js-yaml';
 import { fileURLToPath } from 'url';
 
 import { SCHEME_IDS, generateScheme } from './color_schemes.js';
+import { ColorAutopilotTransition } from './color_autopilot_transition.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -186,6 +187,46 @@ export function validatePaletteChannel(value, label) {
   return value;
 }
 
+function asFullHsv(value) {
+  return typeof value === 'number'
+    ? { h: value, s: 1, v: 1 }
+    : { h: value.h, s: value.s, v: value.v };
+}
+
+function sameHsv(a, b) {
+  return a.h === b.h && a.s === b.s && a.v === b.v;
+}
+
+/** Validate the explicit five-slot target parallel to every palette entry. */
+function validateLivePalettes(value, palettes, label = 'colorAutopilot.livePalettes') {
+  if (!Array.isArray(value) || value.length !== palettes.length) {
+    throw new Error(
+      `${label} must be an array with the same length as colorAutopilot.palettes `
+      + `(${palettes.length}), got ${Array.isArray(value) ? value.length : JSON.stringify(value)}`,
+    );
+  }
+  return value.map((state, stateIndex) => {
+    if (!Array.isArray(state) || state.length !== RING_LENGTH) {
+      throw new Error(`${label}[${stateIndex}] must contain exactly ${RING_LENGTH} HSV slots`);
+    }
+    const copied = state.map((channel, slotIndex) => {
+      if (!channel || typeof channel !== 'object' || Array.isArray(channel)) {
+        throw new Error(`${label}[${stateIndex}][${slotIndex}] must be an {h,s,v} object`);
+      }
+      return validatePaletteChannel(channel, `${label}[${stateIndex}][${slotIndex}]`);
+    });
+    const pair = palettes[stateIndex];
+    if (pair && typeof pair === 'object' && !Array.isArray(pair)) {
+      if (!sameHsv(copied[0], asFullHsv(pair.c1)) || !sameHsv(copied[1], asFullHsv(pair.c2))) {
+        throw new Error(
+          `${label}[${stateIndex}] slots 0/1 must exactly match palettes[${stateIndex}].c1/c2`,
+        );
+      }
+    }
+    return copied;
+  });
+}
+
 /**
  * ColorAutopilot — cycles a SET of color palettes on a self-rescheduling
  * timer, applying one palette every `delay_s` seconds. This is the palette
@@ -278,6 +319,11 @@ export class ColorAutopilot {
     this.resolvePalette = typeof hooks.resolvePaletteFn === 'function' ? hooks.resolvePaletteFn : null;
     this.applyParams = typeof hooks.applyParamsFn === 'function' ? hooks.applyParamsFn : null;
     this._now = typeof hooks.now === 'function' ? hooks.now : () => Date.now();
+    this._transitionReadback = new ColorAutopilotTransition({
+      now: this._now,
+      publish: hooks.onTransition,
+      resolveScope: hooks.resolveTransitionScopeFn,
+    });
     this._scheduleFrame = typeof hooks.scheduleFrame === 'function'
       ? hooks.scheduleFrame
       : (fn, ms) => {
@@ -424,7 +470,7 @@ export class ColorAutopilot {
       // two disagree about what is running — and worse, would round-trip
       // through the broadcast as if both were live. The refusal names the
       // offending field so the fix is one deletion.
-      for (const forbidden of ['palettes', 'delay_s', 'transitionMs', 'shuffle']) {
+      for (const forbidden of ['palettes', 'livePalettes', 'delay_s', 'transitionMs', 'shuffle']) {
         if (obj[forbidden] !== undefined) {
           throw new Error(
             `colorAutopilot.mode 'followNote' does not take '${forbidden}' — that is a palettes-mode field. `
@@ -474,6 +520,9 @@ export class ColorAutopilot {
       }
       return entry;
     });
+    const livePalettes = obj.livePalettes === undefined
+      ? undefined
+      : validateLivePalettes(obj.livePalettes, palettes);
     // delay_s >= 0 (docs/55 §3.1). 0 means CONTINUOUS: no hold at all, the
     // fades run back to back. Negative / NaN / non-number is an authoring
     // error → throw loud. The zero+zero spin-loop case is refused below, once
@@ -507,6 +556,7 @@ export class ColorAutopilot {
         + `got ${JSON.stringify(obj.transitionMs)}`);
     }
     const out = { active: obj.active, mode: 'palettes', palettes, delay_s: obj.delay_s, shuffle, transitionMs };
+    if (livePalettes) out.livePalettes = livePalettes;
     if (followNote) out.followNote = followNote;
     return out;
   }
@@ -551,7 +601,7 @@ export class ColorAutopilot {
    * (e.g. a bare `{ active: false }` stop, which must not change the mode).
    */
   static inferMode(patch, current) {
-    const saysPalettes = ['palettes', 'delay_s', 'transitionMs', 'shuffle']
+    const saysPalettes = ['palettes', 'livePalettes', 'delay_s', 'transitionMs', 'shuffle']
       .some((k) => patch[k] !== undefined);
     const saysFollow = patch.followNote !== undefined;
     if (saysPalettes && !saysFollow) return 'palettes';
@@ -570,6 +620,7 @@ export class ColorAutopilot {
       if (cur.followNote !== undefined) base.followNote = cur.followNote;
     } else {
       base.palettes = cur.palettes;
+      if (cur.livePalettes !== undefined) base.livePalettes = cur.livePalettes;
       base.delay_s = cur.delay_s;
       base.shuffle = cur.shuffle;
       base.transitionMs = cur.transitionMs;
@@ -607,6 +658,11 @@ export class ColorAutopilot {
         shuffle: newState.shuffle !== undefined ? newState.shuffle : false,
         transitionMs: newState.transitionMs !== undefined ? newState.transitionMs : DEFAULT_TRANSITION_MS,
       };
+      if (newState.livePalettes !== undefined) {
+        this.config.colorAutopilot.livePalettes = newState.livePalettes.map(
+          state => state.map(channel => ({ ...channel })),
+        );
+      }
       // The INERT follow-note block rides along so a mode toggle round-trips
       // the operator's cycle tuning (docs/59 §4.1). Nothing ever READS it while
       // the mode is palettes — that is what makes it stored config rather than
@@ -888,6 +944,10 @@ export class ColorAutopilot {
     return this.state.active && typeof this._nextSwapAtMs === 'number' ? this._nextSwapAtMs : null;
   }
 
+  get transition() {
+    return this._transitionReadback.state;
+  }
+
   // Stop the cycle (clears the pending timer + any in-flight crossfade tween).
   // Idempotent.
   stop() {
@@ -976,28 +1036,36 @@ export class ColorAutopilot {
    * to the target params over transitionMs.
    */
   async _applyPalette(id, st, gen) {
+    const livePalette = Array.isArray(st.livePalettes) ? st.livePalettes[this._cursor] : undefined;
     const transitionMs = Number(st.transitionMs) > 0 ? Number(st.transitionMs) : 0;
     const canCrossfade = transitionMs > 0 && this.resolvePalette && this.applyParams;
 
     if (!canCrossfade) {
       // Hard cut: write the palette directly. Keep _currentParams in sync (when
       // we can resolve) so a LATER crossfade ramps from the right start point.
-      const ret = this.applyPalette(id);
+      const target = this.resolvePalette ? this.resolvePalette(id, livePalette) : null;
+      const transitionId = target
+        ? this._transitionReadback.begin(this._currentParams, target, 0)
+        : null;
+      const ret = this.applyPalette(id, livePalette);
       if (ret && typeof ret.then === 'function') await ret;
-      if (this.resolvePalette) {
-        try { this._currentParams = this.resolvePalette(id); } catch { /* resolve already validated upstream */ }
+      if (target) {
+        this._currentParams = target;
+        this._transitionReadback.settle(transitionId, target);
       }
       return;
     }
 
     // Resolve target params loudly (unknown id throws — codex P0).
-    const target = this.resolvePalette(id);
+    const target = this.resolvePalette(id, livePalette);
     const from = this._currentParams;
     // No known start point yet → snap to target (the first applied palette has
     // nothing to fade FROM). Subsequent switches ramp.
     if (!from) {
+      const transitionId = this._transitionReadback.begin(null, target, 0);
       this.applyParams(target);
       this._currentParams = target;
+      this._transitionReadback.settle(transitionId, target);
       return;
     }
     await this._runTween(from, target, transitionMs, gen);
@@ -1013,6 +1081,7 @@ export class ColorAutopilot {
   _runTween(from, to, durationMs, gen) {
     this._cancelTween();
     const start = this._now();
+    const transitionId = this._transitionReadback.begin(from, to, durationMs);
     return new Promise((resolve) => {
       const step = () => {
         // Stale tween (state changed under us) → abandon WITHOUT writing.
@@ -1026,10 +1095,12 @@ export class ColorAutopilot {
         const frame = lerpParams(from, to, t);
         this.applyParams(frame);
         this._currentParams = frame;
+        this._transitionReadback.update(transitionId, frame, t);
         if (t >= 1) {
           // Land exactly on target to avoid float residue.
           this.applyParams(to);
           this._currentParams = to;
+          this._transitionReadback.settle(transitionId, to);
           this._tween = null;
           resolve();
           return;
@@ -1051,6 +1122,7 @@ export class ColorAutopilot {
       if (handle !== undefined && handle !== null) this._clearFrame(handle);
       if (typeof resolve === 'function') resolve();
     }
+    this._transitionReadback.cancel(this._currentParams);
   }
 
   // Pick the next palette id: sequential (advance the cursor with wrap) or, when
@@ -1129,14 +1201,20 @@ export class ColorAutopilot {
     let retweenMs = null;
 
     // ── palettes-mode fields ──────────────────────────────────────────────
-    const palettesFields = ['palettes', 'delay_s', 'transitionMs', 'shuffle'];
+    const palettesFields = ['palettes', 'livePalettes', 'delay_s', 'transitionMs', 'shuffle'];
     for (const f of palettesFields) {
       if (sparse[f] !== undefined && mode !== 'palettes') {
         throw new Error(
           `colorAutopilot patch '${f}' is a palettes-mode field, but the daemon is running mode '${mode}'.`);
       }
     }
-    if (sparse.palettes !== undefined) {
+    if (sparse.palettes !== undefined || sparse.livePalettes !== undefined) {
+      if ((sparse.palettes === undefined) !== (sparse.livePalettes === undefined)
+          && (next.livePalettes !== undefined || sparse.livePalettes !== undefined)) {
+        throw new Error(
+          'colorAutopilot patch must change palettes and livePalettes together so their states stay parallel',
+        );
+      }
       // Reuse the FULL validator so a restage cannot smuggle in a shape a start
       // would have refused. `active`/`delay_s` are supplied from the live state
       // purely so the shared validator has a complete object to check.
@@ -1265,6 +1343,7 @@ export class ColorAutopilot {
 export function lerpHue(a, b, t) {
   if (t <= 0) return a;
   if (t >= 1) return b;
+  if (a === b) return a;
   // Wrap the signed delta into (-0.5, +0.5]: the tie at exactly 0.5 keeps the
   // POSITIVE (forward) arc.
   let d = b - a;

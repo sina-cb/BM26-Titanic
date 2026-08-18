@@ -9,6 +9,10 @@
 (function installTouchPixelViews(root) {
   'use strict';
 
+  if (!root.DeckPixelProjection || typeof root.DeckPixelProjection.layoutView !== 'function') {
+    throw new Error('Deck pixel projection authority did not load');
+  }
+
   var SCHEMA_VERSION = 4;
   var VIEW_AXES = {
     top_down: ['nx', 'nz'],
@@ -16,9 +20,7 @@
     strands: ['nx', 'nz'],
     te_sign: ['nz', 'ny'],
   };
-  var FIT_FILL = 0.92;
   var MAX_DPR = 2;
-  var MAX_PREVIEW_POINTERS = 10;
   var MIN_VIEW_ZOOM = 0.5;
   var MAX_VIEW_ZOOM = 4;
   var VIEW_ZOOM_STEP = 1.25;
@@ -40,6 +42,7 @@
     screenGlyphs: [],
     resizeObserver: null,
     readyPromise: null,
+    readyStatus: 'idle',
     previewPointers: new Map(),
     previewPixelIndices: new Set(),
     previewFrame: null,
@@ -335,30 +338,27 @@
     });
   }
 
-  function panelSubRects(panels, width, height, gap) {
-    if (!panels.length) return [];
-    if (panels.length === 1) return [{ x: 0, y: 0, width: width, height: height }];
-    var weights = panels.map(function (panel) { return panel.weight > 0 ? panel.weight : 1; });
-    var total = weights.reduce(function (sum, value) { return sum + value; }, 0);
-    var inner = width - gap * (panels.length - 1);
-    var x = 0;
-    return panels.map(function (_, index) {
-      var panelWidth = inner * (weights[index] / total);
-      var rect = { x: x, y: 0, width: panelWidth, height: height };
-      x += panelWidth + gap;
-      return rect;
+  function flattenProjectionView(view) {
+    var panels = [];
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    view.panels.forEach(function (panel) {
+      var panelMinX = Infinity, panelMinY = Infinity, panelMaxX = -Infinity, panelMaxY = -Infinity;
+      panel.glyphs.forEach(function (glyph) {
+        var halfX = glyph.sizeX / 2;
+        var halfY = glyph.sizeY / 2;
+        panelMinX = Math.min(panelMinX, glyph.x - halfX);
+        panelMaxX = Math.max(panelMaxX, glyph.x + halfX);
+        panelMinY = Math.min(panelMinY, glyph.y - halfY);
+        panelMaxY = Math.max(panelMaxY, glyph.y + halfY);
+      });
+      var bounds = { minX: panelMinX, minY: panelMinY, maxX: panelMaxX, maxY: panelMaxY };
+      panels.push({ id: panel.id, weight: panel.weight, bounds: bounds });
+      minX = Math.min(minX, panelMinX);
+      maxX = Math.max(maxX, panelMaxX);
+      minY = Math.min(minY, panelMinY);
+      maxY = Math.max(maxY, panelMaxY);
     });
-  }
-
-  function panelTransform(design, rect) {
-    var base = Math.max(0, Math.min(rect.width / design.width, rect.height / design.height));
-    var bx = rect.x + (rect.width - design.width * base) / 2;
-    var by = rect.y + (rect.height - design.height * base) / 2;
-    return {
-      scale: base,
-      ox: bx,
-      oy: by,
-    };
+    return { panels: panels, bounds: { minX: minX, minY: minY, maxX: maxX, maxY: maxY } };
   }
 
   /**
@@ -369,10 +369,11 @@
     requireFinite(width, 'viewport width');
     requireFinite(height, 'viewport height');
     if (width <= 0 || height <= 0) throw new Error('viewport must be positive');
-    var rects = panelSubRects(view.panels, width, height, view.panels.length > 1 ? design.panelGap : 0);
+    var transforms = root.DeckPixelProjection.layoutView(
+      flattenProjectionView(view), design, width, height);
     var out = [];
     view.panels.forEach(function (panel, index) {
-      var transform = panelTransform(design, rects[index]);
+      var transform = transforms[index];
       panel.glyphs.forEach(function (glyph) {
         out.push({
           pixelIndex: glyph.pixelIndex,
@@ -381,8 +382,8 @@
           fixtureType: glyph.fixtureType,
           kind: glyph.kind,
           group: glyph.group,
-          x: glyph.x * transform.scale + transform.ox,
-          y: glyph.y * transform.scale + transform.oy,
+          x: glyph.x * transform.scale + transform.offsetX,
+          y: glyph.y * transform.scale + transform.offsetY,
           sizeX: glyph.sizeX * transform.scale,
           sizeY: glyph.sizeY * transform.scale,
           shape: glyph.shape,
@@ -393,26 +394,15 @@
       });
     });
     if (!out.length) throw new Error("view '" + view.id + "' has no glyphs to fit");
-    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    out.forEach(function (glyph) {
-      var extents = glyphExtents(glyph);
-      minX = Math.min(minX, glyph.x - extents.x);
-      maxX = Math.max(maxX, glyph.x + extents.x);
-      minY = Math.min(minY, glyph.y - extents.y);
-      maxY = Math.max(maxY, glyph.y + extents.y);
-    });
-    var fit = Math.min(width * FIT_FILL / Math.max(1, maxX - minX),
-      height * FIT_FILL / Math.max(1, maxY - minY)) * clampZoom(zoom == null ? 1 : zoom);
-    var centerX = (minX + maxX) / 2;
-    var centerY = (minY + maxY) / 2;
-    var tx = width / 2 + (panX || 0);
-    var ty = height / 2 + (panY || 0);
-    out.forEach(function (glyph) {
-      glyph.x = (glyph.x - centerX) * fit + tx;
-      glyph.y = (glyph.y - centerY) * fit + ty;
-      glyph.sizeX *= fit;
-      glyph.sizeY *= fit;
-    });
+    var viewZoom = clampZoom(zoom == null ? 1 : zoom);
+    if (viewZoom !== 1 || panX || panY) {
+      out.forEach(function (glyph) {
+        glyph.x = (glyph.x - width / 2) * viewZoom + width / 2 + (panX || 0);
+        glyph.y = (glyph.y - height / 2) * viewZoom + height / 2 + (panY || 0);
+        glyph.sizeX *= viewZoom;
+        glyph.sizeY *= viewZoom;
+      });
+    }
     return out;
   }
 
@@ -434,6 +424,24 @@
       context.clearRect(0, 0, state.canvas.width, state.canvas.height);
     }
     console.error('[touch-pixel-views] ' + full);
+  }
+
+  function markPending() {
+    state.staticVerified = false;
+    state.engineVerified = false;
+    if (state.errorElement) {
+      state.errorElement.hidden = true;
+      state.errorElement.textContent = '';
+    }
+    if (state.pad) {
+      state.pad.classList.add('pixel-view-failed');
+      state.pad.setAttribute('aria-disabled', 'true');
+    }
+    if (state.canvas) {
+      var context = state.canvas.getContext('2d');
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, state.canvas.width, state.canvas.height);
+    }
   }
 
   function failEngine(message) {
@@ -705,22 +713,22 @@
     };
   }
 
-  function padWorldPerPx(width, height, target) {
-    if (!state.staticVerified || !state.screenGlyphs.length) {
-      throw new Error('pixel view is not verified');
+  function worldPerPxForGlyphs(sourceGlyphs, view, target) {
+    if (!Array.isArray(sourceGlyphs) || !sourceGlyphs.length) {
+      throw new Error('pixel view has no glyph projection');
     }
     var targetGlyph = target && Number.isInteger(target.pixelIndex)
-      ? state.glyphByPixel.get(target.pixelIndex) : null;
+      ? sourceGlyphs.find(function (glyph) { return glyph.pixelIndex === target.pixelIndex; })
+      : null;
     var glyphs = targetGlyph
-      ? state.screenGlyphs.filter(function (glyph) { return glyph.panelId === targetGlyph.panelId; })
-      : state.screenGlyphs;
-    if (!targetGlyph && state.cachedWorldPerPx) return state.cachedWorldPerPx;
+      ? sourceGlyphs.filter(function (glyph) { return glyph.panelId === targetGlyph.panelId; })
+      : sourceGlyphs;
     var minAxisX = Infinity, maxAxisX = -Infinity, minAxisY = Infinity, maxAxisY = -Infinity;
     glyphs.forEach(function (glyph) {
-      minAxisX = Math.min(minAxisX, glyph.world[state.view.axisX]);
-      maxAxisX = Math.max(maxAxisX, glyph.world[state.view.axisX]);
-      minAxisY = Math.min(minAxisY, glyph.world[state.view.axisY]);
-      maxAxisY = Math.max(maxAxisY, glyph.world[state.view.axisY]);
+      minAxisX = Math.min(minAxisX, glyph.world[view.axisX]);
+      maxAxisX = Math.max(maxAxisX, glyph.world[view.axisX]);
+      minAxisY = Math.min(minAxisY, glyph.world[view.axisY]);
+      maxAxisY = Math.max(maxAxisY, glyph.world[view.axisY]);
     });
     var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     glyphs.forEach(function (glyph) {
@@ -729,35 +737,85 @@
       minY = Math.min(minY, glyph.y);
       maxY = Math.max(maxY, glyph.y);
     });
-    var result = {
+    return {
       x: (maxAxisX - minAxisX) / Math.max(1, maxX - minX),
       y: (maxAxisY - minAxisY) / Math.max(1, maxY - minY),
     };
+  }
+
+  function clearBrushPreview() {
+    if (state.previewFrame !== null) {
+      root.cancelAnimationFrame(state.previewFrame);
+      state.previewFrame = null;
+    }
+    state.previewPointers.clear();
+    state.previewEvents.clear();
+    state.previewPixelIndices.clear();
+    scheduleDraw(false);
+  }
+
+  function padWorldPerPx(width, height, target) {
+    if (!state.staticVerified) throw new Error('pixel view is not verified');
+    if (!state.screenGlyphs.length) {
+      throw new Error('pixel view has no rendered display projection');
+    }
+    var targetGlyph = target && Number.isInteger(target.pixelIndex)
+      ? state.glyphByPixel.get(target.pixelIndex) : null;
+    if (!targetGlyph && state.cachedWorldPerPx) return state.cachedWorldPerPx;
+    var result = worldPerPxForGlyphs(state.screenGlyphs, state.view, target);
     if (!targetGlyph) state.cachedWorldPerPx = result;
     return result;
   }
 
+  function worldBrushRadii(fraction, target) {
+    if (!state.staticVerified) {
+      throw new Error('pixel-view source artifact is not verified');
+    }
+    if (!state.engineVerified) {
+      throw new Error('pixel-view engine topology is not verified');
+    }
+    requireFinite(fraction, 'brush fraction');
+    if (fraction <= 0) throw new Error('brush fraction must be positive');
+    var design = state.artifact.design;
+    var glyphs = reprojectView(state.view, design, design.width, design.height, 0, 0, 1);
+    var per = worldPerPxForGlyphs(glyphs, state.view, target);
+    var radiusPixels = fraction * design.width;
+    return {
+      x: Math.max(0.01, Math.min(1, radiusPixels * per.x)),
+      y: Math.max(0.01, Math.min(2, radiusPixels * per.y)),
+    };
+  }
+
   function verifyEngineLayout(layout) {
+    var REGEN_HINT = ' — verify the active Titanic model, then run: '
+      + 'cd simulation && npm run pixel-views:export';
+    var actualModel = layout && (layout.model || layout.scene) || 'unknown';
+    var actualCount = layout && Number.isInteger(layout.returnedCount)
+      ? layout.returnedCount
+      : (layout && Array.isArray(layout.pixels) ? layout.pixels.length : 'unknown');
+    var expectedCount = state.artifact ? state.artifact.modelPixelCount : 'unknown';
     if (!state.staticVerified || !state.artifact) {
       return Promise.reject(new Error('pixel-view artifact has not passed source verification'));
     }
     if (!layout || layout.scene !== 'titanic' || layout.model !== 'titanic') {
-      var actual = layout && (layout.scene || layout.model);
-      var error = new Error("engine model is '" + actual + "', expected 'titanic'");
+      var error = new Error("engine model is '" + actualModel + "' (" + actualCount
+        + " pixels), expected 'titanic' (" + expectedCount + ' pixels)' + REGEN_HINT);
       failEngine(error.message);
       return Promise.reject(error);
     }
     if (layout.pixelCount !== state.artifact.modelPixelCount ||
         layout.returnedCount !== state.artifact.modelPixelCount ||
         !Array.isArray(layout.pixels) || layout.pixels.length !== state.artifact.modelPixelCount) {
-      var countError = new Error('engine pixel layout is incomplete: expected ' +
-        state.artifact.modelPixelCount + ', got ' + (layout && layout.returnedCount));
+      var countError = new Error("engine model '" + actualModel + "' pixel layout is incomplete: expected " +
+        expectedCount + ', got ' + actualCount + REGEN_HINT);
       failEngine(countError.message);
       return Promise.reject(countError);
     }
     return topologyFingerprint(layout.pixels).then(function (fingerprint) {
       if (fingerprint !== state.artifact.source.modelFingerprint) {
-        throw new Error('engine pixel topology fingerprint does not match the generated view');
+        throw new Error("engine model '" + actualModel + "' (" + actualCount
+          + ' pixels) topology does not match the generated Titanic view ('
+          + expectedCount + ' pixels)' + REGEN_HINT);
       }
       state.artifact.views.forEach(function (view) {
         view.panels.forEach(function (panel) {
@@ -808,9 +866,7 @@
     state.panX = 0;
     state.panY = 0;
     state.zoom = 1;
-    state.previewPointers.clear();
-    state.previewEvents.clear();
-    state.previewPixelIndices.clear();
+    clearBrushPreview();
     if (state.viewSelect) state.viewSelect.value = view.id;
     updateZoomReadout();
     scheduleDraw(true);
@@ -1055,8 +1111,13 @@
       });
     }
     state.pad.addEventListener('pointerdown', function (event) {
-      if (!state.engineVerified || state.previewPointers.has(event.pointerId)
-          || state.previewPointers.size >= MAX_PREVIEW_POINTERS) return;
+      if (!state.engineVerified || state.previewPointers.has(event.pointerId)) return;
+      if (!root.TouchSpatialContactGate ||
+          typeof root.TouchSpatialContactGate.begin !== 'function') {
+        failEngine('single-contact gate is unavailable');
+        return;
+      }
+      if (!root.TouchSpatialContactGate.begin(event.pointerId)) return;
       state.previewPointers.set(event.pointerId, { target: null, pixelIndices: new Set() });
       queueUpdate(event);
     });
@@ -1070,6 +1131,7 @@
         scheduleDraw(false);
       });
     });
+    root.document.addEventListener('spatialcontactclear', clearBrushPreview);
   }
 
   function load(viewId) {
@@ -1128,6 +1190,18 @@
     });
   }
 
+  function startReady(viewId) {
+    state.readyStatus = 'pending';
+    state.readyPromise = load(viewId).then(function (artifact) {
+      state.readyStatus = 'fulfilled';
+      return artifact;
+    }, function (error) {
+      state.readyStatus = 'rejected';
+      throw error;
+    });
+    return state.readyPromise;
+  }
+
   function mount(options) {
     options = options || {};
     state.canvas = options.canvas;
@@ -1142,7 +1216,10 @@
     if (!state.canvas || !state.pad || !state.errorElement) {
       return Promise.reject(new Error('pixel-view mount needs canvas, pad, and error element'));
     }
-    failClosed('waiting for source and engine verification');
+    /* Loading is not a failure. Keep input fail-closed while both proofs are
+       pending, but do not flash a red operator alarm or emit console errors
+       during the normal native boot sequence. */
+    markPending();
     installInteractionGate();
     installViewGesture();
     installBrushPreview();
@@ -1151,14 +1228,27 @@
     }
     state.resizeObserver = new root.ResizeObserver(function () { scheduleDraw(true); });
     state.resizeObserver.observe(state.canvas);
-    state.readyPromise = load(options.viewId || 'top_down');
-    return state.readyPromise;
+    return startReady(options.viewId || 'top_down');
   }
 
   var api = {
     mount: mount,
-    ready: function () { return state.readyPromise || Promise.reject(new Error('pixel view is not mounted')); },
+    ready: function () {
+      if (!state.readyPromise) return Promise.reject(new Error('pixel view is not mounted'));
+      if (state.readyStatus === 'rejected') {
+        return startReady(state.view ? state.view.id : 'top_down');
+      }
+      return state.readyPromise;
+    },
     canArm: function () { return state.staticVerified && state.engineVerified; },
+    hasDisplayProjection: function () {
+      return state.staticVerified
+        && state.screenGlyphs.length > 0
+        && state.canvas
+        && state.canvas.clientWidth > 0
+        && state.canvas.clientHeight > 0;
+    },
+    refreshDisplayProjection: function () { scheduleDraw(true); },
     verifyEngineLayout: verifyEngineLayout,
     validateArtifact: validateArtifact,
     verifyResolvedFingerprint: verifyResolvedFingerprint,
@@ -1168,19 +1258,21 @@
     screenPointToTarget: screenPointToTarget,
     clampZoom: clampZoom,
     zoomAroundPoint: zoomAroundPoint,
-    panelSubRects: panelSubRects,
-    panelTransform: panelTransform,
+    projectionAuthority: root.DeckPixelProjection,
+    flattenProjectionView: flattenProjectionView,
     affectedPixelIndices: affectedPixelIndices,
     padPxToWorld: padPxToWorld,
     padToWorld: padToWorld,
     worldToPad: worldToPad,
     padWorldPerPx: padWorldPerPx,
+    worldBrushRadii: worldBrushRadii,
     currentViewSpec: currentViewSpec,
     selectView: selectView,
     state: function () {
       return {
         staticVerified: state.staticVerified,
         engineVerified: state.engineVerified,
+        readyStatus: state.readyStatus,
         viewId: state.view && state.view.id,
         axisX: state.view && state.view.axisX,
         axisY: state.view && state.view.axisY,

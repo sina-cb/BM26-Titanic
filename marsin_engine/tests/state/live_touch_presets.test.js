@@ -76,6 +76,24 @@ function waitForPresetAction(ws, action, timeoutMs = 4000) {
   });
 }
 
+function waitForControlMessage(ws, predicate, timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.removeListener('message', onMsg);
+      reject(new Error('timeout waiting for Live Touch control message'));
+    }, timeoutMs);
+    function onMsg(buf) {
+      let message;
+      try { message = JSON.parse(buf.toString()); } catch { return; }
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      ws.removeListener('message', onMsg);
+      resolve(message);
+    }
+    ws.on('message', onMsg);
+  });
+}
+
 function sampleState(tag) {
   // An arbitrary panel-owned capture blob — palette/scheme/follow/groups/fx/
   // spatial/mode/background/colour, per docs/70 §5.2's capture set. The
@@ -175,6 +193,83 @@ test('a corrupt store file 400s loudly instead of silently reporting an empty li
 });
 
 // ── 4. Two-client WS: create/rename/reorder/delete all broadcast ────────
+
+test('preset mutations obey the active Live Touch lease owner while armed', async () => {
+  const ownerId = 'preset_document_owner';
+  const ws = await openWs();
+  try {
+    const hello = waitForControlMessage(
+      ws,
+      message => message.type === 'touchControlHelloAck' && message.ownerId === ownerId,
+    );
+    ws.send(JSON.stringify({ type: 'touchControlHello', ownerId }));
+    await hello;
+
+    const armed = waitForControlMessage(
+      ws,
+      message => message.type === 'touchControlArmedAck'
+        && message.ownerId === ownerId
+        && message.armed === true,
+    );
+    ws.send(JSON.stringify({ type: 'touchControlArmed', ownerId, armed: true }));
+    await armed;
+
+    const beforeRejectedWrites = readStoreOnDisk();
+
+    const unowned = await api('POST', '/layers/live_touch/presets', {
+      name: 'Lease-neutral document',
+      state: sampleState('lease_neutral'),
+    });
+    assert.equal(unowned.status, 423, JSON.stringify(unowned.data));
+    assert.equal(unowned.data.code, 'TOUCH_CONTROL_LEASE_HELD');
+    assert.deepEqual(readStoreOnDisk(), beforeRejectedWrites,
+      'an unowned preset mutation must not alter the persisted document');
+
+    const staleOwner = await api('POST', '/layers/live_touch/presets', {
+      name: 'Stale owner document',
+      state: sampleState('stale_owner'),
+    }, { 'X-Touch-Control-Owner': 'not_the_active_owner' });
+    assert.equal(staleOwner.status, 409, JSON.stringify(staleOwner.data));
+    assert.equal(staleOwner.data.code, 'TOUCH_CONTROL_LEASE_INACTIVE');
+    assert.deepEqual(readStoreOnDisk(), beforeRejectedWrites,
+      'a stale owner preset mutation must not alter the persisted document');
+
+    const ownerHeaders = { 'X-Touch-Control-Owner': ownerId };
+    const created = await api('POST', '/layers/live_touch/presets', {
+      name: 'Owner document',
+      state: sampleState('owner_document'),
+    }, ownerHeaders);
+    assert.equal(created.status, 200, JSON.stringify(created.data));
+
+    const entryId = created.data.entry.id;
+    const renamed = await api(
+      'PATCH',
+      `/layers/live_touch/presets/${encodeURIComponent(entryId)}`,
+      { name: 'Owner document renamed' },
+      ownerHeaders,
+    );
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.data));
+
+    const removed = await api(
+      'DELETE',
+      `/layers/live_touch/presets/${encodeURIComponent(entryId)}`,
+      undefined,
+      ownerHeaders,
+    );
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+
+    const disarmed = waitForControlMessage(
+      ws,
+      message => message.type === 'touchControlArmedAck'
+        && message.ownerId === ownerId
+        && message.armed === false,
+    );
+    ws.send(JSON.stringify({ type: 'touchControlArmed', ownerId, armed: false }));
+    await disarmed;
+  } finally {
+    ws.close();
+  }
+});
 
 test('a second WS client observes create/rename/reorder/delete broadcasts', async () => {
   const wsA = await openWs();

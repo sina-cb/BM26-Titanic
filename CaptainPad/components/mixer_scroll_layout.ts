@@ -12,11 +12,7 @@ export const MIXER_BOUNDED_SCROLL_AREA = {
   minHeight: 0,
 } as const;
 
-/**
- * Every Mixer channel is the same compact instrument strip. Keeping all four
- * width constraints in one object prevents a later `flex` shorthand from
- * turning one card into the row's grower while its siblings remain narrow.
- */
+/** The shipped compact width is now the hard floor, not the fixed width. */
 export const MIXER_CHANNEL_CARD_WIDTH = 320;
 export const MIXER_CHANNEL_CARD_TRACK = {
   width: MIXER_CHANNEL_CARD_WIDTH,
@@ -26,18 +22,99 @@ export const MIXER_CHANNEL_CARD_TRACK = {
   flexShrink: 0,
 } as const;
 
+export const MIXER_CHANNEL_CARD_MAX_ROW_FRACTION = 0.5;
+export const MIXER_CHANNEL_ROW_PADDING = 16;
+export const MIXER_CHANNEL_ROW_GAP = 16;
+export const MIXER_GROUP_HORIZONTAL_PADDING = 8;
+export const MIXER_GROUP_BORDER_WIDTH = 1;
+export const MIXER_GROUP_MEMBER_GAP = 12;
+export const MIXER_COLLAPSED_GROUP_WIDTH = 60;
+export const MIXER_COLORS_CARD_WIDTH = 380;
+
+export interface MixerChannelRowSizingOptions {
+  viewportWidth: number;
+  channelCount: number;
+  horizontalPadding: number;
+  /** Every actual row/group gap, expressed separately so tests and callers
+   * cannot accidentally hide spacing inside a guessed viewport width. */
+  gapWidths: readonly number[];
+  /** Non-channel occupants and frames: COLORS, collapsed-group bars, and
+   * expanded-group padding/borders. */
+  fixedItemWidths: readonly number[];
+}
+
+export interface MixerChannelRowSizing {
+  cardWidth: number;
+  availableChannelWidth: number;
+  requiredContentWidth: number;
+  overflow: boolean;
+  cardTrack: {
+    width: number;
+    minWidth: number;
+    maxWidth: number;
+    flexGrow: 0;
+    flexShrink: 0;
+  };
+}
+
+function assertNonNegativeFinite(label: string, value: number): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`[mixer_scroll_layout] ${label} must be a non-negative finite number; got ${value}`);
+  }
+}
+
 /**
- * Three compact cards sit at the landscape viewport boundary once row padding,
- * gaps, group borders, or COLORS are present. Enable the horizontal host at
- * that boundary so native never renders unreachable overflow. Portrait keeps
- * its previous three-card threshold for the responsive web diagnostic view.
+ * Computes the one width shared by every expanded, visible Mixer channel.
+ *
+ * Fixed chrome is removed first. The remaining channel budget is divided
+ * equally, capped at half of that budget, and floored at the shipped 320pt
+ * width. The minimum deliberately wins when a narrow viewport makes the
+ * minimum and 50% cap mutually exclusive; `overflow` then requires the native
+ * horizontal host. Integer point widths avoid Yoga edge-rounding producing
+ * visually unequal siblings from the same fractional style value.
  */
-export function mixerChannelRowScrollEnabled(
-  isPortrait: boolean,
-  visibleCount: number,
-  colorsInRow: boolean,
-): boolean {
-  return colorsInRow || visibleCount >= 3;
+export function mixerChannelRowSizing(
+  options: MixerChannelRowSizingOptions,
+): MixerChannelRowSizing {
+  assertNonNegativeFinite('viewportWidth', options.viewportWidth);
+  assertNonNegativeFinite('channelCount', options.channelCount);
+  assertNonNegativeFinite('horizontalPadding', options.horizontalPadding);
+  if (!Number.isInteger(options.channelCount)) {
+    throw new Error(`[mixer_scroll_layout] channelCount must be an integer; got ${options.channelCount}`);
+  }
+  options.gapWidths.forEach((width, index) => assertNonNegativeFinite(`gapWidths[${index}]`, width));
+  options.fixedItemWidths.forEach((width, index) => assertNonNegativeFinite(`fixedItemWidths[${index}]`, width));
+
+  const gapWidth = options.gapWidths.reduce((sum, width) => sum + width, 0);
+  const fixedItemWidth = options.fixedItemWidths.reduce((sum, width) => sum + width, 0);
+  const fixedChromeWidth = (options.horizontalPadding * 2) + gapWidth + fixedItemWidth;
+  const availableChannelWidth = Math.max(0, options.viewportWidth - fixedChromeWidth);
+  const equalFitWidth = options.channelCount > 0
+    ? availableChannelWidth / options.channelCount
+    : 0;
+  const cappedWidth = Math.min(
+    equalFitWidth,
+    availableChannelWidth * MIXER_CHANNEL_CARD_MAX_ROW_FRACTION,
+  );
+  const cardWidth = options.channelCount > 0
+    ? Math.max(MIXER_CHANNEL_CARD_WIDTH, Math.floor(cappedWidth))
+    : MIXER_CHANNEL_CARD_WIDTH;
+  const requiredContentWidth = fixedChromeWidth + (cardWidth * options.channelCount);
+  const overflow = requiredContentWidth > options.viewportWidth;
+
+  return {
+    cardWidth,
+    availableChannelWidth,
+    requiredContentWidth,
+    overflow,
+    cardTrack: {
+      width: cardWidth,
+      minWidth: cardWidth,
+      maxWidth: cardWidth,
+      flexGrow: 0,
+      flexShrink: 0,
+    },
+  };
 }
 
 export const MIXER_COMPACT_PORTRAIT_MAX_STRIP_HEIGHT = 560;

@@ -250,7 +250,7 @@ describe('the mixer wires its three scroll hosts to the _263 seam (docs/67 §5.2
     // caller expression is what governs whenever no drag holds the lock. If a
     // future edit re-derives it, the row can again paint unreachable overflow.
     expect(MIXER).toMatch(
-      /scrollEnabled=\{mixerChannelRowScrollEnabled\(isPortrait,\s*visibleChannelIds\.length,\s*colorsInRow\)\}/,
+      /scrollEnabled=\{channelRowSizing\.overflow\}/,
     );
   });
 

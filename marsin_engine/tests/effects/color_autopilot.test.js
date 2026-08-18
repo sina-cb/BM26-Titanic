@@ -155,6 +155,43 @@ test('validate DEEP-COPIES {h,s,v} channels (no aliasing into daemon state)', ()
   assert.equal(out.palettes[0].c1.h, 0.2);
 });
 
+test('validate accepts and deep-copies one exact five-slot target per palette entry', () => {
+  const palettes = [{ c1: 0.1, c2: 0.6 }, { c1: 0.6, c2: 0.1 }];
+  const livePalettes = [
+    [0.1, 0.6, 0.2, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 })),
+    [0.6, 0.1, 0.3, 0.4, 0.2].map(h => ({ h, s: 1, v: 1 })),
+  ];
+  const out = ColorAutopilot.validate({
+    active: true, palettes, livePalettes, delay_s: 2, transitionMs: 400,
+  }, KNOWN);
+  livePalettes[0][2].h = 0.99;
+  assert.equal(out.livePalettes[0][2].h, 0.2);
+  assert.equal(out.livePalettes.length, out.palettes.length);
+});
+
+test('validate refuses ambiguous or mismatched five-slot sequences loudly', () => {
+  const palettes = [{ c1: 0.1, c2: 0.6 }, { c1: 0.6, c2: 0.1 }];
+  const goodState = [0.1, 0.6, 0.2, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 }));
+  assert.throws(() => ColorAutopilot.validate({
+    active: true, palettes, livePalettes: [goodState], delay_s: 2,
+  }), /same length as colorAutopilot\.palettes/);
+  assert.throws(() => ColorAutopilot.validate({
+    active: true, palettes: [palettes[0]], livePalettes: [goodState.slice(0, 4)], delay_s: 2,
+  }), /must contain exactly 5 HSV slots/);
+  assert.throws(() => ColorAutopilot.validate({
+    active: true,
+    palettes: [palettes[0]],
+    livePalettes: [[0.9, 0.6, 0.2, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 }))],
+    delay_s: 2,
+  }), /slots 0\/1 must exactly match/);
+  assert.throws(() => ColorAutopilot.validate({
+    active: true,
+    palettes: [palettes[0]],
+    livePalettes: [[0.1, 0.6, 0.2, 0.3, 0.4]],
+    delay_s: 2,
+  }), /must be an \{h,s,v\} object/);
+});
+
 test('validate rejects a bad CHANNEL of an {h,s,v} pair, naming index + channel', () => {
   assert.throws(
     () => ColorAutopilot.validate(
@@ -385,6 +422,25 @@ test('seedCurrentParams makes the FIRST apply crossfade FROM the seeded live col
   advance(1100);
   await p;
   assert.equal(writes.at(-1).colorPalette1.h, 0, 'tween lands exactly on the target hue');
+});
+
+test('palette ticks delegate the exact parallel five-slot state to both apply paths', async () => {
+  const pair = { c1: 0.1, c2: 0.6 };
+  const liveState = [0.1, 0.6, 0.1, 0.6, 0.1].map(h => ({ h, s: 1, v: 1 }));
+  const hardCalls = [];
+  const resolveCalls = [];
+  const hard = new ColorAutopilot((entry, livePalette) => hardCalls.push({ entry, livePalette }), tmpCfg(), {
+    resolvePaletteFn: (entry, livePalette) => {
+      resolveCalls.push({ entry, livePalette });
+      return { colorPalette1: livePalette[0], colorPalette2: livePalette[1] };
+    },
+  });
+  hard.setState(ColorAutopilot.validate({
+    active: true, palettes: [pair], livePalettes: [liveState], delay_s: 1,
+  }));
+  await hard.triggerNext();
+  assert.deepEqual(hardCalls, [{ entry: pair, livePalette: liveState }]);
+  assert.deepEqual(resolveCalls, [{ entry: pair, livePalette: liveState }]);
 });
 
 // ── ADDITIVE scheduling (operator ruling 2026-07-03) ────────────────────────

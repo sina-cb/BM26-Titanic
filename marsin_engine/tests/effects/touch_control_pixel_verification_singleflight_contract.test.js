@@ -13,9 +13,19 @@ test('Live Touch ARM joins the real pixel-verification promise', () => {
   assert.ok(match, 'chartDriftCheck must exist');
   const block = match[0];
 
-  assert.match(block, /if \(chartDriftVerified\) return Promise\.resolve\(true\)/);
+  assert.match(
+    block,
+    /if \(chartDriftVerified && window\.TouchPixelViews && window\.TouchPixelViews\.canArm\(\)\) \{[\s\S]*?return Promise\.resolve\(true\)/,
+    'a cached success is valid only while the mounted verifier still reports both gates true',
+  );
   assert.match(block, /if \(chartDriftInFlight\) return chartDriftInFlight/);
-  assert.match(block, /chartDriftInFlight = Promise\.all\(/);
+  assert.match(
+    block,
+    /chartDriftInFlight = window\.TouchPixelViews\.ready\(\)\.then[\s\S]*?req\('GET', '\/model\/pixel-layout'\)[\s\S]*?verifyEngineLayout\(layout\)/,
+    'one shared promise reports canonical-source, fetch, and compare failures precisely',
+  );
+  assert.match(block, /nativePixelStart\.then\(function \(\) \{ return chartDriftCheck\(\); \}\)/,
+    'native ARM joins the acknowledged verifier-start promise');
   assert.match(block, /chartDriftVerified = true/);
   assert.match(block, /chartDriftInFlight = null/);
   assert.doesNotMatch(block, /chartDriftChecked = true/,

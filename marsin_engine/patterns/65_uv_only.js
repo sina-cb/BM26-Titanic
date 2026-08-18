@@ -1,10 +1,15 @@
 /*
-  65_uv_only.js — "UV Only"  [EXPERIMENTAL SPIKE — in NO program]
+  65_uv_only.js — "UV Only"  [UV ONLY family — legacy spike]
 
-  ⚠ EXPERIMENTAL. This pattern exists so the operator can stand in front of
-  the real rig and decide whether the UV/violet lane is worth using at all.
-  It belongs to exactly one playlist (`uv_test`) and must not be added to
-  ambient / party / any themed program until Sina says go.
+  Originally the experimental spike that answered "is the UV/violet lane
+  worth using at all". On 2026-08-17 the operator ordered a full UV ONLY
+  program (wave _313): this pattern now anchors the `uv_only` playlist as
+  entry 1 of 20, alongside patterns/uv_only/01..19. It also remains alone in
+  `uv_test` (the original bench spike list). It must still stay out of
+  ambient / party / any themed program — UV is a deliberate operator pick.
+  NOTE: unlike the wave _313 family, this spike writes U on EVERY fixture
+  and relies on sacn_mapper dropping the channel on fixtures with no violet
+  die; the new family masks U to FIX_BAR_18/FIX_PAR at the source instead.
 
   ── WHAT "UV" ACTUALLY IS ON THIS RIG (read this before judging the look) ────
   There is NO true blacklight emitter anywhere in the inventory. The `u` lane

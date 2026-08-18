@@ -9,9 +9,9 @@
  * never solos, never touches engine state (docs/64 §2.5).
  *
  * Every decision this bar makes — chip order, shown vs railed, label
- * composition, the muted-style flag, the floor-disabled flag, whether the
- * perf caption shows — lives in the pure `mixer_workspace_bar_logic.ts`
- * module, which vitest can actually exercise (this file cannot be: the
+ * composition, the muted-style flag, the floor-disabled flag — lives in the
+ * pure `mixer_workspace_bar_logic.ts` module, which vitest can actually
+ * exercise (this file cannot be: the
  * vitest config only admits pure `.ts` under `components/**`, and RN
  * components are `.tsx`). This file is a thin render of that module's plan.
  *
@@ -88,7 +88,9 @@ export interface MixerWorkspaceBarProps {
   channels: readonly MixerBarChannel[];
   onOpen: (id: MixerSurfaceId) => void;
   onClose: (id: MixerSurfaceId) => void;
-  /** Perf overlay active — appends the ONE static PARAMS-HIDDEN caption. */
+  /** Perf overlay active — feeds the bar PLAN (which citizens are shown).
+   *  It renders NO caption: report _308 removed every explainer label from
+   *  the chip bar, perf mode included. */
   perfActive?: boolean;
   /** The channel the floor protects (last visible). Its chip renders with no
    *  press handler and an accessibility label saying why — docs/53 §3.1: an
@@ -300,16 +302,8 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     paddingHorizontal: 4,
   },
-  /** The pinned perf-caption slot (docs/67 §4.3) — a row sibling of the
-   *  scroller, not part of its content. `flexShrink:1` + `minWidth:0` let it
-   *  give ground to the chips under pressure; the Text inside then
-   *  ellipsizes rather than hard-clipping at the screen edge. */
-  /** DEVIATION from docs/67 §4.3's literal `maxWidth: 260`, measured: the
-   *  caption's intrinsic width is **262.36 pt** (probed on the scratch dist at
-   *  1366×1024), so a 260 pt ceiling ellipsized it at EVERY viewport — turning
-   *  "shortens only under pressure" into "permanently abbreviated", which is
-   *  worse than the pre-wave behaviour at full width. 280 clears the measured
-   *  width with ~18 pt of headroom for font/theme variation while still
-   *  bounding the slot to roughly a fifth of a landscape row, so the caption
-   *  can never push the chips it captions off the fold. */
+  // The pinned perf-caption slot docs/67 §4.3 once specified here is GONE
+  // (report _308, operator order: no explainer captions in the chip bar) —
+  // its styles went with it. `perfActive` survives as a PLAN input only: it
+  // decides which citizens the bar shows, never any narration.
 });

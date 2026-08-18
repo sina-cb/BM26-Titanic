@@ -24,15 +24,15 @@ Server-side bring-up: `deploy/interior1_agent_brief.md`.
 ## Operations (run from the repo root on the laptop)
 
 ```powershell
-python deploy\deploy.py fetch  --machine <name> [--source prod|scratch|both] [--state]
+python deploy\deploy.py fetch  --machine <name> [--source scratch] [--state]
 python deploy\deploy.py deploy --machine <name> --target scratch [--force]
 python deploy\deploy.py deploy --machine <name> [--scene <scene>] [--dry-run|--restart-only]
 python deploy\deploy.py stop   --machine <name>                    # park it: stop the stack (lights OFF)
 python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it back + verify the scene is live
 ```
 
-- **fetch** is strictly non-destructive (SSH/scp bundles → remote-tracking
-  refs `refs/remotes/<machine>-<source>/*`; never merges). Curation of
+- **fetch** is strictly non-destructive (SSH/scp scratch bundle →
+  `refs/remotes/<machine>-scratch/*`; never merges). Curation of
   fetched `dev/*` branches follows `.agent/os/git.md`: cherry-pick durable
   work onto a `feat/` branch on the laptop, DROP engine runtime state
   (`marsin_engine/states/**`) — never push `dev/*` as-is.
@@ -42,10 +42,26 @@ python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it ba
   `--force`.
 - **deploy → prod** is the full docs/43 pipeline and RESTARTS THE LIVE
   STACK. The `/L` preview in preflight names every path that would change;
-  server-side edits to synced paths are overwritten by design. The prod
-  tree's `.git` is **disposable — mirrored from the laptop on every deploy**;
-  durable server-side commits belong in the **scratch** tree (`fetch`
-  collects them), never in prod.
+  server-side edits to synced paths are overwritten by design. Both source
+  and destination `.git` are excluded from Robocopy, so protected Windows Git
+  objects cannot break the list-only safety preview. Prod Git metadata is
+  unsupported and may be stale; durable server-side commits belong in the
+  **scratch** tree (`fetch` collects them), never in prod. `/ZB` and broad ACL
+  repair are not sanctioned workarounds.
+  Before SMB preview or stack stop, a real deploy validates the laptop's
+  `$BM26_SECRETS` YAML, copies it over encrypted SCP into a protected stable
+  location outside prod, sets protected least-privilege ACLs, persists only
+  its path at Machine scope, removes any stale User-scope override, and verifies
+  it read-only with redacted output.
+  `--dry-run` validates locally and probes remotely but performs none of those
+  remote mutations.
+  Every full deploy resolves and prints the exact shortcut URLs from the
+  selected scene, exported launcher profile registry, and effective
+  machine-overlay port config. After overlays, it removes retired BM26 desktop
+  shortcuts and verifies exactly three `.url` files plus three distinct local
+  icons stored outside the mirrored repo. The boot script is verified to carry
+  the exact `--no-launch` argument before `schtasks /Run`; neither deploy nor
+  supervisor has a browser auto-open path.
 - **verify's crash-loop check is a STABILITY check, not an absolute zero.**
   `restart_count` is monotonic per supervisor lifetime (a benign relaunch
   bumps it), so verify reads boot_status twice ~15 s apart (binding it to the
@@ -94,6 +110,11 @@ python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it ba
 - Prod SMB sync needs a one-time laptop credential
   (`cmdkey /add:<host> /user:<hostname>\titanic /pass`) — the operator
   types the password; agents never handle it.
+- The operator must provide the laptop's external `$BM26_SECRETS` source.
+  A real prod deploy automatically provisions the server copy over encrypted
+  transport before stack stop; agents and deploy output never print paths or
+  credentials. `--dry-run` remains non-mutating and only reports redacted
+  readiness.
 
 ## Required Before Commit (auto-checks)
 
@@ -101,8 +122,9 @@ Run from the repo root; all must pass:
 
 ```powershell
 python -m py_compile deploy\deploy.py
+python -m unittest discover -s deploy\tests -p "test_*.py" -v
 python deploy\deploy.py --help
-python deploy\deploy.py fetch --machine titanic-int --source prod      # non-destructive E2E (writes only a server-side bundle file + laptop remote refs)
+python deploy\deploy.py fetch --machine titanic-int --source scratch   # non-destructive E2E (writes one server-side bundle + laptop remote refs)
 python deploy\deploy.py deploy --machine titanic-int --dry-run         # preflight + preview, changes nothing
 git diff --check -- deploy docs
 python scripts\security_check.py --staged                              # public repo
@@ -141,9 +163,15 @@ phase ends with the engine on the expected scene and the supervisor stable
 - **git-over-SSH to the server fails with quoting errors**: known-broken
   (Windows OpenSSH + cmd.exe strips git's quoting). Bundles via
   `deploy.py fetch` are the primary path, not a fallback.
-- **`dubious ownership` from server-side git**: the trees are owned by the
-  `tech` account; the `titanic` user needs
-  `git config --global --add safe.directory <tree>` once per tree.
+- **Robocopy reports ERROR 5 under `.git`**: this is an exclusion invariant
+  failure. Current deploys exclude both `.git` roots and never enumerate them.
+  Do not add `/ZB` or widen ACLs; update the laptop deploy tooling and rerun the
+  dry-run. Access denied elsewhere still requires a narrow ACL repair on the
+  named destination path for the registered deployment identity.
+- **`dubious ownership` from scratch Git**: if scratch is owned by the `tech`
+  account, the `titanic` user needs
+  `git config --global --add safe.directory <scratch_dest>` once. Prod is not
+  a supported Git workspace.
 - **Engine hot-reload gap**: a deploy that changes output universes needs
   the full stack restart the pipeline already does — never "deploy without
   restart" for universe changes.
@@ -152,3 +180,8 @@ phase ends with the engine on the expected scene and the supervisor stable
   persisted User-scope value from the registry (`HKCU\Environment`) itself and
   prints a `note:`, so this only fails if `setup_env` never ran — restart the
   IDE to silence the note. Detail: `deploy/README.md` §Troubleshooting.
+- **Prod preflight says runtime-secret provisioning/verification failed**:
+  confirm the laptop's external `$BM26_SECRETS` source is valid and the
+  registered SSH identity can administer its private deployment root. Do not
+  copy secrets manually into prod or print them. A Process-only remote variable
+  is insufficient because the scheduled task will not inherit it.

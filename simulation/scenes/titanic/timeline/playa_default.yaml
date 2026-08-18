@@ -230,7 +230,12 @@ cues:
           action:
             type: playlist
             name: baby_tease
-            entryId: e_baby_reveal_orbit_question
+            # PRE-EXISTING BREAK, repaired here: this pinned
+            # `e_baby_tease_two_color_world_walk`, a tease retired by the
+            # redesign in report `_300` and flagged as a dangling cue in `_305`
+            # §2.4. Both reveal cues would have failed at fire time. Repointed
+            # to the tease arc's own calm opener.
+            entryId: e_baby_tease_bullseye_tide
             palette: baby_reveal_duet
             target:
               channel: deck
@@ -259,8 +264,8 @@ cues:
         - afterSec: 992
           action:
             type: playlist
-            name: baby_girl
-            palette: baby_pink
+            name: baby_reveal
+            entryId: e_baby_reveal_diamond_quilt
             target:
               channel: deck
               id: null
@@ -285,6 +290,27 @@ cues:
             globals:
               speed: 0.5
               bpmSpeedSync: 0
+              # THE ANSWER'S COLOUR (docs/73 §2, PALETTE CONTRACT v2). ONE
+              # `baby_reveal` playlist now serves both outcomes — the family is
+              # carried by the palette, not by which playlist fires.
+              # `colorPalette1` IS the answer: the patterns render that colour
+              # and DERIVE their own dark tone from it (the primary's value x
+              # DARK_K), so one slot decides everything and there is no two-slot
+              # handshake to satisfy.
+              # `colorPalette2` is still written, at the same hue and the dark
+              # value, FOR OTHER CONSUMERS ONLY — the reveal patterns never read
+              # it. It keeps the global palette PAIR mirroring the tone the ship
+              # is actually showing.
+              # `colorTransitionMs: 0` pins the palette to SNAP — the slots are
+              # slewed by default, and a mid-ramp sample is an INTERMEDIATE HUE
+              # crossing the wheel toward the answer, i.e. a visibly wrong
+              # colour on the ship in the middle of the ceremony.
+              # The curated `palette:` key was REMOVED from this step on purpose:
+              # a curated palette is hue-only (s=1, v=1) and would overwrite
+              # `colorPalette1` — it would change THE ANSWER'S COLOUR.
+              colorTransitionMs: 0
+              colorPalette1: { h: 0.943869, s: 0.965, v: 1.0 }
+              colorPalette2: { h: 0.943869, s: 0.965, v: 0.28 }
     kind: program
     hold:
       min: 120
@@ -302,7 +328,12 @@ cues:
           action:
             type: playlist
             name: baby_tease
-            entryId: e_baby_reveal_orbit_question
+            # PRE-EXISTING BREAK, repaired here: this pinned
+            # `e_baby_tease_two_color_world_walk`, a tease retired by the
+            # redesign in report `_300` and flagged as a dangling cue in `_305`
+            # §2.4. Both reveal cues would have failed at fire time. Repointed
+            # to the tease arc's own calm opener.
+            entryId: e_baby_tease_bullseye_tide
             palette: baby_reveal_duet
             target:
               channel: deck
@@ -331,8 +362,8 @@ cues:
         - afterSec: 992
           action:
             type: playlist
-            name: baby_boy
-            palette: baby_blue
+            name: baby_reveal
+            entryId: e_baby_reveal_diamond_quilt
             target:
               channel: deck
               id: null
@@ -357,6 +388,27 @@ cues:
             globals:
               speed: 0.5
               bpmSpeedSync: 0
+              # THE ANSWER'S COLOUR (docs/73 §2, PALETTE CONTRACT v2). ONE
+              # `baby_reveal` playlist now serves both outcomes — the family is
+              # carried by the palette, not by which playlist fires.
+              # `colorPalette1` IS the answer: the patterns render that colour
+              # and DERIVE their own dark tone from it (the primary's value x
+              # DARK_K), so one slot decides everything and there is no two-slot
+              # handshake to satisfy.
+              # `colorPalette2` is still written, at the same hue and the dark
+              # value, FOR OTHER CONSUMERS ONLY — the reveal patterns never read
+              # it. It keeps the global palette PAIR mirroring the tone the ship
+              # is actually showing.
+              # `colorTransitionMs: 0` pins the palette to SNAP — the slots are
+              # slewed by default, and a mid-ramp sample is an INTERMEDIATE HUE
+              # crossing the wheel toward the answer, i.e. a visibly wrong
+              # colour on the ship in the middle of the ceremony.
+              # The curated `palette:` key was REMOVED from this step on purpose:
+              # a curated palette is hue-only (s=1, v=1) and would overwrite
+              # `colorPalette1` — it would change THE ANSWER'S COLOUR.
+              colorTransitionMs: 0
+              colorPalette1: { h: 0.594795, s: 0.967, v: 1.0 }
+              colorPalette2: { h: 0.594795, s: 0.967, v: 0.28 }
     kind: program
     hold:
       min: 120

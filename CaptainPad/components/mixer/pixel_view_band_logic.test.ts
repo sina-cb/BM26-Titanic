@@ -429,9 +429,9 @@ describe('computeBandCanvasSize — docs/64 §8 W2 acceptance matrix (real artif
     const flat = realFlat('top_down');
     const [w300, w620, w1220] = widths.map((w) => computeBandCanvasSize(flat, REAL_DESIGN, w, CHANNEL_EDIT_CAP_HEIGHT));
     expect(w300.width).toBeCloseTo(300, 1);
-    expect(w300.height).toBeCloseTo(160.26, 1);
+    expect(w300.height).toBeCloseTo(160.34, 1);
     expect(w620.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
-    expect(w620.width).toBeCloseTo(329.46, 1);
+    expect(w620.width).toBeCloseTo(329.31, 1);
     // Widening the slot further, once the ceiling already binds, does not
     // grow the picture any more — 620 and 1220 land on the SAME box.
     expect(w1220.width).toBeCloseTo(w620.width, 6);

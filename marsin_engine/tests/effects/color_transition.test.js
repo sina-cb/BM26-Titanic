@@ -66,6 +66,41 @@ test('transitionMs=0 snaps to target on the first tick', () => {
   assert.equal(host.last[11].h, 0.25, 'snaps straight to target hue');
 });
 
+test('an already-interpolated ColorAutopilot frame bypasses only the secondary CPC slew', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  registerColors(pc);
+  pc.set('colorTransitionMs', 800, 'api');
+  pc.set('colorPalette1', { h: 0.1, s: 1, v: 1 }, 'api');
+  pc.applySnapshot(fakeHost());
+
+  const result = pc.setColorAutopilotFrame('colorPalette1', { h: 0.6, s: 0.8, v: 0.7 });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(pc._rendered.colorPalette1, { h: 0.6, s: 0.8, v: 0.7 });
+  assert.equal(pc._rampFrom.colorPalette1, null, 'daemon frame must not start a second ramp');
+
+  const host = fakeHost();
+  pc.tickColorTransitions(1000);
+  pc.flushDirty(host);
+  assert.deepEqual(host.last[11], { h: 0.6, s: 0.8, v: 0.7 });
+
+  pc.set('colorPalette1', { h: 0.9, s: 1, v: 1 }, 'api');
+  assert.notEqual(pc._rampFrom.colorPalette1, null, 'manual API write still arms colorTransitionMs');
+});
+
+test('ColorAutopilot frame API refuses non-palette keys and preserves source locks', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  assert.throws(
+    () => pc.setColorAutopilotFrame('speed', 0.5),
+    /only write colorPalette1\/2/,
+  );
+
+  pc.setSourceLock({ mode: 'global', source: 'api' });
+  const before = pc.get('colorPalette1');
+  const result = pc.setColorAutopilotFrame('colorPalette1', { h: 0.3, s: 1, v: 1 });
+  assert.deepEqual(result, { status: 'ignored', reason: 'source_lock', lockedTo: 'api' });
+  assert.deepEqual(pc.get('colorPalette1'), before);
+});
+
 test('mid-ramp injects an eased interpolant, not the target', () => {
   const pc = new ParamCenter(tmpStatePath());
   registerColors(pc);

@@ -104,7 +104,7 @@ describe('CaptainPad tab policy', () => {
     // A sub-view is only as reachable as the tab it lives in: if the parent is
     // frozen out during a show, so is the child. Catching this in policy beats
     // discovering it at 2am on the playa.
-    for (const [routeName, policy] of Object.entries(CAPTAINPAD_TAB_POLICIES)) {
+    for (const policy of Object.values(CAPTAINPAD_TAB_POLICIES)) {
       const parent = (policy as { parentRoute?: string }).parentRoute;
       if (!parent) continue;
       expect(policy.showInPerformance).toBe(captainPadTabPolicy(parent).showInPerformance);

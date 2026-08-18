@@ -9,6 +9,8 @@
 (function (root) {
   'use strict';
 
+  var DEFAULT_PROFILE_ID = 'instruments';
+
   var PROFILE_DEFS = Object.freeze([
     Object.freeze({ id: 'individual', label: 'Individual groups · 24', views: null }),
     Object.freeze({
@@ -91,7 +93,7 @@
 
   var installed = false;
   var profiles = null;
-  var activeId = 'individual';
+  var activeId = DEFAULT_PROFILE_ID;
   var dropdown = null;
   var profileGrid = null;
   var groupsGrid = null;
@@ -327,6 +329,11 @@
         '], extra [' + extra.join(', ') + ']');
     }
     profiles = compiled;
+    if (!profiles.some(function (profile) { return profile.id === DEFAULT_PROFILE_ID; })) {
+      throw new Error("required default group profile '" + DEFAULT_PROFILE_ID
+        + "' is unavailable; available profile ids: "
+        + profiles.map(function (profile) { return profile.id; }).join(', '));
+    }
     bank = root.TouchGroupBank;
     dropdown = root.document.getElementById('groupProfileSelect');
     profileGrid = root.document.getElementById('groupProfileGrid');
@@ -361,6 +368,7 @@
   }
 
   var api = {
+    defaultProfileId: DEFAULT_PROFILE_ID,
     definitions: PROFILE_DEFS,
     compileProfiles: compileProfiles,
     install: install,

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { layoutView as sharedLayoutView } from '@/shared/pixel_view_projection';
+
 import {
   BYTES_PER_SAMPLE,
   DEFAULT_VIS_SOURCE,
@@ -231,6 +233,13 @@ describe('pixel_view_logic — flattening', () => {
 describe('pixel_view_logic — per-view auto-fit', () => {
   const design = { width: 900, height: 520, panelGap: 8 };
   const single = flattenView(pickDefaultView(parsePixelViewArtifact(artifact())));
+
+  it('delegates every final projection to the shared Deck/Live authority', () => {
+    for (const [width, height] of [[1024, 682], [1194, 834], [1440, 900], [760, 620]]) {
+      expect(layoutView(single, design, width, height))
+        .toEqual(sharedLayoutView(single, design, width, height));
+    }
+  });
 
   /** Composite extents of every glyph, as the canvas would draw them. */
   function drawnBounds(flat: FlatPixelView, transforms: ViewTransform[]) {

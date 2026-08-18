@@ -208,9 +208,11 @@ state** (the `_217` contract — round-trip byte-identical):
    dominantly *with patterns*": pattern switching is live-performance work,
    not structure (_228: the engine 409s structural routes; playlist
    activation, faders, mute/solo, bump all stay live).
-3. **Where the params went is answered on the spot** (the deck bar's
+3. ~~**Where the params went is answered on the spot** (the deck bar's
    `PERF_BAR_CAPTION` precedent): one static micro-caps line at the foot of
-   the perf-mode view panel — `PARAMS HIDDEN · SHOW MODE · MIDI STILL LIVE`.
+   the perf-mode view panel — `PARAMS HIDDEN · SHOW MODE · MIDI STILL LIVE`.~~
+   **WITHDRAWN — operator order, report _308:** no explainer caption ships,
+   here or on the deck bar (`PERF_BAR_CAPTION` is gone too).
    Params hidden ≠ params dead: the MFT keeps driving them (_228 semantics);
    only the on-screen sliders are folded away.
 4. **Master band forced open at 160 px** (derived; the session collapse

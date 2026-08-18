@@ -286,20 +286,39 @@ test('native: an injected theme applies and acks through the same pipeline', () 
   assert.deepEqual(panel.errors(), []);
 });
 
-test('native: surface focus and blur reach the page as the same DOM events', () => {
+test('native: focus, verifier start, and blur reach the page as correlated DOM events', () => {
   const panel = bootNative();
   panel.context.window.__captainpadDeliver({
     type: 'captainpad-surface-focus', version: 1, requestId: 'focus-1',
+  });
+  panel.context.window.__captainpadDeliver({
+    type: 'captainpad-pixel-verification-start', version: 1,
+    documentId: 'pixel-document-1', requestId: 'pixel-request-1',
   });
   panel.context.window.__captainpadDeliver({
     type: 'captainpad-surface-blur', version: 1, requestId: 'blur-1',
     target: 'deck', reason: 'background',
   });
   const types = panel.dispatched.map((e) => e.type);
-  assert.deepEqual(types, ['captainpad:surface-focus', 'captainpad:surface-blur']);
+  assert.deepEqual(types, [
+    'captainpad:surface-focus',
+    'captainpad:pixel-verification-start',
+    'captainpad:surface-blur',
+  ]);
   assert.deepEqual(plain(panel.dispatched[1].detail), {
+    documentId: 'pixel-document-1', requestId: 'pixel-request-1',
+  });
+  assert.deepEqual(plain(panel.dispatched[2].detail), {
     requestId: 'blur-1', target: 'deck', reason: 'background',
   });
+});
+
+test('native: verifier start without document identity fails loudly', () => {
+  const panel = bootNative();
+  panel.context.window.__captainpadDeliver({
+    type: 'captainpad-pixel-verification-start', version: 1, requestId: 'pixel-request-1',
+  });
+  assert.match(panel.errors()[0], /pixel verification start requires a documentId/);
 });
 
 test('native: a malformed injected message fails LOUDLY and reveals the panel', () => {

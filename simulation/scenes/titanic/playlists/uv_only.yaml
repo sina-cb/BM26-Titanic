@@ -1,0 +1,265 @@
+schemaVersion: 1
+name: uv_only
+entries:
+  - id: e_65_uv_only
+    pattern: 65_uv_only
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderDirection: 1
+      sliderLevel: 0.8
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderSharpness: 0.35
+      sliderUvFloor: 0.12
+      sliderRgbViolet: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_01_blacklight_tide
+    pattern: uv_only/01_blacklight_tide
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderWaveWidth: 0.45
+      sliderRecoil: 0.6
+      sliderCrest: 0.65
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_02_crossing_uv_beacons
+    pattern: uv_only/02_crossing_uv_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderBeamWidth: 0.45
+      sliderCrossing: 0.55
+      sliderAfterglow: 0.5
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_03_violet_maelstrom
+    pattern: uv_only/03_violet_maelstrom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderArmWidth: 0.55
+      sliderArmCount: 0.35
+      sliderDepth: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_04_cathedral_uv_ribs
+    pattern: uv_only/04_cathedral_uv_ribs
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderRibCount: 0.5
+      sliderRibWidth: 0.5
+      sliderBow: 0.48
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_05_breathing_violet_horizon
+    pattern: uv_only/05_breathing_violet_horizon
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderHorizonWidth: 0.5
+      sliderBreathDepth: 0.5
+      sliderAfterglow: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_06_uv_orbit_rings
+    pattern: uv_only/06_uv_orbit_rings
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderRingWidth: 0.48
+      sliderOrbitTilt: 0.58
+      sliderContrast: 0.6
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_07_violet_eclipse
+    pattern: uv_only/07_violet_eclipse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderEclipseSize: 0.5
+      sliderRimWidth: 0.52
+      sliderDepth: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_08_uv_broadside_call
+    pattern: uv_only/08_uv_broadside_call
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderWallWidth: 0.48
+      sliderExpansion: 0.7
+      sliderContrast: 0.6
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_09_uv_lighthouse
+    pattern: uv_only/09_uv_lighthouse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderBeamWidth: 0.45
+      sliderFlash: 0.55
+      sliderFloorLevel: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_10_violet_caustics
+    pattern: uv_only/10_violet_caustics
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderShimmer: 0.5
+      sliderRipple: 0.35
+      sliderDepth: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_11_uv_aurora_breath
+    pattern: uv_only/11_uv_aurora_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderRibbons: 0.55
+      sliderBreathRate: 0.5
+      sliderBreathDepth: 0.6
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_12_uv_rain
+    pattern: uv_only/12_uv_rain
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderDensity: 0.55
+      sliderFall: 0.6
+      sliderBurst: 0.5
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_13_violet_reaction
+    pattern: uv_only/13_violet_reaction
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderFeed: 0.5
+      sliderSeed: 0.7
+      sliderRim: 0.6
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_14_uv_lattice_drift
+    pattern: uv_only/14_uv_lattice_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderLatticeScale: 0.5
+      sliderLineSoftness: 0.45
+      sliderDetail: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_15_violet_breathing
+    pattern: uv_only/15_violet_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderBreathDepth: 0.6
+      sliderBreathShape: 0.45
+      sliderRibbing: 0.5
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_16_uv_starfield
+    pattern: uv_only/16_uv_starfield
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderStarCount: 0.5
+      sliderBrilliance: 0.65
+      sliderAfterglow: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_17_violet_mantas
+    pattern: uv_only/17_violet_mantas
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderWingSpan: 0.55
+      sliderFlap: 0.5
+      sliderGlide: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_18_uv_ink_plumes
+    pattern: uv_only/18_uv_ink_plumes
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderInk: 0.6
+      sliderFlow: 0.5
+      sliderDiffuse: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_uv_only_19_violet_frond_garden
+    pattern: uv_only/19_violet_frond_garden
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderFrondDensity: 0.55
+      sliderSwayDepth: 0.5
+      sliderTipGlow: 0.6
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null

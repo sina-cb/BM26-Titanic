@@ -12,11 +12,14 @@
 # colours, the quick-effect palette, and every timing number below. Retuning the
 # reveal is a YAML edit, never a code change.
 #
-# WHAT THIS FILE DOES NOT OWN. Playlist CONTENT. `baby_tease`, `baby_girl` and
-# `baby_boy` are the operator's playlists in
+# WHAT THIS FILE DOES NOT OWN. Playlist CONTENT. `baby_tease` and
+# `baby_reveal` (docs/73 — the unified colour-blind answer set that replaced
+# the boy/girl twin playlists) are the operator's playlists in
 # simulation/scenes/titanic/playlists/. The runner refuses to ARM — loudly, by
-# name — if any of them is missing or has no loadable entry, and it never
-# authors playlist content itself.
+# name — if either is missing or has no loadable entry, and it never authors
+# playlist content itself. `baby_reveal` is now BOTH this show's id and a
+# playlist name — deliberately: the show answers the question it asks, with
+# one playlist coloured by whichever `globals` choice fired.
 #
 # ARM (not a stage) captures the pre-show look as the reserved snapshot
 # `ev_prev`, disarms the deck's pattern + colour autopilots, and takes the
@@ -144,6 +147,42 @@ stages:
         mode: trans_crossfade
         durationMs: 1000
         shuffle: false
+    # THE ANSWER'S COLOUR (docs/73 — Baby Reveal unification, PALETTE CONTRACT
+    # v2, operator ruling 2026-08-17). `baby_reveal` replaced the boy/girl twin
+    # answer families with ONE colour-blind pattern set
+    # (`marsin_engine/patterns/baby_reveal/`) that does not know pink from blue
+    # — the show tells it. What a reader needs before touching either choice:
+    #
+    # (a) `colorPalette1` IS THE ANSWER. The patterns render exactly that
+    #     colour and DERIVE their own second tone from it (the primary's value
+    #     x DARK_K = 0.28), so ONE slot decides everything. There is no
+    #     two-slot handshake to satisfy and no handshake blackout: these looks
+    #     also play on the DECK under any ordinary global palette, which is
+    #     what the v2 ruling bought.
+    # (b) `colorPalette2` is still written — same hue, `v: 0.28` — but FOR
+    #     OTHER CONSUMERS ONLY. The reveal patterns never read slot 2. It
+    #     mirrors the dark tone the ship is actually showing so the engine's
+    #     global palette PAIR stays coherent for anything else reading the
+    #     slots. It is not validated by anything on the pattern side.
+    # (c) `colorTransitionMs: 0` matters MORE under v2, not less. The slots are
+    #     slewed by default (800 ms, operator-tunable to 10 s). With the
+    #     handshake blackout gone, a slewed palette no longer goes BLACK
+    #     mid-ramp — it shows an INTERMEDIATE HUE crossing the wheel toward the
+    #     answer, a visibly wrong colour in the middle of the ceremony. Pinned
+    #     to 0, the answer SNAPS. The operator's own value is restored at END
+    #     SHOW by the runner's globals capture/restore (api_server.js
+    #     `captureGlobals` / `setGlobals`, docs/57 §6 G1).
+    # (d) THE WRITE IS VERIFIED. `setGlobals` swallows a ParamCenter
+    #     `source_lock` refusal as runtime arbitration, so a palette write can
+    #     be silently dropped while Live Touch holds the lock — which under v2
+    #     means the reveal runs in whatever colour was already loaded. The
+    #     runner therefore READS THE VALUES BACK and refuses the stage if any
+    #     key did not land (`_assertGlobalsLanded` in
+    #     `lib/special_events/special_events_service.js`). The show refuses to
+    #     start rather than start in a stale colour.
+    # (e) Re-firing a choice (the operator's pink<->blue correction) replays
+    #     this whole action list, so the palette write re-issues automatically
+    #     — there is no stale-palette state to clear by hand.
     choices:
       # The operator's own words for these two buttons were "baby pink or blue",
       # so that is what they say. `IT'S A GIRL` / `IT'S A BOY` is a one-line
@@ -153,17 +192,19 @@ stages:
         label: BABY PINK
         color: '#FF9EC4'
         actions:
+          - { type: globals, set: { colorTransitionMs: 0, colorPalette1: { h: 0.943869, s: 0.965, v: 1.0 }, colorPalette2: { h: 0.943869, s: 0.965, v: 0.28 } } }
           - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
           - { type: masterFade, target: 1.0, durationMs: 200 }
           - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
           - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 700, releaseMs: 1000, releaseTo: show }
-          - { type: playlist, playlist: baby_girl, entryId: e_baby_girl_diamond_quilt, delayMs: 2700 }
+          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 2700 }
       - id: boy
         label: BABY BLUE
         color: '#4FA8FF'
         actions:
+          - { type: globals, set: { colorTransitionMs: 0, colorPalette1: { h: 0.594795, s: 0.967, v: 1.0 }, colorPalette2: { h: 0.594795, s: 0.967, v: 0.28 } } }
           - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
           - { type: masterFade, target: 1.0, durationMs: 200 }
           - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
           - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 700, releaseMs: 1000, releaseTo: show }
-          - { type: playlist, playlist: baby_boy, entryId: e_baby_boy_diamond_quilt, delayMs: 2700 }
+          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 2700 }

@@ -20,12 +20,38 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
+import { WebSocket } from 'ws';
 
 import { createEngineHarness } from '../helpers/spawn_engine.mjs';
 
 const SCENE = 'test_bench';
 const PATTERN = '00_golden_hour_wash';
 const PLAYLIST_NAME = 'ambient';
+const CATALOG_PLAYLIST_NAME = 'titanic_ambient_catalog_equivalence';
+// These are the explicit Live Touch instrument mappings in
+// docs/ui/touch_control_wire.js. They are not playlist entries, so prove the
+// actual armed-owner API compiles and stages them rather than merely checking
+// that their static map points at a source file.
+const INSTRUMENT_PATTERNS = [
+  '128_five_colour_prism',
+  '129_five_colour_stations',
+  '130_spatial_paint',
+];
+const INSTRUMENT_CATALOG_OWNER = 'live_touch_instrument_catalog_owner';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const TITANIC_AMBIENT_PATH = path.resolve(
+  HERE,
+  '../../../simulation/scenes/titanic/playlists/ambient.yaml',
+);
+const TITANIC_AMBIENT = yaml.load(fs.readFileSync(TITANIC_AMBIENT_PATH, 'utf8'));
+if (!TITANIC_AMBIENT || !Array.isArray(TITANIC_AMBIENT.entries)
+    || TITANIC_AMBIENT.entries.length === 0) {
+  throw new Error(`authoritative Titanic ambient playlist is invalid: ${TITANIC_AMBIENT_PATH}`);
+}
 // Mirrors simulation/scenes/*/playlists/ambient.yaml's blessed entry
 // e_ambient_0_00_golden_hour_wash verbatim (id, pattern, defaults) — the
 // canonical operator-blessed pilot playlist. Recreated here (rather than
@@ -56,7 +82,57 @@ const h = createEngineHarness({
   prefix: 'live-touch-background-entry',
   portBase: 17530,
   portSpan: 50,
+  extraArgs: ['--dest', '192.0.2.9'],
 });
+
+function openControlWs() {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${h.port}/ws/control`);
+    ws.on('open', () => resolve(ws));
+    ws.on('error', reject);
+  });
+}
+
+function waitForControl(ws, predicate, timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.removeListener('message', onMessage);
+      reject(new Error('timed out waiting for Live Touch owner acknowledgement'));
+    }, timeoutMs);
+    function onMessage(buf) {
+      let message;
+      try {
+        message = JSON.parse(buf.toString());
+      } catch {
+        return;
+      }
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      ws.removeListener('message', onMessage);
+      resolve(message);
+    }
+    ws.on('message', onMessage);
+  });
+}
+
+async function setCatalogOwnerArmed(ws, armed) {
+  const acknowledged = waitForControl(ws, message => message.type === 'touchControlArmedAck'
+    && message.ownerId === INSTRUMENT_CATALOG_OWNER && message.armed === armed);
+  ws.send(JSON.stringify({
+    type: 'touchControlArmed',
+    ownerId: INSTRUMENT_CATALOG_OWNER,
+    armed,
+  }));
+  await acknowledged;
+}
+
+async function armCatalogOwner(ws) {
+  const welcomed = waitForControl(ws, message => message.type === 'touchControlHelloAck'
+    && message.ownerId === INSTRUMENT_CATALOG_OWNER);
+  ws.send(JSON.stringify({ type: 'touchControlHello', ownerId: INSTRUMENT_CATALOG_OWNER }));
+  await welcomed;
+  await setCatalogOwnerArmed(ws, true);
+}
 
 before(async () => {
   h.spawnEngine();
@@ -68,6 +144,12 @@ before(async () => {
     ],
   });
   assert.equal(created.status, 200, JSON.stringify(created.data));
+
+  const catalogCreated = await h.api('POST', '/playlists', {
+    name: CATALOG_PLAYLIST_NAME,
+    entries: TITANIC_AMBIENT.entries,
+  });
+  assert.equal(catalogCreated.status, 200, JSON.stringify(catalogCreated.data));
 });
 
 after(async () => {
@@ -174,5 +256,57 @@ test('bare {pattern} still stages at pattern code defaults (regression guard)', 
   const staged = response.data.localControls;
   for (const [name, value] of Object.entries(CODE_DEFAULTS)) {
     assert.equal(staged[name], value, `${name} must be at its pattern code default`);
+  }
+});
+
+test('every authoritative Titanic ambient entry resolves and stages through the Live Touch catalog path', async () => {
+  for (const entry of TITANIC_AMBIENT.entries) {
+    assert.equal(typeof entry.id, 'string', 'each dropdown entry needs a stable id');
+    assert.equal(typeof entry.pattern, 'string', `entry '${entry.id}' needs a pattern`);
+    assert.ok(fs.existsSync(path.join(h.engineDir, 'patterns', `${entry.pattern}.js`)),
+      `ambient entry '${entry.id}' points at a missing source '${entry.pattern}'`);
+
+    const response = await h.api('PUT', '/layers/live_touch/pattern', {
+      pattern: entry.pattern,
+      playlist: CATALOG_PLAYLIST_NAME,
+      entryId: entry.id,
+    });
+    assert.equal(response.status, 200,
+      `${entry.id} (${entry.pattern}) must compile and stage: ${JSON.stringify(response.data)}`);
+    assert.equal(response.data.pattern, entry.pattern);
+    assert.ok(response.data.localControls,
+      `${entry.id} must return the entry-backed local controls used by the UI reconciliation`);
+    for (const [control, value] of Object.entries(entry.defaults || {})) {
+      assert.equal(response.data.localControls[control], value,
+        `${entry.id} must apply its authoritative '${control}' default`);
+    }
+  }
+});
+
+test('every mapped instrument pattern compiles and stages through the armed Live owner API', async () => {
+  const ws = await openControlWs();
+  const ownerHeaders = { 'X-Touch-Control-Owner': INSTRUMENT_CATALOG_OWNER };
+  let armed = false;
+  try {
+    await armCatalogOwner(ws);
+    armed = true;
+
+    for (const pattern of INSTRUMENT_PATTERNS) {
+      assert.ok(fs.existsSync(path.join(h.engineDir, 'patterns', `${pattern}.js`)),
+        `mapped instrument '${pattern}' points at a missing pattern source`);
+
+      const response = await h.api('PUT', '/layers/live_touch/pattern', { pattern }, ownerHeaders);
+      assert.equal(response.status, 200,
+        `${pattern} must compile and stage through the owner API: ${JSON.stringify(response.data)}`);
+      assert.equal(response.data.status, 'ok', `${pattern} must stage without a hidden transition`);
+      assert.equal(response.data.pattern, pattern,
+        `${pattern} must be the engine's actual staged background pattern`);
+      assert.equal(response.data.targetPattern, pattern,
+        `${pattern} must be the engine's target pattern (no fallback/substitution)`);
+      assert.equal(response.data.transitionId, null, `${pattern} must not report a stale transition`);
+    }
+  } finally {
+    if (armed) await setCatalogOwnerArmed(ws, false);
+    ws.close();
   }
 });

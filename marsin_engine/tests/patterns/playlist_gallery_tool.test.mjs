@@ -14,14 +14,96 @@ import {
   encodeVideoFramesWithFfmpeg,
   galleryManifestMeetsCampaignContract,
   publishGallery,
+  renderTitanicHullCoverageFrames,
   resolveGalleryPalette,
+  TITANIC_OPERATOR_HULL_REGIONS,
   titanicSmokeStackIndices,
   validateSavedDefaults,
 } from '../../tools/playlist_gallery/generate.mjs';
+import { pixels as titanicPixels } from '../../models/titanic.js';
+import { TITANIC_REGION_NAMES } from '../../tools/titanic_model/regions.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.resolve(HERE, '..', '..');
 const REPO_DIR = path.resolve(ENGINE_DIR, '..');
+
+test('Titanic wall diagnostic uses operator position, not legacy scene side labels', () => {
+  assert.deepEqual(TITANIC_OPERATOR_HULL_REGIONS, [
+    'Right Front Wall',
+    'Right Back Wall',
+    'Left Front Wall',
+    'Left Back Wall',
+  ]);
+});
+
+test('Titanic wall diagnostic renders and fails loud on a missing named wall', () => {
+  const capture = {
+    meta: titanicPixels,
+    frames: [titanicPixels.map((pixel) => pixel.group.includes('Wall')
+      ? [255, 64, 0]
+      : [0, 0, 0])],
+  };
+  const rendered = renderTitanicHullCoverageFrames(capture);
+  assert.equal(rendered.width, 1440);
+  assert.equal(rendered.height, 330);
+  assert.equal(rendered.frames.length, 1);
+  assert.equal(rendered.frames[0].length, 1440 * 330 * 3);
+
+  assert.throws(() => renderTitanicHullCoverageFrames({
+    ...capture,
+    meta: capture.meta.filter((pixel) => pixel.group !== 'Left Front Wall'),
+  }), /Left Front Wall requires 90 pixels/);
+});
+
+test('Ambient gallery carries Crisp autoplay evidence for every named hull wall', () => {
+  const galleryDir = path.join(
+    REPO_DIR, 'docs', 'pattern_gallery', 'playlists', 'titanic', 'ambient',
+  );
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(galleryDir, 'manifest.json'), 'utf8',
+  ));
+  const playlist = yaml.load(fs.readFileSync(
+    path.join(REPO_DIR, 'simulation', 'scenes', 'titanic', 'playlists', 'ambient.yaml'),
+    'utf8',
+  ));
+  assert.equal(manifest.items.length, playlist.entries.length);
+  assert.equal(typeof manifest.modelRegionIntentDigest, 'string');
+  assert.equal(manifest.modelRegionIntentDigest.length, 64);
+  const crispItems = manifest.items.filter((item) => item.pattern.startsWith('crisp/'));
+  assert.equal(crispItems.length, 6);
+  for (const item of crispItems) {
+    assert.ok(item.modelRegionIntent, `${item.pattern}: missing model-region intent`);
+    assert.deepEqual(
+      item.modelRegionIntent.region_treatments.flatMap((entry) => entry.regions).sort(),
+      [...TITANIC_REGION_NAMES].sort(),
+    );
+    assert.ok(fs.existsSync(path.join(galleryDir, 'coverage_gifs', item.coverageGif)),
+      `${item.pattern}: coverage GIF missing`);
+    assert.ok(fs.existsSync(path.join(galleryDir, 'coverage_videos', item.coverageVideo)),
+      `${item.pattern}: coverage video missing`);
+    assert.equal(item.parameterSweepSegments.length, item.controls.length * 3,
+      `${item.pattern}: every control needs min/mid/max sweep segments`);
+    assert.deepEqual(
+      [...new Set(item.parameterSweepSegments.map((segment) => segment.value))],
+      [0, 0.5, 1],
+      `${item.pattern}: parameter sweep values drifted`,
+    );
+    assert.ok(fs.existsSync(path.join(
+      galleryDir, 'parameter_sweeps', item.parameterSweepVideo,
+    )), `${item.pattern}: parameter sweep video missing`);
+  }
+  assert.equal(fs.existsSync(path.join(
+    REPO_DIR, 'docs', 'pattern_gallery', 'playlists', 'titanic', 'crisp',
+  )), false);
+  const html = fs.readFileSync(path.join(galleryDir, 'index.html'), 'utf8');
+  for (const label of [
+    'LEFT FRONT · PORT BOW',
+    'LEFT BACK · PORT STERN',
+    'RIGHT FRONT · STARBOARD BOW',
+    'RIGHT BACK · STARBOARD STERN',
+  ]) assert.match(html, new RegExp(label));
+  assert.match(html, /Every slider at minimum · midpoint · maximum/);
+});
 
 test('playlist gallery encoder emits a GIF89a stream with exact dimensions', () => {
   const frame = Buffer.from([
@@ -118,56 +200,66 @@ test('the baby tease gallery autoplays every preview and exposes manual controls
   assert.match(html, /data-action="seek"/);
 });
 
-// The Baby show is THREE playlists — an outcome-blind tease plus two manual
-// answers — and the galleries are how a teammate reviews them without the rig.
-// The contract that matters here is SEPARATION: the tease gallery must not show
-// an answer, because a reviewer scrolling it before the party would learn the
-// outcome from the page. A single combined `baby_reveal` gallery (which is what
-// used to live here) cannot express that, which is why it is asserted gone.
+// The Baby show is now TWO playlists (docs/73 — the Baby Reveal unification
+// retired the boy/girl twin answer playlists in favour of one colour-blind
+// `baby_reveal` playlist), and the galleries are how a teammate reviews them
+// without the rig. The contract that matters here is SEPARATION: the tease
+// gallery must not show an answer, because a reviewer scrolling it before the
+// party would learn the outcome from the page.
+//
+// NOTE ON SCOPE: this test used to also compare the `baby_girl`/`baby_boy`
+// galleries against the tease. Those playlists and their pattern source
+// (`patterns/baby/`) are retired and deleted — `playlistEntryCount('baby_girl')`
+// now throws ENOENT, which is exactly what caught this test needing a rework.
+// `patterns/baby_reveal/*.js` (the replacement family) is being authored by a
+// concurrent wave (docs/73) and its gallery has not been regenerated yet —
+// generating it needs the palette armed (`patterns/baby_reveal/README.md`
+// "The palette-carrier contract"), which is out of scope for a plumbing-only
+// pass. So this test is narrowed to what it can still assert today: the tease
+// gallery's own shape, and that it still answers nothing. A `baby_reveal`
+// gallery gets its own coverage here once it exists and is regenerated —
+// tracked as a TODO rather than silently dropped.
+//
 // Counts are DERIVED from the playlist the gallery was generated from, never
-// hardcoded: the tease is meant to grow past 20 looks (operator, 2026-08-15) and a
-// frozen 15 here would turn every new tease pattern into a test edit. What stays
-// pinned is that the gallery renders the playlist WHOLE — a generator that quietly
-// dropped an entry is exactly what this catches.
-test('split baby galleries expose the outcome-blind tease and manual answers', () => {
+// hardcoded: the tease is deliberately curated, so changing its keeper count
+// should not require changing this assertion. What stays pinned is that the
+// gallery renders the playlist WHOLE — a generator that quietly dropped an
+// entry is exactly what this catches.
+test('the tease gallery exposes the outcome-blind tease and answers nothing', () => {
   const tease = babyGallery('baby_tease');
-  const girl = babyGallery('baby_girl');
-  const boy = babyGallery('baby_boy');
 
-  for (const [name, gallery, prefix] of [
-    ['baby_tease', tease, 'tease'],
-    ['baby_girl', girl, 'girl'],
-    ['baby_boy', boy, 'boy'],
-  ]) {
-    assert.equal(gallery.manifest.playlist, name);
-    const expected = playlistEntryCount(name);
-    assert.equal(gallery.manifest.items.length, expected,
-      `${name} gallery renders ${gallery.manifest.items.length} looks but the playlist ` +
-      `lists ${expected} — regenerate the gallery`);
-    for (const item of gallery.manifest.items) {
-      assert.match(item.pattern, new RegExp(`^baby/\\d\\d+_${prefix}_`),
-        `${name} gallery renders "${item.pattern}", which is not a ${prefix} pattern`);
-      // Qualified ids keep their slash in the DATA and lose it only in the
-      // generated media FILENAME.
-      assert.ok(item.pattern.includes('/'), `${name}: pattern id must stay qualified`);
-      assert.ok(!item.gif.includes('/') && !item.video.includes('/'),
-        `${name}: media filename must not carry the directory separator`);
-      assert.ok(fs.existsSync(path.join(gallery.dir, 'gifs', item.gif)), `${name}: missing ${item.gif}`);
-      assert.ok(fs.existsSync(path.join(gallery.dir, 'videos', item.video)), `${name}: missing ${item.video}`);
-    }
+  const name = 'baby_tease';
+  const idShape = /^baby_tease\/\d\d+_/;
+  assert.equal(tease.manifest.playlist, name);
+  const expected = playlistEntryCount(name);
+  assert.equal(tease.manifest.items.length, expected,
+    `${name} gallery renders ${tease.manifest.items.length} looks but the playlist ` +
+    `lists ${expected} — regenerate the gallery`);
+  for (const item of tease.manifest.items) {
+    assert.match(item.pattern, idShape,
+      `${name} gallery renders "${item.pattern}", which is not a ${name} pattern`);
+    // Qualified ids keep their slash in the DATA and lose it only in the
+    // generated media FILENAME.
+    assert.ok(item.pattern.includes('/'), `${name}: pattern id must stay qualified`);
+    assert.ok(!item.gif.includes('/') && !item.video.includes('/'),
+      `${name}: media filename must not carry the directory separator`);
+    assert.ok(fs.existsSync(path.join(tease.dir, 'gifs', item.gif)), `${name}: missing ${item.gif}`);
+    assert.ok(fs.existsSync(path.join(tease.dir, 'videos', item.video)), `${name}: missing ${item.video}`);
   }
 
-  // The tease answers nothing: no girl or boy pattern appears on its page, and
-  // neither answer playlist is linked from it.
-  assert.match(tease.html, /Baby Tease - Orbit Question/);
+  // The tease answers nothing: no reveal pattern appears on its page.
+  // The tease playlist's first entry (docs/72 §7 arc: calm -> curious ->
+  // kinetic). This names a real look on purpose — a curation that retires it
+  // must update this line, which is the point: the assertion should notice.
+  assert.match(tease.html, /Baby Tease - Bullseye Tide/);
   assert.doesNotMatch(tease.html, /\d\d_girl_|\d\d_boy_/);
-  assert.doesNotMatch(tease.html, /Baby (Girl|Boy) -/);
-
-  assert.match(girl.html, /Baby Girl - Orbit Glow/);
-  assert.match(boy.html, /Baby Boy - Orbit Glow/);
-  assert.doesNotMatch(girl.html, /\d\d_boy_/);
-  assert.doesNotMatch(boy.html, /\d\d_girl_/);
+  assert.doesNotMatch(tease.html, /Baby (Girl|Boy|Reveal) -/);
 });
+
+// TODO(baby_reveal gallery): once patterns/baby_reveal/*.js exist and the
+// gallery is regenerated with the palette armed (see README), add a sibling
+// assertion here pinning its id shape to /^baby_reveal\/\d\d+_/ and its
+// entry count to the playlist, matching the tease coverage above.
 
 // `baby_reveal` is the SPECIAL EVENT show id. A playlist gallery under that name
 // would mean the word has two meanings again, which is the confusion that put

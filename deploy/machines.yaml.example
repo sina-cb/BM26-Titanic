@@ -21,7 +21,6 @@ machines:
     scene: test_bench
     pattern: 00_golden_hour_wash
     profile: prod
-    open_browser: true
     dest: C:\titanic\BM26-Titanic
     share: \\192.0.2.10\titanic
     share_root: C:\titanic

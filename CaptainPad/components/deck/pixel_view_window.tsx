@@ -10,15 +10,15 @@
  *
  * ── WHY A RAW CANVAS ────────────────────────────────────────────────────────
  *
- * 720 glyphs repainted at the engine's vis cadence. Every React-shaped option
+ * 768 glyphs repainted at the engine's vis cadence. Every React-shaped option
  * loses here: an RN <View> per pixel is the exact pattern the engine's own vis
  * cap exists to prevent (see the comment at marsin_engine/engine.js ~750), and
- * 720 react-native-svg <Rect>es means 720 reconciled nodes per frame. So the
+ * 768 react-native-svg <Rect>es means 768 reconciled nodes per frame. So the
  * frame path touches React ZERO times: the subscriber writes into a ref and
  * calls an imperative draw against a 2D context. React re-renders this
  * component only when the artifact loads, the view changes, or an error does.
  *
- * Measured on the live rig (titanic, 720 glyphs, 5 Hz): see the report.
+ * Measured on the live rig (titanic, full-rate glyph canvas at 5 Hz): see the report.
  *
  * ── NATIVE FIRST, THEN THE BROWSER ──────────────────────────────────────────
  *

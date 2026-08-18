@@ -2,45 +2,32 @@
 /*
   01_orbiting_circle.js - ORBITING CIRCLE
 
-  CONCEPT
-    Up to five solid circular fireflies wander through the normalized X/Z
-    plane on deterministic, incommensurate cosine/sine orbits. Their main
-    bodies and finite geometric echoes retain hard black gaps and sharp
-    antialiased edges. There is no backbuffer and no per-pixel allocation.
+  Two aspect-corrected planetary discs and one satellite travel around a
+  common focus. Filled endpoint-color bodies carry moving nested cartographic
+  contours; black moats, analytic rims, and deterministic eclipse seams keep
+  the circles legible on Titanic's sparse physical map.
 
-  DISCRETE COLOR CONTRACT
-    Every RGB pixel is a scalar multiple of exactly palette endpoint 1 or
-    exactly palette endpoint 2. Overlaps use a deterministic winner; neither
-    body intersections nor antialiasing ever interpolate RGB between endpoints.
-    W=A=U=0 everywhere. Safety Floor is also endpoint-colored, never neutral.
+  FIX_BAR_18     - filled planetary bodies, moats, and eclipses.
+  FIX_RAW_LED    - circle rims and eclipse seams only.
+  FIX_VINTAGE_6  - at most two dim conjunction markers per rail.
+  FIX_PAR        - sparse mass anchors only when a body is present.
+  FIX_TE_SIGN    - two complete complementary local-74 orbit diagrams.
 
-  INSTRUMENT STAGING
-    FIX_BAR_18     - large filled X/Z circles and finite echoes on the Hull.
-    FIX_RAW_LED    - sharp circle rims and body intersections on Silhouette.
-    FIX_VINTAGE_6  - one sparse moving exact-color pearl per six-head fixture.
-    FIX_PAR        - low, steady endpoint anchors reinforced by nearby bodies.
-    FIX_TE_SIGN    - paired local 10x8/74-pixel orbit plaques, using index%74.
+  Every lit RGB pixel is a scalar multiple of exactly one palette endpoint.
+  Black is structural; W=A=U=0. There is no random/noise or render allocation.
 
-  MOTION / MATH
-    Each body combines a primary orbit with sqrt(2), sqrt(3), and phi wobble.
-    Spacing changes the inter-body phase fan. Trail adds up to two smaller
-    earlier-phase circles with explicit gaps rather than temporal feedback.
-
-  CONTROLS (declaration order = physical MIDI order)
-    localSpeed  - cadence of every body and finite echo.
-    bodyRadius  - radius of the solid antialiased circles.
-    count       - one through five active circular bodies.
-    spacing     - angular separation and radial fan between bodies.
-    trail       - separation, size, and count of finite geometric echoes.
-    safetyFloor - black at zero, endpoint-colored minimum visibility above it.
-
-  Static (unmapped) params: all controls and colorPalette1/2.
+  AUDIO_MODULATION_V1:
+    sliderBodyRadius <- micLow range 0.38..0.72 curve ease # bass increases planetary mass
+    sliderSpacing <- micMid range 0.30..0.78 curve linear # mids open orbital eccentricity
+    sliderTrail <- micFlux range 0.18..0.62 curve ease # flux widens the black eclipse moat
+    sliderCount <- micKick range 0.00..1.00 curve pow2 # kicks introduce the satellite
+  Static (unmapped) params: localSpeed, safetyFloor, colorPalette1/2.
 */
 
 export var cp1H = 0.040, cp1S = 1.00, cp1V = 1.00;
 export var cp2H = 0.520, cp2S = 1.00, cp2V = 1.00;
-export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
-export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+export function colorPalette1(hv, sv, vv) { cp1H = hv; cp1S = sv; cp1V = vv; }
+export function colorPalette2(hv, sv, vv) { cp2H = hv; cp2S = sv; cp2V = vv; }
 
 export var localSpeed = 0.30;
 export var bodyRadius = 0.56;
@@ -49,33 +36,32 @@ export var spacing = 0.58;
 export var trail = 0.46;
 export var safetyFloor = 0.00;
 
-export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderBodyRadius(v) { bodyRadius = v; }
-export function sliderCount(v) { count = v; }
-export function sliderSpacing(v) { spacing = v; }
-export function sliderTrail(v) { trail = v; }
-export function sliderSafetyFloor(v) { safetyFloor = v; }
+export function sliderLocalSpeed(value) { localSpeed = value; }
+export function sliderBodyRadius(value) { bodyRadius = value; }
+export function sliderCount(value) { count = value; }
+export function sliderSpacing(value) { spacing = value; }
+export function sliderTrail(value) { trail = value; }
+export function sliderSafetyFloor(value) { safetyFloor = value; }
 
-var SQRT2 = 1.41421356;
-var SQRT3 = 1.73205081;
-var PHI = 1.61803399;
+var PI2_VALUE = 6.28318530718;
 var GOLDEN_FRACTION = 0.61803399;
-var PHASE_WRAP = 10000.0;
-var BODY_LIMIT = 5;
-var ECHO_LIMIT = 3;
+var BODY_COUNT = 3;
+var ASPECT_X = 1.72;
 
-// Five bodies x one head plus two finite echoes. Allocated once at load.
-var bodyX = array(15);
-var bodyZ = array(15);
+var bodyX = array(3);
+var bodyZ = array(3);
+var bodySize = array(3);
 
-var orbitPhase = 0.137;
-var activeBodies = 3;
-var liveBodyRadius = 0.56;
+var storyPhase = 0.0;
+var detailPhase = 0.0;
+var liveRadius = 0.56;
+var liveCount = 0.50;
 var liveSpacing = 0.58;
-var liveTrail = 0.46;
-var liveSafetyFloor = 0.00;
-var circleRadius = 0.15;
-var echoGap = 0.08;
+var authoredSpacing = 0.58;
+var liveMoat = 0.46;
+var liveSilhouette = 0.00;
+var activeBodies = 3.0;
+var eclipseEnvelope = 0.0;
 
 var pr1 = 1.0, pg1 = 0.0, pb1 = 0.0;
 var pr2 = 0.0, pg2 = 1.0, pb2 = 1.0;
@@ -86,87 +72,91 @@ function clamp01(value) {
   return value;
 }
 
+function smoother(lowValue, highValue, value) {
+  var amount = clamp01((value - lowValue) / (highValue - lowValue));
+  return amount * amount * amount * (amount * (amount * 6.0 - 15.0) + 10.0);
+}
+
+function windowEnvelope(value, riseStart, riseEnd, fallStart, fallEnd) {
+  return smoother(riseStart, riseEnd, value)
+       * (1.0 - smoother(fallStart, fallEnd, value));
+}
+
 function _hsv2rgb1() {
-  var hv = cp1H - floor(cp1H); if (hv < 0.0) hv += 1.0;
-  var iv = floor(hv * 6.0) % 6.0;
-  var fv = hv * 6.0 - floor(hv * 6.0);
-  var pv = cp1V * (1.0 - cp1S);
-  var qv = cp1V * (1.0 - fv * cp1S);
-  var tv = cp1V * (1.0 - (1.0 - fv) * cp1S);
-  if      (iv == 0.0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
-  else if (iv == 1.0) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
-  else if (iv == 2.0) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
-  else if (iv == 3.0) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
-  else if (iv == 4.0) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
-  else                 { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
+  var hueValue = cp1H - floor(cp1H); if (hueValue < 0.0) hueValue += 1.0;
+  var sectorValue = floor(hueValue * 6.0) % 6.0;
+  var fractionValue = hueValue * 6.0 - floor(hueValue * 6.0);
+  var lowValue = cp1V * (1.0 - cp1S);
+  var downValue = cp1V * (1.0 - fractionValue * cp1S);
+  var upValue = cp1V * (1.0 - (1.0 - fractionValue) * cp1S);
+  if      (sectorValue == 0.0) { pr1 = cp1V; pg1 = upValue;   pb1 = lowValue;  }
+  else if (sectorValue == 1.0) { pr1 = downValue; pg1 = cp1V; pb1 = lowValue;  }
+  else if (sectorValue == 2.0) { pr1 = lowValue; pg1 = cp1V; pb1 = upValue;    }
+  else if (sectorValue == 3.0) { pr1 = lowValue; pg1 = downValue; pb1 = cp1V;  }
+  else if (sectorValue == 4.0) { pr1 = upValue; pg1 = lowValue; pb1 = cp1V;    }
+  else                          { pr1 = cp1V; pg1 = lowValue; pb1 = downValue;  }
 }
 
 function _hsv2rgb2() {
-  var hv = cp2H - floor(cp2H); if (hv < 0.0) hv += 1.0;
-  var iv = floor(hv * 6.0) % 6.0;
-  var fv = hv * 6.0 - floor(hv * 6.0);
-  var pv = cp2V * (1.0 - cp2S);
-  var qv = cp2V * (1.0 - fv * cp2S);
-  var tv = cp2V * (1.0 - (1.0 - fv) * cp2S);
-  if      (iv == 0.0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
-  else if (iv == 1.0) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
-  else if (iv == 2.0) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
-  else if (iv == 3.0) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
-  else if (iv == 4.0) { pr2 = tv;   pg2 = pv;   pb2 = qv;   }
-  else                 { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
-}
-
-function circleFill(distanceValue, radiusValue, edgeValue) {
-  return 1.0 - smoothstep(radiusValue - edgeValue,
-                          radiusValue + edgeValue, distanceValue);
-}
-
-function circleRim(distanceValue, radiusValue, edgeValue) {
-  return 1.0 - smoothstep(edgeValue * 0.45, edgeValue * 2.25,
-                          abs(distanceValue - radiusValue));
+  var hueValue = cp2H - floor(cp2H); if (hueValue < 0.0) hueValue += 1.0;
+  var sectorValue = floor(hueValue * 6.0) % 6.0;
+  var fractionValue = hueValue * 6.0 - floor(hueValue * 6.0);
+  var lowValue = cp2V * (1.0 - cp2S);
+  var downValue = cp2V * (1.0 - fractionValue * cp2S);
+  var upValue = cp2V * (1.0 - (1.0 - fractionValue) * cp2S);
+  if      (sectorValue == 0.0) { pr2 = cp2V; pg2 = upValue;   pb2 = lowValue;  }
+  else if (sectorValue == 1.0) { pr2 = downValue; pg2 = cp2V; pb2 = lowValue;  }
+  else if (sectorValue == 2.0) { pr2 = lowValue; pg2 = cp2V; pb2 = upValue;    }
+  else if (sectorValue == 3.0) { pr2 = lowValue; pg2 = downValue; pb2 = cp2V;  }
+  else if (sectorValue == 4.0) { pr2 = upValue; pg2 = lowValue; pb2 = cp2V;    }
+  else                          { pr2 = cp2V; pg2 = lowValue; pb2 = downValue;  }
 }
 
 export function beforeRender(delta) {
-  var dt = delta / 1000.0;
-  if (dt < 0.0) dt = 0.0;
-  if (dt > 0.1) dt = 0.1;
+  var deltaSeconds = clamp(delta / 1000.0, 0.0, 0.1);
+  var followAmount = min(1.0, deltaSeconds * 7.0);
+  liveRadius += (clamp01(bodyRadius) - liveRadius) * followAmount;
+  liveCount += (clamp01(count) - liveCount) * followAmount;
+  liveSpacing += (clamp01(spacing) - liveSpacing) * followAmount;
+  liveMoat += (clamp01(trail) - liveMoat) * followAmount;
+  liveSilhouette += (clamp01(safetyFloor) - liveSilhouette) * followAmount;
+  authoredSpacing = clamp01(0.58 + (liveSpacing - 0.58) * 1.65);
 
-  var follow = min(1.0, dt * 6.0);
-  liveBodyRadius += (clamp01(bodyRadius) - liveBodyRadius) * follow;
-  liveSpacing += (clamp01(spacing) - liveSpacing) * follow;
-  liveTrail += (clamp01(trail) - liveTrail) * follow;
-  liveSafetyFloor += (clamp01(safetyFloor) - liveSafetyFloor) * follow;
-  activeBodies = 1.0 + floor(clamp01(count) * 4.999);
+  var speedMultiplier = pow(2.0, (clamp01(localSpeed) - 0.5) * 4.0);
+  var phaseStep = deltaSeconds * (0.28 + speedMultiplier * 0.14);
+  storyPhase += phaseStep;
+  if (storyPhase >= 1.0) storyPhase -= 1.0;
+  detailPhase += phaseStep;
+  if (detailPhase >= 10.0) detailPhase -= 10.0;
 
-  var localMultiplier = pow(2.0, (clamp01(localSpeed) - 0.5) * 4.0);
-  orbitPhase += dt * (0.045 + localMultiplier * 0.100);
-  if (orbitPhase >= PHASE_WRAP) orbitPhase -= PHASE_WRAP;
+  // Count is literal: low selects one primary, middle adds its peer, and the
+  // upper range introduces the satellite. The saved .50 composition remains
+  // the complete two-disc-plus-satellite hierarchy.
+  if (liveCount < 0.18) activeBodies = 1.0;
+  else if (liveCount < 0.44) activeBodies = 2.0;
+  else activeBodies = 3.0;
+  eclipseEnvelope = windowEnvelope(storyPhase, 0.25, 0.38, 0.62, 0.78);
 
-  circleRadius = 0.070 + liveBodyRadius * 0.185;
-  echoGap = 0.040 + liveTrail * 0.145;
-  var spacingPhase = 0.105 + liveSpacing * 0.185;
-  var orbitRadius = 0.205 + liveSpacing * 0.155;
+  var orbitAngle = storyPhase * PI2_VALUE;
+  var orbitSpread = 0.15 + authoredSpacing * 0.12;
+  var approach = eclipseEnvelope * (0.08 + authoredSpacing * 0.05);
+  var focusX = 0.5 + 0.025 * sin(orbitAngle * 2.0);
+  var focusZ = 0.5 + 0.035 * cos(orbitAngle);
 
-  var bodyIndex = 0;
-  for (bodyIndex = 0; bodyIndex < BODY_LIMIT; bodyIndex = bodyIndex + 1.0) {
-    var echoIndex = 0;
-    for (echoIndex = 0; echoIndex < ECHO_LIMIT; echoIndex = echoIndex + 1.0) {
-      var slot = bodyIndex * ECHO_LIMIT + echoIndex;
-      var echoPhase = orbitPhase - echoIndex * echoGap;
-      var bodyPhase = echoPhase * (1.0 + bodyIndex * 0.073)
-                    + bodyIndex * spacingPhase;
-      var wobblePhase = echoPhase * (SQRT2 + bodyIndex * 0.061)
-                      - bodyIndex * spacingPhase * 0.73;
-      var angleA = bodyPhase * PI2;
-      var angleB = wobblePhase * PI2;
-      var radialFan = orbitRadius * (0.82 + bodyIndex * 0.045);
-      bodyX[slot] = 0.5 + radialFan
-        * (0.78 * cos(angleA) + 0.18 * cos(angleB * PHI + bodyIndex));
-      bodyZ[slot] = 0.5 + radialFan
-        * (0.72 * sin(angleA * SQRT2 + bodyIndex * 0.31)
-         + 0.20 * sin(angleB * SQRT3));
-    }
-  }
+  bodyX[0] = focusX + (orbitSpread - approach) * cos(orbitAngle);
+  bodyZ[0] = focusZ + (0.11 + authoredSpacing * 0.055 - approach * 0.45)
+    * sin(orbitAngle);
+  bodyX[1] = focusX + (orbitSpread * 0.92 - approach) * cos(orbitAngle + PI);
+  bodyZ[1] = focusZ + (0.10 + authoredSpacing * 0.050 - approach * 0.40)
+    * sin(orbitAngle + PI);
+
+  var satelliteAngle = orbitAngle * 2.0 + PI * 0.35;
+  bodyX[2] = bodyX[0] + (0.085 + authoredSpacing * 0.035) * cos(satelliteAngle);
+  bodyZ[2] = bodyZ[0] + (0.095 + authoredSpacing * 0.030) * sin(satelliteAngle);
+
+  bodySize[0] = 0.145 + liveRadius * 0.115;
+  bodySize[1] = 0.132 + liveRadius * 0.108;
+  bodySize[2] = 0.072 + liveRadius * 0.064;
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -176,128 +166,147 @@ export function render3D(index, x, y, z) {
   var geometryX = clamp01(x);
   var geometryZ = clamp01(z);
   var isIdentity = fixtureType == FIX_TE_SIGN;
+  var signPair = 0.0;
+
   if (isIdentity) {
-    // Each physical sign is a 40+34 fixture pair. Folding the global address
-    // authors one complete 74-pixel surface instead of repeating 0..33.
-    var signIndex = index % 74.0;
-    geometryX = (signIndex % 10.0) / 9.0;
-    geometryZ = floor(signIndex / 10.0) / 7.0;
+    var localAddress = index % 74.0;
+    signPair = floor(index / 74.0) % 2.0;
+    geometryX = (localAddress % 10.0) / 9.0;
+    geometryZ = floor(localAddress / 10.0) / 7.0;
   }
 
-  var edge = 0.009;
-  var roleRadius = circleRadius;
-  if (isIdentity) {
-    edge = 0.026;
-    roleRadius = 0.095 + liveBodyRadius * 0.070;
-  }
+  var moatWidth = 0.018 + liveMoat * 0.040;
+  var edgeWidth = isIdentity ? 0.035 : 0.012;
+  var bestNormalized = 100.0;
+  var secondNormalized = 100.0;
+  var bestBody = 0.0;
+  var bestDistance = 100.0;
+  var bestRadius = 0.1;
+  var bestDeltaX = 0.0;
+  var bestDeltaZ = 0.0;
+  var bodyIndex = 0.0;
 
-  var winnerEnergy = 0.0;
-  var winnerBody = 0.0;
-  var boundaryEnergy = 0.0;
-  var strongestCore = 0.0;
-  var secondCore = 0.0;
-  var bodyIndex = 0;
-
-  for (bodyIndex = 0; bodyIndex < BODY_LIMIT; bodyIndex = bodyIndex + 1.0) {
+  for (bodyIndex = 0.0; bodyIndex < BODY_COUNT; bodyIndex = bodyIndex + 1.0) {
     if (bodyIndex < activeBodies) {
-      var slot = bodyIndex * ECHO_LIMIT;
-      var centerX = bodyX[slot];
-      var centerZ = bodyZ[slot];
+      var centerX = bodyX[bodyIndex];
+      var centerZ = bodyZ[bodyIndex];
+      var radiusValue = bodySize[bodyIndex];
       if (isIdentity) {
-        centerX = 0.5 + (centerX - 0.5) * 0.88;
-        centerZ = 0.5 + (centerZ - 0.5) * 0.88;
-      }
-      var dx = geometryX - centerX;
-      var dz = geometryZ - centerZ;
-      var distanceValue = sqrt(dx * dx + dz * dz);
-      var bodyCore = circleFill(distanceValue, roleRadius, edge);
-      var bodyEnergy = bodyCore;
-      var bodyRim = circleRim(distanceValue, roleRadius, edge);
-
-      var echoIndex = 1;
-      for (echoIndex = 1; echoIndex < ECHO_LIMIT; echoIndex = echoIndex + 1.0) {
-        slot = bodyIndex * ECHO_LIMIT + echoIndex;
-        centerX = bodyX[slot];
-        centerZ = bodyZ[slot];
-        if (isIdentity) {
-          centerX = 0.5 + (centerX - 0.5) * 0.88;
-          centerZ = 0.5 + (centerZ - 0.5) * 0.88;
-        }
-        dx = geometryX - centerX;
-        dz = geometryZ - centerZ;
-        distanceValue = sqrt(dx * dx + dz * dz);
-
-        var echoStrength = liveTrail;
-        var echoScale = 0.60 + liveTrail * 0.10;
-        if (echoIndex == 2.0) {
-          echoStrength = clamp01((liveTrail - 0.18) * 1.22);
-          echoScale = 0.47 + liveTrail * 0.09;
-        }
-        var echoRadius = roleRadius * echoScale;
-        var echoEnergy = circleFill(distanceValue, echoRadius, edge)
-                       * echoStrength;
-        bodyEnergy = max(bodyEnergy, echoEnergy);
-        bodyRim = max(bodyRim,
-          circleRim(distanceValue, echoRadius, edge) * echoStrength);
+        var signDirection = signPair ? -1.0 : 1.0;
+        var signAngle = storyPhase * PI2_VALUE * signDirection
+                      + signPair * PI;
+        var signOrbit = bodyIndex < 2.0 ? 0.22 : 0.12;
+        var signPhase = signAngle + bodyIndex * PI * 0.92;
+        centerX = 0.5 + signOrbit * cos(signPhase);
+        centerZ = 0.5 + signOrbit * 0.82 * sin(signPhase);
+        radiusValue = bodyIndex < 2.0
+          ? 0.145 + liveRadius * 0.045
+          : 0.085 + liveRadius * 0.025;
       }
 
-      if (bodyCore > strongestCore) {
-        secondCore = strongestCore;
-        strongestCore = bodyCore;
-      } else if (bodyCore > secondCore) {
-        secondCore = bodyCore;
-      }
-      boundaryEnergy = max(boundaryEnergy, bodyRim);
-      if (bodyEnergy > winnerEnergy) {
-        winnerEnergy = bodyEnergy;
-        winnerBody = bodyIndex;
+      var deltaX = (geometryX - centerX) * (isIdentity ? 1.0 : ASPECT_X);
+      var deltaZ = geometryZ - centerZ;
+      var distanceValue = sqrt(deltaX * deltaX + deltaZ * deltaZ);
+      var normalizedDistance = distanceValue / radiusValue;
+      if (normalizedDistance < bestNormalized) {
+        secondNormalized = bestNormalized;
+        bestNormalized = normalizedDistance;
+        bestBody = bodyIndex;
+        bestDistance = distanceValue;
+        bestRadius = radiusValue;
+        bestDeltaX = deltaX;
+        bestDeltaZ = deltaZ;
+      } else if (normalizedDistance < secondNormalized) {
+        secondNormalized = normalizedDistance;
       }
     }
   }
 
-  var brightness = winnerEnergy;
-  var useColor2 = winnerBody % 2.0;
+  var brightness = 0.0;
+  var useColor2 = bestBody == 1.0;
+  var insideBody = bestDistance < bestRadius;
+  var insideMoat = bestDistance < bestRadius + moatWidth;
+  var bodyEdge = 1.0 - smoothstep(edgeWidth, edgeWidth * 2.8,
+    abs(bestDistance - bestRadius));
+  var moatEdge = 1.0 - smoothstep(edgeWidth * 0.7, edgeWidth * 2.2,
+    abs(bestDistance - bestRadius - moatWidth));
+
+  if (insideBody) {
+    var contourTurn = atan2(bestDeltaZ, bestDeltaX) / PI2_VALUE;
+    // Spacing opens both the orbital centers and the longitude packing inside
+    // each body. The saved .58 look remains exactly 4.2 bands.
+    var contourDensity = 4.2 + (authoredSpacing - 0.58) * 6.0;
+    var contourPhase = frac(2.0 + bestNormalized * contourDensity
+                          + contourTurn * 0.70
+                          - storyPhase * 2.0);
+    var contourDistance = abs(contourPhase - 0.5);
+    var contourRidge = 1.0 - smoothstep(0.045, 0.145, contourDistance);
+    brightness = bestNormalized < 0.34 ? 0.72 : 0.34;
+    brightness = max(brightness, contourRidge * 0.94);
+    if (contourDistance < 0.060 && bestNormalized > 0.34) brightness = 0.0;
+    brightness = max(brightness, bodyEdge * 0.86);
+  } else if (!insideMoat) {
+    brightness = moatEdge * 0.34;
+  }
+
+  var eclipseSeam = insideBody
+    * (1.0 - smoothstep(0.025, 0.085, abs(bestNormalized - secondNormalized)))
+    * eclipseEnvelope;
+  if (eclipseSeam > 0.18) brightness = 0.0;
+
+  // Every physical 18-pixel hull bar receives the same orbit-energy intent.
+  // This fixture-local moving meridian is deliberately subordinate to the
+  // world-space bodies: it prevents a side from disappearing when a sparse
+  // wall happens to sit outside both analytic discs, without becoming a wash.
+  if (fixtureType == FIX_BAR_18) {
+    var barOrbitCoordinate = frac(pixelLocalIndex / 18.0
+      + detailPhase * 1.30 + fixtureId * GOLDEN_FRACTION);
+    var barOrbitDistance = abs(barOrbitCoordinate - 0.5);
+    var barOrbitExtent = 0.105 + (0.58 - authoredSpacing) * 0.160;
+    var barOrbitMeridian = 1.0 - smoothstep(0.030, barOrbitExtent,
+      barOrbitDistance);
+    brightness = max(brightness, barOrbitMeridian
+      * (0.26 + eclipseEnvelope * 0.20));
+    if (barOrbitCoordinate > 0.5) useColor2 = 1.0;
+  }
 
   if (fixtureType == FIX_RAW_LED) {
-    // Silhouette keeps the analytic rim and reinforces true body crossings.
-    var intersection = sqrt(strongestCore * secondCore);
-    brightness = max(winnerEnergy * 0.24,
-                     max(boundaryEnergy, intersection));
+    var strandOrbitCoordinate = frac(11.0 + pixelLocalIndex / 40.0
+      - detailPhase * 1.10 + fixtureId * 0.137);
+    var strandOrbitDistance = abs(strandOrbitCoordinate - 0.5);
+    var strandOrbitExtent = 0.085 + (0.58 - authoredSpacing) * 0.140;
+    var strandMeridian = 1.0 - smoothstep(0.025, strandOrbitExtent,
+      strandOrbitDistance);
+    brightness = max(strandMeridian * 0.68,
+      max(bodyEdge * 0.84, moatEdge * 0.38));
+    if (eclipseSeam > 0.18) brightness = eclipseSeam * 0.72;
   } else if (fixtureType == FIX_VINTAGE_6) {
-    // One moving pearl per six-head rail; all pearls remain palette-exact RGB.
-    var pearlHead = floor((orbitPhase * 6.0
-                         + fixtureId * GOLDEN_FRACTION) % 6.0);
-    var pearlGate = pixelLocalIndex == pearlHead;
-    brightness = pearlGate
-      * (0.58 + 0.42 * wave(orbitPhase * 0.37
-                           + fixtureId * GOLDEN_FRACTION));
-    useColor2 = floor(fixtureId * GOLDEN_FRACTION
-                    + orbitPhase * 2.0) % 2.0;
+    var markerHead = floor((storyPhase * 6.0
+                          + fixtureId * GOLDEN_FRACTION) % 6.0);
+    var secondHead = (markerHead + 3.0) % 6.0;
+    var markerGate = pixelLocalIndex == markerHead;
+    var secondGate = pixelLocalIndex == secondHead;
+    var spatialGate = max(bodyEdge, eclipseSeam);
+    var conjunctionPulse = 0.20 + 0.14
+      * wave(detailPhase * 1.70 + fixtureId * 0.071);
+    brightness = markerGate * max(spatialGate * 0.34, conjunctionPulse)
+               + secondGate * eclipseSeam * 0.28;
   } else if (fixtureType == FIX_PAR) {
-    // Organs are the stable gravity anchors under the wandering circles.
-    brightness = 0.18 + winnerEnergy * 0.82;
+    var anchorCohort = floor(fixtureId + floor(storyPhase * 8.0)) % 4.0;
+    var anchorGate = anchorCohort == 0.0;
+    var anchorPressure = insideBody
+      * (bestNormalized < 0.62 ? 0.48 : 0.24);
+    brightness = anchorGate * max(0.24, anchorPressure);
   } else if (isIdentity) {
-    // A balanced local orbit track completes the paired 74-pixel plaques.
-    var signDx = geometryX - 0.5;
-    var signDz = geometryZ - 0.5;
-    var signRadius = sqrt(signDx * signDx + signDz * signDz);
-    var orbitTrack = 1.0 - smoothstep(0.018, 0.068,
-                                     abs(signRadius - 0.42));
-    if (orbitTrack * 0.58 > brightness) {
-      brightness = orbitTrack * 0.58;
-      useColor2 = (floor(geometryX * 4.0)
-                 + floor(geometryZ * 4.0)) % 2.0;
-    }
+    brightness = max(brightness, bodyEdge * 0.66);
   }
 
-  var floorLevel = liveSafetyFloor * 0.12;
-  if (brightness < floorLevel) {
-    brightness = floorLevel;
-    useColor2 = (floor(clamp01(x) * 8.0)
-               + floor(clamp01(z) * 8.0) + fixtureType) % 2.0;
+  if (fixtureType == FIX_RAW_LED && brightness < liveSilhouette * 0.16) {
+    brightness = liveSilhouette * 0.16;
+    useColor2 = signPair;
   }
+
   brightness = clamp01(brightness);
-
   if (useColor2) {
     rgbwau(pr2 * brightness, pg2 * brightness, pb2 * brightness,
            0.0, 0.0, 0.0);

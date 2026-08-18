@@ -102,6 +102,8 @@ test('layer settings API gates Live with ARM and owns both handback paths', asyn
     ownerId: null,
     ready: false,
     pattern: null,
+    patternTransition: null,
+    sessionRevision: 0,
   });
 
   let response = await h.api('POST', '/layers/activate', { target: 'unknown' });

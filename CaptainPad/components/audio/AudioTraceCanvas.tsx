@@ -39,29 +39,31 @@
 //      quadraticCurveTo wave/spectrum rendering). Touch-friendly sizing is
 //      driven by the caller.
 //
-// The component re-renders only itself (one setState of two path strings per
-// frame); the surrounding AUDIO body never re-renders on these frames.
+// The component re-renders only itself at the fixed trace publication cadence;
+// the surrounding AUDIO body never re-renders on these frames.
 
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { View } from 'react-native';
 import Svg, { Path, Line } from 'react-native-svg';
 
+import { advanceTraceClock } from '@/components/audio/audio_trace_logic';
+
 // Internal trace resolution. The ring buffer holds this many normalised
 // [0,1] samples; the rAF loop advances the head one slot per VISUAL step.
-// 360 matches the Companion's TRAIL constant so the on-screen density reads
-// the same. The SVG viewBox is fixed and the path scales to the rendered
-// width via preserveAspectRatio="none".
-const TRAIL_LEN = 360;
-const VIEW_W = 360;
+// 240 samples are enough for the narrow iPad cells and keep path generation
+// bounded when the Companion publishes dozens of signals. The SVG viewBox is
+// fixed and scales to the rendered width via preserveAspectRatio="none".
+const TRAIL_LEN = 240;
+const VIEW_W = 240;
 const VIEW_H = 100;
 
 // VISUAL advance cadence — how fast the trace scrolls left, in samples/sec.
 // Decoupled from BOTH the WS rate (15-30 Hz) and the device frame rate
 // (~60 fps): the rAF loop advances `head` by elapsed * ADVANCE_HZ each
 // frame, so the scroll speed is identical on a 60 Hz and a 120 Hz iPad and
-// independent of how often the network delivers a value. ~45/s fills the
-// 360-slot, ~10 s-equivalent buffer at a calm, readable pace.
-const ADVANCE_HZ = 45;
+// independent of how often the network delivers a value. 24/s fills the
+// 240-slot, 10 s-equivalent buffer at a calm, readable pace.
+const ADVANCE_HZ = 24;
 
 // Per-frame interpolation factor for the displayed value. Each frame the
 // shown value eases toward the latest WS target by this fraction — the
@@ -123,7 +125,7 @@ function buildPath(buf: Float32Array, head: number, close: boolean): string {
 
 // One smooth, filled, self-animating trace. Owns a ring buffer + an rAF loop;
 // reads the live target from refs the parent refreshes each render (cheap, no
-// hot-path state). Emits one setState (two path strings) per animation frame.
+// hot-path state). Emits one setState only when the fixed trace clock advances.
 export function AudioTraceCanvas({
   post, raw, color, background, gridColor, height, active,
 }: AudioTraceCanvasProps) {
@@ -148,8 +150,8 @@ export function AudioTraceCanvas({
   const lastTsRef = useRef(0);
 
   // The ONLY React state on the hot path: the two computed path strings. A
-  // setState per frame is cheap (string assignment + one <Path> d update) and
-  // is scoped to THIS trace, so the page body never re-renders.
+  // One state update per trace-clock advance is scoped to THIS trace, so the
+  // page body never re-renders and idle rAF ticks allocate no SVG path strings.
   const [paths, setPaths] = useState<{ post: string; postFill: string; raw: string }>(
     { post: '', postFill: '', raw: '' },
   );
@@ -172,10 +174,10 @@ export function AudioTraceCanvas({
 
       // 2. ADVANCE the ring buffer head by the elapsed visual cadence.
       //    Fractional accumulation keeps the scroll speed frame-rate-stable.
-      headAccRef.current += dt * ADVANCE_HZ;
-      let advanced = false;
-      while (headAccRef.current >= 1) {
-        headAccRef.current -= 1;
+      const advance = advanceTraceClock(headAccRef.current, dt, ADVANCE_HZ);
+      headAccRef.current = advance.remainder;
+      const advanced = advance.steps > 0;
+      for (let step = 0; step < advance.steps; step += 1) {
         const h = headRef.current;
         // Newest sample lands at the slot just BEHIND head (right edge);
         // head marks the oldest. We write the interpolated value so the new
@@ -183,7 +185,6 @@ export function AudioTraceCanvas({
         postBufRef.current[h] = postShownRef.current;
         rawBufRef.current[h] = rawShownRef.current;
         headRef.current = (h + 1) % TRAIL_LEN;
-        advanced = true;
       }
       // Always keep the right-edge sample fresh so the "now" point tracks the
       // glide even between buffer advances (no visible right-edge stall).
@@ -192,7 +193,7 @@ export function AudioTraceCanvas({
       rawBufRef.current[edge] = rawShownRef.current;
 
       // 3. RE-PATH. Recompute only when something actually moved.
-      if (advanced || true) {
+      if (advanced) {
         const head = headRef.current;
         const postLine = buildPath(postBufRef.current, head, false);
         const postFill = buildPath(postBufRef.current, head, true);

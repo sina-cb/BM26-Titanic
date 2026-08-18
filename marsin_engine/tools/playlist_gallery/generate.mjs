@@ -24,6 +24,7 @@ import ffmpegPath from 'ffmpeg-static';
 import yaml from 'js-yaml';
 
 import { parseAudioModSpec } from '../audio_mod_spec.mjs';
+import { validateTitanicRegionIntent } from '../titanic_model/regions.mjs';
 import { parsePatternDefaults } from '../../lib/pattern_defaults.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,9 @@ const DOCS_ROOT = path.join(REPO_DIR, 'docs', 'pattern_gallery');
 const HARNESS = path.join(ENGINE_DIR, 'tools', 'pattern_audio_harness.mjs');
 const GOALS_PATH = path.join(HERE, 'pattern_goals.json');
 const CONFIG_PATH = path.join(ENGINE_DIR, 'config.yaml');
+const CRISP_REGION_INTENT_PATH = path.join(
+  PATTERNS_DIR, 'crisp', 'region_intent.json',
+);
 const SCRATCH_ROOT = path.join(os.homedir(), 'tmp', 'playlist_gallery');
 
 const WIDTH = 1440;
@@ -45,8 +49,19 @@ const PLOT_BOTTOM = HEIGHT - 13;
 const PLOT_MARGIN = 18;
 const DEFAULT_SECONDS = 10;
 const DEFAULT_FPS = 8;
+const CRISP_SWEEP_SECONDS_PER_VALUE = 1.25;
+const CRISP_SWEEP_FPS = 8;
+const CRISP_SWEEP_VALUES = [0, 0.5, 1];
 const TITANIC_IDENTITY_SECTIONS = new Set([3, 415]);
 const TITANIC_BREAK_COMPRESSION = 0.42;
+// Operator position order. Current scene-name LEFT/RIGHT strings are legacy
+// and physically inverted; see docs/TITANIC_MODEL.md section 1.2.
+export const TITANIC_OPERATOR_HULL_REGIONS = [
+  'Right Front Wall',
+  'Right Back Wall',
+  'Left Front Wall',
+  'Left Back Wall',
+];
 const TITANIC_STACK_CHAINS = {
   'Left SmokeStack': [1, 2, 3, 4],
   'Right SmokeStacks': [5, 6, 7, 8],
@@ -316,6 +331,25 @@ function savedSet(defaults) {
     .join(',');
 }
 
+function playlistModString(entry, pattern) {
+  const mappings = entry.modulations || [];
+  if (mappings.length === 0) return null;
+  const harnessCurve = { linear: 'linear', easeIn: 'pow2', easeOut: 'ease' };
+  return mappings.map((mapping) => {
+    const curve = harnessCurve[mapping.curve];
+    if (!curve || !Array.isArray(mapping.range) || mapping.range.length !== 2) {
+      throw new Error(`${pattern}: invalid playlist modulation ${mapping.id || '<unnamed>'}`);
+    }
+    return [
+      mapping.source?.key,
+      mapping.target?.parameter,
+      mapping.range[0],
+      mapping.range[1],
+      curve,
+    ].join(':');
+  }).join(',');
+}
+
 function capturePattern(patternPath, pattern, scene, playlist, entry, options) {
   const outputDir = path.join(SCRATCH_ROOT, scene, playlist);
   fs.mkdirSync(outputDir, { recursive: true });
@@ -357,7 +391,7 @@ function capturePattern(patternPath, pattern, scene, playlist, entry, options) {
   if (set) args.push('--set', set);
   if (options.variation === 'sound') {
     if (!spec) throw new Error(`${pattern}: --variation sound requires AUDIO_MODULATION_V1`);
-    args.push('--synth', spec.synth, '--mod', spec.modString);
+    args.push('--synth', spec.synth, '--mod', playlistModString(entry, pattern) || spec.modString);
   } else {
     args.push('--synth', 'silence');
   }
@@ -792,6 +826,74 @@ export function renderCaptureFrames(capture, scene) {
   };
 }
 
+export function renderTitanicHullCoverageFrames(capture) {
+  const panelWidth = WIDTH / TITANIC_OPERATOR_HULL_REGIONS.length;
+  const points = new Array(capture.meta.length).fill(null);
+  for (const [panel, region] of TITANIC_OPERATOR_HULL_REGIONS.entries()) {
+    const members = capture.meta
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item.group === region);
+    if (members.length !== 90) {
+      throw new Error(`titanic hull diagnostic: ${region} requires 90 pixels, ` +
+        `found ${members.length}`);
+    }
+    const fixtures = new Map();
+    for (const member of members) {
+      if (!fixtures.has(member.item.fId)) fixtures.set(member.item.fId, []);
+      fixtures.get(member.item.fId).push(member);
+    }
+    if (fixtures.size !== 5) {
+      throw new Error(`titanic hull diagnostic: ${region} requires 5 fixtures, ` +
+        `found ${fixtures.size}`);
+    }
+    const ordered = [...fixtures.values()].sort((left, right) => {
+      const fixtureNumber = (membersForFixture) => {
+        const match = membersForFixture[0].item.name.match(/ Wall (\d+) - /);
+        if (!match) {
+          throw new Error(`titanic hull diagnostic: malformed bar name ` +
+            `'${membersForFixture[0].item.name}'`);
+        }
+        return Number(match[1]);
+      };
+      return fixtureNumber(left) - fixtureNumber(right);
+    });
+    for (const [row, fixture] of ordered.entries()) {
+      const localIndices = fixture.map(({ item }) => item.localIndex).sort((a, b) => a - b);
+      if (fixture.length !== 18 || localIndices.some((value, index) => value !== index)) {
+        throw new Error(`titanic hull diagnostic: ${region} fixture row ${row + 1} ` +
+          'must contain local indices 0..17 exactly');
+      }
+      for (const { item, index } of fixture) {
+        points[index] = {
+          x: panel * panelWidth + 22 + item.localIndex * ((panelWidth - 44) / 17),
+          y: PLOT_TOP + 29 + row * 51,
+        };
+      }
+    }
+  }
+
+  const frames = capture.frames.map((colors) => {
+    const frame = fillFrame([4, 7, 12]);
+    for (let panel = 0; panel < TITANIC_OPERATOR_HULL_REGIONS.length; panel += 1) {
+      const left = panel * panelWidth;
+      const accent = panel < 2 ? [246, 189, 57] : [68, 174, 220];
+      drawRectangle(frame, left, 0, left + panelWidth, 5, accent);
+      drawRectangle(frame, left + 1, 6, left + panelWidth - 1, 28, [10, 15, 24]);
+      for (let row = 0; row < 5; row += 1) {
+        const y = PLOT_TOP + 29 + row * 51;
+        drawRectangle(frame, left + 13, y - 14, left + panelWidth - 13, y + 15,
+          [8, 13, 21]);
+      }
+      if (panel > 0) {
+        drawRectangle(frame, left - 1, 0, left + 1, HEIGHT, [37, 48, 65]);
+      }
+    }
+    drawPointLayer(frame, points, colors, { glow: 10, mid: 6.2, core: 3.5 });
+    return frame;
+  });
+  return { frames, width: WIDTH, height: HEIGHT };
+}
+
 function renderMedia(capture, scene, gifPath, videoPath) {
   const rendered = renderCaptureFrames(capture, scene);
   encodeFramesWithFfmpeg(
@@ -799,6 +901,52 @@ function renderMedia(capture, scene, gifPath, videoPath) {
   encodeVideoFramesWithFfmpeg(
     rendered.frames, rendered.width, rendered.height, Number(capture.fps), videoPath);
   return { featureLabel: rendered.featureLabel };
+}
+
+function renderTitanicHullCoverageMedia(capture, gifPath, videoPath) {
+  const rendered = renderTitanicHullCoverageFrames(capture);
+  encodeFramesWithFfmpeg(
+    rendered.frames, rendered.width, rendered.height, Number(capture.fps), gifPath);
+  encodeVideoFramesWithFfmpeg(
+    rendered.frames, rendered.width, rendered.height, Number(capture.fps), videoPath);
+}
+
+function renderCrispParameterSweep(
+  patternPath, pattern, scene, playlist, entry, controls, options, videoPath,
+) {
+  const frames = [];
+  const segments = [];
+  const sweepOptions = {
+    ...options,
+    seconds: CRISP_SWEEP_SECONDS_PER_VALUE,
+    fps: CRISP_SWEEP_FPS,
+    variation: 'silence',
+  };
+  for (const control of controls) {
+    for (const value of CRISP_SWEEP_VALUES) {
+      const startSeconds = frames.length / CRISP_SWEEP_FPS;
+      const sweepEntry = {
+        ...entry,
+        defaults: { ...(entry.defaults || {}), [control.name]: value },
+      };
+      const capture = capturePattern(
+        patternPath, pattern, scene, playlist, sweepEntry, sweepOptions,
+      );
+      const rendered = renderCaptureFrames(capture, scene);
+      frames.push(...rendered.frames);
+      segments.push({
+        control: control.name,
+        label: control.label,
+        value,
+        startSeconds,
+        seconds: CRISP_SWEEP_SECONDS_PER_VALUE,
+      });
+    }
+  }
+  encodeVideoFramesWithFfmpeg(
+    frames, WIDTH, HEIGHT, CRISP_SWEEP_FPS, videoPath,
+  );
+  return { segments, seconds: frames.length / CRISP_SWEEP_FPS };
 }
 
 function loadGoals() {
@@ -1142,6 +1290,33 @@ function patternCardHtml(item) {
       `<button type="button" data-chapter="${escapeHtml(chapter.time)}"><span>${formatClock(chapter.time)}</span>${escapeHtml(chapter.label)}</button>`,
     ).join('')}</div>`
     : '';
+  const coverageHtml = item.coverageVideo ? `<section class="coverage-evidence">
+    <div class="coverage-heading"><div><p class="eyebrow">Model-region evidence</p>
+      <h3>Four named hull walls · exact saved values</h3></div>
+      <a href="coverage_gifs/${escapeHtml(item.coverageGif)}" download>Download wall GIF</a></div>
+    <div class="coverage-labels"><span>LEFT FRONT · PORT BOW</span>
+      <span>LEFT BACK · PORT STERN</span><span>RIGHT FRONT · STARBOARD BOW</span>
+      <span>RIGHT BACK · STARBOARD STERN</span></div>
+    <video src="coverage_videos/${escapeHtml(item.coverageVideo)}" autoplay muted playsinline
+      preload="metadata" loop aria-label="Four named hull-wall coverage diagnostic for ${escapeHtml(item.title)}"></video>
+  </section>` : '';
+  const modelIntentHtml = item.modelRegionIntent ? `<section class="model-intent">
+    <p><strong>${escapeHtml(item.modelRegionIntent.balance_mode.replaceAll('_', ' '))}</strong>
+      ${escapeHtml(item.modelRegionIntent.balance_rationale)}</p>
+    <details><summary>Every named physical region · declared treatment</summary>
+      <ul>${item.modelRegionIntent.region_treatments.map((treatment) =>
+        `<li><strong>${escapeHtml(treatment.regions.join(' · '))}</strong>` +
+        `<p>${escapeHtml(treatment.intent)}</p></li>`).join('')}</ul></details>
+  </section>` : '';
+  const parameterSweepHtml = item.parameterSweepVideo ? `<section class="parameter-sweep">
+    <div class="coverage-heading"><div><p class="eyebrow">Control-truth review</p>
+      <h3>Every slider at minimum · midpoint · maximum</h3></div></div>
+    <video src="parameter_sweeps/${escapeHtml(item.parameterSweepVideo)}" autoplay muted
+      playsinline preload="metadata" loop aria-label="Parameter sweep for ${escapeHtml(item.title)}"></video>
+    <ol>${item.parameterSweepSegments.map((segment) =>
+      `<li><strong>${escapeHtml(segment.label)}</strong><span>${escapeHtml(segment.value)}</span>` +
+      `<small>${formatClock(segment.startSeconds)}</small></li>`).join('')}</ol>
+  </section>` : '';
   return `<article class="pattern" id="${escapeHtml(item.pattern)}">
     <header><span class="number">${String(item.index + 1).padStart(2, '0')}</span>` +
       `<div><p class="eyebrow">${escapeHtml(item.pattern)}</p>` +
@@ -1164,6 +1339,9 @@ function patternCardHtml(item) {
         ${chapters}
       </div>
     </div>
+    ${parameterSweepHtml}
+    ${coverageHtml}
+    ${modelIntentHtml}
     ${intentHtml}
     <details><summary>Exact playlist values used in this capture</summary>` +
       `<p class="saved-values"><code>${savedValues}</code></p></details>
@@ -1196,11 +1374,13 @@ main{width:min(1720px,100%);margin:auto;padding:34px clamp(10px,2.2vw,38px) 90px
 .back{color:var(--gold);text-decoration:none;font-weight:700}.eyebrow{margin:0;color:var(--muted);font:700 11px/1.2 ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase}
 h1{font-size:clamp(30px,4vw,56px);letter-spacing:-.035em;margin:14px 0 7px}.hero>p{max-width:920px;color:var(--muted);font-size:17px;margin:0}.facts{display:flex;gap:8px;flex-wrap:wrap;margin-top:17px}.facts span{border:1px solid #33425a;border-radius:999px;padding:5px 10px;color:#cad5e3;background:#0a1018}
 .pattern{margin-top:28px;padding:clamp(12px,1.5vw,24px);background:linear-gradient(145deg,#101824,#0a1018);border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 55px #0008;overflow:hidden}.pattern header{display:flex;align-items:center;gap:13px;margin-bottom:14px}.number{display:grid;place-items:center;flex:0 0 48px;height:42px;border-radius:11px;background:#251e0c;color:var(--gold);font-weight:900;font-size:16px}.pattern h2{font-size:clamp(20px,2vw,27px);letter-spacing:-.02em;margin:2px 0 0}.visual{margin-inline:calc(clamp(12px,1.5vw,24px) * -1);background:#04070c;border-block:1px solid #2b3a50}.view-labels{display:grid;grid-template-columns:repeat(3,1fr);font:700 11px/1 ui-monospace,monospace;letter-spacing:.08em;color:#aebbd0;text-align:center;background:#09101a}.view-labels span{padding:10px 4px;border-right:1px solid #253247}.view-labels span:last-child{border:0}.visual video{display:block;width:100%;height:auto;background:#04070c}.transport{display:grid;grid-template-columns:auto auto auto auto minmax(160px,1fr) auto;align-items:center;gap:8px;padding:10px 12px;background:#09101a;border-top:1px solid #253247}.transport button,.transport a,.chapters button{border:1px solid #384a64;border-radius:8px;background:#101a28;color:#e6edf7;padding:7px 10px;font:700 11px system-ui,sans-serif;cursor:pointer;text-decoration:none}.transport button:hover,.transport a:hover,.chapters button:hover{border-color:var(--gold);color:#fff}.transport button[aria-pressed="true"]{background:#2a210d;border-color:#725f27;color:var(--gold)}.transport .time{font:700 11px ui-monospace,monospace;color:#b8c6d8;white-space:nowrap}.transport input{width:100%;accent-color:var(--gold)}.chapters{display:flex;gap:6px;overflow-x:auto;padding:0 12px 11px;background:#09101a}.chapters button{display:flex;gap:6px;align-items:center;white-space:nowrap;background:#0b1320}.chapters button span{color:var(--gold);font:800 10px ui-monospace,monospace}.goal{font-size:17px;max-width:1120px;margin:18px 2px 12px;color:#d9e2ef}details{border-top:1px solid #26344a;padding-top:10px}summary{cursor:pointer;color:#b9c6d7;font-weight:700}.params{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;padding:12px 0 0;margin:0;list-style:none}.params li{border:1px solid #27364c;border-radius:10px;padding:9px 10px;background:#080e16}.params li>div{display:flex;gap:6px;align-items:center}.params p{color:var(--muted);font-size:12px;margin:4px 0 0}.value{margin-left:auto;color:var(--gold);font:700 12px ui-monospace,monospace}.signal{font:800 9px ui-monospace,monospace;padding:3px 5px;border-radius:4px;background:#271f50;color:#c9beff;border:1px solid #594a9b}
+.coverage-evidence{margin:18px 0;border:1px solid #31445e;border-radius:12px;overflow:hidden;background:#050911}.coverage-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 13px}.coverage-heading h3{margin:3px 0 0;font-size:16px}.coverage-heading a{color:var(--gold);text-decoration:none;font-weight:700}.coverage-labels{display:grid;grid-template-columns:repeat(4,1fr);font:800 9px ui-monospace,monospace;letter-spacing:.05em;text-align:center;color:#c2cede;background:#09101a}.coverage-labels span{padding:8px 3px;border-right:1px solid #253247}.coverage-labels span:last-child{border:0}.coverage-evidence video{display:block;width:100%;height:auto}.model-intent{margin:14px 0;padding:11px 13px;border:1px solid #3d345f;border-radius:11px;background:#0b0b18}.model-intent>p{margin:0;color:#cdd7e5}.model-intent>p strong{display:block;color:#c9beff;text-transform:uppercase;font:800 11px ui-monospace,monospace;letter-spacing:.08em}.model-intent ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;padding:10px 0 0;margin:0;list-style:none}.model-intent li{border:1px solid #2c3350;border-radius:8px;padding:9px;background:#080e16}.model-intent li p{margin:4px 0 0;color:var(--muted);font-size:12px}
+.parameter-sweep{margin:18px 0;border:1px solid #4b416e;border-radius:12px;overflow:hidden;background:#070611}.parameter-sweep video{display:block;width:100%;height:auto}.parameter-sweep ol{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:5px;padding:10px;margin:0;list-style:none;background:#090914}.parameter-sweep li{display:grid;grid-template-columns:1fr auto;gap:2px 8px;border:1px solid #302b48;border-radius:7px;padding:6px 8px}.parameter-sweep li strong{font-size:10px}.parameter-sweep li span{color:var(--gold);font:800 10px ui-monospace,monospace}.parameter-sweep li small{grid-column:1/-1;color:#78849a;font:700 9px ui-monospace,monospace}
 .concept{font-size:17px;max-width:1180px;margin:18px 2px 12px;color:#d9e2ef}.concept strong{display:block;color:var(--gold);font:800 11px ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase;margin-bottom:4px}.review-state{display:inline-block;margin-top:16px;border:1px solid #6f5c27;border-radius:999px;padding:5px 10px;color:var(--gold);background:#211b0b;font:800 11px ui-monospace,monospace;letter-spacing:.05em}.intent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:9px;margin:14px 0}.intent-grid>div{border:1px solid #27364c;border-radius:11px;background:#080e16;padding:11px}.intent-grid h3{margin:0 0 5px;color:#c9beff;font:800 11px ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase}.intent-grid p,.roles p,.audio-handles p{margin:0;color:var(--muted);font-size:13px}.roles,.audio-handles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;padding:11px 0 0;margin:0;list-style:none}.roles li,.audio-handles li{border:1px solid #27364c;border-radius:10px;padding:9px 10px;background:#080e16}.mapping{margin-left:6px;color:var(--gold);font:700 11px ui-monospace,monospace}.saved-values code{display:block;padding:9px;border:1px solid #27364c;border-radius:8px;background:#080e16;color:#d9e2ef;overflow-wrap:anywhere}.params small{display:block;color:#72839a;font:700 10px ui-monospace,monospace;margin-top:5px}.intent-block details,details{margin-top:10px}
 @media(max-width:850px){.transport{grid-template-columns:repeat(3,auto);}.transport .time{grid-column:1}.transport input{grid-column:2/-1}.transport a{grid-column:1/-1;text-align:center}}@media(max-width:700px){main{padding-inline:6px}.pattern{border-radius:11px}.view-labels{font-size:8px}.params{grid-template-columns:1fr}}
 </style></head><body><main><section class="hero"><a class="back" href="../../../index.html">← All playlists</a>
 <p class="eyebrow">${escapeHtml(scene)} scene · saved playlist</p><h1>${escapeHtml(prettyName(playlist))}</h1>
-<p>Offline renders compiled through the real ${escapeHtml(scene)} model at the playlist’s exact saved parameter values${options.palette ? ` with the configured ${escapeHtml(options.palette.id)} palette applied` : ''}. The three synchronized views show the same frame. Play, pause, restart, repeat, or scrub the seekable clip; the GIF remains downloadable.</p>
+<p>Offline renders compiled through the real ${escapeHtml(scene)} model at the playlist’s exact saved parameter values${options.palette ? ` with the configured ${escapeHtml(options.palette.id)} palette applied` : ''}. The synchronized views show the same frame. Play, pause, restart, repeat, or scrub the seekable clip; the GIF remains downloadable. Crisp entries also include labelled four-wall autoplay evidence.</p>
 <div class="facts"><span>${items.length} entries</span><span>${options.seconds}s loops</span>` +
     `<span>${options.fps} fps</span><span>${Math.round(options.globalSpeed * 100)}% global clock</span>` +
     `<span>${escapeHtml(options.variation)} variation</span>` +
@@ -1295,10 +1475,25 @@ function galleryIsReady(item) {
         if (!fs.existsSync(sourcePath) || entry.sourceDigest !== fileDigest(sourcePath)) return false;
       }
     }
+    const hasTitanicCrisp = item.scene === 'titanic' &&
+      manifest.items.some((entry) => entry.pattern.startsWith('crisp/'));
+    if (hasTitanicCrisp && manifest.modelRegionIntentDigest !==
+        fileDigest(CRISP_REGION_INTENT_PATH)) return false;
     return manifest.items.every((entry) =>
       typeof entry.gif === 'string' && typeof entry.video === 'string' &&
       fs.existsSync(path.join(dir, 'gifs', entry.gif)) &&
-      fs.existsSync(path.join(dir, 'videos', entry.video)));
+      fs.existsSync(path.join(dir, 'videos', entry.video)) &&
+      (!entry.pattern.startsWith('crisp/') || (
+        entry.modelRegionIntent &&
+        typeof entry.coverageGif === 'string' &&
+        typeof entry.coverageVideo === 'string' &&
+        typeof entry.parameterSweepVideo === 'string' &&
+        Array.isArray(entry.parameterSweepSegments) &&
+        entry.parameterSweepSegments.length === entry.controls.length * 3 &&
+        fs.existsSync(path.join(dir, 'coverage_gifs', entry.coverageGif)) &&
+        fs.existsSync(path.join(dir, 'coverage_videos', entry.coverageVideo)) &&
+        fs.existsSync(path.join(dir, 'parameter_sweeps', entry.parameterSweepVideo))
+      )));
   } catch {
     return false;
   }
@@ -1306,6 +1501,23 @@ function galleryIsReady(item) {
 
 function buildIndex(playlists) {
   fs.mkdirSync(DOCS_ROOT, { recursive: true });
+  const indexedPlaylists = [...playlists];
+  // Baby outcome galleries remain operator review artifacts even after their
+  // one-shot source playlists retire. Keep their established index links.
+  for (const playlist of ['baby_boy', 'baby_girl']) {
+    if (indexedPlaylists.some((item) => item.scene === 'titanic' && item.playlist === playlist)) {
+      continue;
+    }
+    const manifestPath = path.join(galleryPath('titanic', playlist), 'manifest.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    indexedPlaylists.push({
+      scene: 'titanic',
+      playlist,
+      filePath: manifest.source,
+      entries: manifest.items.length,
+    });
+  }
   const transitionDir = path.join(DOCS_ROOT, 'transitions');
   const transitionManifestPath = path.join(transitionDir, 'manifest.json');
   const transitionReady = fs.existsSync(path.join(transitionDir, 'index.html'))
@@ -1326,7 +1538,7 @@ function buildIndex(playlists) {
     : `<div class="playlist">${transitionBody}</div>`;
   const transitionSection = `<section><h2>Transitions</h2><div class="grid">${transitionCard}</div></section>`;
   const grouped = new Map();
-  for (const item of playlists) {
+  for (const item of indexedPlaylists) {
     if (!grouped.has(item.scene)) grouped.set(item.scene, []);
     grouped.get(item.scene).push(item);
   }
@@ -1385,8 +1597,9 @@ node tools/playlist_gallery/generate.mjs --index-only
 \`\`\`
 
 Default clips are 10 seconds at 8 fps, a 100% pattern clock, and use exact saved values with no audio.
-Use \`--global-speed 0.3\` when the operator's review target is the Ambient
-30% global clock; the manifest and gallery header record that scale explicitly.
+The global-speed argument is a clock multiplier, not the CaptainPad fader value.
+For example, global control 0.64 is \`0.25 * 16^0.64 = 1.4742692172911012\`,
+so use \`--global-speed 1.4742692172911012\` for that live-parity review.
 Use \`--variation sound\` only when you intentionally want the pattern-authored
 audio suggestions. Use \`--palette <id>\` to apply an exact palette from
 \`marsin_engine/config.yaml\`; an unknown palette or a pattern without both
@@ -1417,6 +1630,16 @@ function generateOne(scene, playlist, options, patterns, goals) {
   if (!fs.existsSync(playlistPath)) throw new Error(`playlist not found: ${playlistPath}`);
   const data = readYaml(playlistPath);
   if (!Array.isArray(data.entries)) throw new Error(`playlist has no entries array: ${playlistPath}`);
+  const hasTitanicCrisp = scene === 'titanic' &&
+    data.entries.some((entry) => entry.pattern.startsWith('crisp/'));
+  let modelRegionIntents = null;
+  if (hasTitanicCrisp) {
+    const registry = JSON.parse(fs.readFileSync(CRISP_REGION_INTENT_PATH, 'utf8'));
+    if (registry.schemaVersion !== 1 || !registry.patterns) {
+      throw new Error('Crisp model-region intent registry must use schemaVersion 1');
+    }
+    modelRegionIntents = registry.patterns;
+  }
   const preparedEntries = data.entries.map((rawEntry, index) => {
     const entry = { ...rawEntry, index };
     const pattern = entry.pattern;
@@ -1439,8 +1662,28 @@ function generateOne(scene, playlist, options, patterns, goals) {
         }
       }
     }
-    return { entry, pattern, patternPath, goal, controls, savedValues };
+    const modelRegionIntent = scene === 'titanic' && pattern.startsWith('crisp/')
+      ? validateTitanicRegionIntent(pattern, modelRegionIntents[pattern])
+      : null;
+    return {
+      entry,
+      pattern,
+      patternPath,
+      goal,
+      controls,
+      savedValues,
+      modelRegionIntent,
+    };
   });
+  if (hasTitanicCrisp) {
+    const playlistPatterns = new Set(preparedEntries.map((entry) => entry.pattern));
+    const unexpected = Object.keys(modelRegionIntents)
+      .filter((pattern) => !playlistPatterns.has(pattern));
+    if (unexpected.length > 0) {
+      throw new Error(`Crisp model-region intent has non-playlist entries: ` +
+        unexpected.join(', '));
+    }
+  }
 
   const outputDir = galleryPath(scene, playlist);
   const stagingDir = path.join(
@@ -1450,14 +1693,30 @@ function generateOne(scene, playlist, options, patterns, goals) {
   );
   const gifDir = path.join(stagingDir, 'gifs');
   const videoDir = path.join(stagingDir, 'videos');
+  const coverageGifDir = path.join(stagingDir, 'coverage_gifs');
+  const coverageVideoDir = path.join(stagingDir, 'coverage_videos');
+  const parameterSweepDir = path.join(stagingDir, 'parameter_sweeps');
   assertInside(DOCS_ROOT, outputDir);
   assertInside(SCRATCH_ROOT, stagingDir);
   fs.mkdirSync(gifDir, { recursive: true });
   fs.mkdirSync(videoDir, { recursive: true });
+  if (hasTitanicCrisp) {
+    fs.mkdirSync(coverageGifDir, { recursive: true });
+    fs.mkdirSync(coverageVideoDir, { recursive: true });
+    fs.mkdirSync(parameterSweepDir, { recursive: true });
+  }
 
   const items = [];
   for (const prepared of preparedEntries) {
-    const { entry, pattern, patternPath, goal, controls, savedValues } = prepared;
+    const {
+      entry,
+      pattern,
+      patternPath,
+      goal,
+      controls,
+      savedValues,
+      modelRegionIntent,
+    } = prepared;
     const { index } = entry;
     process.stdout.write(`[${index + 1}/${preparedEntries.length}] ${pattern} ... `);
     const capture = capturePattern(patternPath, pattern, scene, playlist, entry, options);
@@ -1467,7 +1726,30 @@ function generateOne(scene, playlist, options, patterns, goals) {
     const gifPath = path.join(gifDir, gifName);
     const videoPath = path.join(videoDir, videoName);
     const rendered = renderMedia(capture, scene, gifPath, videoPath);
-    const mediaSize = fs.statSync(gifPath).size + fs.statSync(videoPath).size;
+    let coverageGifName = null;
+    let coverageVideoName = null;
+    let parameterSweepVideoName = null;
+    let parameterSweep = null;
+    if (modelRegionIntent) {
+      coverageGifName = `${String(index + 1).padStart(3, '0')}_${mediaName}_walls.gif`;
+      coverageVideoName = `${String(index + 1).padStart(3, '0')}_${mediaName}_walls.mp4`;
+      renderTitanicHullCoverageMedia(
+        capture,
+        path.join(coverageGifDir, coverageGifName),
+        path.join(coverageVideoDir, coverageVideoName),
+      );
+      parameterSweepVideoName =
+        `${String(index + 1).padStart(3, '0')}_${mediaName}_parameters.mp4`;
+      parameterSweep = renderCrispParameterSweep(
+        patternPath, pattern, scene, playlist, entry, controls, options,
+        path.join(parameterSweepDir, parameterSweepVideoName),
+      );
+    }
+    const mediaSize = fs.statSync(gifPath).size + fs.statSync(videoPath).size +
+      (coverageGifName ? fs.statSync(path.join(coverageGifDir, coverageGifName)).size : 0) +
+      (coverageVideoName ? fs.statSync(path.join(coverageVideoDir, coverageVideoName)).size : 0) +
+      (parameterSweepVideoName
+        ? fs.statSync(path.join(parameterSweepDir, parameterSweepVideoName)).size : 0);
     console.log(`${(mediaSize / 1024 / 1024).toFixed(2)} MB GIF+MP4`);
     items.push({
       index,
@@ -1475,6 +1757,7 @@ function generateOne(scene, playlist, options, patterns, goals) {
       title: entry.label || prettyName(pattern),
       goal: goal.summary || `A saved ${prettyName(pattern)} look authored for ${prettyName(scene)}.`,
       intent: goal.intent,
+      modelRegionIntent,
       controls,
       savedValues,
       effectiveValues: {
@@ -1490,6 +1773,11 @@ function generateOne(scene, playlist, options, patterns, goals) {
       },
       gif: gifName,
       video: videoName,
+      coverageGif: coverageGifName,
+      coverageVideo: coverageVideoName,
+      parameterSweepVideo: parameterSweepVideoName,
+      parameterSweepSegments: parameterSweep?.segments || [],
+      parameterSweepSeconds: parameterSweep?.seconds || null,
       seconds: options.seconds,
       chapters: chaptersForPattern(pattern, options.seconds),
       featureLabel: rendered.featureLabel,
@@ -1497,7 +1785,7 @@ function generateOne(scene, playlist, options, patterns, goals) {
     });
   }
   const manifest = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     scene,
     playlist,
     seconds: options.seconds,
@@ -1508,6 +1796,9 @@ function generateOne(scene, playlist, options, patterns, goals) {
     source: path.relative(REPO_DIR, playlistPath).replaceAll('\\', '/'),
     playlistDigest: fileDigest(playlistPath),
     goalsDigest: fileDigest(GOALS_PATH),
+    modelRegionIntentDigest: hasTitanicCrisp
+      ? fileDigest(CRISP_REGION_INTENT_PATH)
+      : null,
     items,
   };
   fs.writeFileSync(path.join(stagingDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);

@@ -456,7 +456,10 @@ export function effectiveOpenWindows(
  * two hidden windows are dropped from the rail as well as from the open row
  * (D3): a chip that cannot restore its window is docs/53 §3.1's "affordance
  * that always refuses", and these windows are DELIBERATELY unreachable — the
- * reach path is exiting performance mode, which the bar's caption names.
+ * reach path is exiting performance mode.
+ *
+ * Report _308, operator order: the bar carries NO explainer caption in the
+ * chips' place. The suppression is silent — the chips simply are not there.
  */
 export function effectiveRailWindows(
   state: DeckWorkspaceLayout,
@@ -466,9 +469,6 @@ export function effectiveRailWindows(
   if (!perfActive) return rail;
   return rail.filter((id) => !PERF_HIDDEN_WINDOWS.includes(id));
 }
-
-/** The bar's replacement caption while the overlay is on (D3). */
-export const PERF_BAR_CAPTION = 'PERFORMANCE — PARAMS & AUTOPILOT HIDDEN';
 
 // ── PIXELS → OUTPUT suppression (docs/63 §2.4, operator order 1) ───────────
 //
@@ -496,10 +496,8 @@ export function effectiveShownBars(
   return pixelsShown ? bars.filter((b) => !PIXELS_SUPPRESSES.includes(b)) : bars;
 }
 
-/** The bar row's static micro-caption while OUTPUT is suppressed (docs/63
- *  §2.4 — same recipe as `PERF_BAR_CAPTION`, no affordance that always
- *  refuses: the chip leaves the row entirely instead). */
-export const PIXELS_BAR_CAPTION = '1D OUTPUT — SHOWN WHEN PIXELS IS HIDDEN';
+// Report _308, operator order: like the perf suppression above, this one is
+// SILENT — the OUTPUT chip leaves the row and nothing narrates its absence.
 
 /**
  * Does PATTERNS fill the whole NARROW stack? True iff it is the ONLY window on

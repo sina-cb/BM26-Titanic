@@ -53,7 +53,7 @@ import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useTimeline, zoomEnteredHere } from '@/hooks/useTimeline';
 import {
-  fetchPlaylists, getCachedColorPalettes,
+  fetchPlaylists, getCachedColorPalettes, fetchLayerSettingsState,
   fetchDeckChannel, getAutopilot, fetchDeckColorAutopilot,
   getApiBaseAsync,
 } from '@/utils/api';
@@ -99,6 +99,19 @@ import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
 import { babyRevealConfirmation } from '@/components/timeline/baby_reveal_confirmation';
 import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import { parseLayerSettingsState, type LayerSettingsState } from '@/utils/layer_settings';
+import {
+  describeTimelineDraftSaveFailure,
+  TimelineDraftSaver,
+  type TimelineDraftSaveEvent,
+  type TimelineDraftSaveFailure,
+} from '@/utils/timeline_draft_saver';
+import {
+  beginTimelinePriorityFeedback,
+  settleTimelinePriorityFeedback,
+  timelinePriorityFeedbackText,
+  type TimelinePriorityFeedback,
+} from '@/utils/timeline_priority_feedback';
 
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
@@ -280,17 +293,126 @@ function TimelineScreenContent() {
   // Auto-save (operator request 2026-07-02: the maker saves like a doc editor —
   // no SAVE / CANCEL buttons). `lastSavedVersionRef` is the last draftVersion
   // successfully written; the auto-save effect debounces writes and skips a
-  // version that's already persisted. `autoSaveState` drives a small status
+  // version that's already persisted. `autoSaveEvent` drives a small status
   // chip where the buttons used to be.
   const lastSavedVersionRef = useRef<number | null>(null);
-  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [autoSaveEvent, setAutoSaveEvent] = useState<TimelineDraftSaveEvent | null>(null);
+  const [saveFailure, setSaveFailure] = useState<TimelineDraftSaveFailure | null>(null);
+  const draftSaverRef = useRef<TimelineDraftSaver<ShowPlan> | null>(null);
+  const [liveTouchLease, setLiveTouchLease] = useState<LayerSettingsState['liveTouch'] | null>(null);
+  const liveTouchLeaseRef = useRef<LayerSettingsState['liveTouch'] | null>(null);
+  const priorityAttemptRef = useRef(0);
+  const [priorityFeedback, setPriorityFeedback] = useState<TimelinePriorityFeedback | null>(null);
 
   // Latest draft version that has been requested — used to discard out-of-order
   // preview responses (a slow v1 must not overwrite a newer v2).
   const latestDraftVersionRef = useRef(0);
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    draftSaverRef.current?.dispose();
+  }, []);
   useEffect(() => { latestDraftVersionRef.current = draftVersion; }, [draftVersion]);
+  const bumpDraftVersion = useCallback(() => {
+    const next = latestDraftVersionRef.current + 1;
+    latestDraftVersionRef.current = next;
+    setDraftVersion(next);
+    return next;
+  }, []);
+
+  // The layer-settings replay is the shared ownership truth. Timeline preview
+  // remains available while Live Touch is armed, but background plan writes do
+  // not borrow its owner identity. We keep the draft locally and retry only
+  // after the lease is visibly released.
+  useEffect(() => {
+    let active = true;
+    let observedWsOwnership = false;
+    // A control-bus replay can arrive before this screen's effect subscribes.
+    // Seed from REST first so a cold mount never briefly writes through an ARM
+    // lease it simply has not observed yet.
+    void getApiBaseAsync()
+      .then(() => fetchLayerSettingsState())
+      .then((result) => {
+        if (!active || observedWsOwnership) return;
+        if (result.ok && result.data) {
+          liveTouchLeaseRef.current = result.data.liveTouch;
+          setLiveTouchLease(result.data.liveTouch);
+        }
+        else setActionError(result.error || 'Could not load layer ownership state');
+      })
+      .catch((ownershipError: unknown) => {
+        if (!active) return;
+        setActionError(ownershipError instanceof Error
+          ? ownershipError.message
+          : 'Could not resolve layer ownership state');
+      });
+    const unsubscribe = engineEvents.subscribe((message: EngineMessage) => {
+      if (!message || message.type !== 'layerSettings') return;
+      try {
+        observedWsOwnership = true;
+        const nextLease = parseLayerSettingsState(message).liveTouch;
+        liveTouchLeaseRef.current = nextLease;
+        setLiveTouchLease(nextLease);
+      } catch (leaseError: any) {
+        setActionError(leaseError?.message || 'Layer ownership state is invalid');
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const priorConnectedRef = useRef(connected);
+  useEffect(() => {
+    if (connected && priorConnectedRef.current === false) {
+      void draftSaverRef.current?.retry();
+    }
+    priorConnectedRef.current = connected;
+  }, [connected]);
+
+  const beginPriorityHandoff = useCallback((operation: string): number | null => {
+    const lease = liveTouchLeaseRef.current;
+    const attemptId = priorityAttemptRef.current + 1;
+    const feedback = beginTimelinePriorityFeedback(
+      attemptId,
+      operation,
+      lease?.armed === true,
+      lease?.ownerId ?? null,
+    );
+    if (!feedback) return null;
+    priorityAttemptRef.current = attemptId;
+    setPriorityFeedback(feedback);
+    return attemptId;
+  }, []);
+
+  const finishPriorityHandoff = useCallback((
+    attemptId: number | null,
+    ok: boolean,
+    detail: string | null = null,
+  ) => {
+    if (attemptId === null) return;
+    setPriorityFeedback((current) => settleTimelinePriorityFeedback(
+      current,
+      attemptId,
+      ok,
+      detail,
+    ));
+  }, []);
+
+  const runPriorityBooleanAction = useCallback(async (
+    operation: string,
+    action: () => Promise<boolean>,
+  ): Promise<boolean> => {
+    const attemptId = beginPriorityHandoff(operation);
+    const ok = await action();
+    finishPriorityHandoff(
+      attemptId,
+      ok,
+      ok ? null : 'The engine rejected the Timeline operation after requesting the handoff.',
+    );
+    return ok;
+  }, [beginPriorityHandoff, finishPriorityHandoff]);
 
   // ── UI sheet state ──
   const [planPickerOpen, setPlanPickerOpen] = useState(false);
@@ -326,7 +448,7 @@ function TimelineScreenContent() {
   const [eventActionError, setEventActionError] = useState<string | null>(null);
 
   // ── 1s ticker — drives the live NOW playhead (strip + day editor). ──
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
@@ -377,6 +499,12 @@ function TimelineScreenContent() {
       setPreviewTransportError(null);
       return;
     }
+    // A preview is truth for exactly one draft version. Clear the older derived
+    // view before scheduling the next request so a pending/failed preview can
+    // never leave stale cues presented as if they described the current draft.
+    setDraftOverview(null);
+    setPreviewError(null);
+    setPreviewTransportError(null);
     if (previewTimer.current) clearTimeout(previewTimer.current);
     // Capture the version this request belongs to BEFORE the await so an
     // out-of-order response can be discarded (fix: preview race).
@@ -396,8 +524,8 @@ function TimelineScreenContent() {
         setPreviewError({ msg: r.error || 'Draft invalid', version: v });
         setPreviewTransportError(null);
       } else {
-        // Transport failure (offline / timeout / 5xx) — do NOT block save;
-        // the last good preview (if any) stays on screen.
+        // Transport failure (offline / timeout / 5xx) — do NOT block save, but
+        // also do not leave an older overview on screen under a newer draft.
         setPreviewTransportError(r.error || 'Could not reach the engine to preview the draft');
       }
     }, PREVIEW_DEBOUNCE_MS);
@@ -414,6 +542,20 @@ function TimelineScreenContent() {
   // to the CURRENT draft version — never by a transient transport failure, and
   // never by a stale error from an older draft (fix: sticky previewError).
   const saveBlocked = !!previewError && previewError.version === draftVersion;
+  const autoSaveLabel = (() => {
+    if (saveBlocked) return '⚠ FIX TO SAVE';
+    if (saveFailure?.kind === 'live_touch_held') return '⚠ NOT SAVED · LIVE TOUCH';
+    if (saveFailure) return '⚠ NOT SAVED';
+    if (!autoSaveEvent || autoSaveEvent.version !== draftVersion) return 'UNSAVED';
+    if (autoSaveEvent.phase === 'saving') return 'SAVING…';
+    if (autoSaveEvent.phase === 'saved') return '✓ SAVED';
+    return 'UNSAVED…';
+  })();
+  const autoSaveTone = autoSaveLabel === '✓ SAVED'
+    ? '#00a86b'
+    : autoSaveLabel === 'SAVING…' || autoSaveLabel === 'UNSAVED…'
+      ? C.secondary
+      : C.error;
 
   // Plan timezone (festival-local). Falls back to the active plan's location if
   // the overview carries no location, then to the device tz so the playhead
@@ -428,7 +570,7 @@ function TimelineScreenContent() {
 
   // "Now" in the plan tz, recomputed each 1s tick. dateKey picks "today"; the
   // minutes feed the playhead position.
-  const nowInTz = useMemo(() => nowPartsInTz(planTz), [planTz, nowTick]);
+  const nowInTz = nowPartsInTz(planTz);
 
   // Today's festival index (the overview day whose date matches today in the
   // plan tz). null when today is outside the festival span.
@@ -462,9 +604,9 @@ function TimelineScreenContent() {
       fn(next);
       return next;
     });
-    setDraftVersion((v) => v + 1);
+    bumpDraftVersion();
     setSaveOk(null);
-  }, []);
+  }, [bumpDraftVersion]);
 
   // Returns true when a draft was actually loaded onto the 8-day grid; false
   // when the load failed or the plan has no festival span (the caller must
@@ -485,13 +627,15 @@ function TimelineScreenContent() {
       return false;
     }
     setDraft(clonePlan(plan));
-    setDraftVersion((v) => v + 1);
+    const loadedVersion = bumpDraftVersion();
+    lastSavedVersionRef.current = loadedVersion;
+    draftSaverRef.current?.markSaved(loadedVersion);
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
     setPlanPickerOpen(false);
     return true;
-  }, []);
+  }, [bumpDraftVersion]);
 
   // ALWAYS-EDITING (operator request 2026-07-03): the maker auto-loads the
   // ACTIVE plan into the draft so the timeline tab is ALWAYS in edit mode — the
@@ -506,10 +650,12 @@ function TimelineScreenContent() {
     const r = await fetchTimelinePlan(name);
     if (!r.ok || !r.data || !r.data.festival) return;
     setDraft(clonePlan(r.data));
-    setDraftVersion((v) => { const nv = v + 1; lastSavedVersionRef.current = nv; return nv; });
+    const loadedVersion = bumpDraftVersion();
+    lastSavedVersionRef.current = loadedVersion;
+    draftSaverRef.current?.markSaved(loadedVersion);
     setSaveOk(null);
     setPreviewTransportError(null);
-  }, []);
+  }, [bumpDraftVersion]);
 
   // Drive the always-editing model: whenever there's an active plan and nothing
   // is loaded in the maker, pull the active plan into the draft. Re-fires if the
@@ -527,17 +673,32 @@ function TimelineScreenContent() {
   // new-plan saves, and the close flush. Saving over the ACTIVE plan
   // hot-reloads it engine-side, so the live overview (which gates the FIRE
   // buttons) must refresh — freshly-saved cues become fireable immediately.
-  const persistPlan = useCallback(async (plan: ShowPlan): Promise<boolean> => {
+  const persistPlan = useCallback(async (plan: ShowPlan) => {
+    const priorityAttempt = beginPriorityHandoff('SAVE PLAN');
     const r = await saveTimelinePlan(plan);
+    finishPriorityHandoff(priorityAttempt, r.ok, r.error ?? null);
     if (r.ok) {
       setActionError(null);
       refreshPlans();
       refreshLiveOverview();
-      return true;
     }
-    setActionError(r.error || 'Auto-save failed');
-    return false;
-  }, [refreshPlans, refreshLiveOverview]);
+    return r;
+  }, [beginPriorityHandoff, finishPriorityHandoff, refreshPlans, refreshLiveOverview]);
+
+  if (draftSaverRef.current === null) {
+    draftSaverRef.current = new TimelineDraftSaver<ShowPlan>(persistPlan, (event) => {
+      if (!mountedRef.current) return;
+      setAutoSaveEvent(event);
+      if (event.phase === 'saved') {
+        lastSavedVersionRef.current = event.version;
+        setSaveFailure(null);
+      } else if (event.phase === 'saving') {
+        setSaveFailure(null);
+      } else if (event.phase === 'error') {
+        setSaveFailure(describeTimelineDraftSaveFailure(event.result));
+      }
+    });
+  }
 
   // New plans REQUIRE an operator-entered name (the PlanPickerSheet's name
   // prompt validates + de-duplicates before calling these with the slug).
@@ -548,14 +709,16 @@ function TimelineScreenContent() {
   // written; lastSavedVersionRef starts null so it also re-writes as they edit.
   const startDraft = useCallback((plan: ShowPlan) => {
     setDraft(plan);
-    setDraftVersion((v) => v + 1);
+    const version = bumpDraftVersion();
     lastSavedVersionRef.current = null;
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
+    setSaveFailure(null);
     setPlanPickerOpen(false);
-    void persistPlan(plan);
-  }, [persistPlan]);
+    draftSaverRef.current?.enqueue(version, plan);
+    void draftSaverRef.current?.flush();
+  }, [bumpDraftVersion]);
 
   // New plans seed their DEFAULT CUE from the deck's current live state (see
   // snapshotDeckAsDefaultCue) so the standing fallback matches what's playing
@@ -581,7 +744,7 @@ function TimelineScreenContent() {
   }, [startDraft]);
 
   const handleActivate = useCallback(async (name: string) => {
-    const ok = await activatePlan(name);
+    const ok = await runPriorityBooleanAction('ACTIVATE PLAN', () => activatePlan(name));
     if (ok) {
       refreshPlans(); refreshLiveOverview(); setPlanPickerOpen(false);
       // Always-editing: switch the maker to the plan we just activated so the
@@ -589,23 +752,44 @@ function TimelineScreenContent() {
       setDraft(null);
       await autoLoadActiveIntoDraft(name);
     } else setActionError('Engine rejected plan activation');
-  }, [activatePlan, refreshPlans, refreshLiveOverview, autoLoadActiveIntoDraft]);
+  }, [activatePlan, refreshPlans, refreshLiveOverview, autoLoadActiveIntoDraft,
+    runPriorityBooleanAction]);
+
+  const handleFireCue = useCallback((id: string) => runPriorityBooleanAction(
+    'FIRE CUE',
+    () => fireCue(id),
+  ), [fireCue, runPriorityBooleanAction]);
+
+  const handleSetAutopilot = useCallback((enabled: boolean) => runPriorityBooleanAction(
+    enabled ? 'ENABLE TIMELINE AUTO' : 'DISABLE TIMELINE AUTO',
+    () => setAutopilot(enabled),
+  ), [runPriorityBooleanAction, setAutopilot]);
+
+  const handleEndProgram = useCallback(() => runPriorityBooleanAction(
+    'END PROGRAM',
+    endProgram,
+  ), [endProgram, runPriorityBooleanAction]);
 
   // Delete a saved plan (the picker confirms + hides the ACTIVE plan; the
   // engine also refuses to delete the active one). If the deleted plan is the
   // one loaded in the maker, close the editor so we don't keep re-saving a
   // now-deleted file.
   const handleDeletePlan = useCallback(async (name: string) => {
+    const priorityAttempt = beginPriorityHandoff('DELETE PLAN');
     const r = await deleteTimelinePlan(name);
+    finishPriorityHandoff(priorityAttempt, r.ok, r.error ?? null);
     if (!r.ok) { setActionError(r.error || `Could not delete plan ${name}`); return; }
     setActionError(null);
     if (draft?.name === name) {
       setDraft(null);
       setDraftOverview(null);
+      draftSaverRef.current?.discardPending(draftVersion);
       lastSavedVersionRef.current = null;
+      setAutoSaveEvent(null);
+      setSaveFailure(null);
     }
     refreshPlans();
-  }, [draft?.name, refreshPlans]);
+  }, [beginPriorityHandoff, draft?.name, draftVersion, finishPriorityHandoff, refreshPlans]);
 
   // Persist a plan and refresh the derived views. Shared by auto-save, eager
   // new-plan saves, and the close flush. Saving over the ACTIVE plan
@@ -614,18 +798,39 @@ function TimelineScreenContent() {
   // error banner explains why); a version already on disk is skipped so we
   // don't re-write on load or after our own save.
   useEffect(() => {
-    if (!draft) { lastSavedVersionRef.current = null; setAutoSaveState('idle'); return; }
-    if (saveBlocked) { setAutoSaveState('error'); return; }
-    if (lastSavedVersionRef.current === draftVersion) { setAutoSaveState('saved'); return; }
+    if (!draft) {
+      draftSaverRef.current?.discardPending(draftVersion);
+      lastSavedVersionRef.current = null;
+      setAutoSaveEvent(null);
+      setSaveFailure(null);
+      return;
+    }
+    if (saveBlocked) {
+      draftSaverRef.current?.discardPending(draftVersion);
+      setAutoSaveEvent({ phase: 'error', version: draftVersion, result: {
+        ok: false,
+        status: 400,
+        error: previewError?.msg || 'Draft invalid',
+      } });
+      setSaveFailure({
+        kind: 'invalid',
+        title: 'NOT SAVED — DRAFT INVALID',
+        detail: previewError?.msg || 'Fix the draft before saving.',
+      });
+      return;
+    }
+    if (lastSavedVersionRef.current === draftVersion) {
+      draftSaverRef.current?.markSaved(draftVersion);
+      return;
+    }
+    draftSaverRef.current?.enqueue(draftVersion, draft);
     const versionToSave = draftVersion;
     const t = setTimeout(async () => {
-      setAutoSaveState('saving');
-      const ok = await persistPlan(draft);
-      if (ok) { lastSavedVersionRef.current = versionToSave; setAutoSaveState('saved'); }
-      else setAutoSaveState('error');
+      if (versionToSave !== latestDraftVersionRef.current) return;
+      await draftSaverRef.current?.flush();
     }, 700);
     return () => clearTimeout(t);
-  }, [draft, draftVersion, saveBlocked, persistPlan]);
+  }, [draft, draftVersion, saveBlocked, previewError?.msg]);
 
   // ── Festival span / estimate-tz mutators (top-of-page FestivalEditor) ──
   // These edit the DRAFT. When the operator touches them while viewing the LIVE
@@ -648,11 +853,11 @@ function TimelineScreenContent() {
     const next = clonePlan(r.data);
     fn(next);
     setDraft(next);
-    setDraftVersion((v) => v + 1);
+    bumpDraftVersion();
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
-  }, [draft, mutateDraft, state?.activePlan]);
+  }, [draft, mutateDraft, state?.activePlan, bumpDraftVersion]);
 
   // Set the festival start date to a chosen 'YYYY-MM-DD' (from the DateWheel
   // picker). Day i = startDate + i, so moving the start moves every day's
@@ -935,12 +1140,15 @@ function TimelineScreenContent() {
       return;
     }
     setEventBusy(true);
+    const priorityAttempt = beginPriorityHandoff('TIME TRAVEL');
     const err = await travel(spec);
+    finishPriorityHandoff(priorityAttempt, err === null, err);
     setEventBusy(false);
     if (err) { setEventActionError(err); return; }
     closeEvent();
     router.push('/');
-  }, [eventCue, eventMoment, travel, closeEvent, selectedDayOverview?.date]);
+  }, [beginPriorityHandoff, eventCue, eventMoment, finishPriorityHandoff, travel,
+    closeEvent, selectedDayOverview?.date]);
 
   // ── EXIT RULE D1: returning to the TIMELINE tab ends the zoom ──────────
   //
@@ -1034,7 +1242,7 @@ function TimelineScreenContent() {
               {`${state.activeCue.label}${state.activeCue.kind === 'program' ? ' · show' : ''}`}
             </Text>
             {state.activeProgram ? (
-              <TouchableOpacity onPress={() => endProgram()} style={styles.endProgramBtn} accessibilityLabel="End active program">
+              <TouchableOpacity onPress={() => { void handleEndProgram(); }} style={styles.endProgramBtn} accessibilityLabel="End active program">
                 <Text style={styles.endProgramText}>END</Text>
               </TouchableOpacity>
             ) : null}
@@ -1048,7 +1256,7 @@ function TimelineScreenContent() {
             <Text style={styles.nextCueText} numberOfLines={1}>
               {`program · ${state.activeProgram.cueId}${programCountdown != null ? ` · ${formatCountdown(programCountdown)} left` : ''}`}
             </Text>
-            <TouchableOpacity onPress={() => endProgram()} style={styles.endProgramBtn} accessibilityLabel="End active program">
+            <TouchableOpacity onPress={() => { void handleEndProgram(); }} style={styles.endProgramBtn} accessibilityLabel="End active program">
               <Text style={styles.endProgramText}>END</Text>
             </TouchableOpacity>
           </View>
@@ -1079,8 +1287,51 @@ function TimelineScreenContent() {
         ) : null}
         {!isOffline && error ? <Banner styles={styles} text={error} tone="error" /> : null}
         {actionError ? <Banner styles={styles} text={actionError} tone="error" /> : null}
+        {priorityFeedback ? (
+          <Banner
+            styles={styles}
+            text={timelinePriorityFeedbackText(priorityFeedback)}
+            tone={priorityFeedback.phase === 'succeeded' ? 'ok' : 'error'}
+            C={C}
+          />
+        ) : null}
+        {liveTouchLease?.armed ? (
+          <Banner
+            styles={styles}
+            text={`LIVE TOUCH ARMED${liveTouchLease.ownerId ? ` by '${liveTouchLease.ownerId}'` : ''}. Timeline actions have priority: the engine will disarm Live Touch first, confirm the handoff, then run the requested action once. Draft preview remains read-only.`}
+            tone="error"
+          />
+        ) : null}
         {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError.msg}`} tone="error" /> : null}
-        {previewTransportError ? <Banner styles={styles} text={`Preview unavailable: ${previewTransportError} (a valid draft still auto-saves)`} tone="error" /> : null}
+        {previewTransportError ? (
+          <Banner
+            styles={styles}
+            text={`Preview unavailable: ${previewTransportError}. Preview is not being shown; save status remains separate below.`}
+            tone="error"
+          />
+        ) : null}
+        {saveFailure ? (
+          <View style={styles.actionErrorBanner}>
+            <Text style={styles.actionErrorText}>{saveFailure.title}</Text>
+            <Text style={[styles.actionErrorText, { marginTop: 4 }]}>{saveFailure.detail}</Text>
+            <TouchableOpacity
+              onPress={() => { void draftSaverRef.current?.retry(); }}
+              disabled={autoSaveEvent?.phase === 'saving'}
+              style={[
+                styles.miniBtn,
+                { marginTop: 8, alignSelf: 'flex-start' },
+                autoSaveEvent?.phase === 'saving'
+                  ? { opacity: 0.5 }
+                  : null,
+              ]}
+              accessibilityLabel="Retry saving Timeline draft"
+            >
+              <Text style={styles.miniBtnText}>
+                {liveTouchLease?.armed ? 'PREEMPT LIVE TOUCH + RETRY' : 'RETRY SAVE'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
 
         {/* ── Live controls ──
@@ -1091,7 +1342,7 @@ function TimelineScreenContent() {
             autopilot on/off) and the plan picker. */}
         <View style={styles.controlsRow}>
           <TouchableOpacity
-            onPress={() => state && setAutopilot(!state.autopilotEnabled)}
+            onPress={() => { if (state) void handleSetAutopilot(!state.autopilotEnabled); }}
             disabled={!state}
             style={[
               styles.controlButton,
@@ -1147,7 +1398,15 @@ function TimelineScreenContent() {
           {/* ── PARTY MODE — session HANDLING (gate · playlist · numbers).
               First block in the scroll body: show handling belongs with the
               show plan, and the hard gate must be reachable mid-show. ── */}
-          <PartyModeSection styles={styles} C={C} state={state} connected={connected} />
+          <PartyModeSection
+            styles={styles}
+            C={C}
+            state={state}
+            connected={connected}
+            liveTouchLease={liveTouchLease}
+            onPriorityStart={beginPriorityHandoff}
+            onPriorityFinish={finishPriorityHandoff}
+          />
 
           {/* ── Festival span + sun-estimate tz (top of the maker page) ── */}
           {festivalView ? (
@@ -1176,9 +1435,9 @@ function TimelineScreenContent() {
                     save" (the error banner below explains). */}
                 <Text style={{
                   fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6,
-                  color: autoSaveState === 'error' ? C.error : (autoSaveState === 'saving' ? C.secondary : '#00a86b'),
+                  color: autoSaveTone,
                 }}>
-                  {autoSaveState === 'saving' ? 'SAVING…' : autoSaveState === 'error' ? '⚠ FIX TO SAVE' : '✓ SAVED'}
+                  {autoSaveLabel}
                 </Text>
               </View>
             ) : null}
@@ -1236,7 +1495,7 @@ function TimelineScreenContent() {
           {!draft ? (
             <Text style={styles.helperLine}>Tap a day to view its cues; tap EDIT DAY to edit it — the active plan loads into the maker.</Text>
           ) : (
-            <Text style={styles.helperLine}>Edits preview live across all days and auto-save. ACTIVATE (in PLANS) makes the plan run.</Text>
+            <Text style={styles.helperLine}>Edits preview live across all days. Save is confirmed separately; ACTIVATE (in PLANS) makes the plan run.</Text>
           )}
 
           {/* ── D. Cue list + controls (live) ── */}
@@ -1302,7 +1561,7 @@ function TimelineScreenContent() {
                     // but never when a DIFFERENT plan is loaded in the maker.
                     isActive={(draft === null || draft.name === activePlanName) && state?.activeCue?.id === cue.id}
                     activeSequence={state?.activeSequence ?? null}
-                    onFire={fireCue}
+                    onFire={handleFireCue}
                     styles={styles}
                     C={C}
                   />
@@ -1536,12 +1795,15 @@ function PartyStepperRow({
 }
 
 function PartyModeSection({
-  styles, C, state, connected,
+  styles, C, state, connected, liveTouchLease, onPriorityStart, onPriorityFinish,
 }: {
   styles: Styles;
   C: Palette;
   state: TimelineState | null;
   connected: boolean;
+  liveTouchLease: LayerSettingsState['liveTouch'] | null;
+  onPriorityStart: (operation: string) => number | null;
+  onPriorityFinish: (attemptId: number | null, ok: boolean, detail?: string | null) => void;
 }) {
   const [cfg, setCfg] = useState<PartyConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1631,7 +1893,9 @@ function PartyModeSection({
     if (!Object.keys(patch).length) return;
     setSaving(true);
     setActionError(null);
+    const priorityAttempt = onPriorityStart('SAVE PARTY CONFIG');
     const r = await setPartyConfig(patch);
+    onPriorityFinish(priorityAttempt, r.ok, r.error ?? null);
     if (r.ok && r.data) {
       setCfg(r.data);
       // Only drop the edits this PUT actually carried; anything the operator
@@ -1647,7 +1911,7 @@ function PartyModeSection({
       setActionError(r.error || 'request rejected');
     }
     setSaving(false);
-  }, []);
+  }, [onPriorityFinish, onPriorityStart]);
 
   /** Queue an edit: merge into the pending patch, restart the debounce. */
   const queue = useCallback((patch: PartyConfigPatch) => {
@@ -1721,7 +1985,11 @@ function PartyModeSection({
           accessibilityLabel={enabled ? 'Disable party mode' : 'Enable party mode'}
         >
           <Text style={[styles.controlLabel, { color: enabled ? C.onPrimary : C.error }]}>
-            {saving ? 'SAVING…' : enabled === null ? 'UNAVAILABLE' : enabled ? 'ENABLED' : 'DISABLED'}
+            {saving && liveTouchLease?.armed
+              ? 'PREEMPTING LIVE TOUCH…'
+              : saving
+                ? 'SAVING…'
+                : enabled === null ? 'UNAVAILABLE' : enabled ? 'ENABLED' : 'DISABLED'}
           </Text>
         </TouchableOpacity>
       </View>

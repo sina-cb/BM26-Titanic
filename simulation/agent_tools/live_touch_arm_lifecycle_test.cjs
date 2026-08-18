@@ -104,7 +104,7 @@ function writeIsolatedConfig(tempRoot) {
   return configPath;
 }
 
-function createStaticServer(enginePort) {
+function createStaticServer() {
   return http.createServer((request_, response) => {
     let pathname;
     try {
@@ -124,14 +124,11 @@ function createStaticServer(enginePort) {
         response.writeHead(error.code === 'ENOENT' ? 404 : 500).end(error.message);
         return;
       }
-      const body = pathname.endsWith('/touch_control_wire.js')
-        ? source.replaceAll(':6968', `:${enginePort}`)
-        : source;
       response.writeHead(200, {
         'Cache-Control': 'no-store',
         'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
       });
-      response.end(body);
+      response.end(source);
     });
   });
 }
@@ -181,7 +178,7 @@ async function main() {
   });
   engine.stdout.on('data', chunk => engineLogs.push(chunk.toString()));
   engine.stderr.on('data', chunk => engineLogs.push(chunk.toString()));
-  const staticServer = createStaticServer(enginePort);
+  const staticServer = createStaticServer();
   let browser = null;
 
   try {
@@ -214,7 +211,10 @@ async function main() {
       ],
     });
     const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${staticPort}${PAGE_PATH}`, {
+    const panelUrl = new URL(`http://127.0.0.1:${staticPort}${PAGE_PATH}`);
+    panelUrl.searchParams.set('captainpad_engine_origin', engineBase);
+    panelUrl.searchParams.set('captainpad_live_touch_protocol', '1');
+    await page.goto(panelUrl.href, {
       waitUntil: 'domcontentloaded',
       timeout: 15_000,
     });

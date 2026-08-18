@@ -112,8 +112,11 @@ Design choices, and why:
   git-based deploy would silently ship *less* than what the laptop is
   actually running — a lie. Robocopy ships the tree byte-for-byte,
   `node_modules` included (offline requirement: the server must never need
-  `npm install`). `.git` is synced too so on-server agents can inspect
-  history. Delta copy makes repeat deploys fast; only the first seed is big.
+  `npm install`). `.git` is deliberately excluded: production is a runtime
+  artifact, and protected Windows Git-object ACLs can make even Robocopy's
+  list-only preview fail. On-server agents use the scratch workspace for Git
+  history and durable work. Delta copy makes repeat deploys fast; only the
+  first seed is big.
 - **SSH for control, SMB for bytes.** Both are native Windows. SSH runs
   the remote stop/start; SMB + robocopy moves files with proper
   timestamp-delta behavior. Key-based SSH auth only — no passwords in any
@@ -200,7 +203,6 @@ machines:
     scene: test_bench        # sim scene AND engine model at boot
     pattern: 00_golden_hour_wash
     profile: prod
-    open_browser: true       # auto-open sim + audio pages on the console at boot
     dest: C:\titanic\BM26-Titanic
     share: \\192.0.2.10\titanic    # SMB share rooted at share_root
     share_root: C:\titanic         # dest must live under this (dest_unc maps it)
@@ -231,18 +233,23 @@ sequence and phase names below are what `deploy_prod` emits:
 
 | Phase | What happens | Fails loudly when |
 |---|---|---|
-| 1/8 preflight | Manifest entry exists; SSH reaches the right host; remote `node --version` == local (v24.18.0 today); `--scene` (if given) validated NOW while the stack is still up; SMB reachable + a `robocopy /L` diff summary of what will change | host down, wrong box, node mismatch, share missing, bad `--scene` |
+| 1/8 preflight | Manifest entry exists; SSH reaches the right host; remote `node --version` == local (v24.18.0 today); the laptop's external `$BM26_SECRETS` YAML validates; the exact three-shortcut URL plan is derived and printed from the selected scene, launcher profile, and effective machine overlay/config; a real deploy securely provisions its protected remote secret copy outside prod, persists its Machine-scope path, removes any stale User-scope override, and verifies read access with redacted output; `--dry-run` only probes and describes remote actions; `--scene` (if given) validates NOW while the stack is still up; SMB reachable + a `robocopy /L` diff summary of what will change | host down, wrong box, node mismatch, invalid launcher/lighting profile or port config, local secret invalid, secure copy/ACL/persistence/read verification failure, share missing, bad `--scene` |
 | 2/8 stop stack | `ssh … "schtasks /End /TN BM26TitanicStack"` then `node launcher.js stop` for stragglers, then confirm both ports go quiet | stack won't die (orphaned port) |
 | 3/8 sync working tree | `robocopy <repo> <share> /MIR` with the exclusion list below | any robocopy error class ≥ 8 |
-| 4/8 boot scene + ship manifest | If `--scene`, write it into the private `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`); then ship that private manifest to `<dest>\deploy\machines.yaml` on the server | scene missing its files, manifest unparseable/unwritable |
-| 5/8 apply overlay | Deep-merge each `deploy/overlays/<machine>/` `.yaml` override fragment over the tracked file at the same path and write the result (non-`.yaml` files full-copy); a missing or empty overlay dir is fine — the tracked config is the operator-blessed default | a malformed/empty `.yaml` fragment, a `.yaml` with no tracked base, or a `.yml` fragment |
+| 4/8 boot scene + manifest | If `--scene`, write it into the private `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`); ship that manifest | scene missing its files or manifest unparseable/unwritable |
+| 5/8 apply overlay + operator shortcuts | Deep-merge each `deploy/overlays/<machine>/` `.yaml` override fragment over the tracked file at the same path; then reconcile exactly three localhost `.url` shortcuts on the registered show user's Known Folder desktop from the deployed profile/config, remove retired BM26 shortcut duplicates, and create/verify distinct offline icons in the stable operator-assets directory outside prod | malformed overlay, wrong SSH user, desktop unavailable, URL plan mismatch, stale shortcut removal failure, or icon/shortcut verification mismatch |
 | 6/8 stamp deploy_info.yaml | Write `deploy_info.yaml` at the destination root: git HEAD, branch, dirty-file count, timestamp, source hostname | — |
-| 7/8 start stack | Capture the server wall clock, then `ssh … "schtasks /Run /TN BM26TitanicStack"` (runs in the logged-on session, so audio/devices work — never start the stack directly from the SSH session) | task missing |
+| 7/8 start stack | Capture the server wall clock, verify the deployed boot script contains the exact `node launcher.js <profile> --scene <scene> --no-launch` argument contract, then `ssh … "schtasks /Run /TN BM26TitanicStack"` (runs in the logged-on session, so audio/devices work — never start the stack directly from SSH) | no-launch contract missing or task missing |
 | 8/8 verify | From the laptop: poll `http://host:6968/status` until up (5-min budget — a cold boot plus one benign supervisor restart can exceed 3 min), assert reported model == expected scene; probe sim `:6969`; bind `boot_status.yaml` to THIS run (server wall clock captured just before start) and confirm the supervisor is **stable** — two `restart_count` reads ~15 s apart, failing on any change (rise = crash loop, fall = supervisor restart) | probes time out, wrong scene, stale/crash-looping supervisor |
 
 **Sync exclusions** (`/XD` / `/XF`) — the server *owns* its live state, the
 laptop owns code:
 
+- `.git/**` on both source and destination — production does not execute Git.
+  Excluding both roots prevents inherited/protected object ACLs from aborting
+  the safety preview. Existing prod metadata may remain but is stale and
+  unsupported; all durable server-side Git work lives in scratch. Never use
+  `/ZB` or broad ACL grants to force a prod mirror through `.git`.
 - `marsin_engine/states/**` — deck/mixer/effects runtime state (tracked in
   git, but runtime-mutated; clobbering it mid-event would wipe the server's
   live tuning), so it is excluded on **every** deploy. First-deploy state is
@@ -250,6 +257,18 @@ laptop owns code:
 - `simulation/.scene_backups/`, `.agent_renders/`, `deploy_info.yaml`,
   `machines.yaml`, supervisor logs/status.
 - Overlay-managed files are synced normally, then overwritten in phase 5.
+
+The phase-5 shortcuts are ordinary InternetShortcut files. Their exact URLs
+come from the same exported launcher profile registry and effective deployed
+`simulation/config.yaml` used by the stack, including scene, lighting profile,
+common simulation query, spotlights, and ports. Dry-run prints the complete
+plan. The installer removes retired `.url`/`.lnk` entries targeting the BM26
+localhost endpoints, converges exactly three authoritative names, and verifies
+their contents and plan hash. It also generates three distinct offline `.ico`
+assets in `<share_root>\operator_shortcuts\icons`, outside the mirrored repo,
+then pins each shortcut to its stable icon. It never launches a browser, starts
+a service, or adds startup behavior. The supervisor likewise has no auto-open
+path and always invokes launcher.js with `--no-launch`.
 
 `--restart-only` skips phases 3–6 (fast path for "same code, new scene" — but
 `--scene` needs a sync so it cannot combine with `--restart-only`).
@@ -270,6 +289,14 @@ laptop owns code:
   verify.
 - **Wrong machine ID**: supervisor matches by hostname; unknown hostname =
   refuse to start anything (no default scene).
+- **Runtime secret missing from the scheduled-task environment**: a real prod
+  preflight validates the laptop's external source, copies it over encrypted
+  SCP to an ACL-protected stable path outside the deployed tree, persists that
+  path at Machine scope, removes any stale User-scope override, and opens it
+  read-only before the stop phase. Output
+  redacts both path and values. `--dry-run` performs only local validation and
+  a read-only remote readiness probe. Process-only remote variables do not
+  count.
 - **Two people deploy at once**: last robocopy wins; verify catches an
   inconsistent result. Fleet locking is deliberately out of scope (one
   operator, one laptop).

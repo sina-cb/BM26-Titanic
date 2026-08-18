@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { Palette } from '@/constants/theme';
 import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { opError, opWarn } from '@/utils/op_dialog';
+import { retuneRejectionMessage } from '@/utils/color_autopilot_narration';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -45,6 +46,13 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import {
   MIXER_BOUNDED_SCROLL_AREA,
   MIXER_CHANNEL_CARD_TRACK,
+  MIXER_CHANNEL_ROW_GAP,
+  MIXER_CHANNEL_ROW_PADDING,
+  MIXER_COLLAPSED_GROUP_WIDTH,
+  MIXER_COLORS_CARD_WIDTH,
+  MIXER_GROUP_BORDER_WIDTH,
+  MIXER_GROUP_HORIZONTAL_PADDING,
+  MIXER_GROUP_MEMBER_GAP,
   MIXER_LANDSCAPE_PARAMS_PANEL_COLLAPSED,
   MIXER_LANDSCAPE_PARAMS_PANEL_EMPTY,
   MIXER_LANDSCAPE_PLAYLIST_PANEL_EXPANDED,
@@ -55,7 +63,7 @@ import {
   MIXER_TALL_PORTRAIT_PLAYLIST_PANEL,
   isCompactMixerPortrait,
   mixerChannelContentLayout,
-  mixerChannelRowScrollEnabled,
+  mixerChannelRowSizing,
   mixerLandscapeMediaBandSlot,
 } from '@/components/mixer_scroll_layout';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
@@ -459,7 +467,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange, hidden, workspaceLayout, onOpenSection, onCloseSection }: any) => {
+const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange, hidden, workspaceLayout, onOpenSection, onCloseSection, channelCardTrack }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -719,6 +727,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   return (
     <View style={[
       styles.channelCard,
+      channelCardTrack,
       // Group tint (docs/39 §10): a member channel takes its group's color on
       // the left edge so grouped strips read together at a glance. The lock
       // border (operator-critical) wins over it. (Per-channel color coding was
@@ -1292,8 +1301,9 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
         ]}>
           {contentLayout.forcePixelExpanded ? (
             // docs/64 §3.6 (D5, W4): PARAMS-HIDDEN used to print HERE, once
-            // PER CHANNEL — the workspace bar now prints it ONCE, at its own
-            // right end (`showPerfCaption`), so nothing repeats it per strip.
+            // PER CHANNEL. It no longer prints anywhere — report _308,
+            // operator order: no explainer captions in the chip bar or the
+            // strips, perf mode included.
             // docs/64 §3.5 (D4): the dominant band is this channel's "2D
             // band, forced open" — it only renders while PIXELS is actually
             // shown; an operator-hidden pixels section is never resurrected
@@ -1772,6 +1782,84 @@ export default function MixerScreen() {
   // below). Portrait mounts the citizen as a separate full-width block
   // BELOW the ScrollView instead, so it never enters that row's math.
   const colorsInRow = colorsShown && !isPortrait;
+  const [channelRowViewportWidth, setChannelRowViewportWidth] = useState(width);
+  useEffect(() => {
+    setChannelRowViewportWidth(width);
+  }, [width]);
+  const handleChannelRowLayout = useCallback((event: LayoutChangeEvent) => {
+    const measuredWidth = event.nativeEvent.layout.width;
+    setChannelRowViewportWidth((previousWidth) => (
+      Math.abs(previousWidth - measuredWidth) > 0.5 ? measuredWidth : previousWidth
+    ));
+  }, []);
+
+  // Budget every horizontal occupant that is not an expanded channel card.
+  // This mirrors the render plan below: ungrouped channels are top-level
+  // units; each expanded/collapsed group is one top-level unit; COLORS is one
+  // more. Hidden channels remain mounted with display:none and therefore do
+  // not claim a card, gap, or group-member slot.
+  const knownGroupIds = new Set(mixGroups.map((group) => group.id));
+  const expandedGroupCounts = new Map<string, number>();
+  const collapsedVisibleGroupIds = new Set<string>();
+  let ungroupedExpandedCount = 0;
+  channels.forEach((channel) => {
+    if (!visibleChannelIdSet.has(channel.id)) return;
+    const groupId = typeof channel.mixGroupId === 'string' && knownGroupIds.has(channel.mixGroupId)
+      ? channel.mixGroupId
+      : null;
+    if (groupId == null) {
+      ungroupedExpandedCount += 1;
+    } else if (collapsedGroups.has(groupId)) {
+      collapsedVisibleGroupIds.add(groupId);
+    } else {
+      expandedGroupCounts.set(groupId, (expandedGroupCounts.get(groupId) ?? 0) + 1);
+    }
+  });
+  const expandedGroupChannelCount = Array.from(expandedGroupCounts.values())
+    .reduce((sum, count) => sum + count, 0);
+  const expandedChannelCount = ungroupedExpandedCount + expandedGroupChannelCount;
+  const channelUnitCount = ungroupedExpandedCount
+    + expandedGroupCounts.size
+    + collapsedVisibleGroupIds.size;
+  const rowItemCount = channelUnitCount + (colorsInRow ? 1 : 0);
+  const topLevelGapCount = Math.max(0, rowItemCount - 1);
+  const groupMemberGapCount = Array.from(expandedGroupCounts.values())
+    .reduce((sum, count) => sum + Math.max(0, count - 1), 0);
+  const expandedGroupCount = expandedGroupCounts.size;
+  const collapsedVisibleGroupCount = collapsedVisibleGroupIds.size;
+
+  // Only the six structural numbers below can change card geometry. Mixer WS
+  // broadcasts replace channel objects for live fader/meter updates, but those
+  // updates must not mint a new track object and defeat ChannelStrip's memo.
+  const channelRowSizing = useMemo(() => {
+    const gapWidths = [
+      ...Array.from({ length: topLevelGapCount }, () => MIXER_CHANNEL_ROW_GAP),
+      ...Array.from({ length: groupMemberGapCount }, () => MIXER_GROUP_MEMBER_GAP),
+    ];
+    const expandedGroupFrameWidth = (MIXER_GROUP_HORIZONTAL_PADDING * 2)
+      + (MIXER_GROUP_BORDER_WIDTH * 2);
+    const fixedItemWidths = [
+      ...Array.from({ length: expandedGroupCount }, () => expandedGroupFrameWidth),
+      ...Array.from({ length: collapsedVisibleGroupCount }, () => MIXER_COLLAPSED_GROUP_WIDTH),
+      ...(colorsInRow ? [MIXER_COLORS_CARD_WIDTH] : []),
+    ];
+
+    return mixerChannelRowSizing({
+      viewportWidth: channelRowViewportWidth,
+      channelCount: expandedChannelCount,
+      horizontalPadding: MIXER_CHANNEL_ROW_PADDING,
+      gapWidths,
+      fixedItemWidths,
+    });
+  }, [
+    channelRowViewportWidth,
+    collapsedVisibleGroupCount,
+    colorsInRow,
+    expandedChannelCount,
+    expandedGroupCount,
+    groupMemberGapCount,
+    topLevelGapCount,
+  ]);
   // LEAD RULING (this wave): the mixer's COLORS chip is VIEW-ONLY. Hiding it
   // unmounts the window below and posts NOTHING to the engine — no
   // `runYieldGesture`, no L3 tab-blur yield. docs/61 §2.1's yield rule was
@@ -1813,16 +1901,16 @@ export default function MixerScreen() {
       ].filter(Boolean).join(' '));
     });
   }, [notifyInteraction]);
-  const handleColorsAutopilotRetune = useCallback((patch: Record<string, unknown>) => {
+  const handleColorsAutopilotRetune = useCallback((patch: Record<string, unknown>, failNote?: string) => {
     notifyInteraction();
     void patchDeckColorAutopilot(patch).then((res) => {
       if (!res.ok) {
         console.error('[Mixer] Color-autopilot PATCH rejected:', res.error);
-        opError('Retune not applied', `The engine refused the change. ${res.error || ''} The rotation is still running its previous settings.`.trim());
+        opError('Retune not applied', retuneRejectionMessage('rejected', res.error, failNote));
       }
     }).catch((err) => {
       console.error('[Mixer] Color-autopilot PATCH failed:', err);
-      opError('Retune not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
+      opError('Retune not applied', retuneRejectionMessage('unreachable', err?.message, failNote));
     });
   }, [notifyInteraction]);
   // The mount itself — the REAL `ColorsWindow` (no fork, no copy), styled as
@@ -3271,21 +3359,23 @@ export default function MixerScreen() {
           iterate the array directly — no `.slice(1)` skip-the-deck
           dance. The engine's HIL test (hil_channel_isolation_test)
           guards this invariant. */}
-      {/* Every channel is the same fixed 320pt instrument. One or two cards
-          center; three or more left-align inside an enabled horizontal host,
-          so row padding, group borders, and native rounding can never create
-          unreachable overflow. `colorsInRow` also forces the host on because
-          COLORS mounts INSIDE
+      {/* Every expanded visible channel consumes the SAME measured track.
+          The pure sizing contract budgets row padding/gaps, group frames,
+          collapsed bars, and COLORS before dividing the remainder. One card
+          stops at 50%; two split the usable channel space; larger sets share
+          equally until the 320pt floor requires scrolling. COLORS still mounts
+          INSIDE
           this same ScrollView in landscape (§4's "right end of the strip
           row, scrolling with the row"), at its OWN fixed ~380pt width
           (`styles.colorsCard`, not the channel-card track). Fader gestures
           synchronously lock this host through `LockableScrollView`. */}
       <LockableScrollView
         horizontal
-        scrollEnabled={mixerChannelRowScrollEnabled(isPortrait, visibleChannelIds.length, colorsInRow)}
+        scrollEnabled={channelRowSizing.overflow}
+        onLayout={handleChannelRowLayout}
         contentContainerStyle={[
-          { padding: 16, gap: 16, flexGrow: 1 },
-          mixerChannelRowScrollEnabled(isPortrait, visibleChannelIds.length, colorsInRow)
+          { padding: MIXER_CHANNEL_ROW_PADDING, gap: MIXER_CHANNEL_ROW_GAP, flexGrow: 1 },
+          channelRowSizing.overflow
             ? { justifyContent: 'flex-start' }
             : { justifyContent: 'center' },
         ]}
@@ -3395,6 +3485,7 @@ export default function MixerScreen() {
                 workspaceLayout={workspace.layout}
                 onOpenSection={workspace.open}
                 onCloseSection={workspace.close}
+                channelCardTrack={channelRowSizing.cardTrack}
               />
             );
           };
@@ -3879,7 +3970,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   // ColorsWindow nesting.
   colorsCard: {
     ...globalStyles.panel,
-    width: 380,
+    width: MIXER_COLORS_CARD_WIDTH,
     flexShrink: 0,
     alignSelf: 'stretch',
     overflow: 'hidden',
@@ -3915,9 +4006,9 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   groupContainer: {
     alignSelf: 'stretch',
     borderRadius: 16,
-    borderWidth: 1,
+    borderWidth: MIXER_GROUP_BORDER_WIDTH,
     borderColor: C.ghostBorder,
-    padding: 8,
+    padding: MIXER_GROUP_HORIZONTAL_PADDING,
     gap: 8,
   },
   // The header sits on TOP of the member row in the expanded container; we let
@@ -3940,7 +4031,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     minHeight: 0,
     flexDirection: 'row',
     alignItems: 'stretch',
-    gap: 12,
+    gap: MIXER_GROUP_MEMBER_GAP,
   },
   // ── Collapsed group: narrow VERTICAL bar (operator request 2026-06-29 #2) ──
   // The whole collapsed group is one slim vertical column: a vertical/compact
@@ -3949,7 +4040,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   // expands it back.
   groupBarV: {
     alignSelf: 'flex-start',
-    width: 60,
+    width: MIXER_COLLAPSED_GROUP_WIDTH,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: C.ghostBorder,

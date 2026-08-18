@@ -21,7 +21,8 @@ import {
   ROTATION_HOLD_PRESETS_S, ROTATION_FADE_PRESETS_S,
   rotationAutopilotPatch, assertRotationTiming,
   rotationCursor, cursorRailOffset, cursorRailSegments, CURSOR_FIT_EPS,
-  orbitPairs, orbitDistance, orbitPhase, orbitWindowSlots, turnsOrbit,
+  orbitPairs, orbitDistance, orbitStep, orbitPhase, orbitWindowSlots, turnsOrbit,
+  colourGestureOutcome, crossfadeRetargetRing, turnsRetargetRing,
   SCHEME_PAIR_DEFAULT, PAIR_CHANNEL_LABELS, selectSchemePair, schemePairColours,
   wrap01, turnDelta, beginDial, dialSample, dialHue, dialTicks,
   DIAL_GAIN, DIAL_DEAD_RADIUS_PX, DIAL_TICKS, DIAL_TICK_MAJOR_EVERY,
@@ -34,6 +35,7 @@ import {
   METHOD_FADE_PRESETS_S, METHOD_FADE_DEFAULT_S, NOTE_FADE_PRESETS_MS, NOTE_FADE_DEFAULT_MS,
   MIN_CONTINUOUS_METHOD_FADE_S,
   retunableLive, retuneTiming, rotationRetunePatch, RETUNE_TIMING_TAGS,
+  reduceColorControlState,
   cardForKind, kindLabel, yieldDecision, drivingStripModel, colorChipLabel, takeoverNote,
   YIELD_ON_CARD_SWITCH, YIELD_ON_WINDOW_HIDE, YIELD_ON_TAB_LEAVE, YIELD_KINDS,
   YIELD_SAY, YIELD_FAIL_SAY,
@@ -418,6 +420,46 @@ describe('blendFromBroadcast — where on the A→B arc the rig actually sits', 
   });
 });
 
+describe('authoritative crossfade lifecycle — config plus engine palette readback', () => {
+  const palettes = crossfadeAutopilotPatch(0.2, 0.7, 2, 0.4).palettes;
+  const base = { active: false, mode: 'palettes' as const, palettes, transitionMs: 400 };
+
+  it('renders start, midpoint, and final snap only from received engine frames', () => {
+    const running = reduceColorControlState(base, { active: true, mode: 'palettes', palettes });
+    expect(rotationKind(running.active, running.palettes, running.mode)).toBe('crossfade');
+    expect(rotationCursor(palettes, colour(0.2, 1, 1), colour(0.7, 1, 1)))
+      .toEqual({ index: 0, t: 1 });
+
+    const [mid1, mid2] = engineFrame(palettes[0], palettes[1], 0.5);
+    const midpoint = rotationCursor(palettes, mid1, mid2);
+    expect(midpoint).not.toBeNull();
+    expect(midpoint!.index).toBe(1);
+    expect(midpoint!.t).toBeCloseTo(0.5, 9);
+    expect(blendFromBroadcast(0.2, 0.7, mid1.h)).toBeCloseTo(0.5, 9);
+
+    expect(rotationCursor(palettes, asHsv(palettes[1].c1), asHsv(palettes[1].c2)))
+      .toEqual({ index: 1, t: 1 });
+  });
+
+  it('STOP, failed optimistic start, and reconnect reconcile immediately from payload truth', () => {
+    const optimistic = reduceColorControlState(base, { active: true, mode: 'palettes', palettes });
+    const stopped = reduceColorControlState(optimistic, { active: false });
+    expect(rotationKind(stopped.active, stopped.palettes, stopped.mode)).toBe('none');
+
+    const failedRollback = reduceColorControlState(optimistic, { active: false, mode: 'palettes' });
+    expect(rotationKind(failedRollback.active, failedRollback.palettes, failedRollback.mode)).toBe('none');
+
+    const reconnected = reduceColorControlState(stopped, {
+      active: true,
+      mode: 'palettes',
+      palettes,
+      transitionMs: 400,
+    });
+    expect(rotationKind(reconnected.active, reconnected.palettes, reconnected.mode)).toBe('crossfade');
+    expect(reconnected.transitionMs).toBe(400);
+  });
+});
+
 // ── Live Touch scheme generators, ported VERBATIM ───────────────────────────
 
 describe('scheme generators match the Live Touch constants exactly', () => {
@@ -504,13 +546,13 @@ describe('pair channels: hue number OR full HSV, minimally encoded', () => {
 // ── PALETTE TURNS ───────────────────────────────────────────────────────────
 
 describe('PALETTE TURNS pair derivation', () => {
-  it('5 chosen colours → 5 ADJACENT pairs, wrapping at the end', () => {
+  it('5 chosen colours → 5 adjacent windows stepped without consecutive reuse', () => {
     expect(turnsPairs(RING)).toEqual([
       { c1: 0.07, c2: 0.0 },
-      { c1: 0.0, c2: 0.62 },
       { c1: 0.62, c2: 0.28 },
-      { c1: 0.28, c2: 0.74 },
       { c1: 0.74, c2: 0.07 },
+      { c1: 0.0, c2: 0.62 },
+      { c1: 0.28, c2: 0.74 },
     ]);
   });
 
@@ -523,9 +565,9 @@ describe('PALETTE TURNS pair derivation', () => {
       expect(typeof p.c1).toBe('object');
       expect(typeof p.c2).toBe('object');
     }
-    expect(pairs.map((p) => asHsv(p.c1).v)).toEqual([1.0, 0.78, 0.58, 0.40, 0.25]);
-    // …and each pair's second colour is the ring's NEXT colour.
-    expect(pairs.map((p) => asHsv(p.c2).v)).toEqual([0.78, 0.58, 0.40, 0.25, 1.0]);
+    expect(pairs.map((p) => asHsv(p.c1).v)).toEqual([1.0, 0.58, 0.25, 0.78, 0.40]);
+    // …and each pair's second colour is adjacent on the same step-2 lap.
+    expect(pairs.map((p) => asHsv(p.c2).v)).toEqual([0.78, 0.40, 1.0, 0.58, 0.25]);
   });
 
   it('every chosen colour appears exactly twice — once per ring neighbour', () => {
@@ -593,7 +635,7 @@ describe('the shared transport — TURNS and the crossfade run on the SAME timin
     expect(turnsAutopilotPatch(ring, 0, 1.5).delay_s).toBe(0);
   });
 
-  it('is 5 adjacent pairs, no shuffle, and exactly the five wire keys', () => {
+  it('is 5 stepped adjacent windows with one exact five-slot target per entry', () => {
     expect(turnsAutopilotPatch(ring, 30, 3)).toEqual({
       active: true,
       shuffle: false,
@@ -601,10 +643,10 @@ describe('the shared transport — TURNS and the crossfade run on the SAME timin
       transitionMs: 3000,
       palettes: [
         { c1: 0.07, c2: 0.0 },
-        { c1: 0.0, c2: 0.62 },
         { c1: 0.62, c2: 0.28 },
-        { c1: 0.28, c2: 0.74 },
         { c1: 0.74, c2: 0.07 },
+        { c1: 0.0, c2: 0.62 },
+        { c1: 0.28, c2: 0.74 },
       ],
     });
     expect(Object.keys(turnsAutopilotPatch(ring, 10, 0.8)).sort())
@@ -742,11 +784,11 @@ describe('a scheme tap during a rotation — WHICH CARD you tapped from matters 
     }
   });
 
-  it('during a crossfade it stages ONLY on EVERY card, and names the button that takes over', () => {
+  it('docs/75 §5 (RE-PIN, supersedes docs/61 §5): during a crossfade it RETARGETS on every card', () => {
     for (const surface of ['two', 'turns', 'follow'] as const) {
       const o = schemeTapOutcome('crossfade', 'HUE', surface);
-      expect(o.action).toBe('stage-only');
-      expect(o.message).toBe('Crossfade is driving A/B — STOP it or START TURNS to run the scheme.');
+      expect(o.action).toBe('retarget');
+      expect(o.message).toBe('HUE retunes the running crossfade — from the next fade.');
     }
   });
 
@@ -774,12 +816,75 @@ describe('a scheme tap during a rotation — WHICH CARD you tapped from matters 
       }
     }
     expect(actions.has('pause')).toBe(false);
-    expect(actions).toEqual(new Set(['stage-and-write', 'restage', 'method-override', 'stage-only']));
+    // docs/75 §5 RE-PIN: 'retarget' joins the set now that crossfade PATCHes
+    // its running ring instead of staging only.
+    expect(actions).toEqual(new Set(['stage-and-write', 'restage', 'retarget', 'method-override', 'stage-only']));
   });
 
   it('an unknown kind THROWS — a scheme tap that quietly did nothing would be indistinguishable from broken', () => {
     // @ts-expect-error — deliberately off-contract
     expect(() => schemeTapOutcome('bogus', 'X', 'two')).toThrow(/unknown rotation kind/);
+  });
+});
+
+describe('colourGestureOutcome — the gate becomes a ROUTER for colour edits (docs/75 §5)', () => {
+  it('the full table, kind by kind, on every surface', () => {
+    expect(colourGestureOutcome('none', 'two')).toEqual({ action: 'write' });
+    for (const surface of ['two', 'turns', 'follow'] as const) {
+      expect(colourGestureOutcome('crossfade', surface)).toEqual({ action: 'retarget' });
+      expect(colourGestureOutcome('turns', surface)).toEqual({ action: 'retarget' });
+    }
+  });
+
+  it('follow-note refuses with the EXISTING manualWriteGate sentence (D7 — the note owns the hue)', () => {
+    for (const surface of ['two', 'turns', 'follow'] as const) {
+      const o = colourGestureOutcome('follow-note', surface);
+      expect(o.action).toBe('refuse');
+      expect(o.reason).toBe('FOLLOW NOTE is driving the colours — STOP it to edit.');
+    }
+  });
+
+  it('palette-set refuses with the EXISTING manualWriteGate sentence — the AUTOPILOT window owns that config', () => {
+    for (const surface of ['two', 'turns', 'follow'] as const) {
+      const o = colourGestureOutcome('palette-set', surface);
+      expect(o.action).toBe('refuse');
+      expect(o.reason).toBe('An AUTOPILOT palette set is driving the colours — STOP it to edit.');
+    }
+  });
+
+  it('never invents a sentence manualWriteGate would not also say — sourced, not restated', () => {
+    for (const kind of ['follow-note', 'palette-set'] as const) {
+      const gate = manualWriteGate(false, kind);
+      const outcome = colourGestureOutcome(kind, 'two');
+      expect(gate.canWrite).toBe(false);
+      if (gate.canWrite) continue;
+      expect(outcome.reason).toBe(gate.reason);
+    }
+  });
+
+  it('an unknown kind THROWS, matching schemeTapOutcome and manualWriteGate\'s default arm', () => {
+    // @ts-expect-error — deliberately off-contract
+    expect(() => colourGestureOutcome('bogus', 'two')).toThrow(/unknown rotation kind/);
+  });
+});
+
+describe('the retarget builders — the ring half of a docs/75 §5 PATCH', () => {
+  it('crossfadeRetargetRing is orbitPairs([A,B],[0,1]) — a plain 2-entry chained ring', () => {
+    expect(crossfadeRetargetRing(0.2, 0.7)).toEqual(orbitPairs([colour(0.2, 1, 1), colour(0.7, 1, 1)], [0, 1]));
+    expect(crossfadeRetargetRing(0.2, 0.7)).toEqual(crossfadeAutopilotPatch(0.2, 0.7, 5, 1).palettes);
+  });
+
+  it('turnsRetargetRing is orbitPairs at the given sel — the stepped ring, for any pick', () => {
+    for (const [sel] of ALL_SELS) {
+      expect(turnsRetargetRing(RING, sel)).toEqual(orbitPairs(RING, sel));
+    }
+  });
+
+  it('both builders feed rotationRetunePatch into a valid sparse PATCH for their kind', () => {
+    const crossPatch = rotationRetunePatch('crossfade', { palettes: crossfadeRetargetRing(0.1, 0.5) });
+    expect(crossPatch).toEqual({ palettes: crossfadeRetargetRing(0.1, 0.5) });
+    const turnsPatch = rotationRetunePatch('turns', { palettes: turnsRetargetRing(RING, [1, 3]) });
+    expect(turnsPatch).toEqual({ palettes: turnsRetargetRing(RING, [1, 3]) });
   });
 });
 
@@ -1126,7 +1231,7 @@ describe('recognising a live TURNS config (visible truth, not a guess)', () => {
 
   it('litPairIndex reports which pair is on the rig, and -1 mid-fade', () => {
     const pairs = turnsPairs(ring);
-    expect(litPairIndex(pairs, colour(0.62, 1, 1), colour(0.28, 1, 1))).toBe(2);
+    expect(litPairIndex(pairs, colour(0.62, 1, 1), colour(0.28, 1, 1))).toBe(1);
     // Between two pairs — the UI shows "fading", not a wrong highlight.
     expect(litPairIndex(pairs, colour(0.45, 1, 1), colour(0.45, 1, 1))).toBe(-1);
     expect(litPairIndex(['aurora'], colour(0.1, 1, 1), colour(0.2, 1, 1))).toBe(-1);
@@ -1140,8 +1245,8 @@ describe('recognising a live TURNS config (visible truth, not a guess)', () => {
     const at = (v1: number, v2: number) =>
       litPairIndex(pairs, colour(0.72, 0.95, v1), colour(0.72, 0.95, v2));
     expect(at(1.0, 0.78)).toBe(0);
-    expect(at(0.58, 0.40)).toBe(2);
-    expect(at(0.25, 1.0)).toBe(4);
+    expect(at(0.58, 0.40)).toBe(1);
+    expect(at(0.25, 1.0)).toBe(2);
     expect(at(0.5, 0.5)).toBe(-1);
   });
 });
@@ -1679,23 +1784,115 @@ describe('the ORBIT — a distance-d window travelling right around the ring', (
     expect(() => orbitDistance([0, 1.5], 5)).toThrow(/outside a ring/);
   });
 
-  it('EVERY pick keeps its distance for the whole lap, and loops back', () => {
+  it('orbitStep table (docs/75 §4 D1): adjacent steps by 2, spaced by 1, and n=2 never steps', () => {
+    // n = 5 — the TURNS ring.
+    expect(orbitStep(1, 5)).toBe(2);  // adjacent (T1,T2) — the defect's case
+    expect(orbitStep(2, 5)).toBe(1);  // spaced — already disjoint
+    expect(orbitStep(3, 5)).toBe(1);  // spaced — already disjoint
+    expect(orbitStep(4, 5)).toBe(2);  // adjacent the OTHER way (T5,T1-ish)
+    // n = 2 — the CROSSFADE ring: no disjoint step can exist with only two
+    // slots to share, so the search always falls back to 1.
+    expect(orbitStep(1, 2)).toBe(1);
+  });
+
+  it('docs/75 §3, TABLE 1 (the defect, verbatim): the OLD adjacent slide shared a colour every turn', () => {
+    // What `orbitPairs` built before this change (step always 1): channel A
+    // merely inherits channel B's PREVIOUS colour — asserted here as the
+    // literal old formula, not called through `orbitPairs`, so this table
+    // stays a fixed reference point even as the shipped function changes.
+    const oldSlide = [0, 1, 2, 3, 4].map((i) => [RING_HUES[i % 5], RING_HUES[(i + 1) % 5]]);
+    expect(oldSlide).toEqual([
+      [RING_HUES[0], RING_HUES[1]], [RING_HUES[1], RING_HUES[2]], [RING_HUES[2], RING_HUES[3]],
+      [RING_HUES[3], RING_HUES[4]], [RING_HUES[4], RING_HUES[0]],
+    ]);
+    // Every consecutive pair of OLD windows shares exactly one colour — the
+    // shift-register defect, named for the record before proving the fix.
+    for (let i = 0; i < 5; i++) {
+      const cur = oldSlide[i];
+      const next = oldSlide[(i + 1) % 5];
+      const shared = cur.filter((c) => next.includes(c));
+      expect(shared.length).toBe(1);
+    }
+  });
+
+  it('docs/75 §3, TABLE 2 (the fix, verbatim): sel T1+T2 plays (T1,T2)(T3,T4)(T5,T1)(T2,T3)(T4,T5)', () => {
+    const pairs = orbitPairs(RING, [0, 1]);
+    const wire = pairs.map((p) => [hueOf(p.c1), hueOf(p.c2)]);
+    expect(wire).toEqual([
+      [RING_HUES[0], RING_HUES[1]], // (T1,T2)
+      [RING_HUES[2], RING_HUES[3]], // (T3,T4)
+      [RING_HUES[4], RING_HUES[0]], // (T5,T1)
+      [RING_HUES[1], RING_HUES[2]], // (T2,T3)
+      [RING_HUES[3], RING_HUES[4]], // (T4,T5)
+    ]);
+    // Then it WRAPS: turn 5 (index 4 % 5 = 0) is turn 0 again.
+    const sixth = orbitPairs(RING, [0, 1])[5 % 5];
+    expect([hueOf(sixth.c1), hueOf(sixth.c2)]).toEqual([RING_HUES[0], RING_HUES[1]]);
+    // Consecutive windows are DISJOINT — never share a colour — across a
+    // full lap AND across the wrap (index 4 → index 0).
+    for (let i = 0; i < 5; i++) {
+      const cur = wire[i];
+      const next = wire[(i + 1) % 5];
+      const shared = cur.filter((c) => next.includes(c));
+      expect(shared.length).toBe(0);
+    }
+    // Each staged colour visits BOTH channels exactly once per lap.
+    for (const h of RING_HUES) {
+      const asC1 = wire.filter(([c1]) => c1 === h).length;
+      const asC2 = wire.filter(([, c2]) => c2 === h).length;
+      expect(asC1).toBe(1);
+      expect(asC2).toBe(1);
+    }
+  });
+
+  it('EVERY pick keeps its distance for the whole lap, RESPECTS ITS STEP, and loops back (RE-PIN, docs/75 §4)', () => {
     for (const [sel, d] of ALL_SELS) {
+      const s = orbitStep(d, 5);
       const pairs = orbitPairs(RING, sel);
       expect(pairs).toHaveLength(5);
       pairs.forEach((p, i) => {
-        // Turn i is (selA+i, selA+i+d) — both ends stepped i slots right.
-        expect(hueOf(p.c1)).toBe(RING_HUES[(sel[0] + i) % 5]);
-        expect(hueOf(p.c2)).toBe(RING_HUES[(sel[0] + i + d) % 5]);
+        // Turn i is (selA + i·s, selA + i·s + d) — the window's leading end
+        // steps `s` slots right per turn, and the spacing `d` never changes.
+        expect(hueOf(p.c1)).toBe(RING_HUES[(sel[0] + i * s) % 5]);
+        expect(hueOf(p.c2)).toBe(RING_HUES[(sel[0] + i * s + d) % 5]);
       });
-      // The lap closes: turn 5 sits one slot left of where turn 1 started.
-      expect(hueOf(pairs[4].c1)).toBe(RING_HUES[(sel[0] + 4) % 5]);
+      // The lap closes after n = 5 turns, having visited every slot once.
+      expect(hueOf(pairs[4].c1)).toBe(RING_HUES[(sel[0] + 4 * s) % 5]);
       // Every colour still reaches the rig, exactly twice (once per channel).
       for (const h of RING_HUES) {
         const seen = pairs.filter((p) => hueOf(p.c1) === h).length
           + pairs.filter((p) => hueOf(p.c2) === h).length;
         expect(seen).toBe(2);
       }
+    }
+  });
+
+  it('CROSSFADE BYTE-IDENTITY PIN: the 2-entry ring is untouched by the stepped queue', () => {
+    // n = 2 has no disjoint step, so orbitStep always answers 1 — the exact
+    // chained pair the crossfade has posted since before this change.
+    const pairs = orbitPairs([colour(0.2, 1, 1), colour(0.9, 1, 1)], [0, 1]);
+    expect(pairs).toEqual([
+      { c1: 0.2, c2: 0.9 },
+      { c1: 0.9, c2: 0.2 },
+    ]);
+    expect(crossfadeAutopilotPatch(0.2, 0.9, 5, 1)).toEqual({
+      active: true,
+      shuffle: false,
+      delay_s: 5,
+      transitionMs: 1000,
+      palettes: [{ c1: 0.2, c2: 0.9 }, { c1: 0.9, c2: 0.2 }],
+    });
+  });
+
+  it('SPACED-PAIR BYTE-IDENTITY PIN: d = 2 and d = 3 post the SAME wire as before this change', () => {
+    // Both are already disjoint at step 1 (docs/75 §4 D1), so the formula is
+    // the plain pre-orbit one: turn i is (selA+i, selA+i+d).
+    for (const [sel, d] of ALL_SELS.filter(([, dist]) => dist === 2 || dist === 3)) {
+      const pairs = orbitPairs(RING, sel);
+      pairs.forEach((p, i) => {
+        expect(hueOf(p.c1)).toBe(RING_HUES[(sel[0] + i) % 5]);
+        expect(hueOf(p.c2)).toBe(RING_HUES[(sel[0] + i + d) % 5]);
+      });
     }
   });
 
@@ -1723,12 +1920,15 @@ describe('the ORBIT — a distance-d window travelling right around the ring', (
 });
 
 describe('reading an orbit back off the wire', () => {
-  it('turnsOrbit recovers the ring AND the distance, for every pick', () => {
+  it('turnsOrbit recovers the ring, the DISTANCE, and the STEP, for every pick', () => {
     for (const [sel, d] of ALL_SELS) {
-      const orbit = turnsOrbit(orbitPairs(RING, sel));
+      const orbit = turnsOrbit(orbitPairs(RING, sel), RING);
       expect(orbit).not.toBeNull();
       expect(orbit!.distance).toBe(d);
-      // The ring comes back in WIRE order — starting at COLOUR A's slot.
+      expect(orbit!.step).toBe(orbitStep(d, 5));
+      // The ring comes back de-stepped into WIRE order — starting at COLOUR
+      // A's slot — regardless of whether the wire itself was posted at
+      // step 1 or step 2.
       expect(orbit!.ring.map((c) => c.h))
         .toEqual([0, 1, 2, 3, 4].map((i) => RING_HUES[(sel[0] + i) % 5]));
       expect(isTurnsConfig(orbitPairs(RING, sel))).toBe(true);
@@ -1743,13 +1943,18 @@ describe('reading an orbit back off the wire', () => {
     }
   });
 
-  it('the SMALLEST distance wins, so a MASTER ring still reports 1', () => {
-    // Five identical colours fit every spacing; reporting 1 keeps the readout
-    // byte-identical to what it has always been.
-    expect(turnsOrbit(orbitPairs(generateScheme('master', 0.4), [0, 2]))!.distance).toBe(1);
+  it('MASTER PIN: the SMALLEST (distance, step) wins, so a MASTER ring still reports {distance:1, step:1}', () => {
+    // Five identical colours fit every spacing AND every step (the recognizer
+    // tries s = 1 before s = 2, docs/75 §4); reporting {1, 1} keeps the
+    // readout byte-identical to what it has always been, even though the
+    // daemon's OWN adjacent-pick wire now actually steps by 2.
+    const master = turnsOrbit(orbitPairs(generateScheme('master', 0.4), [0, 2]))!;
+    expect(master.distance).toBe(1);
+    expect(master.step).toBe(1);
     for (const id of SCHEME_IDS) {
       const adjacent = turnsOrbit(turnsPairs(generateScheme(id, 0.2)))!;
       expect(adjacent.distance).toBe(1);
+      expect(adjacent.step).toBe(id === 'master' ? 1 : 2);
     }
   });
 
@@ -1767,7 +1972,7 @@ describe('reading an orbit back off the wire', () => {
 
   it('orbitPhase recovers WHERE the wire ring starts in the staged one', () => {
     for (const [sel] of ALL_SELS) {
-      const wire = turnsOrbit(orbitPairs(RING, sel))!.ring;
+      const wire = turnsOrbit(orbitPairs(RING, sel), RING)!.ring;
       expect(orbitPhase(RING, wire)).toBe(sel[0]);
     }
     // Different colours entirely, or a different length → no phase.
@@ -1781,12 +1986,15 @@ describe('reading an orbit back off the wire', () => {
   it('ROUND TRIP: pick → wire → read back → the same two slots light', () => {
     for (const [sel, d] of ALL_SELS) {
       const wire = orbitPairs(RING, sel);
-      const orbit = turnsOrbit(wire)!;
+      const orbit = turnsOrbit(wire, RING)!;
       const phase = orbitPhase(RING, orbit.ring)!;
       for (let i = 0; i < 5; i++) {
         // Turn i, mapped back into the operator's own T1..T5 numbering.
-        expect(orbitWindowSlots(i, orbit.distance, phase, 5))
-          .toEqual([(sel[0] + i) % 5, (sel[0] + i + d) % 5]);
+        expect(orbitWindowSlots(i, orbit.distance, phase, 5, orbit.step))
+          .toEqual([
+            (sel[0] + i * orbit.step) % 5,
+            (sel[0] + i * orbit.step + d) % 5,
+          ]);
       }
     }
   });
@@ -2155,7 +2363,8 @@ describe('FOLLOW NOTE — a scheme tap from its OWN card is a METHOD OVERRIDE, t
   it('leaves the other own-card rows of the interaction table exactly as they were', () => {
     expect(schemeTapOutcome('none', 'SPLIT', 'two').action).toBe('stage-and-write');
     expect(schemeTapOutcome('turns', 'SPLIT', 'turns').action).toBe('restage');
-    expect(schemeTapOutcome('crossfade', 'SPLIT', 'two').action).toBe('stage-only');
+    // docs/75 §5 RE-PIN: crossfade retargets now, superseding docs/61 §5.
+    expect(schemeTapOutcome('crossfade', 'SPLIT', 'two').action).toBe('retarget');
     expect(schemeTapOutcome('palette-set', 'SPLIT', 'two').action).toBe('stage-only');
   });
 

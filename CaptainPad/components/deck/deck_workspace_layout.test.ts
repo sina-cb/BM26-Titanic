@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   deckWorkspaceIsWide,
@@ -12,9 +15,7 @@ import {
   LEGACY_KNOWN_WINDOWS,
   NARROW_PATTERNS_MIN_SHARE,
   NARROW_REST_ABS_MIN_HEIGHT,
-  PERF_BAR_CAPTION,
   PERF_HIDDEN_WINDOWS,
-  PIXELS_BAR_CAPTION,
   PIXELS_SUPPRESSES,
   PROTECTED_WINDOW,
   WIDE_FLEX_FLOOR,
@@ -44,6 +45,18 @@ import {
   type DeckWindowId,
   type DeckWorkspaceLayout,
 } from './deck_workspace_layout';
+
+// ── Source-text guards (report _308) ───────────────────────────────────────
+// The bar's JSX lives in a `.tsx` the vitest glob deliberately excludes, so
+// "this label is NOT rendered" can only be stated over the source. Comments
+// are stripped first, exactly as `mixer_polish_source_guards.test.ts` does,
+// so the prose explaining the removal cannot fail the guard describing it.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const readSrc = (file: string): string => readFileSync(join(HERE, file), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
+const LAYOUT_SRC = readSrc('deck_workspace_layout.ts');
+const BAR_SRC = readSrc('deck_workspace.tsx');
 
 const close = (s: DeckWorkspaceLayout, id: DeckSurfaceId) => layoutReducer(s, { type: 'close', id });
 const open = (s: DeckWorkspaceLayout, id: DeckSurfaceId) => layoutReducer(s, { type: 'open', id });
@@ -620,8 +633,19 @@ describe('performance overlay — derived, never persisted', () => {
     expect(DECK_WORKSPACE_LAYOUT_KEY).toBe('deck_workspace_layout_v1');
   });
 
-  it('names the suppressed chips\' replacement caption', () => {
-    expect(PERF_BAR_CAPTION).toBe('PERFORMANCE — PARAMS & AUTOPILOT HIDDEN');
+  it('suppresses SILENTLY — no explainer caption stands in the chips\' place', () => {
+    // Report _308, operator order: the perf overlay drops the two chips and
+    // says nothing about it. The suppression BEHAVIOUR above is the contract;
+    // the narration is not. Source-level so the label cannot creep back in
+    // through either the constant or an inline string in the bar.
+    // Sanity: both files really were read, and the ONE surviving rail caption
+    // (the HIDDEN divider label) is still rendered — this is a label removal,
+    // not a bar removal.
+    expect(LAYOUT_SRC).toMatch(/PERF_HIDDEN_WINDOWS/);
+    expect(BAR_SRC).toMatch(/>HIDDEN</);
+    expect(LAYOUT_SRC).not.toMatch(/PERF_BAR_CAPTION/);
+    expect(BAR_SRC).not.toMatch(/PERF_BAR_CAPTION/);
+    expect(`${LAYOUT_SRC}${BAR_SRC}`).not.toMatch(/PARAMS\s*&\s*AUTOPILOT/i);
   });
 });
 
@@ -894,8 +918,12 @@ describe('Deck workspace — PIXELS -> OUTPUT suppression (docs/63 §2.4)', () =
     expect(effectiveShownBars(manuallyClosed, false)).toEqual(['audioBar']);
   });
 
-  it('names the suppression caption', () => {
-    expect(PIXELS_BAR_CAPTION).toBe('1D OUTPUT — SHOWN WHEN PIXELS IS HIDDEN');
+  it('suppresses SILENTLY — no explainer caption for the absent OUTPUT chip', () => {
+    // Report _308, operator order: same ruling as the perf caption above.
+    expect(LAYOUT_SRC).toMatch(/PIXELS_SUPPRESSES/); // sanity: file read, logic intact
+    expect(LAYOUT_SRC).not.toMatch(/PIXELS_BAR_CAPTION/);
+    expect(BAR_SRC).not.toMatch(/PIXELS_BAR_CAPTION/);
+    expect(`${LAYOUT_SRC}${BAR_SRC}`).not.toMatch(/1D OUTPUT|SHOWN WHEN PIXELS/i);
   });
 
   it('never persists — effectiveShownBars is a pure read over the layout', () => {

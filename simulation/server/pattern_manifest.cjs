@@ -34,7 +34,28 @@ const path = require('path');
 // finished pattern being invisible. If the family turns out to be scratch, the
 // reversible call is to move the name into NON_MANIFEST_PATTERN_DIRS below with
 // its reason — nothing else changes.
-const MANIFEST_PATTERN_DIRS = ['ambient_extra', 'baby', 'crisp', 'party_dancers'];
+//
+// `baby_tease` and `baby_reveal` are SEPARATE top-level families, one per
+// playlist, because they are two different jobs. `baby_tease` asks the
+// question: pink and blue both on the ship, outcome-blind, curated and
+// retuned independently of the answer. `baby_reveal` answers it — but as of
+// the Baby Reveal unification (docs/73) the answer is no longer a pair of
+// hard-coded boy/girl twin families in `patterns/baby/`; it is ONE
+// colour-blind set of patterns that declare `colorPalette1`/`colorPalette2`
+// and render whichever hue the show injects at reveal time. `patterns/baby/`
+// is retired entirely — its 20 boy/girl twins are replaced by the 10 patterns
+// in `patterns/baby_reveal/`. Both are top-level siblings rather than nested
+// under `baby/` because a qualified pattern id carries exactly ONE directory
+// segment everywhere in the engine (api_server.js VALID_PATTERN_NAME and
+// playlist_manager.js VALID_PATTERN both accept `<dir>/<name>` and nothing
+// deeper), and this generator only descends one level for the same reason.
+// `white_only` is the grayscale-intensity family (wave _312): twenty keepers
+// derived from the ambient set, playlisted by simulation/scenes/*/playlists/
+// white_only.yaml alongside the root 60-64 white patterns.
+// `uv_only` is its violet twin (wave _313): 19 U-lane-only patterns joining
+// the legacy 65_uv_only spike in the uv_only playlist. The family masks U to
+// the fixtures that physically carry a violet die (ShehdsBars + UkingPars).
+const MANIFEST_PATTERN_DIRS = ['ambient_extra', 'baby_reveal', 'baby_tease', 'crisp', 'party_dancers', 'uv_only', 'white_only'];
 
 // Subdirectories that deliberately hold no operator-selectable pattern, each
 // with the reason it is excluded.

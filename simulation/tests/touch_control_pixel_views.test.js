@@ -31,12 +31,15 @@ const REPO_ROOT = path.resolve(HERE, '../..');
 const ARTIFACT_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.json');
 const PANEL_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control.html');
 const RUNTIME_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.js');
+const PROJECTION_PATH = path.join(REPO_ROOT, 'CaptainPad/shared/pixel_view_projection.js');
 const PIXEL_MAP_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml');
 const VIEW_REGISTRY_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/views.yaml');
 const require = createRequire(import.meta.url);
+const projection = require(PROJECTION_PATH);
+globalThis.DeckPixelProjection = projection;
 const runtime = require(RUNTIME_PATH);
 const VIEW_CONTRACTS = new Map([
-  ['top_down', { pixelCount: 720, axisX: 'nx', axisY: 'nz' }],
+  ['top_down', { pixelCount: 768, axisX: 'nx', axisY: 'nz' }],
   ['front', { pixelCount: 396, axisX: 'nx', axisY: 'ny' }],
   ['strands', { pixelCount: 320, axisX: 'nx', axisY: 'nz' }],
   ['te_sign', { pixelCount: 148, axisX: 'nz', axisY: 'ny' }],
@@ -121,10 +124,13 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
     .find((view) => view.id === 'top_down');
   assert.deepEqual(top.framing, authoredTop.framing,
     'resolved artifact must carry the authored Top-Down framing unchanged');
-  assert.equal(new Set(top.panels[0].glyphs.map((glyph) => glyph.group)).size, 18);
+  assert.equal(new Set(top.panels[0].glyphs.map((glyph) => glyph.group)).size, 20);
   assert.ok(top.panels[0].glyphs.every((glyph) =>
     glyph.fixtureType !== 'TeSignV3A40' && glyph.fixtureType !== 'TeSignV3B34'));
-  assert.ok(top.panels[0].glyphs.every((glyph) => glyph.fixtureType !== 'VintageLed'));
+  for (const group of ['Left Back Rails', 'Right Back Rails']) {
+    assert.equal(top.panels[0].glyphs.filter((glyph) => glyph.group === group).length, 24,
+      `${group} must contribute all 24 rail pixels to Top-Down`);
+  }
   for (const group of ['Left Auditorium', 'Right Auditorium']) {
     assert.equal(top.panels[0].glyphs.filter((glyph) => glyph.group === group).length, 8,
       `${group} must contribute all eight uplights to Top-Down`);
@@ -139,6 +145,28 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
     .filter((glyph) => glyph.effect === 'upwash');
   assert.equal(upwash.length, 8);
   assert.deepEqual(new Set(upwash.map((glyph) => glyph.rotation)), new Set([-30, 33]));
+});
+
+test('Deck and Live Touch execute one projection authority with exact identities and coordinates', () => {
+  const artifact = buildArtifact();
+  assert.equal(runtime.projectionAuthority, projection);
+  for (const view of artifact.views) {
+    const flat = runtime.flattenProjectionView(view);
+    for (const [width, height] of [[1024, 682], [1194, 834], [1440, 900], [760, 620]]) {
+      const transforms = projection.layoutView(flat, artifact.design, width, height);
+      const expected = view.panels.flatMap((panel, panelIndex) => panel.glyphs.map((glyph) => ({
+        pixelIndex: glyph.pixelIndex,
+        x: glyph.x * transforms[panelIndex].scale + transforms[panelIndex].offsetX,
+        y: glyph.y * transforms[panelIndex].scale + transforms[panelIndex].offsetY,
+      })));
+      const live = runtime.reprojectView(view, artifact.design, width, height);
+      assert.deepEqual(live.map((glyph) => glyph.pixelIndex), expected.map((glyph) => glyph.pixelIndex));
+      live.forEach((glyph, index) => {
+        assert.equal(glyph.x, expected[index].x, `${view.id} ${width}x${height} x`);
+        assert.equal(glyph.y, expected[index].y, `${view.id} ${width}x${height} y`);
+      });
+    }
+  }
 });
 
 function correlation(a, b) {
@@ -189,6 +217,11 @@ test('Live display orientation preserves authoritative 3D axes beneath authored 
     assert.ok(correlation(glyphs.map((glyph) => glyph.y),
       glyphs.map((glyph) => glyph.world.ny)) < -0.995);
   }
+  const allVisibleIds = new Set(artifact.views.flatMap((view) => view.panels
+    .flatMap((panel) => panel.glyphs.map((glyph) => glyph.pixelIndex))));
+  assert.deepEqual([...allVisibleIds].sort((a, b) => a - b),
+    Array.from({ length: artifact.modelPixelCount }, (_, index) => index),
+    'the authoritative views must expose every wall, rail, strand, stack, auditorium, and sign pixel');
 
   for (const panel of findView(artifact, 'te_sign').panels) {
     assert.ok(Math.abs(correlation(panel.glyphs.map((glyph) => glyph.x),
@@ -496,8 +529,10 @@ test('Live Touch contains no baked pixel geometry and loads verifier before use'
   const html = fs.readFileSync(PANEL_PATH, 'utf8');
   assert.doesNotMatch(html, /\bPIXMAP(?:_WORLD|_GROUPS|_W|_H)?\b/);
   assert.doesNotMatch(html, /padChartGroups/);
-  const loader = html.indexOf('<script src="touch_control_pixel_views.js"></script>');
+  const loader = html.indexOf("document.write('<script src=\"touch_control_pixel_views.js?v=' + Date.now()");
   const mount = html.indexOf('window.TouchPixelViews.mount({');
   assert.ok(loader >= 0 && mount > loader);
+  assert.match(html, /touch_control_pixel_views\.js\?v=' \+ Date\.now\(\)/,
+    'native WebViews must not reuse a stale pixel-verification script');
   assert.match(html, /id="pixelMapError" role="alert"/);
 });

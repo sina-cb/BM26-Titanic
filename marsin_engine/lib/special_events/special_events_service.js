@@ -80,6 +80,13 @@ const TICK_MS = 1000;
 /** Snapshot morph duration for FINISH / ABORT. */
 const RESTORE_MORPH_MS = 3000;
 
+/**
+ * Readback tolerance for the `globals` write verification. ParamCenter stores
+ * what it was handed, so this is float-equality slack and nothing more — it is
+ * NOT a "close enough" window for a partially applied write.
+ */
+const GLOBALS_READBACK_EPS = 1e-6;
+
 /** Statuses. `ended` is sticky until the operator dismisses it. */
 export const STATUS = Object.freeze({
   IDLE: 'idle', ARMED: 'armed', RUNNING: 'running', ENDED: 'ended',
@@ -126,6 +133,41 @@ const REQUIRED_DEPS = [
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** Human-readable rendering of a global param value for an error message. */
+function formatGlobalValue(v) {
+  if (typeof v === 'number') return String(v);
+  if (isPlainObject(v) && typeof v.h === 'number') {
+    return `{h: ${v.h}, s: ${v.s}, v: ${v.v}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/**
+ * Does the value ParamCenter reads back equal the value the show wrote?
+ *
+ * The `globals` verb authors exactly two shapes (show_schema `case 'globals'`):
+ * a finite number, or an `{h, s, v}` triple. Numbers compare within
+ * GLOBALS_READBACK_EPS; HSV compares component-wise within the same epsilon.
+ * ANY other shape on either side is a mismatch — there is no lenient branch,
+ * because "we could not tell" and "it did not land" must fail the same way.
+ */
+function globalsValueMatches(wrote, read) {
+  if (typeof wrote === 'number') {
+    return typeof read === 'number' && Math.abs(wrote - read) <= GLOBALS_READBACK_EPS;
+  }
+  if (isPlainObject(wrote)) {
+    if (!isPlainObject(read)) return false;
+    for (const component of ['h', 's', 'v']) {
+      const a = wrote[component];
+      const b = read[component];
+      if (typeof a !== 'number' || typeof b !== 'number') return false;
+      if (Math.abs(a - b) > GLOBALS_READBACK_EPS) return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export class SpecialEventsService {
@@ -718,7 +760,19 @@ export class SpecialEventsService {
     console.log(
       `  🎈 [special-events] "${show.id}" → stage "${stage.id}"` +
       `${resolvedChoice ? ` (${resolvedChoice.id})` : ''}`);
-    await this._dispatchActions(actions, `stage ${stage.id}`);
+    // A `delayMs: 0` action is applied SYNCHRONOUSLY here, so its failure
+    // rejects this call and answers the operator's HTTP request — which is the
+    // point. But the Events tab reads `lastError` out of getState(), not the
+    // HTTP body, so put it on that surface too before rethrowing. Generic on
+    // purpose: any synchronous action failure, not just the palette readback.
+    try {
+      await this._dispatchActions(actions, `stage ${stage.id}`);
+    } catch (err) {
+      this.lastError = `stage ${stage.id} refused: ${err && err.message}`;
+      console.error(`  ⛔ [special-events] ${this.lastError}`);
+      this._broadcast();
+      throw err;
+    }
     // The CADENCE arms only once the stage's last authored action has landed.
     // The reveal activates its playlist at +700 ms under a white flash; arming
     // the timer at t=0 would start it counting against the playlist the stage
@@ -1226,9 +1280,19 @@ export class SpecialEventsService {
         return;
       case 'globals':
         this.deps.setGlobals(action.set);
+        // VERIFY IT LANDED. `setGlobals` is not a promise that the write took:
+        // api_server's dep treats a ParamCenter `source_lock` refusal as
+        // runtime arbitration and CONTINUES WITHOUT ERROR, so with Live Touch
+        // holding the lock the palette write is silently dropped. The Baby
+        // Reveal patterns used to fail safe to BLACK in that case; under the v2
+        // palette contract (docs/73 §2.4-v2) they render whatever colour is
+        // live instead — i.e. a swallowed write now shows the WRONG COLOUR at
+        // the one moment that must not be wrong. So the dispatch path reads the
+        // values back and refuses. No fallback, no retry.
+        this._assertGlobalsLanded(action.set, label);
         // Remember WHAT was pinned so the end of the show can put back exactly
-        // those keys (G1). Recorded after the write, so a refused set leaves
-        // nothing to restore.
+        // those keys (G1). Recorded after the write AND after the readback, so
+        // a refused set leaves nothing to restore.
         for (const key of Object.keys(action.set)) this._globalsWritten.add(key);
         return;
       case 'effect':
@@ -1236,6 +1300,56 @@ export class SpecialEventsService {
         return;
       default:
         throw new Error(`${label}: unhandled action type '${action.type}'`);
+    }
+  }
+
+  /**
+   * Assert that every key a `globals` action just wrote is actually live in
+   * ParamCenter. Throws — loudly, by key — if any of them is not.
+   *
+   * WHY A READBACK IS PROOF. `captureGlobals` (already a REQUIRED_DEP, used by
+   * ARM to record the pre-show globals) flattens ParamCenter's CANONICAL state
+   * — the TARGET value of each param, not the `_rendered` value that ramps
+   * toward it over `colorTransitionMs`. So a matching readback means the write
+   * was ACCEPTED, and does not merely mean a slew happens to have finished.
+   * A refused write leaves the canonical value untouched, which is exactly the
+   * failure this catches.
+   *
+   * SCOPE. `type: globals` appears today ONLY in the two `baby_reveal.yaml`
+   * show files, so this verification is generic in shape but in practice
+   * guards the reveal's palette and nothing else.
+   *
+   * The reveal's globals action sits at `delayMs: 0`, so it is applied
+   * synchronously inside `fire()` and this throw propagates out of `fire()` to
+   * the operator's HTTP request: the show REFUSES TO START the run rather than
+   * starting it in a stale colour.
+   */
+  _assertGlobalsLanded(set, label) {
+    let live;
+    try {
+      live = this.deps.captureGlobals();
+    } catch (err) {
+      throw new Error(
+        `${label}: the globals write cannot be verified — reading ParamCenter back failed ` +
+        `(${err && err.message}). The show refuses to run on an unverified palette.`);
+    }
+    if (!isPlainObject(live)) {
+      throw new Error(
+        `${label}: the globals write cannot be verified — captureGlobals() returned ` +
+        `${formatGlobalValue(live)} instead of a param map. The show refuses to run on an ` +
+        'unverified palette.');
+    }
+    for (const [key, wrote] of Object.entries(set)) {
+      const present = Object.prototype.hasOwnProperty.call(live, key);
+      const read = present ? live[key] : undefined;
+      if (present && globalsValueMatches(wrote, read)) continue;
+      throw new Error(
+        `${label}: the globals write DID NOT LAND — '${key}' was written as ` +
+        `${formatGlobalValue(wrote)} but ParamCenter reads back ` +
+        `${present ? formatGlobalValue(read) : '(no such param)'}. The likely cause is a ` +
+        'source_lock refusal — Live Touch is armed and holding the params, and setGlobals ' +
+        'treats that as runtime arbitration and swallows it without error. NO FALLBACK: the ' +
+        'stage refuses rather than running the show on a stale colour.');
     }
   }
 

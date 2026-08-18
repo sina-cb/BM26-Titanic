@@ -16,12 +16,35 @@ const themePath = path.resolve(here, '../../../docs/ui/touch_control_theme.js');
 const themeSource = fs.readFileSync(themePath, 'utf8');
 const pixelViewsPath = path.resolve(here, '../../../docs/ui/touch_control_pixel_views.js');
 const pixelViewsSource = fs.readFileSync(pixelViewsPath, 'utf8');
+const apiServerPath = path.resolve(here, '../../lib/api_server.js');
+const apiServerSource = fs.readFileSync(apiServerPath, 'utf8');
 
 test('Live Touch routes patterns and controls to its isolated layer', () => {
   assert.match(wire, /['"]\/layers\/live_touch\/pattern['"]/);
   assert.match(wire, /['"]\/layers\/live_touch\/control['"]/);
   assert.doesNotMatch(wire, /['"]\/pattern['"]/);
   assert.doesNotMatch(wire, /['"]\/control['"]/);
+});
+
+test('native ARM reads bypass WKWebView cache on both sides of the request', () => {
+  const requestJson = wire.match(/function requestJson\(method, path,[\s\S]*?\n  \}/);
+  assert.ok(requestJson, 'Live Touch requestJson must exist');
+  assert.match(requestJson[0], /if \(method === 'GET'\) opts\.cache = 'no-store'/,
+    'every dynamic engine GET must explicitly bypass the native WebView cache');
+
+  const pixelRoute = apiServerSource.match(
+    /req\.method === 'GET' && req\.url === '\/model\/pixel-layout'[\s\S]*?res\.end\(JSON\.stringify\(\{[\s\S]*?pixels: out,[\s\S]*?\}\)\);/,
+  );
+  assert.ok(pixelRoute, 'engine pixel-layout route must exist');
+  assert.match(pixelRoute[0], /'Cache-Control': 'no-store'/,
+    'the topology response must not survive into another native session');
+
+  const layerRoute = apiServerSource.match(
+    /req\.method === 'GET' && req\.url === '\/layers\/state'[\s\S]*?res\.end\(JSON\.stringify\(buildLayerSettingsPayload\(\)\)\);/,
+  );
+  assert.ok(layerRoute, 'engine layer-state route must exist');
+  assert.match(layerRoute[0], /'Cache-Control': 'no-store'/,
+    'the layer schema/state response must not survive into another native session');
 });
 
 test('the pattern picker offers BACKGROUNDS (ambient playlist) and INSTRUMENTS, isolation intact', () => {
@@ -78,15 +101,110 @@ test('the pattern picker offers BACKGROUNDS (ambient playlist) and INSTRUMENTS, 
   assert.doesNotMatch(wire, /write\('(?:POST|PUT|PATCH|DELETE)', '\/playlists/);
 });
 
-test('an armed pattern swap refreshes instance-local exports before reasserting palette', () => {
+test('an armed pattern swap is retained, engine-confirmed, and refreshes local exports after landing', () => {
   const block = wire.match(/patSel\.addEventListener\('change'[\s\S]*?\n    \}\);/);
   assert.ok(block, 'Live Touch pattern change handler is missing');
   const source = block[0];
-  const installAt = source.indexOf("write('PUT', '/layers/live_touch/pattern'");
+  const clearAt = source.indexOf("clearTransientSpatialContacts('pattern-switch', true)");
+  const installAt = source.indexOf("req('PUT', '/layers/live_touch/pattern'");
+  const transitionAt = source.indexOf("transition: { mode: 'trans_crossfade', durationMs: 500 }");
+  const landingAt = source.indexOf('waitForPatternLanding(');
   const exportsAt = source.indexOf('refreshLiveExports()');
   const paletteAt = source.indexOf('pushPalette(true)');
-  assert.ok(installAt >= 0 && installAt < exportsAt);
+  assert.ok(clearAt >= 0 && clearAt < installAt);
+  assert.ok(transitionAt >= 0 && transitionAt < installAt);
+  assert.ok(installAt < landingAt && landingAt < exportsAt);
   assert.ok(exportsAt < paletteAt);
+  assert.match(source, /syncPatternSelection\(state\.channelPattern\);/,
+    'the optimistic selection must revert to confirmed A before the request');
+  assert.match(source, /result\.status !== 'transitioning'/);
+});
+
+test('Spatial owns exactly one contact command path and clears every transient lifecycle', () => {
+  assert.doesNotMatch(wire, /state\.exports\.sliderTargetX/);
+  assert.doesNotMatch(wire, /state\.exports\.sliderTargetY/);
+  assert.doesNotMatch(wire, /state\.exports\.sliderTouch/);
+  assert.match(wire, /var spatialWrite = settled \? req : write;/,
+    'acknowledged TAKE samples must use the strict request path while live samples keep coalescing');
+  assert.match(wire, /return spatialWrite\('POST', '\/spatial-paint', payload\.body\)\.then\(function \(response\) \{\s*commitSpatialPayload\(payload\);/,
+    'contact truth may commit only after the selected transport promise resolves');
+  assert.match(wire, /spatialPointers\.clear\(\)/);
+  for (const reason of ['background', 'view-change', 'mode-switch', 'pattern-switch']) {
+    assert.match(wire, new RegExp(`clearTransientSpatialContacts\\('${reason}'`));
+  }
+  assert.match(panel, /document\.addEventListener\('spatialcontactclear'/);
+  assert.match(panel, /window\.addEventListener\('pagehide'/);
+});
+
+test('the wire never puts a raw pointerId on the wire — every stroke id is a compact 0..9 slot (BM26 fix wave W2)', () => {
+  // The engine's setSpatialPaint validation (marsin_engine/lib/global_effects_controller.js
+  // ~line 2135) rejects any strokes[].id that is not an integer in [0, 0x7fffffff].
+  // WKWebView pointer ids can be huge or non-integer, so the wire must never
+  // forward e.pointerId directly. Behavioral proof (huge/fractional ids,
+  // stability, release+reuse, 10-concurrent distinctness) lives in
+  // simulation/tests/touch_control_spatial_stroke_ids.test.js; this pins the
+  // source shape so a future edit cannot silently regress it back to raw ids.
+  assert.match(wire, /id: pointer\.slot,/, 'spatialPayload must send the compact slot as strokes[].id');
+  assert.doesNotMatch(wire, /id: pointer\.id,/, 'the raw pointerId must never be the wire id again');
+  assert.match(wire, /function allocateSpatialSlot\(\)/);
+  assert.match(wire, /function releaseSpatialSlot\(slot\)/);
+  assert.match(wire, /var spatialSlotUsed = \[false, false, false, false, false, false, false, false, false, false\];/,
+    'the slot pool is fixed at exactly ten slots, matching the ten-touch cap');
+  // pointer.id itself must still be the raw pointerId — it stays the
+  // spatialPointers Map key and commitSpatialPayload's lookup key, unchanged.
+  assert.match(wire, /id: e\.pointerId, slot: allocateSpatialSlot\(\), current: null, sent: null, retiring: false,/);
+  assert.match(wire, /id: TAKE_CONTACT_KEY, slot: allocateSpatialSlot\(\), current: null, sent: null, retiring: false,/);
+  // Every removal site must release the slot it allocated — a leaked slot
+  // would eventually starve allocateSpatialSlot() even though pointers keep
+  // being lifted.
+  assert.match(wire, /spatialPointers\.forEach\(function \(pointer\) \{ releaseSpatialSlot\(pointer\.slot\); \}\);\s*\n\s*spatialPointers\.clear\(\);/);
+  assert.match(wire, /releaseSpatialSlot\(pointer\.slot\);\s*\n\s*spatialPointers\.delete\(pointerId\);/);
+  assert.match(wire, /if \(failedSpatialPointer\) releaseSpatialSlot\(failedSpatialPointer\.slot\);/);
+});
+
+test('a spatial sample declares its contact — the playback key is unreachable from any real pointer (BM26 _304)', () => {
+  // pushXY used to resolve which spatialPointers entry to update with
+  // `Number.isInteger(e.pointerId) ? e.pointerId : TAKE_POINTER_ID`, using the
+  // SHAPE of the id as a proxy for "this is a real pointer". A WKWebView
+  // pointer id that is a genuinely non-integer double therefore resolved to
+  // the TAKE/playback entry: pointer.current was never set on the entry
+  // pointerdown had created, so that finger silently disappeared from
+  // strokes[] — a fallback, which AGENTS.md P0 forbids. Behavioral proof lives
+  // in simulation/tests/touch_control_spatial_stroke_ids.test.js; these pin
+  // the source shape.
+  assert.doesNotMatch(wire, /Number\.isInteger\(e\.pointerId\)/,
+    'pointer identity must never be inferred from whether the id is an integer');
+
+  // The playback contact is keyed by a NON-NUMERIC sentinel. A DOM pointerId
+  // is always a number, so no real finger can collide with it — the aliasing
+  // class is removed by construction, not by picking an improbable integer.
+  assert.match(wire, /var TAKE_CONTACT_KEY = 'take-playback';/);
+  assert.doesNotMatch(wire, /TAKE_(?:POINTER_ID|CONTACT_KEY) = 0x/,
+    'the playback key must not live in the numeric pointerId namespace');
+
+  // Synthetic playback samples DECLARE themselves; every other sample resolves
+  // to its raw e.pointerId, the same key pointerdown/pointermove/liftBrush use.
+  const resolver = wire.match(/function spatialContactKey\(e\) \{[\s\S]*?\n    \}/);
+  assert.ok(resolver, 'spatialContactKey is missing');
+  assert.match(resolver[0], /if \(e\.spatialPlayback === true\) return TAKE_CONTACT_KEY;/);
+  assert.match(resolver[0], /return e\.pointerId;/,
+    'a real pointer must resolve to its own raw id, never to the playback key');
+  assert.match(resolver[0], /fail\('spatial touch'/,
+    'an unidentifiable sample must be refused loudly, not routed somewhere convenient');
+  assert.match(wire, /pushXY\(\{ spatialPlayback: true,/,
+    'the TAKE replay path must carry the explicit marker');
+  assert.match(wire, /var pointerId = spatialContactKey\(e\);/);
+});
+
+test('Effects use catalog-authored behavior and Performance is action-only', () => {
+  assert.doesNotMatch(wire, /TRIGGER_EFFECTS/);
+  assert.match(wire, /behavior: behavior/);
+  assert.match(wire, /m\.type === 'performanceMode'/);
+  assert.match(wire, /status && status\.performanceMode && status\.performanceMode\.active/);
+  assert.match(panel, /preset\.defaultBehavior/);
+  assert.match(panel, /fxPanel\.classList\.toggle\('is-performance-locked', locked\)/);
+  assert.match(panel, /fxEditToggle\.hidden = locked/);
+  assert.match(panel, /\.effects-panel:not\(\.is-editing\) \.effects-grid \{[\s\S]*?repeat\(8,/);
 });
 
 test('Live Touch uses the canonical Layers blend without a private envelope', () => {
@@ -155,6 +273,20 @@ test('initial ARM batches its complete Live look through atomic prepare', () => 
   assert.doesNotMatch(block[0], /applyStatic\(true\)/);
 });
 
+test('initial ARM brush geometry is verified and independent of Spatial visibility', () => {
+  const initialSpatial = wire.match(
+    /function initialSpatialPrepareBody\(\)[\s\S]*?\n  \}\n\n  function verifyPreparedSlots/,
+  );
+  assert.ok(initialSpatial, 'initialSpatialPrepareBody is missing');
+  assert.match(initialSpatial[0], /window\.padBrushWorldCanonical\(\)/);
+  assert.doesNotMatch(initialSpatial[0], /brushPatch\(/,
+    'ARM staging must not depend on a rendered Spatial canvas');
+  assert.match(panel, /window\.padBrushWorldCanonical = function/);
+  assert.match(pixelViewsSource, /function worldBrushRadii\(fraction, target\)/);
+  assert.match(pixelViewsSource, /pixel view has no rendered display projection/,
+    'display projection failure must not impersonate failed pixel verification');
+});
+
 test('pixel views and spatial fade expose only canonical operator choices', () => {
   assert.match(panel, /id="pixelViewSelect"/);
   assert.match(panel, /id="pixelPan"/);
@@ -163,12 +295,12 @@ test('pixel views and spatial fade expose only canonical operator choices', () =
   assert.match(wire, /\[0\.1, 0\.5, 1, 1\.5\]\.indexOf\(seconds\)/);
   assert.doesNotMatch(wire, /0\.12\s*\+[^\n]*7\.88/);
   assert.doesNotMatch(panel, /FADE[^\n]*(?:8 s|8s|half-life)/i);
-  assert.match(wire, /topPlane \? 'Z\+ SHIP FORWARD' : 'Y\+ UP'/);
+  assert.match(wire, /topPlane \? 'Z\+ FRONT' : 'Y\+ UP'/);
   assert.match(wire, /currentPixelViewId === 'te_sign'/);
-  assert.match(wire, /<b>Z−<\/b>AFT/);
+  assert.match(wire, /<b>Z−<\/b>BACK/);
 });
 
-test('Spatial XY exposes bounded independent multitouch and Spatial-only fullscreen', () => {
+test('Spatial XY exposes one admitted contact, deferred multitouch, and Spatial-only fullscreen', () => {
   assert.match(panel, /id="spatialFullscreen" hidden aria-pressed="false"/);
   assert.match(panel, /is-spatial-fullscreen/);
   assert.match(panel, /if \(!spatial\) setFullscreen\(false\)/,
@@ -202,20 +334,22 @@ test('Spatial XY exposes bounded independent multitouch and Spatial-only fullscr
   assert.doesNotMatch(screen, /document\.body\.appendChild\(iframe\)/,
     'the screen must never reach past the surface to move the iframe either');
   assert.match(screen, /captainpad-spatial-fullscreen-applied/);
+  assert.match(panel, /window\.TouchSpatialContactGate =/);
+  assert.match(panel, /if \(spatialPrimaryContact === null\) spatialPrimaryContact = pointerId/);
+  assert.match(panel, /SPATIAL accepts one contact; the extra touch was ignored/,
+    'additional physical contacts must be refused loudly by the shared page gate');
   assert.match(panel, /var padPointers = new Map\(\)/);
   assert.match(panel, /inkActiveRings = new Map\(\)/);
-  assert.doesNotMatch(panel, /var padPointer = null/,
-    'the retired one-finger gate must not discard additional touches');
 
   assert.match(wire, /var spatialPointers = new Map\(\)/);
   assert.match(wire, /strokes: snapshots\.map/);
   assert.match(wire, /spatialPointers\.size >= 10/,
-    'browser input must enforce the same bounded batch as the engine');
+    'the internal wire pool retains engine compatibility without admitting UI multitouch');
   assert.match(wire, /pointer\.retiring/,
-    'one lift must retire only its own stroke');
+    'the sole admitted contact must retire only after its authoritative lift');
 });
 
-test('Spatial view adjustment owns gestures explicitly without consuming paint multitouch', () => {
+test('Spatial view adjustment owns gestures explicitly without consuming the admitted paint contact', () => {
   assert.match(panel, /id="pixelZoomOut"/);
   assert.match(panel, /id="pixelZoomIn"/);
   assert.match(panel, /id="pixelZoomValue"/);
@@ -434,6 +568,23 @@ test('post-lease ARM abort cleans up before release and cannot ACK navigation', 
   const source = block[0];
   assert.ok(source.indexOf('.then(cleanupLiveState)') < source.indexOf('.then(releaseArmLease)'));
   assert.doesNotMatch(source, /acknowledgeSurfaceRelease/);
+});
+
+test('disarm cleanup uses overlay slot actions and proves no effect state remains', () => {
+  const block = wire.match(/function cleanupLiveState[\s\S]*?\n  var armEl/);
+  assert.ok(block, 'cleanupLiveState implementation is missing');
+  const source = block[0];
+  assert.doesNotMatch(source, /req\('POST', '\/movement-rate'/,
+    'cleanup must never call the retired movement endpoint');
+  assert.match(source, /slot\.effectId === 'movementTrace' && slot\.active === true/);
+  assert.match(source, /\/global-effect-slots\/.*\/deactivate/,
+    'all active movement generators must deactivate through authoritative slots');
+  assert.match(source, /req\('POST', '\/global-effects\/disable-all'/,
+    'true effects must still use the session-owned sweep');
+  assert.match(source, /handbackStep\('effect-readback', verifyEffectsCleared\(\)\)/,
+    'lease release must follow authoritative zero-state readback');
+  assert.match(source, /handbackFailures = null/,
+    'cleanup must release its guard so a clean retry remains idempotent');
 });
 
 test('strict ARM assertions are authorized during the arming phase', () => {

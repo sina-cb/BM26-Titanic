@@ -94,6 +94,11 @@ export default function TouchControlScreen() {
   const requestSequenceRef = useRef(0);
   const pendingThemeRequestRef = useRef<string | null>(null);
   const themeAckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const verifierReadyRef = useRef(false);
+  const verifierDocumentRef = useRef<string | null>(null);
+  const pixelVerificationAcknowledgedRef = useRef(false);
+  const pendingPixelVerificationRequestRef = useRef<string | null>(null);
+  const pixelVerificationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handoffCompletedRef = useRef(false);
   const backgroundHandoffSentRef = useRef(false);
 
@@ -170,6 +175,32 @@ export default function TouchControlScreen() {
     });
   }, [nextRequestId, postToPanel]);
 
+  const sendPixelVerificationStart = useCallback(() => {
+    const documentId = verifierDocumentRef.current;
+    if (!frameLoadedRef.current || !verifierReadyRef.current || !documentId
+        || pixelVerificationAcknowledgedRef.current) return;
+    const requestId = pendingPixelVerificationRequestRef.current
+      ?? nextRequestId('pixel-verify');
+    pendingPixelVerificationRequestRef.current = requestId;
+    const message = {
+      type: 'captainpad-pixel-verification-start' as const,
+      version: LIVE_TOUCH_BRIDGE_VERSION,
+      documentId,
+      requestId,
+    };
+    if (pixelVerificationRetryTimerRef.current) {
+      clearTimeout(pixelVerificationRetryTimerRef.current);
+    }
+    const transmit = () => {
+      if (pendingPixelVerificationRequestRef.current !== requestId
+          || verifierDocumentRef.current !== documentId
+          || pixelVerificationAcknowledgedRef.current) return;
+      postToPanel(message);
+      pixelVerificationRetryTimerRef.current = setTimeout(transmit, 250);
+    };
+    transmit();
+  }, [nextRequestId, postToPanel]);
+
   /* The surface says when it can RECEIVE: the iframe's load event on web, the
      page's own `touch-control-theme-ready` on native (an injected theme can
      only land once the page has installed its inbound hook, and the page
@@ -178,7 +209,8 @@ export default function TouchControlScreen() {
     frameLoadedRef.current = true;
     sendTheme();
     if (frameFocusedRef.current) sendSurfaceFocus();
-  }, [sendSurfaceFocus, sendTheme]);
+    sendPixelVerificationStart();
+  }, [sendPixelVerificationStart, sendSurfaceFocus, sendTheme]);
 
   useFocusEffect(
     useCallback(() => {
@@ -291,6 +323,52 @@ export default function TouchControlScreen() {
         return;
       }
 
+      if (message.type === 'touch-control-pixel-verifier-ready') {
+        const isNewDocument = verifierDocumentRef.current !== message.documentId;
+        if (!isNewDocument && pixelVerificationAcknowledgedRef.current) return;
+        if (isNewDocument) {
+          if (pixelVerificationRetryTimerRef.current) {
+            clearTimeout(pixelVerificationRetryTimerRef.current);
+            pixelVerificationRetryTimerRef.current = null;
+          }
+          verifierDocumentRef.current = message.documentId;
+          pendingPixelVerificationRequestRef.current = null;
+          pixelVerificationAcknowledgedRef.current = false;
+        }
+        verifierReadyRef.current = true;
+        const gateState = `phase=${message.phase} · source=${message.staticVerified} · engine=${message.engineVerified}`
+          + ` · load=${message.readyStatus}`;
+        setBridgeError(`LIVE TOUCH PIXEL VERIFICATION WAITING — ${gateState}`);
+        sendPixelVerificationStart();
+        return;
+      }
+
+      if (message.type === 'touch-control-pixel-verification') {
+        const prefix = 'LIVE TOUCH PIXEL VERIFICATION';
+        if (message.documentId !== verifierDocumentRef.current
+            || message.requestId !== pendingPixelVerificationRequestRef.current) {
+          throw new Error(
+            `Live Touch pixel verification replied for stale document/request during ${message.status}`,
+          );
+        }
+        pixelVerificationAcknowledgedRef.current = true;
+        if (pixelVerificationRetryTimerRef.current) {
+          clearTimeout(pixelVerificationRetryTimerRef.current);
+          pixelVerificationRetryTimerRef.current = null;
+        }
+        if (message.status === 'ready') {
+          setBridgeError(current => current?.startsWith(prefix) ? null : current);
+          return;
+        }
+        const gateState = `phase=${message.phase} · source=${message.staticVerified} · engine=${message.engineVerified}`
+          + ` · load=${message.readyStatus}`;
+        setBridgeError(
+          `${prefix} ${message.status.toUpperCase()} — ${gateState}`
+          + (message.error ? ` — ${message.error}` : ''),
+        );
+        return;
+      }
+
       if (message.type === 'touch-control-surface-released') {
         const reason = completeHandoff(message.requestId, message.target);
         if (reason === 'navigation') handoffCompletedRef.current = true;
@@ -322,14 +400,15 @@ export default function TouchControlScreen() {
         clearTimeout(themeAckTimerRef.current);
         themeAckTimerRef.current = null;
       }
-      setBridgeError(null);
+      setBridgeError(current => current?.startsWith('LIVE TOUCH THEME') ? null : current);
     } catch (error) {
       setBridgeError(error instanceof Error ? error.message : String(error));
     }
-  }, [completeHandoff, postToPanel, sendTheme]);
+  }, [completeHandoff, postToPanel, sendPixelVerificationStart, sendTheme]);
 
   useEffect(() => () => {
     if (themeAckTimerRef.current) clearTimeout(themeAckTimerRef.current);
+    if (pixelVerificationRetryTimerRef.current) clearTimeout(pixelVerificationRetryTimerRef.current);
   }, []);
 
   if (!url || !panelOrigin) {

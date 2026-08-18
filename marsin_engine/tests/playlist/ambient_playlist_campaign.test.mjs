@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 import yaml from 'js-yaml';
 
+import {
+  MODULATION_CURVE_BY_BLOCK_CURVE,
+  parseAudioModSpec,
+} from '../../tools/audio_mod_spec.mjs';
+
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const REPO_ROOT = path.resolve(ENGINE_DIR, '..');
 const PLAYLIST_DIR = path.join(REPO_ROOT, 'simulation/scenes/titanic/playlists');
@@ -25,6 +30,11 @@ function exportedControls(pattern) {
   )].map((match) => match[1]));
 }
 
+function declaredAudioMappings(pattern) {
+  const source = fs.readFileSync(path.join(PATTERN_DIR, `${pattern}.js`), 'utf8');
+  return parseAudioModSpec(source, pattern).mappings;
+}
+
 function assertEntryResolves(entry, playlistName) {
   assert.ok(MANIFEST.has(entry.pattern), `${playlistName}/${entry.pattern}: absent from manifest`);
   const controls = exportedControls(entry.pattern);
@@ -42,7 +52,7 @@ function assertEntryResolves(entry, playlistName) {
 test('Ambient reactive is a same-order, exact-default, silence-safe twin of Ambient', () => {
   const ambient = loadPlaylist('ambient');
   const reactive = loadPlaylist('ambient_sound_reactive');
-  assert.equal(ambient.entries.length, 47);
+  assert.equal(ambient.entries.length, 53);
   assert.equal(reactive.entries.length, ambient.entries.length);
   assert.deepEqual(reactive.entries.map((entry) => entry.pattern),
     ambient.entries.map((entry) => entry.pattern));
@@ -54,6 +64,7 @@ test('Ambient reactive is a same-order, exact-default, silence-safe twin of Ambi
     assert.ok(entry.modulations.length >= 1 && entry.modulations.length <= 3,
       `${entry.pattern}: expected one to three restrained mappings`);
     assertEntryResolves(entry, 'ambient_sound_reactive');
+    const declared = declaredAudioMappings(entry.pattern);
     for (const modulation of entry.modulations) {
       assert.equal(modulation.mode, 'override', `${entry.pattern}: mappings must be override`);
       assert.equal(modulation.polarity, 'unipolar', `${entry.pattern}: mappings must be unipolar`);
@@ -64,6 +75,17 @@ test('Ambient reactive is a same-order, exact-default, silence-safe twin of Ambi
         `${entry.pattern}/${modulation.target.parameter}: invalid response range`);
       assert.ok(['linear', 'easeIn', 'easeOut'].includes(modulation.curve),
         `${entry.pattern}: unsupported curve ${modulation.curve}`);
+      if (entry.pattern.startsWith('crisp/')) {
+        const contract = declared.find(
+          (mapping) => mapping.slider === modulation.target.parameter,
+        );
+        assert.ok(contract,
+          `${entry.pattern}/${modulation.target.parameter}: mapping is not source-declared`);
+        assert.equal(modulation.source.key, contract.signal,
+          `${entry.pattern}/${modulation.target.parameter}: audio source drift`);
+        assert.equal(modulation.curve, MODULATION_CURVE_BY_BLOCK_CURVE[contract.curve],
+          `${entry.pattern}/${modulation.target.parameter}: curve drift`);
+      }
     }
   }
 });
@@ -81,5 +103,13 @@ test('the retired Ambient default backup playlist stays absent from both scenes'
       REPO_ROOT, 'simulation', 'scenes', scene, 'playlists', 'ambient_default_bkup.yaml');
     assert.equal(fs.existsSync(filename), false,
       `${scene}: retired ambient_default_bkup.yaml is back`);
+  }
+});
+
+test('the retired dedicated Crisp playlist stays absent from both scenes', () => {
+  for (const scene of ['titanic', 'test_bench']) {
+    const filename = path.join(
+      REPO_ROOT, 'simulation', 'scenes', scene, 'playlists', 'crisp.yaml');
+    assert.equal(fs.existsSync(filename), false, `${scene}: retired crisp.yaml is back`);
   }
 });

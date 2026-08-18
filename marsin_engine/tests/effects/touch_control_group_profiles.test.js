@@ -78,6 +78,15 @@ test('Live Touch exposes individual plus two exact canonical-view profiles', asy
   }
 });
 
+test('Show instruments is the required authoritative default profile', async () => {
+  const catalog = await liveCatalog();
+  const profiles = profilesRuntime.compileProfiles(catalog);
+  assert.equal(profilesRuntime.defaultProfileId, 'instruments');
+  assert.ok(profiles.some((profile) => profile.id === profilesRuntime.defaultProfileId));
+  assert.match(profilesSource, /var activeId = DEFAULT_PROFILE_ID;/);
+  assert.match(profilesSource, /required default group profile/);
+});
+
 test('profile compilation fails loudly on stale, partial, or overlapping views', async () => {
   const catalog = await liveCatalog();
   const stale = structuredClone(catalog);

@@ -288,6 +288,21 @@
       return;
     }
 
+    if (data.type === 'captainpad-pixel-verification-start') {
+      if (typeof data.documentId !== 'string' || !data.documentId) {
+        fail('pixel verification start requires a documentId');
+        return;
+      }
+      if (typeof data.requestId !== 'string' || !data.requestId) {
+        fail('pixel verification start requires a requestId');
+        return;
+      }
+      document.dispatchEvent(new CustomEvent('captainpad:pixel-verification-start', {
+        detail: { documentId: data.documentId, requestId: data.requestId },
+      }));
+      return;
+    }
+
     if (data.type === 'captainpad-surface-blur') {
       if (typeof data.requestId !== 'string' || !data.requestId) {
         fail('surface blur requires a requestId');

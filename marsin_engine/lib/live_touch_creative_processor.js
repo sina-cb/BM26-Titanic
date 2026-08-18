@@ -15,6 +15,7 @@ export function applyLayerSettingCreativeBuffer({
   frameIndex,
   nowMs,
   signals = {},
+  liveTouchOverlayPattern = null,
 }) {
   if (!(buffer6ch instanceof Uint8Array)) {
     throw new TypeError('Live Touch creative buffer must be a Uint8Array');
@@ -61,6 +62,14 @@ export function applyLayerSettingCreativeBuffer({
     globalEffectsController.applyInvert(pixels);
     globalEffectsController.applyPostInvert({ pixels, frameIndex, nowMs, signals });
 
+    // Movement generators are a Live-only transparent overlay. They must run
+    // after the private effect stages but before existing group protection and
+    // post fixed/spatial authority; applying them anywhere else either erases
+    // the base picture or lets the same movement controller run twice.
+    if (liveTouchOverlayPattern) {
+      liveTouchOverlayPattern.composite(pixels, { nowMs, signals });
+    }
+
     if (protectedPixels) {
       for (const saved of protectedPixels) {
         const pixel = pixels[saved[0]];
@@ -71,6 +80,10 @@ export function applyLayerSettingCreativeBuffer({
 
     globalEffectsController.applyGroupFixedColors(pixels, 'post');
     globalEffectsController.applySpatialStage({ pixels, nowMs });
+  }
+
+  if (!globalEffectsController && liveTouchOverlayPattern) {
+    liveTouchOverlayPattern.composite(pixels, { nowMs, signals });
   }
 
   // The established grand master belongs to the complete setting look. During

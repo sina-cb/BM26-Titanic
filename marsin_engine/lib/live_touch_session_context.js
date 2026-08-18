@@ -1,12 +1,82 @@
 import { AudioBindings } from './audio_bindings.js';
-import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG } from './global_effect_slot_manager.js';
+import {
+  GlobalEffectSlotManager,
+  DEFAULT_SLOT_CONFIG,
+  resolveSlotBinding,
+} from './global_effect_slot_manager.js';
 import { GlobalEffectsController } from './global_effects_controller.js';
+import { GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
+import { LiveTouchOverlayPattern } from './live_touch_overlay_pattern.js';
 import { ParamCenter } from './param_center.js';
 
 const OWNER_HEADER = 'x-touch-control-owner';
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const MAX_PREPARE_OPERATIONS = 128;
 const PREPARE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+// Performance is action-only, so the browser cannot safely construct this
+// layout on ARM. These are the approved Live Touch keys (slots 9..24) and are
+// session-private: they never replace the global Deck/VSN1 bank or persist to
+// disk. Effect identity, label, and behavior come from the executable catalog
+// and fail at module load if the catalog no longer provides a listed key.
+const LIVE_TOUCH_PERFORMANCE_BINDINGS = Object.freeze([
+  ['movementTrace', 'pulse_slow_fade'],
+  ['movementTrace', 'every_other_repeat'],
+  ['movementTrace', 'every_other_reverse'],
+  ['movementTrace', 'every_other_two_tone'],
+  ['movementTrace', 'one_per_color_repeat'],
+  ['movementTrace', 'one_per_color_reverse'],
+  ['movementTrace', 'one_per_color_double'],
+  ['movementTrace', 'whole_group_repeat'],
+  ['movementTrace', 'whole_group_reverse'],
+  ['strobe', 'sync_4hz'],
+  ['beatPump', 'soft'],
+  ['breath', 'calm'],
+  ['feedbackTrails', 'soft_afterimage'],
+  ['feedbackTrails', 'ghost_ship'],
+  ['waterlineSweep', 'shadow_pass'],
+  ['freeze', 'hold'],
+]);
+
+export function buildLiveTouchPerformanceSlots(library = GLOBAL_EFFECT_LIBRARY) {
+  const sessionSlots = DEFAULT_SLOT_CONFIG
+    .filter(slot => slot.slotId < 9 || slot.slotId > 24)
+    .map(slot => ({ ...slot, paramsOverride: { ...(slot.paramsOverride || {}) } }));
+  const keys = LIVE_TOUCH_PERFORMANCE_BINDINGS.map(([effectId, presetId], index) => {
+    const effect = library[effectId];
+    const preset = effect && effect.presets && effect.presets[presetId];
+    if (!effect || !preset || typeof preset.defaultBehavior !== 'string') {
+      throw new Error(
+        `Live Touch Performance seed requires catalog binding '${effectId}|${presetId}'`,
+      );
+    }
+    if (!effect.behaviorTypes.includes(preset.defaultBehavior)) {
+      throw new Error(
+        `Live Touch Performance seed '${effectId}|${presetId}' has unsupported `
+          + `default behavior '${preset.defaultBehavior}'`,
+      );
+    }
+    return {
+      slotId: index + 9,
+      enabled: true,
+      label: preset.label,
+      effectId,
+      presetId,
+      behavior: preset.defaultBehavior,
+      // Palette-follow and browser-specific overrides are configuration. The
+      // action-only Performance seed intentionally uses only catalog params.
+      paramsOverride: {},
+    };
+  });
+  return [...sessionSlots, ...keys].sort((a, b) => a.slotId - b.slotId);
+}
+
+export const LIVE_TOUCH_PERFORMANCE_SLOT_CONFIG = Object.freeze(
+  buildLiveTouchPerformanceSlots().map(slot => Object.freeze({
+    ...slot,
+    paramsOverride: Object.freeze({ ...slot.paramsOverride }),
+  })),
+);
 
 const ROUTED_EXACT_PATHS = new Set([
   '/param-center',
@@ -27,6 +97,7 @@ const ROUTED_EXACT_PATHS = new Set([
   '/mixer',
   '/mixer/tempo',
   '/mixer/tempo/source',
+  '/layers/live_touch/palette',
 ]);
 
 /**
@@ -53,7 +124,7 @@ export class LiveTouchSessionContext {
     this._replaceTransientState();
   }
 
-  _replaceTransientState() {
+  _replaceTransientState({ performanceModeActive = false } = {}) {
     this.effectsController = new GlobalEffectsController({
       engine: { fps: this.fps },
       modelPixelCount: this.model.pixels.length,
@@ -61,24 +132,34 @@ export class LiveTouchSessionContext {
     this.effectsController.initFromModel(this.model.specialEffects || this.model.pixels);
     this.slotManager = new GlobalEffectSlotManager(
       this.effectsController,
-      DEFAULT_SLOT_CONFIG,
+      performanceModeActive ? LIVE_TOUCH_PERFORMANCE_SLOT_CONFIG : DEFAULT_SLOT_CONFIG,
     );
     this.audioBindings = new AudioBindings();
     this.effectsController.audioBindings = this.audioBindings;
     this.paramCenter = new ParamCenter(null, this.paramCenterOptions);
+    this.colorPalette = null;
+    this.overlayPattern = new LiveTouchOverlayPattern(this.model.pixels, {
+      getTwoColorPalette: () => [
+        this.paramCenter.get('colorPalette1'),
+        this.paramCenter.get('colorPalette2'),
+      ],
+    });
     this.paramRouter = null;
     this.tempoBpm = 120;
     this.tempoSourcePref = 'manual';
   }
 
-  begin(ownerId, sharedParamCenter, { applyToLiveChannel = true } = {}) {
+  begin(ownerId, sharedParamCenter, {
+    applyToLiveChannel = true,
+    performanceModeActive = false,
+  } = {}) {
     assertOwnerId(ownerId);
     if (this.ownerId && this.ownerId !== ownerId) {
       throw new Error(`Live Touch session is already owned by '${this.ownerId}'`);
     }
     if (this.ownerId === ownerId) return this.getState();
 
-    this._replaceTransientState();
+    this._replaceTransientState({ performanceModeActive });
     this.ownerId = ownerId;
     this.revision++;
     this.tempoBpm = typeof this.mixer.tempoBpm === 'number'
@@ -121,6 +202,7 @@ export class LiveTouchSessionContext {
     }
     this.model = model;
     this.effectsController.initFromModel(model.specialEffects || model.pixels);
+    this.overlayPattern.setModelPixels(model.pixels);
   }
 
   getState() {
@@ -168,9 +250,13 @@ export class LiveTouchSessionContext {
       fps: this.fps,
       paramCenterOptions: this.paramCenterOptions,
     });
-    candidate.begin(ownerId, this.paramCenter, { applyToLiveChannel: false });
+    candidate.begin(ownerId, this.paramCenter, {
+      applyToLiveChannel: false,
+      performanceModeActive: dependencies.performanceModeActive === true,
+    });
     candidate.tempoBpm = this.tempoBpm;
     candidate.tempoSourcePref = this.tempoSourcePref;
+    if (this.colorPalette) candidate.setPalette(this.colorPalette);
     const localControls = [];
 
     for (let index = 0; index < operations.length; index++) {
@@ -188,11 +274,14 @@ export class LiveTouchSessionContext {
         }
         candidate._applyPreparedHttpOperation(operation, dependencies);
       } catch (error) {
-        throw prepareError(
+        const preparedError = prepareError(
           `operation ${index} ${operation && operation.method} `
             + `${operation && operation.path} failed: ${error.message}`,
           index,
+          error && error.code ? error.code : undefined,
         );
+        if (Number.isInteger(error && error.status)) preparedError.status = error.status;
+        throw preparedError;
       }
     }
     return { candidate, localControls, operationCount: operations.length, ownerId };
@@ -216,6 +305,8 @@ export class LiveTouchSessionContext {
       paramRouter: this.paramRouter,
       tempoBpm: this.tempoBpm,
       tempoSourcePref: this.tempoSourcePref,
+      colorPalette: this.colorPalette,
+      overlayPattern: this.overlayPattern,
       revision: this.revision,
       localControls: Object.fromEntries(
         Object.entries(live.localControls || {}).map(([id, values]) => [id, { ...values }]),
@@ -230,6 +321,8 @@ export class LiveTouchSessionContext {
       this.paramRouter = candidate.paramRouter;
       this.tempoBpm = candidate.tempoBpm;
       this.tempoSourcePref = candidate.tempoSourcePref;
+      this.colorPalette = candidate.colorPalette;
+      this.overlayPattern = candidate.overlayPattern;
 
       // One event-loop turn is the transaction boundary. Apply the complete
       // CPC snapshot and then pattern-local controls before a render timer can
@@ -254,6 +347,8 @@ export class LiveTouchSessionContext {
       this.paramRouter = previous.paramRouter;
       this.tempoBpm = previous.tempoBpm;
       this.tempoSourcePref = previous.tempoSourcePref;
+      this.colorPalette = previous.colorPalette;
+      this.overlayPattern = previous.overlayPattern;
       this.revision = previous.revision;
       live.localControls = previous.localControls;
       try {
@@ -313,6 +408,7 @@ export class LiveTouchSessionContext {
       getFrameIndex: dependencies.getFrameIndex,
       sharedGlobals: dependencies.sharedGlobals,
       serializeMixerState: dependencies.serializeMixerState,
+      performanceModeActive: dependencies.performanceModeActive === true,
     });
     if (!handled || status === null) {
       throw new Error('path is not supported by the Live prepare transaction');
@@ -321,7 +417,10 @@ export class LiveTouchSessionContext {
       const detail = responseBody && responseBody.error
         ? responseBody.error
         : `HTTP ${status}`;
-      throw new Error(detail);
+      const error = new Error(detail);
+      error.status = status;
+      if (responseBody && responseBody.code) error.code = responseBody.code;
+      throw error;
     }
     if (responseBody && responseBody.status === 'partial') {
       const ignored = Array.isArray(responseBody.ignored)
@@ -347,6 +446,8 @@ export class LiveTouchSessionContext {
     return ROUTED_EXACT_PATHS.has(url)
       || /^\/group-fixed-colors\/.+/.test(url)
       || /^\/global-effect-slots\/\d+$/.test(url)
+      || /^\/global-effect-slots\/\d+\/intensity(?:\/reset)?$/.test(url)
+      || /^\/global-effect-slots\/\d+\/mode(?:\/cycle)?$/.test(url)
       || /^\/global-effect-slots\/\d+\/(press|activate|deactivate|trigger|toggle|down|up)$/
         .test(url)
       || /^\/audio-bindings\/(effects|groups)\/.+/.test(url);
@@ -385,6 +486,24 @@ export class LiveTouchSessionContext {
 
   tempoMultiplier() {
     return Math.max(0.05, Math.min(8, this.tempoBpm / 120));
+  }
+
+  setPalette(colorPalette) {
+    this.colorPalette = this.overlayPattern.setPalette(colorPalette);
+    return this.getPalette();
+  }
+
+  getPalette() {
+    return this.colorPalette ? this.colorPalette.map(color => ({ ...color })) : null;
+  }
+
+  _syncSelectedOverlayFromSlot() {
+    const slotId = this.overlayPattern.selectedSlotId;
+    if (!Number.isInteger(slotId)) return;
+    const slot = this.slotManager.getSlot(slotId);
+    if (!slot || slot.effectId !== 'movementTrace') return;
+    const resolved = resolveSlotBinding({ slot });
+    this.overlayPattern.updateParams(stripMovementColorOverrides(resolved.params));
   }
 
   setLiveControl(channel, controlId, v0, v1, v2) {
@@ -429,7 +548,7 @@ export class LiveTouchSessionContext {
    */
   handleHttp({
     req, res, readBody, listModelGroups, getFrameIndex, sharedGlobals,
-    serializeMixerState,
+    serializeMixerState, performanceModeActive = false,
   }) {
     if (!this.routesRequest(req)) return false;
     const method = req.method;
@@ -440,8 +559,9 @@ export class LiveTouchSessionContext {
       res.writeHead(status, JSON_HEADERS);
       res.end(JSON.stringify(body));
     };
-    const fail = error => send(400, {
+    const fail = error => send(Number.isInteger(error && error.status) ? error.status : 400, {
       error: String(error && error.message ? error.message : error),
+      ...(error && error.code ? { code: error.code } : {}),
     });
     const withBody = fn => readBody(data => {
       try { fn(data || {}); } catch (error) { fail(error); }
@@ -450,6 +570,31 @@ export class LiveTouchSessionContext {
       ? performance.now()
       : Date.now();
     const frameIndex = () => (typeof getFrameIndex === 'function' ? getFrameIndex() : 0);
+    const rejectPerformanceEffectConfiguration = () => {
+      if (!performanceModeActive) return false;
+      send(409, {
+        error: 'performance mode is active — effect configuration is locked; use an effect action',
+        code: 'PERFORMANCE_MODE',
+      });
+      return true;
+    };
+
+    if (url === '/layers/live_touch/palette') {
+      if (method === 'GET') {
+        send(200, { colorPalette: this.getPalette() });
+        return true;
+      }
+      if (method === 'POST') {
+        withBody(data => {
+          if (!Object.hasOwn(data, 'colorPalette')) {
+            throw new Error('body must include colorPalette: exactly five HSV colors');
+          }
+          send(200, { status: 'ok', colorPalette: this.setPalette(data.colorPalette) });
+        });
+        return true;
+      }
+      return false;
+    }
 
     if (method === 'GET' && url === '/param-center/schema') {
       send(200, this.paramCenter.getSchema());
@@ -613,45 +758,19 @@ export class LiveTouchSessionContext {
 
     if (url === '/movement-rate') {
       if (method === 'GET') {
-        const movement = controller.movement || {};
+        const movement = this.overlayPattern.params || {};
+        const status = this.overlayPattern.getStatus(nowMs());
         send(200, {
-          active: !!movement.enabled,
+          active: status.active,
           mode: movement.mode,
           pixelsPerSecond: movement.pixelsPerSecond,
           amount: movement.amount,
         });
       } else if (method === 'POST') {
-        withBody(data => {
-          const active = !!data.active;
-          const pixelsPerSecond = strictNumber(
-            data.pixelsPerSecond, 0.05, 120, 6, 'movement-rate pixelsPerSecond',
-          );
-          const mode = data.mode || 'whole_group';
-          if (!['every_other', 'one_per_color', 'whole_group', 'pulse'].includes(mode)) {
-            throw new Error(`movement-rate: unknown mode '${mode}'`);
-          }
-          if (!active) controller.setMovementTrace(false);
-          else {
-            const params = {
-              mode,
-              travel: 'repeat',
-              sync: false,
-              pixelsPerSecond,
-              amount: data.amount === undefined ? 1 : data.amount,
-            };
-            if (data.colors !== undefined) {
-              validateColors(data.colors, 'movement-rate');
-              params.colors = data.colors;
-            }
-            controller.setMovementTrace(true, params, { presetId: 'xy_pad' });
-          }
-          const movement = controller.movement || {};
-          send(200, {
-            status: 'ok', active: !!movement.enabled,
-            mode: movement.mode,
-            pixelsPerSecond: movement.pixelsPerSecond,
-            amount: movement.amount,
-          });
+        if (rejectPerformanceEffectConfiguration()) return true;
+        send(409, {
+          error: 'movement-rate is retired for Live Touch; use an authoritative overlay slot action',
+          code: 'LIVE_TOUCH_OVERLAY_ACTION_REQUIRED',
         });
       } else return false;
       return true;
@@ -673,16 +792,118 @@ export class LiveTouchSessionContext {
       return true;
     }
     if (method === 'GET' && url === '/global-effect-slots/status') {
+      const overlayNowMs = nowMs();
       send(200, {
-        slots: slots.getStatus(),
+        slots: slots.getStatus().map(slot => {
+          if (slot.effectId !== 'movementTrace') return slot;
+          return {
+            ...slot,
+            // Slot state is logical operator intent, not emitted brightness.
+            // During the physical one-second envelope alpha can be zero on
+            // activation or nonzero on fade-out; tying reconciliation to it
+            // would make an honest GET look like a missed press.
+            active: this.overlayPattern.selectedSlotId === slot.slotId
+              && this.overlayPattern.requestedActive,
+          };
+        }),
         effectsPage: slots.getEffectsPage(),
         controller: controller.getStatus(),
+        liveTouchOverlayPattern: this.overlayPattern.getStatus(overlayNowMs),
+      });
+      return true;
+    }
+    if (method === 'PATCH' && url === '/global-effect-slots') {
+      if (rejectPerformanceEffectConfiguration()) return true;
+      withBody(data => {
+        if (!Array.isArray(data.slots)) {
+          throw new Error('body must include slots: array');
+        }
+        validateMovementPaletteOverrides(data.slots);
+        // This manager is session-local. A Live Touch layout edit must never
+        // deploy or persist a shared Deck/Mixer effect layout.
+        slots.setSlots(data.slots, { emitLayout: false });
+        this._syncSelectedOverlayFromSlot();
+        send(200, { slots: slots.getSlots() });
       });
       return true;
     }
     const slotPatch = url.match(/^\/global-effect-slots\/(\d+)$/);
     if (method === 'PATCH' && slotPatch) {
-      withBody(data => send(200, { slot: slots.patchSlot(Number(slotPatch[1]), data) }));
+      if (rejectPerformanceEffectConfiguration()) return true;
+      withBody(data => {
+        const slotId = Number(slotPatch[1]);
+        validateMovementPaletteOverride(data, slots.getSlot(slotId));
+        const slot = slots.patchSlot(slotId, data);
+        this._syncSelectedOverlayFromSlot();
+        send(200, { slot });
+      });
+      return true;
+    }
+    const intensityMatch = url.match(/^\/global-effect-slots\/(\d+)\/intensity(?:\/(reset))?$/);
+    if (method === 'POST' && intensityMatch) {
+      if (rejectPerformanceEffectConfiguration()) return true;
+      const slotId = Number(intensityMatch[1]);
+      const reset = intensityMatch[2] === 'reset';
+      if (reset) {
+        try {
+          const result = slots.resetSlotIntensity(slotId, {
+            frameIndex: frameIndex(), nowMs: nowMs(),
+          });
+          this._syncSelectedOverlayFromSlot();
+          send(200, {
+            status: 'ok', slotId, intensity: result.intensity, applied: result.applied,
+          });
+        } catch (error) {
+          fail(error);
+        }
+      } else {
+        withBody(data => {
+          if (typeof data.value !== 'number' || !Number.isFinite(data.value)) {
+            throw new Error('body must include value: a finite number in [0..1]');
+          }
+          const result = slots.setSlotIntensity(slotId, data.value, {
+            frameIndex: frameIndex(), nowMs: nowMs(),
+          });
+          this._syncSelectedOverlayFromSlot();
+          send(200, {
+            status: 'ok', slotId, intensity: result.intensity,
+            paramValue: result.paramValue, applied: result.applied,
+          });
+        });
+      }
+      return true;
+    }
+    const modeMatch = url.match(/^\/global-effect-slots\/(\d+)\/mode(?:\/(cycle))?$/);
+    if (method === 'POST' && modeMatch) {
+      if (rejectPerformanceEffectConfiguration()) return true;
+      const slotId = Number(modeMatch[1]);
+      const cycle = modeMatch[2] === 'cycle';
+      if (cycle) {
+        try {
+          const result = slots.cycleSlotMode(slotId, {
+            frameIndex: frameIndex(), nowMs: nowMs(),
+          });
+          send(200, {
+            status: 'ok', slotId, mode: result.mode, modeIndex: result.modeIndex,
+            applied: result.applied,
+          });
+        } catch (error) {
+          fail(error);
+        }
+      } else {
+        withBody(data => {
+          if (!Object.prototype.hasOwnProperty.call(data, 'value')) {
+            throw new Error('body must include value (a member of the effect mode values list)');
+          }
+          const result = slots.setSlotMode(slotId, data.value, {
+            frameIndex: frameIndex(), nowMs: nowMs(),
+          });
+          send(200, {
+            status: 'ok', slotId, mode: result.mode, modeIndex: result.modeIndex,
+            applied: result.applied,
+          });
+        });
+      }
       return true;
     }
     const slotAction = url.match(
@@ -692,15 +913,47 @@ export class LiveTouchSessionContext {
       try {
         const slotId = Number(slotAction[1]);
         const action = slotAction[2];
-        slots.dispatchSlotAction({ slotId, action, frameIndex: frameIndex(), nowMs: nowMs() });
-        send(200, { status: 'ok', slotId, action, controller: controller.getStatus() });
+        const slot = slots.getSlot(slotId);
+        if (!slot) throw new Error(`Invalid slotId: ${slotId}`);
+        const actionNowMs = nowMs();
+        if (slot.effectId === 'movementTrace') {
+          const resolved = resolveSlotBinding({ slot });
+          this.overlayPattern.dispatch({
+            slotId,
+            presetId: resolved.presetId,
+            params: stripMovementColorOverrides(resolved.params),
+            action,
+            behavior: resolved.behavior,
+            nowMs: actionNowMs,
+          });
+        } else {
+          slots.dispatchSlotAction({
+            slotId, action, frameIndex: frameIndex(), nowMs: actionNowMs,
+          });
+        }
+        send(200, {
+          status: 'ok', slotId, action, controller: controller.getStatus(),
+          liveTouchOverlayPattern: this.overlayPattern.getStatus(actionNowMs),
+        });
       } catch (error) { fail(error); }
       return true;
     }
     if (method === 'POST' && url === '/global-effects/disable-all') {
       try {
-        const result = slots.disableAll({ frameIndex: frameIndex(), nowMs: nowMs() });
-        send(200, { status: 'ok', disabled: result.disabled });
+        const actionNowMs = nowMs();
+        const result = slots.disableAll({ frameIndex: frameIndex(), nowMs: actionNowMs });
+        this.overlayPattern.dispatch({
+          slotId: this.overlayPattern.selectedSlotId,
+          presetId: this.overlayPattern.presetId,
+          params: this.overlayPattern.params || {},
+          action: 'deactivate',
+          behavior: 'toggle',
+          nowMs: actionNowMs,
+        });
+        send(200, {
+          status: 'ok', disabled: result.disabled,
+          liveTouchOverlayPattern: this.overlayPattern.getStatus(actionNowMs),
+        });
       } catch (error) { fail(error); }
       return true;
     }
@@ -715,6 +968,7 @@ export class LiveTouchSessionContext {
     }
     const bindingMatch = url.match(/^\/audio-bindings\/(effects|groups)\/(.+)$/);
     if (method === 'PUT' && bindingMatch) {
+      if (rejectPerformanceEffectConfiguration()) return true;
       let id;
       try { id = decodeURIComponent(bindingMatch[2]); } catch (error) { fail(error); return true; }
       withBody(data => {
@@ -728,6 +982,7 @@ export class LiveTouchSessionContext {
       return true;
     }
     if (method === 'POST' && url === '/audio-bindings/clear') {
+      if (rejectPerformanceEffectConfiguration()) return true;
       this.audioBindings.clearAll();
       send(200, { ok: true });
       return true;
@@ -821,4 +1076,28 @@ function validateColors(colors, label) {
     for (const value of color) peak = Math.max(peak, value);
   }
   if (peak < 0.05) throw new Error(`${label}: an all-black palette is refused`);
+}
+
+function stripMovementColorOverrides(params) {
+  const { colors, ...withoutColors } = params;
+  return withoutColors;
+}
+
+function validateMovementPaletteOverrides(slot) {
+  if (!slot || typeof slot !== 'object') return;
+  if (slot.effectId === 'movementTrace') validateMovementPaletteOverride(slot);
+}
+
+function validateMovementPaletteOverride(slotPatch, existingSlot = null) {
+  const isMovement = (slotPatch && slotPatch.effectId === 'movementTrace')
+    || (existingSlot && existingSlot.effectId === 'movementTrace');
+  const override = slotPatch && slotPatch.paramsOverride;
+  if (isMovement && override && Object.hasOwn(override, 'colors')) {
+    const error = new Error(
+      'movementTrace colors are session-owned; stage the exact five-colour Live Touch palette instead',
+    );
+    error.code = 'LIVE_TOUCH_OVERLAY_PALETTE_REQUIRED';
+    error.status = 409;
+    throw error;
+  }
 }

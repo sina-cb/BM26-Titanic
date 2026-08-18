@@ -254,6 +254,55 @@ test('globals must be a non-empty map of finite numbers', () => {
     /must be a finite number/);
 });
 
+// colorPalette1/colorPalette2 are ParamCenter `hsv`-typed params
+// (param_center.js): a plain `{ h, s, v }` object, not a number. The `globals`
+// verb has to accept that shape too, or a show that wants to pin the reveal's
+// colour (marsin_engine/patterns/baby_reveal, docs/73) is rejected at load
+// before it ever reaches setGlobals/paramCenter.set — which already handles
+// hsv values today (proven by the END-OF-SHOW globals restore path).
+test('globals accepts an HSV { h, s, v } object alongside plain finite numbers', () => {
+  const ok = validateAction({
+    type: 'globals',
+    set: {
+      colorTransitionMs: 0,
+      colorPalette1: { h: 0.943869, s: 0.965, v: 1.0 },
+      colorPalette2: { h: 0.943869, s: 0.965, v: 0.28 },
+    },
+  }, 'a');
+  assert.deepEqual(ok, {
+    type: 'globals',
+    delayMs: 0,
+    set: {
+      colorTransitionMs: 0,
+      colorPalette1: { h: 0.943869, s: 0.965, v: 1.0 },
+      colorPalette2: { h: 0.943869, s: 0.965, v: 0.28 },
+    },
+  });
+});
+
+test('a malformed HSV globals value is refused loudly, naming the key and what was wrong', () => {
+  // Missing a channel.
+  assert.match(
+    refusal(() => validateAction(
+      { type: 'globals', set: { colorPalette1: { h: 0.5, s: 0.5 } } }, 'a')),
+    /a\.set\['colorPalette1'\] must be a finite number or an HSV object with exactly the keys h, s, v/);
+  // Out-of-range channel.
+  assert.match(
+    refusal(() => validateAction(
+      { type: 'globals', set: { colorPalette1: { h: 0.5, s: 1.5, v: 0.5 } } }, 'a')),
+    /a\.set\['colorPalette1'\]\.s must be a finite number in \[0, 1\], got 1\.5/);
+  // Extra key.
+  assert.match(
+    refusal(() => validateAction(
+      { type: 'globals', set: { colorPalette1: { h: 0.5, s: 0.5, v: 0.5, x: 1 } } }, 'a')),
+    /a\.set\['colorPalette1'\] must be a finite number or an HSV object with exactly the keys h, s, v/);
+  // Non-numeric channel.
+  assert.match(
+    refusal(() => validateAction(
+      { type: 'globals', set: { colorPalette1: { h: 0.5, s: 0.5, v: 'bright' } } }, 'a')),
+    /a\.set\['colorPalette1'\]\.v must be a finite number in \[0, 1\], got "bright"/);
+});
+
 test('an unknown effectId is refused and lists the allowed ones', () => {
   const msg = refusal(() => validateAction({ type: 'effect', effectId: 'fogger', holdMs: 100 }, 'a'));
   assert.match(msg, /effectId must be one of strobe \| vintageWhite \| blastWhite \| uvBlast \| invert/);
@@ -504,8 +553,9 @@ test('the shipped titanic Baby Reveal show validates and has the operator flow',
   assert.equal(show.leaseDurationSec, 1800, 'Baby Reveal owns the rig for at most 30 minutes');
   assert.deepEqual(show.stages.map(s => s.id), ['tease', 'blackout', 'reveal']);
 
-  // The three canonical playlists, and nothing else.
-  assert.deepEqual(showPlaylistNames(show), ['baby_tease', 'baby_girl', 'baby_boy']);
+  // The two canonical playlists (docs/73 — baby_reveal replaced the boy/girl
+  // twin answer playlists with one colour-blind set), and nothing else.
+  assert.deepEqual(showPlaylistNames(show), ['baby_tease', 'baby_reveal']);
 
   // The historically named BLACKOUT stage now holds a neutral full-rig white
   // source at the 10% master safety floor — never the e-stop blackout and
@@ -558,8 +608,25 @@ test('the shipped titanic Baby Reveal show validates and has the operator flow',
         >= playlist.delayMs + reveal.autopilot.transition.durationMs,
       `${choice.id}: the white bloom must cover the complete answer transition`);
   }
-  assert.equal(reveal.choices.find(c => c.id === 'girl').actions.find(a => a.type === 'playlist').playlist, 'baby_girl');
-  assert.equal(reveal.choices.find(c => c.id === 'boy').actions.find(a => a.type === 'playlist').playlist, 'baby_boy');
+  // Both choices activate the SAME colour-blind playlist — the answer is
+  // painted by the `globals` colorPalette1/2 write below, not by picking a
+  // different playlist per choice.
+  assert.equal(reveal.choices.find(c => c.id === 'girl').actions.find(a => a.type === 'playlist').playlist, 'baby_reveal');
+  assert.equal(reveal.choices.find(c => c.id === 'boy').actions.find(a => a.type === 'playlist').playlist, 'baby_reveal');
+
+  // THE PALETTE HANDSHAKE (docs/73): each choice pins colorPalette1/2 to its
+  // family hue, colorPalette2 at the DARK_K = 0.28 tone, with the transition
+  // snapped to 0 ms so the palette never slews through black mid-ramp.
+  for (const [id, hue] of [['girl', 0.943869], ['boy', 0.594795]]) {
+    const globalsAction = reveal.choices.find(c => c.id === id).actions.find(a => a.type === 'globals');
+    assert.ok(globalsAction, `${id} has no globals palette write`);
+    assert.equal(globalsAction.set.colorTransitionMs, 0, `${id}: palette must snap, not slew`);
+    assert.deepEqual(globalsAction.set.colorPalette2,
+      { h: hue, s: globalsAction.set.colorPalette1.s, v: 0.28 },
+      `${id}: colorPalette2 must carry the SAME hue as colorPalette1 at the dark tone`);
+    assert.equal(globalsAction.set.colorPalette1.h, hue, `${id}: colorPalette1 hue mismatch`);
+    assert.equal(globalsAction.set.colorPalette1.v, 1.0, `${id}: colorPalette1 must be full bright`);
+  }
 
   // REVEAL is the final holding stage. It shuffles whichever answer playlist
   // the operator chose until END SHOW; there is no redundant PHOTO GLOW hop.

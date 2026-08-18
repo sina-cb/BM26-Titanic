@@ -147,10 +147,14 @@ var PHI = 1.6180339887;
 // fifth of the rig from mid-ship at ANY radius — that is what "not all the
 // lights are being affected" was.
 //
-// 0.12 + 1.30 = 1.42 clears the 1.3230 worst case with headroom, verified to
+// 0.22 + 1.30 = 1.52 clears the 1.3230 worst case with headroom, verified to
 // give 964/964 coverage from EVERY pixel. Low radius still gives a tight spot,
 // so the range now spans "one fixture" to "the whole ship".
-var R_MIN = 0.12;
+/* Keep the full-radius MINIMUM above the measured 1.323 diagonal even at the
+   wobble trough: (0.22 + 1.30) * 0.88 = 1.3376. The prior 1.2496 contradicted
+   the coverage claim, and the default centre/radius could miss every Titanic
+   pixel because the model has a real centre dead band. */
+var R_MIN = 0.22;
 var R_SPAN = 1.30;
 
 var breathPhase = 0.0;
@@ -240,9 +244,9 @@ export function beforeRender(delta) {
   _hsv2rgb(hue5, cp1S, clamp(val5, 0.0, 1.0));   pr4 = cr; pg4 = cg; pb4 = cb;
 }
 
-export function render3D(index, xIn, yIn, zIn) {
-  var nx = clamp(xIn, 0.0, 1.0);
-  var nz = clamp(zIn, 0.0, 1.0);
+export function render3D(index, x, y, z) {
+  var nx = clamp(x, 0.0, 1.0);
+  var nz = clamp(z, 0.0, 1.0);
 
   // ── Distance from this pixel to the operator's point, in the top-down
   //    plane. Height (ny) is deliberately IGNORED: the operator is aiming at a
@@ -316,7 +320,11 @@ export function render3D(index, xIn, yIn, zIn) {
 
   // Background wash. NON-ZERO floor: the mission is that the ship reads at
   // night, so parking the pool in one corner must not black out the rest.
-  var wash = 0.03 + clamp(glow, 0.0, 1.0) * 0.30;
+  /* The parked background must remain visibly alive even when the pool centre
+     sits in the model's dead band. Previously only `pool` breathed; when no
+     pixel intersected it the entire real Live channel was byte-static. */
+  var washBreath = 0.88 + 0.12 * wave(breathPhase * 0.618 + 0.17);
+  var wash = (0.03 + clamp(glow, 0.0, 1.0) * 0.30) * washBreath;
 
   // ── WHAT THE STROKE DOES ──────────────────────────────────────────────────
   // Mode 0 POOL is the ORIGINAL behaviour, untouched and still the default, so

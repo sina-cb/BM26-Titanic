@@ -158,10 +158,14 @@ function _ensureInitialized() {
 // ── Action functions (REST; re-seed on success so the UI converges even if
 // the WS broadcast is delayed) ──────────────────────────────────────────
 
-async function _reseedAfterAction() {
+async function _reseedAfterAction({ preserveError = false } = {}) {
   const r = await fetchTimelineState();
   if (r.ok && r.data) {
-    _emit({ state: r.data, connected: _cached.connected, error: null });
+    _emit({
+      state: r.data,
+      connected: _cached.connected,
+      error: preserveError ? _cached.error : null,
+    });
   }
 }
 
@@ -179,7 +183,10 @@ async function _setAutopilot(enabled: boolean): Promise<boolean> {
   const r = await setTimelineAutopilot(enabled);
   if (!r.ok) {
     _emit({ ..._cached, error: r.error || 'Failed to toggle autopilot' });
-    await _reseedAfterAction();
+    // Reconcile the authoritative state, but keep the refusal visible. This is
+    // especially important for a Live Touch lease conflict: clearing the error
+    // during the follow-up GET made a rejected action look successful.
+    await _reseedAfterAction({ preserveError: true });
     return false;
   }
   await _reseedAfterAction();

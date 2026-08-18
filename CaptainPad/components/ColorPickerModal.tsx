@@ -46,6 +46,11 @@ import {
   type ColorPalettePreset,
   type MenuColorPalettePreset,
 } from '@/components/color_preset_library';
+import {
+  PALETTE_PICKER_CARD_ITEM_STYLE,
+  PALETTE_PICKER_CARD_STYLE,
+  PALETTE_PICKER_GRID_STYLE,
+} from '@/components/color_preset_library_layout';
 
 // Picker policy: hue-only. Every write pins S=V=1.0.
 const FULL_S = 1;
@@ -372,7 +377,10 @@ export function ColorPickerModal({
         {/* Card swallows taps so interacting inside never dismisses. */}
         <Pressable
           onPress={() => {}}
-          style={{ width: 360, maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}
+          style={[PALETTE_PICKER_CARD_STYLE, {
+            maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20,
+            borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
+          }]}
         >
           {/* ── Header: title + live combined preview ──────────────── */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -513,7 +521,10 @@ export function ColorQueueModal({ visible, presets, onSelect, onClose }: {
       >
         <Pressable
           onPress={() => {}}
-          style={{ width: 360, maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}
+          style={[PALETTE_PICKER_CARD_STYLE, {
+            maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20,
+            borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
+          }]}
         >
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14, textTransform: 'uppercase', marginBottom: 14 }}>
             Queue Colour
@@ -564,7 +575,10 @@ function PresetsTab({ presets, editing = false, onPick, onRemove }: {
 }) {
   const C = usePalette();
   return (
-    <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
+    <ScrollView
+      style={{ alignSelf: 'stretch', maxHeight: 360, minWidth: 0 }}
+      contentContainerStyle={PALETTE_PICKER_GRID_STYLE}
+    >
       {presets.map((p) => {
         const menuPreset = 'source' in p ? p as MenuColorPalettePreset : null;
         const removable = menuPreset ? canRemoveColorPalette(menuPreset) : false;
@@ -579,15 +593,14 @@ function PresetsTab({ presets, editing = false, onPick, onRemove }: {
               onPick(p);
             }}
             disabled={editing && !removable}
-            style={{
-              width: '47%',
+            style={[PALETTE_PICKER_CARD_ITEM_STYLE, {
               paddingVertical: 12, paddingHorizontal: 10,
               borderRadius: 10, borderWidth: 1,
               borderColor: editing && removable ? C.error : C.ghostBorder,
               backgroundColor: C.surface,
               alignItems: 'center', gap: 8,
               opacity: editing && !removable ? 0.58 : 1,
-            }}
+            }]}
             accessibilityLabel={editing
               ? removable ? `Remove ${p.name} palette` : `${p.name} palette is protected`
               : `Apply ${p.name} palette`}

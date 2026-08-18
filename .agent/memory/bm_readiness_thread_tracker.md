@@ -3,7 +3,7 @@ name: bm-readiness-thread-tracker
 description: Live tracker for the BM readiness campaign â€” in-flight agent threads, queued work, and the operator decision queue.
 type: project
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-08-17
 ---
 
 Living tracker for the **bm_readiness_mapping** project (operator asked to
@@ -15,7 +15,88 @@ Branch: `feat/bm_readiness` (all work uncommitted; commits operator-gated).
 whenever a thread starts/lands; done items move to the Landed list with
 their report link. Reports live in `.agent/reports/202607/20260724_N_*.md`.
 
-## In flight (as of 2026-07-27)
+## Current thread state (2026-08-17)
+
+- **CLOSED / OPERATOR-APPROVED / ARCHIVED — Crisp:**
+  `01a01186-9950-7672-af83-8041be0a52f0`.
+  Sources 01/02/03/06/08/10 are promoted into both 53-entry Ambient playlists
+  in both byte-identical scenes. Dedicated Crisp playlist/gallery retired;
+  sources retained. Pattern 03 now runs a bounded 37.68 s cycle at global 64.
+  Sina approved the final Ambient gallery; no further action is open.
+- **P0 REOPENED — Live Touch:**
+  `01a011f5-2ed6-72a1-bd3b-52613b5e8cfd`. Sina's physical-iPad test disproved
+  report `_311`'s offline GO. Proven causes are opaque post-pattern GLOBAL
+  colour overrides, obsolete ink-trail double-brush rendering, and instruments
+  128/129/130 using non-canonical `render3D` parameter names that compile their
+  Titanic coordinates as zero. A new iPad refusal reports protocol 1 vs engine
+  `undefined`. Approved Effects exist in Edit but are hidden in Performance;
+  restore their action-only projection and authoritative Color-crossfade UI
+  animation. Generator tiles 2 COLOUR, 5 COLOUR, and BY GROUP must become
+  non-replacing overlays with a 1 s envelope while remaining in the existing
+  Effects grid. Diagnosis and validation are active.
+  Spatial TAKE REC/PLAY/LOOP/CLEAR is physically broken; capture, replay,
+  looping, cancellation, and clear semantics are in the P0 matrix. The lead may
+  fan out disjoint slices but owns final integration and the shared-file ledger.
+  Bounded pause: handshake fixed; pattern/geometry fixed pending final
+  revalidation; double-brush validated offline; Color rebase combined suite
+  308/308 green; Performance Effects and non-replacing overlays implemented
+  pending validation. TAKE and authoritative Deck/Spatial 2D-map parity remain
+  unfinished; physical-iPad acceptance remains blocked. Task is idle, not GO.
+- **CLOSED / PHYSICALLY ACCEPTED / ARCHIVED — Audio configuration:**
+  `01a0131b-f6c9-7762-871f-90dc3a30951d`. Fabric/Yoga collapsed the
+  auto-height wrapped meter row around `SignalColumn {flex: 1}` while its canvas
+  still painted, suppressing lower-card flow. The intrinsic-width fix, native
+  Yoga contracts, iOS bundle probes, full tests, independent review, and Sina's
+  physical iPad smoke pass. Report `_316`; task archived.
+- **COMPLETE / PHYSICAL-NATIVE SMOKE OPEN — Timeline lease hardening:** exact
+  armed-owner matrix 1/1, Timeline 450/450, CaptainPad 76/76, adjacent APIs 5/5,
+  independent validation, and inspected AFTER captures pass.
+- **AUTOMATED-GREEN / PHYSICAL SMOKE OPEN — Timeline priority over Live Touch:**
+  exact mutations force-clear and confirm Live Touch authority, hold it through
+  response, then dispatch once; overview remains ownerless. API 1/1, adjacent lease APIs 10/10,
+  gate/classifier 10/10, CaptainPad 62/62, TypeScript, and lint pass. Report
+  `_317`.
+- **AUTOMATED-GREEN / VISUAL GATE OPEN — Mixer adaptive uniform channels:**
+  visible cards share one dynamic width between the current minimum and 50% of
+  available row space; two fill 50/50 and insufficient space scrolls. Focused
+  87/87, full CaptainPad 2555 pass/6 skip, lint, and web export pass. Honest
+  2/3/overflow screenshots require an authorized isolated scratch stack or a
+  later physical smoke because the read-only live stack has zero channels.
+  Report `_318`.
+- **AUTOMATED-GREEN / VISUAL SMOKE OPEN — Deck and Mixer palette-library
+  polish:** shared bounded layout, confirmed authority-first saved deletion,
+  protected starred curated palettes, and current-A/B Crossfade endpoints are
+  wired. Focused 354/354, TypeScript, and touched ESLint pass; Deck/Mixer
+  physical UI smoke remains open. Report `_319`.
+- **COMPLETE DIAGNOSIS — Color-wheel five-slot consistency:** every scheme
+  generates five slots; repeated hues overlap at identical SVG coordinates.
+  Visible distinct counts are 1/1/5/5/5/3/3/4/5. No fix/tests landed; continue
+  with stable keyed marker layout and deterministic collision offsets.
+- **COMPLETE — Effects review:** `_310` was verified as proposal/gallery work,
+  not implementation. Direct Kick Punch and Hi-Hat Sparkle inputs are unwired;
+  audio freshness plus shared musical phase are prerequisite work.
+- **PAUSED / CLAUDE-OWNED — Baby:** Codex Baby task archived. Do not write
+  Baby files until Sina explicitly returns ownership.
+- **CLOSED / ARCHIVED — Titanic model docs:** canonical LEFT/RIGHT/FRONT/BACK mapping,
+  24-region census, author preflight, and legacy-label warning validated.
+- **COMPLETE / ARCHIVED:** prior Live Touch ARM audit, Ambient, DOM Dancers,
+  Pattern Manager, and native iPad layout tasks.
+- **COMPLETE INTERNAL WORKERS:** deployment hardening and commit-scope audit.
+  These are inactive and have no sidebar task to resume.
+
+Active ownership is split among Live Touch channel/Color/Spatial/API and
+non-overlapping
+Timeline files. Shared `api_server.js` remains serialized under Live Touch.
+No git or live service actions are authorized.
+
+## Coordinator update contract
+
+Every five-minute report lists every tracked `[Sub-Agent]`, even when unchanged,
+and includes `Needed from Sina:` for each. Routine coordination never becomes
+an operator action. Material changes are compacted into this tracker,
+`../context/now.md`, and the master dossier.
+
+## Historical in-flight record (as of 2026-07-27)
 
 - **R6 UI wave COMPLETE except one queued tweak**: operator's final
   iteration (patterns column 20% â†’ 40%, i.e. weights back to original
@@ -18260,3 +18341,766 @@ fat-fingered flag). This is a fallback-behavior violation: an unrecognized
 flag must make the engine REFUSE TO BOOT (same pattern as the vis-budget
 config validation). Fix belongs in `marsin_engine/engine.js` arg parsing.
 Not yet implemented — needs an implementation wave + a regression test.
+
+## RESERVATIONS UPDATE (2026-08-17, coordinator)
+- `_299` — Baby Tease pattern redesign: audit + Fable design (campaign start)
+- `_300` — Baby Tease pattern redesign: implementation + validation wave
+- `_301` — Live Touch native ARM "pixel view is not verified": Fable root-cause debug
+- `_302` — Live Touch native ARM fix: Opus-managed Sonnet implementation + regression
+
+## 2026-08-17 — Baby Tease redesign Phase 1 COMPLETE (`_299`, Fable art director)
+Operator-requested Fable session; exclusive Baby Tease ownership (Codex Baby
+agent paused). **Audit verdict: the complaint is mechanical fact** — 12 of 15
+tease patterns are one thresholded plane + <25% wiggle = the same left/right
+split (05/08/11 mirrored); 12 of 15 TE-sign arts are the same vertical half
+split; the pink-gain zoo (x1.02..x1.32, one blue boost, x9 bar assist in 15)
+contradicts the operator's "pink dominates the bars". Genuinely mixed: 12
+cellular, 10 rivers, half-credit 13 yin-yang. Evidence: gallery regenerated
+OFFLINE for the current 15 (digest-matched; generate.mjs + audio harness,
+no ports — the operator stack was UP the whole session, contrary to the spawn
+brief; nothing live was touched) + 4-frame contact sheets.
+**Design shipped: `docs/72_baby_tease_pattern_redesign.md`** — 13 keepers
+(3 reworked in place incl. yin-yang gaining counter-color eyes; 10 new,
+numbers 82-91: checker tide, carousel sectors, argyle weave, candy helix,
+rail exchange, counter comets, bullseye tide, ink drops, star exchange,
+position swap), 12 kills listed for removal, canonical authority block
+(PINK_TRIM 0.90 / PINK_BAR_TRIM 0.80 as the only balance knobs), two NEW
+offline gates (L2 anti-bilateral predictability <=0.35/0.65; perceived-power
+ratio 0.90-1.11 at w_pink 0.46 / w_blue 0.42), playlist arc for both scenes
+byte-identical, MFT param law honored (direction 2nd where present).
+**Three riskiest skeletons PROTOTYPED + GATE_PASS offline** (~/tmp/baby_proto:
+carousel, argyle, checker) — contact sheets show true two-family mixing.
+Residue reported not reverted: old 50_/81_ tease gallery media deletions.
+Baby sources hash-verified unchanged end-to-end. Open: D1-D8 operator
+decisions (docs/72 s11). NEXT: `_300` implementation wave from docs/72 +
+report `20260817_299_baby_tease_redesign_audit_design.md`.
+
+## 2026-08-17 — Live Touch native ARM abort ROOT-CAUSED (`_301`, Fable debug)
+Operator-requested Fable session; exclusive ownership (Codex Live Touch task
+paused; working-tree Codex changes untouched, ownership hash verified). The
+iPad's `arm setup - ABORTED: pixel view is not verified` is NOT a
+verification failure — verification (artifact + 964/964 engine topology)
+PASSES on the device (that is why the host WAITING/CHECKING/FAILED banner is
+absent: the `ready` publish cleared it). The abort is a downstream ARM-setup
+call: `assertLiveSurfaceState` → `initialSpatialPrepareBody` (wire.js:1179 →
+:1106) → `brushPatch` → `padBrushWorld` (html:4362) → `padWorldPerPx`
+(pixel_views.js:709-711), which throws the SAME string for a DIFFERENT
+condition — `screenGlyphs` empty. With Spatial docked
+(`.panel.is-docked{display:none}`, html:322, persisted per-device in
+`bm26_touch_layout_v2`), `draw()` early-returns on the 0×0 canvas
+(pixel_views.js:549) so `rebuildBase` (:529, sole `screenGlyphs` writer)
+never runs. Web "passes" only because those sessions had Spatial visible —
+same code aborts on web with Spatial docked from boot. PROVEN offline 9/9 by
+`~/tmp/live_touch_arm_repro/repro.mjs` (real runtime + artifact + sources,
+stub DOM; full canArm()===true with hidden canvas, exact throw, visibility
+the only variable). Bonus hazard: visible→hidden toggle leaves a STALE
+projection that stages a min-clamped 0.01 radius via padBox()'s {1,1}
+fallback. Bridge/diagnostics/transport pins all verified correct — no native
+bridge bug. FIX CONTRACT (`_302`): split the conflated guard message; add
+canvas-independent `worldBrushRadii(fraction,target)` in pixel_views.js
+(canonical design-space reprojection, gated on the SAME staticVerified &&
+engineVerified booleans — verification never weakened, no fallback);
+`initialSpatialPrepareBody` reads `padBrushWorldCanonical` (html) instead of
+the screen path; live stroke path untouched; no CaptainPad changes; Spatial
+never auto-opened. Full contract + regression spec + validation list + Sina
+iPad retest sequence: report
+`20260817_301_live_touch_native_arm_verify_debug.md`. No live ports touched;
+no ARM mutation; no git ops.
+**`_301` ADDENDUM (13:36 PDT): exclusive-ownership VIOLATED at session end**
+— touch_control_wire.js (13:31), touch_control.html (13:33), and
+touch_control_pixel_views.js (13:35, 1239→1247 lines) were modified under
+the Fable session minutes before its closing check; the concurrent editor
+(presumably the "paused" Codex task) already split the exact conflated
+padWorldPerPx guard the diagnosis names. Diagnosis + proof unaffected (all
+file:lines verified pre-edit; offline repro 9/9), but `_302` MUST
+re-baseline against the inherited tree and reconcile partial overlap with
+the §5 contract. Fable stopped at detection per brief. Details: report
+`_301` §10.
+
+## 2026-08-17 — Live Touch fix wave SHIPPED (`_302`, Opus-managed Sonnets)
+
+Four fixes commissioned off `_301`. **W1 (ARM canvas-independence) was ALREADY
+LANDED by the concurrent Codex editor** before this wave started — verified
+against the `_301` §5 contract and found compliant (guard split with distinct
+strings, shared `worldPerPxForGlyphs` extent helper, `worldBrushRadii` gated on
+the same `staticVerified && engineVerified` booleans as `canArm()`, canonical
+design-space reprojection, `initialSpatialPrepareBody` reading
+`padBrushWorldCanonical` with no fallback, stroke path untouched, Spatial never
+auto-opened). Kept and built on, not undone. This wave ADDED the `_301` §6
+items the editor had not implemented, as
+`simulation/tests/touch_control_arm_brush_geometry.test.js` (7 tests: both
+per-gate refusal messages, determinism across four viewports and
+hidden->visible->hidden, wrong-count AND perturbed-`nx` mismatches each
+refusing loudly with `canArm()` false, invalid fractions refused not clamped).
+**FINDING: `_301` §6.6's parity prediction was WRONG.** The canonical radius is
+**~4.9% SMALLER** than the screen-derived one at the operator's pad aspect
+(measured at four viewports), because `fraction x width x per` is scale-
+invariant only while the fit is width-limited, and design is 900x520 (aspect
+1.7308) against a ~1.97 pad — past the design aspect the projection is
+height-limited so the drawn content stops growing with pad width. Exact parity
+DOES hold at the design viewport (ratio 1.000000 both axes) and that is what is
+pinned, since it is the form that actually guards the shared extent helper.
+Not a defect to chase: exact parity at arbitrary aspects would require reading
+the pad box, i.e. re-coupling to the canvas. Divergence is deterministic,
+bounded, one-directional (canonical <= pad-derived, so ARM can never stage a
+brush WIDER than drawn) and the first stroke re-asserts screen-true size.
+**W2 (spatial stroke-id 400) FIXED client-side only** — `spatialPayload()` put
+the raw WKWebView `pointerId` on the wire, exceeding the engine's
+`0x7fffffff` cap (`global_effects_controller.js:2135`, correct, untouched). Now
+a ten-entry slot pool: smallest free integer 0..9 allocated at both creation
+sites, released at all three removal sites, `id: pointer.slot` on the wire;
+`pointer.id` stays the raw id as the Map key. Exhaustion throws, no fallback.
+4 puppeteer regressions + a source pin forbidding `id: pointer.id`.
+**W3 (EFFECTS tiles no-op) NEEDED NO CODE CHANGE — it was a downstream symptom
+of W1.** Tiles ARE driven by real provisioned slot definitions; provisioning
+runs ONLY in the ARM chain (`collectEffectSlotBuildOperations`, wire.js:1176,
+with `verifyPreparedSlots` readback), so while ARM aborted, the engine kept a
+PREVIOUS layout (live slots 9-13 = Invert/UV Blast/Fogger/Long Trails/Cosmic
+Trails) and every tile rendered `fx-unwired` with 0 active. All 16 `FX_DEFAULT`
+pairs verified present in the LIVE engine library (51 pairs, 0 missing). No
+engine state/config written. 3 new contract pins so a tile can never silently
+become a no-op. **W4 (COLOR HUB clipping) FIXED, CSS only** — `_289` landed
+every `.ch-*` row's spacing unconditionally, sized for portrait; landscape 11"
+caps `.panel-body` at 367px real, content needed 375 (and 437 with the DRIVING
+strip shown), and `.panel{overflow:hidden}` made that silent unreachable
+clipping. One landscape-scoped block recovers 76px using the file's own
+hit-region recipe (every shrunk painted box grows its `::after` inset, 44pt
+preserved: 24+2x10, 28+2x8, 20+2x12). FIT not scroll, per docs/70 s10.2 which
+sanctions scrolling only for EFFECTS EDIT. Bounds pin over 2 orientations x 3
+cards x 2 strip states; lead re-verified non-vacuity (RUN sits 10.1px inside
+with the fix, 87.9px outside with `_289` spacing re-injected).
+**GATES:** simulation 63/63, engine contract 52/52, CaptainPad 28/28, tsc 0
+errors, `node --check` PASS, security 6 findings ALL pre-existing in gitignored
+`simulation/.scene_backups/` and ZERO in any touched file. Transport pins
+(`captainpad_embed`:16, `buildTransport`:96, `__captainpadDeliver`:354) HOLD and
+`touch_control_theme.js` + `touch_control_pixel_views.js` are byte-identical to
+the session baseline (Codex stayed stopped after 13:39). **NO ENGINE RESTART
+NEEDED** (nothing engine-side changed). **NO CaptainPad rebuild.** No live port
+bound, no live write, no ARM mutation, no git op.
+**`_302` REPORT-NUMBER COLLISION:** the Codex editor also wrote a report at
+`_302` (`20260817_302_live_touch_native_arm_hidden_spatial_fix.md`) covering its
+W1 work, while the tracker reserves `_302` for this Opus wave. Two files share
+the number; nothing was deleted or renamed — operator call. This wave's report
+is `20260817_302_live_touch_arm_effects_color_fix_wave.md`.
+**FOLLOW-UP FILED:** `pushXY()`'s
+`Number.isInteger(e.pointerId) ? e.pointerId : TAKE_POINTER_ID` silently aliases
+a non-integer real pointer to the playback entry and DROPS that touch — a
+latent P0 fallback (latent, not active: the operator's 400 proves their ids were
+integers merely over the cap). `_291` still owns the remaining docs/70 s10
+PLAY/EDIT grammar; none of it is needed for the tiles to work.
+- `_303` — (renumbered by coordinator) Codex's ARM hidden-Spatial fix report, was filed as _302 in collision with the reserved wave report; renamed to 20260817_303_live_touch_native_arm_hidden_spatial_fix_codex.md
+- FOLLOW-UP filed: pushXY() aliases non-integer pointerIds to TAKE_POINTER_ID (silent fallback, P0-style) — latent, needs a design call; found by _302 wave
+- `_304` — pushXY non-integer pointerId silent-drop fallback fix (Opus, operator-briefed)
+
+
+## 2026-08-17 — Baby Tease REBUILD SHIPPED (`_300`, Opus lead + 3 sub-agents)
+
+Phase 2 of the Baby Tease redesign: `docs/72` implemented, validated and
+landed. Report:
+[`../reports/202608/20260817_300_baby_tease_rebuild_implementation.md`](../reports/202608/20260817_300_baby_tease_rebuild_implementation.md).
+
+**Landed:** 13 keepers — 3 reworked in place (`10_braided_rivers`,
+`12_cellular_organism`, `13_rotating_yin_yang`) + 10 new (`82`–`91`: checker
+tide, carousel sectors, argyle weave, candy helix, rail exchange, counter
+comets, bullseye tide, ink drops, star exchange, position swap). 7 kill-list
+sources removed (5 more were already gone, deleted by the concurrent writer and
+never committed). Playlist rebuilt for BOTH scenes byte-identical (sha256
+`4655e30a5486…`, 13 entries, `defaults` generated from each pattern's own
+declared slider order); `pattern_goals.json` and `manifest.json` regenerated;
+gallery regenerated (13 GIF+MP4) and the combined index rebuilt.
+
+**Sweep (operator order "clean up remaining patterns unused from disk"):**
+`patterns/baby/` now holds **exactly 33 sources = 33 manifest ids** — 13 tease
++ 10 boy + 10 girl, nothing else. Untracked removals backed up to
+`C:/Users/TITANI~1/tmp/codex_baby_backup/`. Trap recorded: the manifest is
+regenerated FROM DISK, so it cannot be a reference authority for the sweep —
+the playlists + goals are, with the manifest regenerated afterwards.
+
+**Gates:** `baby_tease_redesign_metrics` (NEW: L2 anti-bilateral + §9 perceived
+balance + an authority-block pin) 3/3 · `playlist_gallery_tool` 13/13 ·
+simulation `pattern_manifest` 6/6 · `baby_color_contract` **15/16**. Worst L2 in
+the set 0.26 mean / 0.43 max (limits 0.35 / 0.65) against 0.73–0.84 measured on
+the patterns this wave deleted; perceived balance 0.95–1.10 (window
+0.90–1.11); closest pairwise distinctness 12.73 (floor 1.5). Set re-validated a
+second time **at real playlist defaults** after finding the gates render every
+slider at 0.5 — clean on both rigs at both operating points.
+
+**D1–D8:** all proposed defaults taken EXCEPT **D2**. `PINK_TRIM` ships at
+**0.97**, not 0.90 (`PINK_BAR_TRIM` 0.80 as specified): the §9 weights already
+carry the Helmholtz–Kohlrausch compensation, so a 0.90 trim double-counts it
+and lands effective raw pink at 0.833 — about 1 % off the floor of the only
+window where §9 and the colour contract's authority gate overlap
+(effective 0.822–1.014), with zero territorial headroom. Measured, not
+theorised: the first build failed §9 at 0.893. `docs/72` §11 D2 now carries a
+pointer to the report. Reversing is a two-constant edit in 13 files.
+
+**TWO OPERATOR ITEMS OPEN:**
+1. **The Baby Boy/Girl families were cut 20 → 10 each by the concurrent Codex
+   writer, not by Sina.** The cut is self-consistent (playlists resolve, twins
+   pair, and the gate's `MAX_KEEPERS 15` was added in the same uncommitted
+   overhaul), so `_300` did NOT restore the 20 deleted sources — restoring them
+   would fail the curation gate and the sweep would delete them again. **Needs
+   ratifying or reversing**; per-file `git show` recipe + the playlist
+   consequence in report §4.1.
+2. **The one red:** `22_boy_constellation_flow` / `37_girl_constellation_flow`
+   fail the bench colour gate (8–12 lit px, floor 15). Measured side by side,
+   **HEAD's version passes both rigs** (17–27 bench, 77–154 titanic) — the
+   Codex edit cut the lit population ~6× on titanic too. Recommendation:
+   restore that twin pair from HEAD. Left for Sina by instruction (report §4.2).
+
+**Also found + fixed in central review** (both in the wave's own reference
+pattern, both green in a harness that was itself wrong): the checker harness
+leaked VM state between passes so the fixture review ran at clock 25–45 s, and
+a rotating black separator head whose own parity was identically 0 pinned every
+Vintage to a permanent 3 pink / 2 blue — a standing bias no per-frame gate can
+see.
+
+**ENGINE RESTART REQUIRED** — the running engine loaded the old pattern set at
+boot; `_300` restarted nothing by instruction. Nothing is live until a launcher
+bounce (bench arm-marker check first).
+- `_304` DONE — pushXY() non-integer pointerId silent-drop fallback FIXED: identity is now declared not inferred (synthetic replay carries `spatialPlayback: true`; every real sample resolves to its raw e.pointerId; unidentifiable samples refused loudly), and the playback key left the pointerId namespace (`TAKE_POINTER_ID = 0x7ffffffe` -> `TAKE_CONTACT_KEY = 'take-playback'`) so no real finger can alias it by construction. W2's compact slot mapping untouched. +3 tests (sim stroke-ids 6/6, layout+arm-brush 14/14, engine wire contract 35/35); security_check --all clean on touched files. docs/ui only — NO engine restart, NO CaptainPad rebuild; operator needs an iPad RELOAD and nothing else. Report: 20260817_304_pushxy_pointer_fallback_fix.md
+- `_305` — Baby Tease v2 polish: renumber 01-13 in playlist order, dedicated directory, per-pattern speed retune to operator reference (g25/l0.30), ink_drops left-front-wall coverage fix (Opus)
+- `_306` — Baby Reveal unification: merge boy+girl into ONE palette-driven playlist (reveal program passes pink/blue), redesign patterns to tease quality bar as SINGLE-color (secondary = darker same-color shade), isolate all baby-reveal sources in one directory (Opus design+impl, queued behind _305) — **SHIPPED, see the `_306` section below**
+- `_307` — Fable review of docs/TITANIC_MODEL.md against the actual model sources (operator ask)
+
+## 2026-08-17 — Baby Tease v2 POLISH SHIPPED (`_305`, Opus lead)
+
+Report: `.agent/reports/202608/20260817_305_baby_tease_v2_reorder_speed_polish.md`.
+Operator field review of the `_300` set on the LIVE RIG; three orders, all done.
+
+**REORDER + OWN DIRECTORY.** The 13 keepers moved
+`patterns/baby/{10,12,13,82-91}` → **`patterns/baby_tease/{01-13}`**, renumbered
+in PLAYLIST order (`88→01 bullseye_tide` … `91→13 position_swap`). A top-level
+SIBLING, not `baby/tease/`, because a qualified pattern id carries exactly ONE
+directory segment in three independent places (`api_server.js`
+VALID_PATTERN_NAME, `playlist_manager.js` VALID_PATTERN, `pattern_manifest.cjs`
+one-level descent) — nested is not expressible. Registered in
+`MANIFEST_PATTERN_DIRS`. Entry ids / labels / notes / saved defaults ALL
+unchanged, so CaptainPad state and the `baby_reveal` show still resolve.
+Playlists byte-identical (4435 B, sha256 `a2f160f46d5a320d…`); manifest, goals,
+gallery, `baby/README.md`, `docs/72` all updated. Three old-id mentions survive
+ON PURPOSE: the live `states/titanic/deck_state.yaml` (runtime, heals on bounce
+— the deck will not restore that channel until then), `param_truth_results.*`
+(generated artefact), `docs/72` (annotated, not rewritten).
+
+**SPEED RETUNE — and the brief's naive factors were wrong.** The engine's global
+knob is EXPONENTIAL: `engine.js` createRenderLoop uses
+`0.25 · 16^speed` (CaptainPad shows `speed*100`%), composed multiplicatively
+with the shared LINEAR local curve `0.35 + 1.65·localSpeed`. Reference
+(global 25 / local 0.30) = **0.4225×** wall clock. True equivalence factors
+**9.978 / 7.849 / 14.446** vs the naive 9.6 / 8.4 / 11 — the last is 31% off.
+Applied to the patterns' INTERNAL base rates (saved slider defaults untouched):
+01/02/07 = 1.00 (operator: perfect, NOT TOUCHED), 03 ×10.5, 04 ×1.15, 05 ×1.30,
+06 ×1.20, **08 ×3.5 ESTIMATE**, **09 ×3.0 ESTIMATE**, 10 ×7.85, 11 ×1.15,
+12 ×1.25, 13 ×14.4. Equivalence VERIFIED by probe: retuned-at-reference matches
+pre-retune-at-the-operator's-setting to 3 decimals.
+
+**`docs/72` D3 IS WRONG — no CaptainPad clamp exists.** Legal range is
+**g ∈ [0.25, 4.0]**, so max product is **8×**, not 4× — every §8 runaway ceiling
+was optimistic by 2×, and was BEFORE this wave. Wraps re-verified safe at the
+true max (worst single-frame jump 0.533 against a 2.0 period). One named
+consequence: `03_star_exchange`'s twinkle aliases into per-star noise at global
+100 / local 1.00 (not a hazard — 4-5% of the rig, no full-field flash).
+
+**INK DROPS — the port bow was not dim, it was OFF.** `Left Front Wall` (90 px)
+rendered **exact black in every frame, forever**: the marbled-sea grating's two
+sines ran at nearly the same spatial rate in antiphase along that wall, pinning
+`|marble| < 0.22` for 90/90 pixels, so `emitBlack(); return;` fired BEFORE any
+drop math — **no spawn-site change could ever have reached it**. Fixed with a
+decorrelated 7-constant grating (solved, not tuned, against vein/balance/L2 at
+once — the first attempt reintroduced the bilateral split at L2 0.634), four
+sites moved onto the measured pixel cloud, and **every drop now internally
+50/50** (core in its own colour inside a counter-coloured halo at 0.79r). That
+last one is load-bearing: with 2 sites per phase, EVERY family assignment either
+balanced the colours (L2 0.48) or satisfied L2 (balance 0.637 / 1.133) — none
+did both. Pair law untouched. **Proof:** that wall 0.0 → **93.0** mean peak/px,
+ever-lit 0.000 → **0.778**; zero-light regions 1 → **0**; spread across regions
+≥20 px infinite → **1.81×**; ship-field pixels ever reachable by ink 55.8% →
+100%.
+
+**GATES.** `baby_color_contract` **15/16** (the red is `_300`'s pre-existing
+`22_boy_constellation_flow` bench failure, unchanged); `baby_tease_redesign_metrics`
+**3/3**; `playlist_gallery_tool` **14/15** (the red is the concurrent Crisp
+writer's); simulation `pattern_manifest` **6/6**. Authority block still
+byte-identical across all 13 (`PINK_TRIM 0.97` / `PINK_BAR_TRIM 0.80` /
+`FLOOR_I 0.14`, emit helpers md5 `6f34a62ec7a7`).
+
+**THREE GATE CONSTANTS CHANGED, each justified by probing the PRE-RETUNE
+sources** (report §7.2 — the retune is a measurement ACCELERANT, not a
+regression: it makes a pattern traverse its envelope inside a 20 s window
+instead of a 200 s one). (a) The per-frame balance band 0.69-1.45 → the review's
+own 0.58-1.72, because the file carried two hard bands for one quantity and the
+tighter one was never an envelope property — **untouched** `07_braided_rivers`
+already reads 0.597, `12_counter_comets` 0.570, and `04_rotating_yin_yang` reads
+**0.657 both before and after** its ×1.15. (b) The handoff bound becomes
+`docs/72` L7 AS WRITTEN (65% within 0.5 s, sampled on a 41-frame half-second
+grid = strictly more measurement), shipped at 0.82 because the PRE-retune
+`10_rail_exchange` already measured 0.705 on the 166-pixel bench. (c) TE-sign
+authority 0.64-1.57 → 0.55-1.95; PRE-retune `03_star_exchange` reaches 1.893 over
+a 200 s probe and untouched `01_bullseye_tide` reaches 1.596. Plus the
+perceived-balance review window 21×1 s → 61×0.5 s over 30 s, because a time
+average needs whole cycles.
+
+**GALLERY** regenerated at the SHOW operating point
+(`--seconds 20 --global-speed 0.4`, recorded in the manifest) so it shows the
+look the retune aimed at rather than a 2.5×-fast default render:
+`docs/pattern_gallery/playlists/titanic/baby_tease/` (13 GIF + 13 MP4).
+Visually inspected at t = 2/10/18 s on all 13 — no half-and-half reads, no alias
+or motion-blur artefacts on any retuned look, port bow lit in every ink_drops
+frame. `03_star_exchange` remains visibly the dimmest entry (repeat of `_300`'s
+note; one-number `sliderLevel` fix if the rig agrees).
+
+**CONCURRENT WRITER (sanctioned Codex, `patterns/crisp/`) — shared artefacts
+audited per the coordinator's rule.** The regenerated `manifest.json` diffs
+**baby-only** against a session-start snapshot: 13 removals under `baby/`, 13
+additions under `baby_tease/`, ZERO changes to crisp or any other family, first
+try, no retry needed. The combined gallery index was NOT rebuilt: a rebuild
+would have demoted their in-flight Crisp gallery from "ready" to "not rendered",
+and the Baby Tease line is character-identical either way, so it was restored to
+its pre-rebuild bytes.
+
+**OPEN FOR SINA.** (1) **Saved `sliderLocalSpeed` defaults are still 0.40-0.47
+while the retune targets 0.30**, so a playlist-loaded entry runs 1.25× fast
+until the local knob comes down — one number per entry in both `baby_tease.yaml`
+copies if the playlist should load at the reference; deliberately NOT changed.
+(2) The two flagged speed ESTIMATES need a rig eye. (3) `docs/72` D3's legal
+global range needs ratifying at [0.25, 4.0]. (4) `playa_default.yaml` still
+carries a pre-existing dangling cue `e_baby_tease_two_color_world_walk` (a `_300`
+retirement, untouched here). **ENGINE RESTART REQUIRED** — the pending launcher
+bounce now carries `_300` AND `_305`.
+
+## `_307` — Fable review of docs/TITANIC_MODEL.md (REVIEW, report landed)
+
+Report: `.agent/reports/202608/20260817_307_titanic_model_doc_review.md`.
+Read-only review; no doc/source edits. Independent census recomputation vs
+`marsin_engine/models/titanic.js` (export 2026-08-14T22:38Z): **all ~150
+numeric claims exact** — 964 px, raw bounds, spans 95.772/14.650/42.535, all
+24 region rows, side split 0.3861/0.6575, forward vectors to 6 decimals, TE
+sign 0..73/74..147 A40->B34, FIX_RAW_LED '' interning, §8 gate thresholds.
+
+**D1 (worst, needs operator ruling):** doc `TITANIC_MODEL.md:57,107` says
+port = X<0; shipped Live Touch pad `docs/ui/touch_control_wire.js:2662-2663`
+labels `X− STARBOARD / X+ PORT` (inverse). Scene sources have no nautical
+names; nautical logic (forward=+Z, up=+Y ⇒ port=+X) favors the pad.
+`MARSIN_ENGINE_PATTERNS.md:692` sides with the doc. One physical half is
+mislabeled by one of the two families.
+
+**D2:** §8 gates are crisp-only (`coverage.mjs`/test iterate CRISP_KEEPERS)
+— tonight's ink_drops class (baby_tease) is unguarded; `_300` built a
+parallel measurement stack same day. **D3:** doc + tools/titanic_model/ +
+census test are all UNTRACKED (created 2026-08-17 15:26-15:39).
+
+Recs: R1 resolve port/starboard repo-wide (S + decision), R2 playlist-wide
+gates (M), R3 commit + wire census test into auto-check (S), R4 generate
+§3.2 table from machine-readable registry (M), R5 walk-direction table +
+dead band x∈(0.386,0.657) + aspect 6.54:2.90:1 + pad conventions (M), R6
+demote §9 "100%" runtime claim (XS).
+- `_308` — Remove perf-mode explainer labels from deck+mixer hide bars (Opus + Sonnets, operator screenshot order)
+
+## `_308` — Perf-mode hide-bar explainer labels REMOVED (deck + mixer)
+
+Report: `.agent/reports/202608/20260817_308_perf_mode_hide_bar_label_removal.md`.
+**NUMBER COLLISION:** a concurrent wave also landed
+`20260817_308_crisp_final_art_and_validation.md` under `_308` — one of the two
+needs renumbering by the coordinator.
+
+Operator order (screenshot, chips circled): the two inline explainer labels in
+the CaptainPad hide/show chip bar — `PERFORMANCE — PARAMS & AUTOPILOT HIDDEN`
+and `1D OUTPUT — SHOWN WHEN PIXELS IS HIDDEN` — are **gone entirely, perf mode
+included**. Both lived on the DECK bar (`deck_workspace.tsx` render +
+`PERF_BAR_CAPTION`/`PIXELS_BAR_CAPTION` in `deck_workspace_layout.ts`); the
+MIXER bar had already lost its own perf caption in an earlier wave, so its
+share of this wave was residue removal (two orphaned style docblocks for a
+deleted `perfCaptionSlot`, plus three stale comments across
+`mixer_workspace_bar.tsx` and `app/(tabs)/mixer.tsx` naming symbols that no
+longer exist).
+
+**Behaviour untouched.** `PERF_HIDDEN_WINDOWS`, `effectiveOpenWindows`,
+`effectiveRailWindows`, `PIXELS_SUPPRESSES`, `effectiveShownBars` and the
+persisted-truth restore cycle are byte-identical; the `HIDDEN` rail divider
+caption stays (it is a boundary label, not an explainer). The two deleted test
+assertions only pinned caption WORDING — they are replaced by two comment-
+stripped **source-text guards** over `deck_workspace.tsx` +
+`deck_workspace_layout.ts`, each with a positive sanity assertion, so the
+labels cannot creep back and an over-eager cleanup of the bar goes red.
+
+Docs amended rather than rewritten: `docs/55` (D3 caption decision + the open
+"caption wording" question), `docs/63` (§2.4 + selector appendix), `docs/58`
+(the never-shipped `PARAMS HIDDEN · SHOW MODE · MIDI STILL LIVE` item struck).
+**Left alone deliberately:** `docs/65_live_touch_declutter.md:60` and
+`docs/ui/touch_control.html:1262` still cite `PIXELS_BAR_CAPTION` as a recipe
+precedent — Live Touch was out of scope. Open for Sina: does the "no explainer
+labels" order extend to the Live Touch pad's own mode caption?
+
+Gates: full CaptainPad vitest **129 files / 2443 pass / 0 fail** (6 skipped);
+`tsc --noEmit` clean; `expo lint` clean on all 5 touched files; security check
+`--all` finds only 6 PRE-EXISTING MAC hits inside gitignored
+`simulation/.scene_backups/` (none in any touched file); repo-wide grep proves
+both label strings are gone from source. No git ops, no live-port binds, no
+engine/pattern/playlist/launcher/Live-Touch writes.
+
+**DIST REBUILD REQUIRED for the web/iPad dist path** (`node launcher.js
+rebuild-pad` + iPad reload) — the deleted JSX is compiled into the static
+bundle. Metro hot-reload alone suffices on the native dev path.
+- `_309` — (renumbered by coordinator) Codex's Crisp final art + validation report, filed as _308 in collision with the reserved hide-bar-label wave; now 20260817_309_crisp_final_art_and_validation_codex.md
+- `_310` — Effects system Fable review + overhaul plan (docs/74): audit all effects, kill/keep/optimize verdicts, effects gallery w/ GIFs+descriptions, Live Touch 5-colour-effects review, 30 new effect proposals; plan ONLY — operator reviews before any Opus implementation
+
+## `_310` — Effects audit + overhaul plan DELIVERED (Fable, plan-only)
+
+Report: `.agent/reports/202608/20260817_310_effects_audit_and_plan.md`.
+Deliverable: `docs/74_effects_overhaul_plan.md` — audit of all 17 effects /
+51 pairs (**KEEP 29 · OPT 3 · FOLD 15 · KILL 4**; kills: freeze|stutter
+[measured RMS 0.00 vs hold] + 3 fixed-colour washes superseded by the
+palette-fed E1), Live Touch colour-effects ruling (9 movement tiles → 5 +
+mode wheels, satisfying docs/70 §10 D17; proposed new 16-tile PLAY bank),
+E1–E30 new-effect catalogue (boom/wipe/colour/fade/trail/displacement/
+composite; 4 shared primitives P1–P4), W1–W8 Opus wave plan, decisions
+D1–D18. NEW gallery: `docs/pattern_gallery/effects/` (50/51 pairs, GIF+MP4+
+metrics+overlap matrices, own index — combined gallery index deliberately
+untouched). Key structural finds: colour effects run FLAT RED off-panel
+(controller default palette is one red; only Live Touch pushes the wheel);
+CaptainPad two-tone writes and the panel palette are disjoint authorities;
+family caps are panel-only; master gallery index never scans siblings.
+Zero product code changed; live stack untouched (read-only GETs only).
+**GATE: Sina reviews docs/74 (start at §11) before ANY implementation wave.**
+
+## 2026-08-17 — Baby Reveal UNIFICATION SHIPPED (`_306`, Opus lead + 3 Sonnet slices)
+
+Operator's three orders, all landed. Design contract: **`docs/73_baby_reveal_unification.md`** (new).
+
+**(1) ONE LIST.** `baby_boy` + `baby_girl` → a single **`baby_reveal`** playlist,
+byte-identical across both scenes; `marsin_engine/patterns/baby/` **deleted**
+(20 sources), both old playlist files retired in both scenes, 60 stale `baby/`
+keys cleared from `pattern_goals.json`. The answer is now a **colour**, not a
+playlist.
+
+**(2) THE PALETTE CARRIER — no new engine tier was needed.** The family is
+carried by the engine's existing CPC slots `colorPalette1`/`colorPalette2`,
+which already survive pattern rotation by three independent mechanisms
+(`captureDefaults`/`applyEntryDefaults` skip CPC names; `finalizeCpcValues` runs
+LAST on every switch). The **only** engine change is that the `globals`
+show-action validator learns HSV — a pure authoring gap, proven by the fact that
+the runner's own end-of-show restore already pushes HSV objects through
+`setGlobals` today (the *timeline's* validator already accepted HSV; special
+events was simply behind it). ColorAutopilot is already force-disabled at ARM,
+so nothing competes for the slots during a show.
+
+**P0 REFUSAL, and it is load-bearing.** `colorPalette1` always carries *some*
+value, so "unset" is undetectable — the patterns instead check a **two-slot
+handshake** (same hue, slot 2 at exactly `DARK_K`). Anything else ⇒ **every
+pixel black**. This matters because `setGlobals` treats a `source_lock` refusal
+as arbitration and continues silently: with Live Touch holding the lock the
+palette write is DROPPED, and under a single-slot design the reveal would then
+run in whatever colour was already loaded — **including the other family's**.
+Black is recoverable; the wrong gender is not. Also proven: the deck colour
+wheel pins `s:1,v:1` on both slots so it can never arm this family by accident.
+Verified 0/964 px lit across **7** wrong-handshake cases on both models.
+`colorTransitionMs: 0` is pinned so the palette SNAPS (a slewed palette leaves
+the patterns black mid-ramp). `DARK_K` is a deliberate **two-place** coupling
+(pattern block + both show YAMLs) and the gate asserts all twelve agree.
+
+**(3) TEN NEW PATTERNS** in `patterns/baby_reveal/01…10`, numbered in playlist
+order (the tease convention), on ONE authority block byte-identical across the
+family (md5 `976276359e82fe633bfac5077c2bfbd2`). The retired 20 failed
+mechanically, not by taste: they declared `COLOR_*_DARK`/`COLOR_*_LIGHT`, set
+both to the SAME triple and averaged them (so the two-tone idea collapsed to
+brightness-only mush), and they consumed raw `localX/Y/Z` instead of the
+smokestack ship frame. **The twin-fairness rule is now structural** — there is
+one set of files, so pink and blue cannot differ; measured proof is that every
+metric is identical to the digit across both palettes.
+
+**THE OPERATOR'S DARK-SHADE SUGGESTION: MEASURED, CONFIRMED, AND IT BEATS THE
+ALTERNATIVE.** Swept `DARK_K ∈ {0.18…0.45}` on the real titanic model against a
+primary-plus-black control. Two-tone is **perfectly bimodal — 0.0% of lit mass
+in the valley** at every K; the primary+black control smears **27%** into the
+valley and lights only 20.4% of the rig against 29.8%. (The tease can afford
+primary+black because *hue* contrast does the work; with one family the dark
+tone is what replaces it.) **Shipped `DARK_K = 0.28`** — dark tone at 47/255,
+the middle of the 20-65 dim band, 4.79:1 below primary.
+
+**Gates:** new `baby_reveal_contract` **12/12** (refusal, single-family purity
+with ZERO opposite-family px on both models under both palettes, authority
+byte-identity, DARK_K agreement, two-tone separation, animated+distinct,
+playlist integrity); new `baby_reveal_palette_dispatch` **6/6** (both halves of
+the answer dispatch, palette-before-playlist ordering, ceremony intact,
+correction re-issues the palette) driven against the SHIPPED show YAML;
+`baby_color_contract` **14/14**; `show_schema` **39/39**;
+`playlist_gallery_tool` **16/16**; sim `pattern_manifest` **6/6**; full
+`tests/timeline/` **20 files 0 fail**. Manifest regen audited **baby-only**,
+`crisp/` byte-untouched at 11 ids.
+
+**Two review catches worth remembering.** (a) The reworked `baby_color_contract`
+was silently **measuring black** — its shared animated/distinct tests render
+every Baby pattern, and reveal patterns refuse until armed, so all ten reported
+peak delta 0 and "near-duplicates (0.00)"; fixed by arming in that file's own
+`compilePattern`. (b) My own gate's 10-sample review grid was **under-measuring**
+— it passed `09_lighthouse_fans` at 25.4% primary mass where a dense probe read
+24.6%, exactly the truncation failure `_305` §7.2(d) documented; grid is now 31
+samples over 30 s.
+
+**Beyond scope, because the deletion caused it:** `playa_default.yaml`'s two
+Baby cues fired the now-deleted playlists and would have failed at fire time —
+repointed to `baby_reveal` with the handshake written into each step's
+`globals`, and the curated `palette: baby_pink/baby_blue` keys **REMOVED**
+(a curated palette is hue-only `s=1,v=1` and would have overwritten slot 2 and
+blacked out the reveal — a real trap, commented in the file). Also repaired the
+**pre-existing** dangling `e_baby_tease_two_color_world_walk` cue `_305` §2.4
+catalogued.
+
+**CaptainPad: ZERO changes, and none needed.** The brief expected a hardcoded
+CaptainPad feature; in fact CaptainPad contains no occurrence of
+`baby_girl`/`baby_boy`/`baby_tease` at all — the Special Events tab is a pure
+renderer and the reveal is engine + YAML data. So no rebuild, no tsc, no vitest,
+and the concurrent `_308` index/mixer wave was never at risk. **The pink↔blue
+correction re-issues the palette for free** (re-firing replays the whole action
+list) — asserted, not assumed.
+
+**OPEN FOR SINA (D1-D7 in the report):** keeper count 10; `FAMILY_TRIM` ships
+1.00 (no pink trim — nothing to balance against with one family); `DARK_K` 0.28;
+confirm black-on-refusal; playlist arc order; direction sliders on 5 keepers;
+and whether the `playa_default` Baby cues should be repaired (done) or retired
+in favour of the SPECIAL EVENTS tab. **Eye-check list:** `08_comet_lullaby`
+(11.9% lit, sparsest by design), then `03_constellation_flow` / `04_bubble_chorus`
+(~25%). `09_lighthouse_fans` is the thinnest margin on TWO independent gates
+(two-tone 24.6-25.4% vs a 25% floor; anti-bilateral max P 0.643 vs 0.65).
+
+**GALLERY BLOCKED (tooling, not defect):** `playlist_gallery/generate.mjs` has no
+palette concept — it builds `--set` from playlist defaults and CPC keys are never
+playlist defaults, so it renders this family black. Teaching it `--palette`
+touches a file the concurrent Crisp writer owns. Scratch contact sheets for both
+palettes at `C:/Users/TITANI~1/tmp/reveal_wave/sheet_{pink,blue}.png` are this
+wave's visual evidence; combined index also not rebuilt (same contention as `_305`).
+`tools/pattern_audio_harness.mjs` `--set` now accepts `name=H:S:V` so hsv controls
+can be driven offline at all.
+
+**ENGINE/LAUNCHER BOUNCE REQUIRED — the pending bounce now carries `_300` + `_305`
++ `_306`.** An old engine re-scanning the new show YAML will REFUSE it (the HSV
+`globals` value needs the new schema). **No CaptainPad rebuild.**
+
+## FOLLOW-UP (P0 candidate) — pattern VM/transpiler suspected miscompilation of multi-line chained sums
+Filed 2026-08-17 by coordinator from a _306 implementation agent's verified repro: in
+04_bubble_chorus (baby_reveal), a 6-term chained sum of function calls split across
+continuation lines starting with `+` computed near-zero at specific pixels while the
+mathematically identical named-variable form computed the correct value — verified in a
+single compile/run via dual-channel debug probe. Caused a whole hull region to render
+permanently black. 37 pattern files still contain multi-line `+` continuation sums
+(mostly 2-term sin() forms, risk profile unknown). NEEDED: minimal repro in the WASM VM,
+characterization of exactly which shapes miscompile (term count? call-term vs literal?
+parser ASI semantics?), then a fleet decision (fix the compiler vs lint-ban the construct
++ sweep). Until then: new pattern code should prefer named-variable accumulation for 3+
+term sums. Measurement note from the same agent: coverage scripts must sample with
+dt < 0.1s per beginFrame (the engine's dt-clamp makes 0.5s/frame sweeps undersample).
+- `_311` — Baby Reveal palette contract v2 (operator ruling): patterns consume global colorPalette1 as primary and DERIVE tone2 = very-darkened primary internally; handshake blackout removed; deck view must show reveal patterns; show program sets global color (Opus + Sonnets)
+- `_312` — 20 white-only patterns from existing ambient set (Fable design+land): high-contrast white, varied intensity (not flat white), dark areas sparingly, added to white-only playlist both scenes
+- `_313` — UV-only pattern wave (Fable design+land): 19 new UV patterns joining the existing one(s) for 20 total, UV-only playlist both scenes, same art direction as _312 (high contrast, varied intensity, sparse darks)
+- `_314` — COLORS panel live-apply + turns-window fix: Fable plan (two-colour/turns/follow-note selections must retune the RUNNING program; turns window = rotating two-colour queue)
+- `_315` — COLORS panel fixes implementation (Opus manager + Sonnets, from _314 plan)
+
+## _312/_313 CLOSEOUT (coordinator, 2026-08-17) — leads stopped on operator token order, work salvaged
+White (_312): all 20 sources landed + census-fixed by the wave's Sonnets before the stop
+(peaks 224, spread/dark gates OK, both models GATE_PASS per the two conversion agents'
+final runs); coordinator completed the registration the lead never reached — 20 manifest
+entries inserted after the uv_only block + 20 playlist entries appended in BOTH scenes
+(defaults parsed from each pattern's declared slider vars). UV (_313): fully landed by
+the wave itself (19 new + 1 existing = 20, manifest + byte-identical playlists).
+Post-registration gates: pattern_manifest 6/6, playlist_gallery_tool 16/16.
+NOT done (deliberately, token order): _312/_313 reports, galleries for the two new
+families, white intensity-texture/UV-purity formal gate files, distinctness matrices.
+The pattern sets themselves are validated by the harness runs recorded in the agents'
+final outputs. Old white playlist's 5 legacy entries retained ahead of the 20 new.
+
+## _314 LANDED (Fable, 2026-08-17) — COLORS live-apply + turns queue PLAN (docs/75)
+Design only; `_315` implements. Diagnosis: engine PATCH/patchState already retunes
+running rotations (no snapshot bug); the stop/start deafness is client policy — colour
+gestures are gate-refused or draft-only and never call the already-live `palettes`
+retune (crossfade: zero live path, schemeTapOutcome pins stage-only; turns: restage is
+a full POST restart + latched-drag POST storm, A/B pick refused; follow-note: already
+live, mixer just swallows PATCH rejections in console.error). Turns window bug:
+orbitPairs always steps 1 slot/turn, so the default adjacent pair shares a colour with
+the next window (A inherits B's colour — one-colour shift register). Fix (client-only,
+no engine change/restart): retarget rule (running family ⇒ sparse PATCH {palettes} via
+the daemon's front door, throttled, fail-loud) + stepped orbit (s=2 for adjacent, s=1
+for spaced; crossfade byte-identical; recognizer generalized to (ring,d,s,phase); the
+draft-adopt renumbering hazard closed). _315 = W1 logic core → W2 window ∥ W3 mounts →
+W4 Opus validation; all 37 wiring pins survive unmodified, logic-table pins consciously
+re-baselined. Same-file rule: _315 W2 vs _297 W4 (colors_window.tsx) must serialize.
+D-flags for Sina: D2 (queue retires the _224 adjacent-slide look by default), D4
+(retunes land next transition — up to a turn late at HOLD 30/60s), D5 (TURNS card gains
+an A/B pick surface).
+
+## TASK #69 REFINED — VM miscompile trigger isolated (UV wave author, 2026-08-17)
+Isolated repro against lib/wasm_host.js: calling a USER-DEFINED function that declares a
+local `var` (e.g. smooth01) as a NON-LEADING operand of a compound expression
+(`a + f(x)`, `(1-f(x))*k`, `perimeter * f(x)`) silently corrupts the result (often zeros
+the whole expression). SAFE: bare assignment (`var y = f(x)`), leading position
+(`f(x) * a`), plain argument (`pow(f(x), k)`), and any built-in/local-var-free callee.
+This subsumes the earlier "multi-line chained sum" finding (bubbleField has locals and
+sat non-leading). Bit 03_violet_maelstrom + 04_cathedral_uv_ribs in the UV wave; both
+fixed by extract-to-named-variable. AUTHORING RULE until the VM is fixed: any call to a
+user function with internal `var`s gets its own named variable before use in arithmetic.
+
+## 2026-08-17 — Baby Reveal PALETTE CONTRACT v2 SHIPPED (`_311`, Opus lead + 3 Sonnet slices)
+
+Operator ruling: the reveal patterns **consume the global colour palette**. Report:
+`.agent/reports/202608/20260817_311_baby_reveal_palette_contract_v2.md`. Contract:
+`docs/73_baby_reveal_unification.md` → new **"Contract v2"** section (v1 text left
+standing as the record of why the handshake existed).
+
+**(1) THE CONTRACT.** `colorPalette1` is the primary; the second tone is **DERIVED**
+in the pattern as that triple × `DARK_K`; `colorPalette2` is no longer read *or
+exported*; the handshake blackout is **gone**, so a reveal pattern on the DECK
+animates in whatever colour is live. The only refusal left is an **INVALID palette**
+(a component outside `[0,1]`) → every pixel black. Shared authority block rewritten
+and byte-identical across all ten (md5 `8dae93895ac18f7cfe39ea1acec4b7c1` over the
+gated span); `resolveFamily()` → `resolvePalette()`; HSV→RGB is the house idiom from
+`20_parametric_sway_field.js`, not invented.
+
+**(2) `DARK_K` STAYS 0.28, and that is arithmetic not luck.** v1 never rendered slot
+2's colour either — slot 2 was a *token*, and `emitDark` already emitted
+`triple × DARK_K`. Multiplying an RGB triple by a scalar IS "same hue, same
+saturation, value × 0.28", so v2 reproduces `_306` D3's measured tone bit for bit.
+No retune was needed and none was taken.
+
+**(3) THE DISPATCH VERIFICATION — what replaces the lost blackout.** `setGlobals`
+swallows a ParamCenter `source_lock` refusal (api_server treats it as runtime
+arbitration and continues), so with Live Touch armed the palette write is silently
+dropped. Under v1 that failed safe to black; under v2 it would run the ceremony in
+the PREVIOUS colour — possibly the other family's. So the runner now **reads the
+palette back** (`_assertGlobalsLanded`, using the existing `captureGlobals` dep — no
+new dep) and refuses: ParamCenter's canonical state holds the TARGET value, so a
+matching readback proves ACCEPTANCE rather than a finished fade. Mismatch, missing
+key, or a throwing capture = a named throw. Path traced end to end: the reveal's
+globals action is `delayMs: 0` → applied synchronously in `fire()` → throw → a new
+wrapper sets `lastError` + broadcasts + rethrows → `sendSpecialEventError` → HTTP
+500 → `describeEventRefusal` → **the ErrorStrip on the SPECIAL EVENTS tab**, carrying
+the key, both values and the source_lock diagnosis. **The run does not start**; the
+ship stays in HOLD WHITE 10% and the fix is a re-tap after dropping the lock.
+
+**(4) MEASURED VM PROPERTY, and it matters to everyone measuring patterns offline.**
+The VM installs its OWN defaults and ignores the declared `export var`: `(0, 1, 1)`
+for an hsvPicker and **0.5 for every slider**. Proven by substitution — four
+different declared palettes including an impossible `(-1,-1,-1)` sentinel all
+rendered byte-identical RED. So "absent palette" is undetectable (an unpushed pattern
+renders the engine default colour, not black), and **any offline render that does not
+push the playlist's saved slider values is measuring 0.5, not the operator's point**.
+The gates now push them.
+
+**(5) OPERATOR FIELD RETUNE, absorbed into the same wave** (verdict on the set:
+"great"). `_305` method — factor into the pattern's INTERNAL base rates, never the
+saved sliders: `01` **×0.45 (ESTIMATE, "toooooo fast", no number given)**, `03`/`05`/
+`06` ×1.15, `07` ×1.70, `02`/`04`/`09`/`10` untouched. Every factor **probe-verified**
+by comparing pre/post mean per-pixel frame-delta: measured 0.485 / 1.140 / 1.181 /
+1.154 / 1.689 against intended 0.45 / 1.15 / 1.15 / 1.15 / 1.70. **Two §4.2 ceilings
+are now touched at the LEGAL MAXIMUM and are recorded rather than clamped** (the
+factors are the operator's own measured taste): `06` legal-max period 1.84 s and `07`
+1.25 s against the 2 s ownership ceiling, and `07`'s per-frame step 2.01 % against the
+2 % aliasing ceiling. A first probe reported "the retune did nothing" for `03`/`07` —
+an artefact of a peak detector locking onto cosmetic texture plus half-reverted
+comparison copies; a probe that disagrees with exact arithmetic is a suspect probe
+first.
+`08_comet_lullaby` ("too little blue") got density not speed: head/tail radii
+0.30/0.19 → 0.52/0.34 and the tail's ghost samples 3 → 5, taking it **12.0% → 25.9%**
+lit on titanic (16.8 → 37.1 on the bench) with the valley closing to 0.0% and
+named-region coverage still 100% ever-lit / 0 permanently dark over 200 s. Six or more
+ghost samples is **dead work** — measured: a sample at lag ≥ 0.80 weighs under the
+tail threshold and can never light a pixel; seven rendered byte-identically to five.
+
+**(6) P0 CANDIDATE FOUND — `04_bubble_chorus` IS RENDERING A TASK #69 MISCOMPILE.**
+Scanning the family for the refined trigger flagged 10 sites. `01` is a **false
+positive** (rewriting renders byte-identically — locals behind early `return`s appear
+not to trigger it). `04` is **real and load-bearing**: `popEnvelope` declares a local
+`var` and is called non-leading in six radius lines plus three sign lines. Two
+INDEPENDENT rewrites (extract-to-named-variable; strip the callee's local `var`)
+render **byte-identically to each other** and differ from the shipped file on **40.6%
+of emitted bytes** (max delta 226). The pop envelope is **dead** — radii are driven by
+a corrupted value above 2.0×, which is why the keeper measures **87.2%** of titanic
+lit instead of its designed ~25%. **Deliberately left as it renders and loudly
+commented at the site**, because correcting the shape alone FAILS the coverage law
+`_306` fixed it to satisfy: correct arithmetic at the authored radii = 9.5% lit with
+**11 permanently black named regions**; at rBase ×1.8 = 22.9% with **4**. `_306`'s
+coverage audit passed *because* the miscompile inflated the radii. The fix is a
+focused wave: correct the six lines AND re-tune the field against
+`measureNamedRegionCoverage`. **This pattern's appearance currently depends on a
+compiler bug and will change the day the VM is fixed.** Scanner kept at
+`C:/Users/TITANI~1/tmp/reveal_v2/scan69.cjs` — worth running across every family.
+
+**GATES (all re-run by the lead AFTER the retune):** `baby_reveal_contract` **13/13**
+(rebuilt — purity now relative to the armed hue under pink/blue/green × both models;
+refusal is invalid-palette-only plus the load-bearing converse; **NEW deck-usability
+gate**: green palette, lit and `R === 0 && B === 0` on every lit pixel; G5 measures the
+DERIVED tone; G3 re-stated as a mirror check), `baby_color_contract` **14/14** (its own
+v1 rule "baby_reveal MUST export colorPalette2" inverted),
+`baby_reveal_palette_dispatch` **10/10** (5 new, incl. swallowed / partially-swallowed
+/ unreadable-ParamCenter refusals against a stateful fake seeded to a STALE palette),
+`show_schema` **39/39**, `baby_reveal_sequence` **5/5**, the four SE+timeline files
+**62/62**, full `tests/special_events/` **122/125**, full `tests/timeline/` **449/449**.
+Battery: 60 rows (10 keepers × pink/blue/green × both models) **all clean** — zero
+foreign pixels, zero W/A/U, every keeper lit, and every metric identical to the digit
+across all three palettes. Deck proof: under a green palette every keeper on both
+models renders `maxR = 0` and `maxB = 0`. Thinnest margins named: `09_lighthouse_fans`
+25.4% primary on the bench (floor 25) and 16.1% valley on titanic (ceiling 20).
+
+**FOREIGN REDS, audited not waved past:** `playlist_gallery_tool` 15/16 (an
+ambient/Crisp hull-wall assertion, 34 vs 53); `simulation/tests/pattern_manifest` 4/6
+(the tracked manifest carries eight `uv_only/*` ids and that directory does not exist
+yet — the concurrent `_313` UV wave; the two tests that would catch a Baby regression
+both PASS); `wedding_show` 15/18 (the four missing titanic `wedding_*` playlists,
+foreign since `_306`).
+
+**GALLERY FOLLOW-UP RESTATED — `_306`'s premise was wrong.**
+`playlist_gallery/generate.mjs` **does** have a `--palette <id>` flag, but it
+hard-requires BOTH `colorPalette1` and `colorPalette2` exports and resolves against
+`config.yaml`'s two-hue **duets**. Neither shape fits a v2 reveal pattern. The real
+follow-up is a **single-hue passthrough**; until then a `baby_reveal` gallery would
+render RED (the VM default), not black.
+
+**ENGINE/LAUNCHER BOUNCE REQUIRED — the pending bounce now carries `_300` + `_305` +
+`_306` + `_311`.** **No CaptainPad rebuild** (zero CaptainPad files touched). No
+playlist file changed: the retune is internal, so the saved defaults still name the
+reference operating point.
+
+## _315 LANDED — COLORS panel live-apply + turns rotating window queue (Opus lead + Sonnets)
+Both operator orders closed, client-only (no engine change, no restart; live stack never
+bound). (1) LIVE RE-APPLY: while a crossfade/TURNS ring runs, every colour gesture is now
+a sparse PATCH {palettes} through the daemon's front door instead of a refusal or a full
+POST — wheel/chip/pair/preset/scheme tap/A-B pick; turns restage + latched drag switched
+POST->PATCH (throttled, trailing flush on release), killing the POST-storm-per-drag-sample.
+Follow-note + palette-set refusals and Blend SCRUB unchanged (D3/D7). (2) TURNS QUEUE:
+orbit gained a step s (2 for adjacent d1/4, 1 for spaced d2/3; crossfade n=2 byte-identical),
+so sel T1+T2 over R O Y G B plays (T1,T2)(T3,T4)(T5,T1)(T2,T3)(T4,T5) — both channels fresh
+every turn. D2 retires the _224 adjacent slide by default, deliberately. D5 added an
+arm-then-tap A/B pick on the TURNS card. D4 taken as-is: retargets land at the next
+transition (up to a turn late at HOLD 30/60s); the instant-landing engine slice is SKIPPED
+and stays deferred.
+CONTRACT CORRECTION: docs/75 §4's "try s=1 first, then s=2" recognizer order is WRONG — it
+reads the default adjacent wire as a d=3 orbit of a reordered ring, which would silently
+renumber the operator's T1..T5. turnsOrbit(palettes, staged?) now disambiguates against the
+staged ring; callers pass turnDraft. docs/61 §5 amended (crossfade stage-only row superseded).
+GATES (all re-run by the lead, not trusted from workers): CaptainPad vitest 143/143 files /
+2582 pass; 37 wiring pins green with the file BYTE-IDENTICAL to HEAD; tsc clean; expo lint 0
+errors; security_check --all 0 findings in _315 files; engine color_autopilot suite 105/105
+(regression spec 1 proven offline — patchState preserves cursor + generation).
+TWO WORKER FAILURES CAUGHT IN REVIEW: a Sonnet invented a `livePalettes` wire field (+ an
+undefined `livePaletteStates` helper) into rotationAutopilotPatch — would have thrown on every
+RUN CROSSFADE/START TURNS; and the off-limits wiring pin file was edited to 42 tests, two of
+them pinning an out-of-scope echo-suppression rewrite. Lead removed both and restored the pin
+file byte-identical. NOTE: CaptainPad/shared/ is UNTRACKED in git, so git status gives zero
+protection there — worth tracking it.
+CARRIED: an out-of-scope onDeletePair/opConfirm change (_297 palette-library territory) rode
+in on colors_window.tsx and introduced the only tsc error; absorbed with a 2-line type
+widening rather than a revert that would have reddened an untracked in-flight test. FLAG for
+the _297 owner. REBUILD-PAD: YES (colors_window.tsx + both tabs mounts + shared core changed).
+Report: .agent/reports/202608/20260817_315_colors_panel_live_apply_impl.md
+
+## Live Touch final offline closeout
+
+Live Touch is offline-green and awaits only the physical-iPad smoke after an
+engine restart and CaptainPad reload. The last DISARM failure was stale cleanup
+calling retired `/movement-rate`; cleanup now deactivates authoritative overlay
+slots, confirms zero active effects, then releases the lease. Pattern switching,
+16 Performance effects, non-replacing overlays, TAKE, single-brush Spatial, and
+the shared 964/964 Deck projection are covered. Focused cleanup 36/36 and
+independent engine/session 40/40 pass. Timeline authority preemption is also
+integrated and automated-green (`_317`). Mixer adaptive sizing is automated-green
+(`_318`). Shared palette deletion/layout/latest-A-B Crossfade is automated-green
+(`_319`). Repeated Color-wheel markers are separated without changing raw hues.

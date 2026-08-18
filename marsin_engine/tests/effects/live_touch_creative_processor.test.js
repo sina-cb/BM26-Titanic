@@ -76,6 +76,41 @@ test('Live creative processing is setting-local and does not scale another surfa
   assert.deepEqual([...deck], [100, 100, 100, 100, 100, 100]);
 });
 
+test('Live overlay is composited once after private macros without re-entering shared movement', () => {
+  const calls = [];
+  const noOp = () => {};
+  const effects = {
+    effectGroupMask: null,
+    parkedGroupMask: null,
+    applyPixels() { calls.push('level'); },
+    applyGroupFixedColors(_pixels, phase) { calls.push(phase); },
+    applyMacros({ pixels }) { calls.push('macros'); pixels[0].r = 0.4; },
+    applyInvert() { calls.push('invert'); },
+    applyPostInvert() { calls.push('postInvert'); },
+    applySpatialStage: noOp,
+  };
+  const overlay = {
+    composite(pixels) {
+      calls.push('overlay');
+      pixels[0].r = Math.max(pixels[0].r, 0.8);
+    },
+  };
+  const buffer = new Uint8Array(6);
+
+  applyLiveTouchCreativeBuffer({
+    buffer6ch: buffer,
+    modelPixels: [modelPixel(11, 'Bow')],
+    globalEffectsController: effects,
+    liveTouchOverlayPattern: overlay,
+    frameIndex: 1,
+    nowMs: 1000,
+  });
+
+  assert.equal(buffer[0], 204, 'max/lighten overlay adds without replacing the base chain');
+  assert.deepEqual(calls, ['level', 'pre', 'macros', 'invert', 'postInvert', 'overlay', 'post'],
+    'one Live render executes the overlay exactly once at its dedicated chain anchor');
+});
+
 test('setting master uses local parked groups, then Live brightness still owns every group', () => {
   const liveBrightness = new LiveBrightnessController(() => 1000);
   const active = liveBrightness.activate('touch_a', [11, 22]);

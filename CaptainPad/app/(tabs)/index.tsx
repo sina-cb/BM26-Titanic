@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, Modal, Platform, StyleSheet, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { opError, opInfo } from '@/utils/op_dialog';
+import { retuneRejectionMessage } from '@/utils/color_autopilot_narration';
 import { accentWash, useGlobalStyles } from '@/styles/globalStyles';
 import { Radius, Space, Type } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
@@ -1041,19 +1042,16 @@ export default function ControlDeckScreen() {
   // subset swap takes effect at the next advance), so painting the new value
   // immediately would claim a change the rig has not made yet. The broadcast
   // that follows the PATCH is the truth, and it arrives in one round trip.
-  const handleColorAutopilotRetune = useCallback((patch: Record<string, unknown>) => {
+  const handleColorAutopilotRetune = useCallback((patch: Record<string, unknown>, failNote?: string) => {
     notifyInteraction();
     void patchDeckColorAutopilot(patch).then((res) => {
       if (!res.ok) {
         console.error('[Deck] Color-autopilot PATCH rejected:', res.error);
-        opError(
-          'Retune not applied',
-          `The engine refused the change. ${res.error || ''} The rotation is still running its previous settings.`.trim(),
-        );
+        opError('Retune not applied', retuneRejectionMessage('rejected', res.error, failNote));
       }
     }).catch((err) => {
       console.error('[Deck] Color-autopilot PATCH failed:', err);
-      opError('Retune not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
+      opError('Retune not applied', retuneRejectionMessage('unreachable', err?.message, failNote));
     });
   }, [notifyInteraction]);
 

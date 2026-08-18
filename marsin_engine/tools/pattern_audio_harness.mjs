@@ -265,9 +265,31 @@ for (const e of exps) { if (e.name.startsWith('slider')) { const varName = e.nam
 for (const m of mods) if (idOf(m.target) == null) {
   console.log('CONTROL_FAIL: --mod target export not found: ' + m.target); process.exit(2);
 }
+// `--set name=VALUE` for a scalar control, `--set name=H:S:V` for an hsv one.
+//
+// The hsv form exists because an hsv control cannot be driven any other way
+// offline. `applyPalette` above seeds `colorPalette1/2` from the pattern's own
+// `export var cp1H…` declarations, which is right for a pattern whose declared
+// default IS its look. The `baby_reveal` family (docs/73 "Contract v2") renders
+// whatever `colorPalette1` carries and derives its dark tone from it, and its
+// declared default mirrors the VM's own hsvPicker default (h 0, s 1, v 1) — so
+// offline, with no `--set`, that family renders RED. Seeing red there means no
+// palette was injected; to render the show's own answer, inject it:
+//   --set "colorPalette1=0.943869:0.965:1.0"   (pink)
+//   --set "colorPalette1=0.594795:0.967:1.0"   (blue)
+// Colons rather than commas because `--set` is already comma-separated.
 if (A.set) for (const kv of A.set.split(',')) { const [k, raw] = kv.split('='); const id = idOf(k);
-  const v = Number(raw);
   if (id == null) { console.log('CONTROL_FAIL: --set export not found: ' + k); process.exit(2); }
+  if (raw != null && raw.includes(':')) {
+    const parts = raw.split(':').map(Number);
+    if (parts.length !== 3 || parts.some(n => !Number.isFinite(n) || n < 0 || n > 1)) {
+      console.log('CONTROL_FAIL: --set ' + k
+        + ' as hsv must be H:S:V, three finite values in [0, 1]'); process.exit(2);
+    }
+    host.setControl(handle, id, parts[0], parts[1], parts[2]);
+    continue;
+  }
+  const v = Number(raw);
   if (!Number.isFinite(v) || v < 0 || v > 1) {
     console.log('CONTROL_FAIL: --set ' + k + ' must be a finite value in [0, 1]'); process.exit(2);
   }

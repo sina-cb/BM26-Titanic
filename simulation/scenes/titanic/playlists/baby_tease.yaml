@@ -1,171 +1,94 @@
 schemaVersion: 1
 name: baby_tease
 entries:
-  - id: e_baby_tease_constellation_duet
-    pattern: baby/50_tease_constellation_duet
-    label: Baby Tease - Constellation Duet
-    defaults:
-      sliderLocalSpeed: 0.52
-      sliderLevel: 0.9
-      sliderStarFocus: 0.58
-      sliderDuetDepth: 0.6
+  - id: e_baby_tease_bullseye_tide
+    pattern: baby_tease/01_bullseye_tide
+    label: Baby Tease - Bullseye Tide
+    defaults: { sliderLocalSpeed: 0.42, sliderLevel: 0.85, sliderRingCount: 0.5 }
     modulations: []
     midiMappings: []
-    notes: Autonomous pink-and-blue constellation duet; outcome-blind and timeline-free.
-  - id: e_baby_reveal_orbit_question
-    pattern: baby/01_tease_orbit_question
-    label: Baby Tease - Orbit Question
-    defaults:
-      sliderLocalSpeed: 0.34
-      sliderLevel: 0.82
-      sliderRingWidth: 0.54
-      sliderSpatialDepth: 0.68
+    notes: A pink-and-blue bullseye ripples outward from the heart of the ship.
+  - id: e_baby_tease_cellular_organism
+    pattern: baby_tease/02_cellular_organism
+    label: Baby Tease - Cellular Organism
+    defaults: { sliderLocalSpeed: 0.42, sliderLevel: 0.86, sliderCellPush: 0.58 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_reveal_rose_question
-    pattern: baby/03_tease_rose_question
-    label: Baby Tease - Rose Question
-    defaults:
-      sliderLocalSpeed: 0.4
-      sliderLevel: 0.86
-      sliderPetalWidth: 0.52
-      sliderSpatialDepth: 0.7
+    notes: A dozen soft pink and blue pebbles tile the whole ship and slowly trade places.
+  - id: e_baby_tease_star_exchange
+    pattern: baby_tease/03_star_exchange
+    label: Baby Tease - Star Exchange
+    defaults: { sliderLocalSpeed: 0.4, sliderLevel: 0.88, sliderStarDensity: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_constellation_tides
-    pattern: baby/10_tease_constellation_tides
-    label: Baby Tease - Constellation Tides
-    defaults:
-      sliderLocalSpeed: 0.59
-      sliderLevel: 0.9
-      sliderStarFocus: 0.62
-      sliderTideDepth: 0.54
+    notes: Pink stars glitter inside blue country and blue stars inside pink country.
+  - id: e_baby_tease_rotating_yin_yang
+    pattern: baby_tease/04_rotating_yin_yang
+    label: Baby Tease - Rotating Yin-Yang
+    defaults: { sliderLocalSpeed: 0.4, sliderLevel: 0.82, sliderCurlDepth: 0.62, sliderTurnReach: 0.48 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_tidal_ribbons
-    pattern: baby/04_tease_tidal_ribbons
-    label: Baby Tease - Tidal Ribbons
-    defaults:
-      sliderLocalSpeed: 0.42
-      sliderLevel: 0.84
-      sliderRibbonWidth: 0.56
-      sliderTurbulence: 0.48
+    notes: Two interlocking hooks - each carrying the other colour's eye - rock and breathe around the ship's heart.
+  - id: e_baby_tease_ink_drops
+    pattern: baby_tease/05_ink_drops
+    label: Baby Tease - Ink Drops
+    defaults: { sliderLocalSpeed: 0.43, sliderLevel: 0.86, sliderDropReach: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_helix_exchange
-    pattern: baby/09_tease_helix_exchange
-    label: Baby Tease - Helix Exchange
-    defaults:
-      sliderLocalSpeed: 0.56
-      sliderLevel: 0.9
-      sliderHelixWidth: 0.48
-      sliderTurns: 0.55
+    notes: Pink and blue ink drops keep blooming through each other.
+  - id: e_baby_tease_argyle_weave
+    pattern: baby_tease/06_argyle_weave
+    label: Baby Tease - Argyle Weave
+    defaults: { sliderLocalSpeed: 0.45, sliderLevel: 0.86, sliderWeaveScale: 0.55 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_prismatic_fans
-    pattern: baby/11_tease_prismatic_fans
-    label: Baby Tease - Prismatic Fans
-    defaults:
-      sliderLocalSpeed: 0.62
-      sliderLevel: 0.92
-      sliderFanWidth: 0.5
-      sliderFanCount: 0.52
+    notes: Pink and blue diamonds slide across each other like woven ribbons.
+  - id: e_baby_tease_braided_rivers
+    pattern: baby_tease/07_braided_rivers
+    label: Baby Tease - Braided Rivers
+    defaults: { sliderLocalSpeed: 0.47, sliderLevel: 0.84, sliderBraidWidth: 0.54, sliderCurrentBend: 0.66 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_bow_stern_comets
-    pattern: baby/06_tease_bow_stern_comets
-    label: Baby Tease - Bow Stern Comets
-    defaults:
-      sliderLocalSpeed: 0.47
-      sliderLevel: 0.88
-      sliderTailLength: 0.55
-      sliderCometFocus: 0.62
+    notes: Pink and blue rivers run the length of the hull and braid around each other.
+  - id: e_baby_tease_checker_tide
+    pattern: baby_tease/08_checker_tide
+    label: Baby Tease - Checker Tide
+    defaults: { sliderLocalSpeed: 0.45, sliderLevel: 0.86, sliderTileGrain: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_wave_collision
-    pattern: baby/13_tease_wave_collision
-    label: Baby Tease - Wave Collision
-    defaults:
-      sliderLocalSpeed: 0.7
-      sliderLevel: 0.94
-      sliderFrontWidth: 0.48
-      sliderCollisionEnergy: 0.66
+    notes: A giant pink/blue checkerboard whose tiles invert in a slow diagonal wave.
+  - id: e_baby_tease_candy_helix
+    pattern: baby_tease/09_candy_helix
+    label: Baby Tease - Candy Helix
+    defaults: { sliderLocalSpeed: 0.46, sliderDirection: 1, sliderLevel: 0.86, sliderTwistBreath: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_kaleidoscope
-    pattern: baby/12_tease_kaleidoscope
-    label: Baby Tease - Kaleidoscope
-    defaults:
-      sliderLocalSpeed: 0.66
-      sliderLevel: 0.92
-      sliderFoldCount: 0.58
-      sliderEdgeFocus: 0.62
+    notes: A pink-and-blue candy-cane helix twists along the hull.
+  - id: e_baby_tease_rail_exchange
+    pattern: baby_tease/10_rail_exchange
+    label: Baby Tease - Rail Exchange
+    defaults: { sliderLocalSpeed: 0.46, sliderDirection: 1, sliderLevel: 0.86, sliderStreamDensity: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_spiral_race
-    pattern: baby/14_tease_spiral_race
-    label: Baby Tease - Spiral Race
-    defaults:
-      sliderLocalSpeed: 0.62
-      sliderLevel: 0.77
-      sliderSpiralWidth: 0.46
-      sliderSpiralArms: 0.62
+    notes: Stacked pink and blue rails stream in opposite directions and periodically trade lanes.
+  - id: e_baby_tease_carousel_sectors
+    pattern: baby_tease/11_carousel_sectors
+    label: Baby Tease - Carousel Sectors
+    defaults: { sliderLocalSpeed: 0.45, sliderDirection: 1, sliderLevel: 0.86, sliderBladeScallop: 0.55 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_velocity_weave
-    pattern: baby/15_tease_velocity_weave
-    label: Baby Tease - Velocity Weave
-    defaults:
-      sliderLocalSpeed: 0.8
-      sliderLevel: 0.96
-      sliderStrandWidth: 0.48
-      sliderWeaveDepth: 0.68
+    notes: A six-blade pinwheel of alternating pink and blue spins over the whole ship.
+  - id: e_baby_tease_counter_comets
+    pattern: baby_tease/12_counter_comets
+    label: Baby Tease - Counter Comets
+    defaults: { sliderLocalSpeed: 0.44, sliderDirection: 1, sliderLevel: 0.87, sliderCometSize: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Autonomous pink-and-blue question; both families on the ship at once, no answer and no
-      timeline.
-  - id: e_baby_tease_balance_beam
-    pattern: baby/81_tease_balance_beam
-    label: Baby Tease - Balance Beam
-    defaults:
-      sliderLocalSpeed: 0.3
-      sliderBalance: 0.5
-      sliderTransferWidth: 0.38
-      sliderCounterweight: 0.36
-      sliderLevel: 0.9
+    notes: Pink and blue comets circle the ship in opposite directions over a dim woven lattice.
+  - id: e_baby_tease_position_swap
+    pattern: baby_tease/13_position_swap
+    label: Baby Tease - Position Swap
+    defaults: { sliderLocalSpeed: 0.44, sliderLevel: 0.87, sliderFingerCount: 0.5 }
     modulations: []
     midiMappings: []
-    notes: >-
-      Exact Baby Blue and Baby Pink balance bowls share conserved energy across a crisp black
-      transfer boundary.
+    notes: Two solid colour masses slide the length of the ship and zip through each other to swap ends.

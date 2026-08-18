@@ -658,8 +658,6 @@ not empty selections:
   `Left Jewelry`, `Right Jewelry`, `Left Organs`, `Right Organs`,
   `Left Stacks`, `Right Stacks`, `Left Identity`, `Right Identity` → use
   `LEFT` / `RIGHT` (optionally `&&` an instrument view).
-- `PORT`, `STARBOARD` → `LEFT`, `RIGHT`.
-- `FORE`, `AFT` → `FRONT`, `BACK`.
 - `BAND_LOW`, `BAND_MID`, `BAND_HIGH`, every `<base>_BOTH` name, `@RAW` →
   removed outright (report `_145`); `@RAW`'s pixels are now `Strands`.
 - `WALLS`, `AUDITORIUM` → removed (report `_148`) as exact duplicates of the
@@ -689,8 +687,8 @@ touches one. They are the same list CaptainPad's view picker shows.
 
 | View | Pixels | Derived from |
 |---|---:|---|
-| `LEFT` | 482 | world **X < 0** — the whole port half, every instrument |
-| `RIGHT` | 482 | world **X > 0** — the whole starboard half |
+| `LEFT` | 482 | current runtime compatibility half: world **X < 0**; operator **RIGHT** when facing FRONT |
+| `RIGHT` | 482 | current runtime compatibility half: world **X > 0**; operator **LEFT** when facing FRONT |
 | `FRONT` | 388 | groups carrying a `Front` token |
 | `BACK` | 388 | groups carrying a `Back` token |
 | `Strands` | 320 | fixture role `FIX_RAW_LED` — the eight rope runs |
@@ -702,10 +700,13 @@ touches one. They are the same list CaptainPad's view picker shows.
 
 `LEFT` and `RIGHT` are **exhaustive and disjoint**: 482 + 482 = 964, every
 pixel in exactly one half, each half carrying its own wall bars, rope strands,
-Vintage rails, stacks, auditorium pars and one TE sign. The side comes from the
-pixel's world X — physical truth — and a `Left_`/`Right_` group token that
-disagrees with the geometry makes the model **throw at load**, never quietly
-pick a side.
+Vintage rails, stacks, auditorium pars and one TE sign. These two strings are
+current runtime compatibility labels, not the operator's physical side words:
+from the canonical viewpoint (standing on deck facing FRONT), physical LEFT is
+world `X > 0` and physical RIGHT is world `X < 0`. See
+[`TITANIC_MODEL.md`](TITANIC_MODEL.md) for the required translation. The
+runtime membership comes from world X, and a legacy `Left_`/`Right_` group
+token that disagrees with that geometry makes the model **throw at load**.
 
 **`Strands` and `TE Signs` are operator/mixer targeting handles**, keyed on the
 fixture role rather than the scene's group names. When you mean both signs
