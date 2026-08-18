@@ -1467,6 +1467,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     enteredAt: (interruptedPerformanceMode || bootLockForShow) ? new Date().toISOString() : null,
   };
 
+  function syncLiveTouchPerformanceMode() {
+    if (!liveTouchSession || !liveTouchSession.getState().active) return;
+    liveTouchSession.syncPerformanceMode(performanceMode.active);
+  }
+
   // ── EDIT SESSION PRINCIPAL (docs/56 D3) ──────────────────────────────
   // WHO unlocked the rig, engine-global and IN MEMORY ONLY. Set when a
   // performance-mode EXIT is authorised by a fresh passcode (D2), replaced by
@@ -14161,6 +14166,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           performanceMode.active = true;
           performanceMode.enteredAt = new Date().toISOString();
+          syncLiveTouchPerformanceMode();
           // There is no edit session while the show lock is on (docs/56 D3).
           // Entering is NEVER gated — locking the rig is always free, mirroring
           // "the reverse direction is never gated" on the takeover ring.
@@ -14261,6 +14267,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (exitAction === 'keep' || exitAction === 'keep-save') {
           performanceMode.active = false;
           performanceMode.enteredAt = null;
+          syncLiveTouchPerformanceMode();
           setEditPrincipal(exitPrincipal, `performance exit '${exitAction}'`);
           // OWNER ONLY (D7). For a sailor `keep`, the live look stays in memory
           // and disk keeps the pre-show state — which is already correct, since
@@ -14340,6 +14347,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           path.join(stateDir, 'snapshots', `${PERF_SNAPSHOT_NAME}.yaml`));
         performanceMode.active = false;
         performanceMode.enteredAt = null;
+        syncLiveTouchPerformanceMode();
         setEditPrincipal(exitPrincipal, "performance exit 'restore'");
         // OWNER ONLY (D7). For a sailor RESTORE the skip is a no-op in content
         // terms — disk already equals the restored state byte-for-byte (the

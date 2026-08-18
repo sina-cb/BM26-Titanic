@@ -3269,6 +3269,15 @@ html.theme-pending body { visibility: hidden; }
   gap: 8px; overflow: hidden;
 }
 .effects-panel.is-performance-locked .fx-edit-toggle { display: none !important; }
+.fx-arm-hint {
+  display: none; color: var(--yellow); font: 900 9px/1 Inter, system-ui, sans-serif;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.effects-panel.is-performance-disarmed .fx-arm-hint { display: inline-flex; }
+.effects-panel.is-performance-disarmed .fx-cell {
+  opacity: .42; filter: saturate(.28) brightness(.72);
+}
+.effects-panel.is-performance-disarmed .fx-face { cursor: not-allowed; }
 .effects-panel.is-editing .effects-grid {
   overflow-y: auto; grid-template-rows: repeat(4, minmax(148px, auto));
 }
@@ -4036,6 +4045,7 @@ if (window.parent !== window ||
       <div class="panel-header">
         <h2 class="panel-title"><span class="dot" style="background:var(--yellow);box-shadow:0 0 18px rgba(255,216,77,.3)"></span> Effects</h2>
         <span class="panel-sub" id="fxCount">31 effects &middot; 0 active</span>
+        <span class="fx-arm-hint" id="fxArmHint">ARM to use effects</span>
         <button type="button" class="fx-edit-toggle" id="fxEditToggle" aria-pressed="false">EDIT</button>
       </div>
       <div class="panel-body">
@@ -6716,6 +6726,7 @@ document.write('<script src="touch_control_take_state.js?v=' + Date.now() + '"><
   var fxEditToggle = document.getElementById('fxEditToggle');
   var fxPerformanceModeKnown = false;
   var fxPerformanceModeActive = true;
+  var fxArmed = false;
   var performanceEffectSlots = null;
   var canonicalEditGridSnapshot = null;
 
@@ -6752,19 +6763,52 @@ document.write('<script src="touch_control_take_state.js?v=' + Date.now() + '"><
 
   function projectFxPerformanceMode() {
     var locked = !fxPerformanceModeKnown || fxPerformanceModeActive;
+    var performanceReady = fxPerformanceModeKnown && fxPerformanceModeActive
+      && fxArmed && Array.isArray(performanceEffectSlots);
+    var performanceDisabled = fxPerformanceModeKnown && fxPerformanceModeActive
+      && !performanceReady;
     fxPanel.classList.toggle('is-performance-locked', locked);
+    fxPanel.classList.toggle('is-performance-disarmed', performanceDisabled);
+    fxGrid.setAttribute('aria-disabled', String(performanceDisabled));
     fxEditToggle.disabled = locked;
     fxEditToggle.hidden = locked;
     if (locked) closeFxEditing();
+    Array.prototype.forEach.call(fxGrid.querySelectorAll('.fx-cell'), function (cell) {
+      var face = cell.querySelector('[data-role=fxface]');
+      var pick = cell.querySelector('[data-role=fxpick]');
+      if (face) face.disabled = performanceDisabled;
+      if (pick) pick.disabled = fxPerformanceModeActive;
+      if (performanceDisabled) {
+        delete cell.dataset.performanceBound;
+        cell.classList.remove('is-on', 'is-pending');
+        if (face) {
+          face.setAttribute('aria-pressed', 'false');
+          face.setAttribute('aria-disabled', 'true');
+        }
+      } else {
+        if (performanceReady) cell.dataset.performanceBound = 'true';
+        if (face) face.removeAttribute('aria-disabled');
+      }
+    });
   }
 
   projectFxPerformanceMode();
   document.addEventListener('performancemode', function (event) {
     var detail = event.detail || {};
     if (typeof detail.active !== 'boolean') return;
+    var modeChanged = !fxPerformanceModeKnown || detail.active !== fxPerformanceModeActive;
     fxPerformanceModeKnown = true;
     fxPerformanceModeActive = detail.active;
+    if (modeChanged) performanceEffectSlots = null;
     if (!detail.active) restoreCanonicalEditGrid();
+    projectFxPerformanceMode();
+  });
+
+  document.addEventListener('touchtransportstate', function (event) {
+    var detail = event.detail || {};
+    if (typeof detail.armed !== 'boolean') return;
+    fxArmed = detail.armed;
+    if (!fxArmed && fxPerformanceModeActive) performanceEffectSlots = null;
     projectFxPerformanceMode();
   });
 
@@ -6810,8 +6854,10 @@ document.write('<script src="touch_control_take_state.js?v=' + Date.now() + '"><
     performanceEffectSlots = event.detail && event.detail.slots;
     try {
       projectPerformanceEffectSlots(performanceEffectSlots);
+      projectFxPerformanceMode();
     } catch (error) {
       restoreCanonicalEditGrid();
+      projectFxPerformanceMode();
       panelError('Performance effects refused: ' + error.message);
     }
   });

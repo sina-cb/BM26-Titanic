@@ -19104,3 +19104,6 @@ independent engine/session 40/40 pass. Timeline authority preemption is also
 integrated and automated-green (`_317`). Mixer adaptive sizing is automated-green
 (`_318`). Shared palette deletion/layout/latest-A-B Crossfade is automated-green
 (`_319`). Repeated Color-wheel markers are separated without changing raw hues.
+- `_316` — Live Touch Performance effects P0 (false disarmed validation + armed-entry-order slots): Fable quick review/contract
+- `_317` — Live Touch Performance effects implementation (Opus + Sonnets from _316)
+- `_317` reservation RETRACTED (operator order): no implementation wave on our side — the _316 review produces a self-contained Codex handoff brief instead; Codex implements. _317 stays reserved-unused unless reassigned.

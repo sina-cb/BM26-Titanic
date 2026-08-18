@@ -96,6 +96,13 @@ async function disarmOwner(ws) {
   await disarmed;
 }
 
+async function renewOwner(ws) {
+  const renewed = waitFor(ws, message => message.type === 'touchControlArmedAck'
+    && message.ownerId === OWNER_ID && message.armed === true);
+  ws.send(JSON.stringify({ type: 'touchControlArmed', ownerId: OWNER_ID, armed: true }));
+  return renewed;
+}
+
 before(async () => {
   h.spawnEngine();
   await h.waitForReady();
@@ -116,7 +123,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     }, ownerHeaders);
     assert.equal(staged.status, 200, JSON.stringify(staged.data));
     assert.ok(Number.isInteger(staged.data.sessionRevision));
-    const preparedRevision = staged.data.sessionRevision;
+    const editPreparedRevision = staged.data.sessionRevision;
 
     const ownerSlots = await h.api('GET', '/global-effect-slots', undefined, ownerHeaders);
     assert.equal(ownerSlots.status, 200, JSON.stringify(ownerSlots.data));
@@ -146,6 +153,10 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
 
     const entered = await h.api('POST', '/performance-mode', { active: true }, ownerHeaders);
     assert.equal(entered.status, 200, JSON.stringify(entered.data));
+    const performanceLayerState = await h.api('GET', '/layers/state');
+    const performanceRevision = performanceLayerState.data.liveTouch.sessionRevision;
+    assert.ok(performanceRevision > editPreparedRevision,
+      'the mode transition must invalidate the prior private slot revision');
 
     const audioBefore = await h.api('GET', '/audio-bindings', undefined, ownerHeaders);
     assert.equal(audioBefore.status, 200, JSON.stringify(audioBefore.data));
@@ -183,7 +194,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
       'direct Performance audio-binding refusals must leave the private session unchanged');
 
     const blockedSlotPrepare = await h.api('POST', '/layers/live_touch/prepare', {
-      expectedSessionRevision: preparedRevision,
+      expectedSessionRevision: performanceRevision,
       operations: [{
         method: 'PATCH',
         path: '/global-effect-slots/1',
@@ -195,7 +206,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     assert.equal(blockedSlotPrepare.data.operationIndex, 0);
 
     const blockedIntensityPrepare = await h.api('POST', '/layers/live_touch/prepare', {
-      expectedSessionRevision: preparedRevision,
+      expectedSessionRevision: performanceRevision,
       operations: [{
         method: 'POST',
         path: '/global-effect-slots/1/intensity',
@@ -206,7 +217,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     assert.equal(blockedIntensityPrepare.data.code, 'PERFORMANCE_MODE');
 
     const blockedModePrepare = await h.api('POST', '/layers/live_touch/prepare', {
-      expectedSessionRevision: preparedRevision,
+      expectedSessionRevision: performanceRevision,
       operations: [{
         method: 'POST',
         path: '/global-effect-slots/1/mode',
@@ -217,7 +228,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     assert.equal(blockedModePrepare.data.code, 'PERFORMANCE_MODE');
 
     const blockedPrepare = await h.api('POST', '/layers/live_touch/prepare', {
-      expectedSessionRevision: preparedRevision,
+      expectedSessionRevision: performanceRevision,
       operations: [{
         method: 'PUT',
         path: '/audio-bindings/groups/ParLights',
@@ -229,7 +240,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     assert.equal(blockedPrepare.data.operationIndex, 0);
 
     const blockedAudioClearPrepare = await h.api('POST', '/layers/live_touch/prepare', {
-      expectedSessionRevision: preparedRevision,
+      expectedSessionRevision: performanceRevision,
       operations: [{ method: 'POST', path: '/audio-bindings/clear', body: {} }],
     }, ownerHeaders);
     assert.equal(blockedAudioClearPrepare.status, 409, JSON.stringify(blockedAudioClearPrepare.data));
@@ -243,7 +254,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
       'GET', '/global-effect-slots', undefined, ownerHeaders,
     );
     assert.equal(slotsAfterPrepareRefusal.data.slots.find(slot => slot.slotId === 1).label,
-      'Live private edit label', 'a refused prepare must not commit a partial slot edit');
+      '4 Hz Sync', 'a refused prepare must not mutate the canonical Performance seed');
 
     const runtimeAction = await h.api('POST', '/global-effect-slots/1/press', undefined,
       ownerHeaders);
@@ -253,7 +264,7 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     const ownerState = await h.api('GET', '/global-effect-slots', undefined, ownerHeaders);
     assert.equal(ownerState.status, 200, JSON.stringify(ownerState.data));
     assert.equal(ownerState.data.slots.find(slot => slot.slotId === 1).label,
-      'Live private edit label', 'a rejected Performance edit must leave private config unchanged');
+      '4 Hz Sync', 'entering Performance must replace the prior Edit-only private slot config');
 
     const exited = await h.api('POST', '/performance-mode', {
       active: false,
@@ -270,6 +281,98 @@ test('Performance blocks owner-scoped effect configuration but permits runtime a
     const mode = await h.api('GET', '/performance-mode');
     if (mode.data.active) {
       await h.api('POST', '/performance-mode', { active: false, exitAction: 'restore' }, ownerHeaders);
+    }
+    await disarmOwner(ws);
+    ws.close();
+  }
+});
+
+test('same-owner Edit to Performance to Edit transition reseeds only on mode changes', async () => {
+  const ws = await openWs();
+  const ownerHeaders = { 'X-Touch-Control-Owner': OWNER_ID };
+  const globalSlotFile = path.join(h.stateDir, 'global_effect_slots.yaml');
+  const diskBefore = fs.existsSync(globalSlotFile) ? fs.readFileSync(globalSlotFile) : null;
+  const sharedBefore = await h.api('GET', '/global-effect-slots');
+  try {
+    await armOwner(ws);
+    const privateEdit = await h.api('PATCH', '/global-effect-slots/1', {
+      label: 'Edit session marker',
+    }, ownerHeaders);
+    assert.equal(privateEdit.status, 200, JSON.stringify(privateEdit.data));
+    const runningEdit = await h.api(
+      'POST', '/global-effect-slots/1/activate', undefined, ownerHeaders,
+    );
+    assert.equal(runningEdit.status, 200, JSON.stringify(runningEdit.data));
+
+    const beforeModeState = await h.api('GET', '/layers/state');
+    const entered = await h.api(
+      'POST', '/performance-mode', { active: true }, ownerHeaders,
+    );
+    assert.equal(entered.status, 200, JSON.stringify(entered.data));
+    const performanceSlots = await h.api(
+      'GET', '/global-effect-slots', undefined, ownerHeaders,
+    );
+    const projected = performanceSlots.data.slots
+      .filter(slot => slot.slotId >= 9 && slot.slotId <= 24)
+      .map(slot => [slot.slotId, slot.effectId, slot.presetId]);
+    assert.deepEqual(projected, PERFORMANCE_BINDINGS.map(([effectId, presetId], index) => [
+      index + 9, effectId, presetId,
+    ]), 'the already-owned Edit session must immediately expose the canonical Performance bank');
+    const afterEnterState = await h.api('GET', '/layers/state');
+    assert.ok(afterEnterState.data.liveTouch.sessionRevision
+      > beforeModeState.data.liveTouch.sessionRevision,
+    'a real mode change must advance the private session revision');
+    const editEffectStopped = await h.api(
+      'GET', '/global-effect-slots/status', undefined, ownerHeaders,
+    );
+    assert.equal(editEffectStopped.data.controller.strobe.active, false,
+      'entering Performance must stop an Edit effect before replacing its slot manager');
+
+    const palette = await h.api('POST', '/layers/live_touch/palette', {
+      colorPalette: OVERLAY_PALETTE,
+    }, ownerHeaders);
+    assert.equal(palette.status, 200, JSON.stringify(palette.data));
+    const overlayOn = await h.api(
+      'POST', '/global-effect-slots/9/activate', undefined, ownerHeaders,
+    );
+    assert.equal(overlayOn.status, 200, JSON.stringify(overlayOn.data));
+    const revisionBeforeRenewal = afterEnterState.data.liveTouch.sessionRevision;
+    const renewed = await renewOwner(ws);
+    assert.equal(renewed.sessionRevision, revisionBeforeRenewal,
+      'a same-mode lease renewal must not reseed or advance the session');
+    const afterRenewal = await h.api(
+      'GET', '/global-effect-slots/status', undefined, ownerHeaders,
+    );
+    assert.equal(afterRenewal.data.slots.find(slot => slot.slotId === 9).active, true,
+      'a same-mode lease renewal must preserve the running Performance action');
+
+    const exited = await h.api('POST', '/performance-mode', {
+      active: false,
+      exitAction: 'keep',
+    }, ownerHeaders);
+    assert.equal(exited.status, 200, JSON.stringify(exited.data));
+    const editSlots = await h.api('GET', '/global-effect-slots', undefined, ownerHeaders);
+    assert.equal(editSlots.data.slots.find(slot => slot.slotId === 1).label, '4 Hz Sync');
+    assert.equal(editSlots.data.slots.find(slot => slot.slotId === 9).effectId, 'invert',
+      'leaving Performance must restore the default private Edit bank');
+    const overlayStopped = await h.api(
+      'GET', '/global-effect-slots/status', undefined, ownerHeaders,
+    );
+    assert.equal(overlayStopped.data.liveTouchOverlayPattern.requestedActive, false,
+      'leaving Performance must stop a running session overlay');
+    const sharedAfter = await h.api('GET', '/global-effect-slots');
+    assert.deepEqual(sharedAfter.data, sharedBefore.data,
+      'mode transitions must never touch the shared slot manager');
+    const diskAfter = fs.existsSync(globalSlotFile) ? fs.readFileSync(globalSlotFile) : null;
+    assert.deepEqual(diskAfter, diskBefore,
+      'mode transitions must never persist the transient Live Touch slot bank');
+  } finally {
+    const mode = await h.api('GET', '/performance-mode');
+    if (mode.data.active) {
+      await h.api('POST', '/performance-mode', {
+        active: false,
+        exitAction: 'restore',
+      }, ownerHeaders);
     }
     await disarmOwner(ws);
     ws.close();

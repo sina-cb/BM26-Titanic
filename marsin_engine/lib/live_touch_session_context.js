@@ -134,6 +134,7 @@ export class LiveTouchSessionContext {
       this.effectsController,
       performanceModeActive ? LIVE_TOUCH_PERFORMANCE_SLOT_CONFIG : DEFAULT_SLOT_CONFIG,
     );
+    this.performanceModeActive = performanceModeActive;
     this.audioBindings = new AudioBindings();
     this.effectsController.audioBindings = this.audioBindings;
     this.paramCenter = new ParamCenter(null, this.paramCenterOptions);
@@ -157,7 +158,7 @@ export class LiveTouchSessionContext {
     if (this.ownerId && this.ownerId !== ownerId) {
       throw new Error(`Live Touch session is already owned by '${this.ownerId}'`);
     }
-    if (this.ownerId === ownerId) return this.getState();
+    if (this.ownerId === ownerId) return this.syncPerformanceMode(performanceModeActive);
 
     this._replaceTransientState({ performanceModeActive });
     this.ownerId = ownerId;
@@ -181,6 +182,38 @@ export class LiveTouchSessionContext {
 
     const live = this.mixer.getLiveTouchChannel();
     if (live && live.handle) this.registerLiveChannel(live, { apply: applyToLiveChannel });
+    return this.getState();
+  }
+
+  /** Reseed only the transient action bank when the engine mode changes. */
+  syncPerformanceMode(active) {
+    if (typeof active !== 'boolean') {
+      throw new Error('Live Touch Performance mode must be a boolean');
+    }
+    if (!this.ownerId) {
+      throw new Error('Live Touch Performance mode sync requires an active owner session');
+    }
+    if (this.performanceModeActive === active) return this.getState();
+
+    const replacement = new GlobalEffectSlotManager(
+      this.effectsController,
+      active ? LIVE_TOUCH_PERFORMANCE_SLOT_CONFIG : DEFAULT_SLOT_CONFIG,
+    );
+    const actionNowMs = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now()
+      : Date.now();
+    this.slotManager.disableAll({ nowMs: actionNowMs });
+    this.overlayPattern.dispatch({
+      slotId: this.overlayPattern.selectedSlotId,
+      presetId: this.overlayPattern.presetId,
+      params: this.overlayPattern.params || {},
+      action: 'deactivate',
+      behavior: 'toggle',
+      nowMs: actionNowMs,
+    });
+    this.slotManager = replacement;
+    this.performanceModeActive = active;
+    this.revision += 1;
     return this.getState();
   }
 
@@ -210,6 +243,7 @@ export class LiveTouchSessionContext {
       ownerId: this.ownerId,
       revision: this.revision,
       active: this.ownerId !== null,
+      performanceModeActive: this.performanceModeActive,
       tempoBpm: this.tempoBpm,
       tempoSourcePref: this.tempoSourcePref,
     };
@@ -307,6 +341,7 @@ export class LiveTouchSessionContext {
       tempoSourcePref: this.tempoSourcePref,
       colorPalette: this.colorPalette,
       overlayPattern: this.overlayPattern,
+      performanceModeActive: this.performanceModeActive,
       revision: this.revision,
       localControls: Object.fromEntries(
         Object.entries(live.localControls || {}).map(([id, values]) => [id, { ...values }]),
@@ -323,6 +358,7 @@ export class LiveTouchSessionContext {
       this.tempoSourcePref = candidate.tempoSourcePref;
       this.colorPalette = candidate.colorPalette;
       this.overlayPattern = candidate.overlayPattern;
+      this.performanceModeActive = candidate.performanceModeActive;
 
       // One event-loop turn is the transaction boundary. Apply the complete
       // CPC snapshot and then pattern-local controls before a render timer can
@@ -349,6 +385,7 @@ export class LiveTouchSessionContext {
       this.tempoSourcePref = previous.tempoSourcePref;
       this.colorPalette = previous.colorPalette;
       this.overlayPattern = previous.overlayPattern;
+      this.performanceModeActive = previous.performanceModeActive;
       this.revision = previous.revision;
       live.localControls = previous.localControls;
       try {

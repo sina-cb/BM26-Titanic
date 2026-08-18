@@ -176,7 +176,7 @@ async function installHermeticBrowser(page, nativeEmbed = false, catalog = null)
         if (path === '/layers/state') return response(cleanLayerState);
         if (path === '/global-effect-library') return response({ effects });
         if (path === '/global-effect-slots') return response({ slots: [] });
-        if (path === '/global-effect-slots/status') return response({ controller: {} });
+        if (path === '/global-effect-slots/status') return response({ slots: [], controller: {} });
         if (path === '/globals') return response({ effects: {} });
         if (path === '/playlists/ambient') return response({ entries: [
           { id: 'golden-hour', pattern: '00_golden_hour_wash', label: 'Golden Hour Wash' },
@@ -275,6 +275,18 @@ async function captureEvidence(page, fileName) {
 async function captureViewportEvidence(page, fileName) {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, fileName), captureBeyondViewport: false });
+}
+
+async function pointerDownUp(page, selector, holdMs = 0) {
+  const element = await page.$(selector);
+  assert.ok(element, `pointer target is missing: ${selector}`);
+  await element.evaluate(node => node.scrollIntoView({ block: 'center', inline: 'center' }));
+  const box = await element.boundingBox();
+  assert.ok(box && box.width > 0 && box.height > 0, `pointer target is not visible: ${selector}`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  if (holdMs > 0) await new Promise(resolve => setTimeout(resolve, holdMs));
+  await page.mouse.up();
 }
 
 test('Live Touch fits the full professional workspace at iPad landscape and desktop widths', { timeout: 60_000 }, async () => {
@@ -1770,7 +1782,10 @@ test('catalog hold actions serialize down then up, reconcile to inactive truth, 
           return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
         }
         if (path === '/global-effect-slots/status') {
-          return new Response(JSON.stringify({ controller: active ? { freeze: { slotId: 24, active: true } } : {} }), { status: 200 });
+          return new Response(JSON.stringify({
+            slots: [{ slotId: 24, active }],
+            controller: active ? { freeze: { slotId: 24, active: true } } : {},
+          }), { status: 200 });
         }
         if (path === '/globals') return new Response(JSON.stringify({ effects: {} }), { status: 200 });
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
@@ -1796,6 +1811,181 @@ test('catalog hold actions serialize down then up, reconcile to inactive truth, 
     assert.deepEqual(result.settled, { on: false, pending: false }, 'release must end at confirmed inactive truth');
     assert.deepEqual(result.failed, { on: false, pending: false }, 'a rejected hold edge clears local intent');
     assert.match(result.error, /effect hold down/i, `hold failure must name the failed operation: ${result.error}`);
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('disarmed Performance disables every effect card without requesting owner slots', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      const requests = [];
+      const errors = [];
+      document.addEventListener('panelerror', event => errors.push(event.detail && event.detail.message));
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        requests.push({ method: options.method || 'GET', path });
+        if (path === '/status') return new Response(JSON.stringify({
+          liveTouchProtocolVersion: 2,
+          performanceMode: { active: true },
+        }), { status: 200 });
+        if (path === '/layers/state') return new Response(JSON.stringify({
+          type: 'layerSettings', active: 'deck', target: 'deck', queued: null,
+          transition: null,
+          liveTouch: {
+            armed: false, ownerId: null, ready: false, pattern: null,
+            patternTransition: null, sessionRevision: 0,
+          },
+        }), { status: 200 });
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+      window.__wire.phase = 'idle';
+      window.__wire.armed = false;
+      window.__wire._acceptPerformanceMode(true);
+      window.__wire.phase = 'arming';
+      window.__wire._acceptPerformanceMode(true);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const cells = [...document.querySelectorAll('#fxGrid .fx-cell')];
+      return {
+        requests,
+        errors,
+        disabled: cells.every(cell => cell.querySelector('[data-role=fxface]').disabled),
+        boundCount: cells.filter(cell => cell.dataset.performanceBound === 'true').length,
+        hint: getComputedStyle(document.getElementById('fxArmHint')).display,
+        panelDisabled: document.querySelector('.effects-panel')
+          .classList.contains('is-performance-disarmed'),
+      };
+    });
+    assert.equal(result.requests.some(request => request.path.startsWith('/global-effect-slots')),
+      false, `disarmed/arming Performance must not read the shared slot bank: ${JSON.stringify(result.requests)}`);
+    assert.deepEqual(result.errors, [], `disarmed Performance must stay error-free: ${JSON.stringify(result.errors)}`);
+    assert.equal(result.disabled, true, 'every disarmed Performance face must be natively disabled');
+    assert.equal(result.boundCount, 0, 'disarmed Performance must expose no actionable slot binding');
+    assert.equal(result.hint, 'flex', 'the operator must see the ARM-to-use-effects hint');
+    assert.equal(result.panelDisabled, true, 'the complete Performance action bank must paint disabled');
+    await captureEvidence(page, 'native_ipad_landscape_effects_performance_disarmed.png');
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('real Performance effect buttons reconcile toggle and hold actions from pointer readback', { timeout: 45_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    await page.evaluate(async (slots) => {
+      window.__pointerRequests = [];
+      window.__pointerActiveSlots = {};
+      window.__pointerErrors = [];
+      document.addEventListener('panelerror', event => {
+        window.__pointerErrors.push(event.detail && event.detail.message);
+      });
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        const method = options.method || 'GET';
+        window.__pointerRequests.push({ method, path });
+        if (path === '/global-effect-slots') {
+          return new Response(JSON.stringify({ slots }), { status: 200 });
+        }
+        if (path === '/global-effect-slots/status') {
+          return new Response(JSON.stringify({
+            slots: slots.map(slot => ({
+              ...slot,
+              active: window.__pointerActiveSlots[slot.slotId] === true,
+            })),
+            controller: {},
+          }), { status: 200 });
+        }
+        const action = path.match(/^\/global-effect-slots\/(\d+)\/(press|down|up)$/);
+        if (action) {
+          const slotId = Number(action[1]);
+          if (action[2] === 'press') {
+            window.__pointerActiveSlots[slotId] = !window.__pointerActiveSlots[slotId];
+          } else {
+            window.__pointerActiveSlots[slotId] = action[2] === 'down';
+          }
+          return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+        }
+        if (path === '/globals') return new Response(JSON.stringify({ effects: {} }), { status: 200 });
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+      };
+      window.__wire.phase = 'armed';
+      window.__wire.armed = true;
+      document.getElementById('arm').classList.add('is-armed');
+      document.getElementById('armState').textContent = 'ARMED';
+      document.dispatchEvent(new CustomEvent('touchtransportstate', {
+        detail: { online: true, phase: 'armed', armed: true, leaseAcquired: true },
+      }));
+      window.__wire._acceptPerformanceMode(true);
+    }, CANONICAL_PERFORMANCE_SLOTS);
+    await page.waitForFunction(() => {
+      const face = document.querySelector('#fxGrid .fx-cell[data-slot="9"] [data-role=fxface]');
+      return face && !face.disabled
+        && face.closest('.fx-cell').dataset.performanceBound === 'true';
+    });
+    await captureEvidence(page, 'native_ipad_landscape_effects_performance_armed.png');
+
+    const toggleSelector = '#fxGrid .fx-cell[data-slot="9"] [data-role=fxface]';
+    await pointerDownUp(page, toggleSelector);
+    await page.waitForFunction(() => window.__pointerRequests
+      .filter(request => request.path === '/global-effect-slots/9/press').length === 1
+      && document.querySelector('#fxGrid .fx-cell[data-slot="9"]').classList.contains('is-on'));
+    await new Promise(resolve => setTimeout(resolve, 1900));
+    await pointerDownUp(page, toggleSelector);
+    await page.waitForFunction(() => window.__pointerRequests
+      .filter(request => request.path === '/global-effect-slots/9/press').length === 2
+      && !document.querySelector('#fxGrid .fx-cell[data-slot="9"]').classList.contains('is-on'));
+
+    const holdSelector = '#fxGrid .fx-cell[data-slot="24"] [data-role=fxface]';
+    await pointerDownUp(page, holdSelector, 90);
+    await page.waitForFunction(() => {
+      const edges = window.__pointerRequests
+        .filter(request => /^\/global-effect-slots\/24\/(down|up)$/.test(request.path));
+      return edges.length === 2
+        && !document.querySelector('#fxGrid .fx-cell[data-slot="24"]').classList.contains('is-on');
+    });
+    const result = await page.evaluate(() => ({
+      togglePresses: window.__pointerRequests
+        .filter(request => request.path === '/global-effect-slots/9/press').length,
+      holdEdges: window.__pointerRequests
+        .filter(request => /^\/global-effect-slots\/24\/(down|up)$/.test(request.path))
+        .map(request => request.path),
+      activeSlots: Object.entries(window.__pointerActiveSlots)
+        .filter(([, active]) => active).map(([slotId]) => Number(slotId)),
+      errors: window.__pointerErrors,
+    }));
+    assert.equal(result.togglePresses, 2, 'two physical button presses must toggle ON then OFF once each');
+    assert.deepEqual(result.holdEdges, [
+      '/global-effect-slots/24/down',
+      '/global-effect-slots/24/up',
+    ], 'the physical hold button must serialize down then up');
+    assert.deepEqual(result.activeSlots, [], 'toggle-off and hold release must leave no active slot');
+    assert.deepEqual(result.errors, [], `physical Performance actions must stay error-free: ${JSON.stringify(result.errors)}`);
+
+    const disarmed = await page.evaluate(() => {
+      window.__wire.phase = 'idle';
+      window.__wire.armed = false;
+      document.getElementById('arm').classList.remove('is-armed');
+      document.dispatchEvent(new CustomEvent('touchtransportstate', {
+        detail: { online: true, phase: 'idle', armed: false, leaseAcquired: false },
+      }));
+      const cells = [...document.querySelectorAll('#fxGrid .fx-cell')];
+      return {
+        disabled: cells.every(cell => cell.querySelector('[data-role=fxface]').disabled),
+        boundCount: cells.filter(cell => cell.dataset.performanceBound === 'true').length,
+      };
+    });
+    assert.deepEqual(disarmed, { disabled: true, boundCount: 0 },
+      'DISARM must return Performance to the disabled, unbound state');
     await page.close();
   } finally {
     await browser.close();
@@ -1840,7 +2030,10 @@ test('Performance effects require all canonical authoritative slots and send act
             const slot = slots.find(item => item.slotId === Number(slotId));
             controller[slot.effectId] = { active: true, slotId: Number(slotId) };
           });
-          return new Response(JSON.stringify({ controller }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({
+            slots: slots.map(slot => ({ ...slot, active: !!activeSlots[slot.slotId] })),
+            controller,
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (path === '/globals') {
           return new Response(JSON.stringify({ effects: {} }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -1866,6 +2059,9 @@ test('Performance effects require all canonical authoritative slots and send act
       window.__wire.liveBrightnessRevision = 4;
       window.__wire.sectionIds = groups;
       document.getElementById('arm').classList.add('is-armed');
+      document.dispatchEvent(new CustomEvent('touchtransportstate', {
+        detail: { online: true, phase: 'armed', armed: true, leaseAcquired: true },
+      }));
       window.__wire._acceptPerformanceMode(true);
       await new Promise(resolve => setTimeout(resolve, 35));
       const visible = [...document.querySelectorAll('#fxGrid .fx-cell:not([hidden])')];
@@ -2195,7 +2391,10 @@ test('an armed captured preset validates canonically, becomes active only after 
         if (path === '/layers/live_touch/pattern' && failPattern) return new Response('background transition rejected', { status: 409 });
         if (path === '/param-center' && failPattern) await new Promise(resolve => setTimeout(resolve, 40));
         if (path === '/spatial-paint' && failSpatial) return new Response('spatial rejected', { status: 409 });
-        if (path === '/global-effect-slots/status') return new Response(JSON.stringify({ controller: {} }), { status: 200 });
+        if (path === '/global-effect-slots/status') return new Response(JSON.stringify({
+          slots: Object.values(slotRecords).map(slot => ({ ...slot, active: false })),
+          controller: {},
+        }), { status: 200 });
         if (path === '/globals') return new Response(JSON.stringify({ effects: {} }), { status: 200 });
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
       };

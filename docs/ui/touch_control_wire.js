@@ -562,7 +562,12 @@
       detail: { active: active },
     }));
     projectAudioPerformanceLock();
-    if (active) {
+    /* A passive Performance page has no owner-scoped Live session yet.
+       Reading /global-effect-slots there returns the shared Deck/VSN1 bank,
+       which is intentionally not the canonical Live Touch 9..24 action bank.
+       Project here only after ARM is complete. The ARM transaction performs
+       its own authoritative projection after the private lease exists. */
+    if (active && state.phase === 'armed') {
       projectPerformanceEffectSlots().catch(function (error) {
         fail('performance effects', error);
       });
@@ -672,6 +677,10 @@
         state.exports = {};
       }
       chartDriftCheck();
+      if (state.performanceModeActive === true && state.phase !== 'armed') {
+        setStatus();
+        return status;
+      }
       return loadSlots(false).then(function () {
         return publishEffectTruth();
       }).then(function () {
@@ -3629,6 +3638,20 @@
     ]).then(function (r) {
       var st = r[0], globals = r[1] || {};
       var on = {};
+      /* Slot status is the authoritative action truth. In particular,
+         Live Touch movementTrace is rendered by the non-replacing overlay
+         compositor and deliberately never appears as an enabled controller
+         effect. Reading controller-only truth made a successful overlay tap
+         repaint OFF immediately, so the operator could not enable the first
+         nine Performance tiles even though the engine was running them. */
+      if (!st || !Array.isArray(st.slots)) {
+        throw new Error('global effect status omitted authoritative slot state');
+      }
+      st.slots.forEach(function (slot) {
+        if (slot && Number.isInteger(slot.slotId) && slot.active === true) {
+          on[slot.slotId] = true;
+        }
+      });
       var c = (st && st.controller) || {};
       Object.keys(c).forEach(function (k) {
         var v = c[k];
