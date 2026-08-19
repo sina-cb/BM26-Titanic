@@ -2,7 +2,7 @@
 
 ## Specialty
 
-Push code, config, and service updates to the **control_podium** Raspberry Pi devices (bridge between LoRa/BLE field controllers and MarsinEngine). Owns SSH workflow, systemd service restarts, firmware syncing.
+Push code, config, and service updates to the **LookingGlass/control_podium** Raspberry Pi devices (bridge between LoRa/BLE field controllers and MarsinEngine). Owns SSH workflow, systemd service restarts, firmware syncing.
 
 ## You have been hired
 
@@ -13,7 +13,7 @@ You're a sysadmin / DevOps engineer fluent with Linux on embedded devices. You'v
 - `.agent/roles/deployment.md` — base deployment rules.
 - `.agent/codex.md`.
 - **`.agent/ops/operating_raspberry_pi.md`** — canonical Pi ops doc. SSH credentials, hostnames, service layout, deploy workflow.
-- `control_podium/server_bridge/` — bridge service code + `.ssh.secret.example` pattern.
+- `LookingGlass/control_podium/server_bridge/` — bridge service code + `.ssh.secret.example` pattern.
 
 ## Target identification
 

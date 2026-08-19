@@ -23,7 +23,7 @@ surface whose panel manager we adapt), `docs/36_color_palette_live_transitions.m
 
 ## 1. What we adapt from Live Touch (methodology, not DOM)
 
-The Live Touch panel manager (`docs/ui/touch_control.html`, the
+The Live Touch panel manager (`CaptainPad/live_touch/touch_control.html`, the
 `DOCK / UNDOCK ANY PANEL` IIFE near the bottom) earns its keep through five
 rules. These are the rules we port; none of its DOM/localStorage code moves:
 

@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..', '..');
-const WIRE = fs.readFileSync(path.join(ROOT, 'docs', 'ui', 'touch_control_wire.js'), 'utf8');
+const WIRE = fs.readFileSync(
+  path.join(ROOT, 'CaptainPad', 'live_touch', 'touch_control_wire.js'),
+  'utf8',
+);
 
 test('Live Touch ARM joins the real pixel-verification promise', () => {
   const match = WIRE.match(/function chartDriftCheck\(\) \{[\s\S]*?\n  \}/);

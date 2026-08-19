@@ -33,7 +33,7 @@ const RESOLVER_PATHS = [
   path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_layout.js'),
   path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_views.js'),
 ];
-const OUTPUT_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.json');
+const OUTPUT_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.json');
 const ARTIFACT_SCHEMA_VERSION = 4;
 const VIEW_AXIS_PAIRS = Object.freeze({
   top_down: Object.freeze(['nx', 'nz']),
@@ -353,7 +353,7 @@ function checkArtifact(serialized, outputPath) {
 // `--out <path>` redirects the write/check target. TEST-ONLY seam (same
 // doctrine as SIM_SAVE_SERVER_ROOT in save-server.js): the save server passes
 // it when its scene root is overridden onto a throwaway tree, so a test's
-// artifact refresh can never touch the real tracked docs/ui artifact. Absent
+// artifact refresh can never touch the real tracked CaptainPad/live_touch artifact. Absent
 // in production → the canonical OUTPUT_PATH, exactly as before. A dangling
 // `--out` with no value fails loudly rather than guessing.
 function resolveOutputPath(argv) {

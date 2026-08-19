@@ -16,6 +16,7 @@
 import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
 import { handleClientCensus } from '../gui/multi_client_warning.js';
 import { handleBenchMirrorStatus } from '../gui/bench_mirror_banner.js';
+import { shouldAutoDisarmStaleBenchMirror } from '../core/bench_mirror_boot_policy.js';
 
 const RECONNECT_DELAY_MS = 3000;
 const SACN_SOURCE_ID = 'sacn_in';
@@ -49,6 +50,11 @@ export class SacnInputSource {
     // different reply TYPE, and a status broadcast must never resolve it.
     this._benchMirrorOptionWaiters = new Map();
     this._benchMirrorReqSeq = 0;
+    // One-shot stale-mirror guard for the canonical default URL. Explicit
+    // `?bench_mirror=` leaves an armed mirror alone; absent param disarms once
+    // the bridge is ready (never during a blackout/refusal window).
+    this._benchMirrorBootDisarmDone = false;
+    this._benchMirrorBootDisarmInFlight = false;
 
     // Stats
     this.stats = {
@@ -392,6 +398,7 @@ export class SacnInputSource {
         // waiter is resolved only when the reqId matches one we issued.
         this.stats.benchMirror = parsed;
         handleBenchMirrorStatus(parsed);
+        this._maybeAutoDisarmStaleBenchMirror(parsed);
         const waiter = this._benchMirrorWaiters.get(parsed.reqId);
         if (waiter) {
           clearTimeout(waiter.timer);
@@ -407,6 +414,50 @@ export class SacnInputSource {
         }
       }
     } catch (e) { /* ignore non-JSON */ }
+  }
+
+  _maybeAutoDisarmStaleBenchMirror(status) {
+    if (this._benchMirrorBootDisarmDone) return;
+
+    let urlParams;
+    try {
+      urlParams = new URLSearchParams(window.location.search);
+    } catch (err) {
+      console.error(
+        `[sACN Input] stale bench mirror auto-disarm skipped — could not read the URL: ${err.message}`,
+      );
+      this._benchMirrorBootDisarmDone = true;
+      return;
+    }
+    if (!shouldAutoDisarmStaleBenchMirror(urlParams)) {
+      this._benchMirrorBootDisarmDone = true;
+      return;
+    }
+
+    if (!status || status.armed !== true) return;
+
+    if (status.blackoutInFlight === true || this._benchMirrorBootDisarmInFlight) return;
+
+    this._benchMirrorBootDisarmInFlight = true;
+    console.warn(
+      '[sACN Input] Canonical default sim URL — disarming a stale BENCH MIRROR so ship output ' +
+      'is not suspended. Add ?bench_mirror=1 to keep an intentional bench session across reloads.',
+    );
+    this.disarmBenchMirror()
+      .then((reply) => {
+        this._benchMirrorBootDisarmInFlight = false;
+        if (reply && reply.armed !== true) {
+          this._benchMirrorBootDisarmDone = true;
+          return;
+        }
+        if (reply && typeof reply.refusal === 'string' && reply.refusal.trim() !== '') {
+          console.warn(`[sACN Input] stale bench mirror auto-disarm refused — ${reply.refusal.trim()}`);
+        }
+      })
+      .catch((err) => {
+        this._benchMirrorBootDisarmInFlight = false;
+        console.error(`[sACN Input] stale bench mirror auto-disarm failed: ${err.message}`);
+      });
   }
 
   _handleDmxFrame(data) {

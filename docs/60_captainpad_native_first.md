@@ -179,14 +179,14 @@ canvas. The native path keeps the identical spine; only the last hop changes:
 
 ### 4.1 What was verified about today's web embedding
 
-- The panel is the sim-served page `http://<host>:6969/docs/ui/touch_control.html`
+- The panel is the sim-served page `http://<host>:6969/CaptainPad/live_touch/touch_control.html`
   (the sim's HTTP doc root is the repo root — `utils/simulation_url.ts:44-55`);
   reachable from any LAN device.
 - The page reaches the engine itself: `touch_control_wire.js:30`
   `ENGINE = 'http://' + location.hostname + ':6968'` (+ WS on the same
   host). Loaded from the sim host in a WebView, this is correct with **zero
   changes** — the WebView loads from the network, same as Safari.
-- The pixel-view artifact (`docs/ui/touch_control_pixel_views.json`) is a
+- The pixel-view artifact (`CaptainPad/live_touch/touch_control_pixel_views.json`) is a
   same-origin GET — unchanged in a WebView.
 - The passcode gate (`touch_control_passcode.js`) renders entirely inside the
   page and talks only to the engine ("Nothing about it crosses the frame
@@ -379,7 +379,7 @@ calls from native JS were already planned for. Two notes:
 
 ## 6. Files touched (contract for the implementer)
 
-Page side (all under `docs/ui/`, all covered by existing node suites in
+Page side (all under `CaptainPad/live_touch/`, all covered by existing node suites in
 `simulation/tests/touch_control_*.test.js` — extend, don't bypass):
 - `touch_control.html` — head gate `:1599-1618` (+native detection), spatial
   requester `:2141-2156` (transport gate).
@@ -440,7 +440,7 @@ recorded on-device and ≤ the 8 ms budget; web captures still parity-clean;
 all suites green.
 
 **W3 — Live Touch page-side transport.**
-The three `docs/ui` file changes + head gate; extend the
+The three `CaptainPad/live_touch` file changes + head gate; extend the
 `simulation/tests/touch_control_*` suites: native detection, deliver-before-
 ready ordering, fail-loud on missing `ReactNativeWebView`, wire ack via
 transport, iframe mode byte-identical.

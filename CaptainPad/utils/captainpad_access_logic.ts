@@ -95,6 +95,21 @@ export function performancePrimaryAction(
   return privileged ? 'local-lock' : 'authenticate';
 }
 
+export type PerformanceEditRoute = 'exit-sheet' | 'authenticate';
+
+/**
+ * Touching EDIT always opens the engine-authoritative exit sheet. A controller
+ * summon may open per-device authentication on auth-gated show engines, but an
+ * auth-disabled development engine has no login endpoint and must go straight
+ * to the no-passcode exit sheet.
+ */
+export function performanceEditRoute(
+  authRequired: boolean,
+  viaController: boolean,
+): PerformanceEditRoute {
+  return viaController && authRequired ? 'authenticate' : 'exit-sheet';
+}
+
 /**
  * Authentication failures deliberately map from engine codes to fixed copy.
  * The client never echoes a passphrase, raw response body, or deployment-file

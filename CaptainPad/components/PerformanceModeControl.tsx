@@ -19,7 +19,10 @@ import { useCaptainPadAccess } from '@/hooks/use_captainpad_access';
 import { setPerformanceMode, type PerformanceExitAction } from '@/utils/api';
 import type { OperatorAuthSendInput } from '@/utils/takeover_passcode';
 import { performanceExitFailureMessage } from '@/utils/edit_session';
-import { performancePrimaryAction } from '@/utils/captainpad_access_logic';
+import {
+  performanceEditRoute,
+  performancePrimaryAction,
+} from '@/utils/captainpad_access_logic';
 import {
   ENTER_CONFIRM_TITLE,
   ENTER_CONFIRM_MESSAGE,
@@ -106,20 +109,9 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
   // pushed until we ask). Reused by the tap handler AND the APC-summon path so
   // both open with an accurate save-ask.
   const openExitSheet = () => {
-    // docs/56 D2: when the ENGINE gates the exit on a fresh passcode, a
-    // privileged session buys nothing here — the passcode typed in the sheet
-    // IS the authorisation, and demanding a login first would mean two
-    // credentials for one act (and, on a freshly boot-locked show engine, no
-    // pad has a session yet, so the exit would be unreachable). The session
-    // still governs what this DEVICE may see while the lock is on; it just no
-    // longer stands between the operator and the exit sheet.
-    //
-    // authRequired === false → unchanged, byte-for-byte, on every bench.
-    if (!privileged && !authRequired) {
-      setAuthError(null);
-      setAuthOpen(true);
-      return;
-    }
+    // docs/56 D2: the exit sheet itself owns any required passcode. An
+    // auth-disabled development engine renders the same choices with no
+    // passcode field; it has no privileged-login endpoint to call first.
     refreshPerformanceMode();
     setExitError(null);
     setExitOpen(true);
@@ -128,8 +120,14 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
   openExitSheetRef.current = openExitSheet;
 
   // Refs mirror the state for the summon handler (registered once).
-  const stateRef = useRef({ active, privileged, confirmEnter, exitOpen, authOpen, pending: busy, engineOffline });
-  stateRef.current = { active, privileged, confirmEnter, exitOpen, authOpen, pending: busy, engineOffline };
+  const stateRef = useRef({
+    active, privileged, authRequired, confirmEnter, exitOpen, authOpen,
+    pending: busy, engineOffline,
+  });
+  stateRef.current = {
+    active, privileged, authRequired, confirmEnter, exitOpen, authOpen,
+    pending: busy, engineOffline,
+  };
 
   // The OFFLINE mode switch (report `_250`). Local presentation only: no
   // request, no passcode, nothing persisted, discarded on reconnect — the
@@ -150,6 +148,15 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
     setAuthError(null);
     setExitError(null);
   }, [engineOffline]);
+
+  // An engine restart can change the authoritative auth capability while this
+  // sheet is open. Never leave a stale passphrase prompt over an auth-disabled
+  // development session.
+  useEffect(() => {
+    if (authRequired || !authOpen) return;
+    setAuthOpen(false);
+    setAuthError(null);
+  }, [authRequired, authOpen]);
 
   const doEnter = async () => {
     setConfirmEnter(false);
@@ -186,6 +193,10 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
         return;
       }
       if (s.active && !s.privileged) {
+        if (performanceEditRoute(s.authRequired, true) === 'exit-sheet') {
+          openExitSheetRef.current();
+          return;
+        }
         if (s.authOpen) setAuthOpen(false);
         else {
           setAuthError(null);
@@ -318,11 +329,10 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
                 setConfirmEnter(true);
                 return;
               case 'authenticate':
-                // Same reasoning as openExitSheet: on a passcode-gated engine
-                // the EDIT chip goes straight to the exit sheet. Sending the
-                // operator to a login they don't need would be the friction
-                // D2 exists to remove.
-                if (authRequired) { openExitSheet(); return; }
+                if (performanceEditRoute(authRequired, false) === 'exit-sheet') {
+                  openExitSheet();
+                  return;
+                }
                 openAuthentication();
                 return;
               case 'local-lock':
@@ -339,7 +349,7 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
                 ? 'Lock this CaptainPad in Performance view'
                 : (authRequired
                   ? 'Leave performance mode — an operator passcode is required'
-                  : 'Authenticate for privileged edit access'))
+                    : 'Leave performance mode — no passcode is required'))
               : 'Enter performance mode')}
           accessibilityState={{ disabled: busy }}
         >

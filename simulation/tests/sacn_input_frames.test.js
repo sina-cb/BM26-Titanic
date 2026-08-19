@@ -168,6 +168,101 @@ test('G6: disable() removes the router source and rejects every pending waiter',
   await assert.rejects(p3, /closed before the bench-mirror options/);
 });
 
+test('canonical default URL: armed benchMirrorStatus triggers client disarm, never arm', async () => {
+  freshWindow();
+  window.location = {
+    search: '?scene=titanic&profile=2d_pixels&lighting_mode=sacn_in&spotlights=0',
+  };
+  const src = new SacnInputSource('ws://x');
+  let disarmCalls = 0;
+  src.disarmBenchMirror = () => {
+    disarmCalls += 1;
+    return Promise.resolve({ armed: false });
+  };
+
+  src._handleTextMessage(JSON.stringify({
+    type: 'benchMirrorStatus',
+    armed: true,
+    scene: 'test_bench',
+    label: 'TEST BENCH STAND-IN',
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(disarmCalls, 1, 'stale armed mirror on canonical URL must disarm once');
+  assert.equal(src._benchMirrorBootDisarmDone, true);
+});
+
+test('explicit ?bench_mirror=1 leaves an armed mirror alone on boot', async () => {
+  freshWindow();
+  window.location = { search: '?bench_mirror=1&scene=titanic&profile=2d_pixels' };
+  const src = new SacnInputSource('ws://x');
+  let disarmCalls = 0;
+  src.disarmBenchMirror = () => {
+    disarmCalls += 1;
+    return Promise.resolve({ armed: false });
+  };
+
+  src._handleTextMessage(JSON.stringify({
+    type: 'benchMirrorStatus',
+    armed: true,
+    scene: 'test_bench',
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(disarmCalls, 0, 'explicit bench mode must not auto-disarm');
+  assert.equal(src._benchMirrorBootDisarmDone, true);
+});
+
+test('disarmed benchMirrorStatus on canonical URL does not call disarm', async () => {
+  freshWindow();
+  window.location = { search: '?scene=titanic&profile=2d_pixels&lighting_mode=sacn_in&spotlights=0' };
+  const src = new SacnInputSource('ws://x');
+  let disarmCalls = 0;
+  src.disarmBenchMirror = () => {
+    disarmCalls += 1;
+    return Promise.resolve({ armed: false });
+  };
+
+  src._handleTextMessage(JSON.stringify({
+    type: 'benchMirrorStatus',
+    armed: false,
+    available: [{ scene: 'test_bench', label: 'TEST BENCH STAND-IN', slots: 10 }],
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(disarmCalls, 0);
+  assert.equal(src._benchMirrorBootDisarmDone, false,
+    'disarmed boot status is a no-op; guard stays open until an armed status or explicit bench mode');
+});
+
+test('blackoutInFlight defers stale-mirror auto-disarm until the bridge is idle', async () => {
+  freshWindow();
+  window.location = { search: '?scene=titanic&profile=2d_pixels&lighting_mode=sacn_in&spotlights=0' };
+  const src = new SacnInputSource('ws://x');
+  let disarmCalls = 0;
+  src.disarmBenchMirror = () => {
+    disarmCalls += 1;
+    return Promise.resolve({ armed: false });
+  };
+
+  src._handleTextMessage(JSON.stringify({
+    type: 'benchMirrorStatus',
+    armed: true,
+    blackoutInFlight: true,
+    scene: 'test_bench',
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(disarmCalls, 0, 'must not disarm while blackout frames are in flight');
+
+  src._handleTextMessage(JSON.stringify({
+    type: 'benchMirrorStatus',
+    armed: true,
+    scene: 'test_bench',
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(disarmCalls, 1);
+});
+
 test('G15 (fold-in): enable() on a static host never connects — no WebSocket is even constructed',
   () => {
     freshWindow();

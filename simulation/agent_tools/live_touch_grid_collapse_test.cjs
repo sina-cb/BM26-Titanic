@@ -40,7 +40,7 @@ function createPanelServer() {
       response.writeHead(400).end('invalid URL');
       return;
     }
-    const requestedPath = pathname === '/' ? '/docs/ui/touch_control.html' : pathname;
+    const requestedPath = pathname === '/' ? '/CaptainPad/live_touch/touch_control.html' : pathname;
     const filePath = path.resolve(REPO_ROOT, `.${requestedPath}`);
     const relativePath = path.relative(REPO_ROOT, filePath);
     if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
@@ -104,7 +104,7 @@ async function main() {
       }
       request.continue();
     });
-    await page.goto(`http://127.0.0.1:${port}/docs/ui/touch_control.html`, {
+    await page.goto(`http://127.0.0.1:${port}/CaptainPad/live_touch/touch_control.html`, {
       waitUntil: 'domcontentloaded',
       timeout: 15_000,
     });

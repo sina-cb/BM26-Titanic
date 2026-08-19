@@ -28,9 +28,9 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const ARTIFACT_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.json');
-const PANEL_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control.html');
-const RUNTIME_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.js');
+const ARTIFACT_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.json');
+const PANEL_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control.html');
+const RUNTIME_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.js');
 const PROJECTION_PATH = path.join(REPO_ROOT, 'CaptainPad/shared/pixel_view_projection.js');
 const PIXEL_MAP_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml');
 const VIEW_REGISTRY_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/views.yaml');

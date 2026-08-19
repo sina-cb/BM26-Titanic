@@ -2,7 +2,7 @@
  * touch_artifact_freshness.test.js — the Live Touch pixel-view artifact is
  * OWNED by the save server, not by a human remembering a manual export.
  *
- * History: docs/ui/touch_control_pixel_views.json fingerprints its inputs
+ * History: CaptainPad/live_touch/touch_control_pixel_views.json fingerprints its inputs
  * (model, pixel_map_views.yaml, cameras.yaml, resolver sources) and the Live
  * Touch panel fails CLOSED when any live input drifts. Report 20260815_223
  * added a re-export to /save-pixel-map-views only; the operator kept hitting
@@ -38,7 +38,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SAVE_SERVER = path.resolve(HERE, '..', 'server', 'save-server.js');
 const SAVE_SERVER_SRC = fs.readFileSync(SAVE_SERVER, 'utf8');
 const RUNTIME_SRC = fs.readFileSync(
-  path.resolve(HERE, '..', '..', 'docs', 'ui', 'touch_control_pixel_views.js'), 'utf8');
+  path.resolve(HERE, '..', '..', 'CaptainPad', 'live_touch', 'touch_control_pixel_views.js'), 'utf8');
 
 let child = null;
 let port = 0;

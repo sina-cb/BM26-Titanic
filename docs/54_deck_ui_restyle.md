@@ -14,8 +14,8 @@ retirement of scattered hex literals in favor of tokens.
 Related: `docs/53_deck_workspace_windows.md` (the workspace this restyle
 lands ON TOP of — agent _208 is implementing it now),
 `docs/52_special_events_tab.md` (the Events tab that must share this
-vocabulary), `docs/ui/touch_control.html` + `docs/ui/touch_control_theme.js`
-(Live Touch), `docs/ui/color_palette_prototype.html` (the approved COLORS
+vocabulary), `CaptainPad/live_touch/touch_control.html` + `CaptainPad/live_touch/touch_control_theme.js`
+(Live Touch), `CaptainPad/live_touch/color_palette_prototype.html` (the approved COLORS
 prototype), `.agent/os/ui_design.md` (the design-token file format we adopt),
 `.agent/reports/202608/20260806_190_captainpad_param_row.md` (the _190 param
 rows — already the new style; the reference point).
@@ -27,7 +27,7 @@ rows — already the new style; the reference point).
 Four modern surfaces were studied. They agree on a grammar, and one of them
 already rules on the color question.
 
-**The ruling exists in code.** `docs/ui/touch_control_theme.js` is the theme
+**The ruling exists in code.** `CaptainPad/live_touch/touch_control_theme.js` is the theme
 bridge: when Live Touch runs embedded in CaptainPad, **CaptainPad's palette
 tokens overwrite Live Touch's CSS variables** (`CSS_TOKEN_MAP`:
 `background→--bg`, `surfaceContainerHigh→--panel`, `ghostBorder→--border`,

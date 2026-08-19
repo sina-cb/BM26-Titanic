@@ -22,6 +22,7 @@ offline; the only online steps are the pre-playa installs marked as such.
 - [Services and Ports](#-services-and-ports)
 - [Profiles: prod vs dev](#-profiles-prod-vs-dev)
 - [`--no-launch` and auto-open](#-no-launch-and-auto-open)
+- [`--dev-no-auth` (development only)](#--dev-no-auth-development-only)
 - [Running Services Individually](#-running-services-individually)
 - [Debug Laptop and iPads (LAN)](#-debug-laptop-and-ipads-lan)
 - [Monitoring and Health](#-monitoring-and-health)
@@ -50,6 +51,12 @@ installs all three. Python 3 (stdlib only, no pip installs) is needed for
 **Environment:** the launcher requires `BM26_SECRETS` to point at the private
 deployment `secrets.yaml` (CaptainPad operator passphrases). It validates this
 before starting anything and fails loudly if missing.
+
+**No secrets repo?** For local development only, pass **`--dev-no-auth`** on a
+`dev` or `dev-lite` launch — it disables CaptainPad privileged auth so
+Performance and Edit modes work without passcodes. The flag is **refused on
+`prod`** and prints an unmistakable development warning. Never use it on the
+show server or in production.
 
 **Build the CaptainPad static export** (required for `prod` — it refuses to
 start without `CaptainPad/dist/index.html`):
@@ -134,7 +141,8 @@ show server (150) wins.
 Common options: `--scene <name>` (sim scene AND engine model, default
 `titanic`), `--pattern <name>`, `--sim-profile <id>`, `--sacn-priority <n>`,
 `--lan-host <addr>`, `--with-native-pad` (see below), `--split` (tile sim +
-CaptainPad in two Chrome windows), `-f/--force`, `--no-kill`, `--no-launch`.
+CaptainPad in two Chrome windows), `-f/--force`, `--no-kill`, `--no-launch`,
+`--dev-no-auth` (development only — see above).
 Full list: `node launcher.js --help`.
 
 **iPad over Expo Go on a show profile: `--with-native-pad`.** `prod` serves the
@@ -180,6 +188,23 @@ The show box uses it in its boot chain: **power-on → autologon `titanic` →
 scheduled task `BM26TitanicStack` → `boot_server.ps1` → `node launcher.js prod
 --scene <s> --no-launch`** — `boot_server.ps1` opens the show console's own
 windows, so the launcher must not race it with duplicates.
+
+## `--dev-no-auth` (development only)
+
+Explicit opt-in bypass for CaptainPad privileged auth on **`dev` and
+`dev-lite` only**. Without the private `BM26_SECRETS` repository, a contributor
+can still exercise Performance enter/exit and Edit mode locally:
+
+```bash
+node launcher.js dev --scene test_bench --dev-no-auth
+```
+
+The launcher skips `BM26_SECRETS` preflight, sets
+`BM26_CAPTAINPAD_AUTH_REQUIRED=0` on the supervised engine (the ONE authority),
+and prints an unmistakable **DEVELOPMENT AUTH BYPASS** warning. **`prod` refuses
+the flag** — show/deployment profiles must keep operator passcode gates enabled.
+This is never an automatic fallback; omitting the flag preserves the normal
+fail-loud secrets requirement.
 
 ---
 
@@ -337,8 +362,7 @@ Server bring-up from bare Windows, SSH keys, autologon, boot task:
 | Symptom | Fix |
 |---|---|
 | Launcher refuses: port held by a foreign process | Free it, or `-f/--force` (prod already forces). A UDP `5568` squatter is claimed by default — anything holding it silently darks the rig |
-| `prod` refuses to start | Missing `CaptainPad/dist/index.html` → `node launcher.js rebuild-pad`; or `BM26_SECRETS` missing/invalid |
-| Prod boot warns "STALE CaptainPad build" | Sources are newer than `dist/` → `node launcher.js rebuild-pad` + reload the iPad. It is a warning, never a refusal — launching a known-good older build stays possible |
+| `prod` refuses to start | `BM26_SECRETS` missing/invalid; or CaptainPad rebuild failed (see `[rebuild]` output above the abort line). A missing/stale dist rebuilds automatically on boot — if that step fails, fix `CaptainPad/node_modules` or export errors and retry |
 | `rebuild-pad` refuses | Another export, or a Metro still warming, is in flight — parallel exports corrupt the metro cache. Wait and rerun; it names what it is waiting on |
 | "A stack is already running" | `node launcher.js stop`, or `-f` to take it over |
 | Metro serves a stale/frozen bundle | A `CI=true` shell freezes Metro's reloads — the launcher strips `CI` from every Metro it starts, but a hand-run `expo start` won't; unset `CI` and let the launcher own the Metro. `Unable to resolve` for a file that exists means the launcher's dependency-fingerprint guard was bypassed — find out who started that Metro |
@@ -381,8 +405,9 @@ BM26-Titanic/
 ├── marsin_engine/       # WASM MarsinVM Pixelblaze rendering engine (sACN out, REST/WS API)
 ├── CaptainPad/          # React Native/Expo control surface (iPad + web)
 ├── deploy/              # Show-server bring-up + deploy tooling (deploy.py, CHEATSHEET.md)
-├── control_podium/      # Podium hardware + Raspberry Pi bridge (Meshtastic radio path)
-├── LookingGlass/        # Control-panel art piece (ESP32 firmware; flash via its deploy.py ONLY)
+├── LookingGlass/        # Control-panel art piece and archived podium work
+│   ├── panel_firmware/  # ESP32-S3 arcade control panel (active)
+│   └── control_podium/  # Archived LoRa mesh + Pi bridge (see README there)
 ├── marsin_pb/           # Pixelblaze-related tooling
 ├── 3d_models/ 3d_structure/ renders/ images/   # Assets
 ├── states/ docs/ archived/                     # State files, design docs, retired work

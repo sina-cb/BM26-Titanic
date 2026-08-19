@@ -6,7 +6,7 @@ architecture, incl. §8 AS BUILT), `docs/54_deck_ui_restyle.md` (visual canon:
 theme tokens wearing Live Touch grammar), and report
 `.agent/reports/202608/20260814_211_colors_window_impl.md` (the shipped COLORS
 window). The scheme-generator source of truth is
-`docs/ui/touch_control.html` (PALETTE GENERATORS block, lines ~3221–3330) —
+`CaptainPad/live_touch/touch_control.html` (PALETTE GENERATORS block, lines ~3221–3330) —
 the old TS module was deleted; the HTML is canonical.
 
 The five operator intents, verbatim:

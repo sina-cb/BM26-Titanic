@@ -46,7 +46,7 @@ export const NOTE_COLOR_WHEEL_DEFAULTS = Object.freeze({
  * WHY IT EXISTS. The rig's FOLLOW NOTE mode consumes `audioNoteHue`, i.e. THIS
  * wheel — one operator-tunable note→colour authority in one place. Live Touch's
  * own FOLLOW NOTE uses Scriabin's published clavier-à-lumières table instead
- * (`docs/ui/touch_control.html:3401-3414`), so the two surfaces can honestly
+ * (`CaptainPad/live_touch/touch_control.html:3401-3414`), so the two surfaces can honestly
  * disagree about what colour an E is. Rather than port a SECOND mapping into
  * the engine — which would create exactly the two-authorities-that-can-drift
  * problem the design rejects — the twelve Scriabin HUES are offered here as a

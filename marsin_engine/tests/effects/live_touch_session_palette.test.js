@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   assertExactFiveHsv,
   buildCrossfadeLivePalettes,
+  candidatePaletteFromOutput,
+  outputPaletteFromSelection,
   overlayFrameFromPairParams,
   overlayFrameFromTransition,
   overlayFrameFromTransitionState,
@@ -40,6 +42,18 @@ test('two-colour crossfade builds parallel livePalettes and pair overlay frames'
   assert.deepEqual(midpoint[0], { h: 0.35, s: 0.9, v: 0.8 });
   assert.deepEqual(midpoint[1], { h: 0.35, s: 0.9, v: 0.8 });
   assert.deepEqual(midpoint.slice(2), ring.slice(2));
+});
+
+test('non-default A/B choices lead two-colour output while preserving all five samples', () => {
+  const picked = [1, 4];
+  const output = outputPaletteFromSelection(ring, picked);
+  assert.deepEqual(output, [ring[1], ring[4], ring[0], ring[2], ring[3]]);
+  assert.deepEqual(candidatePaletteFromOutput(output, picked), ring);
+
+  const palettes = [{ c1: ring[1], c2: ring[4] }, { c1: ring[4], c2: ring[1] }];
+  const livePalettes = buildCrossfadeLivePalettes(ring, picked, palettes);
+  assert.deepEqual(livePalettes[0], [ring[1], ring[4], ring[0], ring[2], ring[3]]);
+  assert.deepEqual(livePalettes[1], [ring[4], ring[1], ring[0], ring[2], ring[3]]);
 });
 
 test('transition frames keep slots 3-5 stable while A/B interpolate', () => {

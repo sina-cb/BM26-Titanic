@@ -243,6 +243,26 @@ answering the LAN host (`curl -H "expo-platform: ios"` shows `lanHost`, never
 127.0.0.1); Ctrl+C leaves nothing on either port; `status` shows the extra
 row; `dev --with-native-pad` exits 2 with a named refusal.
 
+### W-B4 · `--dev-no-auth`: development-only CaptainPad auth bypass
+
+New launcher flag, valid ONLY on **`dev` and `dev-lite`** (`prod` refuses by
+name — show/deployment profiles must keep operator passcode gates). Explicit
+opt-in, never an automatic fallback:
+
+- Preflight: `resolveCaptainPadAuthPreflight()` — a pure verdict helper (also
+  exported for tests) — skips `BM26_SECRETS` validation when the flag is present.
+- Engine env: **`BM26_CAPTAINPAD_AUTH_REQUIRED=0`** — the launcher is the ONE
+  authority; no hidden default.
+- Lock: **`devNoAuth: true`** when active; `status` warns from the lock field
+  (legacy locks without it read as false).
+- Startup: unmistakable **DEVELOPMENT AUTH BYPASS** warning on stderr.
+- Without the flag: unchanged fail-loud secrets requirement.
+
+**Acceptance:** pure preflight tests prove dev+flag skips secrets, dev without
+flag fails on missing secrets, and prod+flag refuses; `prod --dev-no-auth` exits
+2 before spawning; engine Performance enter/exit works without passcode when
+auth is disabled.
+
 ### W-B2 · Kill the stale-Metro class: dependency fingerprint → auto `--clear`
 
 Before starting ANY Metro child (dev profile's and `--with-native-pad`'s),

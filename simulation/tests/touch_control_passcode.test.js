@@ -19,9 +19,9 @@ import vm from 'node:vm';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const MODULE_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_passcode.js');
-const WIRE_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_wire.js');
-const PANEL_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control.html');
+const MODULE_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_passcode.js');
+const WIRE_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_wire.js');
+const PANEL_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control.html');
 
 const moduleSource = fs.readFileSync(MODULE_PATH, 'utf8');
 const wireSource = fs.readFileSync(WIRE_PATH, 'utf8');

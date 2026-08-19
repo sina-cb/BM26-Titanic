@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { describeLibrary } from '../../lib/global_effect_library.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PANEL_PATH = path.resolve(HERE, '../../../docs/ui/touch_control.html');
+const PANEL_PATH = path.resolve(HERE, '../../../CaptainPad/live_touch/touch_control.html');
 const PANEL_SOURCE = fs.readFileSync(PANEL_PATH, 'utf8');
-const WIRE_PATH = path.resolve(HERE, '../../../docs/ui/touch_control_wire.js');
+const WIRE_PATH = path.resolve(HERE, '../../../CaptainPad/live_touch/touch_control_wire.js');
 const WIRE_SOURCE = fs.readFileSync(WIRE_PATH, 'utf8');
 
 function objectKeysAfter(marker) {

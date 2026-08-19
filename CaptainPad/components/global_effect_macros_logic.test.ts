@@ -33,6 +33,8 @@ import {
   type EffectBanksState,
   chunkStripPages,
   effectSurfacePolicy,
+  resolveEffectsBarGeometry,
+  EFFECTS_BAR_MIN_TOUCH_TARGET,
 } from './global_effect_macros_logic';
 
 const empty = (slotId: number): SlotBindingLike & { slotId: number } => ({
@@ -45,6 +47,7 @@ describe('effectSurfacePolicy — Performance is trigger-only', () => {
       configurationVisible: false,
       boundEffectsTriggerable: true,
       emptySlotsInteractive: false,
+      showBlackout: false,
     });
   });
 
@@ -53,6 +56,16 @@ describe('effectSurfacePolicy — Performance is trigger-only', () => {
       configurationVisible: true,
       boundEffectsTriggerable: true,
       emptySlotsInteractive: true,
+      showBlackout: true,
+    });
+  });
+
+  it('keeps structural controls and BLACKOUT hidden until mode authority resolves', () => {
+    expect(effectSurfacePolicy(false, false)).toEqual({
+      configurationVisible: false,
+      boundEffectsTriggerable: true,
+      emptySlotsInteractive: false,
+      showBlackout: false,
     });
   });
 });
@@ -201,7 +214,6 @@ describe('resolveEffectsPresentation — the invariant full-authoring presentati
     const p = resolveEffectsPresentation();
     expect(p.showEditAffordances).toBe(true);    // ⋯ swap + value/mode detail badge
     expect(p.showEmptySockets).toBe(true);        // tappable "+" bind sockets
-    expect(p.showBlackout).toBe(true);            // e-stop always present
     expect(p.cellHeightScale).toBe(1);            // no growth — original sizing
   });
 
@@ -453,6 +465,58 @@ describe('deployBannerMessage — surface deploy errors, clear on ok, ignore noi
     expect(banner).toEqual({ kind: 'error', message: 'VSN1 layout NOT deployed: boom' });
     apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'ok' });        // success clears
     expect(banner).toBeNull();
+  });
+});
+
+describe('resolveEffectsBarGeometry — shared Deck/Mixer strip contract', () => {
+  it('strip landscape: 44px chips, zero inner padding, tight 4px gaps', () => {
+    const g = resolveEffectsBarGeometry({ variant: 'mixer-strip', isPortrait: false });
+    expect(g.btnHeight).toBe(44);
+    expect(g.btnFont).toBe(12);
+    expect(g.gap).toBe(4);
+    expect(g.labelLines).toBe(1);
+    expect(g.containerPaddingTop).toBe(0);
+    expect(g.stripWrapperPaddingTop).toBe(0);
+    expect(g.dividerMarginHorizontal).toBe(4);
+    expect(g.stripLabelMarginRight).toBe(4);
+  });
+
+  it('strip portrait: same 44px height, smaller label font', () => {
+    const g = resolveEffectsBarGeometry({ variant: 'mixer-strip', isPortrait: true });
+    expect(g.btnHeight).toBe(44);
+    expect(g.btnFont).toBe(10);
+    expect(g.labelLines).toBe(1);
+  });
+
+  it('deck and strip share identical strip geometry when both mount mixer-strip', () => {
+    const landscape = resolveEffectsBarGeometry({ variant: 'mixer-strip', isPortrait: false });
+    const portrait = resolveEffectsBarGeometry({ variant: 'mixer-strip', isPortrait: true });
+    expect(landscape.btnHeight).toBe(portrait.btnHeight);
+    expect(landscape.gap).toBe(portrait.gap);
+    expect(landscape.containerPaddingTop).toBe(0);
+  });
+
+  it('never drops below the minimum touch target', () => {
+    const g = resolveEffectsBarGeometry({
+      variant: 'mixer-strip',
+      isPortrait: false,
+      cellHeightScale: 0.5,
+    });
+    expect(g.btnHeight).toBeGreaterThanOrEqual(EFFECTS_BAR_MIN_TOUCH_TARGET);
+  });
+
+  it('meta band padding clears the badge row (inset + height)', () => {
+    const g = resolveEffectsBarGeometry({ variant: 'mixer-strip', isPortrait: false });
+    expect(g.chipMetaPaddingTop).toBe(g.metaInsetTop + g.metaBadgeHeight);
+  });
+
+  it('deck grid variant keeps 2-line labels and slightly taller portrait chips', () => {
+    const landscape = resolveEffectsBarGeometry({ variant: 'deck', isPortrait: false });
+    const portrait = resolveEffectsBarGeometry({ variant: 'deck', isPortrait: true });
+    expect(landscape.labelLines).toBe(2);
+    expect(portrait.labelLines).toBe(2);
+    expect(portrait.btnHeight).toBeGreaterThanOrEqual(landscape.btnHeight);
+    expect(portrait.btnHeight).toBeGreaterThanOrEqual(EFFECTS_BAR_MIN_TOUCH_TARGET);
   });
 });
 

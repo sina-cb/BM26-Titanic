@@ -110,6 +110,52 @@ function sampleState(tag) {
   };
 }
 
+function productionColorState(tag) {
+  const ring = [
+    { h: 0.12, s: 0.95, v: 1 },
+    { h: 0.502, s: 0.95, v: 1 },
+    { h: 0.884, s: 0.95, v: 1 },
+    { h: 0.266, s: 0.95, v: 1 },
+    { h: 0.648, s: 0.95, v: 1 },
+  ];
+  const palettes = [
+    { c1: ring[0], c2: ring[1] },
+    { c1: ring[1], c2: ring[0] },
+  ];
+  const livePalettes = palettes.map(pair => [
+    pair.c1, pair.c2, ring[2], ring[3], ring[4],
+  ].map(color => ({ ...color })));
+  return {
+    v: 4,
+    mode: 'spatial',
+    base: { h: 0.12, s: 0.85, v: 0.7 },
+    gen: 'golden',
+    follow: false,
+    groups: [
+      {
+        idx: -1, master: true, level: 80, on: true,
+        global: false, own: false, fx: false, locked: false, scheme: 'manual', dot: null,
+      },
+      {
+        idx: 0, master: false, level: 60, on: true,
+        global: true, own: false, fx: false, locked: false, scheme: 'contrast', dot: null,
+      },
+    ],
+    fx: [],
+    colour: {
+      active: false,
+      mode: 'palettes',
+      palettes,
+      livePalettes,
+      delay_s: 2,
+      shuffle: false,
+      transitionMs: 800,
+    },
+    spatial: { takes: [], ink: [] },
+    tag,
+  };
+}
+
 before(async () => {
   h.spawnEngine();
   await h.waitForReady();
@@ -384,10 +430,12 @@ test('a preset survives an engine restart and replays on connect, verbatim', asy
   const preRestart = await api('GET', '/layers/live_touch/presets');
   assert.deepEqual(preRestart.data.entries, [], 'precondition: clean slate before the restart proof');
 
-  const state = sampleState('restart_proof');
+  const state = productionColorState('restart_proof');
   const created = await api('POST', '/layers/live_touch/presets', { name: 'Survives Restart', state });
   assert.equal(created.status, 200, JSON.stringify(created.data));
   const entry = created.data.entry;
+  assert.deepEqual(readStoreOnDisk().entries[0].state, state,
+    'the production color state must be durable before the process exits');
 
   // Kill and re-spawn on the SAME harness (same port, same MARSIN_STATE_DIR
   // temp root) — mirrors the restart pattern used elsewhere in this suite
@@ -407,6 +455,13 @@ test('a preset survives an engine restart and replays on connect, verbatim', asy
   assert.equal(survived.name, entry.name);
   assert.equal(survived.capturedAt, entry.capturedAt);
   assert.deepEqual(survived.state, state, 'the opaque state blob must survive the restart verbatim');
+
+  const appliedColour = await api('POST', '/deck/color-autopilot', survived.state.colour);
+  assert.equal(appliedColour.status, 200, JSON.stringify(appliedColour.data));
+  const colourReadback = await api('GET', '/deck/color-autopilot');
+  assert.equal(colourReadback.status, 200, JSON.stringify(colourReadback.data));
+  assert.deepEqual(colourReadback.data.palettes, state.colour.palettes);
+  assert.equal(colourReadback.data.transitionMs, state.colour.transitionMs);
 
   // A freshly connected pad must also see it via the connect-replay frame —
   // proving liveTouchPresets is wired into BOTH the routing table

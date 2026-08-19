@@ -35,6 +35,9 @@
  *   --no-kill          Don't kill stale stack listeners on our ports
  *   -f, --force        Force-kill ANY process holding our ports (incl. foreign);
  *                      the `prod` profile force-claims by default.
+ *   --dev-no-auth      DEVELOPMENT ONLY (dev/dev-lite): disable CaptainPad
+ *                      privileged auth so Performance/Edit work without
+ *                      BM26_SECRETS. Refused on prod/show profiles.
  *   --help             Show usage
  *
  * Behavior contract:
@@ -193,6 +196,11 @@ const PROFILES = {
   },
 };
 
+// Development profiles that may accept --dev-no-auth. Show/deployment profiles
+// (prod) MUST keep CaptainPad privileged auth enabled — the flag is refused there.
+const DEV_NO_AUTH_FLAG = '--dev-no-auth';
+const DEVELOPMENT_PROFILES = new Set(['dev', 'dev-lite']);
+
 // Valid sim lighting profile ids — the keys of LIGHTING_PROFILES in
 // simulation/src/core/profile_registry.js. Mirrored here (not imported: that
 // module is browser ESM) so a typo in a profile config or in `--sim-profile`
@@ -340,6 +348,49 @@ function resolveNativePadRequest(profileName, captainPadMode, requested) {
   };
 }
 
+// Explicit development-only bypass for CaptainPad privileged auth. Never an
+// automatic fallback — the operator must pass DEV_NO_AUTH_FLAG on the CLI.
+// Pure verdict, no exit: the caller owns the exit code (usage error → 2).
+function resolveDevNoAuthRequest(profileName, requested) {
+  if (requested !== true) return { enabled: false, refusal: null };
+  if (DEVELOPMENT_PROFILES.has(profileName)) return { enabled: true, refusal: null };
+  return {
+    enabled: false,
+    refusal: `${DEV_NO_AUTH_FLAG} is only valid on development profiles (${[...DEVELOPMENT_PROFILES].join(', ')}); `
+      + `profile '${profileName}' is a show/deployment profile and MUST keep CaptainPad privileged auth enabled. `
+      + 'This flag disables operator passcode gates — never use it outside local development.',
+  };
+}
+
+/**
+ * Pure preflight authority for --dev-no-auth and BM26_SECRETS. Combines profile
+ * request resolution with conditional secrets validation. Returns a verdict
+ * only — no spawn, no process.exit. validate() is the production caller.
+ */
+function resolveCaptainPadAuthPreflight({
+  profileName,
+  devNoAuthRequested = false,
+  secretsPath = process.env.BM26_SECRETS,
+  engineDepsInstalled = fs.existsSync(path.join(ENGINE_DIR, 'node_modules')),
+} = {}) {
+  if (typeof profileName !== 'string' || profileName.length === 0) {
+    throw new TypeError('resolveCaptainPadAuthPreflight: profileName is required');
+  }
+  const devNoAuth = resolveDevNoAuthRequest(profileName, devNoAuthRequested);
+  if (devNoAuth.refusal) {
+    return { devNoAuth, refusal: devNoAuth.refusal, secretsProblems: [] };
+  }
+  const secretsProblems = (!devNoAuth.enabled && engineDepsInstalled)
+    ? validateCaptainPadSecrets(secretsPath)
+    : [];
+  return { devNoAuth, refusal: null, secretsProblems };
+}
+
+/** True only when the lock explicitly records devNoAuth: true. Absent/legacy locks → false. */
+function lockHasDevNoAuthBypass(lock) {
+  return !!(lock && lock.devNoAuth === true);
+}
+
 // ── LAN host for the Expo dev server (iPad / Expo Go) ───────────────────
 // Metro bakes a HOST into the native manifest it serves: `launchAsset.url` is
 // where Expo Go goes to download the JS bundle. Left to itself Metro answers
@@ -446,6 +497,10 @@ function usage(stream = process.stdout) {
     `                       Same as ${portCleanup.FORCE_SACN_KILL_ENV}=1.`,
     '    --no-launch        Start every server but DON\'T auto-open any browser',
     '                       windows (URLs still printed). Alias: --no-open',
+    `    ${DEV_NO_AUTH_FLAG.padEnd(18)} DEVELOPMENT ONLY (dev/dev-lite): disable CaptainPad`,
+    '                       privileged auth so Performance/Edit work without',
+    '                       BM26_SECRETS. Refused on prod/show profiles. Unsafe',
+    '                       outside local development — explicit opt-in only.',
     '    --split            OPT-IN: tile sim + CaptainPad side-by-side in two Chrome',
     '                       windows (falls back to the default browser if Chrome is',
     '                       missing). DEFAULT is off — open in your existing browser.',
@@ -475,6 +530,8 @@ function parseArgs(argv) {
     // Default 'high' (HIGH_PRIORITY_CLASS) so the render loop never gets
     // starved by Chrome's foreground boost. 'realtime' is opt-in.
     enginePriority: 'high',
+    // Explicit development-only bypass for CaptainPad privileged auth.
+    devNoAuth: false,
   };
   const takeValue = (flag, value) => {
     if (value === undefined || value.startsWith('-')) {
@@ -519,6 +576,7 @@ function parseArgs(argv) {
       // it, which is why report 20260815_233 §4 could only offer the env var.
       case portCleanup.FORCE_SACN_KILL_FLAG: break;
       case '--no-open': case '--no-launch': opts.open = false; break;
+      case DEV_NO_AUTH_FLAG: opts.devNoAuth = true; break;
       case '--split': opts.split = 'on'; break;
       case '--no-split': opts.split = 'off'; break;
       case '--help': case '-h': usage(); process.exit(0); break;
@@ -1342,13 +1400,6 @@ function validate(opts, profileDef) {
   if (!fs.existsSync(path.join(ENGINE_DIR, 'node_modules'))) {
     problems.push('marsin_engine/node_modules missing — run `npm install` in marsin_engine/');
   }
-  // The supervised stack always enables CaptainPad privileged sessions.
-  // Validate the external credential source before starting Simulation so a
-  // missing private deployment mount cannot waste the boot window and then
-  // fail only when the Engine finally starts. Never print credential values.
-  if (fs.existsSync(path.join(ENGINE_DIR, 'node_modules'))) {
-    problems.push(...validateCaptainPadSecrets(process.env.BM26_SECRETS));
-  }
   const captainPadMode = profileDef.processes.includes('captainpad')
     ? resolveCaptainPadMode(opts.command, profileDef) : null;
 
@@ -1361,6 +1412,22 @@ function validate(opts, profileDef) {
     logError(nativePad.refusal);
     process.exit(2);
   }
+
+  // --dev-no-auth is the same class of USAGE decision: refused on show profiles,
+  // and when enabled it is the ONE authority that skips BM26_SECRETS preflight
+  // and tells the engine BM26_CAPTAINPAD_AUTH_REQUIRED=0.
+  const authPreflight = resolveCaptainPadAuthPreflight({
+    profileName: opts.command,
+    devNoAuthRequested: opts.devNoAuth,
+    secretsPath: process.env.BM26_SECRETS,
+    engineDepsInstalled: fs.existsSync(path.join(ENGINE_DIR, 'node_modules')),
+  });
+  if (authPreflight.refusal) {
+    logError(authPreflight.refusal);
+    process.exit(2);
+  }
+  problems.push(...authPreflight.secretsProblems);
+  const devNoAuth = authPreflight.devNoAuth;
 
   if (captainPadMode === 'static') {
     // The STATIC path runs no bundler: whatever is in dist/ is what the operator
@@ -1399,7 +1466,7 @@ function validate(opts, profileDef) {
     process.exit(1);
   }
 
-  return { captainPadMode, nativePad, metroState, metroGuard };
+  return { captainPadMode, nativePad, devNoAuth, metroState, metroGuard };
 }
 
 // ── The spawn contract (docs/62 W-A1) ───────────────────────────────────
@@ -2200,6 +2267,10 @@ async function cmdStatus() {
   }
   const alive = pidAlive(lock.pid);
   console.log(`Launcher: pid ${lock.pid} (${alive ? 'running' : 'DEAD — stale lock'}) · profile '${lock.profile}' · scene '${lock.scene}' · started ${lock.startedAt}`);
+  if (lockHasDevNoAuthBypass(lock)) {
+    console.error('  ⚠️  DEVELOPMENT AUTH BYPASS (--dev-no-auth): CaptainPad privileged auth is DISABLED for this session.');
+    console.error('      Unsafe outside local development. Never use on the show server or in production.');
+  }
   const withNativePad = lock.withNativePad === true;
   const ports = readPorts({ requireNativePad: withNativePad });
   const results = await runHealthChecks(healthCheckList(ports, lock.profile, { withNativePad }));
@@ -2524,7 +2595,7 @@ async function main() {
   // It also settles the CaptainPad serving mode, the `--with-native-pad` verdict
   // (docs/62 W-B1) and the Metro dependency-fingerprint guard (W-B2) — every one
   // of them must fail BEFORE the running stack can be force-claimed.
-  const { captainPadMode, nativePad, metroState, metroGuard } = validate(opts, profileDef);
+  const { captainPadMode, nativePad, devNoAuth, metroState, metroGuard } = validate(opts, profileDef);
 
   // docs/62 W-C2 — rebuild a missing/stale static export BEFORE any stack process
   // starts or ports are claimed. Uses the same `rebuildPad` implementation as the
@@ -2569,6 +2640,10 @@ async function main() {
   const activeCompanions = (profileDef.companions || []).map((name) => COMPANIONS[name]);
 
   log('launcher', `Profile '${opts.command}' — ${profileDef.description}`);
+  if (devNoAuth.enabled) {
+    logError('⚠️  DEVELOPMENT AUTH BYPASS (--dev-no-auth): CaptainPad privileged auth is DISABLED for this session.');
+    logError('    Unsafe outside local development. Never use on the show server or in production.');
+  }
   log('launcher', `Scene/model: ${opts.scene} · boot pattern: ${opts.pattern}`);
   log('launcher', `Sim lighting profile: ${simProfile} · sACN priority: ${sacnPriority} (E1.31 ${SACN_PRIORITY_MIN}-${SACN_PRIORITY_MAX})`);
   if (captainPadMode) {
@@ -2612,6 +2687,7 @@ async function main() {
     // docs/62 W-B1: `status` probes the extra native-pad row only when the run
     // that wrote this lock actually asked for that child.
     withNativePad: nativePad.enabled,
+    devNoAuth: devNoAuth.enabled,
     children: {},
     resolvedChildren: {},
   });
@@ -2661,10 +2737,10 @@ async function main() {
       {
         BM26_SUPERVISED: '1', BM26_SCENE_SWITCH_FILE: SCENE_SWITCH_FILE,
         BM26_ENGINE_PRIORITY: opts.enginePriority,
-        // The supervised show stack always requires the external CaptainPad
-        // credential source. Direct engine/test runs remain explicit
-        // auth-disabled environments unless their harness opts in.
-        BM26_CAPTAINPAD_AUTH_REQUIRED: '1',
+        // The launcher is the ONE authority on privileged auth for supervised
+        // runs: show profiles require credentials; --dev-no-auth sets 0 on
+        // development profiles only. Direct engine/test runs remain explicit.
+        BM26_CAPTAINPAD_AUTH_REQUIRED: devNoAuth.enabled ? '0' : '1',
       },
       handleEngineExit);
     await waitForHttp('engine api', `${engineUrl}/status`, 120000);
@@ -2833,7 +2909,9 @@ if (require.main === module) {
 module.exports = {
   bindProbe, checkPortFree, readPorts,
   healthCheckList, runHealthChecks, readFrameFlow,
-  validateCaptainPadSecrets,
+  validateCaptainPadSecrets, parseArgs,
+  resolveDevNoAuthRequest, resolveCaptainPadAuthPreflight, lockHasDevNoAuthBypass,
+  DEV_NO_AUTH_FLAG, DEVELOPMENT_PROFILES,
   PROFILES, COMPANIONS, SIM_QUERY_COMMON,
   SIM_LIGHTING_PROFILES, CAPTAINPAD_MODES,
   SACN_PRIORITY_MIN, SACN_PRIORITY_MAX,

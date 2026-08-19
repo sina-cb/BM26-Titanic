@@ -4,7 +4,7 @@
  * Replaces the old RigGlobals strip: the legacy effects (vintageWhite,
  * blastWhite, uvBlast, fogger) now live as engine-side slot effects
  * (see docs/28 §4.3) so the entire surface is a single grid of slot
- * buttons + one BLACKOUT e-stop.
+ * buttons plus an Edit-only BLACKOUT e-stop.
  *
  * Compactness contract (operator feedback "buttons are too large"):
  *   - 2 rows × N columns, flex distributes width to fill the deck
@@ -19,7 +19,7 @@
  *   - Long-press (≥500 ms) → open a sheet listing every preset from
  *     the registry, tap to PATCH the slot's effectId/presetId/label.
  *
- * E-stop contract (May 2026 operator request):
+ * Edit-surface e-stop contract (May 2026 operator request):
  *   - BLACKOUT is a single-tap toggle. Tapping when off engages
  *     immediately (the rig is the e-stop's source of truth — there's
  *     no "I might have meant to tap something else" cost to a
@@ -67,7 +67,11 @@ import {
   GlobalEffectSlotStatus,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
-import { usePerfLock, usePerformanceMode } from '@/hooks/usePerformanceMode';
+import {
+  usePerfLock,
+  usePerformanceMode,
+  usePerformanceModeReady,
+} from '@/hooks/usePerformanceMode';
 import {
   VISIBLE_SLOT_COUNT,
   EFFECTS_PAGE_COUNT,
@@ -86,6 +90,7 @@ import {
   ModeBadge as ModeBadgeInfo,
   chunkStripPages,
   effectSurfacePolicy,
+  resolveEffectsBarGeometry,
 } from './global_effect_macros_logic';
 import { useEffectBanks } from '@/hooks/useEffectBanks';
 import {
@@ -134,8 +139,8 @@ interface Props {
    * tall enough to fit slot labels in portrait, which was the
    * operator's reported pain point on the iPad Pro 11"). The mixer
    * tab passes 'mixer-strip' to render a single horizontal row of
-   * all slots + BLACKOUT, full-width, taller buttons — designed to
-   * be pinned to the bottom of the mixer surface.
+   * all slots plus Edit-only BLACKOUT, full-width, taller buttons —
+   * designed to be pinned to the bottom of the mixer surface.
    */
   variant?: 'deck' | 'mixer-strip';
 }
@@ -191,7 +196,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // affordances and drives the LOCKED mode badge. Read live so the badge clears
   // the moment performance mode is exited. This is SEPARATE from the profile.
   const performanceModeActive = usePerformanceMode().active;
-  const surfacePolicy = effectSurfacePolicy(performanceModeActive);
+  const performanceModeReady = usePerformanceModeReady();
+  const surfacePolicy = effectSurfacePolicy(performanceModeActive, performanceModeReady);
   // Named effect banks (ordered, >= 1). This drives ONLY the neutral BANK badge
   // (informational — names the active bank + its position) and the minimal
   // add/delete controls. It must NEVER touch chrome/sizing/affordances — the
@@ -659,68 +665,27 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     refresh();
   }, [refresh, ensureSlotOff]);
 
-  // Geometry per variant. Single source so the skeleton, real grid,
-  // and blackout button all stay in lockstep.
-  //
-  // mixer-strip is now intentionally LESS TALL than the deck grid
-  // (operator review May 2026: "make them less tall and shorter").
-  // The mixer surface is already vertically constrained by the
-  // channel strips; a 52 px row was eating fader real-estate.
-  const isStrip   = variant === 'mixer-strip';
-  // QA round1 #1: the deck grid was 3-up (row1) then 5-up (row2), so the
-  // bottom row's chips (Ghost Trails / UV Blast / Iceberg Flash / INVERT /
-  // BLACKOUT) were squeezed below their legible width and truncated to
-  // unreadable stubs ("Gh o…", "BLA…") in portrait — a clipped destructive
-  // BLACKOUT is a live-show safety problem. The deck grid is now a UNIFORM
-  // N-column wrap: every row has the same column count, so every chip is the
-  // same width and labels wrap to 2 lines (SlotButton numberOfLines={2}) with
-  // NO mid-word truncation. 48px tall so a 2-line label fits.
-  // QA round3: `adjustsFontSizeToFit` is a NO-OP on react-native-web, so a font
-  // that doesn't fit just truncates with an ellipsis. We no longer rely on it —
-  // every label below picks a REAL fontSize that fits at the column width, and
-  // wraps cleanly to 2 lines (no ellipsis) when a two-word name needs it.
-  //
-  // Portrait panes (deck left-pane, mixer bottom strip) are much narrower than
-  // landscape, so we use fewer columns AND a smaller font there. The taller
-  // chip (52px in portrait) guarantees a 2-line wrapped label
-  // ("5 Hz\nPunch", "Vintage\nWhite") fits without clipping.
-  // Strip (mixer + deck bottom bar): ONE flat row of controls in both
-  // orientations (operator request 2026-06-22) — 8 in landscape, 4-at-a-time
-  // behind a pager in portrait. Portrait used to be 60px tall purely to give a
-  // WRAPPED 2-line label room; strip labels are single-line since 2026-07-27
-  // (operator: "the effects bar must be a stable single line"), so portrait
-  // drops to the same 48px as landscape and the bottom bar gets 12px back.
-  // Strip landscape grew 44→48 (2026-07 visual polish): the value/mode badge
-  // gained 2px of height for legibility, and the chip needs the extra room so
-  // a centred label clears it (see SlotButton's conditional paddingTop).
-  // The chip height is the tuned base height (presentation.cellHeightScale is a
-  // constant 1 now — the profile never grows the cells; the scale hook is kept
-  // only so the geometry has a single documented multiplier point).
-  const baseBtnHeight = isStrip
-    ? 48
-    : (isPortrait ? 52 : 48);
-  const btnHeight = Math.round(baseBtnHeight * presentation.cellHeightScale);
-  // Deck portrait left-pane is the tightest 3-up width, so it drops to 9px to
-  // guarantee a 7-char word ("Vintage", "Iceberg") fits a wrapped line clear of
-  // the ⋯ gutter. The mixer strip (now 4-up wrapped) keeps 10px.
-  // Landscape strip chips are ~150 px wide — plenty of room for a 12 px
-  // label, and the extra point matters for arm's-length legibility at the
-  // podium. The tight portrait sizes are unchanged (they were fitted to the
-  // narrowest pane in QA round3/7).
-  const btnFont   = isStrip
-    ? (isPortrait ? 10 : 12)
-    : (isPortrait ? 9 : 11);
-  const gap       = 6;
-  // Label lines. The DECK GRID keeps 2-line wrapping (its chips are tall and
-  // its 3/4-up columns are narrow). The STRIP is single-line: a 2-line band is
-  // what made the bottom bar read as "a weird 2-line layout", and with 4 wide
-  // chips per portrait page / 8 flex chips in landscape the names fit on one
-  // line (anything genuinely too long tail-ellipsizes — see SlotButton).
-  const labelLines = isStrip ? 1 : 2;
-  // Uniform deck grid columns. Landscape fits 4-up comfortably; the narrow
-  // portrait left-pane needs 3-up so each chip is wide enough for its full
-  // wrapped label (QA round3: 4-up portrait chips were ~90px and truncated).
-  const deckCols  = isPortrait ? 3 : 4;
+  // Geometry per variant — single tested authority (global_effect_macros_logic).
+  const isStrip = variant === 'mixer-strip';
+  const {
+    btnHeight,
+    btnFont,
+    gap,
+    labelLines,
+    deckCols,
+    containerPaddingTop,
+    skeletonPaddingTop,
+    rowMarginBottom,
+    dividerMarginHorizontal,
+    stripLabelMarginRight,
+    chipMetaPaddingTop,
+    metaBadgeHeight,
+    metaInsetTop,
+  } = resolveEffectsBarGeometry({
+    variant: isStrip ? 'mixer-strip' : 'deck',
+    isPortrait,
+    cellHeightScale: presentation.cellHeightScale,
+  });
 
   // MODE BADGE — the passive LOCKED pill shown while performance mode is active
   // (it explains why the ⋯ swap / ＋ bind affordances are inert during a show).
@@ -765,7 +730,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // visually jump). If both fetches fail, surface the error.
   if (visibleSlots === null) {
     return (
-      <View style={{ paddingTop: 8 }}>
+      <View style={{ paddingTop: skeletonPaddingTop }}>
         {/* Strip: header line removed (label rides in-row once loaded). */}
         {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} configurationVisible={surfacePolicy.configurationVisible} />}
         {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
@@ -788,7 +753,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     // In the strip variant the host bottom bar already draws the top rule —
     // GEM adding its own produced a doubled hairline mid-bar, so the inner
     // border only ships with the standalone deck grid.
-    <View style={{ paddingTop: 6, borderTopWidth: isStrip ? 0 : 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined, position: 'relative' }}>
+    <View style={{ paddingTop: containerPaddingTop, borderTopWidth: isStrip ? 0 : 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined, position: 'relative' }}>
       {/* Transient locked-tap toast. `position:absolute` + pointerEvents none =
           ZERO layout cost and zero interference with the chips underneath: the
           FX bar keeps every pixel of its width for effects, and the e-stop is
@@ -880,6 +845,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               fontSize={btnFont}
               minWidth={minWidth}
               labelLines={labelLines}
+              chipMetaPaddingTop={chipMetaPaddingTop}
+              metaInsetTop={metaInsetTop}
+              metaBadgeHeight={metaBadgeHeight}
               configurationVisible={surfacePolicy.configurationVisible}
               onPress={() => onPressSlot(slot)}
               onEdit={() => onPressEdit(slotId)}
@@ -903,10 +871,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // scrolling, and no weird 2-line chips"). New shape: portrait shows
           // FOUR flex:1 chips at a time — wide enough for a single-line label
           // with no scroll — and ‹ › arrows page between the two halves.
-          // BLACKOUT stays pinned OUTSIDE the pager (QA round10 BLOCKER: the
-          // e-stop must never leave the screen) — now trivially true, since
-          // nothing scrolls at all. Invert is NOT a dedicated button — it is an
-          // assignable slot, so it pages with the other chips.
+          // In Edit, BLACKOUT stays pinned outside the pager. Performance hides
+          // it entirely. Invert is not a dedicated button: it is an assignable
+          // slot, so it pages with the other chips.
           const slotChips = visibleSlots.map((slot) => renderCell(slot));
           // party 2026-07-11 — the "Global Effects" label moved INTO the chip
           // row so the strip drops its whole header line. 2026-07-27: it was
@@ -918,25 +885,25 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               style={{
                 fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
                 color: C.secondary, letterSpacing: 1.1,
-                textTransform: 'uppercase', lineHeight: 12,
-                marginRight: 8, alignSelf: 'center',
+                textTransform: 'uppercase', lineHeight: 11,
+                marginRight: stripLabelMarginRight, alignSelf: 'center',
               }}
             >
               {'FX'}
             </Text>
           );
-          // Blackout gets a FIXED width so it never shrinks — the e-stop
-          // must keep a stable, recognisable footprint regardless of
-          // orientation or how many slots are bound.
-          const blackoutCell = (
+          // BLACKOUT is an Edit-only authoring/safety affordance on the touch
+          // surface. Performance removes it from layout; engine and hardware
+          // emergency routes remain untouched.
+          const blackoutCell = surfacePolicy.showBlackout ? (
             <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} fixedWidth={isPortrait ? 96 : 112} />
-          );
+          ) : null;
           // A small divider/gap separates the destructive BLACKOUT e-stop
           // from the slot chips so it never reads as "just another slot"
           // (QA round7 MAJOR).
-          const Divider = (
-            <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: 6, backgroundColor: C.ghostBorder }} />
-          );
+          const Divider = surfacePolicy.showBlackout ? (
+            <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: dividerMarginHorizontal, backgroundColor: C.ghostBorder }} />
+          ) : null;
 
           if (isPortrait) {
             // PORTRAIT PAGER (operator request 2026-07-27). Previously the slot
@@ -952,8 +919,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             // intensity / mode are runtime routes the engine allows, and the
             // ⋯ swap affordance keeps its own perf gate inside SlotButton.
             //
-            // Divider + BLACKOUT remain a FIXED trailing group outside the
-            // pager (QA round10 BLOCKER: the e-stop is always on screen).
+            // In Edit, Divider + BLACKOUT remain a fixed trailing group outside
+            // the pager. Performance omits that group.
             const stripPages = chunkStripPages(slotChips, PORTRAIT_STRIP_PER_PAGE);
             const lastHalf = Math.max(0, stripPages.length - 1);
             // Clamp rather than trust state: the slot count is engine-driven,
@@ -1011,11 +978,12 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                   {pageChips}
                 </View>
                 {pagerArrow(1)}
-                {/* Fixed trailing group — never pages, never scrolls. */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: gap }}>
-                  {Divider}
-                  {blackoutCell}
-                </View>
+                {surfacePolicy.showBlackout ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: gap }}>
+                    {Divider}
+                    {blackoutCell}
+                  </View>
+                ) : null}
               </View>
             );
           }
@@ -1036,12 +1004,13 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             </View>
           );
         }
-        // Deck: one UNIFORM grid of every control (slots + BLACKOUT) chunked
+        // Deck: one uniform grid of visible controls, including BLACKOUT only
+        // in Edit, chunked
         // into rows of `deckCols`. Every row carries exactly deckCols cells
         // (the last row is padded with invisible spacers) so chip widths are
         // identical across rows — fixing the old 3-up/5-up squeeze that
-        // truncated the bottom-row labels (QA round1 #1). BLACKOUT is the
-        // last cell so the destructive e-stop stays bottom-right. Invert is
+        // truncated the bottom-row labels (QA round1 #1). When present,
+        // BLACKOUT is the last cell and stays bottom-right. Invert is
         // no longer a dedicated cell — it is an assignable slot effect and
         // renders as one of the 8 slot chips above whenever the operator
         // swaps it in.
@@ -1049,14 +1018,16 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // NB: wrap in an arrow so Array.map's index arg is never passed as
           // `minWidth` — the deck grid wants flex:1 cells (minWidth undefined).
           ...visibleSlots.map((slot) => renderCell(slot)),
-          <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
+          ...(surfacePolicy.showBlackout
+            ? [<BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />]
+            : []),
         ];
         const rows: React.ReactNode[][] = [];
         for (let i = 0; i < cells.length; i += deckCols) {
           rows.push(cells.slice(i, i + deckCols));
         }
         return rows.map((row, ri) => (
-          <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: 6 }}>
+          <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: rowMarginBottom }}>
             {row}
             {row.length < deckCols
               ? Array.from({ length: deckCols - row.length }).map((_, i) => (
@@ -1426,6 +1397,10 @@ const SlotButton: React.FC<{
   // How many lines the label may occupy. 2 in the deck grid (narrow columns,
   // tall chips); 1 in the strip — a stable single-line bar (2026-07-27).
   labelLines?: number;
+  /** Top inset reserved for value/mode + ⋯ meta row (from resolveEffectsBarGeometry). */
+  chipMetaPaddingTop?: number;
+  metaInsetTop?: number;
+  metaBadgeHeight?: number;
   /** False in raw Performance mode: the chip is trigger-only. */
   configurationVisible: boolean;
   onPress: () => void;
@@ -1438,7 +1413,7 @@ const SlotButton: React.FC<{
   onResetIntensity: () => void;
   onCycleMode: () => void;
   onSetMode: (value: string | number | boolean) => void;
-}> = ({ slot, isOn, height, fontSize, minWidth, labelLines = 2, configurationVisible, onPress, onEdit, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
+}> = ({ slot, isOn, height, fontSize, minWidth, labelLines = 2, chipMetaPaddingTop = 14, metaInsetTop = 2, metaBadgeHeight = 12, configurationVisible, onPress, onEdit, onLockedTap, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
   const C = usePalette();
   // PERFORMANCE MODE: rebinding/clearing a slot (the ⋯ swap sheet →
   // PATCH /global-effect-slots/:id) is a LAYOUT edit, 409-gated while a show
@@ -1500,13 +1475,9 @@ const SlotButton: React.FC<{
           borderWidth: 1,
           borderColor: showOn ? 'transparent' : C.ghostBorder,
           justifyContent: 'center', alignItems: 'center',
-          // Two-band chip layout (2026-07 visual polish): the TOP band is
-          // reserved for meta — value/mode badge (left) and the ⋯ edit
-          // affordance (right) — and the label owns the band below it.
-          // Uniform on every chip so labels sit on one shared baseline
-          // across the strip instead of jumping per-chip with badge
-          // presence.
-          paddingTop: configurationVisible ? 14 : 0,
+          // Two-band chip layout: the TOP band is reserved for meta — value/mode
+          // badge (left) and the ⋯ edit affordance (right).
+          paddingTop: configurationVisible ? chipMetaPaddingTop : 0,
           // RN-Web only: kills the auto bg-color transition. Ignored
           // by native React Native (no-op there).
           ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
@@ -1543,15 +1514,8 @@ const SlotButton: React.FC<{
         accessibilityLabel={`Edit slot ${slot.slotId}`}
         style={{
           display: configurationVisible ? 'flex' : 'none',
-          // 2026-07 visual polish: back to the TOP-right corner — the chip
-          // now reserves its whole top band for meta (paddingTop on the
-          // body pushes the label below), so the corner is guaranteed clear
-          // of the text. Pairs with the value/mode badge in the top-LEFT for
-          // a symmetric meta row. (QA round7 had moved it to the bottom
-          // corner because the label was vertically centred back then and
-          // collided — that constraint no longer exists.)
-          position: 'absolute', top: 4, right: 4,
-          width: 18, height: 18, borderRadius: 9,
+          position: 'absolute', top: metaInsetTop, right: metaInsetTop,
+          width: metaBadgeHeight + 4, height: metaBadgeHeight + 4, borderRadius: (metaBadgeHeight + 4) / 2,
           backgroundColor: showOn ? 'rgba(255,255,255,0.28)' : C.surfaceContainerLowest,
           borderWidth: 1,
           borderColor: showOn ? 'transparent' : C.ghostBorder,
@@ -1592,9 +1556,9 @@ const SlotButton: React.FC<{
           hitSlop={{ top: 6, right: 6, bottom: 6, left: 6 }}
           accessibilityLabel={`Edit slot ${slot.slotId} value and mode`}
           style={{
-            position: 'absolute', top: 4, left: 4,
-            flexDirection: 'row', alignItems: 'center', gap: 4,
-            paddingHorizontal: 5, height: 16, borderRadius: 8,
+            position: 'absolute', top: metaInsetTop, left: metaInsetTop,
+            flexDirection: 'row', alignItems: 'center', gap: 3,
+            paddingHorizontal: 4, height: metaBadgeHeight, borderRadius: metaBadgeHeight / 2,
             backgroundColor: showOn ? 'rgba(255,255,255,0.22)' : C.surfaceContainerLowest,
             borderWidth: 1, borderColor: showOn ? 'transparent' : C.ghostBorder,
           }}

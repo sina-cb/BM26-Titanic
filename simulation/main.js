@@ -22,6 +22,7 @@ import {
 import { pushUndo } from "./src/core/undo.js";
 import { extractParams } from "./src/core/config.js";
 import { applyBootUrlOverrides } from "./src/core/url_overrides.js";
+import { canonicalizeBrowserLocation } from "./src/core/url_canonicalization.js";
 import { createGround, createStarField, loadModel, onModelLoaded } from "./src/core/environment.js";
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange, computeRigidMoveIndices } from "./src/core/interaction.js";
@@ -41,6 +42,7 @@ import { prunePatchTreeEntries } from "./src/dmx/rename_invalidation.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 import { engineHttpUrl } from "./src/core/engine_endpoint.js";
 import { detectGpuAdapter } from "./src/core/gpu_adapter.js";
+import { MODULE_CACHE_EPOCH } from "./src/core/build_stamp.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -314,11 +316,21 @@ async function init() {
 }
 
 // ─── Scene Selection ────────────────────────────────────────────────────
-// URL param ?scene=<name> loads from scenes/<name>/scene_config.yaml
-// Default (no param) loads titanic scene
-const _urlParams = new URLSearchParams(window.location.search);
+// Bare `/simulation/` must visibly become the canonical show-default URL
+// (Titanic · 2D pixels · sACN IN · spotlights 0) before any boot consumer
+// reads `window.location.search`. See src/core/url_canonicalization.js.
+const _canonicalBoot = canonicalizeBrowserLocation(window.location, window.history);
+const _urlParams = _canonicalBoot.params;
+if (_canonicalBoot.changed) {
+  console.log(`[url_canonicalization] address bar → ${_canonicalBoot.href}`);
+}
+window.__simUrlCanonicalBoot = _canonicalBoot;
+
+// URL param ?scene=<name> loads from scenes/<name>/scene_config.yaml.
+// Missing `scene` was filled above; this line is the final authority.
 const _activeScene = _urlParams.get('scene') || 'titanic';
 window.__activeScene = _activeScene; // Expose for save/bridge operations
+window.__BM26_MODULE_CACHE_EPOCH = MODULE_CACHE_EPOCH;
 window.__readonlyMode = _urlParams.get('readonly') === '1'; // iPad observer mode
 if (window.__readonlyMode) {
   const style = document.createElement('style');

@@ -194,13 +194,12 @@ simulation/scenes/test_bench/playlists/…      ← must be BYTE-IDENTICAL
 Every family member must appear in its playlist. The order is a curated show
 arc rather than a filename sort — and for `baby_reveal` the order is now the
 file numbering too (step 1). Each entry's `defaults` must name **exactly**
-the sliders the pattern actually exports; `sliderLocalSpeed: 0.30` is the
-operator's tuned reference operating point (global SPEED 25, local 0.30) and
-new entries should match it so the playlist loads at the tuned look rather
-than needing a hand correction (report `_305` §5 flagged the tease playlist
-for shipping a mismatched default; `baby_reveal` does not repeat that). A
-default naming a slider that does not exist lands on nothing and looks like a
-retune. These facts are asserted per entry.
+the sliders the pattern actually exports. Pattern sources retain
+`localSpeed: 0.30` as the authoring reference, while the Reveal playlist loads
+every entry at the deliberate show-speed value `sliderLocalSpeed: 0.468`.
+New Reveal entries must use that same playlist value unless the whole family is
+retuned together. A default naming a slider that does not exist lands on
+nothing and looks like a retune. These facts are asserted per entry.
 
 The playlist is also what the SPECIAL EVENT arms, and the runner refuses to ARM
 if a playlist is missing or has no loadable entry — so an unregistered pattern

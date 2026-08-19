@@ -15,7 +15,7 @@
  * `simulation/scenes/titanic/pixel_map_views.yaml` by
  * `simulation/tools/export_touch_control_pixel_views.mjs`, and the RESOLVED
  * result — every pixel's design-space x/y, its size, its shape — is serialized
- * to `docs/ui/touch_control_pixel_views.json`. The simulation's own HTTP
+ * to `CaptainPad/live_touch/touch_control_pixel_views.json`. The simulation's own HTTP
  * server (:6969) serves the repo root, so that artifact is a plain read-only
  * GET away (see `utils/simulation_url.ts`).
  *
@@ -98,7 +98,7 @@ import {
 export const PIXEL_VIEW_SCHEMA_VERSION = 4;
 
 /** Path of the sim-resolved artifact ON THE SIMULATION's HTTP server. */
-export const PIXEL_VIEW_ARTIFACT_PATH = '/docs/ui/touch_control_pixel_views.json';
+export const PIXEL_VIEW_ARTIFACT_PATH = '/CaptainPad/live_touch/touch_control_pixel_views.json';
 
 /** One pixel, exactly as the sim's resolver placed it (design-space units). */
 export interface PixelGlyph {
@@ -396,7 +396,7 @@ export function flattenView(view: PixelViewDef): FlatPixelView {
 /**
  * Fraction of the viewport the fitted picture fills, leaving a margin so the
  * outermost glyph's halo is not clipped by the canvas edge. The SIM's own
- * value (`docs/ui/touch_control_pixel_views.js` → `FIT_FILL`), so the deck
+ * value (`CaptainPad/live_touch/touch_control_pixel_views.js` → `FIT_FILL`), so the deck
  * window and the Live Touch pad leave the same breathing room.
  */
 export const FIT_FILL = SHARED_FIT_FILL;

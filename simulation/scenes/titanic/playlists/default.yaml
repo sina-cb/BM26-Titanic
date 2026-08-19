@@ -90,12 +90,12 @@ entries:
     pattern: 06_neon_elevator
     label: null
     defaults:
-      sliderLocalSpeed: 0.72
-      sliderDirection: 0.71
+      sliderLocalSpeed: 0.83
+      sliderDirection: 0.25
       sliderLevel: 0.5
       sliderKick: 0.5
       sliderRadius: 0.5
-      sliderSteps: 0.5
+      sliderSteps: 0.22
       sliderWhiteLevel: 0.5
       sliderWhiteKick: 0.5
       sliderBlinderBite: 0.5

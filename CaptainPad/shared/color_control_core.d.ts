@@ -9,6 +9,7 @@ export type ColorAutopilotState = {
   active: boolean;
   mode?: ColorAutopilotMode;
   palettes: unknown[];
+  livePalettes?: Hsv[][];
   delay_s?: number;
   transitionMs?: number;
   shuffle?: boolean;

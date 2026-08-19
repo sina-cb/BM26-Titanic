@@ -324,6 +324,11 @@ export function reduceColorControlState(previous, payload) {
       ))
       : (mode === 'followNote' ? [] : previous.palettes),
   };
+  if (Array.isArray(payload.livePalettes)) {
+    next.livePalettes = cloneColorValue(payload.livePalettes);
+  } else if (mode === 'followNote') {
+    delete next.livePalettes;
+  }
   for (const key of ['delay_s', 'transitionMs', 'nextSwapAtMs']) {
     if (typeof payload[key] === 'number' || payload[key] === null) next[key] = payload[key];
   }

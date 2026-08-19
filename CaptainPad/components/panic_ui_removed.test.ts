@@ -19,7 +19,7 @@ describe('Deck and Mixer operator safety surface', () => {
     expect(source).not.toContain('title="Panic to safe state?"');
   });
 
-  it('retains the global effects strip, whose BLACKOUT remains the emergency control', () => {
+  it('retains the shared global effects strip on both operator tabs', () => {
     expect(deck).toContain('<RigGlobals variant="mixer" />');
     expect(mixer).toContain('<RigGlobals variant="mixer" />');
   });

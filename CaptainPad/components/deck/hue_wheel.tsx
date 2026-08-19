@@ -75,7 +75,7 @@
  * no per-child coordinate surprises.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, PanResponder, Platform } from 'react-native';
+import { View, Text, PanResponder, Platform } from 'react-native';
 import Svg, { Path, Circle, Line, Text as SvgText, G } from 'react-native-svg';
 
 import {
@@ -109,6 +109,7 @@ const TICK_MAJOR_INNER = 0.50;
 // -control vocabulary. Purely decorative; they carry no value.
 const KNURLS = 24;
 const KNURL_INNER = 0.38;
+const NATIVE_RING_SEGMENTS = 48;
 
 export interface HueWheelProps {
   /** One hue (0..1) per slot. 2 in TWO COLOUR mode, 5 in PALETTE TURNS. */
@@ -151,6 +152,176 @@ export interface HueWheelProps {
   centerFill: string;
   mutedText: string;
 }
+
+type NativeHueWheelArtProps = {
+  size: number;
+  cx: number;
+  cy: number;
+  rw: number;
+  rMid: number;
+  rInner: number;
+  markers: WheelMarker[];
+  labels: string[];
+  armed: number;
+  pointerHue: number;
+  gripped: boolean;
+  handleStroke: string;
+  armedStroke: string;
+  centerFill: string;
+  mutedText: string;
+};
+
+function lineBetween(
+  x1: number, y1: number, x2: number, y2: number,
+  color: string, thickness: number,
+) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const length = Math.hypot(dx, dy);
+  return {
+    position: 'absolute' as const,
+    left: (x1 + x2 - length) / 2,
+    top: (y1 + y2 - thickness) / 2,
+    width: length,
+    height: thickness,
+    borderRadius: thickness / 2,
+    backgroundColor: color,
+    transform: [{ rotateZ: `${Math.atan2(dy, dx)}rad` }],
+  };
+}
+
+/**
+ * Native-safe dial art.
+ *
+ * Physical crash reports showed Fabric aborting inside
+ * `RNSVGNode insertReactSubview` while this rapidly-updating wheel mounted.
+ * Native therefore uses ordinary Views with a stable child topology. Web keeps
+ * the SVG version below, where that legacy-view interop path does not exist.
+ */
+const NativeHueWheelArt = React.memo(function NativeHueWheelArt({
+  size, cx, cy, rw, rMid, rInner, markers, labels, armed, pointerHue, gripped,
+  handleStroke, armedStroke, centerFill, mutedText,
+}: NativeHueWheelArtProps) {
+  const pointer = unitPointForHue(pointerHue);
+  return (
+    <View pointerEvents="none" style={{ width: size, height: size }}>
+      {Array.from({ length: NATIVE_RING_SEGMENTS }, (_, index) => (
+        <View
+          key={`ring-${index}`}
+          style={{
+            position: 'absolute', left: 0, top: 0, width: size, height: size,
+            transform: [{ rotateZ: `${index * 360 / NATIVE_RING_SEGMENTS}deg` }],
+          }}
+        >
+          <View style={{
+            position: 'absolute',
+            left: cx - 2,
+            top: cy - rMid - rw / 2,
+            width: 4,
+            height: rw + 2,
+            borderRadius: 2,
+            backgroundColor: hueCss((index + 0.5) / NATIVE_RING_SEGMENTS),
+          }} />
+        </View>
+      ))}
+
+      {Array.from({ length: KNURLS }, (_, index) => (
+        <View
+          key={`knurl-${index}`}
+          style={{
+            position: 'absolute', left: 0, top: 0, width: size, height: size,
+            transform: [{ rotateZ: `${index * 360 / KNURLS}deg` }],
+          }}
+        >
+          <View style={{
+            position: 'absolute',
+            left: cx - 0.5,
+            top: cy - rInner * HUB_R,
+            width: 1,
+            height: rInner * (HUB_R - KNURL_INNER),
+            backgroundColor: handleStroke,
+            opacity: 0.5,
+          }} />
+        </View>
+      ))}
+
+      <View style={lineBetween(
+        cx + pointer.x * rInner * HUB_R,
+        cy + pointer.y * rInner * HUB_R,
+        cx + pointer.x * rInner,
+        cy + pointer.y * rInner,
+        gripped ? armedStroke : mutedText,
+        gripped ? 4 : 3,
+      )} />
+
+      <View style={{
+        position: 'absolute',
+        left: cx - rInner * HUB_R,
+        top: cy - rInner * HUB_R,
+        width: rInner * HUB_R * 2,
+        height: rInner * HUB_R * 2,
+        borderRadius: rInner * HUB_R,
+        backgroundColor: centerFill,
+        borderColor: gripped ? armedStroke : handleStroke,
+        borderWidth: gripped ? 3 : 1.5,
+      }} />
+
+      {markers.map((marker) => {
+        const hx = cx + marker.position.x;
+        const hy = cy + marker.position.y;
+        const anchorX = cx + marker.anchor.x;
+        const anchorY = cy + marker.anchor.y;
+        const isArmed = marker.index === armed;
+        const markerRadius = isArmed ? 15 : 12;
+        return (
+          <React.Fragment key={marker.key}>
+            {marker.displayHue !== marker.hue ? (
+              <View style={lineBetween(anchorX, anchorY, hx, hy, handleStroke, 1.5)} />
+            ) : null}
+            <View style={{
+              position: 'absolute',
+              left: hx - markerRadius,
+              top: hy - markerRadius,
+              width: markerRadius * 2,
+              height: markerRadius * 2,
+              borderRadius: markerRadius,
+              backgroundColor: hueCss(marker.hue),
+              borderColor: isArmed ? armedStroke : handleStroke,
+              borderWidth: isArmed ? 4 : 2,
+            }} />
+            <Text style={{
+              position: 'absolute',
+              left: hx - markerRadius,
+              top: hy - 7,
+              width: markerRadius * 2,
+              textAlign: 'center',
+              fontSize: 11,
+              lineHeight: 14,
+              fontWeight: '700',
+              color: centerFill,
+            }}>
+              {labels[marker.index] ?? String(marker.index + 1)}
+            </Text>
+          </React.Fragment>
+        );
+      })}
+
+      <Text style={{
+        position: 'absolute',
+        left: cx - rInner * HUB_R,
+        top: cy - 10,
+        width: rInner * HUB_R * 2,
+        textAlign: 'center',
+        fontSize: Math.round(size * 0.13),
+        lineHeight: Math.round(size * 0.13) + 2,
+        fontWeight: '700',
+        color: mutedText,
+      }}>
+        {`${degrees(pointerHue)}°`}
+      </Text>
+    </View>
+  );
+});
 
 function arcPath(cx: number, cy: number, r: number, a0: number, a1: number): string {
   const x0 = cx + Math.sin(a0) * r;
@@ -416,9 +587,10 @@ export const HueWheel = React.memo(function HueWheel({
       accessibilityState={{ disabled: readOnly }}
       {...panResponder.panHandlers}
     >
-      <Svg width={size} height={size} pointerEvents="none">
-        {ring}
-        {ticks}
+      {Platform.OS === 'web' ? (
+        <Svg width={size} height={size} pointerEvents="none">
+          {ring}
+          {ticks}
 
         {/* THE POINTER — the dial's current-value indicator, from the hub's
             edge out to the ring. Drawn UNDER the handles so a handle sitting on
@@ -490,17 +662,36 @@ export const HueWheel = React.memo(function HueWheel({
 
         {/* Centre readout — the value the dial is steering, so the number the
             operator is turning sits inside the thing they are turning. */}
-        <SvgText
-          x={cx}
-          y={cy + 5}
-          fontSize={Math.round(size * 0.13)}
-          fontWeight="bold"
-          fill={mutedText}
-          textAnchor="middle"
-        >
-          {`${degrees(pointerHue)}°`}
-        </SvgText>
-      </Svg>
+          <SvgText
+            x={cx}
+            y={cy + 5}
+            fontSize={Math.round(size * 0.13)}
+            fontWeight="bold"
+            fill={mutedText}
+            textAnchor="middle"
+          >
+            {`${degrees(pointerHue)}°`}
+          </SvgText>
+        </Svg>
+      ) : (
+        <NativeHueWheelArt
+          size={size}
+          cx={cx}
+          cy={cy}
+          rw={rw}
+          rMid={rMid}
+          rInner={rInner}
+          markers={markers}
+          labels={labels}
+          armed={armed}
+          pointerHue={pointerHue}
+          gripped={gripped}
+          handleStroke={handleStroke}
+          armedStroke={armedStroke}
+          centerFill={centerFill}
+          mutedText={mutedText}
+        />
+      )}
     </View>
   );
 });

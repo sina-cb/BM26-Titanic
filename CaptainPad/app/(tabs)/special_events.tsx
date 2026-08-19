@@ -43,7 +43,9 @@ import {
 } from '@/components/special_events/special_events_view';
 import { ShowAutopilotCard } from '@/components/special_events/show_autopilot_card';
 import { usePalette } from '@/hooks/use-theme';
+import { useSharedParamValues } from '@/hooks/useEngineState';
 import { useSpecialEvents } from '@/hooks/useSpecialEvents';
+import { updateParamCenter } from '@/utils/api';
 import type {
   EventAutopilotPatch,
   EventAutopilotState,
@@ -439,8 +441,8 @@ function ShowColumn({
  * *"show the current pattern name on the auto pilot, and simplify the auto
  * pilot, play, and time, 1, 5, 10, 15 that's it."*
  *
- * NOW PLAYING + PLAY/PAUSE + 1/5/10/15 MINUTE pills + SINGLE/SHUFFLE ALL
- * transition style — see `show_autopilot_card.tsx`. Pattern-order shuffle,
+ * NOW PLAYING + GLOBAL SPEED + PLAY/PAUSE + cadence pills + SINGLE/SHUFFLE
+ * ALL transition style — see `show_autopilot_card.tsx`. Pattern-order shuffle,
  * group mode/size/dwell, and the selected single transition stay authored in
  * show YAML. Nothing engine-side narrowed; the DECK tab remains full-featured.
  *
@@ -459,6 +461,10 @@ function StageAutopilotCard({ autopilot, dimmed, onChange, onReset }: {
   onReset: () => void;
 }) {
   const C = usePalette();
+  const globalParams = useSharedParamValues({ speed: 0.5 }) as { speed: number };
+  const setGlobalSpeed = useCallback((speed: number) => {
+    void updateParamCenter({ speed });
+  }, []);
   if (autopilot.transition === null) {
     throw new Error('supported show autopilot is missing its transition contract');
   }
@@ -471,8 +477,10 @@ function StageAutopilotCard({ autopilot, dimmed, onChange, onReset }: {
         nowPlaying={autopilot.nowPlaying}
         transitionShuffle={autopilot.transition.shuffle}
         transitionDurationMs={autopilot.transition.durationMs}
+        globalSpeed={globalParams.speed}
         dimmed={dimmed}
         onChange={(patch) => onChange(patch)}
+        onGlobalSpeedChange={setGlobalSpeed}
       />
       {/* The show file is the author's intent; a live tweak is the operator's.
           Say which one is on the rig, and always offer the way back — otherwise

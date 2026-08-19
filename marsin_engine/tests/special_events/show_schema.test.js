@@ -586,6 +586,12 @@ test('the shipped titanic Baby Reveal show validates and has the operator flow',
     const playlist = choice.actions.find(a => a.type === 'playlist');
     assert.ok(flash, `${choice.id} has no white flash`);
     assert.ok(playlist, `${choice.id} activates no playlist`);
+    assert.equal(flash.delayMs + flash.holdMs, 3000,
+      `${choice.id}: the white ceremony must run for 3 seconds before the color bloom`);
+    assert.equal(playlist.delayMs, flash.delayMs + flash.holdMs,
+      `${choice.id}: the hero must land exactly when the white hold ends`);
+    assert.equal(flash.delayMs + flash.holdMs + flash.releaseMs, 4000,
+      `${choice.id}: the one-second color bloom must finish 4 seconds after the reveal tap`);
     assert.ok(flash.delayMs < playlist.delayMs,
       `${choice.id}: the flash must start BEFORE the playlist swap`);
     assert.ok(flash.delayMs + flash.holdMs >= playlist.delayMs,

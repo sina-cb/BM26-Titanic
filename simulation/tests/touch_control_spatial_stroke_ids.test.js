@@ -1,6 +1,6 @@
 /* Live Touch Spatial — wire stroke ids (BM26 fix wave W2).
  *
- * Root cause (already diagnosed, not re-derived here): docs/ui/touch_control_wire.js
+ * Root cause (already diagnosed, not re-derived here): CaptainPad/live_touch/touch_control_wire.js
  * used to put the RAW DOM pointerId straight on the wire as strokes[].id. In
  * iPad WKWebView, pointer ids derive from iOS touch identifiers and can be
  * huge integers (e.g. 0x80000001) or large non-integer doubles — both violate
@@ -62,12 +62,12 @@ import { loadModelForGauge } from '../../marsin_engine/lib/model_loader.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const PANEL_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control.html');
+const PANEL_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control.html');
 const PANEL_URL = `${pathToFileURL(PANEL_PATH).href}`
   + '?captainpad_engine_origin=http%3A%2F%2F127.0.0.1%3A6968'
   + '&captainpad_live_touch_protocol=2';
 const ARTIFACT = JSON.parse(fs.readFileSync(
-  path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.json'),
+  path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.json'),
   'utf8',
 ));
 const PIXEL_VIEW_SOURCES = {
@@ -339,6 +339,8 @@ async function dispatchSpatialPlay(page, u, v, down) {
     document.dispatchEvent(new CustomEvent('spatialplay', {
       detail: {
         requestId,
+        contactKey: 'take-playback-0',
+        kind: 'playback',
         u, v, down, end: false,
       },
     }));
@@ -352,7 +354,7 @@ function strokeById(payload, id) {
 
 /** The playback contact's spatialPointers key. Deliberately a STRING: a DOM
  *  pointerId is always a number, so no real finger can ever collide with it. */
-const TAKE_CONTACT_KEY = 'take-playback';
+const TAKE_CONTACT_KEY = 'take-playback-0';
 
 const VIEWPORT = { width: 1024, height: 682, deviceScaleFactor: 1 };
 

@@ -22,15 +22,15 @@ import vm from 'node:vm';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const THEME_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_theme.js');
-const WIRE_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_wire.js');
-const PANEL_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control.html');
+const THEME_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_theme.js');
+const WIRE_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_wire.js');
+const PANEL_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control.html');
 
 const themeSource = fs.readFileSync(THEME_PATH, 'utf8');
 const wireSource = fs.readFileSync(WIRE_PATH, 'utf8');
 const panelSource = fs.readFileSync(PANEL_PATH, 'utf8');
 
-const PANEL_URL = 'http://192.168.1.20:6969/docs/ui/touch_control.html';
+const PANEL_URL = 'http://192.168.1.20:6969/CaptainPad/live_touch/touch_control.html';
 const PARENT_ORIGIN = 'http://192.168.1.20:6967';
 
 const THEME_KEYS = [

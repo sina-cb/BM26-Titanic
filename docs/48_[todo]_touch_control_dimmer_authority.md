@@ -179,7 +179,7 @@ by every Live lifecycle path.
 - `marsin_engine/lib/api_server.js`
 - `marsin_engine/lib/ws_topic_routing.js`
 - `marsin_engine/engine.js`
-- `docs/ui/touch_control_wire.js`
+- `CaptainPad/live_touch/touch_control_wire.js`
 
 ## Automated evidence
 

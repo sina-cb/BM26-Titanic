@@ -2,8 +2,8 @@
 
 A complete technical and operational breakdown of the Titanic's manual lighting
 surface, written as source material for operator documentation. Everything in
-here is taken from the code as it stands (`docs/ui/touch_control.html`,
-`docs/ui/touch_control_wire.js`, and the `marsin_engine` endpoints they drive)
+here is taken from the code as it stands (`CaptainPad/live_touch/touch_control.html`,
+`CaptainPad/live_touch/touch_control_wire.js`, and the `marsin_engine` endpoints they drive)
 and from behaviour verified in this repo's test harnesses. Companion docs:
 `docs/44_touch_control.md` (constraints + write table), the audit at
 `.agent/reports/202608/20260810_2_touch_panel_audit.md`, and the hardening

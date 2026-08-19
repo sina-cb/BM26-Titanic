@@ -28,8 +28,8 @@ CaptainPad :6967
        | iframe (same host, different origin)
        v
 Simulation HTTP :6969
-  docs/ui/touch_control.html       layout, local interaction, presets
-  docs/ui/touch_control_wire.js    REST + /ws/control ownership/lease
+  CaptainPad/live_touch/touch_control.html       layout, local interaction, presets
+  CaptainPad/live_touch/touch_control_wire.js    REST + /ws/control ownership/lease
        |
        v
 MarsinEngine :6968
@@ -233,9 +233,9 @@ byte-for-byte behaviorally equivalent.
   and lifecycle handshake, themed wrapper/loading/error surfaces.
 - `CaptainPad/hooks/use-theme.tsx` — consumed as-is; remains authority.
 - `CaptainPad/constants/theme.ts` — consumed as-is; no Live-only registry.
-- `docs/ui/touch_control_theme.js` — atomic exact-origin palette application;
+- `CaptainPad/live_touch/touch_control_theme.js` — atomic exact-origin palette application;
   only structural chrome tokens change.
-- `docs/ui/touch_control_wire.js` — ARM, isolated Live endpoints, brightness,
+- `CaptainPad/live_touch/touch_control_wire.js` — ARM, isolated Live endpoints, brightness,
   layer activation, landed-state polling, and release acknowledgement.
 - `CaptainPad/utils/layer_settings.ts` and `live_touch_bridge.ts` — strict typed
   wire contracts with focused tests.

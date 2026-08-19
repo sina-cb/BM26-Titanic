@@ -42,7 +42,7 @@ Everything reuses the machinery that already exists and is already tested:
 `components/deck/pixel_view_logic.ts` (artifact parse, `flattenView`,
 `layoutView`, sample lookup, honesty captions — 54 tests), the deck window's
 raw-canvas paint path, `engineVizEvents`, and the sim-resolved artifact at
-`/docs/ui/touch_control_pixel_views.json`. **No new geometry code. No new
+`/CaptainPad/live_touch/touch_control_pixel_views.json`. **No new geometry code. No new
 sockets. One new render surface, one new scheduler, one screen integration.**
 
 ---

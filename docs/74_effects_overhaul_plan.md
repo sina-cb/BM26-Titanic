@@ -121,7 +121,7 @@ default tile — reachable only by hunting a picker mid-show.
 | Scheduler | any pair via `dispatchEffectAction`; **zero live tasks on titanic** | `scheduled_tasks.js:245` |
 | Special events | hard-allowlisted to 5 effectIds (`strobe, vintageWhite, blastWhite, uvBlast, invert`), never a presetId | `show_schema.js:84-86` |
 | Autopilot | **fires no global effects at all** (verified zero hits) | — |
-| Legacy `/global-effect` + podium radio | the 4 legacy toggles | `api_server.js:8450`; `control_podium bridge.py:1115-1128` |
+| Legacy `/global-effect` + podium radio | the 4 legacy toggles | `api_server.js:8450`; `LookingGlass/control_podium/comms/bridge.py:1115-1128` |
 
 **Cold pairs (15):** colorWash iceberg_cyan / emergency_red /
 vintage_amber, beatPump halftime, kickPunch punch + ice_punch, freeze
@@ -875,7 +875,7 @@ bounce batches with whatever is already pending.
 `lib/global_effect_slot_manager.js` (mode plumbing only),
 effect modules' `primaryMode` descriptors, and every persisted reference:
 `DEFAULT_SLOT_CONFIG`, `marsin_engine/states/**` migration shim,
-`docs/ui/touch_control.html` FX_DEFAULT/FX_OPTS, scene playlists/timeline
+`CaptainPad/live_touch/touch_control.html` FX_DEFAULT/FX_OPTS, scene playlists/timeline
 cues that name killed pairs, CaptainPad swap-sheet lists.
 **Step zero:** verify mode-wheel capacity per FOLD target (each effect
 has ONE primaryMode; where it is already occupied — e.g. strobe's
@@ -974,7 +974,7 @@ conclusions.
 
 ### W7 — Live Touch surface rework
 
-**Scope:** `docs/ui/touch_control.html` + `touch_control_wire.js`: new
+**Scope:** `CaptainPad/live_touch/touch_control.html` + `touch_control_wire.js`: new
 FX_DEFAULT bank (§6.3), direction/speed mode wiring on the five colour
 tiles, palette-follow opt-in on colour-carrying tiles, AUDIO corner tag
 (F5), FX_SHORT + family assignments for the new tiles (D12).

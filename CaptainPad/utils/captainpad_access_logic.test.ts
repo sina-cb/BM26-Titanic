@@ -4,6 +4,7 @@ import {
   captainPadAuthFailureMessage,
   isEffectivePerformanceLock,
   isValidPrivilegedSession,
+  performanceEditRoute,
   performancePrimaryAction,
   privilegedSessionFromResponse,
   sessionBelongsToEngineOrigin,
@@ -42,6 +43,13 @@ describe('CaptainPad effective performance lock', () => {
     expect(performancePrimaryAction(false, false)).toBe('enter-global');
     expect(performancePrimaryAction(true, false)).toBe('authenticate');
     expect(performancePrimaryAction(true, true)).toBe('local-lock');
+  });
+
+  it('routes auth-disabled Edit directly to the no-passcode exit sheet', () => {
+    expect(performanceEditRoute(false, false)).toBe('exit-sheet');
+    expect(performanceEditRoute(false, true)).toBe('exit-sheet');
+    expect(performanceEditRoute(true, false)).toBe('exit-sheet');
+    expect(performanceEditRoute(true, true)).toBe('authenticate');
   });
 });
 

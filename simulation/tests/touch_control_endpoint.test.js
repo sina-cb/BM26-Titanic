@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const endpoint = require('../../docs/ui/touch_control_endpoint.js');
+const endpoint = require('../../CaptainPad/live_touch/touch_control_endpoint.js');
 
 function panelUrl(engineOrigin = 'http://127.0.0.1:17442', protocol = '2') {
-  return 'http://127.0.0.1:18001/docs/ui/touch_control.html'
+  return 'http://127.0.0.1:18001/CaptainPad/live_touch/touch_control.html'
     + '?captainpad_embed=native'
     + '&captainpad_engine_origin=' + encodeURIComponent(engineOrigin)
     + '&captainpad_live_touch_protocol=' + encodeURIComponent(protocol);

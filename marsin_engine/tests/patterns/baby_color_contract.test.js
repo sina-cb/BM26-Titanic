@@ -913,6 +913,21 @@ const PLAYLISTS = {
   baby_tease: BY_FAMILY.tease,
   baby_reveal: BY_FAMILY.reveal,
 };
+const TEASE_LOCAL_SPEEDS_20_PERCENT_UP = new Map([
+  ['baby_tease/01_bullseye_tide', 0.504],
+  ['baby_tease/02_cellular_organism', 0.504],
+  ['baby_tease/03_star_exchange', 0.48],
+  ['baby_tease/04_rotating_yin_yang', 0.48],
+  ['baby_tease/05_ink_drops', 0.516],
+  ['baby_tease/06_argyle_weave', 0.54],
+  ['baby_tease/07_braided_rivers', 0.564],
+  ['baby_tease/08_checker_tide', 0.54],
+  ['baby_tease/09_candy_helix', 0.552],
+  ['baby_tease/10_rail_exchange', 0.552],
+  ['baby_tease/11_carousel_sectors', 0.54],
+  ['baby_tease/12_counter_comets', 0.528],
+  ['baby_tease/13_position_swap', 0.528],
+]);
 
 test('the two Baby playlists exist in both scenes and resolve to their curated whole family', () => {
   const manifest = new Set(JSON.parse(
@@ -966,6 +981,19 @@ test('both scenes carry byte-identical copies of every Baby playlist', () => {
     const bench = fs.readFileSync(
       path.join(SCENES_DIR, 'test_bench', 'playlists', `${name}.yaml`), 'utf8');
     assert.equal(titanic, bench, `${name}.yaml differs between test_bench and titanic`);
+  }
+});
+
+test('every Baby Tease entry loads with its exact 20% local-speed lift', () => {
+  const playlist = yaml.load(fs.readFileSync(
+    path.join(SCENES_DIR, 'titanic', 'playlists', 'baby_tease.yaml'), 'utf8'));
+  assert.equal(playlist.entries.length, TEASE_LOCAL_SPEEDS_20_PERCENT_UP.size);
+  for (const entry of playlist.entries) {
+    assert.equal(
+      entry.defaults.sliderLocalSpeed,
+      TEASE_LOCAL_SPEEDS_20_PERCENT_UP.get(entry.pattern),
+      `${entry.pattern}: playlist local speed must remain exactly 20% above its prior saved value`,
+    );
   }
 });
 

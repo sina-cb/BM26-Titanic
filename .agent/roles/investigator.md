@@ -37,7 +37,7 @@ Use this to orient before any investigation. The relevant expert spec under `.ag
 | **MarsinScript patterns** | `marsin_engine/patterns/` | `marsin_script_expert.md` | Per-pixel visual math, lifecycle (`beforeRender` / `render3D`), CPC binding contracts |
 | **CaptainPad** (iPad app) | `CaptainPad/` | `captain_pad_expert.md` | RN UI: deck/mixer/audio/osc/config/monitor/studio tabs, hooks, WS buses, modal patterns |
 | **Simulation** (sim viewer) | `simulation/` | `simulation_expert.md` | Web-rendered 3D viewer, scene authoring, save server, sACN bridge |
-| **Control Podium** (Pi bridge + PortWatch) | `control_podium/` | `control_podium_expert.md` | LoRa/BLE field control, Pi services, PortWatch app, secret/pairing config |
+| **Control Podium** (Pi bridge + PortWatch) | `LookingGlass/control_podium/` | `control_podium_expert.md` | LoRa/BLE field control, Pi services, PortWatch app, secret/pairing config |
 | **Models** (rig geometry) | `marsin_engine/models/` + `simulation/scenes/*/scene.yaml` | shared by engine + sim | Fixture positions, DMX patch, view masks |
 | **State** (operator-WIP) | `marsin_engine/states/<model>/*.yaml`, `simulation/scenes/<scene>/playlists/*.yaml` | OPERATOR | Live show state. Read-only for investigators. |
 | **Skills + Docs** | `.agent/skills/`, `docs/` | reference | Design docs (`*_[todo]_*.md`), language spec, pattern guide, lighting arrangement |
@@ -124,7 +124,7 @@ Use slot ports for any investigation that boots a parallel service. Never bind t
 ## Tools forbidden
 
 - `git commit`, `git push`, `git checkout` (other than to `git checkout --` your own throwaways), `git reset --hard`.
-- Edits to ANY file under `marsin_engine/`, `CaptainPad/`, `simulation/`, `control_podium/`, `docs/`, `.agent/codex.md`, `.agent/os/`, `.agent/ops/`, `.agent/skills/`.
+- Edits to ANY file under `marsin_engine/`, `CaptainPad/`, `simulation/`, `LookingGlass/control_podium/`, `docs/`, `.agent/codex.md`, `.agent/os/`, `.agent/ops/`, `.agent/skills/`.
 - Network calls outside the local rig.
 - Touching the operator's engine on port 6968.
 - Modifying any operator-WIP file (see standing rule 2).

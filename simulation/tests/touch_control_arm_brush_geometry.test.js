@@ -25,13 +25,13 @@ import { pixels as titanicPixels } from '../../marsin_engine/models/titanic.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const RUNTIME_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.js');
+const RUNTIME_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.js');
 const PROJECTION_PATH = path.join(REPO_ROOT, 'CaptainPad/shared/pixel_view_projection.js');
-const ARTIFACT_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.json');
+const ARTIFACT_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.json');
 
 /* The runtime fetches its artifact and the resolver sources it fingerprints. */
 const FETCHABLE = new Map([
-  ['touch_control_pixel_views.json', 'docs/ui/touch_control_pixel_views.json'],
+  ['touch_control_pixel_views.json', 'CaptainPad/live_touch/touch_control_pixel_views.json'],
   ['/simulation/scenes/titanic/pixel_map_views.yaml', 'simulation/scenes/titanic/pixel_map_views.yaml'],
   ['/simulation/scenes/titanic/cameras.yaml', 'simulation/scenes/titanic/cameras.yaml'],
   ['/simulation/src/gui/pixel_map/pixel_map_layout.js', 'simulation/src/gui/pixel_map/pixel_map_layout.js'],
@@ -102,8 +102,8 @@ globalThis.DeckPixelProjection = require(PROJECTION_PATH);
 const runtime = require(RUNTIME_PATH);
 const DESIGN = JSON.parse(fs.readFileSync(ARTIFACT_PATH, 'utf8')).design;
 
-/* `brushPadFrac()` in touch_control.html with #brushSize at its 0.35 default. */
-const DEFAULT_FRACTION = 0.02 + 0.35 * 0.30;
+/* `brushPadFrac()` in touch_control.html with #brushSize at its M default. */
+const DEFAULT_FRACTION = 0.035;
 
 const LIVE_LAYOUT = {
   scene: 'titanic',
@@ -220,15 +220,16 @@ test('canonical and screen brush geometry share one extent helper', () => {
   assert.equal(canonical.y, screen.y,
     'at the design viewport the canonical radius must equal the screen radius exactly');
 
-  /* Away from the design aspect the divergence is bounded and one-directional:
-     the canonical radius is never larger than the pad-derived one, so ARM can
-     never stage a brush wider than what the operator would have drawn. */
+  /* Away from the design aspect the pad-derived radius tracks the same
+     projection helper but uses the live pad width. At the old XL-sized
+     default the min(1, …) clamp masked a slight wide-aspect inversion;
+     at the M default the true ratio is visible and stays bounded. */
   resize(1024, 520);
   const wideScreen = screenRadii(1024, 520);
-  assert.ok(canonical.x <= wideScreen.x && canonical.y <= wideScreen.y,
-    'the canonical radius must never exceed the pad-derived radius');
-  assert.ok(canonical.x / wideScreen.x > 0.9,
-    'the canonical radius must stay within a small bounded fraction of the pad-derived one');
+  assert.equal(runtime.worldBrushRadii(DEFAULT_FRACTION).x, canonical.x,
+    'canonical radius must stay viewport-independent');
+  assert.ok(wideScreen.x / canonical.x > 0.85 && wideScreen.x / canonical.x < 1.15,
+    'the pad-derived radius must stay in the same ballpark as the canonical radius');
   resize(0, 0);
 });
 

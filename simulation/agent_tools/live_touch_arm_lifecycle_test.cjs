@@ -23,7 +23,7 @@ const puppeteer = require('puppeteer');
 const SIMULATION_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(SIMULATION_ROOT, '..');
 const ENGINE_DIR = path.join(REPO_ROOT, 'marsin_engine');
-const PAGE_PATH = '/docs/ui/touch_control.html';
+const PAGE_PATH = '/CaptainPad/live_touch/touch_control.html';
 const TEST_OWNER_PASSWORD = 'live-touch-browser-owner';
 // The sACN black hole: TEST-NET-1 (RFC 5737), reserved for documentation and
 // never routed, so a datagram can only be dropped. Never a 127.x address —
@@ -213,7 +213,7 @@ async function main() {
     const page = await browser.newPage();
     const panelUrl = new URL(`http://127.0.0.1:${staticPort}${PAGE_PATH}`);
     panelUrl.searchParams.set('captainpad_engine_origin', engineBase);
-    panelUrl.searchParams.set('captainpad_live_touch_protocol', '1');
+    panelUrl.searchParams.set('captainpad_live_touch_protocol', '2');
     await page.goto(panelUrl.href, {
       waitUntil: 'domcontentloaded',
       timeout: 15_000,

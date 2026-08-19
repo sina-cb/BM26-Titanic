@@ -59,7 +59,7 @@ staging state on the way to merging.
 ### PortWatch lives at
 
 ```
-control_podium/PortWatch/
+LookingGlass/control_podium/PortWatch/
   app.json                    ← Expo manifest (bundle id, permissions)
   eas.json                    ← EAS Build profiles (dev / preview / production)
   package.json
@@ -121,7 +121,7 @@ PortWatch is the AEAD principal: it holds the AES-128 secret from `marsin_engine
 ### 3.1 Node names on the air
 
 Every Heltec advertises as `tcon_<node-name>`, where `<node-name>` is
-the `name:` field from `control_podium/.config.nodes.yaml`:
+the `name:` field from `LookingGlass/control_podium/.config.nodes.yaml`:
 
 | Node id | YAML name | BLE advertised name |
 | ------- | --------- | ------------------- |
@@ -241,7 +241,7 @@ of it.
 ### 4.1 Commands PortWatch issues
 
 These map 1:1 to the `min_role: captain` entries in
-`control_podium/.config.commands.yaml`:
+`LookingGlass/control_podium/.config.commands.yaml`:
 
 | Command                 | What it does on the engine                                                            |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -397,7 +397,7 @@ Two cards:
 ### 6.1 What it is
 
 A long-running Python process at
-`control_podium/companions/bridge_companion.py`. It is the **only** path
+`LookingGlass/control_podium/companions/bridge_companion.py`. It is the **only** path
 by which an off-Wi-Fi client changes engine state. Its job:
 
 1. Sit on the USB-CDC serial port of the server Heltec (`tcon_server`,
@@ -442,7 +442,7 @@ The Pi is a deployment topology, not a code dependency. The same
 on USB:
 
 ```bash
-.venv-dev/bin/python3 control_podium/companions/bridge_companion.py --bus serial
+.venv-dev/bin/python3 LookingGlass/control_podium/companions/bridge_companion.py --bus serial
 ```
 
 ---
@@ -604,7 +604,7 @@ automatically.
 | Constant | Value | Where |
 | -------- | ----- | ----- |
 | Lease duration | 30 s | `CONTROL_LOCK_LEASE_MS` in `marsin_engine/lib/api_server.js` |
-| Renew interval | 20 s | `LEASE_RENEW_INTERVAL_MS` in `control_podium/PortWatch/src/ui/DeckScreen.tsx` |
+| Renew interval | 20 s | `LEASE_RENEW_INTERVAL_MS` in `LookingGlass/control_podium/PortWatch/src/ui/DeckScreen.tsx` |
 | Defensive renew threshold | 12 s | `LEASE_LOW_WATER_SEC`, same file |
 
 The bridge surfaces the lease state on every compact-status PUB:
@@ -651,7 +651,7 @@ State #5 is the second safety: if `vw` ever arrives missing or
 unrecognised (e.g. a future engine adds a third view), we render the
 UNKNOWN ENGINE VIEW warning instead of falling back to deck.
 
-Source-of-truth: `control_podium/PortWatch/src/ui/DeckScreen.tsx`
+Source-of-truth: `LookingGlass/control_podium/PortWatch/src/ui/DeckScreen.tsx`
 DeckCard render block, gate constant `canControlDeck`.
 
 #### `connectGeneration` drives all card hydration
@@ -735,7 +735,7 @@ bleeds across sessions.
 
 #### End-to-end tests for the wire half
 
-These live in `control_podium/tests/test_comms_e2e_sim.py`:
+These live in `LookingGlass/control_podium/tests/test_comms_e2e_sim.py`:
 
 | Test | Covers |
 | ---- | ------ |
@@ -763,7 +763,7 @@ the same pattern with no new infrastructure.
 ## 10.7 Compact-status field reference (PortWatch ↔ Bridge wire)
 
 Every PUB the bridge sends to PortWatch is a comma-separated KV string
-(see `compact_status` in `control_podium/comms/engine_client.py`). The
+(see `compact_status` in `LookingGlass/control_podium/comms/engine_client.py`). The
 following fields drive the deck-card UI:
 
 | Field | Source                                          | Purpose                                                                 |
@@ -807,7 +807,7 @@ per-page airtime that meant:
   it just couldn't beat the other stream to a free transmit slot.
 
 The store now owns a `playlistsHydratedForConn` sentinel
-(`control_podium/PortWatch/src/state/store.ts`):
+(`LookingGlass/control_podium/PortWatch/src/state/store.ts`):
 
 * `PlaylistSwitcher.refresh()` writes it in its `finally` block
   (so a transient LoRa failure on the playlists query still
@@ -982,19 +982,19 @@ What's gone:
 
 * `TargetChannelPicker` component (and its `targetChannelBox` /
   `targetChannelLabel` / `targetChannelValue` styles) — deleted
-  from `control_podium/PortWatch/src/ui/DeckScreen.tsx`.
+  from `LookingGlass/control_podium/PortWatch/src/ui/DeckScreen.tsx`.
 * `targetChannelName` / `channelCount` / `channelNames` fields on
   `EngineStatus` — deleted from
-  `control_podium/PortWatch/src/status/parse.ts`. The
+  `LookingGlass/control_podium/PortWatch/src/status/parse.ts`. The
   `tildeListOrNull` helper that only existed to parse `chs` is gone
   too.
 * `tch` / `nch` / `chs` fields on the bridge wire — deleted from
-  `control_podium/comms/engine_client.py::compact_status`. The
+  `LookingGlass/control_podium/comms/engine_client.py::compact_status`. The
   `CH_NAMES_MAX` / `CH_NAME_LEN_MAX` constants and the per-name
   sanitisation loop are gone with them. The `base_ch` discovery
   loop stays (we still need it for `pat` and `pl`).
 * `state["base_channel_name_override"]` test escape hatch in
-  `control_podium/tests/test_comms_e2e_sim.py::FakeEngine` —
+  `LookingGlass/control_podium/tests/test_comms_e2e_sim.py::FakeEngine` —
   removed; the base channel name is now hard-coded to `DECK MAIN`
   for the few tests that still read it.
 * `test_target_channel_change_via_mixer_propagates` and the
@@ -1050,11 +1050,11 @@ from YAML at build time.
 
 | File                                                  | Consumer                          | Generator / Loader                                     | Local override (gitignored)                            |
 | ----------------------------------------------------- | --------------------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
-| `control_podium/.config.nodes.yaml`                   | Bridge ACL + firmware BLE name    | `firmware/deploy.py::load_nodes()` (build flags)       | n/a                                                    |
-| `control_podium/.config.bridge.yaml`                  | Bridge runtime + companion        | read by `bridge.py`                                    | n/a                                                    |
-| `control_podium/.config.commands.yaml`                | Bridge ACL + per-cmd metadata     | read by `bridge.py`                                    | n/a                                                    |
-| `control_podium/.config.firmware.yaml`                | Heltec firmware (LoRa / BLE / OLED / power profile) | `firmware/deploy.py::load_radio_flags()` (build flags) | `control_podium/.config.firmware.local.yaml`           |
-| `control_podium/PortWatch/.config.portwatch.yaml`     | PortWatch (paging, lease, BLE)    | `scripts/sync-config.mjs` → `src/_generated/config.generated.ts` | `control_podium/PortWatch/.config.portwatch.local.yaml` |
+| `LookingGlass/control_podium/.config.nodes.yaml`                   | Bridge ACL + firmware BLE name    | `firmware/deploy.py::load_nodes()` (build flags)       | n/a                                                    |
+| `LookingGlass/control_podium/.config.bridge.yaml`                  | Bridge runtime + companion        | read by `bridge.py`                                    | n/a                                                    |
+| `LookingGlass/control_podium/.config.commands.yaml`                | Bridge ACL + per-cmd metadata     | read by `bridge.py`                                    | n/a                                                    |
+| `LookingGlass/control_podium/.config.firmware.yaml`                | Heltec firmware (LoRa / BLE / OLED / power profile) | `firmware/deploy.py::load_radio_flags()` (build flags) | `LookingGlass/control_podium/.config.firmware.local.yaml`           |
+| `LookingGlass/control_podium/PortWatch/.config.portwatch.yaml`     | PortWatch (paging, lease, BLE)    | `scripts/sync-config.mjs` → `src/_generated/config.generated.ts` | `LookingGlass/control_podium/PortWatch/.config.portwatch.local.yaml` |
 
 ### 12.1 Firmware config (`.config.firmware.yaml`)
 
@@ -1197,7 +1197,7 @@ hostile-RF environment can revert by adding to a per-machine
 override:
 
 ```yaml
-# control_podium/.config.firmware.local.yaml  (NOT committed)
+# LookingGlass/control_podium/.config.firmware.local.yaml  (NOT committed)
 radio:
   bandwidth_khz: 250.0
 ```
@@ -1256,14 +1256,14 @@ This checklist details the hardware-in-the-loop (HIL) operational verification p
 - `16_captain_pad.md` — CaptainPad's tab structure, navigation rail,
   master-detail UX rules. Now also covers the lockout overlay PortWatch
   triggers.
-- `control_podium/.config.nodes.yaml` — node id ↔ name ↔ role ↔ USB
+- `LookingGlass/control_podium/.config.nodes.yaml` — node id ↔ name ↔ role ↔ USB
   MAC mapping; source of truth for BLE advertised name.
-- `control_podium/.config.commands.yaml` — the radio command allowlist;
+- `LookingGlass/control_podium/.config.commands.yaml` — the radio command allowlist;
   the contract between PortWatch and the bridge.
 - `PortWatch/src/ble/` — the BLE link layer.
 - `PortWatch/src/codec/` — Titanic Frame v2 encode/decode.
 - `marsin_engine/secret.yaml` — the AEAD key. Single source of truth
   across firmware, bridge, and PortWatch. **Never commit.**
-- `control_podium/PortWatch/README.md` — bring-up, EAS / TestFlight /
+- `LookingGlass/control_podium/PortWatch/README.md` — bring-up, EAS / TestFlight /
   App Store deployment, troubleshooting, security notes. Read this
   before doing anything to PortWatch.

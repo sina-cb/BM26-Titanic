@@ -12,9 +12,9 @@ import { loadModelForGauge } from '../../lib/model_loader.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const profilesRuntime = require(path.resolve(
-  here, '../../../docs/ui/touch_control_group_profiles.js'));
+  here, '../../../CaptainPad/live_touch/touch_control_group_profiles.js'));
 const profilesSource = fs.readFileSync(path.resolve(
-  here, '../../../docs/ui/touch_control_group_profiles.js'), 'utf8');
+  here, '../../../CaptainPad/live_touch/touch_control_group_profiles.js'), 'utf8');
 
 async function liveCatalog() {
   const model = await loadModelForGauge('titanic');

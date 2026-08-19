@@ -145,7 +145,7 @@ SYNC_EXCLUDE_DIRS = [
     # CaptainPad/dist and never runs Metro or vitest, so nothing loads them.
     'marsin_engine\\tests',
     'simulation\\tests',
-    'control_podium\\tests',
+    'LookingGlass\\control_podium\\tests',
     'deploy\\tests',
     # AGENT WORKTREES - Claude Code session worktrees are FULL extra checkouts of
     # this repo (each with its own node_modules, .git, tests\ and

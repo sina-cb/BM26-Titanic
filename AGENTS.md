@@ -115,8 +115,7 @@ starting new work; file follow-ups there as `Backlog` cards.
 | `simulation/` | Three.js 3D lighting sim (browser). `npm start` → HTTP :6969, save :6970, sACN bridges :6971/:6972. Scenes in `simulation/scenes/<scene>/` |
 | `marsin_engine/` | Pixelblaze-compatible pattern engine (WASM VM, 40 fps, sACN out, REST/WS API). `node engine.js --model test_bench --pattern <name>` |
 | `CaptainPad/` | TypeScript Expo iPad app — operator control surface |
-| `control_podium/` | Podium hardware + Raspberry Pi server bridge (Meshtastic radio path) |
-| `LookingGlass/` | Control-panel art piece — `panel_firmware/` (ESP32-S3 arcade buttons → WiFi telemetry portal), MAC-locked `deploy.py`, `circuit.html` wiring diagram. Flash via `deploy.py` only; see `.agent/skills/panel_firmware_ops.md` |
+| `LookingGlass/` | Control-panel art piece — `panel_firmware/` (ESP32-S3 arcade buttons → WiFi telemetry portal), MAC-locked `deploy.py`, `circuit.html` wiring diagram. **Archived:** LoRa mesh + Pi bridge lives under `LookingGlass/control_podium/` (see that README). Flash panel firmware via `deploy.py` only; see `.agent/skills/panel_firmware_ops.md` |
 | `marsin_pb/` | Pixelblaze-related tooling |
 | `3d_models/`, `3d_structure/`, `renders/`, `images/` | Assets |
 | `states/`, `docs/`, `archived/` | State files, docs, retired work |

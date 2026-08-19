@@ -84,6 +84,129 @@ test('launcher credential preflight validates keys without exposing values', () 
   }
 });
 
+test('parseArgs accepts --dev-no-auth on development profiles', () => {
+  const opts = launcher.parseArgs(['dev', '--dev-no-auth', '--no-launch']);
+  assert.equal(opts.command, 'dev');
+  assert.equal(opts.devNoAuth, true);
+  assert.equal(opts.open, false);
+});
+
+test('resolveCaptainPadAuthPreflight: dev+--dev-no-auth produces no secrets problem', () => {
+  const verdict = launcher.resolveCaptainPadAuthPreflight({
+    profileName: 'dev',
+    devNoAuthRequested: true,
+    secretsPath: null,
+    engineDepsInstalled: true,
+  });
+  assert.equal(verdict.refusal, null);
+  assert.equal(verdict.devNoAuth.enabled, true);
+  assert.deepEqual(verdict.secretsProblems, []);
+});
+
+test('resolveCaptainPadAuthPreflight: dev without flag preserves missing-secrets failure', () => {
+  const verdict = launcher.resolveCaptainPadAuthPreflight({
+    profileName: 'dev',
+    devNoAuthRequested: false,
+    secretsPath: null,
+    engineDepsInstalled: true,
+  });
+  assert.equal(verdict.refusal, null);
+  assert.equal(verdict.devNoAuth.enabled, false);
+  assert.ok(verdict.secretsProblems.some((p) => p.includes('BM26_SECRETS must point')));
+});
+
+test('resolveCaptainPadAuthPreflight: prod+--dev-no-auth refuses', () => {
+  const verdict = launcher.resolveCaptainPadAuthPreflight({
+    profileName: 'prod',
+    devNoAuthRequested: true,
+    secretsPath: '/unused/secrets.yaml',
+    engineDepsInstalled: true,
+  });
+  assert.match(verdict.refusal, /--dev-no-auth is only valid on development profiles/);
+  assert.equal(verdict.devNoAuth.enabled, false);
+  assert.deepEqual(verdict.secretsProblems, []);
+});
+
+test('resolveCaptainPadAuthPreflight: dev-lite+--dev-no-auth produces no secrets problem', () => {
+  const verdict = launcher.resolveCaptainPadAuthPreflight({
+    profileName: 'dev-lite',
+    devNoAuthRequested: true,
+    secretsPath: null,
+    engineDepsInstalled: true,
+  });
+  assert.equal(verdict.refusal, null);
+  assert.equal(verdict.devNoAuth.enabled, true);
+  assert.deepEqual(verdict.secretsProblems, []);
+});
+
+test('lockHasDevNoAuthBypass: only an explicit true lock field counts', () => {
+  assert.equal(launcher.lockHasDevNoAuthBypass({ devNoAuth: true }), true);
+  assert.equal(launcher.lockHasDevNoAuthBypass({ devNoAuth: false }), false);
+  assert.equal(launcher.lockHasDevNoAuthBypass({}), false);
+  assert.equal(launcher.lockHasDevNoAuthBypass(null), false);
+  assert.equal(launcher.lockHasDevNoAuthBypass({ profile: 'dev' }), false,
+    'legacy locks without devNoAuth must read as auth-bypass false');
+});
+
+test('dev-no-auth lock/status wiring records bypass and status warns', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
+  const writeCall = src.slice(src.indexOf('writeLock({'), src.indexOf('startReaper();'));
+  assert.match(writeCall, /devNoAuth: devNoAuth\.enabled/,
+    'the lock is what status reads after the fact');
+  const status = src.slice(src.indexOf('async function cmdStatus'), src.indexOf('// ── `stop` →'));
+  assert.match(status, /lockHasDevNoAuthBypass\(lock\)/);
+  assert.match(status, /DEVELOPMENT AUTH BYPASS.*--dev-no-auth/);
+});
+
+test('validate() uses resolveCaptainPadAuthPreflight as the ONE secrets authority', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
+  const validateFn = src.slice(src.indexOf('function validate(opts, profileDef)'), src.indexOf('// ── The spawn contract'));
+  assert.match(validateFn, /resolveCaptainPadAuthPreflight\(/);
+  assert.match(validateFn, /problems\.push\(\.\.\.authPreflight\.secretsProblems\)/);
+  assert.ok(!validateFn.includes('resolveDevNoAuthRequest(opts.command'),
+    'validate must not duplicate dev-no-auth resolution outside the preflight helper');
+});
+
+test('--help documents --dev-no-auth as development-only', () => {
+  const run = spawnSync(process.execPath, ['launcher.js', '--help'], {
+    cwd: ROOT, encoding: 'utf8', timeout: 30000,
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /--dev-no-auth/);
+  assert.match(run.stdout, /DEVELOPMENT ONLY/i);
+  assert.match(run.stdout, /BM26_SECRETS/);
+});
+
+test('prod --dev-no-auth exits 2 with a named refusal and starts NOTHING', () => {
+  const lockPath = path.join(os.tmpdir(), `bm26_dev_noauth_prod_${process.pid}.lock.json`);
+  try { fs.unlinkSync(lockPath); } catch { /* first run */ }
+  const run = spawnSync(process.execPath, ['launcher.js', 'prod', '--dev-no-auth', '--no-launch'], {
+    cwd: ROOT, encoding: 'utf8', timeout: 120000,
+    env: { ...process.env, BM26_LAUNCHER_LOCK: lockPath, BM26_SIM_CONFIG: CFG_PATH },
+  });
+  const output = `${run.stdout || ''}${run.stderr || ''}`;
+  assert.equal(run.status, 2, `show profile must refuse the bypass:\n${output}`);
+  assert.match(output, /--dev-no-auth is only valid on development profiles/);
+  assert.match(output, /profile 'prod'/);
+  assert.ok(!fs.existsSync(lockPath),
+    'it must refuse BEFORE assertSingleInstance — a usage error may never take a running stack down');
+});
+
+test('launcher propagates --dev-no-auth to engine as BM26_CAPTAINPAD_AUTH_REQUIRED=0', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
+  const startEngine = src.slice(src.indexOf('async function startEngine(scene)'), src.indexOf('async function handleEngineExit'));
+  assert.match(startEngine, /BM26_CAPTAINPAD_AUTH_REQUIRED: devNoAuth\.enabled \? '0' : '1'/,
+    'the launcher is the ONE authority on supervised auth mode');
+  assert.match(src, /resolveCaptainPadAuthPreflight\(/,
+    'preflight must settle the flag before spawning');
+});
+
+test('launcher warns loudly when --dev-no-auth is active', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
+  assert.match(src, /if \(devNoAuth\.enabled\)/);
+  assert.match(src, /DEVELOPMENT AUTH BYPASS.*--dev-no-auth/);
+});
+
 test('launcher preserves an engine crash-relocked Performance show instead of posting a blocked pattern', async () => {
   const posts = [];
   const logs = [];

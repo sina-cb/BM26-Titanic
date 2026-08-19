@@ -24,6 +24,6 @@
 # changed by the live-control-panel work so a Windows checkout cannot recommit
 # CRLF and turn one API edit into a 12k-line whitespace diff.
 /marsin_engine/lib/api_server.js -text diff whitespace=cr-at-eol
-/docs/ui/touch_control.html text eol=lf
-/docs/ui/touch_control_wire.js text eol=lf
+/CaptainPad/live_touch/touch_control.html text eol=lf
+/CaptainPad/live_touch/touch_control_wire.js text eol=lf
 /CaptainPad/app/(tabs)/touch_control.tsx text eol=lf

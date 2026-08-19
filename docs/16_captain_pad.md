@@ -238,9 +238,9 @@ From CaptainPad's perspective this means:
 | Constant | Value | Defined in |
 | -------- | ----- | ---------- |
 | Lease duration | 30 s | `CONTROL_LOCK_LEASE_MS` in `marsin_engine/lib/api_server.js` |
-| Renew interval (PortWatch) | 20 s | `LEASE_RENEW_INTERVAL_MS` in `control_podium/PortWatch/src/ui/DeckScreen.tsx` |
+| Renew interval (PortWatch) | 20 s | `LEASE_RENEW_INTERVAL_MS` in `LookingGlass/control_podium/PortWatch/src/ui/DeckScreen.tsx` |
 
-End-to-end tests: see `control_podium/tests/test_comms_e2e_sim.py`
+End-to-end tests: see `LookingGlass/control_podium/tests/test_comms_e2e_sim.py`
 (`test_lock_lease_auto_expires`, `test_view_renew_is_idempotent_take`).
 
 ### 4.5.5 What CaptainPad still does while locked

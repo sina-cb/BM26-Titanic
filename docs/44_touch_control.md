@@ -1,8 +1,8 @@
 # 44 — TOUCH CONTROL
 
 The operator surface for driving the ship **by hand**, live. The tuned
-instrument remains `docs/ui/touch_control.html` (geometry + rendering) with
-`docs/ui/touch_control_wire.js` (engine transport), served by the sim and
+instrument remains `CaptainPad/live_touch/touch_control.html` (geometry + rendering) with
+`CaptainPad/live_touch/touch_control_wire.js` (engine transport), served by the sim and
 embedded in CaptainPad as **Layers → Live Touch**. CaptainPad owns navigation
 and theme chrome; the iframe keeps the instrument geometry and gestures.
 
@@ -133,7 +133,7 @@ the available pad. The shipped Top view has no per-fixture offsets, gap
 compression, pitch stretching, or perspective; runtime PAN remains display-only.
 
 ### 2.6 The sim's generated 2D view is canonical
-Live Touch loads `docs/ui/touch_control_pixel_views.json`, generated from the
+Live Touch loads `CaptainPad/live_touch/touch_control_pixel_views.json`, generated from the
 same YAML, camera source, and resolver as the main views. Schema 4 stores the
 simulator resolver's exact glyph coordinates. It verifies every source hash and
 compares each live engine pixel identity and coordinate before ARM. Top contains

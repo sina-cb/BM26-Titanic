@@ -1,7 +1,7 @@
 /**
  * Live Touch brush/UI performance gate.
  *
- * Runs the real docs/ui surface from an ephemeral read-only HTTP origin, proves
+ * Runs the real CaptainPad/live_touch surface from an ephemeral read-only HTTP origin, proves
  * narrow iframe layouts do not widen the document, verifies the generated
  * Titanic pixel artifact against the canonical model, then drives 1,200 pointer
  * samples (two per animation frame). The enforced invariants are intentionally
@@ -20,7 +20,7 @@ const puppeteer = require('puppeteer');
 
 const SIMULATION_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(SIMULATION_ROOT, '..');
-const PAGE_PATH = '/docs/ui/touch_control.html';
+const PAGE_PATH = '/CaptainPad/live_touch/touch_control.html';
 const MODEL_PATH = path.join(REPO_ROOT, 'marsin_engine', 'models', 'titanic.js');
 const RENDER_PATH = path.join(REPO_ROOT, '.agent_renders', 'live_touch_brush_perf.png');
 const FULLSCREEN_RENDER_PATH = path.join(

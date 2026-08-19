@@ -33,7 +33,7 @@ const PATTERN = '00_golden_hour_wash';
 const PLAYLIST_NAME = 'ambient';
 const CATALOG_PLAYLIST_NAME = 'titanic_ambient_catalog_equivalence';
 // These are the explicit Live Touch instrument mappings in
-// docs/ui/touch_control_wire.js. They are not playlist entries, so prove the
+// CaptainPad/live_touch/touch_control_wire.js. They are not playlist entries, so prove the
 // actual armed-owner API compiles and stages them rather than merely checking
 // that their static map points at a source file.
 const INSTRUMENT_PATTERNS = [

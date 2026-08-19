@@ -1,7 +1,7 @@
 // TOUCH CONTROL tab — hosts the operator touch panel.
 //
 // The panel itself is NOT React Native. It is a self-contained page served by
-// the simulation's HTTP server at :6969/docs/ui/touch_control.html, wired
+// the simulation's HTTP server at :6969/CaptainPad/live_touch/touch_control.html, wired
 // straight to the engine's REST API. This tab embeds it so the operator reaches
 // it from the same CaptainPad tab bar as everything else, instead of having to
 // remember a URL.
@@ -47,7 +47,7 @@ import { setSpatialFullscreenActive } from '@/utils/spatial_fullscreen';
 
 /** The panel lives on the SIM server, one port below the engine. */
 const SIM_PORT = '6969';
-const PANEL_PATH = '/docs/ui/touch_control.html';
+const PANEL_PATH = '/CaptainPad/live_touch/touch_control.html';
 
 /**
  * Work out where the panel is served from.
@@ -212,6 +212,13 @@ export default function TouchControlScreen() {
     sendPixelVerificationStart();
   }, [sendPixelVerificationStart, sendSurfaceFocus, sendTheme]);
 
+  const reportHandoffFailure = useCallback(() => {
+    setBridgeError(
+      'LIVE TOUCH HANDOFF DID NOT COMPLETE — remain on Live Touch and try again. '
+      + 'The engine deadman remains authoritative.',
+    );
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       handoffCompletedRef.current = false;
@@ -232,13 +239,17 @@ export default function TouchControlScreen() {
         }
         const target = layerDestinationForNavigationState(navigation.getState());
         if (target) {
-          void requestHandoff(target).catch((error) => {
-            setBridgeError(error instanceof Error ? error.message : String(error));
-          });
+          void requestHandoff(target).catch(reportHandoffFailure);
         }
         setSurfaceFocused(false);
       };
-    }, [navigation, requestHandoff, sendSurfaceFocus, setSurfaceFocused]),
+    }, [
+      navigation,
+      reportHandoffFailure,
+      requestHandoff,
+      sendSurfaceFocus,
+      setSurfaceFocused,
+    ]),
   );
 
   useEffect(() => {
@@ -256,9 +267,7 @@ export default function TouchControlScreen() {
          which is why `reason: 'background'` raises no handoff curtain. */
       if (!frameLoadedRef.current || backgroundHandoffSentRef.current) return;
       backgroundHandoffSentRef.current = true;
-      void requestHandoff('deck', 'background').catch((error) => {
-        setBridgeError(error instanceof Error ? error.message : String(error));
-      });
+      void requestHandoff('deck', 'background').catch(reportHandoffFailure);
     };
     const foregrounded = () => { backgroundHandoffSentRef.current = false; };
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
@@ -278,7 +287,7 @@ export default function TouchControlScreen() {
         document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
-  }, [requestHandoff]);
+  }, [reportHandoffFailure, requestHandoff]);
 
   useEffect(() => navigation.addListener('beforeRemove', (event) => {
     if (handoffCompletedRef.current) return;
@@ -291,10 +300,8 @@ export default function TouchControlScreen() {
         handoffCompletedRef.current = true;
         navigation.dispatch(event.data.action);
       })
-      .catch((error) => {
-        setBridgeError(error instanceof Error ? error.message : String(error));
-      });
-  }), [navigation, requestHandoff]);
+      .catch(reportHandoffFailure);
+  }), [navigation, reportHandoffFailure, requestHandoff]);
 
   useEffect(() => {
     sendTheme();
@@ -336,9 +343,9 @@ export default function TouchControlScreen() {
           pixelVerificationAcknowledgedRef.current = false;
         }
         verifierReadyRef.current = true;
-        const gateState = `phase=${message.phase} · source=${message.staticVerified} · engine=${message.engineVerified}`
-          + ` · load=${message.readyStatus}`;
-        setBridgeError(`LIVE TOUCH PIXEL VERIFICATION WAITING — ${gateState}`);
+        setBridgeError(current => current?.startsWith('LIVE TOUCH PIXEL VERIFICATION')
+          ? null
+          : current);
         sendPixelVerificationStart();
         return;
       }
@@ -360,11 +367,13 @@ export default function TouchControlScreen() {
           setBridgeError(current => current?.startsWith(prefix) ? null : current);
           return;
         }
-        const gateState = `phase=${message.phase} · source=${message.staticVerified} · engine=${message.engineVerified}`
-          + ` · load=${message.readyStatus}`;
+        if (message.status === 'checking') {
+          setBridgeError(current => current?.startsWith(prefix) ? null : current);
+          return;
+        }
         setBridgeError(
-          `${prefix} ${message.status.toUpperCase()} — ${gateState}`
-          + (message.error ? ` — ${message.error}` : ''),
+          'LIVE TOUCH NOT READY — pixel-map verification did not complete. '
+          + 'Reload Live Touch after the lighting engine is ready.',
         );
         return;
       }
@@ -401,8 +410,11 @@ export default function TouchControlScreen() {
         themeAckTimerRef.current = null;
       }
       setBridgeError(current => current?.startsWith('LIVE TOUCH THEME') ? null : current);
-    } catch (error) {
-      setBridgeError(error instanceof Error ? error.message : String(error));
+    } catch {
+      setBridgeError(
+        'LIVE TOUCH CONNECTION CHECK FAILED — reload Live Touch. '
+        + 'Controls remain unavailable until verification succeeds.',
+      );
     }
   }, [completeHandoff, postToPanel, sendPixelVerificationStart, sendTheme]);
 

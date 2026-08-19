@@ -7,7 +7,7 @@ more iPad friendly is a TOP PRIORITY."
 Design status: contract for the standing pipeline (Sonnet implementers, Opus
 validation walk). **This builds ON the docs/65 declutter that just shipped
 (report `_268`) — nothing that wave landed is redesigned here.** Surface:
-the sim-served touch panel (`docs/ui/touch_control.html` + siblings), hosted
+the sim-served touch panel (`CaptainPad/live_touch/touch_control.html` + siblings), hosted
 by CaptainPad in an iframe (web) / webview (native). Scope is **geometry,
 spacing, and affordance only** — every tuned gesture behavior (wheel, brush,
 spatial pad pointer code, wire semantics, ARM chains) is frozen, exactly as

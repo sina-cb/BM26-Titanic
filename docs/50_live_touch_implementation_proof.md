@@ -32,14 +32,14 @@ This document traces the implementation back to the review discussion:
 
 | Requirement | Implementation evidence | Executable evidence |
 |---|---|---|
-| Canonical views and reprojection | `docs/ui/touch_control_pixel_views.js`, generated schema-4 `docs/ui/touch_control_pixel_views.json`, exact simulator-resolved geometry, shared view/camera/resolver fingerprints | `simulation/tests/touch_control_pixel_views.test.js`; artifact check; 15/15 passed |
+| Canonical views and reprojection | `CaptainPad/live_touch/touch_control_pixel_views.js`, generated schema-4 `CaptainPad/live_touch/touch_control_pixel_views.json`, exact simulator-resolved geometry, shared view/camera/resolver fingerprints | `simulation/tests/touch_control_pixel_views.test.js`; artifact check; 15/15 passed |
 | Spatial projection identity | Top/Strands `(nx,nz)`, Front `(nx,ny)`, TE Sign `(nz,ny)` with per-view masks and exact nearest-glyph identity | Pure model-coordinate correlation, preview/engine affected-set equality, display-only PAN, and Aerial-camera fingerprint tests |
 | Symmetric Front painting | Front displays the canonical 396 Front pixels and sends an identity-pinned 792-pixel Front+Back paint mask | Engine selection test proves visible preview equality plus hidden Back participation |
 | TE Sign brush accuracy | Rotated sign declares screen-horizontal `nz`, screen-vertical `ny`; brush scale is calculated per touched sign panel and included atomically in each stroke sample | XS selects 7 local LEDs in the measured center case, all inside the visible circle; reversed-axis engine test rejects row-wide spill |
 | iPad brush bounds | rAF-coalesced preview/input, cached static map, DPR cap 2, bounded ink stamps, 0.1/0.5/1.0/1.5 s linear time-to-zero | `simulation/agent_tools/live_touch_brush_perf_test.cjs`; 1,200-sample and 640–1366 px containment gate |
 | Three independent Layers settings | `marsin_engine/lib/layer_surface_router.js`, `marsin_engine/lib/pattern_mixer.js` | Six directed transitions, reversal, queue, and render-isolation tests |
 | Same transition operation | Canonical router uses the original Deck/Mixer linear byte blend for every pair | HIL forward/reverse midpoint delta: exactly zero per pixel |
-| ARM-only Live activation | `docs/ui/touch_control_lifecycle.js`, `docs/ui/touch_control_wire.js`, layer API owner lease | Passive load performs no owner writes; ARM/abort/disarm/deadman tests |
+| ARM-only Live activation | `CaptainPad/live_touch/touch_control_lifecycle.js`, `CaptainPad/live_touch/touch_control_wire.js`, layer API owner lease | Passive load performs no owner writes; ARM/abort/disarm/deadman tests |
 | Exact render participation | One steady renderer; exactly outgoing + incoming during a blend; third setting queued | Router/render-isolation gate in the 91/91 engine suite |
 | Full-look isolation | Owner-scoped `live_touch_session_context.js` and pre-blend creative processor | Non-default CPC/effects/paint/palette state survives clean and deadman handback byte-for-byte |
 | Rack remains final brightness authority | Live factors applied to the Live look before blend; Dimmer Rack and safety applied once after blend | Rack 0.30 x Live 0.50 rendered ceiling tests, bypass/blackout/parked coverage |
@@ -71,7 +71,7 @@ explicit PAN and FIT controls, and `div#pixelMapError` remains a normally
 hidden, fail-closed diagnostic for stale or invalid generated pixel-view data.
 The rest of Misha's tuned controls and gestures retain their existing structure.
 
-`docs/ui/touch_control_theme.js` maps CaptainPad palette tokens to existing CSS
+`CaptainPad/live_touch/touch_control_theme.js` maps CaptainPad palette tokens to existing CSS
 custom properties. Its injected rules change background, foreground, border,
 shadow, and selected/ARM state colors. They do not set width, height, margin,
 padding, position, grid, flex, or typography geometry. Pattern selection,
@@ -213,7 +213,7 @@ After starting the stack from this worktree, use:
 CaptainPad:        http://127.0.0.1:6967/
 Live Touch:        http://127.0.0.1:6967/touch_control
 Mixer:             http://127.0.0.1:6967/mixer
-Direct Live panel: http://127.0.0.1:6969/docs/ui/touch_control.html
+Direct Live panel: http://127.0.0.1:6969/CaptainPad/live_touch/touch_control.html
 Simulation:        http://127.0.0.1:6969/simulation/?scene=titanic&profile=pixel_mapping
 Engine status:     http://127.0.0.1:6968/status
 ```

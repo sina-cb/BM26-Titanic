@@ -7,6 +7,9 @@
 // pin that, plus the minutes↔seconds mapping the wire speaks.
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   PILL_SECONDS,
@@ -16,6 +19,10 @@ import {
   offPillCaption,
   pillSeconds,
 } from './show_autopilot_logic';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CARD_SOURCE = readFileSync(join(HERE, 'show_autopilot_card.tsx'), 'utf8');
+const SCREEN_SOURCE = readFileSync(join(HERE, '../../app/(tabs)/special_events.tsx'), 'utf8');
 
 describe('show autopilot pills', () => {
   it('is exactly the operator\'s four pills, in SECONDS', () => {
@@ -81,5 +88,20 @@ describe('show autopilot transition selection', () => {
       { label: 'SINGLE', shuffle: false },
       { label: 'SHUFFLE ALL', shuffle: true },
     ]);
+  });
+});
+
+describe('show autopilot global speed', () => {
+  it('places the live rig speed fader on the simplified show card', () => {
+    expect(CARD_SOURCE).toContain('label="GLOBAL SPEED"');
+    expect(CARD_SOURCE).toContain('value={Math.max(0, Math.min(1, globalSpeed))}');
+    expect(CARD_SOURCE).toContain('onChange={onGlobalSpeedChange}');
+    expect(CARD_SOURCE).toContain('disabled={dimmed}');
+  });
+
+  it('reads engine truth and writes the canonical global speed route', () => {
+    expect(SCREEN_SOURCE).toContain('useSharedParamValues({ speed: 0.5 })');
+    expect(SCREEN_SOURCE).toContain('updateParamCenter({ speed })');
+    expect(SCREEN_SOURCE).toContain('globalSpeed={globalParams.speed}');
   });
 });

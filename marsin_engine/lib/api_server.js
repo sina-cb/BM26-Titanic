@@ -6484,6 +6484,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // hard cut. Older persisted configs omit it → report 0.
     transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
     };
+    if (Array.isArray(st.livePalettes)) {
+      out.livePalettes = st.livePalettes.map(
+        palette => palette.map(channel => ({ ...channel })),
+      );
+    }
     const transition = colorAutopilot.transition;
     if (transition) out.colorTransition = transition;
     // The INERT follow-note block rides along so the card can show (and a mode

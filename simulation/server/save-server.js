@@ -211,7 +211,7 @@ function writePatternManifest() {
 }
 
 // ─── Live Touch pixel-view artifact ownership ────────────────────────────
-// docs/ui/touch_control_pixel_views.json is DERIVED state: the sim resolver's
+// CaptainPad/live_touch/touch_control_pixel_views.json is DERIVED state: the sim resolver's
 // output plus byte fingerprints of every authoritative input (the Titanic
 // model, pixel_map_views.yaml, cameras.yaml, views.yaml via the view
 // registry, and the resolver sources). Live Touch fails CLOSED — "PIXEL VIEW
@@ -631,7 +631,7 @@ http.createServer((req, res) => {
         writeFileAtomic(outPath, yaml.dump(tree, { lineWidth: -1 }));
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath} (${tree.views.length} view(s))`);
 
-        // Live Touch reads a PRE-RESOLVED artifact (docs/ui/touch_control_pixel_views.json)
+        // Live Touch reads a PRE-RESOLVED artifact (CaptainPad/live_touch/touch_control_pixel_views.json)
         // that carries a byte fingerprint of this exact YAML, and it fails
         // CLOSED — "PIXEL VIEW UNAVAILABLE" — the moment the two disagree. The
         // 2D Pixel Map auto-saves on every pan/zoom, so without this the

@@ -200,8 +200,8 @@ pane (`studio.tsx:470`) and toast bodies (`:490,:507`) — see D3.
 ## 4. W2 — the Live Touch document (in scope, two CSS lines)
 
 Same annoyance class, same session, own document:
-`docs/ui/touch_control.html` (served verbatim by the sim HTTP server —
-`app/(tabs)/touch_control.tsx:50` pins `/docs/ui/touch_control.html`).
+`CaptainPad/live_touch/touch_control.html` (served verbatim by the sim HTTP server —
+`app/(tabs)/touch_control.tsx:50` pins `/CaptainPad/live_touch/touch_control.html`).
 Its `body` already carries `-webkit-user-select: none; user-select: none`
 (line ~130). Two gaps:
 
@@ -273,7 +273,7 @@ engine contract tests parse this file
   the §2.3 block verbatim. AC: (1) `npx expo export --platform web` emits
   the `captainpad-no-select` style in the `<head>` of **every** dist HTML
   file; (2) Metro dev serves it too; (3) native bundles unchanged.
-- **W2 — `docs/ui/touch_control.html`**: the two CSS additions of §4,
+- **W2 — `CaptainPad/live_touch/touch_control.html`**: the two CSS additions of §4,
   nothing else. AC: body rule gains the callout kill; the contenteditable
   label rule gains the text opt-in; both engine contract tests (§4) pass.
 - **W3 — the committed guard** (house pattern of
@@ -302,7 +302,7 @@ engine contract tests parse this file
   `components/deck/deck_workspace_layout.ts` + `app/(tabs)/index.tsx`.
   **This contract touches NONE of those files** — its entire CaptainPad
   diff is one NEW file (`app/+html.tsx`) + one new test file; W2 lives in
-  `docs/ui/`. Zero file overlap; the implementer starts from the current
+  `CaptainPad/live_touch/`. Zero file overlap; the implementer starts from the current
   post-`_275` tree and the W4 probe measures that tree.
 - W4 requires a fresh `expo export` — machine-wide one-export-at-a-time
   rule applies; export to a scratch dir, never `CaptainPad/dist`, and the

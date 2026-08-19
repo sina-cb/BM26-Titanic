@@ -153,7 +153,7 @@ below:
 The look is **CaptainPad's tokens wearing Live Touch's grammar**: a panel is
 one object, headers are chrome-thin and carry an identity dot, on-states are
 translucent accent washes, and glow is rationed. Live Touch's standalone navy
-is NOT imported — the theme bridge (`docs/ui/touch_control_theme.js`) already
+is NOT imported — the theme bridge (`CaptainPad/live_touch/touch_control_theme.js`) already
 makes Live Touch wear CaptainPad's palette when embedded, so colour authority
 runs one direction only.
 

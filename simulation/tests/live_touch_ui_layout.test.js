@@ -13,12 +13,12 @@ import { loadModelForGauge } from '../../marsin_engine/lib/model_loader.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const PANEL_PATH = path.join(REPO_ROOT, 'docs/ui/touch_control.html');
+const PANEL_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control.html');
 const PANEL_URL = `${pathToFileURL(PANEL_PATH).href}`
   + '?captainpad_engine_origin=http%3A%2F%2F127.0.0.1%3A6968'
   + '&captainpad_live_touch_protocol=2';
 const ARTIFACT = JSON.parse(fs.readFileSync(
-  path.join(REPO_ROOT, 'docs/ui/touch_control_pixel_views.json'),
+  path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.json'),
   'utf8',
 ));
 const PIXEL_VIEW_SOURCES = {
@@ -289,6 +289,59 @@ async function pointerDownUp(page, selector, holdMs = 0) {
   await page.mouse.up();
 }
 
+test('transient refresh failures use calm fail-closed UI and recover without a stale toast', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const failed = await page.evaluate(async () => {
+      window.__refreshRecoveryFetch = window.fetch;
+      window.fetch = async (input, options) => {
+        const url = String(input);
+        if (url.endsWith('/status')) {
+          return new Response(JSON.stringify({ error: 'temporary test outage' }), { status: 503 });
+        }
+        return window.__refreshRecoveryFetch(input, options);
+      };
+      await window.__wire._refresh();
+      return {
+        available: window.__wire.surfaceAvailable,
+        curtainHidden: document.getElementById('liveTouchUnavailable').hidden,
+        pill: document.getElementById('wireStatus').textContent,
+        error: window.__wire.lastError,
+      };
+    });
+    await captureViewportEvidence(page, 'live_touch_refresh_fail_closed.png');
+    const recovered = await page.evaluate(async () => {
+      window.fetch = window.__refreshRecoveryFetch;
+      delete window.__refreshRecoveryFetch;
+      await window.__wire._refresh();
+      const recoveredPill = document.getElementById('wireStatus');
+      return {
+        available: window.__wire.surfaceAvailable,
+        curtainHidden: document.getElementById('liveTouchUnavailable').hidden,
+        pillAttached: !!recoveredPill && recoveredPill.isConnected,
+        error: window.__wire.lastError,
+      };
+    });
+    await captureViewportEvidence(page, 'live_touch_refresh_recovered.png');
+    assert.equal(failed.available, false);
+    assert.equal(failed.curtainHidden, false);
+    assert.match(failed.pill, /ENGINE OFFLINE/);
+    assert.equal(failed.error, null);
+    assert.doesNotMatch(failed.pill, /503|6000|\/status|\{.*error/i);
+    assert.deepEqual(recovered, {
+      available: true,
+      curtainHidden: true,
+      pillAttached: false,
+      error: null,
+    });
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
 test('Live Touch fits the full professional workspace at iPad landscape and desktop widths', { timeout: 60_000 }, async () => {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
   const browser = await puppeteer.launch({ headless: true });
@@ -539,7 +592,7 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
       Object.assign(palette, { text:'#ebdbb2', tint:'#fabd2f', icon:'#928374', surfaceContainerLow:'#32302f', surfaceContainerLowest:'#1d2021', surfaceContainerHigh:'#3c3836', primary:'#fabd2f', onPrimary:'#282828', secondary:'#a89984', tertiary:'#b8bb26', error:'#fb4934', ghostBorder:'rgba(168,153,132,.25)', ambientShadow:'rgba(0,0,0,.55)' });
       window.__captainpadDeliver({ type:'captainpad-theme', version:1, requestId:'take-theme', themeId:'gruvbox', resolvedThemeId:'gruvbox', scheme:'dark', palette });
     });
-    await page.waitForFunction(() => window.TouchTake && window.__wire
+    await page.waitForFunction(() => window.TouchTake && window.TouchTakeBankRuntime && window.__wire
       && window.TouchPixelViews?.state().readyStatus === 'fulfilled');
     await page.evaluate(async (artifact, pixels) => {
       await window.TouchPixelViews.verifyEngineLayout({ scene: 'titanic', model: 'titanic',
@@ -581,22 +634,42 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
       window.TouchTake.replace([]);
     });
     await ensureWorkspacePanelOpen(page, 'spatial-panel');
+    const takeDisclosure = await page.evaluate(() => ({
+      expanded: document.getElementById('takeSummary').getAttribute('aria-expanded'),
+      collapsed: document.getElementById('takeBody').classList.contains('is-take-collapsed'),
+      status: document.getElementById('takeSummaryVal').textContent,
+      sharedRow: Math.abs(
+        document.getElementById('takeSummary').getBoundingClientRect().top
+        - document.getElementById('brushSummary').getBoundingClientRect().top,
+      ) <= 1,
+    }));
+    assert.deepEqual(takeDisclosure, {
+      expanded: 'false', collapsed: true, status: 'S1 · EMPTY', sharedRow: true,
+    });
     assert.deepEqual(await page.evaluate(() => ({
       top: document.querySelector('.pad-label.top').textContent,
       bottom: document.querySelector('.pad-label.bottom').textContent,
       left: document.querySelectorAll('.xy-frame .axis-label')[0].textContent,
       right: document.querySelectorAll('.xy-frame .axis-label')[1].textContent,
     })), { top: 'Z+ FRONT', bottom: 'Z− BACK', left: 'X−LEFT', right: 'X+RIGHT' });
-    await page.$eval('#recModes', (element) => element.scrollIntoView({ block: 'center' }));
     await captureViewportEvidence(page, 'native_ipad_1024x682_take_01_empty.png');
     assert.equal(await page.$eval('#recModes button[data-rec="arm"]', (button) => button.disabled), false);
-    const recHit = await page.$eval('#recModes button[data-rec="arm"]', (button) => { const r = button.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return { tag: hit?.tagName, id: hit?.id, className: hit?.className, rec: hit?.dataset.rec }; });
-    recHit.rect = await page.$eval('#recModes button[data-rec="arm"]', (button) => { const r = button.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; });
-    assert.equal(recHit.rec, 'arm', JSON.stringify(recHit));
+    const summaryHit = await page.$eval('#takeSummary', (button) => {
+      const r = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { id: hit?.id, parentId: hit?.parentElement?.id, height: r.height };
+    });
+    assert.ok(summaryHit.height >= 35 && summaryHit.height <= 38, JSON.stringify(summaryHit));
+    assert.ok(summaryHit.id === 'takeSummaryVal' || summaryHit.parentId === 'takeSummary', JSON.stringify(summaryHit));
+    await page.$eval('#takeSummary', button => button.click());
+    assert.equal(await page.$eval('#takeSummary', button => button.getAttribute('aria-expanded')), 'true');
+    assert.equal(await page.$eval('#brushCluster', element => getComputedStyle(element).display), 'none');
+    assert.equal(await page.$eval('#recModes button[data-rec="arm"]', (button) => button.disabled), false);
     await page.click('#recModes button[data-rec="arm"]');
     await new Promise((resolve) => setTimeout(resolve, 50));
     const recordState = await page.evaluate(() => window.TouchTake.state());
     assert.equal(recordState.phase, 'recording', JSON.stringify(recordState));
+    await page.$eval('#xyPad', (element) => element.scrollIntoView({ block: 'center' }));
     const pad = await page.$eval('#xyPad', (element) => {
       const rect = element.getBoundingClientRect();
       return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
@@ -613,14 +686,14 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
     await new Promise((resolve) => setTimeout(resolve, 180));
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await page.waitForFunction(() => window.TouchSpatialContactGate.state().primary === null);
-    await page.click('#recModes button[data-rec="arm"]');
+    await page.$eval('#recModes button[data-rec="arm"]', (button) => button.click());
     await page.waitForFunction(() => window.TouchTake.state().phase === 'ready');
     const recorded = await page.evaluate(() => window.TouchTake.exportTake());
     assert.ok(recorded.length >= 3 && recorded[0][0] === 0 && recorded[0][3] === 1);
     assert.ok(recorded.at(-1)[0] >= 300 && recorded.at(-1)[3] === 0);
     await captureViewportEvidence(page, 'native_ipad_1024x682_take_03_ready.png');
     await page.evaluate(() => { window.__takeRequests = []; });
-    await page.click('#recModes button[data-rec="play"]');
+    await page.$eval('#recModes button[data-rec="play"]', (button) => button.click());
     await page.waitForFunction(() => window.TouchTake.state().phase === 'playing');
     await captureViewportEvidence(page, 'native_ipad_1024x682_take_04_play_once.png');
     await page.waitForFunction(() => window.TouchTake.state().phase === 'ready', { timeout: 5000 });
@@ -629,7 +702,7 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
     assert.equal(playedFrames[0].touch, true);
     assert.equal(playedFrames.at(-1).touch, false);
     await page.evaluate(() => { window.__takeRequests = []; });
-    await page.click('#recModes button[data-rec="loop"]');
+    await page.$eval('#recModes button[data-rec="loop"]', (button) => button.click());
     await page.waitForFunction(() => window.TouchTake.state().phase === 'looping');
     await captureViewportEvidence(page, 'native_ipad_1024x682_take_05_looping.png');
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -654,9 +727,9 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
           headers: { 'Content-Type': 'application/json' } });
       };
     });
-    await page.waitForFunction(() => typeof window.__takeReleaseLift === 'function', { timeout: 5000 });
-    await page.click('#recModes button[data-rec="clear"]');
+    await page.$eval('#recModes button[data-rec="clear"]', (button) => button.click());
     await page.waitForFunction(() => window.TouchTake.state().phase === 'settling');
+    await page.waitForFunction(() => typeof window.__takeReleaseLift === 'function', { timeout: 5000 });
     const clearing = await page.evaluate(() => ({ take: window.TouchTake.exportTake(), label: document.getElementById('recVal').textContent }));
     assert.equal(clearing.take.length, recorded.length, 'CLEAR retains the take until lift acknowledgement');
     assert.match(clearing.label, /CLEARING/);
@@ -665,6 +738,124 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
     await page.waitForFunction(() => window.TouchTake.state().phase === 'empty');
     assert.deepEqual(await page.evaluate(() => window.TouchTake.exportTake()), []);
     await captureViewportEvidence(page, 'native_ipad_1024x682_take_07_cleared.png');
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('multi-take bank mixes two slots concurrently with isolated contact keys', { timeout: 45_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1024, height: 682, deviceScaleFactor: 1 });
+    await installHermeticBrowser(page, true, await groupCatalog());
+    await page.goto(`${PANEL_URL}&captainpad_embed=native`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => window.TouchTakeBankRuntime && window.__wire
+      && window.TouchPixelViews?.state().readyStatus === 'fulfilled');
+    await page.evaluate(async (artifact, pixels) => {
+      await window.TouchPixelViews.verifyEngineLayout({ scene: 'titanic', model: 'titanic',
+        pixelCount: artifact.modelPixelCount, returnedCount: artifact.modelPixelCount, pixels });
+      window.__takeRequests = [];
+    }, ARTIFACT, titanicPixels);
+    await page.evaluate(() => {
+      window.__takeBaseFetch = window.fetch;
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        if (path !== '/spatial-paint') return window.__takeBaseFetch(input, options);
+        const body = options.body ? JSON.parse(options.body) : null;
+        window.__takeRequests.push(body);
+        return new Response('{"status":"ok"}', { status: 200,
+          headers: { 'Content-Type': 'application/json' } });
+      };
+      window.__wire.phase = 'armed'; window.__wire.armed = true; window.__wire.online = true;
+      window.TouchTakeEligibility = () => ({ ok: true });
+      document.getElementById('arm').classList.add('is-armed');
+      document.getElementById('arm').setAttribute('aria-checked', 'true');
+    });
+    await ensureWorkspacePanelOpen(page, 'spatial-panel');
+    await page.click('#modeToggle button[data-mode="spatial"]');
+    await page.$eval('#takeSummary', button => button.click());
+    const openDisclosure = await page.evaluate(() => ({
+      takeExpanded: document.getElementById('takeSummary').getAttribute('aria-expanded'),
+      takeClass: document.getElementById('takeCluster').className,
+      brushClass: document.getElementById('brushCluster').className,
+      brushDisplay: getComputedStyle(document.getElementById('brushCluster')).display,
+      spatialClass: document.querySelector('#modeToggle button[data-mode="spatial"]').className,
+      takeDisabled: document.getElementById('takeSummary').disabled,
+    }));
+    assert.equal(openDisclosure.brushDisplay, 'none',
+      `opening TAKE must hide BRUSH so the pad keeps its height: ${JSON.stringify(openDisclosure)}`);
+    const transportGeometry = await page.evaluate(() => {
+      const host = document.getElementById('recModes').getBoundingClientRect();
+      const cluster = document.getElementById('takeCluster').getBoundingClientRect();
+      const buttons = [...document.querySelectorAll('#recModes button[data-rec]')].map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { kind: button.dataset.rec, width: rect.width, height: rect.height };
+      });
+      const slots = [...document.querySelectorAll('.take-slot')].map((button) =>
+        button.getBoundingClientRect().height);
+      return { hostWidth: host.width, clusterWidth: cluster.width, buttons, slots };
+    });
+    assert.ok(transportGeometry.hostWidth >= transportGeometry.clusterWidth - 12,
+      `TAKE transport must use the full disclosure width: ${JSON.stringify(transportGeometry)}`);
+    assert.ok(transportGeometry.buttons.every((button) => button.width >= 44 && button.height >= 44),
+      `TAKE transport buttons must be real 44px targets: ${JSON.stringify(transportGeometry.buttons)}`);
+    assert.ok(transportGeometry.slots.every((height) => height >= 44),
+      `TAKE slot buttons must be real 44px targets: ${JSON.stringify(transportGeometry.slots)}`);
+    assert.equal(await page.$eval('#recModes button[data-rec="play"]', button => button.disabled), true,
+      'revealing SPATIAL must preserve the EMPTY take transport gate');
+    await page.evaluate(() => {
+      window.TouchTakeBankRuntime.replaceTake(0, [[0, 0.1, 0.2, 1], [80, 0.2, 0.3, 0]]);
+      window.TouchTakeBankRuntime.replaceTake(1, [[0, 0.7, 0.8, 1], [120, 0.8, 0.9, 0]]);
+    });
+    await captureViewportEvidence(page, 'native_ipad_1024x682_take_bank_01_ready.png');
+    await page.evaluate(async () => {
+      window.__takeRequests = [];
+      await window.TouchTakeBankRuntime.select(0);
+      const first = window.TouchTakeBankRuntime.play(false);
+      await window.TouchTakeBankRuntime.select(1);
+      const second = window.TouchTakeBankRuntime.play(false);
+      await Promise.all([first, second]);
+      window.__takeMixPeak = window.TouchTakeBankRuntime.state().playingCount;
+    });
+    const mixPeak = await page.evaluate(() => window.__takeMixPeak);
+    assert.ok(mixPeak >= 2, 'two slots must overlap during concurrent playback');
+    await page.waitForFunction(() => window.__takeRequests.length >= 2, { timeout: 5000 });
+    await page.waitForFunction(() => window.TouchTakeBankRuntime.state().playingCount === 0, { timeout: 5000 });
+    await captureViewportEvidence(page, 'native_ipad_1024x682_take_bank_02_mixing.png');
+    const frames = await page.evaluate(() => window.__takeRequests);
+    assert.ok(frames.length >= 2, 'concurrent playback must emit spatial writes for both slots');
+    assert.ok(frames.some((frame) => frame.touch === true));
+    assert.ok(frames.some((frame) => frame.touch === false));
+    const completedMix = await page.evaluate(() => window.TouchTakeBankRuntime.state());
+    assert.ok(completedMix.slots.slice(0, 2).every((slot) => slot.phase === 'ready'),
+      `coalesced concurrent samples must complete both takes: ${JSON.stringify(completedMix)}`);
+    assert.ok(completedMix.slots.slice(0, 2).every((slot) => slot.lastError === null),
+      `expected multi-take coalescing must not become an output error: ${JSON.stringify(completedMix)}`);
+    await page.evaluate(async () => {
+      await window.TouchTakeBankRuntime.select(1);
+      await window.TouchTakeBankRuntime.play(true);
+    });
+    await page.waitForFunction(() => window.TouchTakeBankRuntime.state().slots[1].phase === 'looping');
+    await page.$eval('#takeSummary', button => button.click());
+    const collapsedLoopStatus = await page.evaluate(() => ({
+      expanded: document.getElementById('takeSummary').getAttribute('aria-expanded'),
+      collapsed: document.getElementById('takeBody').classList.contains('is-take-collapsed'),
+      looping: document.getElementById('takeSummary').classList.contains('is-looping'),
+      status: document.getElementById('takeSummaryVal').textContent,
+    }));
+    assert.equal(collapsedLoopStatus.expanded, 'false');
+    assert.equal(collapsedLoopStatus.collapsed, true);
+    assert.equal(collapsedLoopStatus.looping, true);
+    assert.match(collapsedLoopStatus.status, /S2 · LOOP/);
+    assert.notEqual(await page.$eval('#brushCluster', element => getComputedStyle(element).display), 'none',
+      'collapsing TAKE must restore both compact summaries');
+    await page.evaluate(() => document.dispatchEvent(new CustomEvent('touchtransportstate', {
+      detail: { armed: false, leaseAcquired: false, online: true, phase: 'disarmed' },
+    })));
+    await page.waitForFunction(() => window.TouchTakeBankRuntime.state().playingCount === 0);
+    await captureViewportEvidence(page, 'native_ipad_1024x682_take_bank_03_lease_cleanup.png');
     await page.close();
   } finally {
     await browser.close();
@@ -692,12 +883,18 @@ test('expanded Brush controls are equal, touch-safe and contained at every suppo
         expanded: document.getElementById('brushSummary').getAttribute('aria-expanded'),
         visibleRows: [...document.querySelectorAll('#brushGrid > .draw-row')]
           .filter((row) => getComputedStyle(row).display !== 'none').length,
+        sharedRow: Math.abs(
+          document.getElementById('takeSummary').getBoundingClientRect().top
+          - document.getElementById('brushSummary').getBoundingClientRect().top,
+        ) <= 1,
       }));
-      assert.deepEqual(collapsed, { expanded: 'false', visibleRows: 0 },
+      assert.deepEqual(collapsed, { expanded: 'false', visibleRows: 0, sharedRow: true },
         `${viewport.name}: Brush boots compact with no hidden control consuming layout`);
 
-      await page.click('#brushSummary');
+      await page.$eval('#brushSummary', button => button.click());
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await page.$eval('#takeCluster', element => getComputedStyle(element).display), 'none',
+        `${viewport.name}: opening Brush hides TAKE instead of sacrificing the pad`);
       const geometry = await page.evaluate(() => {
         const panel = document.querySelector('.spatial-panel').getBoundingClientRect();
         const grid = document.getElementById('brushGrid').getBoundingClientRect();
@@ -801,6 +998,9 @@ test('expanded Brush controls are equal, touch-safe and contained at every suppo
       await page.screenshot({
         path: path.join(SCREENSHOT_DIR, `${viewport.name}_spatial_brush_expanded_bottom.png`),
       });
+      await page.$eval('#brushSummary', button => button.click());
+      assert.notEqual(await page.$eval('#takeCluster', element => getComputedStyle(element).display), 'none',
+        `${viewport.name}: collapsing Brush restores TAKE`);
       await page.close();
     }
   } finally {
@@ -829,9 +1029,16 @@ test('native touch events produce one canonical spatial contact and no ghost con
       window.__wire.armed = true;
       window.__wire.online = true;
       window.__singleContactErrors = [];
+      window.__spatialContactNotices = [];
       document.addEventListener('panelerror', (event) => {
         if (/one contact/i.test(event.detail?.message || '')) {
           window.__singleContactErrors.push(event.detail.message);
+        }
+      });
+      document.addEventListener('panelstatus', (event) => {
+        const message = event.detail?.message || '';
+        if (/SPATIAL contact limit reached/i.test(message)) {
+          window.__spatialContactNotices.push(message);
         }
       });
     });
@@ -903,6 +1110,7 @@ test('native touch events produce one canonical spatial contact and no ghost con
       preview: window.TouchPixelViews.state(),
       ink: window.TouchInkDiagnostics(),
       errors: window.__singleContactErrors.slice(),
+      spatialContactNotices: window.__spatialContactNotices.slice(),
       visibleHandles: [...document.querySelectorAll('#xyPad .xy-handle')]
         .filter((element) => !element.hidden).length,
     }));
@@ -911,8 +1119,10 @@ test('native touch events produce one canonical spatial contact and no ghost con
     assert.equal(snapshot.visibleHandles, 1, 'the accepted primary contact is the only marker');
     assert.equal(snapshot.preview.activePreviewPointers, 1, 'the canonical pixel preview accepts only the primary');
     assert.equal(snapshot.ink.activePointers, 1, 'the page ink input accepts only the primary');
-    assert.equal(snapshot.errors.length, 1, 'the extra simultaneous contact is refused loudly once');
     assert.equal(snapshot.gate.refusedCount, 1, 'the refusal remains owned until that contact lifts');
+    assert.equal(snapshot.spatialContactNotices.length, 1,
+      'the extra simultaneous contact publishes one transient status notice');
+    assert.equal(snapshot.errors.length, 0, 'contact-limit refusal must not become a persistent panel fault');
     await page.evaluate(() => { window.__spatialRequests = []; });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
     await waitForSpatialDispatch();
@@ -1159,6 +1369,44 @@ test('Ambient base selection waits for engine-confirmed crossfade landing and re
     assert.equal(rejected.selected, 'golden-hour', 'failed selection reverts to the confirmed authoritative B option');
     assert.equal(rejected.confirmed, '00_golden_hour_wash');
     assert.match(rejected.error, /pattern:/i, 'rejection is loud on the operator surface');
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a retained Live pattern outside the chooser is passive until ARM restages the selected base', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(() => {
+      const picker = document.getElementById('patternSel');
+      picker.value = '130';
+      picker.dataset.confirmedPattern = '130_spatial_paint';
+      window.__wire.lastError = null;
+      document.getElementById('wireStatus')?.remove();
+      window.__wire._acceptPatternLayerState({
+        liveTouch: {
+          pattern: 'api_staged_pattern_outside_chooser',
+          patternTransition: null,
+        },
+      });
+      return {
+        selected: picker.value,
+        confirmedPattern: picker.dataset.confirmedPattern,
+        channelPattern: window.__wire.channelPattern,
+        error: window.__wire.lastError,
+        errorVisible: !!document.getElementById('wireStatus'),
+      };
+    });
+    assert.deepEqual(result, {
+      selected: '130',
+      confirmedPattern: '130_spatial_paint',
+      channelPattern: 'api_staged_pattern_outside_chooser',
+      error: null,
+      errorVisible: false,
+    }, 'passive startup must preserve the explicit chooser intent without inventing an error');
     await page.close();
   } finally {
     await browser.close();
@@ -1889,10 +2137,17 @@ test('real Performance effect buttons reconcile toggle and hold actions from poi
       document.addEventListener('panelerror', event => {
         window.__pointerErrors.push(event.detail && event.detail.message);
       });
+      window.__pointerBaseFetch = window.fetch;
       window.fetch = async (input, options = {}) => {
         const path = String(input).slice(String(input).indexOf(':6968') + 5);
         const method = options.method || 'GET';
         window.__pointerRequests.push({ method, path });
+        if (path === '/status') {
+          return new Response(JSON.stringify({
+            liveTouchProtocolVersion: 2,
+            performanceMode: { active: true },
+          }), { status: 200 });
+        }
         if (path === '/global-effect-slots') {
           return new Response(JSON.stringify({ slots }), { status: 200 });
         }
@@ -1916,7 +2171,7 @@ test('real Performance effect buttons reconcile toggle and hold actions from poi
           return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
         }
         if (path === '/globals') return new Response(JSON.stringify({ effects: {} }), { status: 200 });
-        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+        return window.__pointerBaseFetch(input, options);
       };
       window.__wire.phase = 'armed';
       window.__wire.armed = true;
@@ -2173,6 +2428,125 @@ test('Performance locks audio-binding configuration and restores it in Edit with
   }
 });
 
+test('Edit ARM prepare from the wire stages session palette before movementTrace slot PATCH without slot colours', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      const wheelPalette = [
+        { h: 0.00, s: 1, v: 1 },
+        { h: 0.16, s: 1, v: 1 },
+        { h: 0.33, s: 1, v: 1 },
+        { h: 0.55, s: 1, v: 1 },
+        { h: 0.78, s: 1, v: 1 },
+      ];
+      const slotsEl = document.getElementById('slots');
+      slotsEl.dataset.palette = JSON.stringify(wheelPalette);
+      const slot9Cell = document.querySelector('#fxGrid .fx-cell[data-slot="9"]');
+      if (!slot9Cell || slot9Cell.dataset.fxkey !== 'movementTrace') {
+        throw new Error('slot 9 must remain the canonical movementTrace action');
+      }
+      slot9Cell.classList.add('is-on');
+      const groups = {};
+      [...document.querySelectorAll('#groupsGrid .fader-strip:not(.is-master)')].forEach((strip, index) => {
+        groups[strip.querySelector('.fader-name').textContent] = index + 1;
+      });
+      const slotRecords = {};
+      let capturedPrepare = null;
+      const brightnessPayload = () => ({
+        active: true,
+        ownerId: window.__wire.ownerId,
+        revision: 5,
+        rackRevision: 0,
+        groups: {},
+        rackCeilings: {},
+        effectiveCaps: {},
+      });
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        const method = options.method || 'GET';
+        if (path === '/touch-control/brightness') {
+          return new Response(JSON.stringify(brightnessPayload()), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (path === '/global-effect-slots' && method === 'GET') {
+          return new Response(JSON.stringify({ slots: Object.values(slotRecords) }), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (/^\/global-effect-slots\/\d+$/.test(path) && method === 'PATCH') {
+          const slotId = Number(path.split('/').pop());
+          slotRecords[slotId] = Object.assign({ slotId }, JSON.parse(options.body));
+          return new Response(JSON.stringify(slotRecords[slotId]), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (path === '/global-effect-slots/status' && method === 'GET') {
+          return new Response(JSON.stringify({
+            slots: Object.values(slotRecords).map(slot => ({ ...slot, active: false })),
+            controller: {},
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (path === '/layers/live_touch/prepare' && method === 'POST') {
+          capturedPrepare = JSON.parse(options.body);
+          for (const op of capturedPrepare.operations) {
+            if (op.method === 'PATCH' && /^\/global-effect-slots\/\d+$/.test(op.path)) {
+              const slotId = Number(op.path.split('/').pop());
+              slotRecords[slotId] = Object.assign({ slotId }, op.body);
+            }
+          }
+          return new Response(JSON.stringify({
+            sessionRevision: 5,
+            brightnessRevision: 6,
+            operationCount: capturedPrepare.operations.length,
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      };
+      window.__wire.phase = 'arming';
+      window.__wire.armed = false;
+      window.__wire.performanceModeActive = false;
+      window.__wire.sessionRevision = 4;
+      window.__wire.liveBrightnessRevision = 4;
+      window.__wire.sectionIds = groups;
+      window.__wire.exports = {};
+      await window.__wire._assertLiveSurfaceState();
+      const operations = capturedPrepare && capturedPrepare.operations ? capturedPrepare.operations : [];
+      const paletteIndex = operations.findIndex(op => op.method === 'POST' && op.path === '/layers/live_touch/palette');
+      const slot9Index = operations.findIndex(op => op.method === 'PATCH' && op.path === '/global-effect-slots/9');
+      const slot9Patch = slot9Index >= 0 ? operations[slot9Index] : null;
+      const paletteOp = paletteIndex >= 0 ? operations[paletteIndex] : null;
+      return {
+        paletteIndex,
+        slot9Index,
+        wheelPalette,
+        paletteBody: paletteOp && paletteOp.body,
+        slot9Patch: slot9Patch ? {
+          effectId: slot9Patch.body && slot9Patch.body.effectId,
+          paramsOverride: slot9Patch.body && slot9Patch.body.paramsOverride,
+        } : null,
+        operationPaths: operations.map(op => `${op.method} ${op.path}`),
+      };
+    });
+    assert.ok(result.paletteIndex >= 0, `prepare must include session palette: ${JSON.stringify(result.operationPaths)}`);
+    assert.deepEqual(result.paletteBody, { colorPalette: result.wheelPalette },
+      'prepare palette operation must carry the exact staged wheel colours');
+    assert.ok(result.slot9Patch, `prepare must provision slot 9: ${JSON.stringify(result.operationPaths)}`);
+    assert.equal(result.slot9Patch.effectId, 'movementTrace');
+    assert.equal(result.slot9Patch.paramsOverride && result.slot9Patch.paramsOverride.colors, undefined,
+      'movementTrace slot PATCH must not carry session-owned colours');
+    assert.ok(result.paletteIndex < result.slot9Index,
+      `palette must precede slot 9 PATCH: ${JSON.stringify(result.operationPaths)}`);
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
 test('a stale preset recall fails loudly without claiming the preset is active', { timeout: 30_000 }, async () => {
   const browser = await puppeteer.launch({ headless: true });
   try {
@@ -2293,6 +2667,78 @@ test('preset list save, broadcast reload, and confirmed delete stay engine-owned
     assert.ok(result.calls.some(call => call.path === '/layers/live_touch/presets/saved' && call.method === 'DELETE'));
     await page.close();
   } finally { await browser.close(); }
+});
+
+test('extended Color Hub scheme survives save, color change, and preset recall', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      document.dispatchEvent(new CustomEvent('liveTouchPresets', { detail: { entries: [] } }));
+      window.__wire.phase = 'armed';
+      window.__wire.armed = true;
+      window.__wire.performanceModeActive = false;
+      window.__wire._preflightPresetRecall = () => Promise.resolve();
+      window.__wire._settlePresetRecall = () => Promise.resolve();
+      document.getElementById('arm').classList.add('is-armed');
+      document.getElementById('armState').textContent = 'ARMED';
+      const errors = [];
+      document.addEventListener('panelerror', event => errors.push(event.detail && event.detail.message));
+      let captured = null;
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        const method = options.method || 'GET';
+        if (path === '/layers/live_touch/presets' && method === 'POST') {
+          captured = JSON.parse(options.body).state;
+          return new Response(JSON.stringify({
+            status: 'ok',
+            entry: { id: 'golden-saved', name: 'Preset 1', state: captured },
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      document.querySelector('#chSchemeActionsTwo [data-scheme="golden"]').click();
+      const savedPalette = JSON.parse(document.getElementById('slots').dataset.palette);
+      document.getElementById('presetSave').click();
+      for (let attempts = 0; attempts < 40 && !captured; attempts += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      document.querySelector('#paletteActions [data-act="contrast"]').click();
+      const changedPalette = JSON.parse(document.getElementById('slots').dataset.palette);
+      document.dispatchEvent(new CustomEvent('liveTouchPresets', {
+        detail: { entries: [{ id: 'golden-saved', name: 'Preset 1', state: captured }] },
+      }));
+      document.querySelector('.preset-row[data-preset-id="golden-saved"] .pr-recall').click();
+      await new Promise(resolve => setTimeout(resolve, 200));
+      return {
+        savedGen: captured && captured.gen,
+        savedFollow: captured && captured.follow,
+        savedPalette,
+        changedPalette,
+        recalledPalette: JSON.parse(document.getElementById('slots').dataset.palette),
+        active: document.querySelector('.preset-row[data-preset-id="golden-saved"]').classList.contains('is-active'),
+        errors,
+      };
+    });
+    assert.equal(result.savedGen, 'golden');
+    assert.equal(result.savedFollow, false);
+    assert.notDeepEqual(result.changedPalette, result.savedPalette,
+      'the operator color change must differ from the saved look');
+    assert.deepEqual(result.recalledPalette, result.savedPalette,
+      'recall must restore the exact five staged colors from the extended generator');
+    assert.equal(result.active, true, `successful color recall did not activate its row: ${JSON.stringify(result)}`);
+    assert.equal(result.errors.some(message => /generator|follow/i.test(message)), false,
+      `valid extended generator was rejected: ${JSON.stringify(result.errors)}`);
+    await page.close();
+  } finally {
+    await browser.close();
+  }
 });
 
 test('a valid preset refuses recall while the Live lease is disarmed without mutating the active row', { timeout: 30_000 }, async () => {
@@ -2553,6 +2999,11 @@ test('Legacy Color and Color Hub share palette authority and settle an authorita
       } }));
       const running = document.getElementById('chRunTwo').textContent;
       const hubPalette = slots.dataset.palette;
+      const abBadges = [...document.querySelectorAll('#chRingTwo .ch-swatch-btn')].map((btn, index) => ({
+        index,
+        isA: btn.classList.contains('is-a'),
+        isB: btn.classList.contains('is-b'),
+      }));
       document.dispatchEvent(new CustomEvent('colorautopilot', { detail: {
         active: false, mode: 'palettes', palettes: pair, delay_s: 1, transitionMs: 500,
       } }));
@@ -2565,6 +3016,7 @@ test('Legacy Color and Color Hub share palette authority and settle an authorita
         schemes,
         sharedSchemes,
         goldenPalette,
+        abBadges,
       };
     });
     assert.deepEqual(result.schemes, result.sharedSchemes,
@@ -2573,7 +3025,10 @@ test('Legacy Color and Color Hub share palette authority and settle an authorita
       'the GOLDEN scheme publishes five distinct authoritative hue slots');
     assert.notEqual(result.legacyPalette, result.before, 'a Legacy Color action republishes the shared palette');
     assert.equal(result.running, 'STOP', 'authoritative crossfade state renders as running');
-    assert.notEqual(result.hubPalette, result.legacyPalette, 'authoritative Color Hub broadcast replaces the shared legacy palette');
+    assert.equal(result.hubPalette, result.legacyPalette,
+      'two-colour crossfade keeps the exact-five ring unchanged while A/B transport updates');
+    assert.ok(result.abBadges.some((entry) => entry.isA) && result.abBadges.some((entry) => entry.isB),
+      'authoritative crossfade adopts A/B selection without replacing the five-slot ring');
     assert.equal(result.settled, 'RUN CROSSFADE', 'authoritative inactive state settles the crossfade control');
     await page.close();
   } finally { await browser.close(); }
@@ -2683,6 +3138,466 @@ test('operator evidence states open every Live Touch workspace with reachable co
     });
     await (await split.$('.colorhub-panel')).screenshot({ path: path.join(SCREENSHOT_DIR, 'constrained_split_900x560_color_scrolled_bottom_actions.png') });
     await split.close(); await ipad1194.close(); await ipad.close(); await desktop.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('Color Hub COLOR TRANSITION fader is visible, touch-accessible, and mirrors Legacy Color', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    await ensureWorkspacePanelOpen(page, 'colorhub-panel');
+    const result = await page.evaluate(() => {
+      const fader = document.getElementById('chColorTransitionFader');
+      const label = document.getElementById('chColorTransitionVal');
+      const legacyOut = document.getElementById('fadeVal');
+      if (!fader || !label) throw new Error('Color Hub transition fader is missing');
+      const before = window.ColorTransitionTiming.ms();
+      fader.value = '875';
+      fader.dispatchEvent(new Event('input', { bubbles: true }));
+      const afterHub = window.ColorTransitionTiming.ms();
+      const legacyMatches = legacyOut.textContent === window.ColorTransitionTiming.formatLabel(afterHub);
+      document.querySelector('.slider-vertical.fade').dispatchEvent(new CustomEvent('sliderchange', { bubbles: true }));
+      return {
+        visible: fader.offsetParent !== null,
+        width: fader.getBoundingClientRect().width,
+        height: fader.getBoundingClientRect().height,
+        label: label.textContent,
+        before,
+        afterHub,
+        legacyMatches,
+        ariaLive: document.getElementById('panelStatus').getAttribute('aria-live'),
+      };
+    });
+    assert.ok(result.visible, 'Color Hub transition fader must render in the open panel');
+    assert.ok(result.width >= 120 && result.height >= 32, JSON.stringify(result));
+    assert.equal(result.label, '4.4s');
+    assert.notEqual(result.afterHub, result.before);
+    assert.equal(result.ariaLive, 'polite');
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('Color Hub crossfade uses the shared fader and restages parallel five-colour targets', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    await ensureWorkspacePanelOpen(page, 'colorhub-panel');
+    const result = await page.evaluate(() => {
+      const writes = [];
+      document.addEventListener('colorautopilotwrite', (event) => {
+        writes.push({
+          method: event.detail.method,
+          body: JSON.parse(JSON.stringify(event.detail.body)),
+        });
+      });
+
+      const fader = document.getElementById('chColorTransitionFader');
+      fader.value = '875';
+      fader.dispatchEvent(new Event('input', { bubbles: true }));
+      const startTimingMs = window.ColorTransitionTiming.ms();
+      document.getElementById('chRunTwo').click();
+      const start = writes.find((write) => write.method === 'POST' && write.body.active === true);
+      if (!start) throw new Error('RUN CROSSFADE did not publish a start request');
+
+      document.dispatchEvent(new CustomEvent('colorautopilot', {
+        detail: {
+          active: true,
+          mode: 'palettes',
+          palettes: start.body.palettes,
+          delay_s: start.body.delay_s,
+          transitionMs: start.body.transitionMs,
+        },
+      }));
+      fader.value = '500';
+      fader.dispatchEvent(new Event('input', { bubbles: true }));
+      const activeTimingMs = window.ColorTransitionTiming.ms();
+      const timingPatch = writes.find((write) => (
+        write.method === 'PATCH'
+        && write.body.transitionMs === activeTimingMs
+        && write.body.palettes === undefined
+      ));
+      if (!timingPatch) throw new Error('running crossfade did not accept the shared fader timing');
+      document.querySelector('#paletteActions [data-act="contrast"]').click();
+      const restage = writes.find((write) => write.method === 'PATCH' && Array.isArray(write.body.palettes));
+      if (!restage) throw new Error('running crossfade did not publish a palette restage');
+
+      return {
+        startTimingMs,
+        activeTimingMs,
+        timingPatch: timingPatch.body,
+        start: start.body,
+        restage: restage.body,
+      };
+    });
+
+    assert.equal(result.start.transitionMs, result.startTimingMs,
+      'RUN CROSSFADE must use the visible COLOR TRANSITION fader');
+    assert.equal(result.timingPatch.transitionMs, result.activeTimingMs,
+      'moving the shared fader must retune a running crossfade');
+    assert.equal(result.start.palettes.length, result.start.livePalettes.length);
+    result.start.livePalettes.forEach((palette) => assert.equal(palette.length, 5));
+    assert.equal(result.restage.palettes.length, result.restage.livePalettes.length,
+      'a live restage must keep palettes and livePalettes parallel');
+    result.restage.livePalettes.forEach((palette) => assert.equal(palette.length, 5));
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('Color Hub A/B selection, capability depth, live feedback, and Follow Note readback stay coherent', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    await ensureWorkspacePanelOpen(page, 'colorhub-panel');
+    const result = await page.evaluate(() => {
+      const writes = [];
+      document.addEventListener('colorautopilotwrite', (event) => {
+        writes.push({
+          method: event.detail.method,
+          body: JSON.parse(JSON.stringify(event.detail.body)),
+        });
+      });
+
+      const ring = JSON.parse(document.getElementById('slots').dataset.palette);
+      document.getElementById('chArmBTwo').click();
+      document.querySelectorAll('#chRingTwo .ch-swatch-btn')[4].click();
+      const armedB = document.getElementById('chArmBTwo');
+      const selection = JSON.parse(document.getElementById('slots').dataset.paletteSelection);
+      document.getElementById('chRunTwo').click();
+      const start = writes.find((write) => write.method === 'POST' && write.body.active === true);
+      if (!start) throw new Error('crossfade start was not published');
+
+      document.dispatchEvent(new CustomEvent('livecolorcapability', {
+        detail: { outputSlots: 2, complete: true },
+      }));
+      const twoDepth = {
+        label: document.getElementById('chCapability').textContent,
+        stagedOnly: document.querySelectorAll('#chRingTwo .is-staged-only').length,
+      };
+      document.dispatchEvent(new CustomEvent('livecolorcapability', {
+        detail: { outputSlots: 5, complete: true },
+      }));
+      const fiveDepth = {
+        label: document.getElementById('chCapability').textContent,
+        stagedOnly: document.querySelectorAll('#chRingTwo .is-staged-only').length,
+      };
+
+      const beforeArmA = document.getElementById('chArmATwo').style.background;
+      const beforeArmB = document.getElementById('chArmBTwo').style.background;
+      document.dispatchEvent(new CustomEvent('colorautopilot', {
+        detail: {
+          active: true,
+          mode: 'palettes',
+          palettes: start.body.palettes,
+          livePalettes: start.body.livePalettes,
+          delay_s: start.body.delay_s,
+          transitionMs: start.body.transitionMs,
+          colorTransition: {
+            id: 'ui-feedback',
+            status: 'running',
+            params: {
+              colorPalette1: { h: 0.22, s: 1, v: 1 },
+              colorPalette2: { h: 0.77, s: 1, v: 1 },
+            },
+          },
+        },
+      }));
+      const liveFeedback = {
+        armAChanged: document.getElementById('chArmATwo').style.background !== beforeArmA,
+        armBChanged: document.getElementById('chArmBTwo').style.background !== beforeArmB,
+        selected: JSON.parse(document.getElementById('slots').dataset.paletteSelection),
+      };
+
+      document.dispatchEvent(new CustomEvent('colorautopilot', {
+        detail: {
+          active: true,
+          mode: 'followNote',
+          followNote: {
+            schemes: ['complement', 'contrast'],
+            methodHoldS: 30,
+            methodFadeS: 3,
+            noteFadeMs: 400,
+            sel: [1, 4],
+            shuffle: false,
+          },
+          currentScheme: 'contrast',
+          notePc: 4,
+          noteHue: 0.35,
+          nextMethodAtMs: null,
+        },
+      }));
+      document.querySelector('#chTabs [data-card="follow"]').click();
+      const followBefore = {
+        count: document.querySelectorAll('#chRingFollow .ch-swatch-btn').length,
+        a: [...document.querySelectorAll('#chRingFollow .ch-swatch-btn')]
+          .findIndex((button) => button.classList.contains('is-a')),
+        b: [...document.querySelectorAll('#chRingFollow .ch-swatch-btn')]
+          .findIndex((button) => button.classList.contains('is-b')),
+      };
+      document.getElementById('chArmAFollow').click();
+      document.querySelectorAll('#chRingFollow .ch-swatch-btn')[2].click();
+      const followPatch = writes.findLast((write) => (
+        write.method === 'PATCH' && write.body.followNote && Array.isArray(write.body.followNote.sel)
+      ));
+
+      return {
+        activeArmPainted: armedB.classList.contains('is-active')
+          && armedB.style.borderColor !== '',
+        selection,
+        ring,
+        start: start.body,
+        twoDepth,
+        fiveDepth,
+        liveFeedback,
+        followBefore,
+        followPatch: followPatch && followPatch.body,
+      };
+    });
+
+    assert.equal(result.activeArmPainted, true, 'ARM B must visibly arm with its assigned colour');
+    assert.deepEqual(result.selection, [0, 4]);
+    assert.deepEqual(result.start.palettes[0].c1, result.ring[0]);
+    assert.deepEqual(result.start.palettes[0].c2, result.ring[4]);
+    assert.deepEqual(result.start.livePalettes[0].slice(0, 2),
+      [result.start.palettes[0].c1, result.start.palettes[0].c2]);
+    assert.equal(result.twoDepth.stagedOnly, 3);
+    assert.match(result.twoDepth.label, /2-COLOUR PATTERN/);
+    assert.equal(result.fiveDepth.stagedOnly, 0);
+    assert.match(result.fiveDepth.label, /ALL 5 SAMPLES OUTPUT/);
+    assert.equal(result.liveFeedback.armAChanged, true);
+    assert.equal(result.liveFeedback.armBChanged, true);
+    assert.deepEqual(result.liveFeedback.selected, [0, 4],
+      'engine readback must not remap the operator A/B indices');
+    assert.deepEqual(result.followBefore, { count: 5, a: 1, b: 4 });
+    assert.deepEqual(result.followPatch.followNote.sel, [2, 4]);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('spatial contact limit shows a transient status notice without faulting ARM', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      const errors = [];
+      document.addEventListener('panelerror', (event) => errors.push(event.detail.message));
+      window.TouchSpatialContactGate.begin(1);
+      window.TouchSpatialContactGate.begin(2);
+      window.TouchSpatialContactGate.begin(3);
+      const status = document.getElementById('panelStatus');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const first = {
+        message: status.textContent,
+        hidden: status.hidden,
+        role: status.getAttribute('role'),
+        ariaLive: status.getAttribute('aria-live'),
+        errors,
+        armed: document.getElementById('armState').textContent,
+      };
+      await new Promise((resolve) => setTimeout(resolve, 3100));
+      return {
+        first,
+        cleared: status.hidden || status.textContent === '',
+      };
+    });
+    assert.match(result.first.message, /SPATIAL contact limit reached/);
+    assert.equal(result.first.hidden, false);
+    assert.equal(result.first.role, 'status');
+    assert.equal(result.first.ariaLive, 'polite');
+    assert.deepEqual(result.first.errors, []);
+    assert.equal(result.first.armed, 'DISARMED');
+    assert.equal(result.cleared, true);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('Live Touch errors have a dismiss button and a distinct new fault reopens the toast', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      document.dispatchEvent(new CustomEvent('panelerror', {
+        detail: { message: 'test dismissible Live Touch fault' },
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const firstPill = document.getElementById('wireStatus');
+      const dismiss = firstPill && firstPill.querySelector('button[aria-label="Dismiss Live Touch error"]');
+      const first = {
+        attached: !!(firstPill && firstPill.isConnected),
+        message: firstPill ? firstPill.textContent : '',
+        hasDismiss: !!dismiss,
+      };
+      if (dismiss) dismiss.click();
+      const dismissed = !!(firstPill && firstPill.isConnected);
+      document.dispatchEvent(new CustomEvent('panelerror', {
+        detail: { message: 'test dismissible Live Touch fault' },
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const sameFaultStayedDismissed = !firstPill.isConnected;
+      document.dispatchEvent(new CustomEvent('panelerror', {
+        detail: { message: 'different Live Touch fault' },
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const reopened = document.getElementById('wireStatus');
+      return {
+        first,
+        dismissed,
+        sameFaultStayedDismissed,
+        reopened: !!(reopened && reopened.isConnected),
+        reopenedMessage: reopened ? reopened.textContent : '',
+      };
+    });
+    assert.equal(result.first.attached, true);
+    assert.match(result.first.message, /test dismissible Live Touch fault/);
+    assert.equal(result.first.hasDismiss, true);
+    assert.equal(result.dismissed, false);
+    assert.equal(result.sameFaultStayedDismissed, true);
+    assert.equal(result.reopened, true);
+    assert.match(result.reopenedMessage, /different Live Touch fault/);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('strict preset effect reconciliation waits for an ordinary reconcile already in progress', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      window.__wire.phase = 'armed';
+      window.__wire.armed = true;
+      const baseFetch = window.fetch;
+      let releaseFirstStatus;
+      const firstStatusGate = new Promise((resolve) => { releaseFirstStatus = resolve; });
+      let statusCalls = 0;
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        if (path === '/global-effect-slots/status') {
+          statusCalls += 1;
+          if (statusCalls === 1) await firstStatusGate;
+          return new Response(JSON.stringify({ slots: [], controller: {} }), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return baseFetch(input, options);
+      };
+      const ordinary = window.__wire._reconcileEffectsForTest(false);
+      await Promise.resolve();
+      const strict = window.__wire._reconcileEffectsForTest(true);
+      releaseFirstStatus();
+      await Promise.all([ordinary, strict]);
+      return { statusCalls };
+    });
+    assert.ok(result.statusCalls >= 4,
+      `strict recall must perform a fresh readback after the active reconcile: ${JSON.stringify(result)}`);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('manual palette change keeps the shared transition timing authority', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(() => {
+      window.ColorTransitionTiming.setMs(1500, 'test');
+      document.querySelector('#paletteActions [data-act="contrast"]').click();
+      return {
+        ms: window.ColorTransitionTiming.ms(),
+        palette: document.getElementById('slots').dataset.palette,
+      };
+    });
+    assert.equal(result.ms, 1500);
+    assert.equal(JSON.parse(result.palette).length, 5);
+    await page.close();
+  } finally { await browser.close(); }
+});
+
+test('opening Presets keeps Spatial open, evicts Color Hub first, and does not clear contacts', { timeout: 45_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    for (const viewport of [
+      { name: '1024x682', width: 1024, height: 682 },
+      { name: '1194x834', width: 1194, height: 834 },
+    ]) {
+      const page = await browser.newPage();
+      await openPanel(page, { ...viewport, deviceScaleFactor: 1 });
+      await page.evaluate(() => {
+        window.__layoutPresetClears = [];
+        document.addEventListener('spatialcontactclearrequest', (event) => {
+          window.__layoutPresetClears.push(event.detail && event.detail.reason);
+        });
+        window.TouchSpatialContactGate.begin(7);
+      });
+      await ensureWorkspacePanelOpen(page, 'presets-panel');
+      const layout = await page.evaluate(() => {
+        const spatial = document.querySelector('.spatial-panel');
+        const presets = document.getElementById('presetsPanel');
+        const colorHub = document.getElementById('colorHubPanel');
+        return {
+          clears: window.__layoutPresetClears.slice(),
+          spatialOpen: spatial && !spatial.classList.contains('is-docked'),
+          presetsOpen: presets && !presets.classList.contains('is-docked'),
+          colorHubDocked: colorHub && colorHub.classList.contains('is-docked'),
+          spatialWidth: spatial ? spatial.getBoundingClientRect().width : 0,
+          presetsWidth: presets ? presets.getBoundingClientRect().width : 0,
+          hasPresetsLayoutClass: document.querySelector('.prow-top')?.classList.contains('has-presets-open'),
+          gatePrimary: window.TouchSpatialContactGate.state().primary,
+        };
+      });
+      assert.deepEqual(layout.clears, [], `opening Presets must not clear Spatial contacts at ${viewport.name}`);
+      assert.equal(layout.spatialOpen, true, `Spatial must stay open beside Presets at ${viewport.name}`);
+      assert.equal(layout.presetsOpen, true, `Presets must open at ${viewport.name}`);
+      assert.equal(layout.colorHubDocked, true, `Color Hub must be evicted before Presets at ${viewport.name}`);
+      assert.equal(layout.gatePrimary, 7, `live Spatial contact must survive Presets open at ${viewport.name}`);
+      assert.ok(layout.spatialWidth > 0 && layout.presetsWidth > 0,
+        `Spatial and Presets must both be visible at ${viewport.name}: ${JSON.stringify(layout)}`);
+      assert.equal(layout.hasPresetsLayoutClass, true,
+        `top row must enter Presets layout mode at ${viewport.name}`);
+      assert.ok(layout.spatialWidth >= layout.presetsWidth,
+        `Spatial must remain at least as wide as Presets at ${viewport.name}: ${JSON.stringify({ spatial: layout.spatialWidth, presets: layout.presetsWidth })}`);
+      await captureViewportEvidence(page, `native_ipad_landscape_${viewport.name}_spatial_presets_side_by_side.png`);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('preset recall preflight refuses store and disarmed states before mutation', { timeout: 30_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    const result = await page.evaluate(async () => {
+      const errors = [];
+      window.__wire.phase = 'armed';
+      window.__wire.armed = true;
+      await window.__wire._preflightPresetRecall({
+        storeReady: false,
+        storeError: null,
+        fxCatalogReady: true,
+      }).catch((error) => errors.push(error.message));
+      window.__wire.phase = 'idle';
+      window.__wire.armed = false;
+      await window.__wire._preflightPresetRecall({
+        storeReady: true,
+        storeError: null,
+        fxCatalogReady: true,
+      }).catch((error) => errors.push(error.message));
+      return { errors };
+    });
+    assert.ok(result.errors.some((message) => /preset store to confirm/i.test(message)),
+      `store preflight must refuse loudly: ${JSON.stringify(result.errors)}`);
+    assert.ok(result.errors.some((message) => /ARM Live Touch/i.test(message)),
+      `disarmed preflight must refuse loudly: ${JSON.stringify(result.errors)}`);
+    await page.close();
   } finally {
     await browser.close();
   }

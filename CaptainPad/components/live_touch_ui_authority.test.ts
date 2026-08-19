@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TOUCH_HTML = readFileSync(join(HERE, '..', '..', 'docs', 'ui', 'touch_control.html'), 'utf8');
-const TOUCH_WIRE = readFileSync(join(HERE, '..', '..', 'docs', 'ui', 'touch_control_wire.js'), 'utf8');
-const TOUCH_PIXEL_VIEWS = readFileSync(join(HERE, '..', '..', 'docs', 'ui', 'touch_control_pixel_views.js'), 'utf8');
+const TOUCH_HTML = readFileSync(join(HERE, '..', 'live_touch', 'touch_control.html'), 'utf8');
+const TOUCH_WIRE = readFileSync(join(HERE, '..', 'live_touch', 'touch_control_wire.js'), 'utf8');
+const TOUCH_PIXEL_VIEWS = readFileSync(join(HERE, '..', 'live_touch', 'touch_control_pixel_views.js'), 'utf8');
 const NATIVE_SURFACE = readFileSync(join(HERE, 'live_touch_surface.tsx'), 'utf8');
 const TOUCH_SCREEN = readFileSync(join(HERE, '..', 'app', '(tabs)', 'touch_control.tsx'), 'utf8');
 const CPC = readFileSync(join(HERE, 'CPCControls.tsx'), 'utf8');
@@ -58,6 +58,7 @@ describe('Live Touch professional workspace contract', () => {
 
   it('makes native pixel verification fresh, retryable, and awaited by ARM', () => {
     expect(TOUCH_HTML).toMatch(/touch_control_pixel_views\.js\?v=' \+ Date\.now\(\)/);
+    expect(TOUCH_HTML).toMatch(/pixel_view_projection\.js\?v=' \+ Date\.now\(\)/);
     expect(NATIVE_SURFACE).toContain('cacheEnabled={false}');
     expect(NATIVE_SURFACE).toContain('cacheMode="LOAD_NO_CACHE"');
     expect(NATIVE_SURFACE).toContain('nativePanelDocumentUrl(url, `${mountToken}-${reloadToken}`)');
@@ -95,10 +96,14 @@ describe('Live Touch professional workspace contract', () => {
     expect(TOUCH_SCREEN).toContain('pixelVerificationAcknowledgedRef.current');
     expect(TOUCH_SCREEN).toContain('message.documentId !== verifierDocumentRef.current');
     expect(TOUCH_SCREEN).toContain("message.type === 'touch-control-pixel-verification'");
-    expect(TOUCH_SCREEN).toContain('source=${message.staticVerified}');
-    expect(TOUCH_SCREEN).toContain('engine=${message.engineVerified}');
-    expect(TOUCH_SCREEN).toContain('load=${message.readyStatus}');
-    expect(TOUCH_SCREEN).toContain('phase=${message.phase}');
+    expect(TOUCH_SCREEN).toContain('LIVE TOUCH NOT READY — pixel-map verification did not complete.');
+    expect(TOUCH_SCREEN).toContain('LIVE TOUCH HANDOFF DID NOT COMPLETE');
+    expect(TOUCH_SCREEN).not.toContain('source=${message.staticVerified}');
+    expect(TOUCH_SCREEN).not.toContain('engine=${message.engineVerified}');
+    expect(TOUCH_SCREEN).not.toContain('(message.error ?');
+    expect(TOUCH_SCREEN).not.toContain(
+      'setBridgeError(error instanceof Error ? error.message : String(error))',
+    );
   });
 });
 

@@ -8,7 +8,7 @@
  * checked by eye.
  *
  * The interaction contract this implements is the operator-approved prototype
- * `docs/ui/color_palette_prototype.html` (report _199). Three of its behaviours
+ * `CaptainPad/live_touch/color_palette_prototype.html` (report _199). Three of its behaviours
  * are load-bearing and are ported EXACTLY, not re-derived:
  *
  *   1. THE PIN POLICY IS ONE FUNCTION. Every write path — wheel, Live Touch
@@ -290,7 +290,7 @@ export function mixHsv(a: Hsv, b: Hsv, t: number): string {
 
 // ── Live Touch sample swatches ──────────────────────────────────────────────
 // The five Palette-slot swatches of the Live Touch COLOURS panel, verbatim from
-// docs/ui/touch_control.html (lines 1680-1684), including that panel's own
+// CaptainPad/live_touch/touch_control.html (lines 1680-1684), including that panel's own
 // ENGINE / LOCAL tags. Declared as HEX and converted by the exact rgbToHsv
 // above, so a chip here is bit-identical to the chip over there. Provenance +
 // the honest caveat that these are the DESIGNED samples (a running Live Touch
@@ -580,7 +580,7 @@ export function blendLabel(t: number): string {
 
 // ── Live Touch SCHEME GENERATORS (docs/55 §2.1) ─────────────────────────────
 // The four palette generators of the Live Touch COLOURS panel, ported VERBATIM
-// from docs/ui/touch_control.html (the PALETTE GENERATORS block, ~3249-3302 —
+// from CaptainPad/live_touch/touch_control.html (the PALETTE GENERATORS block, ~3249-3302 —
 // the old TS module was deleted, so the HTML is the canonical source). Every
 // constant below is that file's, unchanged:
 //

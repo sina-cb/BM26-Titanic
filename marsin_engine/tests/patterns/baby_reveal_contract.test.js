@@ -678,11 +678,10 @@ test('every playlist entry names exactly the sliders its pattern exports', async
       if (declared.includes('sliderDirection')) {
         assert.equal(declared[1], 'sliderDirection', `${id}: sliderDirection must be the SECOND slider`);
       }
-      // The family is authored to the operator's reference operating point, and
-      // the playlist must LOAD there (report _305 §5 flagged the tease shipping
-      // defaults that did not match its tuning point).
-      assert.equal(entry.defaults.sliderLocalSpeed, 0.30,
-        `${entry.id}: the family is tuned at local speed 0.30 and the playlist must load there`);
+      // The Baby show carries a 30% lift over its prior 0.36 operating point,
+      // and every Reveal entry must load at the same 0.468 value.
+      assert.equal(entry.defaults.sliderLocalSpeed, 0.468,
+        `${entry.id}: every Reveal pattern must load with the latest local-speed lift`);
     } finally { pattern.close(); }
   }
 });

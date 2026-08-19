@@ -2,7 +2,7 @@
  * ColorsWindow — the body of the Deck workspace's COLORS window
  * (contract: docs/53_deck_workspace_windows.md §4 two-colour select, §5 PALETTE
  * TURNS; interaction spec: the operator-approved prototype
- * docs/ui/color_palette_prototype.html, report _199).
+ * CaptainPad/live_touch/color_palette_prototype.html, report _199).
  *
  * MOUNT CONTRACT (set by slice A, agent _208 — do not move it): this module
  * path, the `ColorsWindow` export name, and the `disabled` prop. The deck

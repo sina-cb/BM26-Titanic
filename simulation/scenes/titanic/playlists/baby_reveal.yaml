@@ -4,70 +4,70 @@ entries:
   - id: e_baby_reveal_heartbeat_bloom
     pattern: baby_reveal/01_heartbeat_bloom
     label: Baby Reveal - Heartbeat Bloom
-    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.88, sliderBloomSharpness: 0.5, sliderEchoDepth: 0.58 }
+    defaults: { sliderLocalSpeed: 0.468, sliderLevel: 0.88, sliderBloomSharpness: 0.5, sliderEchoDepth: 0.58 }
     modulations: []
     midiMappings: []
     notes: A heartbeat blooms out of the ship's heart in nested shells, twice per beat.
   - id: e_baby_reveal_rose_unfurl
     pattern: baby_reveal/02_rose_unfurl
     label: Baby Reveal - Rose Unfurl
-    defaults: { sliderLocalSpeed: 0.3, sliderDirection: 1.0, sliderLevel: 0.87, sliderPetalWidth: 0.52 }
+    defaults: { sliderLocalSpeed: 0.468, sliderDirection: 1.0, sliderLevel: 0.87, sliderPetalWidth: 0.52 }
     modulations: []
     midiMappings: []
     notes: A great rose of counter-wound petals opens and closes over the whole ship.
   - id: e_baby_reveal_constellation_flow
     pattern: baby_reveal/03_constellation_flow
     label: Baby Reveal - Constellation Flow
-    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.9, sliderStarSize: 0.54, sliderThreadReach: 0.48 }
+    defaults: { sliderLocalSpeed: 0.468, sliderLevel: 0.9, sliderStarSize: 0.54, sliderThreadReach: 0.48 }
     modulations: []
     midiMappings: []
     notes: Bright stars drift through a dim web of threads that stretch and snap between them.
   - id: e_baby_reveal_bubble_chorus
     pattern: baby_reveal/04_bubble_chorus
     label: Baby Reveal - Bubble Chorus
-    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.89, sliderBubbleSize: 0.5, sliderCellDensity: 0.52 }
+    defaults: { sliderLocalSpeed: 0.468, sliderLevel: 0.89, sliderBubbleSize: 0.5, sliderCellDensity: 0.52 }
     modulations: []
     midiMappings: []
     notes: Big soft bubbles swell, crowd each other and pop across the hull.
   - id: e_baby_reveal_ribbon_braid
     pattern: baby_reveal/05_ribbon_braid
     label: Baby Reveal - Ribbon Braid
-    defaults: { sliderLocalSpeed: 0.3, sliderDirection: 1.0, sliderLevel: 0.89, sliderBraidAmount: 0.56 }
+    defaults: { sliderLocalSpeed: 0.468, sliderDirection: 1.0, sliderLevel: 0.89, sliderBraidAmount: 0.56 }
     modulations: []
     midiMappings: []
     notes: Three thick ribbons braid the length of the ship, passing over and under each other.
   - id: e_baby_reveal_diamond_quilt
     pattern: baby_reveal/06_diamond_quilt
     label: Baby Reveal - Diamond Quilt
-    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.91, sliderSeamWidth: 0.5, sliderQuiltScale: 0.52 }
+    defaults: { sliderLocalSpeed: 0.468, sliderLevel: 0.91, sliderSeamWidth: 0.5, sliderQuiltScale: 0.52 }
     modulations: []
     midiMappings: []
     notes: Travelling stitches lock a field of large diamonds into a quilt.
   - id: e_baby_reveal_tidal_terraces
     pattern: baby_reveal/07_tidal_terraces
     label: Baby Reveal - Tidal Terraces
-    defaults: { sliderLocalSpeed: 0.3, sliderDirection: 1.0, sliderLevel: 0.88, sliderTerraceCount: 0.5 }
+    defaults: { sliderLocalSpeed: 0.468, sliderDirection: 1.0, sliderLevel: 0.88, sliderTerraceCount: 0.5 }
     modulations: []
     midiMappings: []
     notes: Stepped terraces climb the rig like a stadium wave, riser by riser.
   - id: e_baby_reveal_comet_lullaby
     pattern: baby_reveal/08_comet_lullaby
     label: Baby Reveal - Comet Lullaby
-    defaults: { sliderLocalSpeed: 0.3, sliderDirection: 1.0, sliderLevel: 0.88, sliderTailLength: 0.56 }
+    defaults: { sliderLocalSpeed: 0.468, sliderDirection: 1.0, sliderLevel: 0.88, sliderTailLength: 0.56 }
     modulations: []
     midiMappings: []
     notes: Soft comet heads sail the hull trailing long dim tails through black.
   - id: e_baby_reveal_lighthouse_fans
     pattern: baby_reveal/09_lighthouse_fans
     label: Baby Reveal - Lighthouse Fans
-    defaults: { sliderLocalSpeed: 0.3, sliderDirection: 1.0, sliderLevel: 0.9, sliderFanCount: 0.45 }
+    defaults: { sliderLocalSpeed: 0.468, sliderDirection: 1.0, sliderLevel: 0.9, sliderFanCount: 0.45 }
     modulations: []
     midiMappings: []
     notes: Rotating lighthouse fans sweep the whole ship through crisp black shutters.
   - id: e_baby_reveal_celebration_burst
     pattern: baby_reveal/10_celebration_burst
     label: Baby Reveal - Celebration Burst
-    defaults: { sliderLocalSpeed: 0.3, sliderLevel: 0.92, sliderBurstWidth: 0.52, sliderBurstReach: 0.64 }
+    defaults: { sliderLocalSpeed: 0.468, sliderLevel: 0.92, sliderBurstWidth: 0.52, sliderBurstReach: 0.64 }
     modulations: []
     midiMappings: []
     notes: Shells and rays fire from the ship in a full celebration finale.

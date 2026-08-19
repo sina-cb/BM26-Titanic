@@ -52,13 +52,13 @@ presets:
   - name: Top Right Half
     key: topright
     position:
-      x: 22
-      'y': 55
-      z: -8
+      x: 92.272
+      'y': 19.503
+      z: 92.272
     target:
-      x: 22
-      'y': 6
-      z: -8
+      x: -2
+      'y': 8
+      z: -5.341
   - name: Top Left Half
     key: topleft
     position:

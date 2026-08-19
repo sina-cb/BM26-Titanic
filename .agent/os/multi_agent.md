@@ -6,7 +6,7 @@ running in **isolated git worktrees** without stepping on each other's
 filesystem, ports, or branch state, then collect and merge their results.
 
 It exists because parallelizing real engineering work in this repo (engine,
-sim, CaptainPad, control_podium) is only safe when each agent owns:
+sim, CaptainPad, LookingGlass/control_podium) is only safe when each agent owns:
 
 1. its own working tree (no `.git/index` lock races),
 2. its own branch (no accidental cross-task commits),
@@ -197,7 +197,7 @@ including the operator's main checkout, may already be using them):
 | Audio Slice OSC-in (local-only) | `10001` | `config.yaml::audioCompanion.audioSlice.listenPort` (Audio Slice → Companion; see docs/37 §6.2) |
 | CaptainPad `web:serve` | `6967` | `CaptainPad/package.json::web:serve` |
 | CaptainPad Expo Metro | `8081` | Expo default |
-| Server bridge `/health` | `7099` | `control_podium/.config.bridge.yaml::health.port` |
+| Server bridge `/health` | `7099` | `LookingGlass/control_podium/.config.bridge.yaml::health.port` |
 
 Per-slot allocation (use these in your worktree):
 

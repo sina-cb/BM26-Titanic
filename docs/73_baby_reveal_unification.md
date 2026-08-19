@@ -574,9 +574,10 @@ against **18.93×**, not against a comfortable 4×. Ceilings: no ownership front
 crosses a fixed point more often than once per 2 s at the legal maximum, and no
 per-frame phase step exceeds 0.02 of a period at 40 fps.
 
-The playlist SAVES `sliderLocalSpeed: 0.30` on every entry, so the playlist
-loads at the point the patterns were tuned to. (`_305` §5 flagged that the tease
-ships 0.40–0.47 defaults against a 0.30 tuning point; we are not repeating it.)
+The pattern sources retain `localSpeed: 0.30` as their authoring reference.
+The show playlist deliberately SAVES `sliderLocalSpeed: 0.468` on every Reveal
+entry: the earlier 20 percent lift to 0.36 followed by a Reveal-only 30 percent
+lift. Baby Tease keeps its independently tuned defaults.
 
 ### 4.3 MFT parameter law
 
@@ -616,7 +617,7 @@ that makes `y` the primary axis.
 | 10 | `10_celebration_burst` | `e_baby_reveal_celebration_burst` | Shells and rays fire from the ship in a full celebration finale. |
 
 `06_diamond_quilt` is the **hero**: the show's reveal choice pins it by
-`entryId`, so it is the look that rises under the white bloom at t = 2700 ms
+`entryId`, so it is the look that rises under the white bloom at t = 3000 ms
 regardless of playlist order or later curation.
 
 The arc is calm → building → celebratory. Numbering **is** playlist order;
@@ -767,7 +768,7 @@ reference point** (§4.2).
   the metronome; signs = a 4×3 mini quilt with the same three states.
 - **Params:** `sliderLocalSpeed 0.30`, `sliderLevel 0.91`,
   `sliderSeamWidth 0.50`, `sliderQuiltScale 0.52`.
-- **Hero note:** this look lands under the white bloom at t = 2700 ms. It must
+- **Hero note:** this look lands under the white bloom at t = 3000 ms. It must
   read instantly and at full strength from the first frame — no slow build-in.
 
 #### K07 — `07_tidal_terraces`

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const TakeState = require('../../docs/ui/touch_control_take_state.js');
+const TakeState = require('../../CaptainPad/live_touch/touch_control_take_state.js');
 
 class FakeClock {
   constructor() {
@@ -273,4 +273,17 @@ test('lifecycle stop cancels stale scheduled generations and emits no late frame
   await run.clock.tick(1000);
   assert.equal(run.output.length, countAfterStop, 'cancelled generation emits no stale timer sample');
   assert.equal(run.machine.state().contactDown, false);
+});
+
+test('settle cleanup emits one authoritative lift during clear', async () => {
+  const run = harness();
+  run.machine.replace([[0, 0.2, 0.2, 1], [40, 0.8, 0.8, 0]]);
+  await run.machine.play(true);
+  await run.clock.tick(0);
+  const settleClear = run.machine.clear();
+  assert.equal(run.machine.state().phase, 'settling');
+  await settleClear;
+  assert.equal(run.output.filter(({ meta }) => meta.kind === 'settle').length, 1);
+  assert.equal(run.output.at(-1).sample.down, false);
+  assert.equal(run.machine.state().phase, 'empty');
 });

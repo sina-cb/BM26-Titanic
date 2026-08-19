@@ -1218,10 +1218,20 @@ export class ColorAutopilot {
       // Reuse the FULL validator so a restage cannot smuggle in a shape a start
       // would have refused. `active`/`delay_s` are supplied from the live state
       // purely so the shared validator has a complete object to check.
-      const probe = ColorAutopilot.validate(
-        { active: true, palettes: sparse.palettes, delay_s: next.delay_s, transitionMs: next.transitionMs },
-        knownIds);
+      const probeBody = {
+        active: true,
+        palettes: sparse.palettes === undefined ? next.palettes : sparse.palettes,
+        delay_s: next.delay_s,
+        transitionMs: next.transitionMs,
+      };
+      if (sparse.livePalettes !== undefined) probeBody.livePalettes = sparse.livePalettes;
+      const probe = ColorAutopilot.validate(probeBody, knownIds);
       next.palettes = probe.palettes;
+      if (probe.livePalettes !== undefined) {
+        next.livePalettes = probe.livePalettes;
+      } else {
+        delete next.livePalettes;
+      }
       // The cursor is PRESERVED (clamped): a ring restage keeps its place in the
       // rotation, which is what makes cadence, fade AND phase survive a scheme
       // swap (docs/59 §5.2 — `_224`'s one-tap restage becomes this patch).

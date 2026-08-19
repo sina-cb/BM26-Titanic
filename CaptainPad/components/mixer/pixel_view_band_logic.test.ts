@@ -329,7 +329,7 @@ describe('resolveBandViewId', () => {
 // exports.
 
 const REAL_ARTIFACT_PATH = path.resolve(
-  __dirname, '..', '..', '..', 'docs', 'ui', 'touch_control_pixel_views.json',
+  __dirname, '..', '..', 'live_touch', 'touch_control_pixel_views.json',
 );
 
 const REAL_PARSED = parsePixelViewArtifact(JSON.parse(fs.readFileSync(REAL_ARTIFACT_PATH, 'utf8')));

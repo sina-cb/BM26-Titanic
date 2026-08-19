@@ -82,7 +82,7 @@ describe('use_pixel_view_artifact', () => {
     await loadPixelViewArtifact();
     await loadEnginePixelCount();
 
-    expect(calls).toContain('http://sim.test:6969/docs/ui/touch_control_pixel_views.json');
+    expect(calls).toContain('http://sim.test:6969/CaptainPad/live_touch/touch_control_pixel_views.json');
     expect(calls).toContain('http://engine.test:6968/model/group-layout');
   });
 

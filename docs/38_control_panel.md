@@ -603,7 +603,7 @@ matching the offline-readiness requirement.
 ### 6.2 `panel_bridge` — host service on the Pi
 
 Propose a new host-side service at **`LookingGlass/panel_bridge/`** (does not
-exist yet), by analogy to the repo's existing `control_podium/server_bridge`
+exist yet), by analogy to the repo's existing `LookingGlass/control_podium/server_bridge`
 (see `22_server_bridge.md`). Likely Python, deployed on the **same Raspberry Pi
 as MarsinEngine**, on the podium.
 

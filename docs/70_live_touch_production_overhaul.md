@@ -363,7 +363,7 @@ Scope: §2 complete — SPATIAL default + reorder via `data-mode`, EFFECT
 CONTROL rename, POOL→INVERT label/help, tiered button system (44pt pills;
 BRUSH cluster collapse), cross-mode residue removal, portrait header
 collision fix, PRESETS/docked-tab affordance, audio-rail presentation.
-Files: `docs/ui/touch_control.html`, `touch_control_wire.js` (mode
+Files: `CaptainPad/live_touch/touch_control.html`, `touch_control_wire.js` (mode
 predicates only), `app/(tabs)/touch_control.tsx` (header chrome),
 HTML-parsing contract tests.
 Acceptance:
@@ -495,7 +495,7 @@ newest).
 
 ### Pad / panel (no engine restart)
 
-- W1 entirely; the HTML panel (`docs/ui/*`) is served from disk by the sim
+- W1 entirely; the HTML panel (`CaptainPad/live_touch/*`) is served from disk by the sim
   (:6969) — an iframe reload picks it up; CaptainPad tab-chrome changes
   need a web dist export / native rebuild per docs/62 (`rebuild-pad`).
 - W2/W3/W4 panel sides ride the same panel-reload path.
@@ -623,7 +623,7 @@ service hatch), toggled by one 44pt pill in the panel header beside
 
 ### 10.3 W6 — the implementer package
 
-Scope: `docs/ui/touch_control.html` only (CSS + the small state-toggle and
+Scope: `CaptainPad/live_touch/touch_control.html` only (CSS + the small state-toggle and
 narration script; `touch_control_wire.js` only if the level fader's writer
 needs a named export — prefer reusing the existing merge path).
 Sequencing: **after `_289`** (the W2/W3/W4 panel sides) — same-file waves
@@ -780,7 +780,7 @@ horizontal scroll, never wraps):
 
 ### 11.4 W7 — the implementer package
 
-Scope: `docs/ui/touch_control.html` (dock script + chip-row CSS/markup;
+Scope: `CaptainPad/live_touch/touch_control.html` (dock script + chip-row CSS/markup;
 panel-reload only, no engine change). Sequence: **after `_289` and the W6
 effects wave** — same-file waves never interleave; implementation slot
 assigned by the coordinator (`_294+`).

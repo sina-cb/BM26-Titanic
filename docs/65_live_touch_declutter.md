@@ -13,7 +13,7 @@ Operator orders (verbatim intent, live iPad testing):
    optimize that as well."
 
 Design status: contract for 2–3 Sonnet implementers + an Opus validation
-walk. Surface: the sim-served touch panel — `docs/ui/touch_control.html` +
+walk. Surface: the sim-served touch panel — `CaptainPad/live_touch/touch_control.html` +
 siblings — hosted by CaptainPad in an iframe (web) / react-native-webview
 (native, report `_252`). This is the operator's tuned surface: **restraint,
 not a redesign.** Layout only; every control behavior (wheel, brush, spatial
@@ -273,8 +273,8 @@ rules) at 1366×1024 and 1024×1366; confirm the standalone numbers hold and
 record the table in the landing report. No product code.
 
 **W1 — audio strip minimal + hideable (Sonnet A).** Files:
-`docs/ui/touch_control.html` (meter CSS §4.1, dock-script: meter-strip as a
-no-floor bar citizen §4.2, comment updates), `docs/ui/touch_control_wire.js`
+`CaptainPad/live_touch/touch_control.html` (meter CSS §4.1, dock-script: meter-strip as a
+no-floor bar citizen §4.2, comment updates), `CaptainPad/live_touch/touch_control_wire.js`
 (`buildMeter` card markup: drop `.sig-sub` to `title`, trace 20 px; skip
 `drawMeterTraces` while docked). Persistence probes: v2 store without
 `meter-strip` → open; with → docked; corrupt store → open + rail intact.

@@ -4,12 +4,13 @@
 // Operator, verbatim: *"show the current pattern name on the auto pilot, and
 // simplify the auto pilot, play, and time, 1, 5, 10, 15 that's it."*
 //
-// Four things, top to bottom, and nothing else drawn:
+// Five things, top to bottom, and nothing else drawn:
 //
 //   1. NOW PLAYING — the live name of the deck's active playlist entry.
-//   2. PLAY / PAUSE — the rotation on/off.
-//   3. Time pills 5 / 15 / 30 / 60 SECONDS.
-//   4. Transition selection — SINGLE / SHUFFLE ALL, with the live duration.
+//   2. GLOBAL SPEED — the shared rig clock used by every Baby pattern.
+//   3. PLAY / PAUSE — the rotation on/off.
+//   4. Time pills 5 / 15 / 30 / 60 SECONDS.
+//   5. Transition selection — SINGLE / SHUFFLE ALL, with the live duration.
 //
 // What this replaced was the deck's full `<PatternAutopilotPanel>`: cadence
 // pills from 1 s to 3 m, pattern-order shuffle, GROUP + SIZE + DWELL, a full
@@ -38,6 +39,7 @@ import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 
 import { usePalette } from '@/hooks/use-theme';
+import { MiniFader } from '@/components/ui/MiniFader';
 import {
   PILL_SECONDS,
   TRANSITION_SELECTIONS,
@@ -66,14 +68,17 @@ export interface ShowAutopilotCardProps {
   transitionShuffle: boolean;
   /** Live transition time; rendered honestly even after a live override. */
   transitionDurationMs: number;
+  /** Shared 0..1 rig clock. Kept live from the engine, never card-local state. */
+  globalSpeed: number;
   /** Dim to near-black — a ceremonial stage is live elsewhere on the column. */
   dimmed: boolean;
   onChange: (patch: EventAutopilotPatch) => void;
+  onGlobalSpeedChange: (speed: number) => void;
 }
 
 export function ShowAutopilotCard({
   active, everySec, nowPlaying, transitionShuffle, transitionDurationMs,
-  dimmed, onChange,
+  globalSpeed, dimmed, onChange, onGlobalSpeedChange,
 }: ShowAutopilotCardProps) {
   const C = usePalette();
   const title = nowPlayingTitle(nowPlaying);
@@ -138,7 +143,18 @@ export function ShowAutopilotCard({
         {title === null ? '—' : title}
       </Text>
 
-      {/* ── 2. PLAY / PAUSE ──────────────────────────────────────────── */}
+      {/* ── 2. GLOBAL SPEED ───────────────────────────────────────────── */}
+      <View style={{ width: '100%', maxWidth: 440, marginTop: 16 }}>
+        <MiniFader
+          label="GLOBAL SPEED"
+          badge="RIG"
+          value={Math.max(0, Math.min(1, globalSpeed))}
+          disabled={dimmed}
+          onChange={onGlobalSpeedChange}
+        />
+      </View>
+
+      {/* ── 3. PLAY / PAUSE ──────────────────────────────────────────── */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 16 }}>
         <TouchableOpacity
           onPress={() => onChange({ active: !active })}
@@ -171,7 +187,7 @@ export function ShowAutopilotCard({
         </TouchableOpacity>
       </View>
 
-      {/* ── 3. TIME PILLS ────────────────────────────────────────────── */}
+      {/* ── 4. TIME PILLS ────────────────────────────────────────────── */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 }}>
         {PILL_SECONDS.map((seconds) => {
           const lit = litSeconds === seconds;
@@ -231,7 +247,7 @@ export function ShowAutopilotCard({
         </Text>
       )}
 
-      {/* ── 4. TRANSITION STYLE ─────────────────────────────────────────── */}
+      {/* ── 5. TRANSITION STYLE ─────────────────────────────────────────── */}
       <Text style={{
         fontFamily: 'Inter_400Regular',
         fontSize: 11,

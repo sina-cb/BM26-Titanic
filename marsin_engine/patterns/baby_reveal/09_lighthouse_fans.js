@@ -173,7 +173,7 @@ function fanSweep(ang, rad, wobble, blades, blockClock, primaryBand, wakeBand) {
 export function render3D(index, x, y, z) {
   if (fixtureType == FIX_VINTAGE_6) {
     var head = pixelLocalIndex % 6.0;
-    fanSweep(head / 6.0, head / 5.0, 0.0, 6.0, spinClock * 1.5, 0.22, 0.55);
+    fanSweep(head / 6.0, head / 5.0, 0.0, 6.0, spinClock * 1.5, 0.23, 0.55);
     return;
   }
 
@@ -185,7 +185,7 @@ export function render3D(index, x, y, z) {
     var signDY = signY - 0.5;
     var signAng = atan2(signDY, signDX) / PI2 + 0.5;
     var signRad = hypot(signDX, signDY);
-    fanSweep(signAng, signRad, 0.0, 4.0, spinClock / 3.0, 0.24, 0.55);
+    fanSweep(signAng, signRad, 0.0, 4.0, spinClock / 3.0, 0.25, 0.55);
     return;
   }
 
@@ -197,5 +197,5 @@ export function render3D(index, x, y, z) {
   var rad = hypot(shipLong - 0.5, shipWide - 0.5);
   var blades = 3.0 + floor(liveFanCount * 3.0);
   var wobble = sin(y * PI2 + breathClock * 0.7) * 0.05;
-  fanSweep(ang, rad, wobble, blades, spinClock, 0.22, 0.55);
+  fanSweep(ang, rad, wobble, blades, spinClock, 0.23, 0.55);
 }

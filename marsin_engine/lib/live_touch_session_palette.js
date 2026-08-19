@@ -35,6 +35,51 @@ export function lerpHsv(a, b, t) {
   };
 }
 
+function validateSelection(sel, label = 'selection') {
+  if (!Array.isArray(sel) || sel.length !== 2) {
+    throw new Error(`${label} must contain exactly two palette indices`);
+  }
+  const pair = sel.map((index, channel) => {
+    if (!Number.isInteger(index) || index < 0 || index >= LIVE_TOUCH_RING_LENGTH) {
+      throw new Error(`${label}[${channel}] must be an integer in [0,${LIVE_TOUCH_RING_LENGTH})`);
+    }
+    return index;
+  });
+  if (pair[0] === pair[1]) {
+    throw new Error(`${label} must choose two different palette samples`);
+  }
+  return pair;
+}
+
+/**
+ * Turn the five visible candidate samples into the pattern's five output slots.
+ * The selected A/B samples always lead so two-colour patterns consume exactly
+ * the operator's pair; five-colour patterns receive that pair plus every
+ * remaining sample once, in the visible ring's order.
+ */
+export function outputPaletteFromSelection(ring, sel) {
+  const base = assertExactFiveHsv(ring, 'ring');
+  const pair = validateSelection(sel);
+  const remaining = base.filter((_color, index) => index !== pair[0] && index !== pair[1]);
+  return [base[pair[0]], base[pair[1]], ...remaining].map(cloneHsv);
+}
+
+/** Map an output-ordered frame back onto the five visible candidate samples. */
+export function candidatePaletteFromOutput(output, sel) {
+  const ordered = assertExactFiveHsv(output, 'output');
+  const pair = validateSelection(sel);
+  const candidate = new Array(LIVE_TOUCH_RING_LENGTH);
+  candidate[pair[0]] = cloneHsv(ordered[0]);
+  candidate[pair[1]] = cloneHsv(ordered[1]);
+  const remainingIndices = [0, 1, 2, 3, 4].filter(
+    index => index !== pair[0] && index !== pair[1],
+  );
+  remainingIndices.forEach((index, offset) => {
+    candidate[index] = cloneHsv(ordered[offset + 2]);
+  });
+  return candidate;
+}
+
 export function overlayFrameFromPairParams(ring, sel, params) {
   const base = assertExactFiveHsv(ring, 'ring');
   const pairSel = Array.isArray(sel) && sel.length === 2 ? sel : [0, 1];
@@ -67,15 +112,10 @@ export function overlayFrameFromTransition(ring, sel, fromFive, toFive, progress
 }
 
 export function livePaletteForCrossfadeEntry(ring, sel, c1, c2) {
-  const base = assertExactFiveHsv(ring, 'ring');
-  const pairSel = Array.isArray(sel) && sel.length === 2 ? sel : [0, 1];
+  const base = outputPaletteFromSelection(ring, sel);
   const left = typeof c1 === 'number' ? { h: c1, s: 1, v: 1 } : cloneHsv(c1);
   const right = typeof c2 === 'number' ? { h: c2, s: 1, v: 1 } : cloneHsv(c2);
-  return base.map(function (color, index) {
-    if (index === pairSel[0]) return left;
-    if (index === pairSel[1]) return right;
-    return color;
-  });
+  return [left, right, ...base.slice(2)].map(cloneHsv);
 }
 
 export function buildCrossfadeLivePalettes(ring, sel, palettes) {

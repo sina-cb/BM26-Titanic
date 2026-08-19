@@ -13,7 +13,7 @@ Introduced 2026-07-01 (PR #43). Companion git rules: `git.md`.
 | Class | Where it lives instead |
 | --- | --- |
 | Secrets: keys, tokens, passwords, passphrases | `$BM26_SECRETS` / `$BM26_DEPLOY_REGISTRY` env-provided deploy source; gitignored `marsin_engine/secret.yaml`; gitignored `.ssh.secret` |
-| Device MAC addresses | Gitignored `control_podium/.config.nodes.pairing.yaml` (see "MAC pairing overlay" below) or the external deploy registry |
+| Device MAC addresses | Gitignored `LookingGlass/control_podium/.config.nodes.pairing.yaml` (see "MAC pairing overlay" below) or the external deploy registry |
 | Home / dev LAN + Tailscale IPs | Nowhere. Redact in prose as `10.x.x.NNN` (keep the last octet for readability — the `x` breaks IP parsing) |
 | WiFi SSIDs / AP passphrases | Env-provided build secrets. (Exception: the panel's broadcast AP name is documented non-secret in its `config.yaml`) |
 | Personal emails, addresses, operator PII | Nowhere. Bot plumbing (`noreply@...`) is fine |
@@ -151,7 +151,7 @@ The node table is split like `utils/config_store.py`:
   Roles and ACL only; NEVER hardware identifiers.
 - `.config.nodes.pairing.yaml` — **gitignored.** node id → `usb_mac`.
   Written only by `firmware/deploy.py` (`--pair` / auto-pair / `--clear`);
-  merged at load by `control_podium/utils/nodes_config.py::load_nodes()`.
+  merged at load by `LookingGlass/control_podium/utils/nodes_config.py::load_nodes()`.
 
 Handling rules:
 

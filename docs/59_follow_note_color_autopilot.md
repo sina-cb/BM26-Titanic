@@ -89,7 +89,7 @@ Live Touch's client-side `audionote` listener is irrelevant to the rig path.
 
 **Note → hue mapping: `audioNoteHue`, NOT a fresh Scriabin port.** Live
 Touch's FOLLOW NOTE uses its own client-side Scriabin table with per-note S/V
-(`docs/ui/touch_control.html:3401-3414`). The engine's canonical note→colour
+(`CaptainPad/live_touch/touch_control.html:3401-3414`). The engine's canonical note→colour
 system is the **companion's configurable `noteColors` wheel**
 (`audio/config/derived_signals_config.js`, editable in the companion UI,
 circle-of-fifths layout, hue-only by design — "it never dims the color or

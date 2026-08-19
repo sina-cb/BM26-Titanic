@@ -90,6 +90,9 @@ seam — never point the live stack at it):
   leftovers by hand.
 - `withNativePad` — whether this run asked for the supervised Expo Go Metro, so
   `status` knows to probe the extra `captainpad-native` row.
+- `devNoAuth` — whether this run launched with `--dev-no-auth`; `status` prints
+  an unmistakable auth-bypass warning when true. Legacy locks without the field
+  are treated as false.
 - `metroReadyAt` — when a launcher Metro passed readiness. `rebuild-pad` refuses
   to export while it is absent on a stack that has a Metro: exporting into a
   still-warming Metro's cache is the corruption that produces a blank-page
@@ -163,3 +166,22 @@ Ctrl+C in its terminal) → `node launcher.js <profile>`.
 
 The **coordinator** owns every launcher action in this table. The operator owns
 his own Expo instances.
+
+## `--dev-no-auth` — development-only CaptainPad auth bypass
+
+Contributors without the private `BM26_SECRETS` repository can run **`dev` or
+`dev-lite` with `--dev-no-auth`** to disable CaptainPad privileged auth for that
+session. The launcher:
+
+- refuses the flag on **`prod`** (usage error, exit 2 — before any child spawn);
+- uses **`resolveCaptainPadAuthPreflight()`** (pure, exported for tests) to skip
+  `BM26_SECRETS` preflight when the flag is present;
+- sets **`BM26_CAPTAINPAD_AUTH_REQUIRED=0`** on the supervised engine — the ONE
+  authority; no hidden environment default;
+- records **`devNoAuth: true`** in the lock; `node launcher.js status` prints an
+  unmistakable auth-bypass warning when that field is set (legacy locks without
+  it read as false);
+- prints an unmistakable **DEVELOPMENT AUTH BYPASS** warning.
+
+Without the flag, behavior is unchanged: missing secrets fail loudly at
+preflight. Never use `--dev-no-auth` on the show server or in production.

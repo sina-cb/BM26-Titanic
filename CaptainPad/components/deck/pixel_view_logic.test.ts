@@ -85,7 +85,7 @@ const nodeBase64 = (b64: string) => new Uint8Array(Buffer.from(b64, 'base64'));
 
 describe('pixel_view_logic — artifact contract', () => {
   it('pins the sim artifact route and schema version', () => {
-    expect(PIXEL_VIEW_ARTIFACT_PATH).toBe('/docs/ui/touch_control_pixel_views.json');
+    expect(PIXEL_VIEW_ARTIFACT_PATH).toBe('/CaptainPad/live_touch/touch_control_pixel_views.json');
     expect(PIXEL_VIEW_SCHEMA_VERSION).toBe(4);
   });
 
@@ -608,7 +608,7 @@ describe('pixel_view_logic — honesty about what is on screen', () => {
 
 describe('pixel_view_logic — the checked-in simulation artifact', () => {
   const artifactPath = path.resolve(
-    __dirname, '..', '..', '..', 'docs', 'ui', 'touch_control_pixel_views.json',
+    __dirname, '..', '..', 'live_touch', 'touch_control_pixel_views.json',
   );
 
   it('exists where the simulation serves it from', () => {

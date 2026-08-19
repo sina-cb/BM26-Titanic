@@ -25,11 +25,11 @@ describe('Live Touch host bridge', () => {
   it('resolves the simulation host from the CaptainPad origin and declares that exact origin', () => {
     expect(resolveLiveTouchPanelUrl(
       'http://127.0.0.1:6968/',
-      '/docs/ui/touch_control.html',
+      '/CaptainPad/live_touch/touch_control.html',
       '6969',
       'http://192.0.2.4:6967',
     )).toBe(
-      'http://192.0.2.4:6969/docs/ui/touch_control.html'
+      'http://192.0.2.4:6969/CaptainPad/live_touch/touch_control.html'
       + '?captainpad_origin=http%3A%2F%2F192.0.2.4%3A6967'
       + '&captainpad_engine_origin=http%3A%2F%2F127.0.0.1%3A6968'
       + '&captainpad_live_touch_protocol=2',
@@ -39,10 +39,10 @@ describe('Live Touch host bridge', () => {
   it('keeps and declares the configured engine origin when no browser origin exists', () => {
     expect(resolveLiveTouchPanelUrl(
       'http://show-host.local:6968/',
-      '/docs/ui/touch_control.html',
+      '/CaptainPad/live_touch/touch_control.html',
       '6969',
     )).toBe(
-      'http://show-host.local:6969/docs/ui/touch_control.html'
+      'http://show-host.local:6969/CaptainPad/live_touch/touch_control.html'
       + '?captainpad_engine_origin=http%3A%2F%2Fshow-host.local%3A6968'
       + '&captainpad_live_touch_protocol=2',
     );
@@ -56,12 +56,12 @@ describe('Live Touch host bridge', () => {
     // own origin check would then bless.
     expect(resolveLiveTouchPanelUrl(
       'http://192.0.2.4:6968/',
-      '/docs/ui/touch_control.html',
+      '/CaptainPad/live_touch/touch_control.html',
       '6969',
       null,
       LIVE_TOUCH_NATIVE_EMBED,
     )).toBe(
-      'http://192.0.2.4:6969/docs/ui/touch_control.html'
+      'http://192.0.2.4:6969/CaptainPad/live_touch/touch_control.html'
       + '?captainpad_embed=native'
       + '&captainpad_engine_origin=http%3A%2F%2F192.0.2.4%3A6968'
       + '&captainpad_live_touch_protocol=2',
@@ -79,7 +79,7 @@ describe('Live Touch host bridge', () => {
   it('refuses to claim both a parent origin and a native embed', () => {
     expect(() => resolveLiveTouchPanelUrl(
       'http://127.0.0.1:6968/',
-      '/docs/ui/touch_control.html',
+      '/CaptainPad/live_touch/touch_control.html',
       '6969',
       'http://192.0.2.4:6967',
       LIVE_TOUCH_NATIVE_EMBED,
@@ -88,11 +88,11 @@ describe('Live Touch host bridge', () => {
 
   it('leaves the web URL byte-identical when no embed mode is given', () => {
     const withoutArg = resolveLiveTouchPanelUrl(
-      'http://127.0.0.1:6968/', '/docs/ui/touch_control.html', '6969',
+      'http://127.0.0.1:6968/', '/CaptainPad/live_touch/touch_control.html', '6969',
       'http://192.0.2.4:6967',
     );
     const withNull = resolveLiveTouchPanelUrl(
-      'http://127.0.0.1:6968/', '/docs/ui/touch_control.html', '6969',
+      'http://127.0.0.1:6968/', '/CaptainPad/live_touch/touch_control.html', '6969',
       'http://192.0.2.4:6967', null,
     );
     expect(withNull).toBe(withoutArg);
@@ -102,12 +102,12 @@ describe('Live Touch host bridge', () => {
   it('encodes the exact resolved API origin independently from the web panel host', () => {
     const resolved = resolveLiveTouchPanelUrl(
       'https://[2001:db8::7]:7443/api?ignored=true',
-      '/docs/ui/touch_control.html',
+      '/CaptainPad/live_touch/touch_control.html',
       '6969',
       'https://captainpad.example:6967',
     );
     expect(resolved).toBe(
-      'https://captainpad.example:6969/docs/ui/touch_control.html'
+      'https://captainpad.example:6969/CaptainPad/live_touch/touch_control.html'
       + '?captainpad_origin=https%3A%2F%2Fcaptainpad.example%3A6967'
       + '&captainpad_engine_origin=https%3A%2F%2F%5B2001%3Adb8%3A%3A7%5D%3A7443'
       + '&captainpad_live_touch_protocol=2',
@@ -116,23 +116,23 @@ describe('Live Touch host bridge', () => {
 
   it('rejects malformed or non-http endpoint inputs instead of guessing', () => {
     expect(() => resolveLiveTouchPanelUrl(
-      'http://[', '/docs/ui/touch_control.html', '6969',
+      'http://[', '/CaptainPad/live_touch/touch_control.html', '6969',
     )).toThrow(/API base is not a valid URL/);
     expect(() => resolveLiveTouchPanelUrl(
-      'ws://show-host.local:6968', '/docs/ui/touch_control.html', '6969',
+      'ws://show-host.local:6968', '/CaptainPad/live_touch/touch_control.html', '6969',
     )).toThrow(/API base must use http or https/);
     expect(() => resolveLiveTouchPanelUrl(
-      'http://show-host.local:6968', '/docs/ui/touch_control.html', '6969',
+      'http://show-host.local:6968', '/CaptainPad/live_touch/touch_control.html', '6969',
       'file:///captainpad',
     )).toThrow(/parent origin must use http or https/);
     expect(() => resolveLiveTouchPanelUrl(
-      'http://show-host.local:6968', '/docs/ui/touch_control.html', 'not-a-port',
+      'http://show-host.local:6968', '/CaptainPad/live_touch/touch_control.html', 'not-a-port',
     )).toThrow(/simulation port must be a decimal integer/);
   });
 
   it('rejects missing, duplicate, malformed, and mismatched URL endpoint contracts', () => {
     const expected = 'http://show-host.local:6968';
-    const base = 'http://show-host.local:6969/docs/ui/touch_control.html';
+    const base = 'http://show-host.local:6969/CaptainPad/live_touch/touch_control.html';
     expect(() => validateLiveTouchPanelUrl(
       `${base}?captainpad_live_touch_protocol=2`, expected,
     )).toThrow(/missing engine origin/);
@@ -230,14 +230,14 @@ describe('Live Touch host bridge', () => {
   it('preserves the native endpoint contract while adding the document cache token', () => {
     const panelUrl = resolveLiveTouchPanelUrl(
       'http://show-host.local:6968',
-      '/docs/ui/touch_control.html',
+      '/CaptainPad/live_touch/touch_control.html',
       '6969',
       null,
       LIVE_TOUCH_NATIVE_EMBED,
     );
     const documentUrl = nativePanelDocumentUrl(panelUrl, 'mount 7');
     expect(documentUrl).toBe(
-      'http://show-host.local:6969/docs/ui/touch_control.html'
+      'http://show-host.local:6969/CaptainPad/live_touch/touch_control.html'
       + '?captainpad_embed=native'
       + '&captainpad_engine_origin=http%3A%2F%2Fshow-host.local%3A6968'
       + '&captainpad_live_touch_protocol=2'

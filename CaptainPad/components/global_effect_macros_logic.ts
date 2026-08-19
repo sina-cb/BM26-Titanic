@@ -63,15 +63,21 @@ export const SHOW_EFFECT_PAGES = false;
  * layout instead of being dimmed, so a live-show tap cannot open a slot,
  * intensity, mode, or binding editor.
  */
-export function effectSurfacePolicy(performanceModeActive: boolean): {
+export function effectSurfacePolicy(
+  performanceModeActive: boolean,
+  performanceModeReady: boolean = true,
+): {
   configurationVisible: boolean;
   boundEffectsTriggerable: true;
   emptySlotsInteractive: boolean;
+  showBlackout: boolean;
 } {
+  const editSurfaceVisible = performanceModeReady && !performanceModeActive;
   return {
-    configurationVisible: !performanceModeActive,
+    configurationVisible: editSurfaceVisible,
     boundEffectsTriggerable: true,
-    emptySlotsInteractive: !performanceModeActive,
+    emptySlotsInteractive: editSurfaceVisible,
+    showBlackout: editSurfaceVisible,
   };
 }
 
@@ -298,14 +304,13 @@ export function bankBadgeLabel(state: EffectBanksState): string {
  *  CaptainPad effects UI must ALWAYS look and behave the same regardless of the
  *  VSN1 profile). `showEditAffordances` gates the swap ⋯ pencil AND the
  *  value/mode detail badge; `showEmptySockets` gates the tappable "+" bind
- *  sockets; `cellHeightScale` multiplies the base chip height; `showBlackout` is
- *  the e-stop. All constant now — the profile no longer touches the grid.
+ *  sockets; `cellHeightScale` multiplies the base chip height. All constant now
+ *  — the profile no longer touches the grid.
  *  (Structural affordances are still dimmed by PERFORMANCE MODE — a separate
  *  concern handled in the component via usePerfLock, not here.) */
 export interface EffectsPresentation {
   showEditAffordances: boolean;
   showEmptySockets: boolean;
-  showBlackout: boolean;
   cellHeightScale: number;
 }
 
@@ -317,8 +322,93 @@ export function resolveEffectsPresentation(): EffectsPresentation {
   return {
     showEditAffordances: true,
     showEmptySockets: true,
-    showBlackout: true,
     cellHeightScale: 1,
+  };
+}
+
+// ── Effects bar geometry — shared Deck/Mixer bottom strip contract ─────────────
+// Both tabs mount `<RigGlobals variant="mixer" />`, which renders GEM in
+// `mixer-strip` mode. These tokens are the single layout authority so the two
+// surfaces stay visually lockstep while the bar sheds wasted vertical padding.
+
+/** iOS HIG / operator minimum — chip row height never drops below this. */
+export const EFFECTS_BAR_MIN_TOUCH_TARGET = 44;
+
+export type EffectsBarVariant = 'deck' | 'mixer-strip';
+
+export interface EffectsBarGeometry {
+  btnHeight: number;
+  btnFont: number;
+  gap: number;
+  labelLines: number;
+  /** Inner GEM top inset. Strip = 0 (host `globalRigBar` owns outer padding). */
+  containerPaddingTop: number;
+  /** RigGlobals wrapper top inset. Strip = 0 to avoid double-padding the host. */
+  stripWrapperPaddingTop: number;
+  chipMetaPaddingTop: number;
+  metaBadgeHeight: number;
+  metaInsetTop: number;
+  dividerMarginHorizontal: number;
+  stripLabelMarginRight: number;
+  deckCols: number;
+  rowMarginBottom: number;
+  skeletonPaddingTop: number;
+}
+
+/**
+ * Derive the effects-bar geometry for a variant + orientation. Pure so Deck and
+ * Mixer share one tested contract without react-native.
+ */
+export function resolveEffectsBarGeometry(args: {
+  variant: EffectsBarVariant;
+  isPortrait: boolean;
+  cellHeightScale?: number;
+}): EffectsBarGeometry {
+  const { variant, isPortrait, cellHeightScale = 1 } = args;
+  const isStrip = variant === 'mixer-strip';
+  const scaledHeight = (base: number) => Math.max(
+    EFFECTS_BAR_MIN_TOUCH_TARGET,
+    Math.round(base * cellHeightScale),
+  );
+
+  const metaInsetTop = 2;
+  const metaBadgeHeight = 12;
+  const chipMetaPaddingTop = metaInsetTop + metaBadgeHeight;
+
+  if (isStrip) {
+    return {
+      btnHeight: scaledHeight(44),
+      btnFont: isPortrait ? 10 : 12,
+      gap: 4,
+      labelLines: 1,
+      containerPaddingTop: 0,
+      stripWrapperPaddingTop: 0,
+      chipMetaPaddingTop,
+      metaBadgeHeight,
+      metaInsetTop,
+      dividerMarginHorizontal: 4,
+      stripLabelMarginRight: 4,
+      deckCols: isPortrait ? 3 : 4,
+      rowMarginBottom: 4,
+      skeletonPaddingTop: 2,
+    };
+  }
+
+  return {
+    btnHeight: scaledHeight(isPortrait ? 48 : 44),
+    btnFont: isPortrait ? 9 : 11,
+    gap: 4,
+    labelLines: 2,
+    containerPaddingTop: 2,
+    stripWrapperPaddingTop: 2,
+    chipMetaPaddingTop,
+    metaBadgeHeight,
+    metaInsetTop,
+    dividerMarginHorizontal: 4,
+    stripLabelMarginRight: 4,
+    deckCols: isPortrait ? 3 : 4,
+    rowMarginBottom: 4,
+    skeletonPaddingTop: 2,
   };
 }
 

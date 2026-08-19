@@ -125,7 +125,7 @@ If you answered "I assumed" on anything load-bearing — go verify.
 
 ## Standing rules
 
-1. **READ-ONLY for production source.** No edits to `marsin_engine/`, `CaptainPad/`, `simulation/`, `control_podium/`, `docs/`, `.agent/codex.md`, `.agent/os/`, `.agent/ops/`, `.agent/skills/`. Throwaway scripts go under `~/tmp/<validation>/`.
+1. **READ-ONLY for production source.** No edits to `marsin_engine/`, `CaptainPad/`, `simulation/`, `LookingGlass/control_podium/`, `docs/`, `.agent/codex.md`, `.agent/os/`, `.agent/ops/`, `.agent/skills/`. Throwaway scripts go under `~/tmp/<validation>/`.
 2. **NEVER touch operator-WIP files.** Same list as the developer spec.
 3. **NEVER commit, push, or modify git state.** Read-only via `git log` / `git diff` / `git show`.
 4. **Boot only on slot ports** unless the brief explicitly says the operator's port is the target. Kill what you boot before reporting.

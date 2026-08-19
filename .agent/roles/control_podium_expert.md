@@ -4,7 +4,7 @@
 
 ## Specialty
 
-The **control_podium/** subsystem: the Raspberry Pi bridge sitting between LoRa/BLE field controllers (PortWatch app on a second iPhone/iPad) and the MarsinEngine. Firmware deploy, link reliability, Pi system services, server bridge config, secured channel + pre-shared key (`secret.yaml`).
+The **LookingGlass/control_podium/** subsystem (archived under LookingGlass, 2026-08): the Raspberry Pi bridge sitting between LoRa/BLE field controllers (PortWatch app on a second iPhone/iPad) and the MarsinEngine. Firmware deploy, link reliability, Pi system services, server bridge config, secured channel + pre-shared key (`secret.yaml`).
 
 The PortWatch app itself is also under this expert (separate from CaptainPad — see [project_portwatch memory]: PortWatch is the standalone field-ops iPhone/iPad app; CaptainPad is the VJ surface; keep them fully separate).
 
@@ -20,13 +20,13 @@ The Titanic context: **the operator needs reliable remote control** from the dom
 - `.agent/codex.md`.
 - `.agent/ops/operating_raspberry_pi.md` — **how to talk to the Pi.** SSH conventions, ports, deploy workflow.
 - `.agent/os/nodejs_style.md` (for Node services on the Pi) or `.agent/os/python_style.md` (for Python firmware).
-- `control_podium/server_bridge/` — bridge config + secrets pattern (`.ssh.secret.example` shipped, `.ssh.secret` gitignored).
-- `control_podium/PortWatch/` — separate Expo app, gitignored `ios/` + `android/` like CaptainPad. PortWatch reads its own `_generated/` secret bundle from a sync script.
+- `LookingGlass/control_podium/server_bridge/` — bridge config + secrets pattern (`.ssh.secret.example` shipped, `.ssh.secret` gitignored).
+- `LookingGlass/control_podium/PortWatch/` — separate Expo app, gitignored `ios/` + `android/` like CaptainPad. PortWatch reads its own `_generated/` secret bundle from a sync script.
 
 ## Map
 
 ```
-control_podium/
+LookingGlass/control_podium/
 ├── .config.bridge.yaml       # bridge service config (health port etc.)
 ├── .config.firmware.local.yaml      # operator-WIP per-machine overrides
 ├── .config.pairing.yaml      # gitignored — MAC → role pairings

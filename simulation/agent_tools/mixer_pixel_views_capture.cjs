@@ -34,7 +34,7 @@ const WANT_PERF = args.includes('--perf');
  * Serve the pixel-map artifact from the REPO instead of from the simulator.
  *
  * The simulator's HTTP document root IS the repo root (see
- * `utils/simulation_url.ts`), so `docs/ui/touch_control_pixel_views.json` on
+ * `utils/simulation_url.ts`), so `CaptainPad/live_touch/touch_control_pixel_views.json` on
  * disk is byte-for-byte the response :6969 gives — this substitutes the
  * TRANSPORT, never the content, and exists so a capture run does not depend on
  * the operator's simulator being up (and never tempts a harness into binding

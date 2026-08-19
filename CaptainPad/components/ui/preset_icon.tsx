@@ -20,6 +20,7 @@
  * system growing a dependency on the colours window.
  */
 import React from 'react';
+import { Platform, View } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
 
 /** Below this the wedge seams are wider than the wedges; draw a plain dot. */
@@ -54,6 +55,26 @@ export const PresetIcon: React.FC<PresetIconProps> = ({ colours, size, borderCol
   const c = size / 2;
   const r = c - (borderColor ? 0.5 : 0);
   const n = colours.length;
+  if (Platform.OS !== 'web') {
+    return (
+      <View
+        pointerEvents="none"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          overflow: 'hidden',
+          flexDirection: 'row',
+          borderWidth: borderColor ? 1 : 0,
+          borderColor,
+        }}
+      >
+        {colours.map((backgroundColor, index) => (
+          <View key={index} style={{ flex: 1, backgroundColor }} />
+        ))}
+      </View>
+    );
+  }
   return (
     <Svg width={size} height={size} pointerEvents="none">
       {n === 1 || size < MIN_WEDGE_SIZE ? (

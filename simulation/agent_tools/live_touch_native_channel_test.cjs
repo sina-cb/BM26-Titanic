@@ -35,10 +35,10 @@ const TITANIC_PLAYLISTS_DIR = path.join(
   'titanic',
   'playlists',
 );
-const PAGE_PATH = '/docs/ui/touch_control.html';
+const PAGE_PATH = '/CaptainPad/live_touch/touch_control.html';
 const ENGINE_ORIGIN_PARAM = 'captainpad_engine_origin';
 const PROTOCOL_PARAM = 'captainpad_live_touch_protocol';
-const PROTOCOL_VERSION = '1';
+const PROTOCOL_VERSION = '2';
 const TEST_OWNER_PASSWORD = 'live-touch-native-channel-owner';
 const BLACKHOLE_HOST = '192.0.2.9';
 const TEMP_PREFIX = 'live-touch-native-channel-';
@@ -268,21 +268,21 @@ function createStaticServer() {
 }
 
 async function assertRawStaticSource(staticPort) {
-  const route = '/docs/ui/touch_control_wire.js';
+  const route = '/CaptainPad/live_touch/touch_control_wire.js';
   const response = await fetch(`http://127.0.0.1:${staticPort}${route}`);
   assert(response.status === 200, `raw wire request returned ${response.status}`);
   const served = Buffer.from(await response.arrayBuffer());
   const source = fs.readFileSync(
-    path.join(REPO_ROOT, 'docs', 'ui', 'touch_control_wire.js'),
+    path.join(REPO_ROOT, 'CaptainPad', 'live_touch', 'touch_control_wire.js'),
   );
   assert(served.equals(source), 'static server rewrote touch_control_wire.js');
   return crypto.createHash('sha256').update(served).digest('hex');
 }
 
 function assertPageEndpointContractIntegrated() {
-  const wirePath = path.join(REPO_ROOT, 'docs', 'ui', 'touch_control_wire.js');
-  const endpointPath = path.join(REPO_ROOT, 'docs', 'ui', 'touch_control_endpoint.js');
-  const htmlPath = path.join(REPO_ROOT, 'docs', 'ui', 'touch_control.html');
+  const wirePath = path.join(REPO_ROOT, 'CaptainPad', 'live_touch', 'touch_control_wire.js');
+  const endpointPath = path.join(REPO_ROOT, 'CaptainPad', 'live_touch', 'touch_control_endpoint.js');
+  const htmlPath = path.join(REPO_ROOT, 'CaptainPad', 'live_touch', 'touch_control.html');
   const wireSource = fs.readFileSync(wirePath, 'utf8');
   const endpointSource = fs.readFileSync(endpointPath, 'utf8');
   const htmlSource = fs.readFileSync(htmlPath, 'utf8');
@@ -290,8 +290,8 @@ function assertPageEndpointContractIntegrated() {
     `endpoint parser has no ${ENGINE_ORIGIN_PARAM} contract; refusing to launch`);
   assert(endpointSource.includes(PROTOCOL_PARAM),
     `endpoint parser has no ${PROTOCOL_PARAM} contract; refusing to launch`);
-  assert(/PROTOCOL_VERSION\s*=\s*1\s*;/.test(endpointSource),
-    'endpoint parser protocol version is not exactly 1; refusing to launch');
+  assert(/PROTOCOL_VERSION\s*=\s*2\s*;/.test(endpointSource),
+    'endpoint parser protocol version is not exactly 2; refusing to launch');
   const parserIndex = htmlSource.indexOf('touch_control_endpoint.js');
   const wireIndex = htmlSource.indexOf('touch_control_wire.js');
   assert(parserIndex >= 0 && wireIndex > parserIndex,

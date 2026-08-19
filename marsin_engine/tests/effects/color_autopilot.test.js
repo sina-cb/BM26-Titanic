@@ -192,6 +192,27 @@ test('validate refuses ambiguous or mismatched five-slot sequences loudly', () =
   }), /must be an \{h,s,v\} object/);
 });
 
+test('patchState replaces palettes and livePalettes together', () => {
+  const pairA = [{ c1: 0.1, c2: 0.6 }, { c1: 0.6, c2: 0.1 }];
+  const liveA = [
+    [0.1, 0.6, 0.2, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 })),
+    [0.6, 0.1, 0.2, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 })),
+  ];
+  const pairB = [{ c1: 0.2, c2: 0.7 }, { c1: 0.7, c2: 0.2 }];
+  const liveB = [
+    [0.2, 0.7, 0.1, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 })),
+    [0.7, 0.2, 0.1, 0.3, 0.4].map(h => ({ h, s: 1, v: 1 })),
+  ];
+  const ca = new ColorAutopilot(() => {}, tmpCfg());
+  ca.setState(ColorAutopilot.validate({
+    active: false, palettes: pairA, livePalettes: liveA, delay_s: 2, transitionMs: 400,
+  }, KNOWN));
+  ca.patchState({ palettes: pairB, livePalettes: liveB }, KNOWN);
+  liveB[0][2].h = 0.99;
+  assert.deepEqual(ca.state.palettes, pairB);
+  assert.equal(ca.state.livePalettes[0][2].h, 0.1);
+});
+
 test('validate rejects a bad CHANNEL of an {h,s,v} pair, naming index + channel', () => {
   assert.throws(
     () => ColorAutopilot.validate(

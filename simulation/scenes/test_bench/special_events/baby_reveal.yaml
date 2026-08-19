@@ -121,9 +121,9 @@ stages:
   # THE FLASH-BLOOM-THEN-PLAYLIST ORDERING is authored as offsets from the tap:
   #   t=0 ms    release the 10 percent white hold and lift the master
   #   t=0 ms    rapid full-rig white flashes begin for two seconds
-  #   t=2000 ms one full-rig white blast lands and holds for 700 ms
-  #   t=2700 ms Diamond Quilt activates under the blast's soft release
-  #   t=3700 ms the bloom is out and the selected color owns the ship
+  #   t=2000 ms one full-rig white blast lands and holds for 1000 ms
+  #   t=3000 ms Diamond Quilt activates under the blast's soft release
+  #   t=4000 ms the bloom is out and the selected color owns the ship
   #
   # The landed release path lets Diamond Quilt rise through the white bloom.
   # No fake white-tail pattern is involved; entryId pins the hero independently
@@ -196,8 +196,8 @@ stages:
           - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
           - { type: masterFade, target: 1.0, durationMs: 200 }
           - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
-          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 700, releaseMs: 1000, releaseTo: show }
-          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 2700 }
+          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 1000, releaseMs: 1000, releaseTo: show }
+          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 3000 }
       - id: boy
         label: BABY BLUE
         color: '#4FA8FF'
@@ -206,5 +206,5 @@ stages:
           - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
           - { type: masterFade, target: 1.0, durationMs: 200 }
           - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
-          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 700, releaseMs: 1000, releaseTo: show }
-          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 2700 }
+          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 1000, releaseMs: 1000, releaseTo: show }
+          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 3000 }

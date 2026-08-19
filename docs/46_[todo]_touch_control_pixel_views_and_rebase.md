@@ -111,7 +111,7 @@ away from its authoritative orthographic position.
 
 ## Root cause and correction of the Live top-view mismatch
 
-The previous `docs/ui/touch_control.html` did not consume the pipeline above.
+The previous `CaptainPad/live_touch/touch_control.html` did not consume the pipeline above.
 It embedded:
 
 - a 964-point `PIXMAP` string;
@@ -143,7 +143,7 @@ The deterministic build-time exporter is:
 It imports and runs the same resolver/layout implementation used by the
 simulation against the Titanic scene, then atomically writes:
 
-`docs/ui/touch_control_pixel_views.json`
+`CaptainPad/live_touch/touch_control_pixel_views.json`
 
 The artifact is local and same-origin on the simulation server, preserving
 offline readiness. It contains no hand-copied geometry. `npm run

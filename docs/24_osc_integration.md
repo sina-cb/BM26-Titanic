@@ -912,7 +912,7 @@ The four levers are independent — for example `audioBpm` is live
 
 `broadcastSharedParamsThrottled` reads `broadcastHz` to gate WS
 emissions. The PortWatch bridge filter is a small change in
-`control_podium/comms/engine_client.py::compact_status` — it iterates
+`LookingGlass/control_podium/comms/engine_client.py::compact_status` — it iterates
 the schema and only emits fields where `portWatch === true`. That
 change is documented in the [implementation report](.agent/02_reports/202605/20260524_1_osc_impl.md)
 rather than baked into the engine itself.
@@ -1191,7 +1191,7 @@ work needed.
 > the moment a new `portWatch: false` param is added.
 >
 > See [implementation plan §7](.agent/02_reports/202605/20260524_1_osc_impl.md) for the
-> diff in `control_podium/comms/engine_client.py`.
+> diff in `LookingGlass/control_podium/comms/engine_client.py`.
 
 ---
 

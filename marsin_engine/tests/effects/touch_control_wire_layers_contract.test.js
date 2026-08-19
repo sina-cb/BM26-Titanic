@@ -6,15 +6,15 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const wirePath = path.resolve(here, '../../../docs/ui/touch_control_wire.js');
+const wirePath = path.resolve(here, '../../../CaptainPad/live_touch/touch_control_wire.js');
 const wire = fs.readFileSync(wirePath, 'utf8');
-const panelPath = path.resolve(here, '../../../docs/ui/touch_control.html');
+const panelPath = path.resolve(here, '../../../CaptainPad/live_touch/touch_control.html');
 const panel = fs.readFileSync(panelPath, 'utf8');
-const lifecyclePath = path.resolve(here, '../../../docs/ui/touch_control_lifecycle.js');
+const lifecyclePath = path.resolve(here, '../../../CaptainPad/live_touch/touch_control_lifecycle.js');
 const lifecycleSource = fs.readFileSync(lifecyclePath, 'utf8');
-const themePath = path.resolve(here, '../../../docs/ui/touch_control_theme.js');
+const themePath = path.resolve(here, '../../../CaptainPad/live_touch/touch_control_theme.js');
 const themeSource = fs.readFileSync(themePath, 'utf8');
-const pixelViewsPath = path.resolve(here, '../../../docs/ui/touch_control_pixel_views.js');
+const pixelViewsPath = path.resolve(here, '../../../CaptainPad/live_touch/touch_control_pixel_views.js');
 const pixelViewsSource = fs.readFileSync(pixelViewsPath, 'utf8');
 const apiServerPath = path.resolve(here, '../../lib/api_server.js');
 const apiServerSource = fs.readFileSync(apiServerPath, 'utf8');
@@ -101,6 +101,16 @@ test('the pattern picker offers BACKGROUNDS (ambient playlist) and INSTRUMENTS, 
   assert.doesNotMatch(wire, /write\('(?:POST|PUT|PATCH|DELETE)', '\/playlists/);
 });
 
+test('passive retained-pattern mismatch is quiet while explicit staging stays strict', () => {
+  const sync = wire.match(/function syncPatternSelection\(pattern\) \{[\s\S]*?\n  \}/);
+  assert.ok(sync, 'Live Touch pattern selection synchronizer is missing');
+  assert.doesNotMatch(sync[0], /\bfail\(/,
+    'a stale retained channel or a catalog race must not create an operator error');
+  assert.match(wire,
+    /if \(!syncPatternSelection\(response\.pattern\)\) \{\s*throw new Error\('Live Touch staged a pattern/,
+    'the explicit ARM stage acknowledgement must still reject an impossible chooser mismatch');
+});
+
 test('an armed pattern swap is retained, engine-confirmed, and refreshes local exports after landing', () => {
   const block = wire.match(/patSel\.addEventListener\('change'[\s\S]*?\n    \}\);/);
   assert.ok(block, 'Live Touch pattern change handler is missing');
@@ -153,7 +163,7 @@ test('the wire never puts a raw pointerId on the wire — every stroke id is a c
   // pointer.id itself must still be the raw pointerId — it stays the
   // spatialPointers Map key and commitSpatialPayload's lookup key, unchanged.
   assert.match(wire, /id: e\.pointerId, slot: allocateSpatialSlot\(\), current: null, sent: null, retiring: false,/);
-  assert.match(wire, /id: TAKE_CONTACT_KEY, slot: allocateSpatialSlot\(\), current: null, sent: null, retiring: false,/);
+  assert.match(wire, /id: contactKey, slot: allocateSpatialSlot\(\), current: null, sent: null, retiring: false,/);
   // Every removal site must release the slot it allocated — a leaked slot
   // would eventually starve allocateSpatialSlot() even though pointers keep
   // being lifted.
@@ -178,21 +188,21 @@ test('a spatial sample declares its contact — the playback key is unreachable 
   // The playback contact is keyed by a NON-NUMERIC sentinel. A DOM pointerId
   // is always a number, so no real finger can collide with it — the aliasing
   // class is removed by construction, not by picking an improbable integer.
-  assert.match(wire, /var TAKE_CONTACT_KEY = 'take-playback';/);
+  assert.match(wire, /var TAKE_PLAYBACK_PREFIX = 'take-playback-';/);
   assert.doesNotMatch(wire, /TAKE_(?:POINTER_ID|CONTACT_KEY) = 0x/,
     'the playback key must not live in the numeric pointerId namespace');
 
-  // Synthetic playback samples DECLARE themselves; every other sample resolves
-  // to its raw e.pointerId, the same key pointerdown/pointermove/liftBrush use.
+  // Synthetic playback samples DECLARE themselves with a bank-scoped contactKey;
+  // every other sample resolves to its raw e.pointerId.
   const resolver = wire.match(/function spatialContactKey\(e\) \{[\s\S]*?\n    \}/);
   assert.ok(resolver, 'spatialContactKey is missing');
-  assert.match(resolver[0], /if \(e\.spatialPlayback === true\) return TAKE_CONTACT_KEY;/);
-  assert.match(resolver[0], /return e\.pointerId;/,
-    'a real pointer must resolve to its own raw id, never to the playback key');
+  assert.match(resolver[0], /if \(e\.spatialPlayback === true\) \{/);
+  assert.match(resolver[0], /isTakePlaybackKey\(e\.contactKey\)/);
+  assert.match(resolver[0], /return e\.contactKey;/);
   assert.match(resolver[0], /fail\('spatial touch'/,
     'an unidentifiable sample must be refused loudly, not routed somewhere convenient');
-  assert.match(wire, /pushXY\(\{ spatialPlayback: true,/,
-    'the TAKE replay path must carry the explicit marker');
+  assert.match(wire, /pushXY\(\{ spatialPlayback: true, contactKey: contactKey,/,
+    'the TAKE replay path must carry the explicit marker and bank contactKey');
   assert.match(wire, /var pointerId = spatialContactKey\(e\);/);
 });
 
@@ -244,21 +254,21 @@ test('the COLOR HUB panel is the one explicitly authorized non-layer route (docs
   assert.match(wire, /colorHubRequest\(detail\.method, detail\.path \|\| '\/deck\/color-autopilot', detail\.body\)/);
 });
 
-test('Live Touch brush boots at S / 150 and every brush option row has uniform weight', () => {
-  assert.match(panel, /id="brushSize" data-value="0\.18"/);
+test('Live Touch brush boots at M and every brush option row has uniform weight', () => {
+  assert.match(panel, /id="brushSize" data-value="0\.05"/);
   assert.match(panel, /id="brushPower" data-value="0\.75"/);
-  assert.match(panel, /id="brushSizeVal">18%<\/span>/);
+  assert.match(panel, /id="brushSizeVal">M<\/span>/);
   assert.match(panel, /id="brushPowerVal">150%<\/span>/);
   assert.match(panel, /\.sp-controls #dutyRow, \.sp-controls #speedRow \{[\s\S]*?grid-column: auto;/);
   assert.match(panel, /#strobeDutyChips button, #zFaderChips button \{\s*min-height: 26px;/);
 });
 
-test('Color Hub adopts the engine-confirmed inline ring before repainting A/B', () => {
+test('Color Hub reconciles engine-confirmed inline state before repainting A/B', () => {
   assert.match(panel, /function chAdoptBroadcastRing\(payload\)/);
   const broadcast = panel.match(/document\.addEventListener\('colorautopilot',[\s\S]*?\n    \}\);/);
   assert.ok(broadcast, 'Color Hub broadcast handler is missing');
   assert.match(broadcast[0], /chAdoptBroadcastRing\(CH\.broadcast\)/);
-  assert.match(broadcast[0], /chRenderRing\(\)/);
+  assert.match(broadcast[0], /chRenderAll\(\)/);
 });
 
 test('initial ARM batches its complete Live look through atomic prepare', () => {
@@ -266,11 +276,63 @@ test('initial ARM batches its complete Live look through atomic prepare', () => 
   assert.ok(block, 'assertLiveSurfaceState is missing');
   assert.match(block[0], /prepareOperations = \[\]/);
   assert.match(block[0], /['"]\/layers\/live_touch\/prepare['"]/);
+  assert.match(block[0], /performanceModeActive === true[\s\S]*?collectEffectSlotBuildOperations\(\)[\s\S]*?pushPalette\(true\)/,
+    'Performance ARM must stage the visible palette before overlay actions become available');
   assert.match(block[0], /expectedSessionRevision: state\.sessionRevision/);
   assert.match(block[0], /brightness: brightness/);
   assert.match(block[0], /initialSpatialPrepareBody/);
   assert.doesNotMatch(block[0], /initializeLiveBrightness/);
   assert.doesNotMatch(block[0], /applyStatic\(true\)/);
+});
+
+test('the Live Touch wheel publishes its selected five-colour output to the private overlay palette', () => {
+  const block = wire.match(/function pushPalette\(strict, skipEnginePair, explicitOutputPalette\)[\s\S]*?\n  \}\n\n  \/\* Reserved for any future per-slot colour effects/);
+  assert.ok(block, 'pushPalette is missing');
+  assert.match(block[0], /outputPaletteFromSelection/,
+    'the visible candidate ring must put selected A/B first without dropping the other samples');
+  assert.match(block[0], /strictWrite\('POST', '\/layers\/live_touch\/palette', \{ colorPalette: pal \}\)/,
+    'atomic ARM must include the private overlay palette');
+  assert.match(block[0], /pushOverlayPalette\(pal\)/,
+    'wheel changes must update the private overlay palette while armed');
+});
+
+test('Edit ARM stages the session palette before movement slot provisioning', () => {
+  const block = wire.match(/function assertLiveSurfaceState\(\)[\s\S]*?\n  \}\n\n  function armLiveTouch/);
+  assert.ok(block, 'assertLiveSurfaceState is missing');
+  const editArm = block[0].match(
+    /req\('POST', '\/global-effects\/disable-all'[\s\S]*?reconcileEffects\(true\)/,
+  );
+  assert.ok(editArm, 'Edit ARM staging chain is missing');
+  const editChain = editArm[0];
+  const paletteAt = editChain.indexOf('pushPalette(true)');
+  const slotsAt = editChain.indexOf('collectEffectSlotBuildOperations');
+  assert.ok(paletteAt >= 0 && slotsAt > paletteAt,
+    'Edit ARM must stage the five-colour session palette before slot PATCH operations');
+});
+
+test('assertLiveSurfaceState is exposed for headless ARM prepare verification', () => {
+  assert.match(wire, /state\._assertLiveSurfaceState = assertLiveSurfaceState/);
+});
+
+test('movementTrace provisioning never sends session-owned colours through slot params', () => {
+  assert.doesNotMatch(wire, /paletteRgb6\(/,
+    'slot provisioning must not convert the wheel palette into slot paramsOverride.colors');
+  const block = wire.match(/function provisionCell\(cell\)[\s\S]*?\n  \}\n\n  function buildEffectSlots/);
+  assert.ok(block, 'provisionCell is missing');
+  assert.doesNotMatch(block[0], /ov\.colors\s*=/,
+    'slot paramsOverride.colors is refused — colours belong to /layers/live_touch/palette');
+  assert.match(block[0], /movementTrace[\s\S]*?fadeSpan/,
+    'movement slots still carry fade envelope params');
+});
+
+test('wheel palettechange refreshes session palette without slot colour patches', () => {
+  assert.doesNotMatch(wire, /pushMovementColours\(/,
+    'movementTrace colours are session-owned — wheel moves must not patch slot params');
+  const block = wire.match(/slotsEl\.addEventListener\('palettechange'[\s\S]*?\n  \}\);/);
+  assert.ok(block, 'palettechange handler is missing');
+  assert.match(block[0], /pushPalette\(false/);
+  assert.match(block[0], /pushEffectColours\(\)/);
+  assert.doesNotMatch(block[0], /pushMovementColours\(/);
 });
 
 test('initial ARM brush geometry is verified and independent of Spatial visibility', () => {
@@ -294,7 +356,9 @@ test('pixel views and spatial fade expose only canonical operator choices', () =
   assert.match(panel, /\['0\.1 s', 0\.1\], \['0\.5 s', 0\.5\], \['1\.0 s', 1\], \['1\.5 s', 1\.5\]/);
   assert.match(wire, /\[0\.1, 0\.5, 1, 1\.5\]\.indexOf\(seconds\)/);
   assert.doesNotMatch(wire, /0\.12\s*\+[^\n]*7\.88/);
-  assert.doesNotMatch(panel, /FADE[^\n]*(?:8 s|8s|half-life)/i);
+  const spatialFadeRow = panel.match(/id="fadeRow"[\s\S]*?<\/div>/);
+  assert.ok(spatialFadeRow, 'spatial fadeRow is missing');
+  assert.doesNotMatch(spatialFadeRow[0], /(?:8 s|8s|half-life)/i);
   assert.match(wire, /topPlane \? 'Z\+ FRONT' : 'Y\+ UP'/);
   assert.match(wire, /currentPixelViewId === 'te_sign'/);
   assert.match(wire, /<b>Z−<\/b>BACK/);
@@ -335,9 +399,11 @@ test('Spatial XY exposes one admitted contact, deferred multitouch, and Spatial-
     'the screen must never reach past the surface to move the iframe either');
   assert.match(screen, /captainpad-spatial-fullscreen-applied/);
   assert.match(panel, /window\.TouchSpatialContactGate =/);
-  assert.match(panel, /if \(spatialPrimaryContact === null\) spatialPrimaryContact = pointerId/);
-  assert.match(panel, /SPATIAL accepts one contact; the extra touch was ignored/,
+  assert.match(panel, /spatialLiveContact !== null && spatialLiveContact !== pointerId/);
+  assert.match(panel, /SPATIAL contact limit reached; the extra touch was ignored/,
     'additional physical contacts must be refused loudly by the shared page gate');
+  assert.match(panel, /take-playback-/);
+  assert.match(panel, /touch_control_take_playback_overlay\.js/);
   assert.match(panel, /var padPointers = new Map\(\)/);
   assert.match(panel, /inkActiveRings = new Map\(\)/);
 
@@ -554,19 +620,27 @@ test('handback proves landing and cleanup before acknowledged lease release', ()
   assert.ok(block, 'handbackLiveTouch implementation is missing');
   const source = block[0];
   const landedAt = source.indexOf('waitForLayerSetting(target');
-  const cleanupAt = source.indexOf('.then(cleanupLiveState)');
-  const releaseAt = source.indexOf('.then(releaseArmLease)');
+  const cleanupAt = source.indexOf('.then(cleanupThenReleaseArmLease)');
   const idleAt = source.indexOf("setArmUiPhase('idle')");
   assert.ok(landedAt >= 0 && landedAt < cleanupAt);
-  assert.ok(cleanupAt < releaseAt);
-  assert.ok(releaseAt < idleAt);
+  assert.ok(cleanupAt < idleAt);
+
+  const releaseHelper = wire.match(
+    /function cleanupThenReleaseArmLease[\s\S]*?\n  \}/,
+  );
+  assert.ok(releaseHelper, 'cleanup/release safety helper is missing');
+  assert.ok(
+    releaseHelper[0].indexOf('cleanupLiveState()')
+      < releaseHelper[0].indexOf('.then(releaseArmLease)'),
+    'every cleanup attempt must finish before the lease release',
+  );
 });
 
 test('post-lease ARM abort cleans up before release and cannot ACK navigation', () => {
   const block = wire.match(/function abortArm[\s\S]*?function runSeries/);
   assert.ok(block, 'abortArm implementation is missing');
   const source = block[0];
-  assert.ok(source.indexOf('.then(cleanupLiveState)') < source.indexOf('.then(releaseArmLease)'));
+  assert.match(source, /\.then\(cleanupThenReleaseArmLease\)/);
   assert.doesNotMatch(source, /acknowledgeSurfaceRelease/);
 });
 
@@ -583,6 +657,9 @@ test('disarm cleanup uses overlay slot actions and proves no effect state remain
     'true effects must still use the session-owned sweep');
   assert.match(source, /handbackStep\('effect-readback', verifyEffectsCleared\(\)\)/,
     'lease release must follow authoritative zero-state readback');
+  assert.match(wire,
+    /function restoreEffectColours\(\) \{\s*\/\*[\s\S]*?if \(state\.performanceModeActive === true\) return Promise\.resolve\(\)/,
+    'Performance disarm must never PATCH its action-only private slot configuration');
   assert.match(source, /handbackFailures = null/,
     'cleanup must release its guard so a clean retry remains idempotent');
 });
@@ -632,4 +709,42 @@ test('Live Touch shows a compact dismissible Timeline lease notice', () => {
   assert.match(banner, /leaseHeld && !leaseDismissed/);
   assert.match(banner, /setLeaseDismissed\(true\)/);
   assert.match(banner, /accessibilityLabel="Dismiss takeover lease notice"/);
+});
+
+test('Color Hub exposes the shared COLOR TRANSITION fader and timing authority', () => {
+  assert.match(panel, /touch_control_color_transition_timing\.js/);
+  assert.match(panel, /id="chColorTransitionFader"/);
+  assert.match(panel, /COLOR TRANSITION/);
+  assert.match(wire, /ColorTransitionTiming/);
+  assert.match(wire, /colortransitiontiming/);
+  assert.match(wire, /pushFadeToEngine/);
+});
+
+test('spatial contact limit routes to a transient status notice, not fail()', () => {
+  assert.match(panel, /touch_control_spatial_contact_notice\.js/);
+  assert.match(panel, /id="panelStatus" role="status" aria-live="polite"/);
+  const gateBlock = panel.match(/function reportExtraSpatialContact\(pointerId\) \{[\s\S]*?\n  \}/);
+  assert.ok(gateBlock, 'reportExtraSpatialContact is missing');
+  assert.match(gateBlock[0], /SpatialContactNotice\.show\(\)/);
+  assert.doesNotMatch(gateBlock[0], /panelerror/);
+  assert.match(wire, /SpatialContactNotice\.show\(\)/);
+  assert.match(wire, /SpatialContactNotice\.cleanup\(\)/);
+});
+
+test('Presets layout pins Spatial and evicts Color Hub before opening the playlist', () => {
+  assert.match(panel, /NON_DISPLACEABLE_PANEL_KEYS = \['spatial-panel'\]/);
+  assert.match(panel, /PRESETS_OPEN_EVICTION_ORDER = \['colorhub-panel', 'color-panel'\]/);
+  assert.match(panel, /function preparePresetsWorkspace/);
+  assert.match(panel, /has-presets-open/);
+  assert.match(panel, /if \(panelKey\(target\) === 'presets-panel'\) preparePresetsWorkspace\(\)/);
+});
+
+test('preset recall exposes one wire preflight for ARM, lease, catalog, and store readiness', () => {
+  assert.match(wire, /state\._preflightPresetRecall = function \(pageChecks\)/);
+  assert.match(wire, /ARM Live Touch before recalling a preset/);
+  assert.match(wire, /effect catalog to confirm before recalling a preset/);
+  assert.match(wire, /background catalog to confirm before recalling a preset/);
+  assert.match(wire, /preset store to confirm before recalling a preset/);
+  assert.match(panel, /_preflightPresetRecall\(\{/);
+  assert.match(panel, /preset partially applied:/);
 });
