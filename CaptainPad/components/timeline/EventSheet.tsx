@@ -24,6 +24,7 @@
  */
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet, ScrollView } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { OverviewCue, TimelineResolve } from '@/utils/timelineApi';
@@ -107,7 +108,9 @@ export function EventSheet({
   // so there is nothing to animate OUT, and a fade IN just delays the one
   // decision the operator came here to make.
   return (
-    <Modal transparent visible animationType="none" onRequestClose={onClose}>
+    <Modal transparent visible animationType="none" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <ScrollView showsVerticalScrollIndicator={false}>

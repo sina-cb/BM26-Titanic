@@ -39,6 +39,7 @@ import {
 import { Radius } from '@/constants/theme';
 import { readableInk, useGlobalStyles } from '@/styles/globalStyles';
 import { opError } from '@/utils/op_dialog';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 // Ink for anything FILLED with MOD_GREEN. Derived once (docs/54 §1.1: a
 // fixed accent never hardcodes its ink) instead of the '#fff' literals this
@@ -337,7 +338,9 @@ export const AllModulationsPanel: React.FC<Props> = ({
   if (!visible) return null;
 
   return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <View
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
       >

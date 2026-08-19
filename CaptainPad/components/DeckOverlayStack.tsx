@@ -26,6 +26,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { opError, opWarn } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { accentWash, glowFor, identityDot, useGlobalStyles } from '@/styles/globalStyles';
@@ -90,7 +91,7 @@ const BlendPickerModal: React.FC<{
   const globalStyles = useGlobalStyles();
   const on = accentWash(C.primary);
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
       <TouchableOpacity
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
         activeOpacity={1}
@@ -538,7 +539,7 @@ export const DeckOverlayStack: React.FC<{
       )}
 
       {/* ── Add overlay sheet: view (required) + playlist ─────────────── */}
-      <Modal transparent visible={showAdd} animationType="fade" onRequestClose={() => setShowAdd(false)}>
+      <Modal transparent visible={showAdd} animationType="fade" onRequestClose={() => setShowAdd(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity
           style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
           activeOpacity={1}

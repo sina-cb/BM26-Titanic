@@ -69,7 +69,7 @@ export function performanceExitRefusalMessage(result: EditSessionResult): string
       return rateLimitedCopy(result);
     case EXIT_KEEP_SAVE_OWNER_ONLY:
       return 'Only the captain’s passcode can save this session’s tuning. '
-        + 'Choose KEEP WITHOUT SAVING or RESTORE PRE-SHOW, or enter the captain’s passcode.';
+        + 'Choose DISCARD PERFORMANCE CHANGES, or enter the captain’s passcode.';
     default:
       return null;
   }
@@ -106,7 +106,7 @@ export function performanceExitFailureMessage(result: EditSessionResult): string
     case 'PERFORMANCE_MODE_SNAPSHOT_MISSING':
     case 'PERFORMANCE_MODE_SNAPSHOT_MALFORMED':
       return 'The pre-show snapshot is missing or unreadable, so the rig cannot be '
-        + 'restored. Choose KEEP LIVE STATE to leave performance mode with the '
+        + 'restored. Choose SAVE CHANGES to leave performance mode with the '
         + 'current look.';
     case 'PERFORMANCE_MODE_INVALID_EXIT':
     case 'INVALID_BODY':

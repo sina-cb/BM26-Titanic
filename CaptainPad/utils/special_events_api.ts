@@ -59,7 +59,8 @@
 
 import { ApiResult, fetchWithTimeout } from './api';
 import { getApiBaseAsync } from './apiBase';
-import { TAKEOVER_PASSCODE_HEADER } from './timelineApi';
+import { clearOperatorAuthOnRefusal, operatorAuthHeaders } from './operator_auth';
+import type { OperatorAuthSendInput } from './takeover_passcode';
 
 const BASE_PATH = '/special-events';
 const STATE_PATH = '/special-events/state';
@@ -738,9 +739,16 @@ export function fetchSpecialEventsState(): Promise<ApiResult<SpecialEventsState>
  * passcode (ARM engages the takeover lease); `passcode` is attached to this one
  * request's headers and never stored anywhere.
  */
-export function armSpecialEvent(showId: string, passcode?: string): Promise<ApiResult<SpecialEventsState>> {
-  const headers = passcode === undefined ? undefined : { [TAKEOVER_PASSCODE_HEADER]: passcode };
-  return eventsPost(ARM_PATH, { show: showId }, headers);
+export async function armSpecialEvent(
+  showId: string,
+  auth?: OperatorAuthSendInput,
+): Promise<ApiResult<SpecialEventsState>> {
+  const base = await getApiBaseAsync();
+  const requestUrl = `${base}${ARM_PATH}`;
+  const headers = await operatorAuthHeaders(auth || {});
+  const result = await eventsPost(ARM_PATH, { show: showId }, headers);
+  await clearOperatorAuthOnRefusal(headers, result.status, requestUrl);
+  return result;
 }
 
 export function fireSpecialEventStage(

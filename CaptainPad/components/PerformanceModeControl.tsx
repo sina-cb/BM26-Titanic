@@ -17,6 +17,7 @@ import {
 import { usePerformanceDialogButton } from '@/hooks/useMidiControl';
 import { useCaptainPadAccess } from '@/hooks/use_captainpad_access';
 import { setPerformanceMode, type PerformanceExitAction } from '@/utils/api';
+import type { OperatorAuthSendInput } from '@/utils/takeover_passcode';
 import { performanceExitFailureMessage } from '@/utils/edit_session';
 import { performancePrimaryAction } from '@/utils/captainpad_access_logic';
 import {
@@ -233,13 +234,13 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
   //   • threw     → the same box, naming the connection.
   // The sheet deliberately stays OPEN on a refusal so the dirty summary and the
   // retry are still in front of the operator.
-  const doExit = async (action: PerformanceExitAction, passcode: string) => {
+  const doExit = async (action: PerformanceExitAction, auth: OperatorAuthSendInput) => {
     setPending(true);
     setExitError(null);
     try {
       const result = await setPerformanceMode(
         { active: false, exitAction: action },
-        passcode || undefined,
+        auth,
       );
       if (result.ok && applyPerformanceModeResponse(result.data)) {
         setExitOpen(false);
@@ -414,8 +415,8 @@ export function PerformanceModeControl({ isPortrait = false }: Props) {
         visible={exitOpen && !engineOffline}
         pending={pending}
         // Dirty-aware save-ask: when the operator tuned patterns mid-show the
-        // sheet summarizes them and offers KEEP & SAVE / KEEP WITHOUT SAVING;
-        // a clean session renders the original two-choice sheet.
+        // sheet summarizes them and offers DISCARD vs SAVE CHANGES; a clean
+        // session renders the same two-choice sheet with different hints.
         dirtyCount={dirtyCount}
         dirtyEntries={dirtyEntries}
         // One physical button can't choose between the exits — a second press

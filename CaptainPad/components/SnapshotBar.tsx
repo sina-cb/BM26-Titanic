@@ -18,6 +18,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -183,7 +184,13 @@ export function SnapshotBar({ disabled = false, compact = false }: {
       </TouchableOpacity>
 
       {/* ── Recall / delete list ─────────────────────────────────────── */}
-      <Modal transparent visible={listOpen} animationType="fade" onRequestClose={() => { setMorphRow(null); setListOpen(false); }}>
+      <Modal
+        transparent
+        visible={listOpen}
+        animationType="fade"
+        onRequestClose={() => { setMorphRow(null); setListOpen(false); }}
+        supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+      >
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => { setMorphRow(null); setListOpen(false); }}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>
@@ -252,7 +259,13 @@ export function SnapshotBar({ disabled = false, compact = false }: {
 
       {/* ── Capture name prompt (in-app modal — RN-web drops Alert
           button callbacks, see ConfirmSheet's note) ──────────────── */}
-      <Modal transparent visible={nameOpen} animationType="fade" onRequestClose={() => setNameOpen(false)}>
+      <Modal
+        transparent
+        visible={nameOpen}
+        animationType="fade"
+        onRequestClose={() => setNameOpen(false)}
+        supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+      >
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setNameOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>

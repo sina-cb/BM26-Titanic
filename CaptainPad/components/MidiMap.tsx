@@ -23,6 +23,7 @@ import {
 } from '@/utils/api';
 import { SectionLabel, Chip, NumberInput } from '@/components/ui/PopoverKit';
 import { ParamChip, useParamRowMetrics } from '@/components/ui/param_chips';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 // Violet accent — distinct from modulation's green (◎) and the primary blue
 // (interactive control), so "this param is MIDI-mapped" scans at a glance.
@@ -247,7 +248,9 @@ export function MidiMapPopover({
   };
 
   return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
         onPress={onClose}

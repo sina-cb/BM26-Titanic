@@ -26,6 +26,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { opError, opWarn } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -161,7 +162,7 @@ export function ParamPresetMenu({ channelId, channelPattern, locked }: Props) {
       </TouchableOpacity>
 
       {/* ── Recall / capture / delete sheet ──────────────────────────── */}
-      <Modal transparent visible={listOpen} animationType="fade" onRequestClose={() => setListOpen(false)}>
+      <Modal transparent visible={listOpen} animationType="fade" onRequestClose={() => setListOpen(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setListOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>
@@ -230,7 +231,7 @@ export function ParamPresetMenu({ channelId, channelPattern, locked }: Props) {
 
       {/* ── Capture name prompt (in-app modal — RN-web drops Alert button
           callbacks, see ConfirmSheet's note) ─────────────────────────── */}
-      <Modal transparent visible={nameOpen} animationType="fade" onRequestClose={() => setNameOpen(false)}>
+      <Modal transparent visible={nameOpen} animationType="fade" onRequestClose={() => setNameOpen(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setNameOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>

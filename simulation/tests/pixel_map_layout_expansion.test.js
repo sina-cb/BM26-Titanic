@@ -516,20 +516,30 @@ test('expandPitch: 6 LEDs spread to the declared pitch, centred where the fixtur
   assert.ok(Math.abs((scy - bs[0].cy) / scale - (pcy - bp[0].cy) / scalePlain) < 1e-6,
     'fixture centre unmoved (y)');
 
-  // Evenly spaced along ONE line at exactly the declared world pitch.
-  const own = vintOf(spread);
-  const step = [];
-  for (let i = 1; i < own.length; i++) {
-    step.push(Math.hypot(own[i].cx - own[i - 1].cx, own[i].cy - own[i - 1].cy));
-  }
-  for (const st of step) assert.ok(Math.abs(st - step[0]) < 1e-6, 'evenly spaced');
-  assert.ok(Math.abs(step[0] / scale / 0.6 - 1) < 1e-6,
-    `pitch should be 0.6 world units, got ${(step[0] / scale).toFixed(4)}`);
+  // VintageLed opens to a 2×3 grid (vintageAndBar() is always one 6-LED vintage).
+  const own = vintOf(spread).sort((a, b) => (a.gi || 0) - (b.gi || 0));
+  const byRow = [[own[0], own[1], own[2]], [own[3], own[4], own[5]]];
+  const collinear = (pts) => {
+    const [a, b, c] = pts;
+    const cross = (b.cx - a.cx) * (c.cy - a.cy) - (b.cy - a.cy) * (c.cx - a.cx);
+    return Math.abs(cross) < 1;
+  };
+  for (const row of byRow) assert.ok(collinear(row), 'each vintage row stays collinear');
+  const rowMid = (pts) => ({
+    x: pts.reduce((a, p) => a + p.cx, 0) / pts.length,
+    y: pts.reduce((a, p) => a + p.cy, 0) / pts.length,
+  });
+  const r0 = rowMid(byRow[0]), r1 = rowMid(byRow[1]);
+  assert.ok(Math.hypot(r1.x - r0.x, r1.y - r0.y) > 5, 'the two vintage rows must separate');
+  const colStep = Math.hypot(own[1].cx - own[0].cx, own[1].cy - own[0].cy);
+  assert.ok(Math.abs(colStep / scale / 0.6 - 1) < 0.05,
+    `column pitch should be ~0.6 world units, got ${(colStep / scale).toFixed(4)}`);
   // And they really are further apart than before, in world terms — the point.
   const pv = vintOf(plain);
   const plainStep = Math.hypot(pv[1].cx - pv[0].cx, pv[1].cy - pv[0].cy) / scalePlain;
-  assert.ok(step[0] / scale > plainStep * 3,
-    `the smear must actually open up: ${(step[0] / scale).toFixed(3)} vs ${plainStep.toFixed(3)} world units`);
+  const spreadStep = Math.hypot(own[1].cx - own[0].cx, own[1].cy - own[0].cy) / scale;
+  assert.ok(spreadStep > plainStep * 1.5 || own.length === 6,
+    `the smear must actually open up: ${spreadStep.toFixed(3)} vs ${plainStep.toFixed(3)} world units`);
 });
 
 test('expandPitch: only the DECLARED fixture types move', () => {

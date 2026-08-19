@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext, useCallback, useMemo, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, AppState, Modal, Platform, ScrollView, useWindowDimensions } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -118,7 +119,9 @@ function GroupFixedColorModal({ group, override, onClose }: {
   };
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}>
         <View style={{ width: 380, backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}>
           {/* Header: group name + live preview swatch */}

@@ -40,6 +40,7 @@ import { paramDisplayName, PARAM_NAME_LEGACY_CAP } from '@/components/param_row_
 import { usePerfLock } from '@/hooks/usePerformanceMode';
 import { opError } from '@/utils/op_dialog';
 import { readableInk } from '@/styles/globalStyles';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 // ── modulationState frame subscription ──────────────────────────────
 //
@@ -1134,7 +1135,9 @@ export function ModulationPopover({
   const modalMaxHeight = Math.min(900, Math.max(520, viewportHeight - 48));
 
   return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
         onPress={onClose}

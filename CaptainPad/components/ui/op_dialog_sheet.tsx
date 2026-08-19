@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Modal } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 import { usePalette } from '@/hooks/use-theme';
 import { type Palette, Radius, Space, Type } from '@/constants/theme';
@@ -77,6 +78,7 @@ export const OpDialogSheet: React.FC<OpDialogSheetProps> = ({ dialog }) => {
       visible={dialog !== null}
       animationType="fade"
       onRequestClose={dismiss}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
     >
       <TouchableOpacity
         style={styles.backdrop}

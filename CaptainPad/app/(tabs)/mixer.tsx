@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Palette } from '@/constants/theme';
 import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { opError, opWarn } from '@/utils/op_dialog';
 import { retuneRejectionMessage } from '@/utils/color_autopilot_narration';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -41,6 +42,7 @@ import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 import { CPCControls } from '@/components/CPCControls';
+import { useDeckWorkspace, DeckWorkspaceBar } from '@/components/deck/deck_workspace';
 import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import {
@@ -207,7 +209,7 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
       <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
         <View style={styles.modalContent}>
           <Text style={[styles.labelCaps, {marginBottom: 12}]}>{title || 'BLEND MODE'}</Text>
@@ -925,7 +927,7 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
           0.7 backdrop) so it reads the same as the blend/transition/view
           pickers and never clips. Each row is ≥44pt tall and preserves the
           exact handler + gating of the original icon button. */}
-      <Modal transparent visible={channelPerformance.managementVisible && showActionsMenu} animationType="fade" onRequestClose={() => setShowActionsMenu(false)}>
+      <Modal transparent visible={channelPerformance.managementVisible && showActionsMenu} animationType="fade" onRequestClose={() => setShowActionsMenu(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowActionsMenu(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.modalContent}>
@@ -1758,6 +1760,11 @@ export default function MixerScreen() {
   // itself. Hiding is VIEW-ONLY: it never mutes, never solos, never calls the
   // engine (docs/64 §2.5) — every selector below only decides what RENDERS.
   const workspace = useMixerWorkspace();
+  // The AUDIO SIGNALS row (CPCControls row 2) shares the deck workspace's
+  // `audioBar` surface — same chip, same AsyncStorage key, same default-open
+  // semantics (docs/63 §3.1). The mixer renders only that bar via
+  // `DeckWorkspaceBar`'s `barsOnly` filter in the CPC optimizer slot.
+  const deckWorkspace = useDeckWorkspace();
   const channelRoster = useMemo(() => channels.map((ch) => ch.id as string), [channels]);
   const visibleChannelIds = useMemo(
     () => mixerVisibleChannels(channelRoster, workspace.layout),
@@ -3302,6 +3309,16 @@ export default function MixerScreen() {
       <CPCControls
         screen="mixer"
         disabled={activationsLocked}
+        optimizerSlot={
+          <DeckWorkspaceBar
+            layout={deckWorkspace.layout}
+            onOpen={deckWorkspace.openWindow}
+            onClose={deckWorkspace.closeWindow}
+            perfActive={deckWorkspace.perfActive}
+            barsOnly={['audioBar']}
+          />
+        }
+        hideAudioRow={!deckWorkspace.isBarShown('audioBar')}
         trailing={
           <TouchableOpacity
             style={[styles.groupsButton, activationsLocked && { opacity: 0.45 }]}
@@ -3619,7 +3636,7 @@ export default function MixerScreen() {
       </View>
 
       {/* ── Add-channel playlist picker ─────────────────────────────── */}
-      <Modal transparent visible={addPickerOpen} animationType="fade" onRequestClose={() => setAddPickerOpen(false)}>
+      <Modal transparent visible={addPickerOpen} animationType="fade" onRequestClose={() => setAddPickerOpen(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAddPickerOpen(false)}>
           <View style={styles.modalContent}>
             <Text style={[styles.labelCaps, {marginBottom: 12}]}>NEW CHANNEL · PICK A PLAYLIST</Text>
@@ -3648,7 +3665,7 @@ export default function MixerScreen() {
           backdrop) like every other picker. GroupRailBody is stateless w.r.t.
           the registry — it renders the parent-owned mixGroups + channels and
           reports edits up through the typed groupsSoloApi clients. */}
-      <Modal transparent visible={groupsModalOpen} animationType="fade" onRequestClose={() => setGroupsModalOpen(false)}>
+      <Modal transparent visible={groupsModalOpen} animationType="fade" onRequestClose={() => setGroupsModalOpen(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGroupsModalOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.modalContent}>
@@ -3673,7 +3690,7 @@ export default function MixerScreen() {
       {/* Channel has unsaved param edits made while locked. The user must
           choose to either persist them into the playlist entry or roll
           back to the saved defaults before the lock actually releases. */}
-      <Modal transparent visible={!!unlockPrompt} animationType="fade" onRequestClose={() => resolveUnlockPrompt('cancel')}>
+      <Modal transparent visible={!!unlockPrompt} animationType="fade" onRequestClose={() => resolveUnlockPrompt('cancel')} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}

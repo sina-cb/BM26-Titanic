@@ -188,3 +188,55 @@ test('with privileged auth DISABLED verifyPassphrase refuses rather than guessin
     ok: false, status: 503, code: 'PRIVILEGED_AUTH_DISABLED',
   });
 });
+
+// ── OPERATOR PASSCODE WAIVER (operator ruling 2026-08-18) ─────────────────
+// Separate from privileged sessions: minted only after passcode verification,
+// scoped to operator-passcode gates, 30-minute lifetime, in-memory on engine.
+
+test('mintPasscodeWaiver issues an opaque waiver without creating a session', () => {
+  const { dir, secretsPath } = fixture();
+  try {
+    const auth = createCaptainPadAuth({ required: true, secretsPath });
+    const minted = auth.mintPasscodeWaiver('gamma-pass', 'pad-a');
+    assert.equal(minted.ok, true);
+    assert.equal(typeof minted.token, 'string');
+    assert.ok(minted.token.length > 0);
+    assert.equal(minted.principal, 'bringup');
+    assert.equal(minted.remainingMs, CAPTAINPAD_AUTH_CONSTANTS.REMEMBERED_SESSION_MS);
+    assert.equal(auth.isPrivilegedRequest(request(minted.token)), false);
+    const waiver = auth.waiverForToken(minted.token);
+    assert.equal(waiver.principal, 'bringup');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('passcode waivers expire after 30 minutes and never log the secret', () => {
+  const { dir, secretsPath } = fixture();
+  let timestamp = 1000;
+  try {
+    const auth = createCaptainPadAuth({ required: true, secretsPath, now: () => timestamp });
+    const minted = auth.mintPasscodeWaiver('alpha-pass', 'pad-a');
+    assert.equal(minted.ok, true);
+    assert.equal(auth.waiverForToken(minted.token).principal, 'owner');
+    timestamp = minted.expiresAt;
+    assert.equal(auth.waiverForToken(minted.token), null);
+    assert.equal(JSON.stringify(minted).includes('alpha-pass'), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mintPasscodeWaiver shares the passcode lockout policy', () => {
+  const { dir, secretsPath } = fixture();
+  let timestamp = 5000;
+  try {
+    const auth = createCaptainPadAuth({ required: true, secretsPath, now: () => timestamp });
+    for (let i = 0; i < CAPTAINPAD_AUTH_CONSTANTS.FAILURE_LIMIT; i += 1) {
+      assert.equal(auth.mintPasscodeWaiver('wrong-pass', 'pad-a').status, 401);
+    }
+    assert.equal(auth.mintPasscodeWaiver('alpha-pass', 'pad-a').status, 429);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

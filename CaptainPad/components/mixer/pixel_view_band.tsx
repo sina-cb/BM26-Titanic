@@ -37,6 +37,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View, type LayoutChangeEvent } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 import { Palette, Radius, Space, Type } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
@@ -572,7 +573,7 @@ export const PixelViewBand = React.memo(function PixelViewBand({
           pattern), one ≥44 pt row per view the OPERATOR authored, in his own
           order. Whatever he adds to scenes/titanic/pixel_map_views.yaml shows
           up here after the next artifact export; this file names no views. */}
-      <Modal transparent visible={pickerOpen} animationType="fade" onRequestClose={() => setPickerOpen(false)}>
+      <Modal transparent visible={pickerOpen} animationType="fade" onRequestClose={() => setPickerOpen(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setPickerOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => undefined}>
             <View style={styles.modalContent}>

@@ -193,3 +193,43 @@ test('a hand-authored view may ship offsets from scene YAML', () => {
   }));
   assert.deepEqual(findView(c, 'v').offsets, { 'Bar A': { dx: 3, dy: 4 } });
 });
+
+// ─── immutable identities + read-only rotation ─────────────────────────────
+
+test('offsets move screen positions but leave gi and fixKey identities untouched', () => {
+  const plain = expand(undefined);
+  const moved = expand({ 'Bar A': { dx: 40, dy: -25 }, 'Bar B': { dx: -12, dy: 8 } });
+  const idOf = (pts) => pts.map((p) => `${p.gi}:${p.fixKey}`).sort().join('|');
+  assert.equal(idOf(moved), idOf(plain),
+    'every mapped gi/fixKey pair must survive a layout offset unchanged');
+  const barA = moved.filter((p) => p.fixKey === 'Bar A').sort((a, b) => a.gi - b.gi);
+  const barA0 = plain.filter((p) => p.fixKey === 'Bar A').sort((a, b) => a.gi - b.gi);
+  assert.deepEqual(barA.map((p) => p.gi), barA0.map((p) => p.gi));
+});
+
+test('a projected fixture refuses rotation — offsets on spatial moves carry dx/dy only', () => {
+  const c = buildDefaultViews();
+  const v = findView(c, 'top_down');
+  v.offsets = { 'Left Front Wall 1': { dx: 5, dy: 5 } };
+  const round = createViewsContainer(toParams(c));
+  const saved = findView(round, 'top_down').offsets['Left Front Wall 1'];
+  assert.deepEqual(saved, { dx: 5, dy: 5 }, 'spatial offset round-trip is dx/dy only');
+  assert.equal('rot' in saved, false, 'projected moves must not invent rot on offsets');
+});
+
+test('layout tweaks outside spatial panels are refused, not silently stored', () => {
+  const radial = {
+    id: 'v', label: 'v',
+    panels: [{ id: 'main', select: [{}], layout: 'radial', expandPitch: { VintageLed: 0.6 } }],
+  };
+  assert.throws(() => validateViewDef(radial),
+    /expandPitch needs a 'spatial' layout/,
+    'radial layouts must refuse LED pitch stretch — only spatial projections may depart');
+  const lanes = {
+    id: 'v', label: 'v',
+    panels: [{ id: 'main', select: [{}], layout: 'lanes', compress: { minWorldGap: 5, gapWorld: 4 } }],
+  };
+  assert.throws(() => validateViewDef(lanes),
+    /compress needs a 'spatial' layout/,
+    'lanes layouts must refuse gap compression');
+});

@@ -7,13 +7,10 @@
  * (their content is the deck screen's own state), so this module owns exactly
  * two things:
  *
- *   • `useDeckWorkspace()` — the reducer state + AsyncStorage hydrate/persist.
- *     LAYOUT ONLY: the closed set, under the versioned key
- *     `deck_workspace_layout_v1`. Never engine state, never a selection, never
- *     the split ratio (that one is engine-owned via /deck/playlist/slots).
- *     A layout op sends NO REST/WS traffic — minimize is not close: the ✕ on
- *     DECK B inside SplitPlaylistPanes remains the one and only
- *     engine-authoritative unbind.
+ *   • `useDeckWorkspace()` — subscribes to the module-level
+ *     `deck_workspace_store` (AsyncStorage hydrate-once + one persist per
+ *     transition). Deck and Mixer share this store so `audioBar` converges
+ *     live while both tabs stay mounted.
  *
  *   • `<DeckWorkspaceBar>` — ONE compact row directly under the LIVE OUTPUT
  *     header listing every window: open windows as "hide" chips (canonical
@@ -30,9 +27,8 @@
  * along with everything else it covers (docs/38 outranks the convenience of
  * re-arranging windows mid-plan).
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { usePalette } from '@/hooks/use-theme';
 import { Palette, Space, Type } from '@/constants/theme';
@@ -43,27 +39,23 @@ import { DualSwatch } from '@/components/ColorPickerModal';
 import { usePerformanceMode } from '@/hooks/usePerformanceMode';
 import { WorkspaceChip } from '@/components/ui/workspace_chip';
 import {
+  DECK_BAR_IDS,
   DECK_BAR_TITLES,
   DECK_WINDOW_TITLES,
-  DECK_WORKSPACE_LAYOUT_KEY,
-  DEFAULT_LAYOUT,
   PERF_HIDDEN_WINDOWS,
   PIXELS_SUPPRESSES,
   PROTECTED_WINDOW,
   effectiveOpenWindows,
   effectiveShownBars,
   isDeckWindowId,
-  layoutReducer,
-  normalizeLayout,
   railSurfaces,
-  serializeLayout,
   wideFlexFor,
   type DeckBarId,
   type DeckSurfaceId,
   type DeckWindowId,
   type DeckWorkspaceLayout,
-  type LayoutAction,
 } from '@/components/deck/deck_workspace_layout';
+import { getDeckWorkspaceStore } from '@/components/deck/deck_workspace_store';
 
 // The 8pt hitSlop / 44pt hit-target floor is the shared `<WorkspaceChip>`'s
 // concern now (`components/ui/workspace_chip.tsx`, `WORKSPACE_CHIP_HIT_SLOP`).
@@ -196,67 +188,20 @@ export interface DeckWorkspaceController {
 }
 
 /**
- * Layout state + persistence. Hydrates once on mount; every transition writes
- * the new closed set back fire-and-forget. A corrupt stored PREFERENCE resets
- * loudly to the default (console.error) — this is a view preference, not
- * engine state, and refusing to render the Deck over a stale layout cookie
- * would invert the mission priority (docs/53 §3.2).
+ * Layout state + persistence. Subscribes to the module-level
+ * `deck_workspace_store` so Deck and Mixer converge immediately while both
+ * tabs stay mounted; AsyncStorage is hydrate-once + one write per transition.
  */
 export function useDeckWorkspace(): DeckWorkspaceController {
-  const [layout, setLayout] = useState<DeckWorkspaceLayout>(DEFAULT_LAYOUT);
-  // Mirror of the live layout so the dispatcher can stay a zero-dependency
-  // stable callback (a changing callback identity would re-render every chip).
-  const layoutRef = useRef<DeckWorkspaceLayout>(DEFAULT_LAYOUT);
-  // If the operator minimizes something before the async hydrate lands, their
-  // action wins — the stored preference must never overwrite a live intent.
-  const touchedRef = useRef(false);
+  const store = getDeckWorkspaceStore();
+  const layout = useSyncExternalStore(store.subscribe, store.getLayout, store.getLayout);
 
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(DECK_WORKSPACE_LAYOUT_KEY).then((raw) => {
-      if (!alive || touchedRef.current || raw == null) return;
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (err) {
-        console.error('[Deck] workspace layout store is corrupt — using the default layout:', err);
-        const fresh = normalizeLayout(null);
-        layoutRef.current = fresh;
-        setLayout(fresh);
-        return;
-      }
-      const next = normalizeLayout(parsed);
-      layoutRef.current = next;
-      setLayout(next);
-    }).catch((err) => {
-      console.error('[Deck] workspace layout read failed — using the default layout:', err);
-    });
-    return () => { alive = false; };
-  }, []);
-
-  const dispatch = useCallback((action: LayoutAction) => {
-    const prev = layoutRef.current;
-    const next = layoutReducer(prev, action);
-    // The reducer returns the SAME reference for a no-op (e.g. close(patterns)),
-    // so nothing re-renders and nothing is written.
-    if (next === prev) return;
-    touchedRef.current = true;
-    layoutRef.current = next;
-    setLayout(next);
-    // `serializeLayout` stamps the set of windows this build knows about
-    // alongside the closed set, so a LATER build that adds a window can tell
-    // "he opened it" from "it did not exist yet" (report _225).
-    AsyncStorage.setItem(
-      DECK_WORKSPACE_LAYOUT_KEY,
-      JSON.stringify(serializeLayout(next)),
-    ).catch((err) => {
-      // The in-memory layout stays authoritative for this session.
-      console.error('[Deck] workspace layout save failed:', err);
-    });
-  }, []);
-
-  const openWindow = useCallback((id: DeckSurfaceId) => dispatch({ type: 'open', id }), [dispatch]);
-  const closeWindow = useCallback((id: DeckSurfaceId) => dispatch({ type: 'close', id }), [dispatch]);
+  const openWindow = useCallback((id: DeckSurfaceId) => {
+    store.dispatch({ type: 'open', id });
+  }, [store]);
+  const closeWindow = useCallback((id: DeckSurfaceId) => {
+    store.dispatch({ type: 'close', id });
+  }, [store]);
 
   // THE PERFORMANCE OVERLAY (docs/55 §2.5). Derived HERE, at the isOpen /
   // flexFor / rail boundary — never through the reducer, never through
@@ -345,6 +290,10 @@ export interface DeckWorkspaceBarProps {
    *  (docs/55 D3). Silently: report _308 removed the explainer caption that
    *  used to stand in their place. */
   perfActive?: boolean;
+  /** When set, render ONLY these bars — no window chips. The mixer tab uses
+   *  this to expose the AUDIO hide/show affordance (docs/63 §3.1) without
+   *  surfacing deck windows, while sharing the same deck workspace store. */
+  barsOnly?: readonly DeckBarId[];
   /** Rendered OUTSIDE the horizontal chip ScrollView, right-aligned, and
    *  never scrolled away or clipped (docs/63 §3.2) — this is where the
    *  plan-lock cluster (PLAN LIVE / TOOK OVER chips + `PlanIndicatorPill`)
@@ -355,30 +304,46 @@ export interface DeckWorkspaceBarProps {
 }
 
 export const DeckWorkspaceBar = React.memo(function DeckWorkspaceBar(
-  { layout, onOpen, onClose, perfActive = false, trailing }: DeckWorkspaceBarProps,
+  { layout, onOpen, onClose, perfActive = false, barsOnly, trailing }: DeckWorkspaceBarProps,
 ) {
   const C = usePalette();
+
+  const barsOnlySet = useMemo(
+    () => (barsOnly ? new Set<DeckBarId>(barsOnly) : null),
+    [barsOnly],
+  );
 
   // The bar derives its OWN composition from `layout` + `perfActive` using
   // the exact same pure functions `useDeckWorkspace` uses — `effectiveOpenWindows`,
   // `effectiveShownBars`, `railSurfaces` — so the hook's state and what this
   // bar renders can never diverge (docs/63 §3.2/§3.3).
-  const openWindowIds = useMemo(() => effectiveOpenWindows(layout, perfActive), [layout, perfActive]);
+  const openWindowIds = useMemo(
+    () => (barsOnlySet ? [] : effectiveOpenWindows(layout, perfActive)),
+    [layout, perfActive, barsOnlySet],
+  );
   const pixelsShown = openWindowIds.includes('pixels');
-  const shownBarIds = useMemo(() => effectiveShownBars(layout, pixelsShown), [layout, pixelsShown]);
+  const shownBarIds = useMemo(() => {
+    if (barsOnlySet) {
+      return DECK_BAR_IDS.filter((id) => barsOnlySet.has(id) && !layout.closed.includes(id));
+    }
+    return effectiveShownBars(layout, pixelsShown);
+  }, [layout, pixelsShown, barsOnlySet]);
   // The restore rail across BOTH tiers, in close order. `railSurfaces`
   // already interleaves windows and bars exactly as they were closed; this
   // filter applies the SAME two suppression predicates `effectiveRailWindows`
   // (perf-hidden windows) and `effectiveShownBars` (pixels-suppressed bars)
   // apply, just over the combined list, so the interleaving survives.
   const rail = useMemo(() => {
+    if (barsOnlySet) {
+      return layout.closed.filter((id): id is DeckBarId => barsOnlySet.has(id as DeckBarId));
+    }
     const all = railSurfaces(layout);
     return all.filter((id) => (
       isDeckWindowId(id)
         ? !(perfActive && PERF_HIDDEN_WINDOWS.includes(id))
         : !(pixelsShown && PIXELS_SUPPRESSES.includes(id))
     ));
-  }, [layout, perfActive, pixelsShown]);
+  }, [layout, perfActive, pixelsShown, barsOnlySet]);
 
   return (
     <View

@@ -11,6 +11,8 @@
  *   node launcher.js status                Show what is running
  *   node launcher.js stop                  Stop a running stack
  *   node launcher.js rebuild-pad           Re-export CaptainPad's static dist
+ *                                          (also runs automatically on prod boot
+ *                                          when sources are newer than dist/)
  *
  * Profiles (all include the Audio Companion — the sole audio analyzer, which
  * feeds the engine over OSC; docs/37 — and all serve CaptainPad):
@@ -420,6 +422,8 @@ function usage(stream = process.stdout) {
     '    rebuild-pad        Re-export CaptainPad/dist (the ONE dist-refresh path).',
     '                       Safe while the stack runs — the static server reads from',
     '                       disk, so an iPad reload picks it up with no restart.',
+    '                       On prod boot, a missing or stale dist rebuilds here',
+    '                       automatically before any service starts.',
     '',
     '  Options:',
     `    --scene <name>     Sim scene AND engine model (default: ${DEFAULT_SCENE})`,
@@ -1144,12 +1148,13 @@ function markMetroReady(state) {
   }
 }
 
-// ── docs/62 W-C2 · a stale static dist announces itself ──────────────────
+// ── docs/62 W-C2 · stale static dist → auto-rebuild before startup ───────
 //
 // The static profile runs no bundler: whatever is in `dist/` is what the
 // operator gets. Sources newer than the export mean the pad on the iPad is not
-// the pad in the tree. WARN, never refuse (docs/62 D6) — deliberately launching
-// a known-good older build must stay possible offline.
+// the pad in the tree. On profile startup the launcher rebuilds automatically
+// (same path as `rebuild-pad`) and refuses to boot if the export stays missing
+// or stale — never a prompt, never a silent fallback.
 function newestSourceMtime(baseDir, subdirs = CAPTAINPAD_SOURCE_DIRS, deps = {}) {
   const readdir = deps.readdirSync || fs.readdirSync;
   const stat = deps.statSync || fs.statSync;
@@ -1174,18 +1179,87 @@ function newestSourceMtime(baseDir, subdirs = CAPTAINPAD_SOURCE_DIRS, deps = {})
 }
 
 // Pure verdict so the threshold and the message are testable without a tree.
-function distStalenessVerdict(distMtimeMs, newest) {
+function distStalenessVerdict(distMtimeMs, newest, padDir = CAPTAINPAD_DIR) {
   if (newest === null) return { stale: false, why: 'no CaptainPad sources found to compare against' };
   if (distMtimeMs === null) {
-    return { stale: false, why: 'no dist to compare (a missing export is a validate() failure, not staleness)' };
+    return { stale: false, why: 'no dist to compare (a missing export is rebuilt before startup, not staleness)' };
   }
   if (newest.mtimeMs <= distMtimeMs) return { stale: false, why: 'the static export is newer than every source' };
   return {
     stale: true,
-    why: `${path.relative(CAPTAINPAD_DIR, newest.path)} is NEWER than the static export — the iPad is `
-      + 'being served an OLDER build than this tree. Refresh it with `node launcher.js rebuild-pad` '
-      + '(no restart needed), or launch anyway if this older build is the one you want (docs/62 W-C2).',
+    why: `${path.relative(padDir, newest.path)} is NEWER than the static export — the iPad would be `
+      + 'served an OLDER build than this tree (docs/62 W-C2).',
   };
+}
+
+// Injectable freshness read — one source of truth for W-C2 startup and tests.
+function readCaptainPadStaticFreshness(deps = {}) {
+  const padDir = deps.padDir || CAPTAINPAD_DIR;
+  const distDir = deps.distDir || path.join(padDir, 'dist');
+  const indexPath = path.join(distDir, 'index.html');
+  const stat = deps.statSync || fs.statSync;
+  const sourceDirs = deps.sourceDirs || CAPTAINPAD_SOURCE_DIRS;
+  const newest = newestSourceMtime(padDir, sourceDirs, deps);
+
+  if (!fs.existsSync(indexPath)) {
+    return {
+      fresh: false, missing: true, stale: false, distMtimeMs: null, newest, indexPath, padDir,
+    };
+  }
+  const distMtimeMs = stat(indexPath).mtimeMs;
+  const verdict = distStalenessVerdict(distMtimeMs, newest, padDir);
+  return {
+    fresh: !verdict.stale,
+    missing: false,
+    stale: verdict.stale,
+    verdict,
+    distMtimeMs,
+    newest,
+    indexPath,
+    padDir,
+  };
+}
+
+// Runs the canonical `rebuildPad` path when the static export is missing or
+// stale, then re-checks. No-op when fresh; skips non-static profiles entirely.
+async function ensureCaptainPadStaticExport(captainPadMode, deps = {}) {
+  if (captainPadMode !== 'static') return { ok: true, rebuilt: false, skipped: true };
+
+  const info = deps.log || ((msg) => log('launcher', msg));
+  const rebuild = deps.rebuild || rebuildPad;
+  const readFreshness = deps.readFreshness || readCaptainPadStaticFreshness;
+  const exit = deps.exit || ((code) => process.exit(code));
+
+  let state = readFreshness(deps);
+  if (state.fresh) return { ok: true, rebuilt: false, skipped: false };
+
+  if (state.missing) {
+    info('CaptainPad static export missing — rebuilding automatically before startup (docs/62 W-C2).');
+  } else {
+    logError(`STALE CaptainPad build — ${state.verdict.why}`);
+    info('Rebuilding the static export automatically before startup (docs/62 W-C2).');
+  }
+
+  const result = await rebuild(deps);
+  if (!result.ok) {
+    logError('CaptainPad static export rebuild failed — aborting startup. '
+      + 'Fix the export error above, or run `node launcher.js rebuild-pad` manually, then retry.');
+    exit(1);
+  }
+
+  state = readFreshness(deps);
+  if (state.missing) {
+    logError('CaptainPad static export is still missing after rebuild — aborting startup.');
+    exit(1);
+  }
+  if (state.stale) {
+    logError(`CaptainPad static export is still STALE after rebuild — ${state.verdict.why} `
+      + 'Aborting startup.');
+    exit(1);
+  }
+
+  info('CaptainPad static export is fresh — continuing startup.');
+  return { ok: true, rebuilt: true, skipped: false };
 }
 
 // ── Preflight validation — fail loudly before spawning anything ─────────
@@ -1297,11 +1371,8 @@ function validate(opts, profileDef) {
     if (!fs.existsSync(STATIC_WEB_SERVER)) {
       problems.push(`Static web server missing: ${STATIC_WEB_SERVER}`);
     }
-    if (!fs.existsSync(path.join(CAPTAINPAD_DIST_DIR, 'index.html'))) {
-      problems.push(
-        `CaptainPad static export missing (${path.join(CAPTAINPAD_DIST_DIR, 'index.html')}) — ` +
-        'build it: node launcher.js rebuild-pad');
-    }
+    // A missing export is rebuilt automatically in ensureCaptainPadStaticExport()
+    // (docs/62 W-C2) — not a validate() refusal, so startup can self-heal once.
   } else if (captainPadMode === 'expo') {
     problems.push(...captainPadMetroDependencyProblems());
   }
@@ -1326,15 +1397,6 @@ function validate(opts, profileDef) {
     for (const p of problems) logError(p);
     logError('Run `node launcher.js setup` to install all subsystem dependencies.');
     process.exit(1);
-  }
-
-  // docs/62 W-C2 — WARN, never refuse (D6): launching a deliberate older build
-  // must stay possible offline. Runs after the problem gate so it can assume the
-  // export exists.
-  if (captainPadMode === 'static') {
-    const distMtimeMs = fs.statSync(path.join(CAPTAINPAD_DIST_DIR, 'index.html')).mtimeMs;
-    const verdict = distStalenessVerdict(distMtimeMs, newestSourceMtime(CAPTAINPAD_DIR));
-    if (verdict.stale) logError(`⚠ STALE CaptainPad build — ${verdict.why}`);
   }
 
   return { captainPadMode, nativePad, metroState, metroGuard };
@@ -2464,6 +2526,11 @@ async function main() {
   // of them must fail BEFORE the running stack can be force-claimed.
   const { captainPadMode, nativePad, metroState, metroGuard } = validate(opts, profileDef);
 
+  // docs/62 W-C2 — rebuild a missing/stale static export BEFORE any stack process
+  // starts or ports are claimed. Uses the same `rebuildPad` implementation as the
+  // explicit `rebuild-pad` subcommand — one source of truth, no recursive launch.
+  await ensureCaptainPadStaticExport(captainPadMode);
+
   // The native-pad port is DEMANDED only when the flag is present (W-B1).
   const ports = readPorts({ requireNativePad: nativePad.enabled });
 
@@ -2786,8 +2853,9 @@ module.exports = {
   resolveNativePadRequest, captainPadMetroDependencyProblems,
   metroDependencyFingerprint, readMetroDependencyState, metroCacheGuard, metroArgs, metroChildEnv,
   METRO_FINGERPRINT_STAMP, INSTALL_WRITE_ORDER_SLACK_MS,
-  // ── docs/62 W-C: rebuild-pad + the stale-dist warning ──
+  // ── docs/62 W-C: rebuild-pad + auto-rebuild on stale static export ──
   SUBCOMMANDS, REBUILD_PAD_LOCK,
   runningExpoExports, stackMetroState, rebuildPadGuard, rebuildPadState, rebuildPad,
-  newestSourceMtime, distStalenessVerdict, CAPTAINPAD_SOURCE_DIRS,
+  newestSourceMtime, distStalenessVerdict, readCaptainPadStaticFreshness,
+  ensureCaptainPadStaticExport, CAPTAINPAD_SOURCE_DIRS,
 };

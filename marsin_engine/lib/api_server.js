@@ -4303,25 +4303,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return true;
   }
 
-  // ══ PERFORMANCE-MODE TAKEOVER PASSCODE — OPERATOR RULING 2026-08-14 ═══════
+  // ══ PERFORMANCE-MODE OPERATOR PASSCODE GATES ═══════════════════════════════
   //
-  // "Take over in performance mode from the timeline needs to have either of
-  // the passwords we have for Sina, Muisha, or Sailors." … "pass code is
-  // required EVERY TIME."
+  // While a show is live, seizing the rig FROM a running plan, leaving the show
+  // lock, and asserting an edit-session principal are operator-authority acts.
+  // Each request must carry EITHER:
+  //   • a fresh `X-CaptainPad-Passcode` header (verified per attempt), OR
+  //   • a valid opaque `X-CaptainPad-Passcode-Waiver` minted within the last
+  //     30 minutes after a successful passcode check (operator ruling 2026-08-18).
   //
-  // While a show is live (performance mode ON), seizing the rig FROM a running
-  // plan is an operator-authority act: it must be authorised by one of the
-  // three named principals the CaptainPad privileged-auth credential store
-  // already carries (owner / collaborator / bringup — see captainpad_auth.js,
-  // provisioned exclusively from the external $BM26_SECRETS file; no credential
-  // material exists anywhere in this repo).
-  //
-  // EVERY TIME means EVERY TIME. This gate deliberately ignores
-  // `x-captainpad-session`: a live 30-minute privileged session, a remembered
-  // device, or a takeover authorised ten seconds ago buys nothing. The
-  // passcode itself is re-verified per attempt via `verifyPassphrase`, which
-  // issues no session and shares the existing lockout policy (5 failures in a
-  // rolling minute → 60 s lockout, keyed by remote address).
+  // A privileged SESSION (`X-CaptainPad-Session`) deliberately buys nothing here.
+  // Waivers are scoped ONLY to these passcode gates — they do not unlock
+  // structural performance locks, mint privileged sessions, or broaden route
+  // authority. The engine-verified principal from passcode or waiver still
+  // drives owner-only save checks (docs/56 D7).
   //
   // THE REVERSE DIRECTION IS NEVER GATED. Timeline resume and operator-lease
   // expiry force-disarm Live Touch with no auth at all — getting BACK to the
@@ -4329,6 +4324,71 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   //
   // Performance mode OFF → no gate, byte-identical to the previous behaviour.
   const TAKEOVER_PASSCODE_HEADER = 'x-captainpad-passcode';
+  const PASSCODE_WAIVER_HEADER = 'x-captainpad-passcode-waiver';
+
+  function headerValue(req, name) {
+    const raw = req && req.headers ? req.headers[name] : null;
+    return Array.isArray(raw) ? raw[0] : raw;
+  }
+
+  /**
+   * Resolve the engine-verified operator principal from passcode OR waiver.
+   *
+   * @returns {{ok: true, principal: string, via: 'passcode'|'waiver'}} or
+   *   {ok:false, status, body}. Never trusts a client-supplied principal name.
+   */
+  function resolveOperatorPrincipal(req, what, codes) {
+    const passcode = headerValue(req, TAKEOVER_PASSCODE_HEADER);
+    if (typeof passcode === 'string' && passcode.length > 0) {
+      const result = captainPadAuth.verifyPassphrase(
+        passcode,
+        req.socket && req.socket.remoteAddress,
+      );
+      if (!result.ok) {
+        console.warn(`  ⚠ [operator-auth] REFUSED ${what} — operator passcode rejected ` +
+          `(${result.code}).`);
+        return {
+          ok: false,
+          status: result.status,
+          body: {
+            error: result.status === 429
+              ? 'Too many attempts. Wait before trying again.'
+              : 'Operator passcode rejected.',
+            code: result.status === 429 ? codes.rateLimited : codes.invalid,
+            ...(result.retryAfterMs ? { retryAfterMs: result.retryAfterMs } : {}),
+          },
+        };
+      }
+      return { ok: true, principal: result.principal, via: 'passcode' };
+    }
+
+    const waiverToken = headerValue(req, PASSCODE_WAIVER_HEADER);
+    if (typeof waiverToken === 'string' && waiverToken.length > 0) {
+      const waiver = captainPadAuth.waiverForToken(waiverToken);
+      if (!waiver) {
+        console.warn(`  ⚠ [operator-auth] REFUSED ${what} — passcode waiver invalid or expired.`);
+        return {
+          ok: false,
+          status: 401,
+          body: {
+            error: 'Operator passcode waiver is invalid or expired — enter the passcode again.',
+            code: codes.waiverInvalid || codes.invalid,
+          },
+        };
+      }
+      return { ok: true, principal: waiver.principal, via: 'waiver' };
+    }
+
+    console.warn(`  ⚠ [operator-auth] REFUSED ${what} — no operator passcode or waiver was supplied.`);
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        error: codes.requiredMessage || 'an operator passcode is required',
+        code: codes.required,
+      },
+    };
+  }
 
   /**
    * @returns {null} when the takeover may proceed, or a
@@ -4336,45 +4396,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    */
   function checkTakeoverPasscode(req, what) {
     if (!performanceMode.active) return null;
-    // Mirrors the performance-mode EXIT gate: with privileged auth disabled
-    // there is no credential store to check against (isolated engine/test
-    // mode), so the gate is inert rather than an unopenable lock.
     if (!captainPadAuth.required) return null;
-    const raw = req && req.headers ? req.headers[TAKEOVER_PASSCODE_HEADER] : null;
-    const passcode = Array.isArray(raw) ? raw[0] : raw;
-    if (typeof passcode !== 'string' || passcode.length === 0) {
-      console.warn(`  ⚠ [takeover] REFUSED ${what} — performance mode is live and no operator ` +
-        'passcode was supplied. The timeline keeps running.');
-      return {
-        status: 401,
-        body: {
-          error: 'performance mode is live — an operator passcode is required to take over '
-            + 'from the timeline',
-          code: 'TAKEOVER_AUTH_REQUIRED',
-        },
-      };
-    }
-    const result = captainPadAuth.verifyPassphrase(
-      passcode,
-      req.socket && req.socket.remoteAddress,
-    );
-    if (!result.ok) {
-      // The attempted secret is NEVER logged, echoed, or included in the error.
-      console.warn(`  ⚠ [takeover] REFUSED ${what} — operator passcode rejected ` +
-        `(${result.code}). The timeline keeps running.`);
-      return {
-        status: result.status,
-        body: {
-          error: result.status === 429
-            ? 'Too many attempts. Wait before trying again.'
-            : 'Operator passcode rejected.',
-          code: result.status === 429 ? 'TAKEOVER_AUTH_RATE_LIMITED' : 'TAKEOVER_AUTH_INVALID',
-          ...(result.retryAfterMs ? { retryAfterMs: result.retryAfterMs } : {}),
-        },
-      };
-    }
-    console.log(`[takeover] ${what} authorised by principal '${result.principal}' ` +
-      '(fresh passcode; no session was created or consumed)');
+    const resolved = resolveOperatorPrincipal(req, what, {
+      required: 'TAKEOVER_AUTH_REQUIRED',
+      invalid: 'TAKEOVER_AUTH_INVALID',
+      rateLimited: 'TAKEOVER_AUTH_RATE_LIMITED',
+      waiverInvalid: 'TAKEOVER_AUTH_WAIVER_INVALID',
+      requiredMessage: 'performance mode is live — an operator passcode is required to take over '
+        + 'from the timeline',
+    });
+    if (!resolved.ok) return { status: resolved.status, body: resolved.body };
+    console.log(`[takeover] ${what} authorised by principal '${resolved.principal}' ` +
+      `(via ${resolved.via}; no privileged session was created or consumed)`);
     return null;
   }
 
@@ -4392,52 +4425,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   // ══ EDIT-SESSION PRINCIPAL GATES (docs/56 D2/D3/D5b) ═════════════════════
   //
-  // Same ring, same EVERY-TIME ruling, same lockout as the takeover gate above:
-  // `verifyPassphrase` issues nothing, so a live privileged session, a
-  // remembered device, or an unlock ten seconds ago buys exactly nothing.
-  // Factored out here so the perf-mode EXIT gate and POST /edit-session can
-  // never drift apart in header name, refusal shape, or logging posture.
+  // Same ring and lockout as the takeover gate above. Accepts passcode OR a
+  // valid 30-minute passcode waiver — never a privileged session token.
 
   /**
-   * Verify the X-CaptainPad-Passcode header for an identity-establishing act.
+   * Verify operator authority for an identity-establishing act.
    *
    * @returns {{ok: true, principal: string}} when verified, or
    *   {ok:false, status, body} the caller must send. The attempted secret is
    *   NEVER logged, echoed, or included in the refusal.
    */
   function verifyPrincipalPasscode(req, what, codes) {
-    const raw = req && req.headers ? req.headers[TAKEOVER_PASSCODE_HEADER] : null;
-    const passcode = Array.isArray(raw) ? raw[0] : raw;
-    if (typeof passcode !== 'string' || passcode.length === 0) {
-      console.warn(`  ⚠ [EditSession] REFUSED ${what} — no operator passcode was supplied.`);
-      return {
-        ok: false,
-        status: 401,
-        body: {
-          error: 'an operator passcode is required — a privileged session is not a substitute',
-          code: codes.required,
-        },
-      };
+    const resolved = resolveOperatorPrincipal(req, what, {
+      required: codes.required,
+      invalid: codes.invalid,
+      rateLimited: codes.rateLimited,
+      waiverInvalid: codes.waiverInvalid || codes.invalid,
+      requiredMessage: codes.requiredMessage
+        || 'an operator passcode is required — a privileged session is not a substitute',
+    });
+    if (!resolved.ok) {
+      console.warn(`  ⚠ [EditSession] REFUSED ${what} — ${resolved.body.code}.`);
+      return resolved;
     }
-    const result = captainPadAuth.verifyPassphrase(
-      passcode,
-      req.socket && req.socket.remoteAddress,
-    );
-    if (!result.ok) {
-      console.warn(`  ⚠ [EditSession] REFUSED ${what} — operator passcode rejected (${result.code}).`);
-      return {
-        ok: false,
-        status: result.status,
-        body: {
-          error: result.status === 429
-            ? 'Too many attempts. Wait before trying again.'
-            : 'Operator passcode rejected.',
-          code: result.status === 429 ? codes.rateLimited : codes.invalid,
-          ...(result.retryAfterMs ? { retryAfterMs: result.retryAfterMs } : {}),
-        },
-      };
-    }
-    return { ok: true, principal: result.principal };
+    return { ok: true, principal: resolved.principal };
   }
 
   /** Write a {status, body} refusal produced by verifyPrincipalPasscode. */
@@ -6308,7 +6319,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const c = validatePaletteChannel(value, label);
     return typeof c === 'number' ? { h: c, s: 1, v: 1 } : { h: c.h, s: c.s, v: c.v };
   }
-  function resolveColorPaletteParams(entry) {
+  function resolveColorPaletteParams(entry, livePalette) {
+    if (Array.isArray(livePalette) && livePalette.length === 5) {
+      return {
+        colorPalette1: resolvedChannel(livePalette[0], 'livePalettes[][0]'),
+        colorPalette2: resolvedChannel(livePalette[1], 'livePalettes[][1]'),
+      };
+    }
     if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
       return {
         colorPalette1: resolvedChannel(entry.c1, 'inline palette c1'),
@@ -6384,8 +6401,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // HARD-CUT palette apply (one write per cycle tick, never per frame):
   // surface the change the same way an operator palette write would — persist +
   // broadcast so every UI mirrors the live palette without polling.
-  function applyColorPalette(id) {
-    writeColorPaletteParams(resolveColorPaletteParams(id));
+  function applyColorPalette(id, livePalette) {
+    writeColorPaletteParams(resolveColorPaletteParams(id, livePalette));
     saveAllState();
     broadcastColorAutopilot();
   }
@@ -6398,6 +6415,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
     resolvePaletteFn: resolveColorPaletteParams,
     applyParamsFn: writeColorPaletteParams,
+    onTransition: (transitionState) => {
+      if (!transitionState) return;
+      broadcastWs({ type: 'colorAutopilot', ...colorAutopilotState(), colorTransition: transitionState });
+    },
+    resolveTransitionScopeFn: () => 'live-five',
     // Re-broadcast the next-swap time on every (re)schedule so the deck
     // color-autopilot countdown stays accurate after each palette switch.
     onSchedule: () => broadcastColorAutopilot(),
@@ -6458,10 +6480,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       palettes: Array.isArray(st.palettes) ? [...st.palettes] : [],
       delay_s: typeof st.delay_s === 'number' ? st.delay_s : 30,
       shuffle: !!st.shuffle,
-      // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
-      // hard cut. Older persisted configs omit it → report 0.
-      transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
+    // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
+    // hard cut. Older persisted configs omit it → report 0.
+    transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
     };
+    const transition = colorAutopilot.transition;
+    if (transition) out.colorTransition = transition;
     // The INERT follow-note block rides along so the card can show (and a mode
     // toggle can restore) the operator's cycle tuning. Nothing reads it to
     // decide anything while the mode is palettes.
@@ -7325,7 +7349,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST, PATCH, DELETE');
     res.setHeader('Access-Control-Allow-Headers',
-      'Content-Type, X-Touch-Control-Owner, X-CaptainPad-Session, X-CaptainPad-Passcode');
+      'Content-Type, X-Touch-Control-Owner, X-CaptainPad-Session, X-CaptainPad-Passcode, '
+      + 'X-CaptainPad-Passcode-Waiver');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -7334,7 +7359,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     const captainPadAuthRoute = req.url === '/captainpad/auth/login'
       || req.url === '/captainpad/auth/session'
-      || req.url === '/captainpad/auth/logout';
+      || req.url === '/captainpad/auth/logout'
+      || req.url === '/captainpad/auth/passcode-waiver';
     if (!captainPadAuthRoute) {
       if (await rejectIfTimelinePreemptionFails(req, res)) return;
       if (rejectTouchControlLeaseConflict(req, res)) return;
@@ -7441,8 +7467,67 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     if (req.method === 'POST' && req.url === '/captainpad/auth/logout') {
       captainPadAuth.revokeRequest(req);
+      const waiverToken = headerValue(req, PASSCODE_WAIVER_HEADER);
+      if (typeof waiverToken === 'string' && waiverToken.length > 0) {
+        captainPadAuth.revokePasscodeWaiver(waiverToken);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ authenticated: false }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/captainpad/auth/passcode-waiver') {
+      readBody((data) => {
+        const passcode = data && data.passcode;
+        const result = captainPadAuth.mintPasscodeWaiver(
+          passcode,
+          req.socket && req.socket.remoteAddress,
+        );
+        if (!result.ok) {
+          if (result.retryAfterMs) {
+            res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)));
+          }
+          res.writeHead(result.status, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+          });
+          return res.end(JSON.stringify({
+            ok: false,
+            error: result.status === 429
+              ? 'Too many attempts. Wait before trying again.'
+              : 'Operator passcode rejected.',
+            code: result.status === 429 ? 'PASSCODE_WAIVER_RATE_LIMITED' : 'PASSCODE_WAIVER_INVALID',
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+          ok: true,
+          token: result.token,
+          principal: result.principal,
+          expiresAt: result.expiresAt,
+          remainingMs: result.remainingMs,
+        }));
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/captainpad/auth/passcode-waiver') {
+      const waiverToken = headerValue(req, PASSCODE_WAIVER_HEADER);
+      const waiver = captainPadAuth.waiverForToken(
+        typeof waiverToken === 'string' ? waiverToken : '',
+      );
+      res.writeHead(waiver ? 200 : 401, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        'Vary': 'X-CaptainPad-Passcode-Waiver',
+      });
+      res.end(JSON.stringify(waiver ? {
+        ok: true,
+        principal: waiver.principal,
+        expiresAt: waiver.expiresAt,
+        remainingMs: Math.max(0, waiver.expiresAt - Date.now()),
+      } : {
+        ok: false,
+        code: 'PASSCODE_WAIVER_INVALID',
+      }));
       return;
     }
 
@@ -14211,6 +14296,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             required: 'EXIT_AUTH_REQUIRED',
             invalid: 'EXIT_AUTH_INVALID',
             rateLimited: 'EXIT_AUTH_RATE_LIMITED',
+            waiverInvalid: 'EXIT_AUTH_WAIVER_INVALID',
           });
           if (!verified.ok) return sendPrincipalRefusal(res, verified);
           exitPrincipal = verified.principal;
@@ -14245,7 +14331,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             error: 'only the captain\'s passcode can save session tuning on exit — '
-              + 'choose KEEP WITHOUT SAVING or RESTORE',
+              + 'choose DISCARD PERFORMANCE CHANGES',
             code: 'EXIT_KEEP_SAVE_OWNER_ONLY',
             principal: exitPrincipal,
           }));
@@ -14411,6 +14497,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         required: 'EDIT_SESSION_AUTH_REQUIRED',
         invalid: 'EDIT_SESSION_AUTH_INVALID',
         rateLimited: 'EDIT_SESSION_AUTH_RATE_LIMITED',
+        waiverInvalid: 'EDIT_SESSION_AUTH_WAIVER_INVALID',
       });
       if (!verified.ok) return sendPrincipalRefusal(res, verified);
       setEditPrincipal(verified.principal, 'edit-session assertion');

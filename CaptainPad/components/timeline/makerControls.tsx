@@ -14,6 +14,7 @@
  */
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { usePalette } from '@/hooks/use-theme';
 
 export function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -197,7 +198,13 @@ export function Dropdown({
         </Text>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.primary }}>▾</Text>
       </TouchableOpacity>
-      <Modal transparent visible={open} animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal
+        transparent
+        visible={open}
+        animationType="fade"
+        onRequestClose={() => setOpen(false)}
+        supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+      >
         <Pressable
           onPress={() => setOpen(false)}
           style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}

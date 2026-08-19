@@ -141,10 +141,11 @@ by name, over: another `rebuild-pad`; any `expo export` running elsewhere on the
 box; a launcher Metro that has not reported readiness. Never run
 `npm run web:build` into the live dist by hand.
 
-A prod boot also **warns** (never refuses — D6) when `dist/index.html` is older
-than the newest file under `CaptainPad/{app,components,hooks,utils}`, naming
-`rebuild-pad`. Launching a deliberate older known-good build stays possible
-offline; it just stops being invisible.
+On a **static profile boot** (`prod`), a missing or stale `dist/` triggers the
+same rebuild automatically **before any stack process starts** — visible
+`[rebuild]` progress, one attempt, then a loud abort if the export is still
+missing or stale. No prompt, no silent fallback. Expo profiles (`dev` /
+`dev-lite`) skip this entirely — Metro serves source live.
 
 ## Cadence: keeping the live stack at latest
 

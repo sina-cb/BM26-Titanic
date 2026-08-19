@@ -26,6 +26,7 @@
 
 const DEAD = 3; // px of movement before a press counts as a drag (not a click)
 const ZOOM_MIN = 0.3, ZOOM_MAX = 8;
+const HIT_SLOP = 6; // extra CSS px for touch / coarse pointer hit testing
 
 const normRot = (r) => ((r + 180) % 360 + 360) % 360 - 180;
 
@@ -51,6 +52,10 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
   };
 
   const onMove = (e) => {
+    if (drag && ctx.getMode() !== 'edit') {
+      drag = null;
+      return;
+    }
     const p = rectPt(e);
     if (!moved && Math.hypot(p.cx - downX, p.cy - downY) >= DEAD) moved = true;
 
@@ -77,7 +82,7 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
     }
 
     // Idle hover: status-strip color.
-    const px = paneView.pixelAt(p.cx, p.cy);
+    const px = paneView.pixelAt(p.cx, p.cy, { slop: HIT_SLOP });
     ctx.setHover(px ? ctx.colorOf(px.gi) : null);
     canvas.style.cursor = (ctx.getMode() === 'edit' && px) ? 'grab' : (ctx.getMode() === 'edit' ? 'default' : 'grab');
   };
@@ -90,8 +95,13 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
   const onDown = (e) => {
     canvas.focus();
     e.stopPropagation();
+    if (typeof canvas.setPointerCapture === 'function' && e.pointerId != null) {
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* already captured */ }
+    }
     const p = rectPt(e);
     downX = p.cx; downY = p.cy; moved = false;
+
+    if (ctx.getMode() !== 'edit') drag = null;
 
     // Space / middle button → pan (overrides everything).
     if (e.button === 1 || (e.button === 0 && spaceDown)) { startPan(p); e.preventDefault(); return; }
@@ -102,7 +112,7 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
     if (e.button === 2) {
       if (ctx.getMode() !== 'edit' || !ctx.groupOf) return;
       e.preventDefault();
-      const hit = paneView.pixelAt(p.cx, p.cy);
+      const hit = paneView.pixelAt(p.cx, p.cy, { slop: HIT_SLOP });
       if (!hit || !hit.fixKey) { if (!e.shiftKey) ctx.setSelection(new Set()); return; }
       const group = ctx.groupOf(hit.fixKey);
       const sel = e.shiftKey ? new Set(ctx.getSelection()) : new Set();
@@ -114,7 +124,7 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
 
     if (ctx.getMode() === 'edit') {
       ctx.materialize();                       // ensure every fixture has a stored anchor
-      const px = paneView.pixelAt(p.cx, p.cy);
+      const px = paneView.pixelAt(p.cx, p.cy, { slop: HIT_SLOP });
       if (px && px.fixKey) {
         let sel = new Set(ctx.getSelection());
         if (e.shiftKey) { sel.has(px.fixKey) ? sel.delete(px.fixKey) : sel.add(px.fixKey); }
@@ -139,8 +149,14 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
     startPan(p);
   };
 
-  const onUp = () => {
-    if (drag) { if (moved) ctx.commit(); drag = null; }
+  const onUp = (e) => {
+    if (e && typeof canvas.releasePointerCapture === 'function' && e.pointerId != null) {
+      try { if (canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+    if (drag) {
+      if (moved && ctx.getMode() === 'edit') ctx.commit();
+      drag = null;
+    }
     if (panning) panning = null;
     canvas.style.cursor = ctx.getMode() === 'edit' ? 'default' : 'grab';
   };
@@ -228,6 +244,8 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerdown', onDown);
   window.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('keydown', onKeyDown);
@@ -238,6 +256,8 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
     canvas.removeEventListener('pointermove', onMove);
     canvas.removeEventListener('pointerdown', onDown);
     window.removeEventListener('pointerup', onUp);
+    canvas.removeEventListener('pointerup', onUp);
+    canvas.removeEventListener('pointercancel', onUp);
     canvas.removeEventListener('wheel', onWheel);
     canvas.removeEventListener('dblclick', onDblClick);
     canvas.removeEventListener('keydown', onKeyDown);

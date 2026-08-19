@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:ios-prebuild": "node scripts/verify_ios_prebuild_scratch.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",

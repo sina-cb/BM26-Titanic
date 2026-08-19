@@ -1110,7 +1110,7 @@ test('W-A5: the launcher starts the sentinel right after it writes the lock', ()
 
 // ════════════════════════════════════════════════════════════════════════
 // _262 · docs/62 W-B (the supervised Expo Go Metro + the stale-Metro guard)
-//        and W-C (rebuild-pad + the stale-dist warning)
+//        and W-C (rebuild-pad + auto-rebuild on stale/missing static export)
 //
 // Same rules as the W-A block above: SCRATCH ports (174xx — deliberately clear
 // of W-A's 173xx and of the 78xx map the sibling suites use), a SCRATCH lock, a
@@ -1434,7 +1434,7 @@ test('W-C1: `rebuild-pad` is a real subcommand, routed before any profile handli
   assert.match(runner, /'expo', 'export', '--platform', 'web', '-c'/);
   assert.match(runner, /CI: null/);
   // And the launcher tells operators to use it instead of a hand-run build.
-  assert.match(src, /build it: node launcher\.js rebuild-pad/);
+  assert.match(src, /run `node launcher\.js rebuild-pad` manually/);
 });
 
 test('W-C1: the serialization guard refuses each hazard BY NAME, and passes when clear', () => {
@@ -1657,7 +1657,41 @@ test('W-C1 CLI: `launcher.js rebuild-pad` refuses a serialized run and exports N
   fs.unlinkSync(pad.lock);
 });
 
-// ── W-C2 · a stale static dist announces itself (warn, never refuse) ──────
+// ── W-C2 · stale/missing static dist auto-rebuilds before startup ─────────
+
+function freshnessPad(name, opts = {}) {
+  const pad = scratchPad(name);
+  fs.mkdirSync(path.join(pad.dir, 'app'), { recursive: true });
+  const sourcePath = path.join(pad.dir, 'app', 'x.tsx');
+  if (opts.withSource !== false) {
+    fs.writeFileSync(sourcePath, 'export {}');
+    if (opts.sourceMtimeMs !== undefined) {
+      const d = new Date(opts.sourceMtimeMs);
+      fs.utimesSync(sourcePath, d, d);
+    }
+  }
+  if (opts.withDist !== false) {
+    fs.mkdirSync(pad.dist, { recursive: true });
+    fs.writeFileSync(path.join(pad.dist, 'index.html'), '<html></html>');
+    if (opts.distMtimeMs !== undefined) {
+      const d = new Date(opts.distMtimeMs);
+      fs.utimesSync(path.join(pad.dist, 'index.html'), d, d);
+    }
+  }
+  return { ...pad, sourcePath };
+}
+
+function ensureDeps(pad, extra = {}) {
+  return {
+    padDir: pad.dir,
+    distDir: pad.dist,
+    rebuildLockPath: pad.lock,
+    listExpoExports: () => [],
+    readLock: () => null,
+    log: () => {},
+    ...extra,
+  };
+}
 
 test('W-C2: the newest source mtime is found across the CaptainPad source trees', () => {
   const dir = wbDir('staleness');
@@ -1683,23 +1717,171 @@ test('W-C2: the newest source mtime is found across the CaptainPad source trees'
   assert.ok(!launcher.CAPTAINPAD_SOURCE_DIRS.includes('dist'));
 });
 
-test('W-C2: the stale-dist verdict names rebuild-pad, and is a WARNING — never a refusal', () => {
+test('W-C2: the stale-dist verdict names the newer source and never offers a launch-anyway escape hatch', () => {
   const fresh = launcher.distStalenessVerdict(2000, { path: 'CaptainPad/app/x.tsx', mtimeMs: 1000 });
   assert.equal(fresh.stale, false);
   const stale = launcher.distStalenessVerdict(1000, { path: path.join(ROOT, 'CaptainPad', 'app', 'x.tsx'), mtimeMs: 2000 });
   assert.equal(stale.stale, true);
   assert.match(stale.why, /is NEWER than the static export/);
-  assert.match(stale.why, /node launcher\.js rebuild-pad/);
-  assert.match(stale.why, /launch anyway/, 'D6: a deliberate older build must stay launchable offline');
+  assert.match(stale.why, /docs\/62 W-C2/);
+  assert.ok(!/launch anyway/i.test(stale.why));
   assert.equal(launcher.distStalenessVerdict(1000, null).stale, false);
+});
 
-  // MUTATION: turn the warning into a problems.push()/process.exit and this goes
-  // red — refusing to boot an older known-good build is exactly what D6 forbids.
+test('W-C2: readCaptainPadStaticFreshness reports fresh, stale, and missing states', () => {
+  const now = Date.now();
+  const freshPad = freshnessPad('fresh_read', { distMtimeMs: now, sourceMtimeMs: now - 1000 });
+  const fresh = launcher.readCaptainPadStaticFreshness(ensureDeps(freshPad));
+  assert.equal(fresh.fresh, true);
+  assert.equal(fresh.missing, false);
+  assert.equal(fresh.stale, false);
+
+  const stalePad = freshnessPad('stale_read', { distMtimeMs: now - 5000, sourceMtimeMs: now });
+  const stale = launcher.readCaptainPadStaticFreshness(ensureDeps(stalePad));
+  assert.equal(stale.fresh, false);
+  assert.equal(stale.stale, true);
+
+  const missingPad = freshnessPad('missing_read', { withDist: false });
+  const missing = launcher.readCaptainPadStaticFreshness(ensureDeps(missingPad));
+  assert.equal(missing.fresh, false);
+  assert.equal(missing.missing, true);
+});
+
+test('W-C2: a fresh static export is a no-op — rebuild is never invoked', async () => {
+  const pad = freshnessPad('ensure_fresh', {
+    distMtimeMs: Date.now(),
+    sourceMtimeMs: Date.now() - 1000,
+  });
+  let rebuilds = 0;
+  const result = await launcher.ensureCaptainPadStaticExport('static', ensureDeps(pad, {
+    rebuild: async () => { rebuilds += 1; return { ok: true, code: 0 }; },
+  }));
+  assert.deepEqual([result.ok, result.rebuilt, rebuilds], [true, false, 0]);
+});
+
+test('W-C2: a stale static export triggers rebuild + recheck, then startup may continue', async () => {
+  const pad = freshnessPad('ensure_stale_ok', {
+    distMtimeMs: Date.now() - 5000,
+    sourceMtimeMs: Date.now(),
+  });
+  let rebuilds = 0;
+  const lines = [];
+  const result = await launcher.ensureCaptainPadStaticExport('static', ensureDeps(pad, {
+    log: (m) => lines.push(String(m)),
+    rebuild: async (deps) => {
+      rebuilds += 1;
+      return launcher.rebuildPad({
+        ...deps,
+        runExport: fakeExport(pad, { hash: 'fresh123' }),
+      });
+    },
+  }));
+  assert.deepEqual([result.ok, result.rebuilt, rebuilds], [true, true, 1]);
+  assert.match(lines.join('\n'), /Rebuilding the static export automatically/);
+  assert.match(lines.join('\n'), /fresh — continuing startup/);
+  assert.equal(launcher.readCaptainPadStaticFreshness(ensureDeps(pad)).fresh, true);
+});
+
+test('W-C2: a missing static export triggers rebuild before startup', async () => {
+  const pad = freshnessPad('ensure_missing_ok', { withDist: false });
+  let rebuilds = 0;
+  const lines = [];
+  const result = await launcher.ensureCaptainPadStaticExport('static', ensureDeps(pad, {
+    log: (m) => lines.push(String(m)),
+    rebuild: async (deps) => {
+      rebuilds += 1;
+      return launcher.rebuildPad({
+        ...deps,
+        runExport: fakeExport(pad, { hash: 'frommissing' }),
+      });
+    },
+  }));
+  assert.deepEqual([result.ok, result.rebuilt, rebuilds], [true, true, 1]);
+  assert.match(lines.join('\n'), /export missing — rebuilding automatically/);
+});
+
+test('W-C2: rebuild failure aborts startup loudly — no services, no prompt', async () => {
+  const pad = freshnessPad('ensure_fail', {
+    distMtimeMs: Date.now() - 5000,
+    sourceMtimeMs: Date.now(),
+  });
+  let exitCode = null;
+  const { stderr } = await captureStderr(async () => launcher.ensureCaptainPadStaticExport('static', ensureDeps(pad, {
+    exit: (code) => { exitCode = code; },
+    rebuild: async () => ({ ok: false, code: 1, reason: 'export failed' }),
+  })));
+  assert.equal(exitCode, 1);
+  assert.match(stderr, /rebuild failed — aborting startup/);
+  assert.ok(!/launch anyway/i.test(stderr));
+});
+
+test('W-C2: still-stale output after rebuild aborts startup', async () => {
+  const pad = freshnessPad('ensure_still_stale', {
+    distMtimeMs: Date.now() - 5000,
+    sourceMtimeMs: Date.now(),
+  });
+  let exitCode = null;
+  const { stderr } = await captureStderr(async () => launcher.ensureCaptainPadStaticExport('static', ensureDeps(pad, {
+    exit: (code) => { exitCode = code; },
+    rebuild: async () => {
+      // "Succeeded" without rewriting dist — freshness stays stale.
+      return { ok: true, code: 0 };
+    },
+  })));
+  assert.equal(exitCode, 1);
+  assert.match(stderr, /still STALE after rebuild/);
+});
+
+test('W-C2: expo profiles and stacks without CaptainPad skip auto-rebuild entirely', async () => {
+  let rebuilds = 0;
+  const bump = async () => { rebuilds += 1; return { ok: true, code: 0 }; };
+  assert.deepEqual(await launcher.ensureCaptainPadStaticExport('expo', { rebuild: bump }),
+    { ok: true, rebuilt: false, skipped: true });
+  assert.deepEqual(await launcher.ensureCaptainPadStaticExport(null, { rebuild: bump }),
+    { ok: true, rebuilt: false, skipped: true });
+  assert.equal(rebuilds, 0);
+});
+
+test('W-C2: non-interactive shells behave the same — no prompt path exists', async () => {
   const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
-  const fn = src.slice(src.indexOf('function validate(opts, profileDef)'), src.indexOf('// ── The spawn contract'));
-  const block = fn.slice(fn.indexOf('distStalenessVerdict') - 400);
-  assert.match(block, /if \(verdict\.stale\) logError\(/);
-  assert.ok(!/verdict\.stale[\s\S]{0,200}process\.exit/.test(block), 'staleness must never gate the boot');
-  // …and it runs AFTER the problems gate, so it can assume the export exists.
-  assert.ok(fn.indexOf('logError(\'Run `node launcher.js setup`') < fn.indexOf('distStalenessVerdict'));
+  assert.ok(!/readline|launch anyway|prompt\(/i.test(src),
+    'staleness self-heals automatically — there must be no interactive prompt');
+
+  const pad = freshnessPad('ensure_ci', {
+    distMtimeMs: Date.now() - 5000,
+    sourceMtimeMs: Date.now(),
+  });
+  const had = process.env.CI;
+  process.env.CI = 'true';
+  try {
+    const result = await launcher.ensureCaptainPadStaticExport('static', ensureDeps(pad, {
+      rebuild: async (deps) => launcher.rebuildPad({
+        ...deps,
+        runExport: fakeExport(pad, { hash: 'ciok' }),
+      }),
+    }));
+    assert.equal(result.ok, true);
+  } finally {
+    if (had === undefined) delete process.env.CI; else process.env.CI = had;
+  }
+});
+
+test('W-C2 WIRING: ensure runs after validate and BEFORE assertSingleInstance / any child spawn', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
+  const main = src.slice(src.indexOf('async function main()'));
+  const validateIdx = main.indexOf('validate(opts, profileDef)');
+  const ensureIdx = main.indexOf('ensureCaptainPadStaticExport(captainPadMode)');
+  const singleIdx = main.indexOf('await assertSingleInstance');
+  const simIdx = main.indexOf("startChild('sim'");
+  // MUTATION: move ensure after assertSingleInstance, or drop it entirely, and
+  // one of these ordering assertions goes red — services must not start stale.
+  assert.ok(validateIdx >= 0 && ensureIdx > validateIdx,
+    'freshness self-heal runs only after preflight passes');
+  assert.ok(ensureIdx < singleIdx,
+    'rebuild must finish before the running stack can be force-claimed');
+  assert.ok(ensureIdx < simIdx,
+    'rebuild must finish before the first supervised child spawns');
+  const validateFn = src.slice(src.indexOf('function validate(opts, profileDef)'), src.indexOf('// ── The spawn contract'));
+  assert.ok(!/distStalenessVerdict/.test(validateFn),
+    'validate() must not warn-and-continue on staleness — ensure owns that');
 });

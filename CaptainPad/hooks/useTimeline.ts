@@ -288,7 +288,7 @@ async function _takeover(): Promise<TakeoverOutcome> {
       performanceActive: getPerformanceModeState().active,
       title: TAKEOVER_PROMPT_TITLE,
       detail: TAKEOVER_PROMPT_DETAIL,
-      send: (passcode?: string) => postTimelineTakeover(undefined, passcode),
+      send: (auth) => postTimelineTakeover(undefined, auth),
     });
   } catch (err: any) {
     // No prompt host mounted, or the transport threw: fail LOUD, never take
@@ -352,7 +352,7 @@ async function _performTakeover(cueId: string): Promise<PerformTakeoverResult> {
       performanceActive: getPerformanceModeState().active,
       title: TAKEOVER_PROMPT_TITLE,
       detail: TAKEOVER_PROMPT_DETAIL,
-      send: (passcode?: string) => postTimelineTakeover({ scope: 'perform', cueId }, passcode),
+      send: (auth) => postTimelineTakeover({ scope: 'perform', cueId }, auth),
     });
   } catch (err: any) {
     const msg = err?.message || 'Failed to take the deck';

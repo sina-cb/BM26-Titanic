@@ -23,12 +23,16 @@ vi.mock('@/utils/engineEvents', () => ({
   },
 }));
 
+vi.mock('@/utils/passcode_waiver', () => ({
+  getValidPasscodeWaiver: vi.fn(async () => null),
+}));
+
 const performanceMode = { active: false };
 vi.mock('@/hooks/usePerformanceMode', () => ({
   getPerformanceModeState: () => performanceMode,
 }));
 
-const postTimelineTakeover = vi.fn(async (_body?: unknown, _passcode?: string) => (
+const postTimelineTakeover = vi.fn(async (_body?: unknown, _auth?: unknown) => (
   { ok: true, status: 200, data: {} } as Record<string, unknown>
 ));
 vi.mock('@/utils/timelineApi', () => ({
@@ -42,17 +46,22 @@ vi.mock('@/utils/timelineApi', () => ({
   fireTimelineCue: async () => ({ ok: true }),
   postTimelineActivity: async () => ({ ok: true }),
   postTimelineTravel: async () => ({ ok: true }),
-  postTimelineTakeover: (body?: unknown, passcode?: string) => postTimelineTakeover(body, passcode),
+  postTimelineTakeover: (body?: unknown, auth?: unknown) => postTimelineTakeover(body, auth),
 }));
 
 import {
   registerTakeoverPasscodePrompt,
+  type OperatorAuthSendInput,
   type TakeoverPasscodePrompt,
 } from '@/utils/takeover_passcode';
 import { runPerformTakeover, runTakeover } from './useTimeline';
 
 const FAKE_GOOD = 'fake-code-alpha';
 const FAKE_BAD = 'fake-code-wrong';
+
+function typedAuth(passcode: string, remember30 = false): OperatorAuthSendInput {
+  return { passcode, remember30 };
+}
 
 function authRefusal(code: string, extra: Record<string, unknown> = {}) {
   return { ok: false, status: 401, error: 'refused', data: { code, ...extra } };
@@ -61,10 +70,11 @@ function authRefusal(code: string, extra: Record<string, unknown> = {}) {
 let prompts: TakeoverPasscodePrompt[] = [];
 let unregister: () => void = () => undefined;
 
-/** Let the pending gate reach the prompt (one microtask past the send guard). */
-async function settle() {
-  await Promise.resolve();
-  await Promise.resolve();
+/** Wait until the gate reaches requestTakeoverPasscode and registers a prompt. */
+async function waitForPrompts(count = 1) {
+  await vi.waitFor(() => {
+    expect(prompts).toHaveLength(count);
+  });
 }
 
 beforeEach(() => {
@@ -97,39 +107,38 @@ describe('runTakeover — performance mode ON', () => {
 
   it('prompts before touching the engine and sends the typed passcode', async () => {
     const takeover = runTakeover();
-    await settle();
+    await waitForPrompts();
 
     expect(postTimelineTakeover).not.toHaveBeenCalled();
     expect(prompts).toHaveLength(1);
     expect(prompts[0].title).toMatch(/passcode/i);
     expect(prompts[0].detail).toMatch(/every takeover/i);
 
-    await prompts[0].submit(FAKE_GOOD);
+    await prompts[0].submit(FAKE_GOOD, false);
 
     expect(await takeover).toBe('ok');
-    expect(postTimelineTakeover).toHaveBeenCalledWith(undefined, FAKE_GOOD);
+    expect(postTimelineTakeover).toHaveBeenCalledWith(undefined, typedAuth(FAKE_GOOD));
   });
 
   it('prompts AGAIN on the very next takeover — two takeovers, two prompts', async () => {
     const first = runTakeover();
-    await settle();
-    await prompts[0].submit(FAKE_GOOD);
+    await waitForPrompts();
+    await prompts[0].submit(FAKE_GOOD, false);
     expect(await first).toBe('ok');
 
     const second = runTakeover();
-    await settle();
-    expect(prompts).toHaveLength(2);
+    await waitForPrompts(2);
     // Nothing was replayed from the authorised attempt seconds ago.
     expect(postTimelineTakeover).toHaveBeenCalledTimes(1);
 
-    await prompts[1].submit(FAKE_GOOD);
+    await prompts[1].submit(FAKE_GOOD, false);
     expect(await second).toBe('ok');
     expect(postTimelineTakeover).toHaveBeenCalledTimes(2);
   });
 
   it('CANCEL issues no request and is not reported as a failure', async () => {
     const takeover = runTakeover();
-    await settle();
+    await waitForPrompts();
     prompts[0].cancel();
 
     expect(await takeover).toBe('cancelled');
@@ -137,25 +146,26 @@ describe('runTakeover — performance mode ON', () => {
   });
 
   it('retries in place with the engine reason, without echoing the attempt', async () => {
-    postTimelineTakeover.mockImplementation(async (_body?: unknown, passcode?: string) => (
-      passcode === FAKE_GOOD
+    postTimelineTakeover.mockImplementation(async (_body?: unknown, auth?: unknown) => {
+      const typed = auth as OperatorAuthSendInput | undefined;
+      return typed?.passcode === FAKE_GOOD
         ? { ok: true, status: 200, data: {} }
-        : authRefusal('TAKEOVER_AUTH_INVALID')
-    ));
+        : authRefusal('TAKEOVER_AUTH_INVALID');
+    });
 
     const takeover = runTakeover();
-    await settle();
+    await waitForPrompts();
 
-    const reason = await prompts[0].submit(FAKE_BAD);
+    const reason = await prompts[0].submit(FAKE_BAD, false);
     expect(reason).toMatch(/rejected/i);
     expect(reason).not.toContain(FAKE_BAD);
     expect(prompts).toHaveLength(1);
 
-    expect(await prompts[0].submit(FAKE_GOOD)).toBeNull();
+    expect(await prompts[0].submit(FAKE_GOOD, false)).toBeNull();
     expect(await takeover).toBe('ok');
     expect(postTimelineTakeover.mock.calls).toEqual([
-      [undefined, FAKE_BAD],
-      [undefined, FAKE_GOOD],
+      [undefined, typedAuth(FAKE_BAD)],
+      [undefined, typedAuth(FAKE_GOOD)],
     ]);
   });
 
@@ -165,8 +175,8 @@ describe('runTakeover — performance mode ON', () => {
     );
 
     const takeover = runTakeover();
-    await settle();
-    expect(await prompts[0].submit(FAKE_BAD)).toMatch(/locked this device out for 30s/i);
+    await waitForPrompts();
+    expect(await prompts[0].submit(FAKE_BAD, false)).toMatch(/locked this device out for 30s/i);
 
     prompts[0].cancel();
     expect(await takeover).toBe('cancelled');
@@ -192,13 +202,13 @@ describe('runPerformTakeover — the EVENT sheet scoped PERFORM', () => {
     performanceMode.active = true;
 
     const perform = runPerformTakeover('cue_1');
-    await settle();
-    await prompts[0].submit(FAKE_GOOD);
+    await waitForPrompts();
+    await prompts[0].submit(FAKE_GOOD, false);
 
     expect(await perform).toEqual({ outcome: 'ok', error: null });
     expect(postTimelineTakeover).toHaveBeenCalledWith(
       { scope: 'perform', cueId: 'cue_1' },
-      FAKE_GOOD,
+      typedAuth(FAKE_GOOD),
     );
   });
 
@@ -206,7 +216,7 @@ describe('runPerformTakeover — the EVENT sheet scoped PERFORM', () => {
     performanceMode.active = true;
 
     const perform = runPerformTakeover('cue_1');
-    await settle();
+    await waitForPrompts();
     prompts[0].cancel();
 
     expect(await perform).toEqual({ outcome: 'cancelled', error: null });
@@ -220,8 +230,8 @@ describe('runPerformTakeover — the EVENT sheet scoped PERFORM', () => {
     });
 
     const perform = runPerformTakeover('cue_1');
-    await settle();
-    expect(await prompts[0].submit(FAKE_GOOD)).toBeNull();
+    await waitForPrompts();
+    expect(await prompts[0].submit(FAKE_GOOD, false)).toBeNull();
 
     expect(await perform).toEqual({
       outcome: 'failed',

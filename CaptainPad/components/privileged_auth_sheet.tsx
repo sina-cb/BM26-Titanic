@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -11,6 +11,7 @@ import {
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 interface PrivilegedAuthSheetProps {
   visible: boolean;
@@ -30,19 +31,41 @@ export function PrivilegedAuthSheet({
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
   const [passphrase, setPassphrase] = useState('');
-  const [remember30, setRemember30] = useState(false);
+  const [remember30, setRemember30State] = useState(false);
+  const remember30Ref = useRef(false);
+  const setRemember30 = (next: boolean) => {
+    remember30Ref.current = next;
+    setRemember30State(next);
+  };
 
   useEffect(() => {
     if (!visible) {
       setPassphrase('');
-      setRemember30(false);
+      remember30Ref.current = false;
+      setRemember30State(false);
     }
   }, [visible]);
 
   const canSubmit = passphrase.length > 0 && !pending;
 
+  const submit = () => {
+    if (!canSubmit) return;
+    const attempted = passphrase;
+    const remember = remember30Ref.current;
+    setPassphrase('');
+    remember30Ref.current = false;
+    setRemember30State(false);
+    onSubmit(attempted, remember);
+  };
+
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={pending ? undefined : onCancel}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      onRequestClose={pending ? undefined : onCancel}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <TouchableOpacity
         style={styles.backdrop}
         activeOpacity={1}
@@ -72,14 +95,12 @@ export function PrivilegedAuthSheet({
               placeholderTextColor={C.secondary}
               style={styles.input}
               returnKeyType="done"
-              onSubmitEditing={() => {
-                if (canSubmit) onSubmit(passphrase, remember30);
-              }}
+              onSubmitEditing={submit}
               accessibilityLabel="Privileged access passphrase"
             />
             <TouchableOpacity
               style={styles.rememberRow}
-              onPress={() => setRemember30((value) => !value)}
+              onPress={() => setRemember30(!remember30Ref.current)}
               disabled={pending}
               accessibilityRole="checkbox"
               accessibilityState={{ checked: remember30, disabled: pending }}
@@ -112,7 +133,7 @@ export function PrivilegedAuthSheet({
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.button, styles.editButton, !canSubmit && styles.buttonDisabled]}
-                onPress={() => onSubmit(passphrase, remember30)}
+                onPress={submit}
                 disabled={!canSubmit}
                 accessibilityRole="button"
                 accessibilityState={{ disabled: !canSubmit }}

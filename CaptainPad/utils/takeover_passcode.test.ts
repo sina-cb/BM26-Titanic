@@ -10,18 +10,34 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+vi.mock('./passcode_waiver', () => ({
+  getValidPasscodeWaiver: vi.fn(async () => null),
+  mintPasscodeWaiver: vi.fn(),
+  clearPasscodeWaiver: vi.fn(),
+  PASSCODE_WAIVER_HEADER: 'X-CaptainPad-Passcode-Waiver',
+}));
+
+import {
+  getValidPasscodeWaiver,
+} from './passcode_waiver';
+
 import {
   registerTakeoverPasscodePrompt,
   requestTakeoverPasscode,
   runGatedTakeover,
   takeoverAuthFailureMessage,
   takeoverPasscodePromptReady,
+  type OperatorAuthSendInput,
   type TakeoverPasscodePrompt,
   type TakeoverSendResult,
 } from './takeover_passcode';
 
 const FAKE_GOOD = 'fake-code-alpha';
 const FAKE_BAD = 'fake-code-wrong';
+
+function typedAuth(passcode: string, remember30 = false): OperatorAuthSendInput {
+  return { passcode, remember30 };
+}
 
 function refusal(code: string, extra: Record<string, unknown> = {}): TakeoverSendResult {
   return { ok: false, status: 401, error: 'refused', data: { error: 'refused', code, ...extra } };
@@ -43,7 +59,16 @@ function mountFakeHost(): FakeHost {
 
 let host: FakeHost;
 
-beforeEach(() => { host = mountFakeHost(); });
+/** Wait until runGatedTakeover reaches requestTakeoverPasscode and registers a prompt. */
+async function waitForPrompts(count = 1) {
+  await vi.waitFor(() => {
+    expect(host.prompts).toHaveLength(count);
+  });
+}
+
+const getValidWaiver = vi.mocked(getValidPasscodeWaiver);
+
+beforeEach(() => { host = mountFakeHost(); getValidWaiver.mockReset(); getValidWaiver.mockResolvedValue(null); });
 afterEach(() => { host.unregister(); });
 
 describe('takeoverAuthFailureMessage — which refusals are passcode refusals', () => {
@@ -114,18 +139,18 @@ describe('runGatedTakeover — performance mode OFF', () => {
     // this client's last state seed and the request. The engine is the
     // authority, so its TAKEOVER_AUTH_REQUIRED opens the prompt rather than
     // failing silently.
-    const send = vi.fn(async (passcode?: string) => (
-      passcode === FAKE_GOOD ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_REQUIRED')
+    const send = vi.fn(async (auth?: OperatorAuthSendInput) => (
+      auth?.passcode === FAKE_GOOD ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_REQUIRED')
     ));
 
     const gate = runGatedTakeover({ performanceActive: false, title: 't', detail: 'd', send });
-    await Promise.resolve();
+    await waitForPrompts();
     expect(host.prompts).toHaveLength(1);
-    await host.prompts[0].submit(FAKE_GOOD);
+    await host.prompts[0].submit(FAKE_GOOD, false);
 
     expect((await gate).cancelled).toBe(false);
     expect(send).toHaveBeenNthCalledWith(1);
-    expect(send).toHaveBeenNthCalledWith(2, FAKE_GOOD);
+    expect(send).toHaveBeenNthCalledWith(2, typedAuth(FAKE_GOOD));
   });
 });
 
@@ -134,7 +159,7 @@ describe('runGatedTakeover — performance mode ON', () => {
     const send = vi.fn(async () => ({ ok: true, status: 200 }));
 
     const gate = runGatedTakeover({ performanceActive: true, title: 'Passcode', detail: 'why', send });
-    await Promise.resolve();
+    await waitForPrompts();
 
     // Nothing is requested before the operator answers.
     expect(send).not.toHaveBeenCalled();
@@ -142,12 +167,27 @@ describe('runGatedTakeover — performance mode ON', () => {
     expect(host.prompts[0].title).toBe('Passcode');
     expect(host.prompts[0].detail).toBe('why');
 
-    await host.prompts[0].submit(FAKE_GOOD);
+    await host.prompts[0].submit(FAKE_GOOD, false);
     const gated = await gate;
 
     expect(gated.cancelled).toBe(false);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith(FAKE_GOOD);
+    expect(send).toHaveBeenCalledWith(typedAuth(FAKE_GOOD));
+  });
+
+  it('passes remember30=true through the prompt submit path', async () => {
+    const send = vi.fn(async (auth?: OperatorAuthSendInput) => (
+      auth?.passcode === FAKE_GOOD && auth?.remember30 === true
+        ? { ok: true, status: 200 }
+        : refusal('TAKEOVER_AUTH_INVALID')
+    ));
+
+    const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
+    await waitForPrompts();
+    await host.prompts[0].submit(FAKE_GOOD, true);
+
+    expect((await gate).cancelled).toBe(false);
+    expect(send).toHaveBeenCalledWith(typedAuth(FAKE_GOOD, true));
   });
 
   it('prompts AGAIN for a second takeover — nothing is remembered', async () => {
@@ -155,29 +195,72 @@ describe('runGatedTakeover — performance mode ON', () => {
     const options = { performanceActive: true, title: 't', detail: 'd', send };
 
     const first = runGatedTakeover(options);
-    await Promise.resolve();
-    await host.prompts[0].submit(FAKE_GOOD);
+    await waitForPrompts();
+    await host.prompts[0].submit(FAKE_GOOD, false);
     await first;
 
+    getValidWaiver.mockResolvedValue(null);
     const second = runGatedTakeover(options);
-    await Promise.resolve();
-    expect(host.prompts).toHaveLength(2);
+    await waitForPrompts(2);
     // The second attempt gets NOTHING for free: no passcode is replayed, the
     // request only happens once the operator types it again.
     expect(send).toHaveBeenCalledTimes(1);
 
-    await host.prompts[1].submit(FAKE_GOOD);
+    await host.prompts[1].submit(FAKE_GOOD, false);
     await second;
 
     expect(send).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls).toEqual([[FAKE_GOOD], [FAKE_GOOD]]);
+    expect(send.mock.calls).toEqual([[typedAuth(FAKE_GOOD)], [typedAuth(FAKE_GOOD)]]);
+  });
+
+  it('skips the prompt when a stored waiver validates', async () => {
+    getValidWaiver.mockResolvedValue({
+      token: 'stored-waiver-token',
+      principal: 'owner',
+      expiresAt: Date.now() + 60_000,
+      engineOrigin: 'http://engine.test',
+    });
+    const send = vi.fn(async () => ({ ok: true, status: 200 }));
+
+    const gated = await runGatedTakeover({
+      performanceActive: true,
+      title: 't',
+      detail: 'd',
+      send,
+    });
+
+    expect(gated.cancelled).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith();
+    expect(host.prompts).toHaveLength(0);
+  });
+
+  it('prompts when a stored waiver fails validation on the gated send', async () => {
+    getValidWaiver
+      .mockResolvedValueOnce({
+        token: 'stored-waiver-token',
+        principal: 'owner',
+        expiresAt: Date.now() + 60_000,
+        engineOrigin: 'http://engine.test',
+      })
+      .mockResolvedValue(null);
+    const send = vi.fn(async (auth?: OperatorAuthSendInput) => (
+      auth?.passcode ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_WAIVER_INVALID')
+    ));
+
+    const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
+    await waitForPrompts();
+    await host.prompts[0].submit(FAKE_GOOD, false);
+
+    expect((await gate).cancelled).toBe(false);
+    expect(send.mock.calls).toEqual([[], [typedAuth(FAKE_GOOD)]]);
   });
 
   it('CANCEL makes no request at all', async () => {
     const send = vi.fn(async () => ({ ok: true, status: 200 }));
 
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
+    await waitForPrompts();
     host.prompts[0].cancel();
 
     expect(await gate).toEqual({ cancelled: true, result: null });
@@ -185,31 +268,31 @@ describe('runGatedTakeover — performance mode ON', () => {
   });
 
   it('keeps the sheet open with the reason on a rejected passcode, then succeeds', async () => {
-    const send = vi.fn(async (passcode?: string) => (
-      passcode === FAKE_GOOD ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_INVALID')
+    const send = vi.fn(async (auth?: OperatorAuthSendInput) => (
+      auth?.passcode === FAKE_GOOD ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_INVALID')
     ));
 
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
+    await waitForPrompts();
 
     // A refusal resolves to a retry reason — the host keeps the sheet mounted.
-    const retryReason = await host.prompts[0].submit(FAKE_BAD);
+    const retryReason = await host.prompts[0].submit(FAKE_BAD, false);
     expect(retryReason).toMatch(/rejected/i);
     expect(retryReason).not.toContain(FAKE_BAD);
     // Still ONE prompt: the retry happens in place, not by reopening.
     expect(host.prompts).toHaveLength(1);
 
-    expect(await host.prompts[0].submit(FAKE_GOOD)).toBeNull();
+    expect(await host.prompts[0].submit(FAKE_GOOD, false)).toBeNull();
     expect((await gate).cancelled).toBe(false);
-    expect(send.mock.calls).toEqual([[FAKE_BAD], [FAKE_GOOD]]);
+    expect(send.mock.calls).toEqual([[typedAuth(FAKE_BAD)], [typedAuth(FAKE_GOOD)]]);
   });
 
   it('cancelling after a rejected attempt still counts as cancelled', async () => {
     const send = vi.fn(async () => refusal('TAKEOVER_AUTH_INVALID'));
 
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
-    await host.prompts[0].submit(FAKE_BAD);
+    await waitForPrompts();
+    await host.prompts[0].submit(FAKE_BAD, false);
     host.prompts[0].cancel();
 
     expect(await gate).toEqual({ cancelled: true, result: null });
@@ -219,11 +302,11 @@ describe('runGatedTakeover — performance mode ON', () => {
     const send = vi.fn(async () => ({ ok: false, status: 409, error: 'portwatch owns the rig' }));
 
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
+    await waitForPrompts();
 
     // null = "flow finished, close" — the sheet must not loop on an error the
     // operator cannot fix by retyping a passcode.
-    expect(await host.prompts[0].submit(FAKE_GOOD)).toBeNull();
+    expect(await host.prompts[0].submit(FAKE_GOOD, false)).toBeNull();
     const gated = await gate;
     expect(gated.cancelled).toBe(false);
     expect(gated.result?.error).toBe('portwatch owns the rig');
@@ -233,9 +316,9 @@ describe('runGatedTakeover — performance mode ON', () => {
     const send = vi.fn(async () => { throw new Error('Engine unreachable'); });
 
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
+    await waitForPrompts();
     // The host closes on null and the requester sees the throw.
-    expect(await host.prompts[0].submit(FAKE_GOOD)).toBeNull();
+    expect(await host.prompts[0].submit(FAKE_GOOD, false)).toBeNull();
     await expect(gate).rejects.toThrow('Engine unreachable');
   });
 });
@@ -244,8 +327,8 @@ describe('storage audit — the passcode exists only for the in-flight request',
   it('leaves no trace in the module after a completed takeover', async () => {
     const send = vi.fn(async () => ({ ok: true, status: 200 }));
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
-    await host.prompts[0].submit(FAKE_GOOD);
+    await waitForPrompts();
+    await host.prompts[0].submit(FAKE_GOOD, false);
     await gate;
 
     // Every value this module exports, plus the prompt object it handed out.
@@ -260,13 +343,13 @@ describe('storage audit — the passcode exists only for the in-flight request',
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const send = vi.fn(async (passcode?: string) => (
-      passcode === FAKE_GOOD ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_INVALID')
+    const send = vi.fn(async (auth?: OperatorAuthSendInput) => (
+      auth?.passcode === FAKE_GOOD ? { ok: true, status: 200 } : refusal('TAKEOVER_AUTH_INVALID')
     ));
     const gate = runGatedTakeover({ performanceActive: true, title: 't', detail: 'd', send });
-    await Promise.resolve();
-    await host.prompts[0].submit(FAKE_BAD);
-    await host.prompts[0].submit(FAKE_GOOD);
+    await waitForPrompts();
+    await host.prompts[0].submit(FAKE_BAD, false);
+    await host.prompts[0].submit(FAKE_GOOD, false);
     await gate;
 
     const written = [log, warn, error]

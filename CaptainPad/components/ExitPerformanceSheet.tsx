@@ -1,16 +1,24 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Modal } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, Modal } from 'react-native';
+import { OperatorPasscodeKeypad } from '@/components/operator_passcode_keypad';
+import { OperatorPasscodeRememberRow } from '@/components/operator_passcode_remember_row';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
+import { accentFill } from '@/styles/design_recipes';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   performanceExitChoices,
   dirtySummaryText,
   dirtyRestoreCaption,
   PASSCODE_REQUIRED_HINT,
+  REMEMBERED_OPERATOR_AUTH_HINT,
   type DeckDirtyEntry,
   type PerformanceExitAction,
 } from '@/components/performance_mode_logic';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
+import { getPasscodeWaiver, getValidPasscodeWaiver } from '@/utils/passcode_waiver';
+import { isValidPasscodeWaiver } from '@/utils/passcode_waiver_logic';
+import type { OperatorAuthSendInput } from '@/utils/takeover_passcode';
 
 // ── ExitPerformanceSheet ──────────────────────────────────────────────────
 // Exit choice for PERFORMANCE MODE. Modeled on ConfirmSheet's in-app Modal
@@ -21,29 +29,26 @@ import {
 // ASK whether to save the tuned parameter state, friendly + identical wherever
 // the exit flow appears — and this is the one shared component, so deck + mixer
 // match automatically):
-//   • CLEAN (dirtyCount === 0) — renders exactly as before:
-//       KEEP LIVE STATE   → exitAction:'keep'    (leave, nothing to save)
-//       RESTORE PRE-SHOW  → exitAction:'restore' (discard tweaks, restore capture)
-//   • DIRTY (dirtyCount > 0) — a warm summary of what was tuned + an explicit
-//     save-ask:
-//       KEEP & SAVE TUNING  → exitAction:'keep-save' (write tuning to playlists)
-//       KEEP WITHOUT SAVING → exitAction:'keep'      (keep live look, drop backlog)
-//       RESTORE PRE-SHOW    → exitAction:'restore'   (discard tuning + tweaks)
+//   • CLEAN (dirtyCount === 0) — two choices:
+//       DISCARD PERFORMANCE CHANGES → exitAction:'restore'
+//       SAVE CHANGES              → exitAction:'keep'
+//   • DIRTY (dirtyCount > 0) — same two choices with a warm summary:
+//       DISCARD PERFORMANCE CHANGES → exitAction:'restore'
+//       SAVE CHANGES              → exitAction:'keep-save' (captain's passcode only)
 // CANCEL always stays in performance mode. The button list + copy come from
 // performanceExitChoices() so the wording is vitest-pinned and can't drift.
 // No optimistic flip — the caller awaits the engine WS echo; a brief `pending`
 // spinner label covers the round-trip.
 //
 // PASSCODE (docs/56 D2/D8). Leaving the lock now requires a FRESH operator
-// passcode, verified per attempt by the engine, because the principal who types
-// it becomes the edit session that decides what gets written to disk. The field
-// uses the takeover_passcode_sheet idiom deliberately — a single useState wiped
-// on submit and on close, no remember affordance, nothing persisted — and NOT
-// PrivilegedAuthSheet, which mints the 30-minute session this flow ignores.
-// The passcode rides on the SAME request as the exit action: one entry, one
-// verification, atomic with the choice.
+// passcode (or a valid 30-minute waiver when Remember is checked), verified per
+// attempt by the engine. The keypad + optional Remember row follow the
+// takeover_passcode_sheet idiom — NOT PrivilegedAuthSheet, which mints the
+// 30-minute privileged session this flow ignores. The auth object rides on the
+// SAME request as the exit action: one entry, one verification, atomic with the
+// choice.
 //
-// KEEP & SAVE TUNING carries a "captain's passcode only" caption and stays
+// SAVE CHANGES carries a "captain's passcode only" caption when dirty and stays
 // TAPPABLE for everyone. The client cannot pre-know which principal is being
 // typed (that would mean verifying before submit), so a sailor who picks it
 // gets the engine's 400 rendered in the error box below — an honest refusal
@@ -70,7 +75,7 @@ export interface ExitPerformanceSheetProps {
   passcodeRequired?: boolean;
   /** The engine's refusal for the last attempt; never contains the passcode. */
   error?: string | null;
-  onChoose: (action: PerformanceExitAction, passcode: string) => void;
+  onChoose: (action: PerformanceExitAction, auth: OperatorAuthSendInput) => void;
   onCancel: () => void;
 }
 
@@ -87,24 +92,63 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
 }) => {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const saveFill = useMemo(() => accentFill(C.error), [C.error]);
   const isDirty = dirtyCount > 0;
   const choices = useMemo(() => performanceExitChoices(dirtyCount), [dirtyCount]);
   const summary = isDirty ? dirtySummaryText(dirtyCount, dirtyEntries) : '';
   const restoreCaption = isDirty ? dirtyRestoreCaption(dirtyCount) : '';
 
-  const [passcode, setPasscode] = useState('');
+  const [passcode, setPasscodeState] = useState('');
+  const passcodeRef = useRef('');
+  const setPasscode = (next: string) => {
+    passcodeRef.current = next;
+    setPasscodeState(next);
+  };
+  const [remember30, setRemember30State] = useState(false);
+  const remember30Ref = useRef(false);
+  const setRemember30 = (next: boolean) => {
+    remember30Ref.current = next;
+    setRemember30State(next);
+  };
+  const toggleRemember30 = () => setRemember30(!remember30Ref.current);
+  const [rememberedAuth, setRememberedAuth] = useState(false);
+
   // Wipe on close. With the wipe on submit below, this component holds the
   // secret only while the operator is typing it.
   useEffect(() => {
-    if (!visible) setPasscode('');
-  }, [visible]);
+    if (!visible) {
+      passcodeRef.current = '';
+      setPasscodeState('');
+      remember30Ref.current = false;
+      setRemember30State(false);
+      setRememberedAuth(false);
+      return;
+    }
+    if (!passcodeRequired) {
+      setRememberedAuth(false);
+      return;
+    }
+    let cancelled = false;
+    const local = getPasscodeWaiver();
+    if (isValidPasscodeWaiver(local)) {
+      setRememberedAuth(true);
+    }
+    void getValidPasscodeWaiver().then((waiver) => {
+      if (!cancelled) setRememberedAuth(waiver !== null);
+    });
+    return () => { cancelled = true; };
+  }, [visible, passcodeRequired]);
 
   const choose = (action: PerformanceExitAction) => {
-    const attempted = passcode;
+    const attempted = passcodeRef.current;
+    const remember = remember30Ref.current;
     // Clear BEFORE handing it off: the request is in flight, nothing here needs
     // the value any more, and a rejection must start from an empty field.
-    setPasscode('');
-    onChoose(action, attempted);
+    passcodeRef.current = '';
+    setPasscodeState('');
+    remember30Ref.current = false;
+    setRemember30State(false);
+    onChoose(action, { passcode: attempted, remember30: remember });
   };
   // ONLY the in-flight request disables the choices (report _236).
   //
@@ -125,7 +169,13 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
   const choicesDisabled = pending;
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onCancel}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <TouchableOpacity
         style={styles.backdrop}
         activeOpacity={1}
@@ -154,27 +204,26 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
             ) : null}
 
             {passcodeRequired ? (
-              <>
-                <TextInput
-                  value={passcode}
-                  onChangeText={setPasscode}
-                  editable={!pending}
-                  secureTextEntry
-                  autoFocus
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="off"
-                  textContentType="none"
-                  placeholder="Operator passcode"
-                  placeholderTextColor={C.secondary}
-                  style={styles.input}
-                  accessibilityLabel="Operator passcode to leave performance mode"
-                />
-                {/* Says WHY the field is there, before the operator finds out by
-                    being refused (report _236). The choices stay tappable — this
-                    is a hint, never a gate. */}
-                <Text style={styles.passcodeHint}>{PASSCODE_REQUIRED_HINT}</Text>
-              </>
+              rememberedAuth ? (
+                <Text style={styles.passcodeHint}>{REMEMBERED_OPERATOR_AUTH_HINT}</Text>
+              ) : (
+                <>
+                  <OperatorPasscodeKeypad
+                    value={passcode}
+                    onChange={setPasscode}
+                    disabled={pending}
+                  />
+                  <OperatorPasscodeRememberRow
+                    checked={remember30}
+                    onToggle={toggleRemember30}
+                    disabled={pending}
+                  />
+                  {/* Says WHY the passcode is there, before the operator finds out by
+                      being refused (report _236). The choices stay tappable — this
+                      is a hint, never a gate. */}
+                  <Text style={styles.passcodeHint}>{PASSCODE_REQUIRED_HINT}</Text>
+                </>
+              )
             ) : null}
             {error ? (
               <View style={styles.errorBox} accessibilityRole="alert">
@@ -184,12 +233,17 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
 
             {choices.map(({ action, label, hint, tone, caption }) => {
               const isRestore = tone === 'restore';
+              const isSave = tone === 'save';
               return (
                 <TouchableOpacity
                   key={action}
                   style={[
                     styles.choiceBtn,
                     isRestore && styles.restoreBtn,
+                    isSave && {
+                      backgroundColor: saveFill.backgroundColor,
+                      borderColor: saveFill.borderColor,
+                    },
                     choicesDisabled && { opacity: 0.45 },
                   ]}
                   onPress={() => choose(action)}
@@ -199,7 +253,11 @@ export const ExitPerformanceSheet: React.FC<ExitPerformanceSheetProps> = ({
                   accessibilityLabel={caption ? `${label} — ${caption}` : label}
                   accessibilityState={{ disabled: choicesDisabled }}
                 >
-                  <Text style={[styles.choiceLabel, isRestore && { color: C.tertiary }]}>
+                  <Text style={[
+                    styles.choiceLabel,
+                    isRestore && { color: C.tertiary },
+                    isSave && { color: saveFill.color },
+                  ]}>
                     {label}
                   </Text>
                   <Text style={styles.choiceHint}>
@@ -244,7 +302,7 @@ function makeStyles(C: Palette) {
       borderRadius: 16,
       padding: 24,
       minWidth: 340,
-      maxWidth: 460,
+      maxWidth: 560,
       borderWidth: 1,
       borderColor: C.ghostBorder,
     },
@@ -298,22 +356,7 @@ function makeStyles(C: Palette) {
       marginTop: -10,
       marginBottom: 14,
     },
-    // Operator passcode field — mirrors takeover_passcode_sheet's input so the
-    // two passcode moments in the app look and feel identical.
-    input: {
-      minHeight: 56,
-      borderRadius: 10,
-      borderWidth: 2,
-      borderColor: C.ghostBorder,
-      backgroundColor: C.surfaceContainerHigh,
-      color: C.text,
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 20,
-      letterSpacing: 2,
-      paddingHorizontal: 16,
-      marginBottom: 8,
-    },
-    // Standing explanation for the passcode field. Secondary ink so it reads as
+    // Standing explanation for the passcode keypad. Secondary ink so it reads as
     // a caption, not as an error — errors get the box below it.
     passcodeHint: {
       fontFamily: 'Inter_400Regular',

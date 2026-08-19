@@ -2,155 +2,122 @@
 
 CaptainPad is the native remote-control surface for the MarsinEngine environment. It operates over WebSockets and REST APIs, eliminating the need to physically access the server or parse `yaml` configuration manually.
 
-## 0. Windows → iPad quick deploy (shared-computer safe)
+**Canonical iPad build runbook:** [`../.agent/ops/build_ipad_release.md`](../.agent/ops/build_ipad_release.md) (EAS log reading, provisioning gotchas, Metro block-list rules). This README is the operator-facing quick path; the runbook is the deep reference.
 
-Building a **Release** `.ipa` from Windows with **no persistent login left on this machine**. Secrets live in session-only env vars and Apple certs are stored on Expo's servers, not here. Do steps in **your own PowerShell terminal** — never paste the token/password into an agent chat.
+---
+
+## 1. Local development
+
+```bash
+cd CaptainPad
+npm install          # once
+
+npm start            # Expo dev server
+npm run start:k      # kill stuck port, then start
+npm run start:kc     # kill port + clear Metro cache
+```
+
+- **iPad / iPhone:** install **Expo Go** from the App Store and scan the QR code.
+- **Web:** `npm run web:build && npm run web:serve` → `http://localhost:6967`
+
+Quality gates before any iOS ship:
+
+```bash
+npm run check        # typecheck + lint
+npm test             # vitest (includes ios prebuild contract)
+node scripts/verify_ios_prebuild_scratch.mjs   # optional: scratch prebuild freshness
+npx expo export:embed --eager --platform ios --dev false --reset-cache
+```
+
+---
+
+## 2. Windows — EAS cloud build only
+
+Windows cannot run Xcode or `pod install`. **All Windows iOS builds go through EAS Build** (Expo's macOS cloud builders). Do not attempt local native compilation on Windows.
+
+Use a **session-only** Expo token and Apple app-specific password — never commit them, and never paste them into agent chats:
 
 ```powershell
-# 1. Authenticate for this session only (avoids leaving persistent login credentials on disk)
 $env:EXPO_TOKEN = "your_expo_token_here"
 $env:EXPO_APPLE_APP_SPECIFIC_PASSWORD = "your_apple_app_specific_password_here"
 
-# 2. Change directory to CaptainPad root
-cd "C:\Users\Titanic's End\workspace\BM26-Titanic\CaptainPad"
+cd path\to\BM26-Titanic\CaptainPad
 
-# 3. (Optional but Recommended) Run a local bundle check to catch compilation issues before uploading to the cloud
+# Catch JS bundle errors locally before uploading
 npx expo export:embed --eager --platform ios --dev false --reset-cache
 
-# 4. Trigger the EAS preview build (internal Release profile)
+# Internal Release .ipa (preview profile)
 npx eas-cli build --profile preview --platform ios --clear-cache --non-interactive
 
-# 5. Clean up environment variables when done
 Remove-Item Env:EXPO_TOKEN
 Remove-Item Env:EXPO_APPLE_APP_SPECIFIC_PASSWORD
 ```
 
-- `preview` is a **Release** build (`buildConfiguration: "Release"` in `eas.json`) — optimized bundle baked in, no Metro, runs offline. This is the one you want for the playa.
-- Requires an active **Apple Developer Program** membership ($99/yr) to sign for a physical device.
-- Using `npx eas-cli` (not a global install) keeps this shared box clean. To lock the token to *only* CaptainPad, generate it from a **Robot user** scoped to the CaptainPad project instead of a personal account token, and delete it when done.
+- **`preview`** is a **Release** build (`buildConfiguration: "Release"` in `eas.json`) — optimized bundle baked in, no Metro, runs offline on the playa.
+- Requires an **Apple Developer Program** membership to sign for a physical device.
+- Prefer `npx eas-cli` over a global install on shared machines.
+- **New iPad registered?** Run one **interactive** build (drop `--non-interactive`) so EAS can refresh the provisioning profile to include the new device UDID.
 
-> [!TIP]
-> **Updating the Provisioning Profile for a New iPad:**
-> If you just registered a new device (e.g. via `npx eas-cli device:create`), the cached provisioning profile on EAS won't automatically include it. 
-> Run the build **interactively** (without `--non-interactive`) just this once to update the profile:
-> ```powershell
-> npx eas-cli build --profile preview --platform ios --clear-cache
-> ```
-> During this interactive build:
-> - EAS will see the new device you registered.
-> - It will ask if it should update the provisioning profile to include it. Choose **Yes**.
-> - It will use your active Apple session to automatically update the credentials on Expo's servers.
-> 
-> Once this build succeeds (or starts compiling), your provisioning profile on EAS will be permanently updated. For all future builds, you can safely return to using the `--non-interactive` command:
-> ```powershell
-> npx eas-cli build --profile preview --platform ios --clear-cache --non-interactive
-> ```
+EAS uploads your local `CaptainPad/` tree (excluding `node_modules`, `ios/`, `android/` per `.easignore`), installs deps, runs `expo prebuild`, and compiles on Expo's Mac builders. See the runbook for log reading when builds fail at `EAGER_BUNDLE`.
 
 ---
 
-## 1. Local Development
-Because of the React Native / Expo architecture, you can run this locally and connect to your engine instantly:
-```bash
-cd CaptainPad
-npm install          # Only required once
+## 3. macOS — local iOS native build (no EAS)
 
-npm start            # Start Expo dev server
-npm run start:k      # Kill port before starting (if port is stuck)
-npm run start:kc     # Kill port + clear Metro cache
-```
-- **iPad / iPhone**: Download the **Expo Go** application from the App Store and aggressively scan the QR code via your generic camera app.
-- **Android**: Download **Expo Go** from the Play Store and scan within the app.
+Use this when you have a Mac with Xcode and USB access to the target iPad. Produces the same **Release** `.app` EAS would: no `__DEV__`, no RedBox, no Metro listener.
 
----
+### 3.1 Prerequisites
 
-## 2. Permanent iOS Installation (Production)
-Because the primary deployment target is an iPad operating on a Windows-based engineering network, standard Xcode compilation is strictly impossible natively. We bind the deployment vector to the **EAS (Expo Application Services)** Cloud.
+| Requirement | Verify |
+|---|---|
+| macOS + **Xcode** (recent stable; `xcodebuild -version`) | |
+| **CocoaPods** (`pod --version`; `brew install cocoapods` if missing) | |
+| **Node** 20+ (`node --version`) | |
+| Apple ID in **Xcode → Settings → Accounts** with an **Apple Development** cert | |
+| iPad connected via USB, **unlocked**, **Trust This Computer** accepted | `xcrun devicectl list devices` |
 
-For the canonical iPad build runbook, including EAS log reading and known Metro pitfalls, see `../.agent/00_gol/09_build_ipad_release.md`.
+### 3.2 Regenerating `ios/` (safe to delete)
 
-To permanently install the `.ipa` onto your iPad bypassing Expo Go entirely, follow this cloud-compile workflow:
+`CaptainPad/ios/` is **gitignored and fully regenerable**. All native intent lives in tracked files:
 
-### Prerequisite 
-Ensure you have an active Apple Developer License.
+| Tracked source | What it controls |
+|---|---|
+| `app.json` | Bundle ID, landscape lock, Bonjour (`_marsinengine._tcp`), local-network plist strings, encryption export flag |
+| `app.json` → `plugins` | Expo Router, splash screen, web browser |
+| `metro.config.js` + `yaml-transformer.js` | YAML imports, Metro block-list (must not hide `node_modules/*/dist`) |
+| `package.json` | Native module versions (Skia, Reanimated, etc.) |
 
-### Step 1: Install Build Engine
-Ensure the EAS core compiler is globally executable.
-```bash
-npm install -g eas-cli
-```
+**Nothing in `ios/` should be hand-edited.** Signing team, device UDIDs, and Node paths are build-time overrides (below), not committed deltas.
 
-### Step 2: Authenticate
-Log into your EAS/Expo account via the CLI bridge.
-```bash
-eas login
-```
-
-### Step 3: Trigger Cloud Pipeline (Choose Your Profile)
-EAS offers two radically different ways to compile your app depending on your current needs:
-
-**A. Development Profile (Hot-Reloading Vessel)**
-If you want to rapidly test code changes but need native modules (like Bluetooth or Native Pickers), compile a development build:
-```bash
-eas build --platform ios --profile development --clear-cache
-```
-*Note: A development build generates an "empty" shell! When you launch it on your iPad, it will scream "No development server found." You MUST start your local Windows server (`npm start`) and scan that terminal's QR code using your iPad's camera to bridge the connection and pull the Javascript payload over WiFi.*
-
-**B. Preview / Production Profile (Standalone)**
-If you want the app permanently installed and capable of running securely without your laptop entirely:
-```bash
-eas build --platform ios --profile preview --clear-cache
-```
-*Note: This aggressively bundles all Javascript directly into the `.ipa`. It will open and run permanently disconnected from any development server.*
-
-### Step 4: Apple Developer Provisioning Flow
-- **Device Registration:** EAS will ask if you want to register new devices natively. **Accept this**, and a QR code will spawn in the terminal.
-- **Scan:** Use your physical iPad (and iPhone) to scan that terminal QR code. It will download an Apple Configuration Profile securely mapping your UDID directly to the Apple Developer portal.
-- **Final Install:** When compilation succeeds (~5-10 minutes), scan the final generated QR code to passively download the `CaptainPad.ipa` directly to your iOS springboard.
-
----
-
-## 3. Local Mac Build (No EAS Required)
-
-If you have a Mac, you can build the Release `.app` entirely locally — no EAS account, no cloud-build minutes, no internet round-trip after the initial dependency download. Faster iteration than EAS, and useful when EAS free-tier limits run out.
-
-This produces the **same production bundle** EAS would: no `__DEV__` checks, no RedBox, no Metro hot-reload listener, no Hermes lazy parsing. Substantially snappier on-device than an Expo Go dev build.
-
-### Prerequisites
-- macOS with **Xcode 26+** (`xcodebuild -version` to confirm)
-- **CocoaPods** (`pod --version`; install with `brew install cocoapods` if missing)
-- An **Apple Developer account** (free Personal Team works; paid Developer Program gives you push, app transfer, etc.)
-- Apple ID signed into **Xcode → Settings → Accounts**. Confirm under Manage Certificates that an **"Apple Development"** cert exists for your team — if not, click `+` and create one.
-- iPad connected via USB, **unlocked**, and "Trust This Computer" accepted.
-
-### Step 1: Generate the native iOS project
 ```bash
 cd CaptainPad
 npm install
 npx expo prebuild --platform ios --clean
 ```
-This creates `CaptainPad/ios/` (gitignored) and runs `pod install`. **First run takes 15-30 min** on a cold CocoaPods spec cache; subsequent runs are seconds. The `ios/` directory is regenerable from `app.json` + plugins, so feel free to delete and re-prebuild whenever native deps change.
 
-### Step 2: Set your signing team
-Open `ios/CaptainPad.xcworkspace`. Select the **CaptainPad** target → **Signing & Capabilities** → pick your team from the **Team** dropdown. Xcode writes the team ID into `project.pbxproj`.
+This creates `ios/` and runs `pod install`. **First run: 15–30 min** on a cold CocoaPods cache; warm runs are ~1–2 min.
 
-Or do it from the CLI — find your team ID first:
+To prove freshness without touching your checkout:
+
 ```bash
-security find-identity -p codesigning -v | grep "Apple Development"
-# →  "Apple Development: <Name> (<TEAM_ID>)"
-```
-Then patch the project file:
-```bash
-sed -i '' 's/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = "<TEAM_ID>";/g' \
-  ios/CaptainPad.xcodeproj/project.pbxproj
+node scripts/verify_ios_prebuild_scratch.mjs
 ```
 
-### Step 3: Find your iPad's UDID
-```bash
-xcrun devicectl list devices
-```
-Look for your iPad in `available (paired)` rows. Copy the long **Identifier** column value (this is the UDID xcodebuild + devicectl need).
+That copies the project to a temp dir, prebuilds there, checks semantic plist/pbxproj output against `app.json`, and deletes the copy.
 
-### Step 4: Build (Release config)
+### 3.3 Signing (never bake into `project.pbxproj`)
+
+`expo prebuild --clean` wipes `ios/CaptainPad.xcodeproj/project.pbxproj`. Pass signing on the **xcodebuild command line** instead:
+
+1. Find your Apple Development team ID (10-character prefix from Xcode → Settings → Accounts, or decode a cached provisioning profile — see runbook § "Picking the right Apple team").
+2. Find the iPad UDID: `xcrun devicectl list devices` → copy the **Identifier** for your paired device.
+
+**Do not commit team IDs, UDIDs, or cert serials to the repo.**
+
+Optional GUI path: open `ios/CaptainPad.xcworkspace` → target **CaptainPad** → **Signing & Capabilities** → pick your team. This writes into the regenerable pbxproj and will be lost on the next `--clean` prebuild — prefer CLI overrides for repeatability.
+
+### 3.4 Release build (CLI)
+
 ```bash
 xcodebuild \
   -workspace ios/CaptainPad.xcworkspace \
@@ -160,53 +127,95 @@ xcodebuild \
   -jobs 4 \
   -allowProvisioningUpdates \
   -allowProvisioningDeviceRegistration \
+  DEVELOPMENT_TEAM=<TEAM_ID> \
+  CODE_SIGN_STYLE=Automatic \
   build
 ```
 
-**Why `-jobs 4`:** capping parallelism keeps RAM in check. Native compile + Swift frontend + Hermes XCFrameworks copy can otherwise spike to 16-32 GB peak on an Apple Silicon Mac and crash macOS. Bump to `-jobs 8` if you have 32 GB+ RAM and want faster cold builds.
+- **`-jobs 4`:** caps RAM during native + Hermes compile (lower to `-jobs 2` if macOS swaps/crashes).
+- **`-allowProvisioningUpdates` / `-allowProvisioningDeviceRegistration`:** Xcode auto-registers the device and creates/refreshes the dev profile for `com.titanicrig.captainpad`.
+- **First cold build:** ~15–30 min. **Incremental JS-only rebuilds:** ~1–5 min.
 
-**Provisioning:** the two `-allow…` flags let Xcode auto-register your iPad's UDID with your Apple Developer team and auto-create the provisioning profile for `com.titanicrig.captainpad` on first build. Without an Apple ID signed into Xcode this step fails — see Step 0.
+### 3.5 Install and launch
 
-**First build:** 15-30 min. **Subsequent incremental builds:** 1-5 min (Pods stay compiled in `~/Library/Developer/Xcode/DerivedData/`).
-
-### Step 5: Install on the iPad
 ```bash
 xcrun devicectl device install app --device <DEVICE_UDID> \
   ~/Library/Developer/Xcode/DerivedData/CaptainPad-*/Build/Products/Release-iphoneos/CaptainPad.app
 ```
-Watch for `App installed: bundleID: com.titanicrig.captainpad`. The icon appears on the iPad's home screen.
 
-### Rebuilding after code changes
-Pure TS/TSX changes (everything under `app/`, `components/`, `hooks/`, `utils/`, etc.) just need Steps 4 + 5 again. **No re-prebuild needed.** A one-liner that does both:
+Expect `App installed: bundleID: com.titanicrig.captainpad`. Icon appears on the home screen.
+
+**JS-only changes** (`app/`, `components/`, `hooks/`, `utils/`, …): repeat §3.4 + §3.5 only — no re-prebuild.
+
+One-liner:
+
 ```bash
 xcodebuild -workspace ios/CaptainPad.xcworkspace \
   -configuration Release -scheme CaptainPad \
   -destination "id=<DEVICE_UDID>" \
-  -jobs 4 -allowProvisioningUpdates build \
+  -jobs 4 -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM=<TEAM_ID> CODE_SIGN_STYLE=Automatic build \
   && xcrun devicectl device install app --device <DEVICE_UDID> \
     ~/Library/Developer/Xcode/DerivedData/CaptainPad-*/Build/Products/Release-iphoneos/CaptainPad.app
 ```
 
-### When you DO need to re-run `expo prebuild`
-Only when `app.json`, `app.config.js`, the `plugins` list, or any native package in `package.json` changes. Pure JS/TS edits don't need it.
+### 3.6 When to re-run `expo prebuild`
 
-### Common failures
-- **`The developer disk image could not be mounted on this device`** — unlock the iPad, plug it in, open **Xcode → Window → Devices and Simulators**, wait for "Preparing device for development…" to finish. Retry.
-- **`No profiles for 'com.titanicrig.captainpad' were found`** — your Apple ID isn't signed into Xcode, OR the team in `project.pbxproj` doesn't match an account in Xcode → Settings → Accounts. Fix the team or sign in, then rebuild.
-- **`xcodebuild ... error code 70` ("Timed out waiting for all destinations")** — iPad got locked or unplugged. Unlock, replug, retry.
-- **Mac crash during compile** — `-jobs` too high for your RAM. Lower to `-jobs 2` or close other heavy apps (Chrome, Metro bundler, simulators).
+Only when **`app.json`**, the **`plugins` list**, or a **native `package.json` dependency** changes. Pure TS/TSX edits do not need it.
+
+### 3.7 Troubleshooting (macOS local)
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `The developer disk image could not be mounted` | iPad locked or mid-setup | Unlock, replug, **Xcode → Window → Devices and Simulators**, wait for "Preparing device…" |
+| `No profiles for 'com.titanicrig.captainpad' were found` | Apple ID not in Xcode, or wrong team | Sign in; pass correct `DEVELOPMENT_TEAM=<TEAM_ID>` on xcodebuild line |
+| `error code 70` (destination timeout) | iPad locked/unplugged mid-build | Unlock, replug, retry |
+| `xcodebuild` exit 65 / `ReactNativeDependencies` script failed | Stale Node path in Xcode script phase | Create `ios/.xcode.env.local` (gitignored): `export NODE_BINARY=$(command -v node)` or your nvm/fnm path |
+| Mac crash during compile | `-jobs` too high for RAM | `-jobs 2`; close browsers/Metro/simulators |
+| "Unable to verify app — internet connection required" on launch | Wildcard provisioning profile cached | See runbook § "Wildcard vs bundle-specific provisioning profiles" |
+| "Developer Mode Required" on launch | iOS 16+ sideload lockout | §4 below |
 
 ---
 
-## 4. iOS Troubleshooting: "Developer Mode Required"
-Because CaptainPad is signed via Ad-Hoc internal provisioning (not the public App Store), iOS 16+ enforces a brutal security lockout by default. 
+## 4. iOS Developer Mode (sideloaded builds)
 
-To authorize the build on your iPad/iPhone:
-1. Open the native **Settings** app.
-2. Navigate to **Privacy & Security**.
-3. Scroll to the very bottom to the **Security** section.
-4. Tap **Developer Mode** and toggle it **ON**.
-5. Your device will prompt you to **Restart**.
-6. After booting up, unlock the screen and tap **Turn On** on the final confirmation pop-up. Enter your PIN.
+Ad-hoc / development-signed builds require Developer Mode on iOS 16+:
 
-The app will now launch perfectly!
+1. **Settings → Privacy & Security → Developer Mode** → **ON**
+2. Restart when prompted
+3. After reboot, tap **Turn On** and enter your PIN
+
+Confirm: `xcrun devicectl device info details --device <DEVICE_UDID>` → `developerModeStatus: enabled`.
+
+---
+
+## 5. EAS profiles (macOS or Windows)
+
+| Profile | Use case | Metro at runtime? |
+|---|---|---|
+| `development` | Dev client + hot reload over Wi‑Fi | Yes — must run `npm start` and connect |
+| `preview` | Standalone Release for playa iPads | No — JS baked in |
+| `production` | App Store / TestFlight (auto-increment) | No |
+
+```bash
+eas login                                    # once
+eas build --platform ios --profile preview --clear-cache
+```
+
+Device registration: EAS prompts with a QR code during interactive builds. Scan from the target iPad to register its UDID with your Apple team.
+
+---
+
+## 6. Native reproducibility notes
+
+**Audited conclusion:** `CaptainPad/ios/` can be deleted and recreated from `app.json` + plugins + `npm install` + `expo prebuild --platform ios --clean` + `pod install`. No custom Expo config plugins or hand-maintained native files are required.
+
+| Item | Status |
+|---|---|
+| Info.plist keys (Bonjour, local network, landscape, bundle ID) | Declared in `app.json` |
+| Signing team / device UDID | **Manual at build time** — CLI `DEVELOPMENT_TEAM=` + `-destination id=` |
+| `ios/.xcode.env.local` Node path | **Optional local override** (gitignored); create if Xcode script phases can't find Node |
+| `ios/Pods/`, `Podfile.lock`, `*.xcworkspace` | Generated by `pod install` |
+| Metro YAML + block-list | Tracked in `metro.config.js` / `yaml-transformer.js` |
+
+Automated guard: `utils/ios_prebuild_contract.test.ts` (runs with `npm test`). Optional full scratch check: `node scripts/verify_ios_prebuild_scratch.mjs`.

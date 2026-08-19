@@ -217,6 +217,8 @@ export class PixelMapPaneView {
     this._staticDirty = true;
     this._rects = [];          // last computed panel sub-rects (CSS px)
     this._xforms = new Map();  // panelId → { scale, ox, oy }
+    this._geomEpoch = 0;       // bumps whenever panel pixel geometry changes
+    this._staticEpoch = -1;    // epoch baked into this.static (must match _geomEpoch)
     this.lastList = null;
   }
 
@@ -229,6 +231,7 @@ export class PixelMapPaneView {
   setPanels(panels) {
     this.panels = Array.isArray(panels) ? panels : [];
     this._recomputeRects();
+    this._geomEpoch++;
     this._staticDirty = true;
   }
 
@@ -242,6 +245,7 @@ export class PixelMapPaneView {
     this.zoom = zoom || 1;
     this.pan = pan || { x: 0, y: 0 };
     this._recomputeRects();
+    this._geomEpoch++;
     this._staticDirty = true;
     // `persist: false` is how the owner RESTORES a saved framing without
     // immediately writing it straight back out again.
@@ -308,6 +312,7 @@ export class PixelMapPaneView {
     }
     this.cssW = cssW; this.cssH = cssH;
     this._recomputeRects();
+    this._geomEpoch++;
     this._staticDirty = true;
   }
 
@@ -331,7 +336,9 @@ export class PixelMapPaneView {
     }
   }
 
-  // ── Static layer: bg + dark off-bezels + error banners ──────────────────
+  // ── Static layer: flat background + error banners only ───────────────────
+  // Dark bezels and lit fills share ONE glyph pass in paint() so a cached
+  // screen-space bezel bitmap can never drift from the live projection.
   _drawStatic() {
     if (!this.sctx) return;
     const ctx = this.sctx;
@@ -345,20 +352,27 @@ export class PixelMapPaneView {
     for (let i = 0; i < active.length; i++) {
       const panel = active[i];
       const rect = this._rects[i];
-      const xf = this._xforms.get(panel.id);
-      if (panel.error) { this._drawError(ctx, rect, panel); continue; }
-      if (!xf || !panel.pixels) continue;
-      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-      ctx.fillStyle = BEZEL_FILL;
-      ctx.strokeStyle = BEZEL_STROKE;
-      ctx.lineWidth = 1 / xf.scale;
-      for (const p of panel.pixels) {
-        this._shape(ctx, xf, p.cx, p.cy, p.sizeX * 0.96, p.sizeY * 0.96, p.shape, p.rot);
-        ctx.fill();
-      }
+      if (panel.error) this._drawError(ctx, rect, panel);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this._staticDirty = false;
+    this._staticEpoch = this._geomEpoch;
+  }
+
+  /** One authoritative geometry read for this frame: panels + letterbox xforms. */
+  _geometrySnapshot() {
+    this._recomputeRects();
+    const active = this._activePanels();
+    const panels = [];
+    for (let i = 0; i < active.length; i++) {
+      const panel = active[i];
+      panels.push({
+        panel,
+        rect: this._rects[i],
+        xf: this._xforms.get(panel.id),
+      });
+    }
+    return { panels, epoch: this._geomEpoch };
   }
 
   _drawError(ctx, rect, panel) {
@@ -411,20 +425,21 @@ export class PixelMapPaneView {
     if (!this.canvas || !this.ctx) return;
     if (!(this.canvas.width > 0) || !(this.canvas.height > 0)) return;  // not laid out yet
     this.lastList = list;
-    if (this._staticDirty) this._drawStatic();
+    const snap = this._geometrySnapshot();
+    if (this._staticDirty || this._staticEpoch !== snap.epoch) this._drawStatic();
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     if (this.static && this.static.width > 0 && this.static.height > 0) ctx.drawImage(this.static, 0, 0);
 
-    const active = this._activePanels();
-    for (let i = 0; i < active.length; i++) {
-      const panel = active[i];
-      if (panel.error || !panel.pixels || !panel.pixels.length) continue;
-      const xf = this._xforms.get(panel.id);
-      if (!xf) continue;
+    ctx.fillStyle = BEZEL_FILL;
+    for (const { panel, xf } of snap.panels) {
+      if (panel.error || !panel.pixels || !panel.pixels.length || !xf) continue;
       let lastStyle = null;
       for (const p of panel.pixels) {
+        // Every mapped pixel gets a dark bezel at the SAME coordinates as hit/drag.
+        this._shape(ctx, xf, p.cx, p.cy, p.sizeX * 0.96, p.sizeY * 0.96, p.shape, p.rot);
+        ctx.fill();
         const c = bufColor(colorBuf, p.gi);
         if (!c) continue;
         const [r, g, b] = c;
@@ -433,6 +448,7 @@ export class PixelMapPaneView {
         if (style !== lastStyle) { ctx.fillStyle = style; lastStyle = style; }
         this._shape(ctx, xf, p.cx, p.cy, p.sizeX, p.sizeY, p.shape, p.rot);
         ctx.fill();
+        ctx.fillStyle = BEZEL_FILL;
       }
       if (this.mode === 'edit') this._drawSelection(ctx, panel, xf);
     }
@@ -454,6 +470,7 @@ export class PixelMapPaneView {
   /** Map a CSS-pixel client point to { panelId, x, y } in that panel's design
    *  space, or null if the point is outside every panel. */
   clientToContent(cssX, cssY) {
+    this._recomputeRects();
     for (let i = 0; i < this._rects.length; i++) {
       const r = this._rects[i];
       if (cssX < r.x || cssX > r.x + r.w || cssY < r.y || cssY > r.y + r.h) continue;
@@ -465,22 +482,32 @@ export class PixelMapPaneView {
   }
 
   /** Nearest pixel to a client point (within ~its size), or null. */
-  pixelAt(cssX, cssY) {
+  pixelAt(cssX, cssY, { slop = 0 } = {}) {
     const hit = this.clientToContent(cssX, cssY);
     if (!hit) return null;
     const panel = this.panels.find((p) => p.id === hit.panelId);
     if (!panel || !panel.pixels) return null;
+    const xf = this._xforms.get(hit.panelId);
+    const slopDesign = xf ? slop / xf.scale : slop;
     let best = null, bestD = Infinity;
     for (const p of panel.pixels) {
       const d = Math.hypot(p.cx - hit.x, p.cy - hit.y);
-      const rad = Math.max(p.sizeX, p.sizeY);
-      if (d < rad && d < bestD) { bestD = d; best = p; }
+      const rad = Math.max(p.sizeX, p.sizeY) + slopDesign;
+      if (d <= rad && d < bestD) { bestD = d; best = p; }
     }
     return best;
+  }
+
+  /** Map a fixture's design anchor to pane-local CSS px (for probes/tests). */
+  designToClient(panelId, x, y) {
+    const xf = this._xforms.get(panelId);
+    if (!xf) return null;
+    return { x: x * xf.scale + xf.ox, y: y * xf.scale + xf.oy };
   }
 
   dispose() {
     this.canvas = null; this.ctx = null;
     this.panels = []; this._xforms.clear(); this._rects = [];
+    this._geomEpoch = 0; this._staticEpoch = -1; this._staticDirty = true;
   }
 }

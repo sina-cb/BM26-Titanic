@@ -21,6 +21,17 @@ vi.mock('./apiBase', () => ({
   getDefaultApiBase: () => 'http://engine.test',
   setApiBase: () => undefined,
 }));
+vi.mock('./passcode_waiver', () => ({
+  PASSCODE_WAIVER_HEADER: 'X-CaptainPad-Passcode-Waiver',
+  getValidPasscodeWaiver: vi.fn(async () => null),
+  mintPasscodeWaiver: vi.fn(async () => ({
+    token: 'waiver-token-alpha',
+    principal: 'owner',
+    expiresAt: Date.now() + 30 * 60 * 1000,
+    engineOrigin: 'http://engine.test',
+  })),
+  clearPasscodeWaiver: vi.fn(async () => undefined),
+}));
 
 import {
   postTimelineTakeover,
@@ -28,6 +39,7 @@ import {
   resumeTimeline,
   TAKEOVER_PASSCODE_HEADER,
 } from './timelineApi';
+import { mintPasscodeWaiver, PASSCODE_WAIVER_HEADER } from './passcode_waiver';
 
 const FAKE_PASSCODE = 'fake-code-alpha';
 
@@ -61,7 +73,7 @@ describe('postTimelineTakeover — passcode header', () => {
   });
 
   it('sends the passcode as the header of that one request, never in the body or URL', async () => {
-    await postTimelineTakeover({ scope: 'perform', cueId: 'cue_1' }, FAKE_PASSCODE);
+    await postTimelineTakeover({ scope: 'perform', cueId: 'cue_1' }, { passcode: FAKE_PASSCODE });
 
     expect(headerOf(0, TAKEOVER_PASSCODE_HEADER)).toBe(FAKE_PASSCODE);
     expect(calls[0].url).not.toContain(FAKE_PASSCODE);
@@ -72,7 +84,7 @@ describe('postTimelineTakeover — passcode header', () => {
   });
 
   it('does not leak the passcode into the NEXT takeover', async () => {
-    await postTimelineTakeover(undefined, FAKE_PASSCODE);
+    await postTimelineTakeover(undefined, { passcode: FAKE_PASSCODE });
     await postTimelineTakeover();
 
     expect(headerOf(0, TAKEOVER_PASSCODE_HEADER)).toBe(FAKE_PASSCODE);
@@ -92,11 +104,18 @@ describe('postTimelineTakeover — passcode header', () => {
   it('surfaces the engine refusal envelope verbatim (code included)', async () => {
     stubFetch({ error: 'performance mode is live', code: 'TAKEOVER_AUTH_REQUIRED' }, false, 401);
 
-    const result = await postTimelineTakeover(undefined, FAKE_PASSCODE);
+    const result = await postTimelineTakeover(undefined, { passcode: FAKE_PASSCODE });
 
     expect(result.ok).toBe(false);
     expect(result.status).toBe(401);
     expect(result.error).toBe('performance mode is live');
     expect((result.data as { code?: string }).code).toBe('TAKEOVER_AUTH_REQUIRED');
+  });
+
+  it('remember30 mints a waiver header instead of sending the raw passcode', async () => {
+    await postTimelineTakeover(undefined, { passcode: FAKE_PASSCODE, remember30: true });
+    expect(vi.mocked(mintPasscodeWaiver)).toHaveBeenCalledWith(FAKE_PASSCODE);
+    expect(headerOf(0, TAKEOVER_PASSCODE_HEADER)).toBeNull();
+    expect(headerOf(0, PASSCODE_WAIVER_HEADER)).toBe('waiver-token-alpha');
   });
 });

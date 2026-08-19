@@ -38,13 +38,14 @@ const harness = createEngineHarness({
   extraArgs: ['--dest', '192.0.2.9'],
 });
 
-async function request(method, route, body, token, passcode) {
+async function request(method, route, body, token, passcode, waiverToken) {
   const response = await fetch(`${harness.base()}${route}`, {
     method,
     headers: {
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { 'X-CaptainPad-Session': token } : {}),
       ...(passcode ? { 'X-CaptainPad-Passcode': passcode } : {}),
+      ...(waiverToken ? { 'X-CaptainPad-Passcode-Waiver': waiverToken } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -179,6 +180,88 @@ test('logout revokes the opaque session', async () => {
   assert.equal(revokedSession.cacheControl, 'no-store');
 });
 
+test('passcode waiver mints, validates, and authorises exit without the raw passcode', async () => {
+  let mode = await request('GET', '/performance-mode');
+  if (!mode.data.active) {
+    const enter = await request('POST', '/performance-mode', { active: true });
+    assert.equal(enter.status, 200, JSON.stringify(enter.data));
+    mode = await request('GET', '/performance-mode');
+  }
+  assert.equal(mode.status, 200);
+  assert.equal(mode.data.active, true);
+
+  const mint = await request('POST', '/captainpad/auth/passcode-waiver', { passcode: OWNER_FIXTURE });
+  assert.equal(mint.status, 200);
+  assert.equal(mint.data.ok, true);
+  assert.equal(typeof mint.data.token, 'string');
+  assert.equal(mint.data.principal, 'owner');
+  assert.equal(mint.data.remainingMs, 30 * 60 * 1000);
+  assert.equal(JSON.stringify(mint.data).includes(OWNER_FIXTURE), false);
+
+  const validate = await request('GET', '/captainpad/auth/passcode-waiver', undefined, undefined, undefined, mint.data.token);
+  assert.equal(validate.status, 200);
+  assert.equal(validate.data.ok, true);
+  assert.equal(validate.data.principal, 'owner');
+  assert.ok(validate.data.remainingMs > 0);
+
+  const exit = await request(
+    'POST',
+    '/performance-mode',
+    { active: false, exitAction: 'keep' },
+    undefined,
+    undefined,
+    mint.data.token,
+  );
+  assert.equal(exit.status, 200);
+  assert.equal(exit.data.active, false);
+  assert.equal(exit.data.editPrincipal, 'owner');
+});
+
+test('logout revokes a presented passcode waiver so the old token cannot authorise again', async () => {
+  let mode = await request('GET', '/performance-mode');
+  if (!mode.data.active) {
+    const enter = await request('POST', '/performance-mode', { active: true });
+    assert.equal(enter.status, 200, JSON.stringify(enter.data));
+    mode = await request('GET', '/performance-mode');
+  }
+  assert.equal(mode.data.active, true);
+
+  const mint = await request('POST', '/captainpad/auth/passcode-waiver', { passcode: OWNER_FIXTURE });
+  assert.equal(mint.status, 200);
+  assert.equal(typeof mint.data.token, 'string');
+
+  const logout = await request(
+    'POST',
+    '/captainpad/auth/logout',
+    undefined,
+    undefined,
+    undefined,
+    mint.data.token,
+  );
+  assert.equal(logout.status, 200);
+
+  const validate = await request(
+    'GET',
+    '/captainpad/auth/passcode-waiver',
+    undefined,
+    undefined,
+    undefined,
+    mint.data.token,
+  );
+  assert.equal(validate.status, 401);
+
+  const exit = await request(
+    'POST',
+    '/performance-mode',
+    { active: false, exitAction: 'keep' },
+    undefined,
+    undefined,
+    mint.data.token,
+  );
+  assert.equal(exit.status, 401);
+  assert.equal(exit.data.code, 'EXIT_AUTH_WAIVER_INVALID');
+});
+
 test('auth-required SIGKILL relocks Performance, invalidates the old token, and permits a fresh privileged exit', async () => {
   const oldLogin = await request('POST', '/captainpad/auth/login', {
     passphrase: OWNER_FIXTURE,
@@ -187,10 +270,13 @@ test('auth-required SIGKILL relocks Performance, invalidates the old token, and 
   assert.equal(oldLogin.status, 200);
 
   // Entering the lock is never gated (docs/56 D2) — a token is not needed and
-  // not consulted. The previous test left the rig in edit mode.
-  const enter = await request('POST', '/performance-mode', { active: true });
-  assert.equal(enter.status, 200);
-  assert.equal(enter.data.editPrincipal, null, 'entering performance mode kept an edit session');
+  // not consulted. The previous test left the rig in performance mode.
+  let mode = await request('GET', '/performance-mode');
+  if (!mode.data.active) {
+    const enter = await request('POST', '/performance-mode', { active: true });
+    assert.equal(enter.status, 200, JSON.stringify(enter.data));
+    assert.equal(enter.data.editPrincipal, null, 'entering performance mode kept an edit session');
+  }
 
   const crashedProcess = harness.proc;
   assert.ok(crashedProcess, 'auth harness has no engine process to crash');

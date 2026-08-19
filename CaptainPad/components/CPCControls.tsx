@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, useWindowDimensions, Modal, ScrollView, Pressable } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
 import {
@@ -59,19 +60,18 @@ interface CPCControlsProps {
   // (client-side view state), the AUDIO meters + plot picker (display-only
   // local selection), and the OSC status pill (a read-only details sheet).
   disabled?: boolean;
-  // DECK-ONLY (docs/63 §3.1). The Deck's DeckWorkspaceBar ("the view
-  // optimizer") renders here, between row 1 (GLOBALS) and row 2 (AUDIO
-  // SIGNALS) — "under the globals". Undefined renders NOTHING (no wrapper
-  // element, no extra gap) so the mixer — which never passes this — stays
-  // byte-identical (docs/63 §5 pin 8).
+  // DECK + MIXER (docs/63 §3.1). The Deck's full DeckWorkspaceBar ("the view
+  // optimizer") and the Mixer's AUDIO-only bar chip both render here, between
+  // row 1 (GLOBALS) and row 2 (AUDIO SIGNALS) — "under the globals".
+  // Undefined renders NOTHING (no wrapper element, no extra gap).
   optimizerSlot?: React.ReactNode;
-  // DECK-ONLY (docs/63 §3.1). When true, row 2 (the AUDIO SIGNALS meters +
+  // DECK + MIXER (docs/63 §3.1). When true, row 2 (the AUDIO SIGNALS meters +
   // the plot-picker button) and its <AudioPlotPicker> modal are not
   // rendered. The `useAudioPlotSelection` hook and the live audio-signals
   // subscription stay unconditional — only the JSX is gated — so the
-  // AsyncStorage-backed selection is untouched and simply doesn't mount
-  // while hidden. The mixer never passes this, so its AUDIO row is
-  // unaffected.
+  // AsyncStorage-backed plot selection is untouched and simply doesn't mount
+  // while hidden. Both tabs gate this on the shared deck workspace
+  // `audioBar` surface via `useDeckWorkspace().isBarShown('audioBar')`.
   hideAudioRow?: boolean;
 }
 
@@ -533,11 +533,10 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optim
         ) : null}
       </View>
 
-      {/* ── Deck-only optimizer slot (docs/63 §3.1) — the DeckWorkspaceBar
-          ("view optimizer") renders here, under GLOBALS and above AUDIO
-          SIGNALS. Undefined (the mixer's case) renders NOTHING — not an
-          empty View — so the outer View's `gap` never adds phantom space
-          and the mixer stays byte-identical (docs/63 §5 pin 8). */}
+      {/* ── Workspace optimizer slot (docs/63 §3.1) — DeckWorkspaceBar on
+          the deck tab; on the mixer tab, the same bar recipe limited to the
+          AUDIO chip via `barsOnly`. Undefined renders NOTHING — not an empty
+          View — so the outer View's `gap` never adds phantom space. */}
       {optimizerSlot}
 
       {/* ── Row 2: audio — dynamic live-only signal meters ──────────────
@@ -552,9 +551,10 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optim
           DECK-ONLY hideAudioRow (docs/63 §3.1): when true, this row and its
           <AudioPlotPicker> modal below are both skipped — gated on the SAME
           condition so they can never drift apart and leave the modal
-          mounted over a hidden row. The `useAudioPlotSelection` hook above
-          and the `useAudioSignals` subscription stay unconditional; only
-          this JSX is gated.
+          mounted over a hidden row. Deck and Mixer both drive this from the
+          shared deck workspace `audioBar` surface. The `useAudioPlotSelection`
+          hook above and the `useAudioSignals` subscription stay unconditional;
+          only this JSX is gated.
        */}
       {!hideAudioRow ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 4 : 6 }}>
@@ -885,7 +885,9 @@ function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
     onChange(next.length > 0 ? next : []);   // empty array persists as "none shown"
   };
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#0009', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
         <Pressable onPress={() => { /* swallow inner taps */ }} style={{ width: '90%', maxWidth: 560, maxHeight: '82%', backgroundColor: C.surfaceContainerLow, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>

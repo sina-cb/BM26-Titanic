@@ -1,6 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import { fetchWithTimeout, getApiBaseAsync } from '@/utils/api';
+import {
+  clearCaptainPadAuthOnBootFailure,
+  lockCaptainPadAuth,
+  restoreCaptainPadAuthOnBoot,
+} from '@/utils/captainpad_auth_boot';
 import { engineEvents } from '@/utils/engineEvents';
 import {
   captainPadAuthFailureMessage,
@@ -12,7 +17,6 @@ import { normalizedOrigin } from '@/utils/privileged_request_scope';
 import {
   clearPrivilegedSession,
   getPrivilegedSession,
-  restorePrivilegedSession,
   setPrivilegedSession,
   subscribePrivilegedSession,
   type PrivilegedSession,
@@ -50,14 +54,8 @@ export function CaptainPadAccessProvider({ children }: { children: React.ReactNo
   useEffect(() => subscribePrivilegedSession(setSession), []);
   useEffect(() => {
     let cancelled = false;
-    restorePrivilegedSession()
-      .then(async (restored) => {
-        if (!restored) return;
-        const validated = await validateSession(restored);
-        if (validated) await setPrivilegedSession(validated);
-        else await clearPrivilegedSession();
-      })
-      .catch(() => clearPrivilegedSession())
+    restoreCaptainPadAuthOnBoot()
+      .catch(() => clearCaptainPadAuthOnBootFailure())
       .finally(() => { if (!cancelled) setLoading(false); })
       .catch((error) => {
         console.warn('CaptainPad session restore cleanup failed:', error);
@@ -147,12 +145,7 @@ export function CaptainPadAccessProvider({ children }: { children: React.ReactNo
   }, []);
 
   const lock = useCallback(async () => {
-    const base = await getApiBaseAsync();
-    try {
-      await fetchWithTimeout(`${base}/captainpad/auth/logout`, { method: 'POST' }, 5000);
-    } finally {
-      await clearPrivilegedSession();
-    }
+    await lockCaptainPadAuth();
   }, []);
 
   const value = useMemo(() => ({ session, loading, authenticate, lock }), [session, loading, authenticate, lock]);

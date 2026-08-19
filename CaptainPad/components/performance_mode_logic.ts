@@ -189,15 +189,15 @@ export const ENTER_CONFIRM_MESSAGE =
   'working but WILL NOT be saved — on exit you choose to keep or discard them.';
 export const ENTER_CONFIRM_LABEL = 'GO LIVE';
 
-/** Copy for the EXIT sheet's actions. Used verbatim for the CLEAN sheet (no
- *  dirty deck tuning → the original two choices). The dirty save-ask sheet uses
- *  performanceExitChoices() below, which reworded 'keep' to "without saving". */
+/** Copy for the EXIT sheet's actions — the CaptainPad UI exposes exactly two
+ *  choices (DISCARD + SAVE CHANGES). The engine still accepts three internal
+ *  exitAction values for compatibility. */
 export function exitActionLabel(action: PerformanceExitAction): string {
   switch (action) {
-    case 'keep-save': return 'KEEP & SAVE TUNING';
-    case 'restore': return 'RESTORE PRE-SHOW';
+    case 'keep-save': return 'SAVE CHANGES';
+    case 'restore': return 'DISCARD PERFORMANCE CHANGES';
     case 'keep':
-    default: return 'KEEP LIVE STATE';
+    default: return 'SAVE CHANGES';
   }
 }
 export function exitActionHint(action: PerformanceExitAction): string {
@@ -205,7 +205,7 @@ export function exitActionHint(action: PerformanceExitAction): string {
     case 'keep-save':
       return 'Save your session tuning into the playlists and leave performance mode.';
     case 'restore':
-      return 'Discard every live tweak and restore the exact look from when you went live.';
+      return 'Roll the whole rig back to the pre-show snapshot — every live tweak is discarded.';
     case 'keep':
     default:
       return 'Persist the current live look and leave performance mode.';
@@ -213,20 +213,16 @@ export function exitActionHint(action: PerformanceExitAction): string {
 }
 
 // ── Exit sheet CHOICES (dirty-aware) ────────────────────────────────────────
-// The single source of truth for which buttons the exit sheet shows, in order,
-// and their wording — so deck + mixer (one shared component) always match and
-// the copy is vitest-pinned. Two shapes:
-//   • CLEAN (dirtyCount === 0): the original two choices — KEEP LIVE STATE /
-//     RESTORE PRE-SHOW. Nothing was tuned, so there's no save question to ask.
-//   • DIRTY (dirtyCount > 0): an explicit save-ask — KEEP & SAVE TUNING /
-//     KEEP WITHOUT SAVING / RESTORE PRE-SHOW. Here 'keep' reads "without
-//     saving" so the two keeps can never be confused.
-// `tone` lets the sheet paint RESTORE as the destructive choice.
+// The CaptainPad exit UI exposes exactly TWO choices in this order:
+//   1. DISCARD PERFORMANCE CHANGES → exitAction:'restore' (full pre-show rollback)
+//   2. SAVE CHANGES → exitAction:'keep-save' when dirty, 'keep' when clean
+// `tone` lets the sheet paint SAVE as the emphasized choice and DISCARD as
+// destructive.
 export interface PerformanceExitChoice {
   action: PerformanceExitAction;
   label: string;
   hint: string;
-  tone: 'default' | 'restore';
+  tone: 'default' | 'restore' | 'save';
   /**
    * An extra qualifier line under the hint. Only `keep-save` carries one: the
    * engine accepts it from the captain's passcode ALONE (docs/56 D7), and the
@@ -237,7 +233,7 @@ export interface PerformanceExitChoice {
   caption?: string;
 }
 
-/** Shown under KEEP & SAVE TUNING. Pinned here so the wording can't drift. */
+/** Shown under SAVE CHANGES when dirty. Pinned here so the wording can't drift. */
 export const KEEP_SAVE_OWNER_ONLY_CAPTION = 'Captain’s passcode only.';
 
 /**
@@ -252,33 +248,27 @@ export const PASSCODE_REQUIRED_HINT =
   'This engine requires an operator passcode to leave performance mode. '
   + 'Whoever types it owns what gets saved for the rest of the edit session.';
 
+/** Shown on the exit sheet when a valid 30-minute waiver is already on device. */
+export const REMEMBERED_OPERATOR_AUTH_HINT =
+  'Your operator passcode is remembered on this CaptainPad for the next 30 minutes. '
+  + 'Choose how to leave performance mode — no passcode entry needed.';
+
 export function performanceExitChoices(dirtyCount: number): PerformanceExitChoice[] {
-  if (dirtyCount > 0) {
-    return [
-      {
-        action: 'keep-save',
-        label: 'KEEP & SAVE TUNING',
-        hint: 'Save your session tuning into the playlists, then leave performance mode.',
-        tone: 'default',
-        caption: KEEP_SAVE_OWNER_ONLY_CAPTION,
-      },
-      {
-        action: 'keep',
-        label: 'KEEP WITHOUT SAVING',
-        hint: 'Keep the live look for now, but don’t write the tuning to the playlists.',
-        tone: 'default',
-      },
-      {
-        action: 'restore',
-        label: 'RESTORE PRE-SHOW',
-        hint: exitActionHint('restore'),
-        tone: 'restore',
-      },
-    ];
-  }
+  const saveAction: PerformanceExitAction = dirtyCount > 0 ? 'keep-save' : 'keep';
   return [
-    { action: 'keep', label: exitActionLabel('keep'), hint: exitActionHint('keep'), tone: 'default' },
-    { action: 'restore', label: exitActionLabel('restore'), hint: exitActionHint('restore'), tone: 'restore' },
+    {
+      action: 'restore',
+      label: exitActionLabel('restore'),
+      hint: exitActionHint('restore'),
+      tone: 'restore',
+    },
+    {
+      action: saveAction,
+      label: exitActionLabel(saveAction),
+      hint: exitActionHint(saveAction),
+      tone: 'save',
+      ...(dirtyCount > 0 ? { caption: KEEP_SAVE_OWNER_ONLY_CAPTION } : {}),
+    },
   ];
 }
 
@@ -308,7 +298,7 @@ export function dirtySummaryText(count: number, entries: DeckDirtyEntry[]): stri
 export function dirtyRestoreCaption(count: number): string {
   if (count <= 0) return '';
   const noun = count === 1 ? 'this session tweak' : `all ${count} tuned patterns`;
-  return `RESTORE discards ${noun}.`;
+  return `Discard discards ${noun}.`;
 }
 
 // ── EDIT SESSION (docs/56 D5/D8) ────────────────────────────────────────────
@@ -487,9 +477,9 @@ export function performanceSummonOutcome(
 export function pressAgainToGoLiveLabel(buttonName: string): string {
   return `● PRESS ${buttonName.toUpperCase()} AGAIN TO GO LIVE`;
 }
-/** The exit-sheet hint: the controller button can't pick KEEP vs RESTORE. */
+/** The exit-sheet hint: the controller button can't pick DISCARD vs SAVE. */
 export function exitChoiceControllerHint(buttonName: string): string {
-  return `${buttonName.toUpperCase()} closes this sheet — choose KEEP or RESTORE here on the iPad.`;
+  return `${buttonName.toUpperCase()} closes this sheet — choose DISCARD or SAVE CHANGES here on the iPad.`;
 }
 
 // ── Performance-dialog summon bus ───────────────────────────────────────────

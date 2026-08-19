@@ -634,6 +634,31 @@ export function expandFixturePitch(P, pitchByType) {
     const pitch = pitchByType[pts[0].fixtureType];
     const cu = pts.reduce((a, p) => a + p.u, 0) / pts.length;
     const cv = pts.reduce((a, p) => a + p.v, 0) / pts.length;
+    // VintageLed is six heads on a vertical body — expand to 2×3 so the Front
+    // view reads as two distinct rows of three circles, not one cramped column
+    // (operator, 2026-08-18).
+    if (pts[0].fixtureType === 'VintageLed' && pts.length === 6) {
+      pts.sort((a, b) => (a.gi || 0) - (b.gi || 0));
+      const du = pts[pts.length - 1].u - pts[0].u;
+      const dv = pts[pts.length - 1].v - pts[0].v;
+      const len = Math.hypot(du, dv);
+      let ux = 1; let uv = 0; let px = 0; let pv = 1;
+      if (len > 1e-9) {
+        ux = du / len; uv = dv / len;
+        px = -uv; pv = ux;
+      }
+      const cols = 3; const rows = 2;
+      pts.forEach((p, i) => {
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        const tCol = (col - (cols - 1) / 2) * pitch;
+        const tRow = (row - (rows - 1) / 2) * pitch;
+        p.u = cu + ux * tCol + px * tRow;
+        p.v = cv + uv * tCol + pv * tRow;
+      });
+      types.add(pts[0].fixtureType);
+      continue;
+    }
     // The fixture's own projected direction, from its first to its last LED.
     const du = pts[pts.length - 1].u - pts[0].u;
     const dv = pts[pts.length - 1].v - pts[0].v;

@@ -36,9 +36,9 @@ views:
         sizeX: 16
         sizeY: 16
     framing:
-      zoom: 0.7117802478134119
-      panX: -11.743754856816679
-      panY: -110.44295182275795
+      zoom: 0.797193877551021
+      panX: 62.56088169550867
+      panY: -148.02493741679586
     offsets:
       Left Auditorium 5:
         dx: 104

@@ -16,8 +16,8 @@
 //
 // TAPPING IT ESCALATES. The chip opens the same passcode idiom the timeline
 // takeover uses (TakeoverPasscodeSheet — one useState, wiped on submit and on
-// close, no remember affordance, nothing stored; storage audit in
-// utils/takeover_passcode.ts). It deliberately is NOT PrivilegedAuthSheet,
+// close; optional Remember mints a 30-minute waiver token, never the raw
+// passcode; storage audit in utils/takeover_passcode.ts). It deliberately is NOT PrivilegedAuthSheet,
 // which mints the 30-minute session this whole flow is built to ignore.
 // The sheet's copy states the consequence plainly: asserting the captain's
 // code starts auto-saving the CURRENT live tuning, including whatever the
@@ -44,6 +44,7 @@ import {
 } from '@/hooks/usePerformanceMode';
 import { assertEditSession } from '@/utils/api';
 import { editSessionRefusalMessage } from '@/utils/edit_session';
+import { getValidPasscodeWaiver } from '@/utils/passcode_waiver';
 
 export function EditSessionChip() {
   const { active, editPrincipal, authRequired } = usePerformanceMode();
@@ -59,11 +60,11 @@ export function EditSessionChip() {
   // DEFAULT_PERFORMANCE_MODE takes. A warning we cannot yet justify is noise.
   const chip = ready ? editSessionChip(editPrincipal, active, authRequired) : null;
 
-  const submit = async (passcode: string) => {
+  const submit = async (passcode: string, remember30: boolean) => {
     setPending(true);
     setError(null);
     try {
-      const result = await assertEditSession(passcode);
+      const result = await assertEditSession({ passcode, remember30 });
       if (result.ok) {
         setSheetOpen(false);
         // The POST response is authoritative, but re-seed so the dirty summary
@@ -79,12 +80,33 @@ export function EditSessionChip() {
     }
   };
 
+  const openSheet = async () => {
+    setError(null);
+    setPending(true);
+    try {
+      const waiver = await getValidPasscodeWaiver();
+      if (waiver) {
+        const result = await assertEditSession({});
+        if (result.ok) {
+          refreshPerformanceMode();
+          return;
+        }
+        setError(editSessionRefusalMessage(result));
+      }
+    } catch {
+      setError('The engine did not accept the request. Check the connection and try again.');
+    } finally {
+      setPending(false);
+    }
+    setSheetOpen(true);
+  };
+
   if (!chip) return null;
 
   return (
     <View>
       <Pressable
-        onPress={() => { setError(null); setSheetOpen(true); }}
+        onPress={() => { void openSheet(); }}
         style={styles.chip}
         accessibilityRole="button"
         accessibilityLabel={`${chip.label}. ${chip.detail}`}
@@ -102,7 +124,7 @@ export function EditSessionChip() {
         title={ESCALATE_SHEET_TITLE}
         detail={ESCALATE_SHEET_DETAIL}
         submitLabel="START SAVING"
-        footnote="Verified every time — this passcode is never stored on this CaptainPad."
+        footnote="When Remember is off, the passcode is used once and never stored."
         onSubmit={submit}
         onCancel={() => { setSheetOpen(false); setError(null); }}
       />

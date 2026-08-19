@@ -79,12 +79,21 @@ export function createCaptainPadAuth({
   }
   const credentials = required ? loadCredentials(secretsPath) : [];
   const sessions = new Map();
+  /** In-memory operator passcode waivers — scoped separately from privileged sessions. */
+  const waivers = new Map();
   const failures = new Map();
 
   function cleanupSessions() {
     const timestamp = now();
     for (const [key, session] of sessions) {
       if (session.expiresAt <= timestamp) sessions.delete(key);
+    }
+  }
+
+  function cleanupWaivers() {
+    const timestamp = now();
+    for (const [key, waiver] of waivers) {
+      if (waiver.expiresAt <= timestamp) waivers.delete(key);
     }
   }
 
@@ -195,10 +204,48 @@ export function createCaptainPadAuth({
     return sessions.delete(digest(token).toString('hex'));
   }
 
+  /**
+   * Mint a 30-minute opaque passcode waiver after validating the operator
+   * passcode. Issues nothing on failure. Waivers are scoped ONLY to operator-
+   * passcode gates — they do not mint privileged sessions.
+   */
+  function mintPasscodeWaiver(passphrase, remoteKey) {
+    const checked = checkPassphrase(passphrase, remoteKey);
+    if (!checked.ok) return checked;
+    cleanupWaivers();
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = checked.timestamp + REMEMBERED_SESSION_MS;
+    waivers.set(digest(token).toString('hex'), {
+      principal: checked.principal,
+      expiresAt,
+    });
+    return {
+      ok: true,
+      token,
+      principal: checked.principal,
+      expiresAt,
+      remainingMs: expiresAt - checked.timestamp,
+    };
+  }
+
+  function waiverForToken(token) {
+    if (!required || typeof token !== 'string' || token.length === 0) return null;
+    cleanupWaivers();
+    return waivers.get(digest(token).toString('hex')) || null;
+  }
+
+  function revokePasscodeWaiver(token) {
+    if (typeof token !== 'string' || token.length === 0) return false;
+    return waivers.delete(digest(token).toString('hex'));
+  }
+
   return Object.freeze({
     required,
     authenticate,
     verifyPassphrase,
+    mintPasscodeWaiver,
+    waiverForToken,
+    revokePasscodeWaiver,
     sessionForRequest,
     revokeRequest,
     isPrivilegedRequest: (req) => sessionForRequest(req) !== null,

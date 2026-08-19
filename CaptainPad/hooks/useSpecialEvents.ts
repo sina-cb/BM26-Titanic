@@ -196,7 +196,7 @@ async function _armShow(showId: string): Promise<ArmOutcome> {
       performanceActive: getPerformanceModeState().active,
       title: ARM_PROMPT_TITLE,
       detail: ARM_PROMPT_DETAIL,
-      send: (passcode?: string) => armSpecialEvent(showId, passcode),
+      send: (auth) => armSpecialEvent(showId, auth),
     });
   } catch (err: any) {
     // No prompt host mounted, or the transport threw. Fail LOUD: never arm a

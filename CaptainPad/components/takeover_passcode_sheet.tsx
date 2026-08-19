@@ -1,33 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 
+import { OperatorPasscodeKeypad } from '@/components/operator_passcode_keypad';
+import { OperatorPasscodeRememberRow } from '@/components/operator_passcode_remember_row';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 // ── TakeoverPasscodeSheet ──────────────────────────────────────────────────
 //
-// The PER-ATTEMPT operator passcode prompt for taking the rig from the timeline
-// while performance mode is live (operator ruling 2026-08-14, engine gate in
-// marsin_engine/lib/api_server.js → checkTakeoverPasscode).
+// The operator passcode prompt for performance-mode gates: timeline takeover,
+// special-event ARM, edit-session escalation, and similar surfaces.
 //
 // Deliberately NOT PrivilegedAuthSheet: that sheet opens a 30-minute privileged
-// SESSION and offers "remember on this device". Reusing it here would hand the
-// operator exactly the thing the ruling forbids. This sheet shares its visual
-// idiom (modal card, secure input, error box, CANCEL / primary pair) and drops
-// every persistence affordance:
+// SESSION for structural performance-lock bypass. This sheet may optionally mint
+// a separate 30-minute passcode WAIVER (operator ruling 2026-08-18) that
+// authorises only operator-passcode gates — never privileged editing.
 //
-//   * no remember checkbox, no session, no storage — see the storage audit in
-//     utils/takeover_passcode.ts;
 //   * the typed passcode lives in ONE `useState` and is wiped on submit and on
-//     close, so a re-open always starts empty;
+//     close;
+//   * Remember for 30 minutes stores only an opaque waiver token bound to the
+//     engine origin — never the raw passcode;
 //   * a rejected attempt shows the engine's reason and NEVER echoes what was
 //     typed.
 //
@@ -43,7 +43,7 @@ const TOUCH_TARGET = 56;
  *  prompts) byte-identical; the edit-session escalation sheet overrides them. */
 const DEFAULT_SUBMIT_LABEL = 'TAKE OVER';
 const DEFAULT_FOOTNOTE =
-  'Required for every takeover — this passcode is never stored on this CaptainPad.';
+  'When Remember is off, the passcode is used once and never stored.';
 
 interface TakeoverPasscodeSheetProps {
   visible: boolean;
@@ -54,11 +54,11 @@ interface TakeoverPasscodeSheetProps {
   detail: string;
   /** Confirm-button caption. Defaults to the takeover wording. */
   submitLabel?: string;
-  /** The reassurance line under the buttons. Defaults to the takeover wording;
-   *  every variant must keep saying the passcode is not stored, because that
-   *  is the promise utils/takeover_passcode.ts audits. */
+  /** The reassurance line under the buttons. */
   footnote?: string;
-  onSubmit: (passcode: string) => void;
+  /** When false, hide the Remember row (exit sheet manages its own copy). */
+  showRemember?: boolean;
+  onSubmit: (passcode: string, remember30: boolean) => void;
   onCancel: () => void;
 }
 
@@ -70,28 +70,50 @@ export function TakeoverPasscodeSheet({
   detail,
   submitLabel = DEFAULT_SUBMIT_LABEL,
   footnote = DEFAULT_FOOTNOTE,
+  showRemember = true,
   onSubmit,
   onCancel,
 }: TakeoverPasscodeSheetProps) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
-  const [passcode, setPasscode] = useState('');
+  const [passcode, setPasscodeState] = useState('');
+  const passcodeRef = useRef('');
+  const setPasscode = (next: string) => {
+    passcodeRef.current = next;
+    setPasscodeState(next);
+  };
+  const [remember30, setRemember30State] = useState(false);
+  const remember30Ref = useRef(false);
+  const setRemember30 = (next: boolean) => {
+    remember30Ref.current = next;
+    setRemember30State(next);
+  };
+  const toggleRemember30 = () => setRemember30(!remember30Ref.current);
 
   // Wipe on close. Combined with the wipe on submit below, the component holds
   // the secret only while the operator is typing it.
   useEffect(() => {
-    if (!visible) setPasscode('');
+    if (!visible) {
+      passcodeRef.current = '';
+      setPasscodeState('');
+      remember30Ref.current = false;
+      setRemember30State(false);
+    }
   }, [visible]);
 
   const canSubmit = passcode.length > 0 && !pending;
 
   const submit = () => {
     if (!canSubmit) return;
-    const attempted = passcode;
+    const attempted = passcodeRef.current;
+    const remember = remember30Ref.current;
     // Clear BEFORE handing it off: the request is in flight, nothing in this
     // component needs the value any more, and a rejection must start fresh.
-    setPasscode('');
-    onSubmit(attempted);
+    passcodeRef.current = '';
+    setPasscodeState('');
+    remember30Ref.current = false;
+    setRemember30State(false);
+    onSubmit(attempted, remember);
   };
 
   return (
@@ -100,6 +122,7 @@ export function TakeoverPasscodeSheet({
       visible={visible}
       animationType="fade"
       onRequestClose={pending ? undefined : onCancel}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
     >
       <TouchableOpacity
         style={styles.backdrop}
@@ -114,23 +137,18 @@ export function TakeoverPasscodeSheet({
               <Text style={styles.title}>{title}</Text>
             </View>
             <Text style={styles.message}>{detail}</Text>
-            <TextInput
+            <OperatorPasscodeKeypad
               value={passcode}
-              onChangeText={setPasscode}
-              editable={!pending}
-              secureTextEntry
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoComplete="off"
-              textContentType="none"
-              placeholder="Operator passcode"
-              placeholderTextColor={C.secondary}
-              style={styles.input}
-              returnKeyType="go"
-              onSubmitEditing={submit}
-              accessibilityLabel="Operator takeover passcode"
+              onChange={setPasscode}
+              disabled={pending}
             />
+            {showRemember ? (
+              <OperatorPasscodeRememberRow
+                checked={remember30}
+                onToggle={toggleRemember30}
+                disabled={pending}
+              />
+            ) : null}
             {error ? (
               <View style={styles.errorBox} accessibilityRole="alert">
                 <Text style={styles.errorText}>{error}</Text>
@@ -183,7 +201,7 @@ function makeStyles(C: Palette) {
       borderRadius: 18,
       padding: 28,
       minWidth: 380,
-      maxWidth: 520,
+      maxWidth: 560,
       borderWidth: 1,
       borderColor: C.ghostBorder,
     },
@@ -207,19 +225,6 @@ function makeStyles(C: Palette) {
       lineHeight: 22,
       color: C.secondary,
       marginBottom: 20,
-    },
-    input: {
-      minHeight: 64,
-      borderRadius: 12,
-      borderWidth: 2,
-      borderColor: C.ghostBorder,
-      backgroundColor: C.surfaceContainerHigh,
-      color: C.text,
-      fontFamily: 'Inter_400Regular',
-      fontSize: 22,
-      letterSpacing: 2,
-      paddingHorizontal: 18,
-      marginBottom: 16,
     },
     errorBox: {
       borderRadius: 10,

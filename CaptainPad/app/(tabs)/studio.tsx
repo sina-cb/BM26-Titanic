@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvoidingView, Platform, SafeAreaView, useWindowDimensions, type TextStyle } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { useGlobalStyles, shadow } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -375,7 +376,9 @@ function StudioScreenContent() {
       </View>
 
       {/* Fullscreen Editor Modal */}
-      <Modal visible={isEditing} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={isEditing} animationType="slide" presentationStyle="pageSheet"
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={webViewportHeight != null

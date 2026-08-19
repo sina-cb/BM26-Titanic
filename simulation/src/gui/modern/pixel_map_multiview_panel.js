@@ -63,7 +63,8 @@ const CSS = `
   border: 1px solid rgba(140,160,200,0.14); border-radius: 3px; font-size: 11px; padding: 0; }
 .pmv-btn:hover { color: #fabd2f; border-color: rgba(250,189,47,0.4); }
 .pmv-canvas-host { flex: 1 1 auto; position: relative; min-height: 0; }
-.pmv-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.pmv-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  touch-action: none; }
 .pmv-divider { position: absolute; z-index: 5; }
 .pmv-divider.v { cursor: col-resize; }
 .pmv-divider.h { cursor: row-resize; }
@@ -113,7 +114,9 @@ function buildPanels(deps, viewId, clusters, list) {
     const placements = (panel.placements && panel.placements.size)
       ? panel.placements
       : deps.seedPanel(def, panel.clusters, list, design.w, design.h, styles);
-    const pixels = deps.expandPanel(def, panel.clusters, list, placements, styles);
+    const viewDef = deps.getViewDef ? deps.getViewDef(viewId) : null;
+    const pixels = deps.expandPanel(def, panel.clusters, list, placements, styles,
+      viewDef && viewDef.offsets);
     return { id, label: def.label || id, weight: def.weight || 1, design, pixels, error: null };
   });
 }
@@ -165,11 +168,29 @@ export function measureObstructions(canvasEl, doc) {
 const ZOOM_RANGE = { min: FRAMING_ZOOM_MIN, max: FRAMING_ZOOM_MAX };
 
 // ── The pane element ──────────────────────────────────────────────────────
+function bindPaneInteraction(rec, el, key, deps) {
+  if (!deps.attachInteraction || !el) return;
+  if (rec.detach) rec.detach();
+  if (deps.getMode) rec.viewInst.setMode(deps.getMode());
+  rec.detach = deps.attachInteraction(el, rec.viewInst, {
+    getPath: () => key,
+    getViewId: () => rec.viewId,
+  });
+}
+
 function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose, onZoom, onFit, onBind }) {
   const views = deps.listViews ? deps.listViews() : [];
   const onCanvas = (el) => {
     const key = pane.path;
-    if (el) {
+    if (!el) {
+      const rec = records.current.get(key);
+      if (rec) {
+        if (rec.detach) { rec.detach(); rec.detach = null; }
+        rec.canvas = null;
+      }
+      return;
+    }
+    {
       let rec = records.current.get(key);
       if (!rec) {
         const viewInst = new PixelMapPaneView();
@@ -177,23 +198,17 @@ function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose
         const ro = (typeof ResizeObserver !== 'undefined')
           ? new ResizeObserver(() => viewInst.resize()) : null;
         rec = { viewInst, unregister, ro, canvas: null, viewId: null, detach: null };
-        // Initial mode + per-pane edit/pan/zoom interaction (S4 data plane).
-        if (deps.getMode) viewInst.setMode(deps.getMode());
-        if (deps.attachInteraction) {
-          rec.detach = deps.attachInteraction(el, viewInst, {
-            getPath: () => key,
-            getViewId: () => rec.viewId,
-          });
-        }
         records.current.set(key, rec);
       }
-      if (rec.canvas !== el) {
+      const canvasChanged = rec.canvas !== el;
+      if (canvasChanged) {
         rec.viewInst.attach(el);
         if (rec.ro) { rec.ro.disconnect(); rec.ro.observe(el); }
         rec.canvas = el;
       }
       // (Re)load this pane's data when its bound view changes or on first mount.
-      if (rec.viewId !== pane.view) {
+      const viewChanged = rec.viewId !== pane.view;
+      if (viewChanged) {
         rec.viewId = pane.view;
         // Operator framing (report 20260725_54): restore what he saved for THIS
         // view, then start reporting his pan/zoom back so it persists. The sink
@@ -216,6 +231,12 @@ function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose
         }
         const topo = topoRef.current || (deps.currentTopology ? deps.currentTopology() : null);
         rec.viewInst.setPanels(topo ? panelsFor(deps, pane.view, topo) : []);
+      }
+      // Bind pointer handlers AFTER the canvas, framing, and panel geometry are
+      // current — attaching to a detached node or an empty projection is the
+      // "Edit mode cannot select or move pixels" failure mode.
+      if (canvasChanged || viewChanged || !rec.detach) {
+        bindPaneInteraction(rec, el, key, deps);
       }
     }
   };
@@ -344,6 +365,15 @@ function Multiview({ deps, initial }) {
   useEffect(() => {
     if (!deps.subscribeMode) return;
     return deps.subscribeMode((m) => { for (const rec of records.current.values()) rec.viewInst.setMode(m); });
+  }, []);
+
+  // Keep amber selection chrome in sync when selection changes without going
+  // through the focused pane's pointer handler (keyboard Escape, programmatic).
+  useEffect(() => {
+    if (!deps.subscribeSelection) return;
+    return deps.subscribeSelection((sel) => {
+      for (const rec of records.current.values()) rec.viewInst.setSelection(sel);
+    });
   }, []);
 
   // Views container changed (add/remove/rename/duplicate) — refresh dropdowns

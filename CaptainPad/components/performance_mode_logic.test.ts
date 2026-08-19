@@ -28,6 +28,7 @@ import {
   exitChoiceControllerHint,
   KEEP_SAVE_OWNER_ONLY_CAPTION,
   PASSCODE_REQUIRED_HINT,
+  REMEMBERED_OPERATOR_AUTH_HINT,
   ESCALATE_SHEET_TITLE,
   ESCALATE_SHEET_DETAIL,
   editPrincipalMaySave,
@@ -174,9 +175,9 @@ describe('label + copy helpers', () => {
   });
 
   it('names the exit actions distinctly', () => {
-    expect(exitActionLabel('keep')).toMatch(/keep/i);
-    expect(exitActionLabel('keep-save')).toMatch(/save/i);
-    expect(exitActionLabel('restore')).toMatch(/restore/i);
+    expect(exitActionLabel('keep')).toBe('SAVE CHANGES');
+    expect(exitActionLabel('keep-save')).toBe('SAVE CHANGES');
+    expect(exitActionLabel('restore')).toBe('DISCARD PERFORMANCE CHANGES');
     expect(exitActionHint('keep')).toMatch(/persist/i);
     expect(exitActionHint('keep-save')).toMatch(/save/i);
     expect(exitActionHint('restore')).toMatch(/discard/i);
@@ -190,36 +191,35 @@ describe('label + copy helpers', () => {
 });
 
 describe('performanceExitChoices (dirty-aware exit sheet)', () => {
-  it('CLEAN (dirtyCount 0) → the original two choices, keep first + restore last', () => {
+  it('CLEAN (dirtyCount 0) → two choices: discard first, save second', () => {
     const choices = performanceExitChoices(0);
-    expect(choices.map((c) => c.action)).toEqual(['keep', 'restore']);
-    expect(choices[0].label).toBe('KEEP LIVE STATE');
-    expect(choices[1].tone).toBe('restore');
-    // No 'keep-save' offered when nothing was tuned.
+    expect(choices.map((c) => c.action)).toEqual(['restore', 'keep']);
+    expect(choices[0].label).toBe('DISCARD PERFORMANCE CHANGES');
+    expect(choices[0].tone).toBe('restore');
+    expect(choices[1].label).toBe('SAVE CHANGES');
+    expect(choices[1].tone).toBe('save');
     expect(choices.some((c) => c.action === 'keep-save')).toBe(false);
   });
 
-  it('DIRTY (dirtyCount > 0) → save-ask: keep-save, keep-without-saving, restore', () => {
+  it('DIRTY (dirtyCount > 0) → two choices: discard + save (keep-save)', () => {
     const choices = performanceExitChoices(4);
-    expect(choices.map((c) => c.action)).toEqual(['keep-save', 'keep', 'restore']);
-    expect(choices[0].label).toBe('KEEP & SAVE TUNING');
-    // The two keeps must be unambiguous — 'keep' reads "WITHOUT SAVING" here.
-    expect(choices[1].label).toBe('KEEP WITHOUT SAVING');
-    expect(choices[1].label).not.toBe(choices[0].label);
-    expect(choices[2].action).toBe('restore');
-    expect(choices[2].tone).toBe('restore');
+    expect(choices.map((c) => c.action)).toEqual(['restore', 'keep-save']);
+    expect(choices[0].label).toBe('DISCARD PERFORMANCE CHANGES');
+    expect(choices[0].tone).toBe('restore');
+    expect(choices[1].label).toBe('SAVE CHANGES');
+    expect(choices[1].tone).toBe('save');
+    expect(choices[2]).toBeUndefined();
   });
 
-  it('only KEEP & SAVE carries the owner-only caption (docs/56 D7)', () => {
+  it('only SAVE CHANGES (keep-save) carries the owner-only caption when dirty (docs/56 D7)', () => {
     const choices = performanceExitChoices(2);
     const keepSave = choices.find((c) => c.action === 'keep-save');
+    expect(keepSave?.label).toBe('SAVE CHANGES');
     expect(keepSave?.caption).toBe(KEEP_SAVE_OWNER_ONLY_CAPTION);
     expect(KEEP_SAVE_OWNER_ONLY_CAPTION.toLowerCase()).toContain('captain');
-    // Every other choice is open to any principal, so none is captioned.
     for (const c of choices.filter((x) => x.action !== 'keep-save')) {
       expect(c.caption).toBeUndefined();
     }
-    // …and the clean sheet has no captions at all (no keep-save on offer).
     expect(performanceExitChoices(0).every((c) => c.caption === undefined)).toBe(true);
   });
 
@@ -231,6 +231,11 @@ describe('performanceExitChoices (dirty-aware exit sheet)', () => {
     expect(PASSCODE_REQUIRED_HINT.length).toBeGreaterThan(40);
     expect(PASSCODE_REQUIRED_HINT).toContain('passcode');
     expect(PASSCODE_REQUIRED_HINT.toLowerCase()).toContain('saved');
+  });
+
+  it('remembered-auth hint tells the operator passcode entry is skipped', () => {
+    expect(REMEMBERED_OPERATOR_AUTH_HINT.toLowerCase()).toContain('remembered');
+    expect(REMEMBERED_OPERATOR_AUTH_HINT.toLowerCase()).toContain('no passcode');
   });
 
   it('keep-save stays TAPPABLE — the client cannot pre-know the principal', () => {
@@ -471,7 +476,7 @@ describe('controller-affordance copy (rendered ONLY when a binder is connected)'
   it('the exit hint says the button only closes and the choice is on the iPad', () => {
     const hint = exitChoiceControllerHint('SOLO');
     expect(hint).toMatch(/^SOLO closes this sheet/);
-    expect(hint).toMatch(/KEEP or RESTORE/);
+    expect(hint).toMatch(/DISCARD or SAVE CHANGES/);
     expect(hint).toMatch(/iPad/);
   });
 });

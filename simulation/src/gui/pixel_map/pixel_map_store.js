@@ -606,8 +606,8 @@ export function buildMultiviewDeps() {
     resolveView: (viewDef, clusters, list) =>
       resolveView(viewDef, clusters, list, { viewRegistry: store.viewRegistry }),
     seedPanel: (def, clusters, list, w, h, styles) => seedPanel(def, clusters, list, w, h, styles),
-    expandPanel: (def, clusters, list, placements, styles) =>
-      expandPanel(def, clusters, list, placements, styles),
+    expandPanel: (def, clusters, list, placements, styles, offsets) =>
+      expandPanel(def, clusters, list, placements, styles, offsets),
     buildPanels: (viewId) => buildPanelsForView(viewId),
     onTopology: (fn) => { store._topoListeners.add(fn); return () => store._topoListeners.delete(fn); },
     subscribeViews: (fn) => { store._viewsListeners.add(fn); return () => store._viewsListeners.delete(fn); },
@@ -617,6 +617,7 @@ export function buildMultiviewDeps() {
     openViewManager: () => { store.managerOpen.value = true; },
     getMode: () => store.mode.value,
     subscribeMode: (fn) => effect(() => { fn(store.mode.value); }),
+    subscribeSelection: (fn) => effect(() => { fn(store.selection.value); }),
     attachInteraction: (canvas, paneView, paneCtx) =>
       attachPaneInteraction(canvas, paneView, makeEditCtx(paneView, paneCtx)),
     onLayoutChange: (state) => { if (state && typeof state.focus === 'string') store.focusedPath.value = state.focus; },

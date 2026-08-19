@@ -36,6 +36,7 @@ export async function setApiBase(value: string): Promise<void> {
   await setApiBaseValue(value);
   if (shouldClearSessionForEngineOriginChange(previousBase, value)) {
     await clearPrivilegedSession();
+    await (await import('./passcode_waiver')).clearPasscodeWaiver();
   }
 }
 
@@ -498,28 +499,30 @@ export async function fetchPerformanceMode(): Promise<ApiResult<PerformanceModeS
 /**
  * Enter or leave the show lock.
  *
- * ENTERING is never gated — locking the rig is always free. LEAVING requires a
- * fresh operator passcode EVERY time (docs/56 D2): the verified principal
- * becomes the edit session that decides what the engine persists, so a stored
- * session token deliberately buys nothing here.
+ * ENTERING is never gated. LEAVING requires operator passcode or a valid
+ * 30-minute passcode waiver (docs/56 D2, operator ruling 2026-08-18).
  */
 export async function setPerformanceMode(
   body: { active: true } | { active: false; exitAction: PerformanceExitAction },
-  passcode?: string,
+  auth?: import('./takeover_passcode').OperatorAuthSendInput,
 ): Promise<ApiResult<PerformanceModeState>> {
   try {
+    const headers = await (await import('./operator_auth')).operatorAuthHeaders(auth || {});
     const res = await fetchWithTimeout(`${api_base}/performance-mode`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(passcode ? { [TAKEOVER_PASSCODE_HEADER]: passcode } : {}),
+        ...headers,
       },
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    // Codex P0 — fail loud: surface the engine's rejection (+ code) so the
-    // control can show the real error instead of a phantom success.
     if (!res.ok) {
+      await (await import('./operator_auth')).clearOperatorAuthOnRefusal(
+        headers,
+        res.status,
+        `${api_base}/performance-mode`,
+      );
       return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
     }
     return { ok: true, data };
@@ -531,24 +534,27 @@ export async function setPerformanceMode(
 
 /**
  * Re-assert WHO owns persistence while already in edit mode (docs/56 D3).
- * Escalation (a sailor session + the captain's code → saves open, blessing the
- * CURRENT live look) and handover (the captain's session + a sailor's code →
- * saves freeze) are the same call. Issues nothing; stores nothing.
  */
 export async function assertEditSession(
-  passcode: string,
+  auth: import('./takeover_passcode').OperatorAuthSendInput,
 ): Promise<ApiResult<PerformanceModeState>> {
   try {
+    const headers = await (await import('./operator_auth')).operatorAuthHeaders(auth);
     const res = await fetchWithTimeout(`${api_base}/edit-session`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        [TAKEOVER_PASSCODE_HEADER]: passcode,
+        ...headers,
       },
       body: '{}',
     });
     const data = await res.json();
     if (!res.ok) {
+      await (await import('./operator_auth')).clearOperatorAuthOnRefusal(
+        headers,
+        res.status,
+        `${api_base}/edit-session`,
+      );
       return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
     }
     return { ok: true, data };

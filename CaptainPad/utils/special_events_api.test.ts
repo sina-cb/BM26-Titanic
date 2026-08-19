@@ -16,7 +16,20 @@ vi.mock('./api', () => ({
   fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
 }));
 vi.mock('./apiBase', () => ({
+  api_base: 'http://engine.test',
+  getApiBase: () => 'http://engine.test',
   getApiBaseAsync: async () => 'http://engine.test',
+}));
+vi.mock('./passcode_waiver', () => ({
+  PASSCODE_WAIVER_HEADER: 'X-CaptainPad-Passcode-Waiver',
+  getValidPasscodeWaiver: vi.fn(async () => null),
+  mintPasscodeWaiver: vi.fn(async () => ({
+    token: 'waiver-token-alpha',
+    principal: 'owner',
+    expiresAt: Date.now() + 30 * 60 * 1000,
+    engineOrigin: 'http://engine.test',
+  })),
+  clearPasscodeWaiver: vi.fn(async () => undefined),
 }));
 
 import {
@@ -37,6 +50,7 @@ import {
   SPECIAL_EVENT_LOCK,
   STAGE_NOT_ARMED,
 } from './special_events_api';
+import { mintPasscodeWaiver, PASSCODE_WAIVER_HEADER } from './passcode_waiver';
 import { TAKEOVER_PASSCODE_HEADER } from './timelineApi';
 
 const FAKE_PASSCODE = 'fake-code-alpha';
@@ -253,7 +267,7 @@ describe('transport', () => {
   });
 
   it('attaches the passcode to exactly that one request, in the header only', async () => {
-    await armSpecialEvent('baby_reveal', FAKE_PASSCODE);
+    await armSpecialEvent('baby_reveal', { passcode: FAKE_PASSCODE });
     const [url, init] = fetchWithTimeout.mock.calls[0];
     expect(init.headers[TAKEOVER_PASSCODE_HEADER]).toBe(FAKE_PASSCODE);
     expect(init.headers['Content-Type']).toBe('application/json');
@@ -263,10 +277,18 @@ describe('transport', () => {
   });
 
   it('does not leak the passcode into the NEXT request', async () => {
-    await armSpecialEvent('baby_reveal', FAKE_PASSCODE);
+    await armSpecialEvent('baby_reveal', { passcode: FAKE_PASSCODE });
     await armSpecialEvent('baby_reveal');
     const second = fetchWithTimeout.mock.calls[1][1];
     expect(second.headers[TAKEOVER_PASSCODE_HEADER]).toBeUndefined();
+  });
+
+  it('remember30 mints a waiver header instead of sending the raw passcode', async () => {
+    await armSpecialEvent('baby_reveal', { passcode: FAKE_PASSCODE, remember30: true });
+    expect(vi.mocked(mintPasscodeWaiver)).toHaveBeenCalledWith(FAKE_PASSCODE);
+    const init = fetchWithTimeout.mock.calls[0][1];
+    expect(init.headers[TAKEOVER_PASSCODE_HEADER]).toBeUndefined();
+    expect(init.headers[PASSCODE_WAIVER_HEADER]).toBe('waiver-token-alpha');
   });
 
   it('never carries a passcode on the non-takeover verbs', async () => {

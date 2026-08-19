@@ -41,11 +41,11 @@ export function TakeoverPasscodeHost() {
     setError(null);
   }), []);
 
-  const handleSubmit = useCallback((passcode: string) => {
+  const handleSubmit = useCallback((passcode: string, remember30: boolean) => {
     if (!prompt) return;
     setPending(true);
     setError(null);
-    void prompt.submit(passcode).then((retryReason) => {
+    void prompt.submit(passcode, remember30).then((retryReason) => {
       if (retryReason === null) {
         // Flow finished (authorised, or an error the caller surfaces itself).
         setPrompt(null);

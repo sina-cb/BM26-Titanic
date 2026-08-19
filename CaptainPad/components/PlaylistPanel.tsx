@@ -33,6 +33,7 @@ import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 // loud on both platforms AND part of the app UI.
 import { opDialog, opError, opWarn } from '@/utils/op_dialog';
 import { specialEventRefusal } from '@/utils/engine_refusal';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Playlist reconcile debug tracing. The activeEntryId reconcile path (below) is
@@ -1965,7 +1966,13 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
     [playlists, query],
   );
   return (
-  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onClose}
+    supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+  >
     <TouchableOpacity
       activeOpacity={1}
       onPress={onClose}
@@ -2077,7 +2084,13 @@ const AddPatternModal: React.FC<AddPatternModalProps> = ({
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
   return (
-  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onClose}
+    supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+  >
     <TouchableOpacity
       activeOpacity={1}
       onPress={onClose}
@@ -2129,7 +2142,13 @@ const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
   const canAppend = !!playlistName;
   return (
-  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onClose}
+    supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+  >
     <TouchableOpacity
       activeOpacity={1}
       onPress={onClose}
@@ -2211,7 +2230,13 @@ const NewPlaylistNameModal: React.FC<NewPlaylistNameModalProps> = ({
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
   const clean = sanitizeName(name);
   return (
-  <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onCancel}
+    supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+  >
     <TouchableOpacity
       activeOpacity={1}
       onPress={onCancel}
@@ -2284,7 +2309,13 @@ const DuplicatePlaylistNameModal: React.FC<DuplicatePlaylistNameModalProps> = ({
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
   const clean = sanitizeName(name);
   return (
-  <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onCancel}
+    supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+  >
     <TouchableOpacity
       activeOpacity={1}
       onPress={onCancel}

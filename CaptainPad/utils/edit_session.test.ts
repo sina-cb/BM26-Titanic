@@ -40,9 +40,8 @@ describe('performanceExitRefusalMessage', () => {
       ok: false, code: EXIT_KEEP_SAVE_OWNER_ONLY, data: { principal: 'bringup' },
     });
     expect(msg).toContain('captain');
-    // The two exits that DO work for this principal are named explicitly.
-    expect(msg).toContain('KEEP WITHOUT SAVING');
-    expect(msg).toContain('RESTORE PRE-SHOW');
+    // The exit that DOES work for this principal is named explicitly.
+    expect(msg).toContain('DISCARD PERFORMANCE CHANGES');
   });
 
   it('reports the engine lockout window instead of inventing one', () => {
@@ -152,7 +151,7 @@ describe('performanceExitFailureMessage', () => {
     expect(performanceExitFailureMessage({ ok: false, code: 'PERFORMANCE_MODE_NOT_ACTIVE' }))
       .toContain('already off');
     expect(performanceExitFailureMessage({ ok: false, code: 'PERFORMANCE_MODE_SNAPSHOT_MISSING' }))
-      .toContain('KEEP LIVE STATE');
+      .toContain('SAVE CHANGES');
     expect(performanceExitFailureMessage({ ok: false, code: 'TOUCH_CONTROL_LEASE_HELD' }))
       .toContain('Touch Control');
     expect(performanceExitFailureMessage({ ok: false, code: 'SPECIAL_EVENT' }))

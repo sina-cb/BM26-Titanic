@@ -23,6 +23,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, useWindowDimensions } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { usePalette } from '@/hooks/use-theme';
 import { accentWash, useGlobalStyles } from '@/styles/globalStyles';
 import { Radius, Type } from '@/constants/theme';
@@ -277,7 +278,13 @@ export function TransitionStylePicker({
           color: disabled ? C.icon : C.primary,
         }}>▾</Text>
       </TouchableOpacity>
-      <Modal transparent visible={open} animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal
+        transparent
+        visible={open}
+        animationType="fade"
+        onRequestClose={() => setOpen(false)}
+        supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+      >
         <Pressable
           style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
           onPress={() => setOpen(false)}

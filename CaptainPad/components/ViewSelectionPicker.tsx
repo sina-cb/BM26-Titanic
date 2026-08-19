@@ -17,6 +17,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 import { usePalette } from '@/hooks/use-theme';
 import {
@@ -74,7 +75,9 @@ export const ViewSelectionPicker: React.FC<ViewSelectionPickerProps> = ({
   const allActive = isAllActive(current);
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={close}>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={close}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <TouchableOpacity
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
         activeOpacity={1}

@@ -11,6 +11,8 @@
 import { getApiBaseAsync } from './apiBase';
 import { fetchWithTimeout, ApiResult } from './api';
 import { TAKEOVER_PASSCODE_HEADER } from './edit_session';
+import { clearOperatorAuthOnRefusal, operatorAuthHeaders } from './operator_auth';
+import type { OperatorAuthSendInput } from './takeover_passcode';
 import type { ColorPaletteEntry } from './api';
 
 // ── Wire types (the engine /timeline contract, docs/38 §7 + §14) ───────
@@ -724,17 +726,22 @@ export interface TimelineTakeoverBody {
 // because this has been its public home for every caller.
 export { TAKEOVER_PASSCODE_HEADER };
 
-export function postTimelineTakeover(
+export async function postTimelineTakeover(
   body?: TimelineTakeoverBody,
-  passcode?: string,
+  auth?: OperatorAuthSendInput,
 ): Promise<ApiResult<{ operatorLease?: TimelineOperatorLease; zoom?: TimelineZoom | null }>> {
-  return timelineSend(
+  const base = await getApiBaseAsync();
+  const requestUrl = `${base}/timeline/takeover`;
+  const headers = await operatorAuthHeaders(auth || {});
+  const result = await timelineSend<{ operatorLease?: TimelineOperatorLease; zoom?: TimelineZoom | null }>(
     'POST',
     '/timeline/takeover',
     body,
     undefined,
-    passcode ? { [TAKEOVER_PASSCODE_HEADER]: passcode } : undefined,
+    headers,
   );
+  await clearOperatorAuthOnRefusal(headers, result.status, requestUrl);
+  return result;
 }
 
 // ── EVENT ZOOM: resolve + travel (_95 §3.2 / §3.4) ──────────────────────

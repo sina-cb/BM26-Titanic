@@ -396,6 +396,10 @@ export function animate() {
     if (window.showPixelMap2d) window.showPixelMap2d(_headless);
     _headlessLatched = _headless;
   }
+  // Belt on the latch: split_layout and other resize paths re-ask for a visible
+  // canvas every frame. Re-apply the headless veto so a stale 3D hull can never
+  // sit behind the 2D map after layout settles (report 20260815_265).
+  if (_headless) applyCanvasVisibility(renderer, params.lightingProfile, true);
 
   // ─── Gradient Mode (OKLCH perceptual interpolation, LUT-sampled) ───
   if (lightingEnabled && lightingMode === 'gradient' && getProfileDef(params.lightingProfile).mappingEnabled) {

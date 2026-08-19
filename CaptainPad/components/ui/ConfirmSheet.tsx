@@ -4,6 +4,7 @@ import { usePalette } from '@/hooks/use-theme';
 import { Palette, Radius } from '@/constants/theme';
 import { accentFill, useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 
 // ── ConfirmSheet ────────────────────────────────────────────────────────
 // Reusable destructive-action confirmation for the production lighting
@@ -66,7 +67,13 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
   // gets near-black text instead of the old hardcoded white at ~2.5:1.
   const danger = accentFill(C.error);
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onCancel}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <TouchableOpacity
         style={styles.backdrop}
         activeOpacity={1}

@@ -43,6 +43,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Platform, useWindowDimensions } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { shadow } from '@/styles/globalStyles';
@@ -1652,7 +1653,9 @@ const SlotDetailSheet: React.FC<{
   // editor that avoids a drag-fader inside a modal (reliable on RN-web + native).
   const steps = [0, 0.25, 0.5, 0.75, 1];
   return (
-    <Modal transparent animationType="fade" visible={open} onRequestClose={onClose}>
+    <Modal transparent animationType="fade" visible={open} onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 }}>
         <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ alignSelf: 'center', width: '100%', maxWidth: 420 }}>
           {/* Sheet card (2026-07 visual polish): matches the app's card
@@ -2002,7 +2005,9 @@ const SwapSheet: React.FC<{
   // "Empty" and no REMOVE, not a phantom bound effect.
   const isBound = slotIsBound(slot);
   return (
-    <Modal transparent animationType="fade" visible={slotId !== null} onRequestClose={onClose}>
+    <Modal transparent animationType="fade" visible={slotId !== null} onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 }}>
         <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ alignSelf: 'center', width: '100%', maxWidth: 560 }}>
           {/* Sheet card — same visual contract as SlotDetailSheet (16px

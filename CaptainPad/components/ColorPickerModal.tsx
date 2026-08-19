@@ -20,6 +20,7 @@
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Pressable, Modal, ScrollView } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { useSharedParamValues } from '@/hooks/useEngineState';
@@ -367,7 +368,9 @@ export function ColorPickerModal({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={cancel}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={cancel}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       {/* Backdrop: tapping anywhere outside the card cancels (docs/36 §6). */}
       <Pressable
         onPress={() => { if (shouldSwallowBackdrop()) return; cancel(); }}
@@ -513,7 +516,9 @@ export function ColorQueueModal({ visible, presets, onSelect, onClose }: {
 }) {
   const C = usePalette();
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable
         onPress={onClose}
         accessibilityLabel="Close queue picker"

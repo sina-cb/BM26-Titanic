@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, Modal, Platform, StyleSheet, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { opError, opInfo } from '@/utils/op_dialog';
 import { retuneRejectionMessage } from '@/utils/color_autopilot_narration';
 import { accentWash, useGlobalStyles } from '@/styles/globalStyles';
@@ -1936,7 +1937,7 @@ export default function ControlDeckScreen() {
           clear option (color = null). Pure metadata — tints the deck card for
           identification, no render effect. Mirrors the mixer strip's picker.
           Screen-level so it draws above every card. */}
-      <Modal transparent visible={showColorPicker} animationType="fade" onRequestClose={() => setShowColorPicker(false)}>
+      <Modal transparent visible={showColorPicker} animationType="fade" onRequestClose={() => setShowColorPicker(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowColorPicker(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={[globalStyles.panel, styles.modalContent]}>

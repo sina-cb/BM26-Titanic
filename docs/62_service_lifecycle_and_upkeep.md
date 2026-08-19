@@ -5,8 +5,8 @@ IMPLEMENTED** — report `_260`, on Fable's recommended defaults for **D1**
 (sentinel reaps in all profiles) and **D2** (`shell:false` for `node`
 children). **W-B (B1-B3) and W-C (C1-C3) are IMPLEMENTED** — report `_266`, on
 the recommended defaults for **D3** (a flag, not a fourth profile), **D4**
-(`:7175` retired), **D5** (in-place export) and **D6** (warn, never refuse, on
-a stale dist). Operational half in `.agent/ops/stack_lifecycle.md` (sanctioned
+(`:7175` retired), **D5** (in-place export) and **D6** (auto-rebuild on a
+stale/missing dist at static-profile boot). Operational half in `.agent/ops/stack_lifecycle.md` (sanctioned
 stops, the native-pad child, the fingerprint guard, `rebuild-pad`, and the
 per-profile cadence table). Every D1-D6 default is now taken; §5 is history.
 **Operator ruling (verbatim intent):** *"using launcher directly to launch is
@@ -309,17 +309,22 @@ completes, the bundle hash changes, a reload serves the new hash, no stack
 process restarted (PIDs unchanged). With `CI=true` exported in the parent
 shell, the export still succeeds (env deletion proven).
 
-### W-C2 · Prod boot announces a stale dist
+### W-C2 · Prod boot auto-rebuilds a stale or missing static dist
 
-In `validate()` for static mode: compare `dist/index.html` mtime against the
-newest source mtime under `CaptainPad/{app,components,hooks,utils}` (cheap
-walk, `node_modules`/`dist` excluded). If sources are newer, print ONE loud
-warning naming `node launcher.js rebuild-pad` — **warn, never refuse** (D6):
-deliberately launching an older known-good build must stay possible on the
-playa; the announcement makes staleness visible instead of gating on it.
+In `validate()` for static mode: a missing export is **not** a preflight
+failure — startup self-heals. After validation, before any stack process starts
+or ports are claimed, `ensureCaptainPadStaticExport()` compares
+`dist/index.html` mtime against the newest source mtime under
+`CaptainPad/{app,components,hooks,utils}` (cheap walk, `node_modules`/`dist`
+excluded). If the export is missing or sources are newer, the launcher runs the
+**same** `rebuildPad` implementation as `node launcher.js rebuild-pad` (visible
+`[rebuild]` progress), re-checks freshness, and **refuses to boot** if the
+export is still missing or stale. No prompt, no silent fallback, no recursive
+launcher invocation — one rebuild attempt per boot.
 
-**Acceptance:** touch a source file → prod boot prints the warning; run
-`rebuild-pad` → next boot silent.
+**Acceptance:** touch a source file → prod boot rebuilds automatically and
+continues only when fresh; a failed export aborts startup; `dev`/`dev-lite`
+(expo Metro) never trigger a dist rebuild.
 
 ### W-C3 · Cadence and ownership ("keep live at latest", per profile)
 
@@ -352,7 +357,7 @@ guard was bypassed — check who started that Metro".
 | D3 | Native Metro shape: `--with-native-pad` flag on static profiles, or a fourth `prod+native` profile? | **Flag.** It composes with prod defaults (force-claim, priority 150) instead of forking them; the lock records it for `status`. |
 | D4 | Retire the :7175 standing mirror? | **Yes.** Prod :6967 is the same dist through the same server; ephemeral 71xx verification servers stay in-session only. |
 | D5 | `rebuild-pad`: in-place export (brief 404 window) or atomic dist-swap (`dist.new` → rename)? | **In-place.** Expo owns the dist layout; the window is seconds and announced. Revisit only if a mid-show rebuild becomes a real workflow. |
-| D6 | Stale-dist check at prod boot: warn or refuse? | **Warn.** Launching a deliberate older build must remain possible offline. |
+| D6 | Stale-dist check at prod boot: warn or refuse? | **Auto-rebuild, then refuse if still stale.** The launcher runs `rebuild-pad` once before services start; operators never boot unknowingly stale output. |
 
 ## 6. Sizing (for Opus implementation)
 

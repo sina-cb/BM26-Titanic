@@ -29,13 +29,13 @@ vi.mock('@/utils/engineEvents', () => ({
 
 // The two leaf transport modules, stubbed so the REAL special_events_api can be
 // imported (for its refusal copy) without dragging in config.yaml / RN.
+vi.mock('@/utils/api', () => ({
+  fetchWithTimeout: async () => { throw new Error('no request should reach the network here'); },
+}));
 vi.mock('@/utils/apiBase', () => ({
   api_base: 'http://engine.test',
   getApiBase: () => 'http://engine.test',
   getApiBaseAsync: async () => 'http://engine.test',
-}));
-vi.mock('@/utils/api', () => ({
-  fetchWithTimeout: async () => { throw new Error('no request should reach the network here'); },
 }));
 
 const performanceMode = { active: false };
@@ -43,9 +43,11 @@ vi.mock('@/hooks/usePerformanceMode', () => ({
   getPerformanceModeState: () => performanceMode,
 }));
 
+import type { OperatorAuthSendInput } from '@/utils/takeover_passcode';
+
 type Result = { ok: boolean; status?: number; error?: string; code?: string; data?: unknown };
 
-const armSpecialEvent = vi.fn(async (_show: string, _passcode?: string): Promise<Result> => ({ ok: true, status: 200 }));
+const armSpecialEvent = vi.fn(async (_show: string, _auth?: OperatorAuthSendInput): Promise<Result> => ({ ok: true, status: 200 }));
 const fireSpecialEventStage = vi.fn(async (_stageId: string, _choiceId?: string): Promise<Result> => ({ ok: true, status: 200 }));
 const fireSpecialEventQuickEffect = vi.fn(async (_effectId: string): Promise<Result> => ({ ok: true, status: 200 }));
 const dismissSpecialEvent = vi.fn(async (): Promise<Result> => ({ ok: true, status: 200 }));
@@ -63,13 +65,17 @@ const fetchSpecialEventsState = vi.fn(async () => ({
   },
 }));
 
+vi.mock('@/utils/passcode_waiver', () => ({
+  getValidPasscodeWaiver: vi.fn(async () => null),
+}));
+
 vi.mock('@/utils/special_events_api', async () => {
   const actual = await vi.importActual<typeof import('@/utils/special_events_api')>(
     '@/utils/special_events_api',
   );
   return {
     ...actual,
-    armSpecialEvent: (show: string, passcode?: string) => armSpecialEvent(show, passcode),
+    armSpecialEvent: (show: string, auth?: OperatorAuthSendInput) => armSpecialEvent(show, auth),
     fireSpecialEventStage: (s: string, c?: string) => fireSpecialEventStage(s, c),
     fireSpecialEventQuickEffect: (e: string) => fireSpecialEventQuickEffect(e),
     extendSpecialEvent: () => extendSpecialEvent(),
@@ -100,6 +106,10 @@ import {
 const FAKE_GOOD = 'fake-code-alpha';
 const FAKE_BAD = 'fake-code-wrong';
 
+function typedAuth(passcode: string, remember30 = false): OperatorAuthSendInput {
+  return { passcode, remember30 };
+}
+
 function authRefusal(): Result {
   return { ok: false, status: 401, error: 'refused', data: { code: 'TAKEOVER_AUTH_INVALID' } };
 }
@@ -107,11 +117,11 @@ function authRefusal(): Result {
 let prompts: TakeoverPasscodePrompt[] = [];
 let unregister: () => void = () => undefined;
 
-/** Let the gate reach the prompt (one microtask past the send guard). */
-async function settle() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+/** Wait until the gate reaches requestTakeoverPasscode and registers a prompt. */
+async function waitForPrompts(count = 1) {
+  await vi.waitFor(() => {
+    expect(prompts).toHaveLength(count);
+  });
 }
 
 beforeEach(() => {
@@ -146,9 +156,9 @@ describe('ARM outside performance mode', () => {
     // Performance mode flipped on between our state read and the request.
     armSpecialEvent.mockResolvedValueOnce(authRefusal());
     const pending = runArmShow('baby_reveal');
-    await settle();
+    await waitForPrompts();
     expect(prompts).toHaveLength(1);
-    await prompts[0].submit(FAKE_GOOD);
+    await prompts[0].submit(FAKE_GOOD, false);
     expect(await pending).toBe('ok');
   });
 });
@@ -158,31 +168,30 @@ describe('ARM in performance mode — a fresh passcode EVERY time', () => {
 
   it('prompts BEFORE any request reaches the engine', async () => {
     const pending = runArmShow('baby_reveal');
-    await settle();
+    await waitForPrompts();
     expect(prompts).toHaveLength(1);
     expect(armSpecialEvent).not.toHaveBeenCalled();
-    await prompts[0].submit(FAKE_GOOD);
+    await prompts[0].submit(FAKE_GOOD, false);
     expect(await pending).toBe('ok');
-    expect(armSpecialEvent).toHaveBeenCalledWith('baby_reveal', FAKE_GOOD);
+    expect(armSpecialEvent).toHaveBeenCalledWith('baby_reveal', typedAuth(FAKE_GOOD));
   });
 
   it('prompts again on the very next ARM — nothing is remembered', async () => {
     const first = runArmShow('baby_reveal');
-    await settle();
-    await prompts[0].submit(FAKE_GOOD);
+    await waitForPrompts();
+    await prompts[0].submit(FAKE_GOOD, false);
     await first;
 
     const second = runArmShow('baby_reveal');
-    await settle();
-    expect(prompts).toHaveLength(2);
-    await prompts[1].submit(FAKE_GOOD);
+    await waitForPrompts(2);
+    await prompts[1].submit(FAKE_GOOD, false);
     await second;
-    expect(armSpecialEvent.mock.calls.map((c) => c[1])).toEqual([FAKE_GOOD, FAKE_GOOD]);
+    expect(armSpecialEvent.mock.calls.map((c) => c[1])).toEqual([typedAuth(FAKE_GOOD), typedAuth(FAKE_GOOD)]);
   });
 
   it('treats CANCEL as a non-event: no request, no error, no alert', async () => {
     const pending = runArmShow('baby_reveal');
-    await settle();
+    await waitForPrompts();
     prompts[0].cancel();
     expect(await pending).toBe('cancelled');
     expect(armSpecialEvent).not.toHaveBeenCalled();
@@ -192,11 +201,11 @@ describe('ARM in performance mode — a fresh passcode EVERY time', () => {
   it('retries in place on a rejected passcode — one prompt, two attempts', async () => {
     armSpecialEvent.mockResolvedValueOnce(authRefusal());
     const pending = runArmShow('baby_reveal');
-    await settle();
-    const reason = await prompts[0].submit(FAKE_BAD);
+    await waitForPrompts();
+    const reason = await prompts[0].submit(FAKE_BAD, false);
     expect(reason).toContain('Passcode rejected');
     expect(reason).not.toContain(FAKE_BAD);
-    await prompts[0].submit(FAKE_GOOD);
+    await prompts[0].submit(FAKE_GOOD, false);
     expect(await pending).toBe('ok');
     expect(prompts).toHaveLength(1);
     expect(armSpecialEvent).toHaveBeenCalledTimes(2);
