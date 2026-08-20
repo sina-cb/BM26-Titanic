@@ -1,18 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { setDeckChannelControl, sendControl } from '@/utils/api';
+import { opError } from '@/utils/op_dialog';
+import { engineEvents } from '@/utils/engineEvents';
 import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/useEngineState';
 import { ModulatedSlider, useEntryModulations, useModulationState, prettySliderName } from '@/components/Modulation';
 import { useEntryMidiMappings } from '@/components/MidiMap';
-import { engineEvents } from '@/utils/engineEvents';
-import { isDeckSaveConfirmation } from '@/components/deck_saved_logic';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import { knobBadgeFor } from '@/utils/midi/knob_badge';
-import { KnobPill } from '@/components/ui/knob_pill';
+import { ParamRow, ParamValueText } from '@/components/ui/param_row';
+import { MatchedChip, NotKnobMappedChip } from '@/components/ui/param_chips';
+import { paramDisplayName } from '@/components/param_row_layout';
 
 export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant?: 'deck' | 'mixer', channelId?: string, exports?: any[], wsRef?: unknown }) => {
   const C = usePalette();
@@ -98,7 +100,16 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   // much an operator tuned a slider. See `rejectIfWrongRole` in
   // api_server.js.
   const writeLocal = (controlId: number, v0: number, v1?: number, v2?: number) => {
-    setDeckChannelControl(controlId, v0, v1, v2);
+    if (!engineEvents.send({ type: 'setControl', id: controlId, v0, v1, v2 })) {
+      void setDeckChannelControl(controlId, v0, v1, v2).then((result) => {
+        if (!result.ok) {
+          opError(
+            'Parameters not saved',
+            result.error || 'The engine rejected the deck parameter update.',
+          );
+        }
+      });
+    }
   };
 
   if (exps.length === 0) return (
@@ -115,8 +126,8 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           operator request — no duplicate speed/hue UI.) */}
       {/* Saved indicator moved to the deck channel card header (next
           to the ◎ ALL pill) in `app/(tabs)/index.tsx` so it never
-          reflows the slider stack when it appears/disappears. The
-          `DeckSavedFlash` component is exported from this file. */}
+          reflows the slider stack when it appears/disappears. Deck and Mixer
+          now share `ChannelSaveFeedback`. */}
       {sliderRows.map((row) => {
         const e = row.export as any;
         const badge = knobBadgeFor(row);
@@ -131,63 +142,64 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
         // is NOT in this branch — those rows stay fully TOUCH-editable below,
         // they just render without a KNOB badge.
         if (badge.excludedReason === 'matched' || badge.excludedReason === 'no-v0') {
-          const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
           return (
-            <View key={`slider-${e.id}`} style={{ opacity: 0.5 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{niceName}</Text>
-                  {badge.excludedReason === 'matched'
-                    ? <MatchedBadge cpcLabel={e.cpcLabel} />
-                    : <NotKnobMappedBadge />}
-                </View>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0.5).toFixed(2)}</Text>
-              </View>
+            <ParamRow
+              key={`slider-${e.id}`}
+              dimmed
+              // No knob number by construction — an excluded row consumes no
+              // physical encoder, and the absent chip is how the operator sees
+              // that at a glance.
+              name={paramDisplayName(e.name)}
+              status={badge.excludedReason === 'matched'
+                ? <MatchedBadge cpcLabel={e.cpcLabel} />
+                : <NotKnobMappedBadge />}
+              trailing={<ParamValueText>{(e.v0 ?? 0.5).toFixed(2)}</ParamValueText>}
+            >
               <HorizontalFader
                 value={e.v0 ?? 0.5}
                 onChange={() => {}}
                 trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12, justifyContent: 'center' }}
                 fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.secondary, borderRadius: 12 }}
               />
-            </View>
+            </ParamRow>
           );
         }
-        // Knob-mapped (or knob-less overflow): the ModulatedSlider as before,
-        // with a "KNOB N" badge naming the physical encoder when one drives it.
+        // Knob-mapped (or knob-less overflow): the ModulatedSlider, whose own
+        // header now carries the "KNOB N" chip inline instead of the pill
+        // sitting on a line of its own above the slider.
         return (
-          <View key={`slider-${e.id}`}>
-            {badge.knobNumber !== null
-              ? <KnobPill knobNumber={badge.knobNumber} style={{ alignSelf: 'flex-start', marginBottom: 3 }} />
-              : null}
-            <ModulatedSlider
-              exportItem={{ id: e.id, name: e.name, v0: e.v0 }}
-              onChangeBase={(val: number) => writeLocal(e.id, val)}
-              playlistName={deckPlaylistName}
-              entryId={deckEntryId}
-              mapping={mappingByTarget[e.name] ?? null}
-              live={modulationLive[e.name] ?? null}
-              onChanged={refreshMappings}
-              midiMapping={midiByTarget[e.name] ?? null}
-              onMidiChanged={refreshMidi}
-            />
-          </View>
+          <ModulatedSlider
+            key={`slider-${e.id}`}
+            // `audioSuggestion` is additive engine metadata (the pattern's
+            // AUDIO_MODULATION_V1 recommendation for this param); forwarding
+            // it lets the row show the ♪ chip.
+            exportItem={{ id: e.id, name: e.name, v0: e.v0, audioSuggestion: e.audioSuggestion }}
+            knobNumber={badge.knobNumber}
+            onChangeBase={(val: number) => writeLocal(e.id, val)}
+            playlistName={deckPlaylistName}
+            entryId={deckEntryId}
+            mapping={mappingByTarget[e.name] ?? null}
+            live={modulationLive[e.name] ?? null}
+            onChanged={refreshMappings}
+            midiMapping={midiByTarget[e.name] ?? null}
+            onMidiChanged={refreshMidi}
+          />
         );
       })}
       {colorPickers.map((e: any) => {
         const matched = !!e.cpcOwned;
         return (
-          <View key={`color-${e.id}`} style={{ opacity: matched ? 0.5 : 1 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>HUE</Text>
-                {matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
-              </View>
-              {/* QA round8 #3: HUE is an angle — show it in degrees ("°")
-                  to match the deck HUE row + ColorPickerModal (Math.round(v*360)°)
-                  instead of a bare normalized 0.00–1.00, which reads as a
-                  cryptic fraction next to the rest of the app's "°" hues. */}
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{Math.round((e.v0 ?? 0) * 360)}°</Text>
-            </View>
+          <ParamRow
+            key={`color-${e.id}`}
+            dimmed={matched}
+            name="HUE"
+            status={matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
+            // QA round8 #3: HUE is an angle — show it in degrees ("°") to match
+            // the deck HUE row + ColorPickerModal (Math.round(v*360)°) instead
+            // of a bare normalized 0.00–1.00, which reads as a cryptic fraction
+            // next to the rest of the app's "°" hues.
+            trailing={<ParamValueText>{`${Math.round((e.v0 ?? 0) * 360)}°`}</ParamValueText>}
+          >
             <HorizontalFader
               value={e.v0 ?? 0}
               onChange={matched ? (() => {}) : ((val: number) => writeLocal(e.id, val, e.v1, e.v2))}
@@ -195,7 +207,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
               fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 4 }}
               thumbStyle={{ position: 'absolute', width: 14, height: 18, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -7 }] }}
             />
-          </View>
+          </ParamRow>
         );
       })}
       {/* Only render the toggle/trigger strip when there's something to
@@ -241,103 +253,12 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 // The "KNOB N" pill itself is the SHARED components/ui/knob_pill.tsx (one
 // paint, app-wide) — this file only decides WHICH rows get one (knobBadgeFor).
 
-function NotKnobMappedBadge() {
-  const C = usePalette();
-  return (
-    <View style={{
-      paddingHorizontal: 6, paddingVertical: 1,
-      borderRadius: 4, backgroundColor: C.surfaceContainerHigh,
-      borderWidth: 1, borderColor: C.ghostBorder,
-    }}>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
-        color: C.secondary, letterSpacing: 0.5,
-      }} numberOfLines={1}>—</Text>
-    </View>
-  );
-}
-
-function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
-  const C = usePalette();
-  return (
-    <View style={{
-      paddingHorizontal: 6, paddingVertical: 1,
-      borderRadius: 4, backgroundColor: C.surfaceContainerHigh,
-      borderWidth: 1, borderColor: C.ghostBorder,
-    }}>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
-        color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.5,
-      }} numberOfLines={1}>
-        MATCHED{cpcLabel ? ` · ${cpcLabel}` : ''}
-      </Text>
-    </View>
-  );
-}
-
-// ── Saved flash (deck-only) ─────────────────────────────────────────
-//
-// Tiny ✓ SAVED pill that briefly appears whenever the deck's params are
-// PERSISTED. Two engine events mean that (see isDeckSaveConfirmation):
-//   - `deckParamsSaved` — a deck LOCAL-PARAM write hit deck_state.yaml. Emitted
-//     by the deck control-write paths ONLY when auto-save is ON, so with
-//     auto-save OFF the flash honestly never fires (nothing was saved). This is
-//     the signal for the operator's day-to-day "I moved a slider" confirmation
-//     (the debounced auto-capture that used to drive it was retired 2026-07-07;
-//     the honest persistence signal is now the deck save itself).
-//   - `playlistEntryCaptured` — an explicit / on-switch capture wrote the deck's
-//     params into the active playlist entry's defaults.
-// Mirrors the "✓ SAVED" badge in PlaylistPanel so operators get the same signal
-// no matter which pane they were watching.
-
-export function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (!deckChannelId) return;
-    return engineEvents.subscribe((m) => {
-      if (isDeckSaveConfirmation(m, deckChannelId)) {
-        setSavedAt(Date.now());
-      }
-    });
-  }, [deckChannelId]);
-  useEffect(() => {
-    if (savedAt === null) return;
-    const t = setTimeout(() => setSavedAt(null), 1400);
-    return () => clearTimeout(t);
-  }, [savedAt]);
-  // Always render the same outer shape so siblings (EntryLabelEditor,
-  // ◎ ALL pill) never re-flow when the flash toggles. The inner pill
-  // is hidden via opacity rather than conditional render — same DOM,
-  // same measured width/height regardless of state.
-  const visible = savedAt !== null;
-  return (
-    <View
-      style={{
-        minWidth: 70,
-        minHeight: 22,
-        justifyContent: 'center',
-        alignItems: 'flex-start',
-      }}
-    >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 4,
-          paddingHorizontal: 8,
-          paddingVertical: 2,
-          borderRadius: 4,
-          backgroundColor: 'rgba(0,168,107,0.15)',
-          opacity: visible ? 1 : 0,
-        }}
-      >
-        <Text style={{ color: '#00a86b', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6 }}>
-          ✓ SAVED
-        </Text>
-      </View>
-    </View>
-  );
-}
+// The "—" and "MATCHED · <CPC>" chips are the SHARED ones from the parameter-row
+// chip family (components/ui/param_chips.tsx) — the mixer strip renders exactly
+// the same pair, so the two surfaces cannot drift. These aliases keep the local
+// call sites reading as they did.
+const NotKnobMappedBadge = NotKnobMappedChip;
+const MatchedBadge = MatchedChip;
 
 function MatchedButton({ name, cpcLabel }: { name: string; cpcLabel?: string }) {
   const C = usePalette();

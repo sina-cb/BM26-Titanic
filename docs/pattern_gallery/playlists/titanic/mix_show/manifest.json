@@ -1,0 +1,286 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "mix_show",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/mix_show.yaml",
+  "playlistDigest": "1df2cf5a92bdb11d216057b5f1e77d7e99583008f2345e07cced61b71b9bf2d7",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "13_sparkle",
+      "title": "Sparkle",
+      "goal": "An elegant Celestial Chandelier: fixed constellation points ignite, form diamond cores, and decay over velvet-black negative space.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "total elegance budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "total elegance budget"
+          }
+        },
+        {
+          "name": "sliderStarCount",
+          "label": "Star Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "build reveals more stars",
+          "audio": {
+            "slider": "sliderStarCount",
+            "signal": "micFlux",
+            "min": 0.12,
+            "max": 0.86,
+            "curve": "ease",
+            "note": "build reveals more stars"
+          }
+        },
+        {
+          "name": "sliderBrilliance",
+          "label": "Brilliance",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "high-frequency diamonds",
+          "audio": {
+            "slider": "sliderBrilliance",
+            "signal": "micHigh",
+            "min": 0.16,
+            "max": 0.76,
+            "curve": "linear",
+            "note": "high-frequency diamonds"
+          }
+        },
+        {
+          "name": "sliderTwinkleFocus",
+          "label": "Twinkle Focus",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderAfterglow",
+          "label": "Afterglow",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Afterglow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarChorus",
+          "label": "Star Chorus",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Star Chorus character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurst",
+          "label": "Burst",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "constellation burst",
+          "audio": {
+            "slider": "sliderBurst",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.78,
+            "curve": "pow2",
+            "note": "constellation burst"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvStars",
+          "label": "Uv Stars",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderStarCount": 0.5,
+        "sliderBrilliance": 0.7,
+        "sliderTwinkleFocus": 0.5,
+        "sliderAfterglow": 0.5,
+        "sliderStarChorus": 0.55,
+        "sliderBurst": 0,
+        "sliderJewelryWhite": 0.5,
+        "sliderUvStars": 0.3
+      },
+      "gif": "001_13_sparkle.gif",
+      "video": "001_13_sparkle.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e793ac29e726d423dcab8a2c879d871aa0a41e277be2e112cc38201535246d42"
+    },
+    {
+      "index": 1,
+      "pattern": "13_sparkle",
+      "title": "Sparkle",
+      "goal": "An elegant Celestial Chandelier: fixed constellation points ignite, form diamond cores, and decay over velvet-black negative space.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "total elegance budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "total elegance budget"
+          }
+        },
+        {
+          "name": "sliderStarCount",
+          "label": "Star Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "build reveals more stars",
+          "audio": {
+            "slider": "sliderStarCount",
+            "signal": "micFlux",
+            "min": 0.12,
+            "max": 0.86,
+            "curve": "ease",
+            "note": "build reveals more stars"
+          }
+        },
+        {
+          "name": "sliderBrilliance",
+          "label": "Brilliance",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "high-frequency diamonds",
+          "audio": {
+            "slider": "sliderBrilliance",
+            "signal": "micHigh",
+            "min": 0.16,
+            "max": 0.76,
+            "curve": "linear",
+            "note": "high-frequency diamonds"
+          }
+        },
+        {
+          "name": "sliderTwinkleFocus",
+          "label": "Twinkle Focus",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderAfterglow",
+          "label": "Afterglow",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Afterglow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarChorus",
+          "label": "Star Chorus",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Star Chorus character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurst",
+          "label": "Burst",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "constellation burst",
+          "audio": {
+            "slider": "sliderBurst",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.78,
+            "curve": "pow2",
+            "note": "constellation burst"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvStars",
+          "label": "Uv Stars",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderStarCount": 0.5,
+        "sliderBrilliance": 0.7,
+        "sliderTwinkleFocus": 0.5,
+        "sliderAfterglow": 0.5,
+        "sliderStarChorus": 0.55,
+        "sliderBurst": 0,
+        "sliderJewelryWhite": 0.5,
+        "sliderUvStars": 0.3
+      },
+      "gif": "002_13_sparkle.gif",
+      "video": "002_13_sparkle.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e793ac29e726d423dcab8a2c879d871aa0a41e277be2e112cc38201535246d42"
+    }
+  ]
+}

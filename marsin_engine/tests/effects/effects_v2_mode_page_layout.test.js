@@ -242,6 +242,10 @@ test('the API bank-switch flow (swap + requestFullDeploy) fires exactly one page
   const { hook, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
   });
   const mgr = mkMgr({ onLayoutChanged: (evt) => { hook(evt); } });
@@ -525,6 +529,10 @@ test('deploy hook ENABLED deploys the pinned single-page CLI contract and report
   const { hook, status, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
   });
   assert.equal(status.enabled, true);
@@ -554,6 +562,10 @@ test('deploy is a SINGLE page-0 flash even for a multi-page change (own-page ret
   const { hook, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
   });
   // A whole-config replace touching pages 0 and 3 — only page 0 reaches COM12.
@@ -571,6 +583,10 @@ test('DEBOUNCE: a burst of page-0 edits coalesces into ONE deploy', async () => 
   const { hook, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
     setTimeoutFn: timer.setTimeoutFn,
     clearTimeoutFn: timer.clearTimeoutFn,
@@ -592,6 +608,10 @@ test('DEBOUNCE: edits spanning pages 0-2 during the window collapse to ONE page-
   const { hook, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
     setTimeoutFn: timer.setTimeoutFn,
     clearTimeoutFn: timer.clearTimeoutFn,
@@ -628,6 +648,10 @@ test('BUSY-GUARD: overlapping changes never open COM12 twice — deploys seriali
   const { hook, flush, status } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: gatedSpawn,
     setTimeoutFn: timer.setTimeoutFn,
     clearTimeoutFn: timer.clearTimeoutFn,
@@ -669,6 +693,10 @@ test('deploy hook fails LOUDLY on a non-zero CLI exit (no silent retry)', async 
   const { hook, status, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls, { code: 2, stderr: 'port busy' }),
   });
   await hook(layoutEvt([0], 1));
@@ -687,6 +715,10 @@ test('deploy hook CLAMPS to page 0 — pages 1-3 are dropped, never flashed', as
   const { hook, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
   });
   // A whole-config replace marks ALL pages [0,1,2,3]; only page 0 reaches COM12.
@@ -704,6 +736,10 @@ test('a layout change confined to pages 1-3 flashes NOTHING (no-visible-page)', 
   const { hook, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls),
   });
   const res = await hook(layoutEvt([2], 1)); // an edit on invisible page 2
@@ -719,6 +755,10 @@ test('a FAILED page-0 deploy is RETAINED in pendingPages and RETRIED on the next
   const { hook, status, flush } = createLayoutDeployHook({
     stateDir: dir,
     engineConfig: { vsn1: { deployLayout: true } },
+    // Attach probe pinned ATTACHED: these cases are about the deploy contract,
+    // not about presence. Injecting it keeps the probe out of `calls` (and out
+    // of any real process) so the spawn assertions below count deploys only.
+    probeFn: async () => 'attached',
     spawnFn: mkFakeSpawn(calls, { code: 2, stderr: 'LCD INIT over budget' }),
   });
   await hook(layoutEvt([0], 1));

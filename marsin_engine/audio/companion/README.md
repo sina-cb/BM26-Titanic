@@ -32,18 +32,85 @@ audio in → [ raw source ] → [ type-aware op chain ] → [ osc_out tap ]
 
 ## Quick start
 
+### Safe isolated test bench
+
+This command is the microphone-locked, loopback-only setup for synthetic and
+digital-file analysis. Keep the engine stopped: its production config can bind
+show OSC/controller endpoints even when its API port is overridden.
+
+```powershell
+node audio/companion/companion_server.js --model test_bench --host 127.0.0.1 --port 31666 --source test --no-mic --osc-port 31601 --engine-port 31668 --datasets "C:\path\to\corpus"
+```
+
+Before trusting the session, verify `/signal_snapshot` reports `mode: "test"`,
+`micDisabled: true`, `engineLink.connected: false`, OSC target
+`127.0.0.1:31601`, and engine target `127.0.0.1:31668`. The `--no-mic`
+interlock rejects UI and engine-directed microphone switches and device
+enumeration. File replay feeds PCM digitally into the analyzer and starts with
+speaker monitoring muted (and re-mutes on every source switch — monitoring is
+armed per load, never inherited).
+
+**`--no-mic` is ENFORCED, not conventional.** Refusing to open a capture device
+is only half of isolation: a companion still POSTs its design manifest to the
+engine, PATCHes that engine's live audio config, and streams OSC at the
+configured target — so an un-isolated `--no-mic` run reconfigures the *show*
+engine. Four boot-time interlocks now make that impossible. All four run
+before any socket is created; failing any one of them refuses the boot.
+
+- **`--no-mic` requires `--source test|file`.** Without it the boot source
+  comes from `config.yaml` `companion.source` (`mic` on the rig) and the
+  process died on an unhandled rejection *after* binding its servers.
+- **`--no-mic` requires BOTH `--osc-port` and `--engine-port` on the command
+  line.** Loopback is *not* isolation: `config.yaml` points the engine endpoint
+  at `127.0.0.1:6968`, which is the **live production engine**. So a
+  `--no-mic --source test` run with no port flags would pass the loopback check
+  below and still push its manifest and config PATCHes into the running show.
+  Both ports must therefore be named explicitly, every time — nothing is
+  defaulted (a guessed port is a fallback). Use the reserved bench ports
+  `--osc-port 31601 --engine-port 31668`; omitting either is a hard refusal
+  that names the missing flag.
+- **Explicit ports must differ from the configured production endpoints.**
+  Naming `--engine-port 6968` explicitly is still the live production engine,
+  and naming the configured production OSC port is still the show signal bus.
+  `--no-mic` compares both effective outbound targets to the configured targets
+  and refuses matching endpoints before it creates any socket.
+- **`--no-mic` requires loopback outbound targets.** Both the effective OSC
+  target host and the effective engine-endpoint host must be loopback. Kept as
+  defense in depth: the port flags above already pin both resolvers to
+  `127.0.0.1`, so this check guards against a future resolver branch that
+  honours a configured host. **Nothing is silently rewritten** — a non-loopback
+  target is a hard refusal naming the flag to pass. A configured loopback show
+  endpoint is still rejected by the production-endpoint interlock above.
+
+### Normal standalone use
+
 ```bash
 cd marsin_engine
-node audio/companion/companion_server.js          # → http://localhost:6966
+node audio/companion/companion_server.js --model <scene>
 #   --port 6974                                    # serve the UI on another port
+#   --host 0.0.0.0                                 # expose on the LAN (default: loopback)
 #   --datasets <dir>                               # root for the File-source browser
 ```
 
 Open **<http://localhost:6966>** in a browser.
 
-- **No engine required for analysis.** The Companion analyzes independently;
-  with no engine running it boots on the synthetic test source and you can
-  design + preview chains offline.
+- **Binds `127.0.0.1` by default.** The WS surface retunes the *live show*
+  (derived tuning, gates, source, OSC target) with no authentication, so an
+  open bind on every interface is not something to inherit by accident — on
+  playa that interface list includes a guest network. Exposing it is an
+  explicit act: **`--host 0.0.0.0`**. `launcher.js` (the production boot path)
+  passes exactly that, so the show rig is reachable from the iPad/laptop as
+  before; only ad-hoc `node companion_server.js` runs changed.
+- **The engine must boot FIRST on a scene's first run.** The Companion resolves
+  its effective config from `config.yaml` **plus**
+  `states/<scene>/audio_state.yaml`, and that state file is **written by the
+  engine**. A brand-new scene has no such file, so the Companion refuses to
+  boot (`scene audio config read failed …`) — start the engine once for that
+  scene, let it write the state file, then start the Companion. The launcher
+  already orders it this way (engine → companions).
+- **No engine required for analysis** *(after that first boot)*. The Companion
+  analyzes independently; with no engine running it boots on the synthetic test
+  source and you can design + preview chains offline.
 - **For the OSC output + manifest, run the engine first** (`node engine.js
   --model <scene> …` in `marsin_engine/`). Then the Companion's `osc_out` taps
   reach the engine CPC and CaptainPad auto-shows the signals.
@@ -107,12 +174,29 @@ build contract
 
 | Surface | Where | Notes |
 |---|---|---|
-| Companion UI + WebSocket | `http://localhost:6966`, `ws://…/ws` | `--port` overrides; serves `ui/` |
+| Companion UI + WebSocket | `http://localhost:6966`, `ws://…/ws` | `--port` overrides; serves `ui/`; binds **loopback** unless `--host` says otherwise (launcher passes `--host 0.0.0.0`) |
 | OSC out (signals → engine) | UDP → `127.0.0.1:10000` | engine's `osc.port`; from `config.companion.osc`, else `osc.port`, loopback |
 | Manifest POST (→ engine API) | `POST http://<engine>/audio/signals/manifest` | engine API endpoint, default `127.0.0.1:6968` |
 | Engine config link (→ engine API) | `GET`/`PATCH /audio/config`, `ws://<engine>/ws/control` | shared-tuning two-way sync |
 | `GET /catalog` | Companion HTTP | ops, raw sources, signals, views, OSC target |
 | `GET /browse`, `GET /file` | Companion HTTP | File-source directory browse + ranged audio serve |
+| `GET /signal_snapshot` | Companion HTTP | read-only: mode/targets, effective audio-analysis config, every live-policy signal, `bpmOutput` (published vs raw BPM) |
+
+`/signal_snapshot` separates **registration**, **production**, and
+**transport**, because the three used to be conflated. The row set comes from
+the registry's static `live` descriptor flag — that only proves a key *exists*.
+`writes` / `lastWriteHop` count both real ParamCenter writes and direct designed
+chain production against the top-level `analyzerHops` clock. The `producer`
+object keeps those counts separate (`cpcWrites`, `designedWrites`, `kinds`), so
+a designed `micLow` output is not falsely reported dead merely because it goes
+straight from its post-processing chain to OSC. `transport` reports the actual
+address, packet count, last value, and decaying send rate:
+
+- `writes: 0` — **nothing has ever written this key** in this process.
+- `analyzerHops - lastWriteHop` growing — its producer has gone quiet.
+- `registered: false` — the key is not in this process's CPC at all (`value`
+  is then `null`; an absent key is reported as absent, never as `0`).
+- `transport.count: 0` — the producer has not put a packet on that OSC path.
 
 ## Config
 
@@ -128,12 +212,67 @@ build contract
   the boot source (`companion.source`), and the mic device
   (`companion.device` override → else `audio.capture.device`).
 - **Shared tuning via `EngineConfigLink`** (`engine_config_link.js`) — input
-  gain, source smoothing, and capture device are kept in sync with the engine
-  as the single source of truth. The Companion subscribes to the engine's
+  gain, source smoothing, capture device, and the operator-facing derived-signal
+  detector settings are kept in sync with the engine as the single source of
+  truth. The Companion subscribes to the engine's
   `audioConfig` broadcasts and writes its own UI changes back via
   `PATCH /audio/config`, so a change in CaptainPad, the engine, or this UI
   reflects everywhere. Analysis stays independent and degrades gracefully when
   the engine is down (applied locally, surfaced loudly as local-only).
+- **The ENGINE is the sole writer of `states/<scene>/audio_state.yaml`.** The
+  Companion applies a derived-tuning edit to its live modules and writes it
+  **through** to the engine; it never writes that file itself. It used to, and
+  so did the engine on the very PATCH the same edit triggered — two
+  uncoordinated `load → merge → save` cycles on one file, i.e. a lost-update
+  race decided by whoever read first. **Engine offline:** the edit still
+  applies locally (analysis never blocks), the UI says so, and the edit is
+  **parked and replayed** to the engine on reconnect. A definitive rejection
+  with readable authoritative engine config snaps the value back and flashes
+  the exact keys that reverted. A transport failure or unreadable engine truth
+  keeps the edit pending for reconnect; until the engine has actually ruled, a
+  pending group is locally authoritative and reconciliation will not overwrite
+  it.
+  Same-group edits are serialized; while one engine PATCH is in flight, newer
+  complete-group snapshots coalesce so the last operator edit cannot be
+  persisted first and then overwritten by a slower, older response.
+- **Only live-patched `derivedSignals` groups are persisted.** The scene state
+  no longer carries a full copy of the derived tree. A group the operator has
+  not touched stays owned by `config.yaml` and follows its retunes; a group they
+  have touched is persisted with its live-tunable fields only. **CaptainPad's
+  "Reset to defaults" drops every persisted `derivedSignals` group**, so
+  `config.yaml` wins again for all of them (mic selection and the `enabled`
+  flag survive the reset).
+- **Published-BPM slew** (`audio.bpmTracker.outputSlewEnabled` /
+  `outputSlewBpmPerSec`) — the BPM sent to the engine WALKS to a new tempo at
+  the configured BPM/s instead of stepping to it, so a re-lock or a track
+  change can't glitch the lights. The tempo detector itself is untouched; the
+  exact estimate stays visible as `bpmOutput.raw` in `/signal_snapshot`. The
+  **BPM SLEW** control on the DERIVED TUNE page writes through the same
+  `PATCH /audio/config` path as the gains; an out-of-range rate is rejected,
+  never clamped. Every other `bpmTracker` key is config-only (restart).
+
+## Known gaps (documented, not fixed)
+
+Recorded here so the UI is not read as claiming more than it does:
+
+- **The OSC-OUT per-signal mute checkbox is INERT.** The `setOscSend` handler
+  still records + persists the checkbox into `design.osc.disabled`, but
+  emission ignores it: `OSC_SEND_FILTER_ENABLED` is `false` (operator request
+  2026-06-30), so **every** signal is sent regardless of its checkbox. Ticking
+  a box changes nothing on the wire today. Follow-up: Notion *"Fix OSC send
+  filter (per-signal mute)"*.
+- **Events look different in the UI than on the wire.** Analyzer event
+  producers emit a one-hop 0/1 pulse; the UI/frame shows that raw pulse, while
+  OSC carries the `event_transport.js` representation — a ~150 ms decaying
+  **envelope** on the event key plus a monotonic `…Seq` integer force-sent on
+  the rising edge (so an event can't vanish between throttled send frames).
+  So a value read in the Companion UI will not match the value the engine's
+  ParamCenter holds for the same key. This is deliberate; the divergence is
+  documented rather than hidden.
+- **Stale `audioVocalsHot` entries** exist in some `states/*/globals_state.yaml`
+  files from an earlier signal set. They are left alone on purpose — a running
+  production engine may hold those files open, and rewriting them from a test
+  branch is the kind of side effect the HIL guard exists to prevent.
 
 ## Testing
 

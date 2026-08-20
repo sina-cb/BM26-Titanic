@@ -86,6 +86,7 @@ parLights:
       rotX: 0
       rotY: 0
       rotZ: 0
+      haloScale: 1
     - group: LeftSmokeStack
       name: LeftSmokeStack 1
       fixtureType: UkingPar
@@ -509,6 +510,8 @@ ledStrands:
       sectionId: 1
       fixtureId: 1
       viewMask: 0
+      haloScale: 1
+      viewMaskHi: 0
     - name: Right
       startX: -3
       startY: 5
@@ -523,6 +526,8 @@ ledStrands:
       sectionId: 2
       fixtureId: 2
       viewMask: 0
+      haloScale: 1
+      viewMaskHi: 0
 traces:
   - name: LeftSmokeStack
     shape: circle
@@ -648,109 +653,3 @@ traces:
     fixtureRotOffY: 0
     fixtureRotOffZ: 0
     locked: false
-pixelMap2d:
-  fixtures:
-    LeftSmokeStack 1:
-      x: 742
-      'y': 107
-      rot: 0
-    LeftSmokeStack 2:
-      x: 805.5
-      'y': 133.5
-      rot: 0
-    LeftSmokeStack 3:
-      x: 832
-      'y': 197
-      rot: 0
-    LeftSmokeStack 4:
-      x: 805.5
-      'y': 260.5
-      rot: 0
-    LeftSmokeStack 5:
-      x: 742
-      'y': 287
-      rot: 0
-    LeftSmokeStack 6:
-      x: 678.5
-      'y': 260.5
-      rot: 0
-    LeftSmokeStack 7:
-      x: 652
-      'y': 197
-      rot: 0
-    LeftSmokeStack 8:
-      x: 678.5
-      'y': 133.5
-      rot: 0
-    RightSmokeStack 1:
-      x: 158
-      'y': 107
-      rot: 0
-    RightSmokeStack 2:
-      x: 221.5
-      'y': 133.5
-      rot: 0
-    RightSmokeStack 3:
-      x: 168
-      'y': 256
-      rot: 0
-    RightSmokeStack 4:
-      x: 144
-      'y': 272
-      rot: 0
-    RightSmokeStack 5:
-      x: 120
-      'y': 272
-      rot: 0
-    RightSmokeStack 6:
-      x: 94.5
-      'y': 260.5
-      rot: 0
-    RightSmokeStack 7:
-      x: 80
-      'y': 240
-      rot: 0
-    RightSmokeStack 8:
-      x: 94.5
-      'y': 133.5
-      rot: 0
-    Line 3 1:
-      x: 499.5
-      'y': 404
-      rot: 180
-    Line 3 2:
-      x: 323
-      'y': 415
-      rot: 180
-    Line 3 3:
-      x: 323
-      'y': 592
-      rot: 180
-    Front 1:
-      x: 448
-      'y': 128
-      rot: -180
-    Front 2:
-      x: 448
-      'y': 64
-      rot: -180
-    FrontTowers 1:
-      x: 305
-      'y': 343.5
-      rot: -90
-    FrontTowers 2:
-      x: 410
-      'y': 377.5
-      rot: -90
-    FrontTowers 3:
-      x: 478.5
-      'y': 344.5
-      rot: -90
-    FrontTowers 4:
-      x: 515
-      'y': 281.5
-      rot: -90
-    Left:
-      x: 272
-      'y': 376
-      rot: -150

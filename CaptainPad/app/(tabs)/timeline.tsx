@@ -13,12 +13,27 @@
  *      markers by kind). Live (GET /overview) until the operator edits, then
  *      a debounced preview of the DRAFT (POST /overview) so changes are seen
  *      across all days before saving.
- *   C. Day editor / maker — tap a day → vertical timeline; add/edit/delete
- *      cues via the themed CueEditorSheet (segmented/stepper/dropdown — no
- *      keyboard walls). Validation 400s surface inline, loudly.
+ *   C. DAY level (`DayView`) — tap a day to ZOOM IN: a full-screen day with
+ *      phase bands, the resolved "what actually plays" ribbon, the events, and
+ *      the same add/edit/delete via the themed CueEditorSheet (segmented/
+ *      stepper/dropdown — no keyboard walls). Validation 400s surface inline,
+ *      loudly. ◀ WEEK zooms back out.
  *   D. Cue list + controls — per-cue FIRE, the EVENT LOG (cue fires + plan
  *      lifecycle: activate/resume/autopilot/takeover/program),
  *      program/end.
+ *
+ * The ZOOM LADDER (report _94, operator ruling D1–D8 as recommended):
+ *
+ *     FESTIVAL ──tap a day──▶ DAY ──tap an event──▶ EVENT (the deck itself)
+ *      (the 8-day strip)     (this tab, level C)    LIVE  → PERFORM
+ *                                                   else  → TIME TRAVEL
+ *
+ * FESTIVAL and DAY are pure BROWSE levels — client-side navigation, zero engine
+ * effect, so reviewing the timeline can never touch the rig. EVENT is the only
+ * level that does, and it goes through the arbiter's EXISTING human layer (a
+ * scoped operator takeover). Leaving it is the existing resume() — which is why
+ * returning to THIS tab ends the zoom (D1), from the client that entered it.
+ * The mode banner itself is global: `components/timeline/ZoomBanner.tsx`.
  *
  * Draft / preview / save loop:
  *   - The draft plan is local state (loaded from GET /timeline/plans/:name,
@@ -29,21 +44,24 @@
  *   - With NO draft, the strip shows the live active-plan overview.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
+import { opConfirm, opWarn } from '@/utils/op_dialog';
+import { useFocusEffect, router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { useTimeline } from '@/hooks/useTimeline';
+import { useTimeline, zoomEnteredHere } from '@/hooks/useTimeline';
 import {
-  fetchPlaylists, getCachedColorPalettes,
+  fetchPlaylists, getCachedColorPalettes, fetchLayerSettingsState,
   fetchDeckChannel, getAutopilot, fetchDeckColorAutopilot,
+  getApiBaseAsync,
 } from '@/utils/api';
 import {
   fetchTimelinePlans,
   fetchTimelinePlan,
   fetchTimelineOverview,
+  fetchTimelineResolve,
   previewTimelineOverview,
   saveTimelinePlan,
   deleteTimelinePlan,
@@ -51,6 +69,9 @@ import {
   TimelineCue,
   TimelineRecentFire,
   TimelineOverview,
+  TimelineResolve,
+  TimelineTravelSpec,
+  TimelineActiveSequence,
   OverviewCue,
   ShowPlan,
   PlanCue,
@@ -58,7 +79,8 @@ import {
   ActionPlaylist,
 } from '@/utils/timelineApi';
 import { DayOverviewStrip } from '@/components/timeline/DayOverviewStrip';
-import { DayEditor } from '@/components/timeline/DayEditor';
+import { DayView } from '@/components/timeline/DayView';
+import { EventSheet } from '@/components/timeline/EventSheet';
 import { CueEditorSheet } from '@/components/timeline/CueEditorSheet';
 import { PlanPickerSheet } from '@/components/timeline/PlanPickerSheet';
 import {
@@ -67,6 +89,29 @@ import {
 import {
   brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h, seedDefaultCue,
 } from '@/components/timeline/timelineTemplate';
+import {
+  fetchPartyConfig, setPartyConfig, describePartyStatus, describePartyRows,
+  describeEffectiveNote, stepPartyField, coalescePartyPatches, mergePartyPatch,
+  formatMinSec, formatMinutes, parsePartyConfig,
+  type PartyConfig, type PartyConfigPatch, type PartyNumericField,
+} from '@/utils/party_api';
+import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
+import { companionUrlFromApiBase } from '@/utils/companion_url';
+import { babyRevealConfirmation } from '@/components/timeline/baby_reveal_confirmation';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import { parseLayerSettingsState, type LayerSettingsState } from '@/utils/layer_settings';
+import {
+  describeTimelineDraftSaveFailure,
+  TimelineDraftSaver,
+  type TimelineDraftSaveEvent,
+  type TimelineDraftSaveFailure,
+} from '@/utils/timeline_draft_saver';
+import {
+  beginTimelinePriorityFeedback,
+  settleTimelinePriorityFeedback,
+  timelinePriorityFeedbackText,
+  type TimelinePriorityFeedback,
+} from '@/utils/timeline_priority_feedback';
 
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
@@ -210,10 +255,21 @@ function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | n
 }
 
 export default function TimelineScreen() {
+  return (
+    <PerformanceRouteGuard routeName="timeline">
+      <TimelineScreenContent />
+    </PerformanceRouteGuard>
+  );
+}
+
+function TimelineScreenContent() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
-  const { state, connected, error, setAutopilot, endProgram, fireCue, activatePlan } = useTimeline();
+  const {
+    state, connected, error, setAutopilot, endProgram, fireCue, activatePlan,
+    resume, performTakeover, travel,
+  } = useTimeline();
 
   // ── Server resources ──
   const [plans, setPlans] = useState<string[]>([]);
@@ -237,17 +293,126 @@ export default function TimelineScreen() {
   // Auto-save (operator request 2026-07-02: the maker saves like a doc editor —
   // no SAVE / CANCEL buttons). `lastSavedVersionRef` is the last draftVersion
   // successfully written; the auto-save effect debounces writes and skips a
-  // version that's already persisted. `autoSaveState` drives a small status
+  // version that's already persisted. `autoSaveEvent` drives a small status
   // chip where the buttons used to be.
   const lastSavedVersionRef = useRef<number | null>(null);
-  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [autoSaveEvent, setAutoSaveEvent] = useState<TimelineDraftSaveEvent | null>(null);
+  const [saveFailure, setSaveFailure] = useState<TimelineDraftSaveFailure | null>(null);
+  const draftSaverRef = useRef<TimelineDraftSaver<ShowPlan> | null>(null);
+  const [liveTouchLease, setLiveTouchLease] = useState<LayerSettingsState['liveTouch'] | null>(null);
+  const liveTouchLeaseRef = useRef<LayerSettingsState['liveTouch'] | null>(null);
+  const priorityAttemptRef = useRef(0);
+  const [priorityFeedback, setPriorityFeedback] = useState<TimelinePriorityFeedback | null>(null);
 
   // Latest draft version that has been requested — used to discard out-of-order
   // preview responses (a slow v1 must not overwrite a newer v2).
   const latestDraftVersionRef = useRef(0);
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    draftSaverRef.current?.dispose();
+  }, []);
   useEffect(() => { latestDraftVersionRef.current = draftVersion; }, [draftVersion]);
+  const bumpDraftVersion = useCallback(() => {
+    const next = latestDraftVersionRef.current + 1;
+    latestDraftVersionRef.current = next;
+    setDraftVersion(next);
+    return next;
+  }, []);
+
+  // The layer-settings replay is the shared ownership truth. Timeline preview
+  // remains available while Live Touch is armed, but background plan writes do
+  // not borrow its owner identity. We keep the draft locally and retry only
+  // after the lease is visibly released.
+  useEffect(() => {
+    let active = true;
+    let observedWsOwnership = false;
+    // A control-bus replay can arrive before this screen's effect subscribes.
+    // Seed from REST first so a cold mount never briefly writes through an ARM
+    // lease it simply has not observed yet.
+    void getApiBaseAsync()
+      .then(() => fetchLayerSettingsState())
+      .then((result) => {
+        if (!active || observedWsOwnership) return;
+        if (result.ok && result.data) {
+          liveTouchLeaseRef.current = result.data.liveTouch;
+          setLiveTouchLease(result.data.liveTouch);
+        }
+        else setActionError(result.error || 'Could not load layer ownership state');
+      })
+      .catch((ownershipError: unknown) => {
+        if (!active) return;
+        setActionError(ownershipError instanceof Error
+          ? ownershipError.message
+          : 'Could not resolve layer ownership state');
+      });
+    const unsubscribe = engineEvents.subscribe((message: EngineMessage) => {
+      if (!message || message.type !== 'layerSettings') return;
+      try {
+        observedWsOwnership = true;
+        const nextLease = parseLayerSettingsState(message).liveTouch;
+        liveTouchLeaseRef.current = nextLease;
+        setLiveTouchLease(nextLease);
+      } catch (leaseError: any) {
+        setActionError(leaseError?.message || 'Layer ownership state is invalid');
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const priorConnectedRef = useRef(connected);
+  useEffect(() => {
+    if (connected && priorConnectedRef.current === false) {
+      void draftSaverRef.current?.retry();
+    }
+    priorConnectedRef.current = connected;
+  }, [connected]);
+
+  const beginPriorityHandoff = useCallback((operation: string): number | null => {
+    const lease = liveTouchLeaseRef.current;
+    const attemptId = priorityAttemptRef.current + 1;
+    const feedback = beginTimelinePriorityFeedback(
+      attemptId,
+      operation,
+      lease?.armed === true,
+      lease?.ownerId ?? null,
+    );
+    if (!feedback) return null;
+    priorityAttemptRef.current = attemptId;
+    setPriorityFeedback(feedback);
+    return attemptId;
+  }, []);
+
+  const finishPriorityHandoff = useCallback((
+    attemptId: number | null,
+    ok: boolean,
+    detail: string | null = null,
+  ) => {
+    if (attemptId === null) return;
+    setPriorityFeedback((current) => settleTimelinePriorityFeedback(
+      current,
+      attemptId,
+      ok,
+      detail,
+    ));
+  }, []);
+
+  const runPriorityBooleanAction = useCallback(async (
+    operation: string,
+    action: () => Promise<boolean>,
+  ): Promise<boolean> => {
+    const attemptId = beginPriorityHandoff(operation);
+    const ok = await action();
+    finishPriorityHandoff(
+      attemptId,
+      ok,
+      ok ? null : 'The engine rejected the Timeline operation after requesting the handoff.',
+    );
+    return ok;
+  }, [beginPriorityHandoff, finishPriorityHandoff]);
 
   // ── UI sheet state ──
   const [planPickerOpen, setPlanPickerOpen] = useState(false);
@@ -258,16 +423,32 @@ export default function TimelineScreen() {
   // Whether the cue list shows the SELECTED day's cues or ALL days. Default =
   // the selected day (per the brief).
   const [showAllDays, setShowAllDays] = useState(false);
-  // The day whose editor modal is OPEN (explicit EDIT DAY) — distinct from the
-  // selected/viewed day so a single tap selects without opening the editor.
-  const [editingDay, setEditingDay] = useState<number | null>(null);
+  // ── ZOOM LADDER (report _94 §1) ──────────────────────────────────────
+  //   FESTIVAL (the 8-day strip) ──tap a day──▶ DAY (full screen) ──tap an
+  //   event──▶ EVENT (the deck itself, under a mode banner).
+  // FESTIVAL and DAY are pure BROWSE levels — client-side only, zero engine
+  // effect. Reviewing the timeline never touches the rig. Only the EVENT rung
+  // does, and it goes through the arbiter's existing human layer.
+  const [zoomLevel, setZoomLevel] = useState<'festival' | 'day'>('festival');
   const [cueSheetOpen, setCueSheetOpen] = useState(false);
   const [editingCue, setEditingCue] = useState<PlanCue | null>(null);
   // The plan's DEFAULT CUE editor (reuses CueEditorSheet in 'defaultCue' mode).
   const [defaultCueSheetOpen, setDefaultCueSheetOpen] = useState(false);
 
+  // ── EVENT rung: the event sheet + its read-only resolver peek ──────────
+  const [eventCue, setEventCue] = useState<OverviewCue | null>(null);
+  // A bare CALENDAR tap (empty time between cues) — the MOMENT variant of the
+  // event sheet (operator ruling 2026-08-03). Exactly one of eventCue /
+  // eventMoment is ever set.
+  const [eventMoment, setEventMoment] = useState<{ date: string; time: string } | null>(null);
+  const [eventResolve, setEventResolve] = useState<TimelineResolve | null>(null);
+  const [eventResolveError, setEventResolveError] = useState<string | null>(null);
+  const [eventResolvePending, setEventResolvePending] = useState(false);
+  const [eventBusy, setEventBusy] = useState(false);
+  const [eventActionError, setEventActionError] = useState<string | null>(null);
+
   // ── 1s ticker — drives the live NOW playhead (strip + day editor). ──
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
@@ -318,6 +499,12 @@ export default function TimelineScreen() {
       setPreviewTransportError(null);
       return;
     }
+    // A preview is truth for exactly one draft version. Clear the older derived
+    // view before scheduling the next request so a pending/failed preview can
+    // never leave stale cues presented as if they described the current draft.
+    setDraftOverview(null);
+    setPreviewError(null);
+    setPreviewTransportError(null);
     if (previewTimer.current) clearTimeout(previewTimer.current);
     // Capture the version this request belongs to BEFORE the await so an
     // out-of-order response can be discarded (fix: preview race).
@@ -337,8 +524,8 @@ export default function TimelineScreen() {
         setPreviewError({ msg: r.error || 'Draft invalid', version: v });
         setPreviewTransportError(null);
       } else {
-        // Transport failure (offline / timeout / 5xx) — do NOT block save;
-        // the last good preview (if any) stays on screen.
+        // Transport failure (offline / timeout / 5xx) — do NOT block save, but
+        // also do not leave an older overview on screen under a newer draft.
         setPreviewTransportError(r.error || 'Could not reach the engine to preview the draft');
       }
     }, PREVIEW_DEBOUNCE_MS);
@@ -355,6 +542,20 @@ export default function TimelineScreen() {
   // to the CURRENT draft version — never by a transient transport failure, and
   // never by a stale error from an older draft (fix: sticky previewError).
   const saveBlocked = !!previewError && previewError.version === draftVersion;
+  const autoSaveLabel = (() => {
+    if (saveBlocked) return '⚠ FIX TO SAVE';
+    if (saveFailure?.kind === 'live_touch_held') return '⚠ NOT SAVED · LIVE TOUCH';
+    if (saveFailure) return '⚠ NOT SAVED';
+    if (!autoSaveEvent || autoSaveEvent.version !== draftVersion) return 'UNSAVED';
+    if (autoSaveEvent.phase === 'saving') return 'SAVING…';
+    if (autoSaveEvent.phase === 'saved') return '✓ SAVED';
+    return 'UNSAVED…';
+  })();
+  const autoSaveTone = autoSaveLabel === '✓ SAVED'
+    ? '#00a86b'
+    : autoSaveLabel === 'SAVING…' || autoSaveLabel === 'UNSAVED…'
+      ? C.secondary
+      : C.error;
 
   // Plan timezone (festival-local). Falls back to the active plan's location if
   // the overview carries no location, then to the device tz so the playhead
@@ -369,7 +570,7 @@ export default function TimelineScreen() {
 
   // "Now" in the plan tz, recomputed each 1s tick. dateKey picks "today"; the
   // minutes feed the playhead position.
-  const nowInTz = useMemo(() => nowPartsInTz(planTz), [planTz, nowTick]);
+  const nowInTz = nowPartsInTz(planTz);
 
   // Today's festival index (the overview day whose date matches today in the
   // plan tz). null when today is outside the festival span.
@@ -403,9 +604,9 @@ export default function TimelineScreen() {
       fn(next);
       return next;
     });
-    setDraftVersion((v) => v + 1);
+    bumpDraftVersion();
     setSaveOk(null);
-  }, []);
+  }, [bumpDraftVersion]);
 
   // Returns true when a draft was actually loaded onto the 8-day grid; false
   // when the load failed or the plan has no festival span (the caller must
@@ -426,13 +627,15 @@ export default function TimelineScreen() {
       return false;
     }
     setDraft(clonePlan(plan));
-    setDraftVersion((v) => v + 1);
+    const loadedVersion = bumpDraftVersion();
+    lastSavedVersionRef.current = loadedVersion;
+    draftSaverRef.current?.markSaved(loadedVersion);
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
     setPlanPickerOpen(false);
     return true;
-  }, []);
+  }, [bumpDraftVersion]);
 
   // ALWAYS-EDITING (operator request 2026-07-03): the maker auto-loads the
   // ACTIVE plan into the draft so the timeline tab is ALWAYS in edit mode — the
@@ -447,10 +650,12 @@ export default function TimelineScreen() {
     const r = await fetchTimelinePlan(name);
     if (!r.ok || !r.data || !r.data.festival) return;
     setDraft(clonePlan(r.data));
-    setDraftVersion((v) => { const nv = v + 1; lastSavedVersionRef.current = nv; return nv; });
+    const loadedVersion = bumpDraftVersion();
+    lastSavedVersionRef.current = loadedVersion;
+    draftSaverRef.current?.markSaved(loadedVersion);
     setSaveOk(null);
     setPreviewTransportError(null);
-  }, []);
+  }, [bumpDraftVersion]);
 
   // Drive the always-editing model: whenever there's an active plan and nothing
   // is loaded in the maker, pull the active plan into the draft. Re-fires if the
@@ -468,17 +673,32 @@ export default function TimelineScreen() {
   // new-plan saves, and the close flush. Saving over the ACTIVE plan
   // hot-reloads it engine-side, so the live overview (which gates the FIRE
   // buttons) must refresh — freshly-saved cues become fireable immediately.
-  const persistPlan = useCallback(async (plan: ShowPlan): Promise<boolean> => {
+  const persistPlan = useCallback(async (plan: ShowPlan) => {
+    const priorityAttempt = beginPriorityHandoff('SAVE PLAN');
     const r = await saveTimelinePlan(plan);
+    finishPriorityHandoff(priorityAttempt, r.ok, r.error ?? null);
     if (r.ok) {
       setActionError(null);
       refreshPlans();
       refreshLiveOverview();
-      return true;
     }
-    setActionError(r.error || 'Auto-save failed');
-    return false;
-  }, [refreshPlans, refreshLiveOverview]);
+    return r;
+  }, [beginPriorityHandoff, finishPriorityHandoff, refreshPlans, refreshLiveOverview]);
+
+  if (draftSaverRef.current === null) {
+    draftSaverRef.current = new TimelineDraftSaver<ShowPlan>(persistPlan, (event) => {
+      if (!mountedRef.current) return;
+      setAutoSaveEvent(event);
+      if (event.phase === 'saved') {
+        lastSavedVersionRef.current = event.version;
+        setSaveFailure(null);
+      } else if (event.phase === 'saving') {
+        setSaveFailure(null);
+      } else if (event.phase === 'error') {
+        setSaveFailure(describeTimelineDraftSaveFailure(event.result));
+      }
+    });
+  }
 
   // New plans REQUIRE an operator-entered name (the PlanPickerSheet's name
   // prompt validates + de-duplicates before calling these with the slug).
@@ -489,14 +709,16 @@ export default function TimelineScreen() {
   // written; lastSavedVersionRef starts null so it also re-writes as they edit.
   const startDraft = useCallback((plan: ShowPlan) => {
     setDraft(plan);
-    setDraftVersion((v) => v + 1);
+    const version = bumpDraftVersion();
     lastSavedVersionRef.current = null;
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
+    setSaveFailure(null);
     setPlanPickerOpen(false);
-    void persistPlan(plan);
-  }, [persistPlan]);
+    draftSaverRef.current?.enqueue(version, plan);
+    void draftSaverRef.current?.flush();
+  }, [bumpDraftVersion]);
 
   // New plans seed their DEFAULT CUE from the deck's current live state (see
   // snapshotDeckAsDefaultCue) so the standing fallback matches what's playing
@@ -522,7 +744,7 @@ export default function TimelineScreen() {
   }, [startDraft]);
 
   const handleActivate = useCallback(async (name: string) => {
-    const ok = await activatePlan(name);
+    const ok = await runPriorityBooleanAction('ACTIVATE PLAN', () => activatePlan(name));
     if (ok) {
       refreshPlans(); refreshLiveOverview(); setPlanPickerOpen(false);
       // Always-editing: switch the maker to the plan we just activated so the
@@ -530,23 +752,44 @@ export default function TimelineScreen() {
       setDraft(null);
       await autoLoadActiveIntoDraft(name);
     } else setActionError('Engine rejected plan activation');
-  }, [activatePlan, refreshPlans, refreshLiveOverview, autoLoadActiveIntoDraft]);
+  }, [activatePlan, refreshPlans, refreshLiveOverview, autoLoadActiveIntoDraft,
+    runPriorityBooleanAction]);
+
+  const handleFireCue = useCallback((id: string) => runPriorityBooleanAction(
+    'FIRE CUE',
+    () => fireCue(id),
+  ), [fireCue, runPriorityBooleanAction]);
+
+  const handleSetAutopilot = useCallback((enabled: boolean) => runPriorityBooleanAction(
+    enabled ? 'ENABLE TIMELINE AUTO' : 'DISABLE TIMELINE AUTO',
+    () => setAutopilot(enabled),
+  ), [runPriorityBooleanAction, setAutopilot]);
+
+  const handleEndProgram = useCallback(() => runPriorityBooleanAction(
+    'END PROGRAM',
+    endProgram,
+  ), [endProgram, runPriorityBooleanAction]);
 
   // Delete a saved plan (the picker confirms + hides the ACTIVE plan; the
   // engine also refuses to delete the active one). If the deleted plan is the
   // one loaded in the maker, close the editor so we don't keep re-saving a
   // now-deleted file.
   const handleDeletePlan = useCallback(async (name: string) => {
+    const priorityAttempt = beginPriorityHandoff('DELETE PLAN');
     const r = await deleteTimelinePlan(name);
+    finishPriorityHandoff(priorityAttempt, r.ok, r.error ?? null);
     if (!r.ok) { setActionError(r.error || `Could not delete plan ${name}`); return; }
     setActionError(null);
     if (draft?.name === name) {
       setDraft(null);
       setDraftOverview(null);
+      draftSaverRef.current?.discardPending(draftVersion);
       lastSavedVersionRef.current = null;
+      setAutoSaveEvent(null);
+      setSaveFailure(null);
     }
     refreshPlans();
-  }, [draft?.name, refreshPlans]);
+  }, [beginPriorityHandoff, draft?.name, draftVersion, finishPriorityHandoff, refreshPlans]);
 
   // Persist a plan and refresh the derived views. Shared by auto-save, eager
   // new-plan saves, and the close flush. Saving over the ACTIVE plan
@@ -555,18 +798,39 @@ export default function TimelineScreen() {
   // error banner explains why); a version already on disk is skipped so we
   // don't re-write on load or after our own save.
   useEffect(() => {
-    if (!draft) { lastSavedVersionRef.current = null; setAutoSaveState('idle'); return; }
-    if (saveBlocked) { setAutoSaveState('error'); return; }
-    if (lastSavedVersionRef.current === draftVersion) { setAutoSaveState('saved'); return; }
+    if (!draft) {
+      draftSaverRef.current?.discardPending(draftVersion);
+      lastSavedVersionRef.current = null;
+      setAutoSaveEvent(null);
+      setSaveFailure(null);
+      return;
+    }
+    if (saveBlocked) {
+      draftSaverRef.current?.discardPending(draftVersion);
+      setAutoSaveEvent({ phase: 'error', version: draftVersion, result: {
+        ok: false,
+        status: 400,
+        error: previewError?.msg || 'Draft invalid',
+      } });
+      setSaveFailure({
+        kind: 'invalid',
+        title: 'NOT SAVED — DRAFT INVALID',
+        detail: previewError?.msg || 'Fix the draft before saving.',
+      });
+      return;
+    }
+    if (lastSavedVersionRef.current === draftVersion) {
+      draftSaverRef.current?.markSaved(draftVersion);
+      return;
+    }
+    draftSaverRef.current?.enqueue(draftVersion, draft);
     const versionToSave = draftVersion;
     const t = setTimeout(async () => {
-      setAutoSaveState('saving');
-      const ok = await persistPlan(draft);
-      if (ok) { lastSavedVersionRef.current = versionToSave; setAutoSaveState('saved'); }
-      else setAutoSaveState('error');
+      if (versionToSave !== latestDraftVersionRef.current) return;
+      await draftSaverRef.current?.flush();
     }, 700);
     return () => clearTimeout(t);
-  }, [draft, draftVersion, saveBlocked, persistPlan]);
+  }, [draft, draftVersion, saveBlocked, previewError?.msg]);
 
   // ── Festival span / estimate-tz mutators (top-of-page FestivalEditor) ──
   // These edit the DRAFT. When the operator touches them while viewing the LIVE
@@ -589,11 +853,11 @@ export default function TimelineScreen() {
     const next = clonePlan(r.data);
     fn(next);
     setDraft(next);
-    setDraftVersion((v) => v + 1);
+    bumpDraftVersion();
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
-  }, [draft, mutateDraft, state?.activePlan]);
+  }, [draft, mutateDraft, state?.activePlan, bumpDraftVersion]);
 
   // Set the festival start date to a chosen 'YYYY-MM-DD' (from the DateWheel
   // picker). Day i = startDate + i, so moving the start moves every day's
@@ -676,6 +940,13 @@ export default function TimelineScreen() {
   }, [draft, refreshPlaylists]);
 
   const openEditCue = useCallback((cue: PlanCue) => {
+    if (cue.action.type === 'sequence') {
+      opWarn(
+        'Sequenced event is locked',
+        'This cue contains second-accurate event steps that the visual cue editor cannot safely rewrite. Edit its plan YAML and revalidate instead.',
+      );
+      return;
+    }
     refreshPlaylists();
     setEditingCue(cue);
     setCueSheetOpen(true);
@@ -713,13 +984,8 @@ export default function TimelineScreen() {
     return { startDate: festival.startDate, days: festival.days, tz };
   }, [draft?.festival, draft?.location?.tz, overview?.festival, overview?.location?.tz]);
 
-  // The day-editor's overview object (the day whose modal is open).
-  const editingDayOverview = useMemo(() => {
-    if (editingDay === null || !overview) return null;
-    return overview.days.find((d) => d.index === editingDay) ?? null;
-  }, [editingDay, overview]);
-
-  // The SELECTED day's overview object (drives the filtered cue list).
+  // The SELECTED day's overview object — the DAY level renders this, and it
+  // also drives the filtered cue list at the FESTIVAL level.
   const selectedDayOverview = useMemo(() => {
     if (selectedDay === null || !overview) return null;
     return overview.days.find((d) => d.index === selectedDay) ?? null;
@@ -768,6 +1034,142 @@ export default function TimelineScreen() {
     if (liveOverview?.days) for (const d of liveOverview.days) for (const c of d.cues) s.add(c.id);
     return s;
   }, [liveOverview]);
+
+  // ── ZOOM LADDER: navigation + the EVENT rung ──────────────────────────
+
+  // FESTIVAL → DAY. Pure client navigation; nothing is sent to the engine.
+  const openDay = useCallback((idx: number) => {
+    setSelectedDay(idx);
+    setShowAllDays(false);
+    setZoomLevel('day');
+  }, []);
+
+  const backToWeek = useCallback(() => setZoomLevel('festival'), []);
+
+  const stepDay = useCallback((delta: number) => {
+    if (!overview) return;
+    const idxs = overview.days.map((d) => d.index);
+    const cur = selectedDay ?? idxs[0];
+    const pos = idxs.indexOf(cur);
+    const next = idxs[pos + delta];
+    if (next !== undefined) setSelectedDay(next);
+  }, [overview, selectedDay]);
+
+  // DAY → EVENT. Opens the sheet and fires the READ-ONLY resolver peek
+  // (GET /timeline/resolve — zero side effects: nothing dispatched, no lease
+  // armed, no latch written). A 400 (out-of-window target, unresolvable cue) is
+  // surfaced verbatim in the sheet; we never fake a preview.
+  const openEvent = useCallback((cue: OverviewCue) => {
+    setEventCue(cue);
+    setEventMoment(null);
+    setEventResolve(null);
+    setEventResolveError(null);
+    setEventActionError(null);
+    setEventResolvePending(true);
+    const date = selectedDayOverview?.date;
+    fetchTimelineResolve({ cueId: cue.id, ...(date ? { date } : {}) }).then((r) => {
+      setEventResolvePending(false);
+      if (r.ok && r.data) { setEventResolve(r.data); setEventResolveError(null); }
+      else setEventResolveError(r.error || 'Could not resolve this moment');
+    });
+  }, [selectedDayOverview?.date]);
+
+  // CALENDAR → MOMENT. A tap on EMPTY calendar time opens the same sheet in
+  // MOMENT mode, peeking the resolver at that bare instant ({date, time} —
+  // the same arbitrary-timestamp surface the travel steppers ride on). Still
+  // read-only: the rig moves only on the sheet's TIME TRAVEL button.
+  const openMoment = useCallback((time: string) => {
+    const date = selectedDayOverview?.date;
+    if (!date) return; // no resolvable day under the tap — open nothing
+    setEventCue(null);
+    setEventMoment({ date, time });
+    setEventResolve(null);
+    setEventResolveError(null);
+    setEventActionError(null);
+    setEventResolvePending(true);
+    fetchTimelineResolve({ date, time }).then((r) => {
+      setEventResolvePending(false);
+      if (r.ok && r.data) { setEventResolve(r.data); setEventResolveError(null); }
+      else setEventResolveError(r.error || 'Could not resolve this moment');
+    });
+  }, [selectedDayOverview?.date]);
+
+  const closeEvent = useCallback(() => {
+    setEventCue(null);
+    setEventMoment(null);
+    setEventResolve(null);
+    setEventResolveError(null);
+    setEventActionError(null);
+  }, []);
+
+  // PERFORM — a SCOPED takeover of the LIVE event. The plan holds; a program
+  // that comes due is deferred (never dismissed) until the zoom exits. On
+  // success we land on the DECK tab under the green banner — the event level
+  // does not build a second deck UI, it reuses the real one.
+  //
+  // PERFORMANCE MODE (operator ruling 2026-08-14): a scoped PERFORM is still a
+  // takeover from a running plan, so the operator passcode prompt opens first.
+  // 'cancelled' = they dismissed it — keep the EVENT sheet open, show no error,
+  // and do not navigate (nothing was taken over).
+  const handlePerform = useCallback(async () => {
+    if (!eventCue) return;
+    setEventBusy(true);
+    const result = await performTakeover(eventCue.id);
+    setEventBusy(false);
+    if (result.outcome === 'cancelled') return;
+    if (result.outcome === 'failed') {
+      setEventActionError(result.error || 'Failed to take the deck');
+      return;
+    }
+    closeEvent();
+    router.push('/');
+  }, [eventCue, performTakeover, closeEvent]);
+
+  // TIME TRAVEL — the deck carries the plan's resolved state at the target
+  // instant, as a STATIC snapshot (D4): a CUE's fire instant, or a bare
+  // MOMENT tapped on the calendar ({date, time}). Works while the plan is
+  // DORMANT: that is exactly when the operator rehearses.
+  const handleTravel = useCallback(async () => {
+    let spec: TimelineTravelSpec;
+    if (eventCue) {
+      const date = selectedDayOverview?.date;
+      spec = { cueId: eventCue.id, ...(date ? { date } : {}) };
+    } else if (eventMoment) {
+      spec = { date: eventMoment.date, time: eventMoment.time };
+    } else {
+      return;
+    }
+    setEventBusy(true);
+    const priorityAttempt = beginPriorityHandoff('TIME TRAVEL');
+    const err = await travel(spec);
+    finishPriorityHandoff(priorityAttempt, err === null, err);
+    setEventBusy(false);
+    if (err) { setEventActionError(err); return; }
+    closeEvent();
+    router.push('/');
+  }, [beginPriorityHandoff, eventCue, eventMoment, finishPriorityHandoff, travel,
+    closeEvent, selectedDayOverview?.date]);
+
+  // ── EXIT RULE D1: returning to the TIMELINE tab ends the zoom ──────────
+  //
+  // The operator's own words — "going back to the timeline tab is how to get out
+  // of the time travel feature". `resume()` → catchUp re-derives the owner for
+  // NOW, so the plan picks straight back up.
+  //
+  // Gated on zoomEnteredHere(): there is ONE engine zoom session, and a second
+  // pad merely browsing to its timeline tab must NEVER yank pad A's live
+  // performance. That pad exits through the banner's explicit EXIT instead.
+  //
+  // Deps are deliberately EMPTY so this fires once per FOCUS event and not every
+  // time the zoom state changes while the tab is already focused (which would
+  // resume the zoom the instant the operator armed it).
+  const zoomRef = useRef(state?.zoom ?? null);
+  useEffect(() => { zoomRef.current = state?.zoom ?? null; }, [state?.zoom]);
+  const resumeRef = useRef(resume);
+  useEffect(() => { resumeRef.current = resume; }, [resume]);
+  useFocusEffect(useCallback(() => {
+    if (zoomRef.current && zoomEnteredHere()) void resumeRef.current();
+  }, []));
 
   return (
     <View style={styles.container}>
@@ -840,7 +1242,7 @@ export default function TimelineScreen() {
               {`${state.activeCue.label}${state.activeCue.kind === 'program' ? ' · show' : ''}`}
             </Text>
             {state.activeProgram ? (
-              <TouchableOpacity onPress={() => endProgram()} style={styles.endProgramBtn} accessibilityLabel="End active program">
+              <TouchableOpacity onPress={() => { void handleEndProgram(); }} style={styles.endProgramBtn} accessibilityLabel="End active program">
                 <Text style={styles.endProgramText}>END</Text>
               </TouchableOpacity>
             ) : null}
@@ -854,7 +1256,7 @@ export default function TimelineScreen() {
             <Text style={styles.nextCueText} numberOfLines={1}>
               {`program · ${state.activeProgram.cueId}${programCountdown != null ? ` · ${formatCountdown(programCountdown)} left` : ''}`}
             </Text>
-            <TouchableOpacity onPress={() => endProgram()} style={styles.endProgramBtn} accessibilityLabel="End active program">
+            <TouchableOpacity onPress={() => { void handleEndProgram(); }} style={styles.endProgramBtn} accessibilityLabel="End active program">
               <Text style={styles.endProgramText}>END</Text>
             </TouchableOpacity>
           </View>
@@ -885,8 +1287,51 @@ export default function TimelineScreen() {
         ) : null}
         {!isOffline && error ? <Banner styles={styles} text={error} tone="error" /> : null}
         {actionError ? <Banner styles={styles} text={actionError} tone="error" /> : null}
+        {priorityFeedback ? (
+          <Banner
+            styles={styles}
+            text={timelinePriorityFeedbackText(priorityFeedback)}
+            tone={priorityFeedback.phase === 'succeeded' ? 'ok' : 'error'}
+            C={C}
+          />
+        ) : null}
+        {liveTouchLease?.armed ? (
+          <Banner
+            styles={styles}
+            text={`LIVE TOUCH ARMED${liveTouchLease.ownerId ? ` by '${liveTouchLease.ownerId}'` : ''}. Timeline actions have priority: the engine will disarm Live Touch first, confirm the handoff, then run the requested action once. Draft preview remains read-only.`}
+            tone="error"
+          />
+        ) : null}
         {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError.msg}`} tone="error" /> : null}
-        {previewTransportError ? <Banner styles={styles} text={`Preview unavailable: ${previewTransportError} (a valid draft still auto-saves)`} tone="error" /> : null}
+        {previewTransportError ? (
+          <Banner
+            styles={styles}
+            text={`Preview unavailable: ${previewTransportError}. Preview is not being shown; save status remains separate below.`}
+            tone="error"
+          />
+        ) : null}
+        {saveFailure ? (
+          <View style={styles.actionErrorBanner}>
+            <Text style={styles.actionErrorText}>{saveFailure.title}</Text>
+            <Text style={[styles.actionErrorText, { marginTop: 4 }]}>{saveFailure.detail}</Text>
+            <TouchableOpacity
+              onPress={() => { void draftSaverRef.current?.retry(); }}
+              disabled={autoSaveEvent?.phase === 'saving'}
+              style={[
+                styles.miniBtn,
+                { marginTop: 8, alignSelf: 'flex-start' },
+                autoSaveEvent?.phase === 'saving'
+                  ? { opacity: 0.5 }
+                  : null,
+              ]}
+              accessibilityLabel="Retry saving Timeline draft"
+            >
+              <Text style={styles.miniBtnText}>
+                {liveTouchLease?.armed ? 'PREEMPT LIVE TOUCH + RETRY' : 'RETRY SAVE'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
 
         {/* ── Live controls ──
@@ -897,7 +1342,7 @@ export default function TimelineScreen() {
             autopilot on/off) and the plan picker. */}
         <View style={styles.controlsRow}>
           <TouchableOpacity
-            onPress={() => state && setAutopilot(!state.autopilotEnabled)}
+            onPress={() => { if (state) void handleSetAutopilot(!state.autopilotEnabled); }}
             disabled={!state}
             style={[
               styles.controlButton,
@@ -923,7 +1368,46 @@ export default function TimelineScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── THE ZOOM LADDER, rung 2: DAY ──────────────────────────────
+            A full-screen day: phase bands, sun, the events, and the RESOLVED
+            ribbon of what actually plays. Pure browse — no engine calls. The
+            FESTIVAL body below is what you come back to via ◀ WEEK. */}
+        {zoomLevel === 'day' && selectedDayOverview ? (
+          <DayView
+            day={selectedDayOverview}
+            dayCount={overview ? overview.days.length : 0}
+            planCues={draft?.cues ?? []}
+            nowMinutes={selectedDayOverview.index === todayIndex ? nowMinutes : null}
+            // LIVE is a property of TODAY's occurrence, not of the cue id. The
+            // same cue appears on every day it applies to; marking Thursday's
+            // row live because today's instance is running would be a lie — and
+            // it would offer PERFORM from a day that isn't happening.
+            activeCueId={selectedDayOverview.index === todayIndex ? (state?.activeCue?.id ?? null) : null}
+            canEdit={!!draft}
+            onBackToWeek={backToWeek}
+            onPrevDay={() => stepDay(-1)}
+            onNextDay={() => stepDay(1)}
+            onOpenEvent={openEvent}
+            onOpenMoment={openMoment}
+            onEditCue={openEditCue}
+            onDeleteCue={handleDeleteCue}
+            onAddCue={openAddCue}
+          />
+        ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+          {/* ── PARTY MODE — session HANDLING (gate · playlist · numbers).
+              First block in the scroll body: show handling belongs with the
+              show plan, and the hard gate must be reachable mid-show. ── */}
+          <PartyModeSection
+            styles={styles}
+            C={C}
+            state={state}
+            connected={connected}
+            liveTouchLease={liveTouchLease}
+            onPriorityStart={beginPriorityHandoff}
+            onPriorityFinish={finishPriorityHandoff}
+          />
+
           {/* ── Festival span + sun-estimate tz (top of the maker page) ── */}
           {festivalView ? (
             <FestivalEditor
@@ -951,9 +1435,9 @@ export default function TimelineScreen() {
                     save" (the error banner below explains). */}
                 <Text style={{
                   fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6,
-                  color: autoSaveState === 'error' ? C.error : (autoSaveState === 'saving' ? C.secondary : '#00a86b'),
+                  color: autoSaveTone,
                 }}>
-                  {autoSaveState === 'saving' ? 'SAVING…' : autoSaveState === 'error' ? '⚠ FIX TO SAVE' : '✓ SAVED'}
+                  {autoSaveLabel}
                 </Text>
               </View>
             ) : null}
@@ -988,26 +1472,18 @@ export default function TimelineScreen() {
               todayIndex={todayIndex}
               selectedIndex={selectedDay}
               nowMinutes={nowMinutes}
-              onSelectDay={(idx) => {
-                // Single tap: SELECT/VIEW the day (highlight + filter the cue
-                // list to it). This never opens the editor and never touches
-                // the draft, so viewing is non-destructive.
-                setSelectedDay(idx);
-                setShowAllDays(false);
-              }}
-              onEditDay={(idx) => {
-                // Explicit EDIT DAY: open the day editor. It needs a draft to
-                // edit; if we're viewing the live plan, load it into the draft
-                // first so edits mutate a copy. Only open if the load actually
-                // succeeded — a failed / festival-less load must not dangle.
-                setSelectedDay(idx);
-                if (!draft && state?.activePlan) {
-                  loadPlanIntoDraft(state.activePlan).then((ok) => { if (ok) setEditingDay(idx); });
-                } else if (draft) {
-                  setEditingDay(idx);
-                } else {
-                  setActionError('No active plan to edit — start from the BRC template via PLANS.');
-                }
+              onOpenDay={(idx) => {
+                // ZOOM IN: FESTIVAL → DAY. Pure client navigation — nothing is
+                // sent to the engine, so reviewing never touches the rig.
+                //
+                // The DAY level also EDITS (＋ CUE, per-row EDIT/delete), and
+                // editing mutates a DRAFT. The always-editing maker normally has
+                // the active plan loaded already; if it doesn't (and there IS an
+                // active plan) we pull it in so the edit affordances are live.
+                // A failed / festival-less load leaves the level read-only
+                // rather than dangling — the DayView hides its edit controls.
+                openDay(idx);
+                if (!draft && state?.activePlan) void loadPlanIntoDraft(state.activePlan);
               }}
             />
           ) : (
@@ -1019,7 +1495,7 @@ export default function TimelineScreen() {
           {!draft ? (
             <Text style={styles.helperLine}>Tap a day to view its cues; tap EDIT DAY to edit it — the active plan loads into the maker.</Text>
           ) : (
-            <Text style={styles.helperLine}>Edits preview live across all days and auto-save. ACTIVATE (in PLANS) makes the plan run.</Text>
+            <Text style={styles.helperLine}>Edits preview live across all days. Save is confirmed separately; ACTIVATE (in PLANS) makes the plan run.</Text>
           )}
 
           {/* ── D. Cue list + controls (live) ── */}
@@ -1084,7 +1560,8 @@ export default function TimelineScreen() {
                     // highlight when viewing live OR editing the active plan —
                     // but never when a DIFFERENT plan is loaded in the maker.
                     isActive={(draft === null || draft.name === activePlanName) && state?.activeCue?.id === cue.id}
-                    onFire={fireCue}
+                    activeSequence={state?.activeSequence ?? null}
+                    onFire={handleFireCue}
                     styles={styles}
                     C={C}
                   />
@@ -1112,6 +1589,7 @@ export default function TimelineScreen() {
             <Text style={styles.emptyHint}>Loading timeline…</Text>
           ) : null}
         </ScrollView>
+        )}
       </View>
 
       {/* ── Sheets ── */}
@@ -1129,16 +1607,42 @@ export default function TimelineScreen() {
         onClose={() => setPlanPickerOpen(false)}
       />
 
-      <DayEditor
-        visible={editingDay !== null && !!draft}
-        day={editingDayOverview}
-        plan={draft ?? brcStarterPlan()}
-        nowMinutes={editingDay !== null && editingDay === todayIndex ? nowMinutes : null}
-        onAddCue={openAddCue}
-        onEditCue={openEditCue}
-        onDeleteCue={handleDeleteCue}
-        onClose={() => setEditingDay(null)}
+      {/* ── THE ZOOM LADDER, rung 3: EVENT ──────────────────────────────
+          Tap an event (agenda row OR calendar block) at the DAY level → one
+          sheet, one primary action, with the branch chosen by the ENGINE's own
+          state (is this cue the live deck owner?). A bare CALENDAR tap on empty
+          time opens the same sheet in MOMENT mode (time travel only). Both
+          branches land on the DECK tab under a mode banner. */}
+      {eventCue || eventMoment ? (
+      <EventSheet
+        cue={eventCue}
+        moment={eventMoment}
+        dayDate={selectedDayOverview?.date ?? null}
+        // Same rule as the DAY rows: only TODAY's occurrence can be performed.
+        activeCueId={
+          selectedDayOverview && selectedDayOverview.index === todayIndex
+            ? (state?.activeCue?.id ?? null)
+            : null
+        }
+        planActive={state?.planActive}
+        inFestivalWindow={state?.inFestivalWindow}
+        resolve={eventResolve}
+        resolveError={eventResolveError}
+        resolvePending={eventResolvePending}
+        busy={eventBusy}
+        actionError={eventActionError}
+        canEdit={!!draft && !!eventCue && (draft?.cues ?? []).some((c) => c.id === eventCue.id)}
+        onPerform={() => { void handlePerform(); }}
+        onTravel={() => { void handleTravel(); }}
+        onEdit={() => {
+          if (!eventCue) return; // MOMENT mode has no cue to edit
+          const planCue = (draft?.cues ?? []).find((c) => c.id === eventCue.id);
+          closeEvent();
+          if (planCue) openEditCue(planCue);
+        }}
+        onClose={closeEvent}
       />
+      ) : null}
 
       {draft ? (
         <CueEditorSheet
@@ -1147,7 +1651,7 @@ export default function TimelineScreen() {
           plan={draft}
           playlists={playlists}
           palettes={getCachedColorPalettes()}
-          dayIndex={editingDay ?? 0}
+          dayIndex={selectedDay ?? 0}
           onSave={handleSaveCue}
           onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
           onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}
@@ -1175,6 +1679,478 @@ export default function TimelineScreen() {
 }
 
 // ── Banner ──
+// ── PARTY MODE (session HANDLING) ──────────────────────────────────────
+//
+// Division of concerns (operator, 2026-07-27): the Audio Companion configures
+// DETECTION (thresholds/params); THIS tab owns HANDLING — the hard gate, the
+// playlist a session triggers, and the session numbers. Show handling belongs
+// with the show plan, which is why the card lives here and not on Audio.
+//
+// Server truth is GET/PUT /party-config (utils/party_api.ts), persisted
+// engine-side. Codex P0: every edit is reconciled against the PUT response and
+// a rejection prints the engine's message VERBATIM — no silent revert.
+//
+// Editing model: stepper taps mutate a LOCAL pending value immediately (touch
+// feel) and a short debounce PUTs the settled value, so holding "+" through a
+// range doesn't fire ten writes. The row shows "· unsaved" while a commit is
+// pending and snaps to the server's number when it lands.
+
+const PARTY_COMMIT_DEBOUNCE_MS = 700;
+
+/** Row hint + an optional engine-effective note, as one line. */
+function joinHint(base: string, note: string | null): string {
+  return note ? `${base} · ${note}` : base;
+}
+
+/** ON/OFF pill used by the SESSION LENGTH + COOLDOWN rows. */
+function PartyRowToggle({
+  styles, C, on, disabled, onPress, label,
+}: {
+  styles: Styles;
+  C: Palette;
+  on: boolean;
+  disabled: boolean;
+  onPress: () => void;
+  label: string;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.partyToggle,
+        on
+          ? { backgroundColor: C.primary, borderColor: C.primary }
+          : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder },
+        disabled ? { opacity: 0.4 } : null,
+      ]}
+      accessibilityLabel={`${on ? 'Disable' : 'Enable'} ${label}`}
+    >
+      <Text style={[styles.partyToggleText, { color: on ? C.onPrimary : C.secondary }]}>
+        {on ? 'ON' : 'OFF'}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function PartyStepperRow({
+  styles, C, label, hint, valueText, dirty, disabled, onStep, toggle, greyed,
+}: {
+  styles: Styles;
+  C: Palette;
+  label: string;
+  hint: string;
+  valueText: string;
+  dirty: boolean;
+  disabled: boolean;
+  onStep: (dir: -1 | 1) => void;
+  /** Optional per-row enable switch (SESSION LENGTH / COOLDOWN). */
+  toggle?: { on: boolean; disabled: boolean; onPress: () => void };
+  /** Row is inert (its feature is off) — dim it and hide the stepper. */
+  greyed?: boolean;
+}) {
+  return (
+    <View style={styles.partyFieldRow}>
+      <View style={{ flex: 1, minWidth: 140, opacity: greyed ? 0.5 : 1 }}>
+        <Text style={styles.partyFieldLabel}>{label}</Text>
+        <Text style={styles.partyFieldHint}>{hint}</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {toggle ? (
+          <PartyRowToggle
+            styles={styles}
+            C={C}
+            on={toggle.on}
+            disabled={toggle.disabled}
+            onPress={toggle.onPress}
+            label={label}
+          />
+        ) : null}
+        {greyed ? null : (
+          <>
+            <TouchableOpacity
+              onPress={() => onStep(-1)}
+              disabled={disabled}
+              style={[styles.partyStepBtn, disabled ? { opacity: 0.4 } : null]}
+              accessibilityLabel={`Decrease ${label}`}
+            >
+              <Text style={styles.partyStepBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={[styles.partyFieldValue, dirty ? { color: C.secondary } : null]}>
+              {valueText}{dirty ? ' ·' : ''}
+            </Text>
+            <TouchableOpacity
+              onPress={() => onStep(1)}
+              disabled={disabled}
+              style={[styles.partyStepBtn, disabled ? { opacity: 0.4 } : null]}
+              accessibilityLabel={`Increase ${label}`}
+            >
+              <Text style={styles.partyStepBtnText}>+</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function PartyModeSection({
+  styles, C, state, connected, liveTouchLease, onPriorityStart, onPriorityFinish,
+}: {
+  styles: Styles;
+  C: Palette;
+  state: TimelineState | null;
+  connected: boolean;
+  liveTouchLease: LayerSettingsState['liveTouch'] | null;
+  onPriorityStart: (operation: string) => number | null;
+  onPriorityFinish: (attemptId: number | null, ok: boolean, detail?: string | null) => void;
+}) {
+  const [cfg, setCfg] = useState<PartyConfig | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // ONE coalesced pending patch for every control on the card (toggles,
+  // playlist, steppers). Mashing a toggle or holding "+" collapses into a
+  // single debounced PUT whose body is the FINAL intent.
+  const [pending, setPending] = useState<PartyConfigPatch>({});
+  const [companionUrl, setCompanionUrl] = useState<string | null>(null);
+  // Clock for the live "ends in m:ss" / "cooling down m:ss" readouts.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+
+  const load = useCallback(async () => {
+    const r = await fetchPartyConfig();
+    if (r.ok && r.data) { setCfg(r.data); setLoadError(null); }
+    else { setCfg(null); setLoadError(r.error || 'unknown error'); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => { if (commitTimer.current) clearTimeout(commitTimer.current); }, []);
+
+  // CROSS-SURFACE TRUTH: the engine broadcasts `partyConfig` on every PUT and
+  // replays it on /ws/control connect. Without this listener a change made from
+  // another surface (the companion PARTY tab, curl) left this card permanently
+  // contradicting itself — a DISABLED pill over an ENABLED toggle, with no way
+  // to fix it in-app. The payload is getPartyStatus() + availablePlaylists,
+  // exactly what parsePartyConfig validates (extra keys like `type` ignored).
+  useEffect(() => engineEvents.subscribe((msg: EngineMessage) => {
+    if (!msg || (msg as any).type !== 'partyConfig') return;
+    try { setCfg(parsePartyConfig(msg)); setLoadError(null); } catch (e: any) {
+      setLoadError(e?.message || 'partyConfig broadcast malformed');
+    }
+  }), []);
+
+  // The 5 s re-read runs while the card is MOUNTED — it is the only thing that
+  // discovers a session transition (the engine broadcasts partyConfig on PUTs,
+  // not on armed→in_session). It used to be gated on `livePhase`, i.e. on the
+  // very value it would refresh: the card could never learn it had entered a
+  // session, and once it landed on `disabled` it stopped polling forever. The
+  // card only exists while the Timeline tab renders, which IS the visible gate.
+  useEffect(() => {
+    const refresh = setInterval(() => { void load(); }, 5000);
+    return () => clearInterval(refresh);
+  }, [load]);
+
+  // The 1 s countdown clock stays gated: only a live phase has anything ticking.
+  const livePhase = cfg?.effectiveState === 'in_session' || cfg?.effectiveState === 'cooldown';
+  useEffect(() => {
+    if (!livePhase) return;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [livePhase]);
+
+  // Deep-link target for "tuned in the Audio Companion" — same derivation the
+  // Audio tab's OPEN COMPANION button uses. Null (plain text, no link) if the
+  // base can't be parsed; we never link to a guessed address.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const base = await getApiBaseAsync();
+      if (!alive) return;
+      try { setCompanionUrl(companionUrlFromApiBase(base)); } catch { setCompanionUrl(null); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Mirror a gate flip that arrived on the control bus (another surface, or
+  // the engine itself) so this card never shows a stale toggle.
+  const busEnabled = typeof state?.partyEnabled === 'boolean' ? state.partyEnabled : null;
+  useEffect(() => {
+    if (busEnabled === null) return;
+    setCfg((c) => (c && c.enabled !== busEnabled ? { ...c, enabled: busEnabled } : c));
+  }, [busEnabled]);
+
+  /**
+   * Send the accumulated patch. On success the RESPONSE replaces local state
+   * and the pending overlay clears. On failure (400 or an engine that went
+   * away mid-edit) the pending edits are KEPT so the operator doesn't lose
+   * their work — the error banner explains and offers RETRY.
+   */
+  const commit = useCallback(async () => {
+    const patch = pendingRef.current;
+    if (!Object.keys(patch).length) return;
+    setSaving(true);
+    setActionError(null);
+    const priorityAttempt = onPriorityStart('SAVE PARTY CONFIG');
+    const r = await setPartyConfig(patch);
+    onPriorityFinish(priorityAttempt, r.ok, r.error ?? null);
+    if (r.ok && r.data) {
+      setCfg(r.data);
+      // Only drop the edits this PUT actually carried; anything the operator
+      // touched while it was in flight survives for the next commit.
+      setPending((p) => {
+        const next: PartyConfigPatch = { ...p };
+        for (const k of Object.keys(patch) as (keyof PartyConfigPatch)[]) {
+          if ((next as any)[k] === (patch as any)[k]) delete (next as any)[k];
+        }
+        return next;
+      });
+    } else {
+      setActionError(r.error || 'request rejected');
+    }
+    setSaving(false);
+  }, [onPriorityFinish, onPriorityStart]);
+
+  /** Queue an edit: merge into the pending patch, restart the debounce. */
+  const queue = useCallback((patch: PartyConfigPatch) => {
+    setPending((p) => coalescePartyPatches([p, patch]));
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(() => { void commit(); }, PARTY_COMMIT_DEBOUNCE_MS);
+  }, [commit]);
+
+  const stepField = useCallback((field: PartyNumericField, dir: -1 | 1) => {
+    const base = cfg;
+    if (!base) return;
+    const current = (pendingRef.current[field] ?? base[field]) as number;
+    queue({ [field]: stepPartyField(field, current, dir) } as PartyConfigPatch);
+  }, [cfg, queue]);
+
+  // What the operator currently sees: server truth with pending edits on top.
+  const view = cfg ? mergePartyPatch(cfg, pending) : null;
+  const enabled = view ? view.enabled : null;
+  const hasPending = Object.keys(pending).length > 0;
+  const status = describePartyStatus({
+    enabled,
+    // /party-config is the AUTHORITY for every party field it reports; the
+    // control-bus timelineState only fills gaps a pre-addition engine leaves.
+    effectiveState: cfg?.effectiveState,
+    planActive: cfg?.planActive ?? state?.planActive ?? null,
+    inFestivalWindow: cfg?.inFestivalWindow ?? state?.inFestivalWindow ?? null,
+    party: state?.party,
+    currentMood: state?.currentMood,
+    sessionFollowsMusic: cfg?.sessionFollowsMusic,
+    sessionEndsAtMs: cfg?.sessionEndsAtMs,
+    cooldownRemainingSec: cfg?.cooldownRemainingSec ?? state?.partyCooldownRemainingSec,
+    nowMs,
+    engineOffline: !connected,
+  });
+  const statusColor =
+    status.tone === 'live' ? '#00a86b'
+    : status.tone === 'off' ? C.error
+    : status.tone === 'armed' ? C.primary
+    : status.tone === 'noplan' ? '#f5a623'
+    : status.tone === 'manual' ? '#f5a623'
+    : C.secondary;
+
+  const shown = (f: PartyNumericField): number => (view ? view[f] : 0);
+  // Row enable/grey states come from the engine's OWN fields (with any pending
+  // edit laid over them), and the cooldown-forced-off rule lives in ONE pure
+  // place, so the card can never show a combination the engine doesn't hold.
+  // Null until the config is loaded — the rows it drives don't render before then.
+  const rows = view ? describePartyRows(view) : null;
+
+  return (
+    <View style={styles.partyCard}>
+      <View style={styles.partyHeaderRow}>
+        <IconSymbol name="sparkles" size={20} color={C.primary} />
+        <View style={{ flex: 1, minWidth: 160 }}>
+          <Text style={styles.partyTitle}>PARTY MODE</Text>
+          <Text style={styles.partyDetail}>{status.detail}</Text>
+        </View>
+        <View style={[styles.pill, { borderColor: statusColor }]}>
+          <Text style={[styles.pillText, { color: statusColor }]}>{status.label}</Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => { if (enabled !== null) queue({ enabled: !enabled }); }}
+          disabled={enabled === null || saving}
+          style={[
+            styles.controlButton,
+            enabled
+              ? { backgroundColor: C.primary }
+              : { backgroundColor: C.surfaceContainerHigh, borderColor: C.error, borderWidth: 1 },
+            (enabled === null || saving) ? { opacity: 0.6 } : null,
+          ]}
+          accessibilityLabel={enabled ? 'Disable party mode' : 'Enable party mode'}
+        >
+          <Text style={[styles.controlLabel, { color: enabled ? C.onPrimary : C.error }]}>
+            {saving && liveTouchLease?.armed
+              ? 'PREEMPTING LIVE TOUCH…'
+              : saving
+                ? 'SAVING…'
+                : enabled === null ? 'UNAVAILABLE' : enabled ? 'ENABLED' : 'DISABLED'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {loadError ? (
+        <View style={styles.actionErrorBanner}>
+          <Text style={styles.actionErrorText}>{`Party config unavailable — ${loadError}`}</Text>
+          <TouchableOpacity onPress={() => void load()} style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }]}>
+            <Text style={styles.miniBtnText}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {actionError ? (
+        <View style={styles.actionErrorBanner}>
+          <Text style={styles.actionErrorText}>{`Rejected — ${actionError}`}</Text>
+          {hasPending ? (
+            <Text style={[styles.actionErrorText, { marginTop: 4 }]}>
+              Your edits are still here, unsaved. Fix the cause (or wait for the engine) and tap RETRY.
+            </Text>
+          ) : null}
+          <TouchableOpacity
+            onPress={() => { void commit(); }}
+            disabled={saving || !hasPending}
+            style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }, (saving || !hasPending) ? { opacity: 0.5 } : null]}
+          >
+            <Text style={styles.miniBtnText}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {view && rows ? (
+        <>
+          <Text style={styles.partySubLabel}>{`TRIGGER PLAYLIST (${view.availablePlaylists.length})`}</Text>
+          {view.availablePlaylists.length === 0 ? (
+            <Text style={styles.cueError}>
+              The engine reports no playlists — a party session would have nothing to run.
+            </Text>
+          ) : (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {view.availablePlaylists.map((p) => {
+                const sel = p === view.playlist;
+                return (
+                  <TouchableOpacity
+                    key={p}
+                    onPress={() => { if (!sel) queue({ playlist: p }); }}
+                    style={[
+                      styles.partyChip,
+                      sel
+                        ? { backgroundColor: C.primary, borderColor: C.primary }
+                        : { backgroundColor: C.surfaceContainerLowest, borderColor: C.ghostBorder },
+                    ]}
+                  >
+                    <Text style={[styles.partyChipText, { color: sel ? C.onPrimary : C.text }]}>{p}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          <Text style={styles.partySubLabel}>SESSION HANDLING</Text>
+
+          {/* SUSTAIN — the strong-detection guarantee. NO toggle, by design:
+              it is always in force. */}
+          <PartyStepperRow
+            styles={styles}
+            C={C}
+            label="SUSTAIN BEFORE TRIGGER"
+            hint="How long party audio must hold before a session starts."
+            valueText={formatMinSec(shown('minDwellSec'))}
+            dirty={pending.minDwellSec !== undefined}
+            disabled={saving}
+            onStep={(d) => stepField('minDwellSec', d)}
+          />
+
+          {/* SESSION LENGTH — toggle ON = fixed length. OFF = FOLLOW THE
+              MUSIC: the session simply ends when the party signal drops.
+              There is NO timeline-side release value to edit — the release IS
+              the companion's `offConfirmMs` detection param (one sustain, not
+              two stacked), so the OFF row is a HINT that points at the Audio
+              Companion, not an editor. */}
+          {rows.durationEnabled ? (
+            <PartyStepperRow
+              styles={styles}
+              C={C}
+              label="SESSION LENGTH"
+              hint={joinHint(
+                'How long a triggered party session runs.',
+                describeEffectiveNote(shown('durationMin'), cfg?.effectiveDurationMin, (n) => `${n} min`),
+              )}
+              valueText={`${shown('durationMin')} min`}
+              dirty={pending.durationMin !== undefined}
+              disabled={saving}
+              onStep={(d) => stepField('durationMin', d)}
+              toggle={{ on: true, disabled: saving, onPress: () => queue({ durationEnabled: false }) }}
+            />
+          ) : (
+            <View style={styles.partyFieldRow}>
+              <View style={{ flex: 1, minWidth: 140 }}>
+                <Text style={styles.partyFieldLabel}>SESSION LENGTH</Text>
+                <Text style={styles.partyFieldHint}>
+                  Follows the music — ends when the party signal drops (release sustain ={' '}
+                  <Text style={styles.partyMono}>offConfirmMs</Text>, tuned in the{' '}
+                  {companionUrl ? (
+                    <Text
+                      style={styles.partyLink}
+                      onPress={() => Linking.openURL(companionUrl)}
+                      accessibilityRole="link"
+                    >
+                      Audio Companion ↗
+                    </Text>
+                  ) : (
+                    <Text>Audio Companion</Text>
+                  )}
+                  ).
+                </Text>
+              </View>
+              <PartyRowToggle
+                styles={styles}
+                C={C}
+                on={false}
+                disabled={saving}
+                onPress={() => queue({ durationEnabled: true })}
+                label="SESSION LENGTH"
+              />
+            </View>
+          )}
+
+          {/* COOLDOWN — own toggle, but forced off + greyed while the session
+              follows the music (operator rule). Greying comes from
+              describePartyRows() over the engine's own fields, never from
+              local UI memory. */}
+          <PartyStepperRow
+            styles={styles}
+            C={C}
+            label="COOLDOWN"
+            hint={rows.cooldownHint ?? joinHint(
+              'Lockout after a session before another can trigger.',
+              describeEffectiveNote(shown('cooldownSec'), cfg?.effectiveCooldownSec, formatMinutes),
+            )}
+            valueText={formatMinutes(shown('cooldownSec'))}
+            dirty={pending.cooldownSec !== undefined}
+            disabled={saving}
+            greyed={!rows.cooldownEnabled}
+            onStep={(d) => stepField('cooldownSec', d)}
+            toggle={{
+              on: rows.cooldownEnabled,
+              disabled: saving || rows.cooldownToggleDisabled,
+              onPress: () => queue({ cooldownEnabled: !rows.cooldownEnabled }),
+            }}
+          />
+
+          <Text style={styles.helperLine}>
+            Disabling kills any running session immediately and blocks triggering (detection keeps running). Playlist and the numbers above take effect on the NEXT session.
+          </Text>
+        </>
+      ) : null}
+    </View>
+  );
+}
+
 function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone: 'error' | 'ok'; C?: Palette }) {
   if (tone === 'ok' && C) {
     return (
@@ -1194,7 +2170,7 @@ function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone:
 // Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
 // cue (countdown / error / enabled) over it when one matches by id.
 function CueRow({
-  cue, dayIndex, live, fireable, fireBlockedReason, isActive, onFire, styles, C,
+  cue, dayIndex, live, fireable, fireBlockedReason, isActive, activeSequence, onFire, styles, C,
 }: {
   cue: OverviewCue;
   /** When set (ALL DAYS view), prefixes the row with its day number. */
@@ -1207,6 +2183,7 @@ function CueRow({
   fireBlockedReason: 'save' | 'activate' | null;
   /** True when this cue is the live event driving the deck right now. */
   isActive: boolean;
+  activeSequence: TimelineActiveSequence | null;
   onFire: (id: string) => void;
   styles: Styles;
   C: Palette;
@@ -1217,7 +2194,10 @@ function CueRow({
   const subtitle = dayIndex !== null
     ? `D${dayIndex + 1} · ${atText} · ${triggerText}`
     : `${atText} · ${triggerText}`;
-  const countdown = live
+  const sequenceRunning = activeSequence?.cueId === cue.id;
+  const countdown = sequenceRunning
+    ? `STEP ${Math.min(activeSequence!.nextStepIndex + 1, activeSequence!.totalSteps)}/${activeSequence!.totalSteps} · ${formatCountdown(activeSequence!.nextInSec)}`
+    : live
     ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
     : atText;
   // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan (`fireable`,
@@ -1231,6 +2211,23 @@ function CueRow({
     : fireBlockedReason === 'activate'
       ? 'activate this plan to fire'
       : null;
+  // The ONLY alert in CaptainPad that ever carried buttons — and therefore the
+  // one that was outright BROKEN on the web build: RN-web drops Alert.alert
+  // button callbacks, so on the podium this confirmation rendered nothing and
+  // the cue simply never fired. opConfirm resolves on both platforms.
+  const fire = async () => {
+    const confirmation = babyRevealConfirmation(cue.id);
+    if (!confirmation) {
+      onFire(cue.id);
+      return;
+    }
+    const proceed = await opConfirm({
+      title: confirmation.title,
+      message: confirmation.body,
+      confirmLabel: confirmation.confirmLabel,
+    });
+    if (proceed) onFire(cue.id);
+  };
   return (
     <View style={[
       styles.cueRow,
@@ -1250,7 +2247,7 @@ function CueRow({
       </View>
       <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
       <TouchableOpacity
-        onPress={() => onFire(cue.id)}
+        onPress={() => { void fire(); }}
         disabled={!canFire}
         style={[styles.fireButton, !canFire && { opacity: 0.4 }]}
         accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (${fireHint || 'unavailable'})`}
@@ -1417,5 +2414,47 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 12,
     },
     actionErrorText: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12 },
+    // ── PARTY MODE card (session handling) ──
+    partyCard: {
+      borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerLowest, padding: 16, marginBottom: 14,
+    },
+    partyHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+    partyTitle: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text,
+      letterSpacing: 1.2, textTransform: 'uppercase',
+    },
+    partyDetail: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 },
+    partySubLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.icon, letterSpacing: 1.2,
+      textTransform: 'uppercase', marginTop: 16, marginBottom: 8,
+    },
+    partyChip: {
+      paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, borderWidth: 1,
+      minHeight: 40, justifyContent: 'center',
+    },
+    partyChipText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.6 },
+    partyFieldRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder,
+    },
+    partyFieldLabel: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, letterSpacing: 0.6 },
+    partyFieldHint: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 2 },
+    partyFieldValue: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text,
+      minWidth: 76, textAlign: 'center',
+    },
+    partyStepBtn: {
+      width: 44, height: 44, borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center',
+    },
+    partyStepBtnText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 20, color: C.text },
+    partyToggle: {
+      minWidth: 56, minHeight: 44, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    partyToggleText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.8 },
+    partyMono: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text },
+    partyLink: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary },
   });
 }

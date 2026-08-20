@@ -18,7 +18,8 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
-import { useGlobalStyles } from '@/styles/globalStyles';
+import { accentWash, glowFor, identityDot, useGlobalStyles } from '@/styles/globalStyles';
+import { Radius, Type } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   AutopilotTimerPills,
@@ -118,6 +119,12 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
 }) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
+  // The AUTOPILOT window's identity colour is `tertiary` — the palette's
+  // "auto-driven / synced" green, which is literally this card's semantic
+  // (docs/54 §3). The same dot marks the window's workspace chip, so the
+  // card and its chip read as one object.
+  const on = accentWash(C.primary);
+  const live = accentWash(C.tertiary);
 
   // Soft PLAN lock: the whole card (PLAY/PAUSE, SHUFFLE, GROUP, cadence pills,
   // SIZE/DWELL, and the nested DECK TX) changes what's playing, so it's gated as
@@ -128,14 +135,26 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
       pointerEvents={disabled ? 'none' : 'auto'}
       style={bare
         ? { gap: 6, opacity: disabled ? 0.45 : 1 }
-        : { marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6, opacity: disabled ? 0.45 : 1 }}
+        // `cardOnPanel` tones (docs/54 rows 9/13): the lowest surface + the
+        // card radius, so every card on the deck sits at the same depth
+        // inside its window. Padding untouched — density is preserved.
+        : { marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: Radius.card, backgroundColor: C.surfaceContainerLowest, ...globalStyles.ghostBorder, gap: 6, opacity: disabled ? 0.45 : 1 }}
     >
       {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE + GROUP so it costs
           zero extra vertical height — the label rides the baseline of the
           tallest control next to it. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 6, columnGap: 8 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', flexShrink: 1 }}>{title}</Text>
+        {/* flexWrap: the cluster used to SHRINK, which clipped the PLAY/PAUSE
+            control instead of moving it (the identity dot costs this row
+            ~18pt, and the all-four-windows-open landscape column is the
+            binding width). Wrapping keeps the transport whole — it only
+            costs a second line in the layouts where it would have been cut. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', rowGap: 6, gap: 8, flexShrink: 1, minWidth: 0 }}>
+          {/* Identity dot — the AUTOPILOT green. Costs no height (it sits on
+              the label's baseline row) and is what ties this card to its
+              workspace chip. */}
+          <View style={identityDot(C.tertiary)} />
+          <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, flexShrink: 1 }}>{title}</Text>
           {/* Next-pattern-swap countdown — rides right after the label, only
               while a swap is scheduled. Self-ticking (its own 1 Hz interval) so
               it never re-renders the deck screen; reads identically whether the
@@ -143,10 +162,21 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
           <SwapCountdown targetMs={nextSwapAtMs ?? null} />
           <TouchableOpacity
             onPress={() => { onInteraction?.(); onChange({ active: !active }); }}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: active ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: active ? 'transparent' : C.ghostBorder }}
+            // RUNNING is a LIVE state — the engine is swapping patterns on
+            // its own — so it wears the tertiary wash plus the ONE sanctioned
+            // glow (docs/54 §1: armed / live / selected only, never resting
+            // chrome). PAUSED is plain outlined chrome.
+            style={[
+              // flexShrink 0: the identity dot costs this row ~18pt, and in
+              // the ALL-FOUR-WINDOWS-OPEN landscape layout the shrinking
+              // cluster was clipping "PAUSE" to "PAUS". The TITLE yields
+              // (it already truncates); the transport control never does.
+              { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: active ? live.backgroundColor : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.control, borderWidth: 1, borderColor: active ? live.borderColor : C.ghostBorder },
+              active && { boxShadow: glowFor(C.tertiary) },
+            ]}
           >
-            <IconSymbol name={active ? "pause.fill" : "play.fill"} size={16} color={active ? "#FFF" : C.text} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: active ? "#FFF" : C.text, fontSize: 12 }}>
+            <IconSymbol name={active ? "pause.fill" : "play.fill"} size={16} color={active ? live.color : C.text} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: active ? live.color : C.text, fontSize: 12 }}>
               {active ? 'PAUSE' : 'PLAY'}
             </Text>
           </TouchableOpacity>
@@ -155,12 +185,21 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <TouchableOpacity
             onPress={() => { onInteraction?.(); onChange({ shuffle: !shuffle }); }}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
+            // On-state = the shared accent wash. The 1px border is present in
+            // BOTH states (transparent when off) so toggling never nudges the
+            // header row's wrap point.
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 6,
+              paddingHorizontal: 8, paddingVertical: 8,
+              borderRadius: Radius.control, borderWidth: 1,
+              borderColor: shuffle ? on.borderColor : 'transparent',
+              backgroundColor: shuffle ? on.backgroundColor : 'transparent',
+            }}
             accessibilityRole="switch"
             accessibilityLabel={shuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
           >
-            <IconSymbol name="shuffle" size={16} color={shuffle ? C.primary : C.icon} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: shuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
+            <IconSymbol name="shuffle" size={16} color={shuffle ? on.color : C.icon} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: shuffle ? on.color : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
           </TouchableOpacity>
           {/* PATTERN-GROUP LOCALITY: GROUP rides next to SHUFFLE with the SAME
               on/off treatment (icon + label tint primary when on, icon token
@@ -168,12 +207,18 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
               /deck/playlist/autopilot via setAutopilot's group arg. */}
           <TouchableOpacity
             onPress={() => { onInteraction?.(); onChange({ groupMode: !groupMode }); }}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 6,
+              paddingHorizontal: 8, paddingVertical: 8,
+              borderRadius: Radius.control, borderWidth: 1,
+              borderColor: groupMode ? on.borderColor : 'transparent',
+              backgroundColor: groupMode ? on.backgroundColor : 'transparent',
+            }}
             accessibilityRole="switch"
             accessibilityLabel={groupMode ? 'Disable autopilot pattern groups' : 'Enable autopilot pattern groups'}
           >
-            <IconSymbol name="square.grid.2x2" size={16} color={groupMode ? C.primary : C.icon} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: groupMode ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>GROUP</Text>
+            <IconSymbol name="square.grid.2x2" size={16} color={groupMode ? on.color : C.icon} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: groupMode ? on.color : C.icon, fontSize: 12, letterSpacing: 0.5 }}>GROUP</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -187,10 +232,7 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
           TimerPillBar `label` recipe so the row reads consistently. */}
       {profiles && profiles.length ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
-            color: C.icon, textTransform: 'uppercase',
-          }}>
+          <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: C.icon }}>
             PROFILE
           </Text>
           <AutopilotProfilePicker

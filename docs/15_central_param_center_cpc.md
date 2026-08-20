@@ -655,7 +655,7 @@ Implementation pointers:
 - `CaptainPad/hooks/useEngineLock.ts` — the only consumer surface in
   CaptainPad today. Drives `EngineLockoutOverlay` (see
   `docs/16_captain_pad.md` §4.5).
-- `control_podium/PortWatch/src/state/store.ts` — `engineStatus.viewOverrideActive`,
+- `LookingGlass/control_podium/PortWatch/src/state/store.ts` — `engineStatus.viewOverrideActive`,
   `controlLockOwner`, `controlLockLeaseRemainSec`, `deckPlaylistName`,
   and `engineView` are all pulled from the same compact-status PUB.
   The PortWatch DeckScreen reads them to show TAKE LOCK / RELEASE /
@@ -683,7 +683,7 @@ times an hour.
 | Constant | Value | Defined in |
 | -------- | ----- | ---------- |
 | Lease duration | 30 s | `CONTROL_LOCK_LEASE_MS` in `marsin_engine/lib/api_server.js` |
-| Renew interval | 20 s | `LEASE_RENEW_INTERVAL_MS` in `control_podium/PortWatch/src/ui/DeckScreen.tsx` |
+| Renew interval | 20 s | `LEASE_RENEW_INTERVAL_MS` in `LookingGlass/control_podium/PortWatch/src/ui/DeckScreen.tsx` |
 | Defensive renew threshold | 12 s | `LEASE_LOW_WATER_SEC` in same file |
 
 On boot, if the engine restored `controlLock === 'portwatch'` from
@@ -715,7 +715,7 @@ current state *before* enabling any write controls. This is the
    so the DECK / PARAMS screens render with engine ground truth.
 
 The full set of integration tests for this surface lives at
-`control_podium/tests/test_comms_e2e_sim.py`:
+`LookingGlass/control_podium/tests/test_comms_e2e_sim.py`:
 `test_view_override_cmd`, `test_compact_status_surfaces_lock_and_playlist`,
 `test_view_renew_is_idempotent_take`, `test_lock_lease_auto_expires`,
 `test_hlo_triggers_eager_pub`.
@@ -811,7 +811,7 @@ per-component subscription needed.
 Two layers:
 
 1. **Bridge query reply.** The `qry params` handler in
-   `control_podium/comms/bridge.py::_exec_qry` enumerates known keys
+   `LookingGlass/control_podium/comms/bridge.py::_exec_qry` enumerates known keys
    explicitly. Add the new key to the `(short, full)` mapping:
 
    ```python
@@ -830,10 +830,10 @@ Two layers:
    document it inline.
 
 2. **PortWatch parser + UI.** Mirror the new tag in
-   `control_podium/PortWatch/src/status/parse.ts::parseGlobalParamsSnapshot`
+   `LookingGlass/control_podium/PortWatch/src/status/parse.ts::parseGlobalParamsSnapshot`
    (add the field to `GlobalParamsSnapshot`, pull `kv.ch` →
    `Number(...)`). Then add a `StepperBar` in
-   `control_podium/PortWatch/src/ui/ParamsCard.tsx::GlobalParamsCard`
+   `LookingGlass/control_podium/PortWatch/src/ui/ParamsCard.tsx::GlobalParamsCard`
    with whatever discretisation makes sense for the parameter.
 
    Writes go through `cmd param/<key>/<value>` (already in the
@@ -853,9 +853,9 @@ the test is mostly mechanical.
 | Engine      | `marsin_engine/lib/param_center.js`                        | Append to `PARAM_REGISTRY`.                 |
 | Patterns    | Any pattern wanting the value: add `sharedNewParam(v)`.    | Opt-in only.                                |
 | CaptainPad  | `CaptainPad/components/CPCControls.tsx`                    | Only if new type; otherwise auto-picked up. |
-| Bridge      | `control_podium/comms/bridge.py::_exec_qry` (`qry params`) | Add 2-char short tag mapping.               |
+| Bridge      | `LookingGlass/control_podium/comms/bridge.py::_exec_qry` (`qry params`) | Add 2-char short tag mapping.               |
 | PortWatch   | `PortWatch/src/status/parse.ts` + `ParamsCard.tsx`         | Field + UI control.                         |
-| Tests       | `control_podium/tests/test_comms_e2e_sim.py`               | Extend the FakeEngine snapshot + asserts.   |
+| Tests       | `LookingGlass/control_podium/tests/test_comms_e2e_sim.py`               | Extend the FakeEngine snapshot + asserts.   |
 
 The CaptainPad → engine path requires no transport changes at all —
 the schema-driven UI flow + the `useEngineState` hook make every new

@@ -11,6 +11,7 @@
  * (marsin_engine/tools/gallery/live_layout.mjs → buildMap): pick the two
  * world axes with the largest spread, normalize preserving aspect, flip Y.
  */
+import { compareNatural } from '../../core/natural_sort.js';
 
 // ─── Per-type "goofy pixel" styles ────────────────────────────────────────
 // sizeX/sizeY/gap are in design units. sizeX = pixel width along the fixture's
@@ -20,13 +21,39 @@
 // `sectionEvery` adds a subtle extra gap after every Nth pixel (segments a bar
 // into its physical sections).
 export const TYPE_STYLES = {
-  ShehdsBar:  { shape: 'square', sizeX: 13, sizeY: 13, gap: 3, sectionEvery: 6, sectionGap: 4 },
+  // ShehdsBar pixels were 13×13; the operator asked for beefier bar segments in
+  // the 2D view (Sina). Bumped uniformly to 17×17 (+31% linear) — square pixels
+  // stay square, so a bar reads thicker at ANY rotation, and because the size is
+  // in design units it scales with zoom instead of being a fixed screen weight.
+  // In `spatial`/`planar` layouts a bar's LENGTH comes from world coords, so this
+  // is a thickness change with only ~4 design units of extra end-cap.
+  ShehdsBar:  { shape: 'square', sizeX: 17, sizeY: 17, gap: 3, sectionEvery: 6, sectionGap: 4 },
   VintageLed: { shape: 'circle', sizeX: 15, sizeY: 15, gap: 5, specular: true },
   UkingPar:   { shape: 'circle', sizeX: 24, sizeY: 24, gap: 0, bezelRing: true },
+  // LED strand pixels are many & small — tight dots so a 40-px strand reads as
+  // a strand, not a wall. TeLedGrid40 is the TE sign (a true 2-D grid, expanded
+  // via the `planar` layout): compact square cells with a hair of gap.
+  LedStrand:   { shape: 'square', sizeX: 7,  sizeY: 7,  gap: 2 },
+  TeLedGrid40: { shape: 'square', sizeX: 9,  sizeY: 9,  gap: 2 },
+  // TE Sign V3 — the real sign's two interlocking logo halves (LED-class, DMX
+  // transport). Irregular per-pixel `dots` (not a grid): expanded via `planar`
+  // from real world coords, so these are just the dot sizes. Small dots so the
+  // 74-px logo reads as a sign, not a wall.
+  TeSignV3A40: { shape: 'square', sizeX: 7,  sizeY: 7,  gap: 1 },
+  TeSignV3B34: { shape: 'square', sizeX: 7,  sizeY: 7,  gap: 1 },
   _default:   { shape: 'square', sizeX: 13, sizeY: 13, gap: 3 },
 };
 
 export const DEFAULT_CANVAS = { w: 900, h: 520 };
+
+// Fixture types that are DMX-TRANSPORTED on the wire but classified as LED
+// fixtures in the taxonomy (operator ruling, Sina 2026-07-24). Their cluster
+// `kind` is derived as 'led' even though the exporter/model bytes and the wire
+// transport stay DMX — this is a display/selector classification only, so S1's
+// exporter byte-parity test is unaffected. The titanic scene's TE sign is now
+// the real TE Sign V3 pair (TeSignV3A40 + TeSignV3B34, group 'TE Sign'); the
+// legacy TeLedGrid40 placeholder is retired (no scene uses it).
+export const LED_CLASS_FIXTURE_TYPES = new Set(['TeSignV3A40', 'TeSignV3B34']);
 
 const _warnedTypes = new Set();
 
@@ -49,6 +76,13 @@ export function styleFor(fixtureType, typeOverrides) {
   if (typeof ov.sizeY === 'number') out.sizeY = ov.sizeY;
   else if (typeof ov.size === 'number') out.sizeY = ov.size;
   if (typeof ov.gap === 'number') out.gap = ov.gap;
+  if (ov.effect !== undefined) {
+    if (ov.effect !== 'upwash') {
+      throw new Error(`[PixelMap] unsupported fixture effect '${ov.effect}' for ` +
+        `'${fixtureType}' (expected 'upwash')`);
+    }
+    out.effect = ov.effect;
+  }
   return out;
 }
 
@@ -64,10 +98,22 @@ export function buildClusters(batchList) {
     const e = batchList[gi];
     const fi = e.fixIndex;
     if (!cur || cur.fixIndex !== fi) {
+      // `kind` classifies the cluster as 'dmx' | 'led'. It is LED when the
+      // pixel is LED-TRANSPORTED, OR when its fixtureType is LED-class by ruling
+      // (the TE LED Grid is DMX-wired but an LED fixture — operator 2026-07-24;
+      // see LED_CLASS_FIXTURE_TYPES). A strand pixel carries an empty serialized
+      // fixtureType (byte-identity — the exporter never stamps 'LedStrand' on the
+      // model), so the cluster's display type is derived here: an LED cluster
+      // styles as 'LedStrand' unless it has an explicit type. This is a
+      // display/selector classification only — the model bytes stay untouched.
+      const serializedType = e.fixtureType || '';
+      const kind = (e.type === 'led' || LED_CLASS_FIXTURE_TYPES.has(serializedType)) ? 'led' : 'dmx';
+      const fixtureType = serializedType || (kind === 'led' ? 'LedStrand' : 'Generic');
       cur = {
         fixIndex: fi,
         fixKey: e.fixKey || e.name || `Fixture ${fi}`,
-        fixtureType: e.fixtureType || 'Generic',
+        fixtureType,
+        kind,
         group: e.group || '',
         pixels: [], // { gi } — index into batchList for live color read
       };
@@ -236,6 +282,7 @@ export function clusterPixelPositions(cluster, placement, style) {
       sizeX: style.sizeX,
       sizeY: style.sizeY,
       shape: style.shape,
+      effect: style.effect,
       rot,
     });
   }
@@ -272,6 +319,586 @@ export function fixturesInRect(clusters, placements, typeOverrides, x0, y0, x1, 
 /** fixKeys of every fixture in the same logical group (Left Vintage, …). */
 export function fixturesInGroup(clusters, groupName) {
   return clusters.filter((c) => c.group === groupName).map((c) => c.fixKey);
+}
+
+// ─── Panel-level layout (multiview): seed + expand per layout type ────────
+// A "panel" is a view's fixture SUBSET already resolved by the view layer (S2);
+// `clusters` here is that subset, not the whole rig. seedPanel produces anchor
+// placements, expandPanel turns anchors + pixels into screen positions. Layout
+// types: 'spatial' (today's world projection), 'radial' (ring per group by world
+// bearing), 'planar' (true 2-D grid from the pixel cloud — TE sign), 'lanes'
+// (one horizontal row per fixture). Contract: report 20260724_9 §5.
+
+/** Projection plane → [horizontalWorldAxis, verticalWorldAxis]. */
+function planeAxes(projection) {
+  if (projection === 'front') return ['x', 'y', true];
+  if (projection === 'side') return ['z', 'y', true];
+  // The Titanic Aerial camera approaches from +Z, so its near/front end is at
+  // the BOTTOM of the screen. Keep that orientation in every orthographic Top
+  // view: +X runs right and +Z runs down. Front/Side still put world +Y up.
+  return ['x', 'z', false]; // top (default)
+}
+
+/** The two widest-spread world axes across a set of {x,y,z} points. */
+function bestTwoAxes(points) {
+  const spread = (k) => { const v = points.map((p) => p[k]); return Math.max(...v) - Math.min(...v); };
+  const ranked = [['x', spread('x')], ['y', spread('y')], ['z', spread('z')]]
+    .sort((a, b) => b[1] - a[1]);
+  return [ranked[0][0], ranked[1][0]];
+}
+
+/** Fit world points (projected on axA/axB) into the canvas box, aspect-preserved.
+ *  Returns screen {x,y} per input point (single point → canvas center). */
+function fitPointsToBox(points, axA, axB, canvasW, canvasH, padFrac = 0.2) {
+  if (points.length === 1) return [{ x: canvasW / 2, y: canvasH / 2 }];
+  const padX = canvasW * padFrac, padY = canvasH * padFrac;
+  const boxW = Math.max(1, canvasW - padX * 2), boxH = Math.max(1, canvasH - padY * 2);
+  const ha = points.map((p) => p[axA]), va = points.map((p) => p[axB]);
+  const ha0 = Math.min(...ha), ha1 = Math.max(...ha);
+  const va0 = Math.min(...va), va1 = Math.max(...va);
+  const hR = (ha1 - ha0) || 1, vR = (va1 - va0) || 1;
+  const worldAspect = vR / hR, boxAspect = boxH / boxW;
+  let drawW, drawH;
+  if (worldAspect <= boxAspect) { drawW = boxW; drawH = boxW * worldAspect; }
+  else { drawH = boxH; drawW = boxH / worldAspect; }
+  const ox = padX + (boxW - drawW) / 2, oy = padY + (boxH - drawH) / 2;
+  return points.map((p) => ({
+    x: ox + ((p[axA] - ha0) / hR) * drawW,
+    y: oy + (1 - (p[axB] - va0) / vR) * drawH, // flip Y (world up → screen up)
+  }));
+}
+
+/** Group world centroid = mean of member cluster centroids. */
+function groupWorldCentroid(clusters, batchList) {
+  let x = 0, y = 0, z = 0;
+  const n = clusters.length || 1;
+  for (const c of clusters) {
+    const cc = clusterCentroid(c, batchList);
+    x += cc.x; y += cc.y; z += cc.z;
+  }
+  return { x: x / n, y: y / n, z: z / n };
+}
+
+/** Smallest positive gap between distinct values (world cell size of a grid). */
+function minPositiveGap(vals) {
+  const uniq = [...new Set(vals.map((v) => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
+  let min = Infinity;
+  for (let i = 1; i < uniq.length; i++) {
+    const d = uniq[i] - uniq[i - 1];
+    if (d > 1e-6 && d < min) min = d;
+  }
+  return Number.isFinite(min) ? min : 0;
+}
+
+// One ring per group: fixtures sit on a circle around their group centroid, the
+// on-screen angle = the fixture's real world bearing around that centroid, so a
+// physical par ring reads as a ring. Multiple groups' ring centers are laid out
+// with the same aspect-preserving fit as spatial.
+function seedRadial(clusters, batchList, projection, canvasW, canvasH, typeOverrides) {
+  const placements = new Map();
+  const [axA, axB] = planeAxes(projection);
+  const groups = new Map();
+  for (const c of clusters) {
+    const g = c.group || c.fixKey; // an ungrouped fixture is its own 1-ring
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(c);
+  }
+  const groupList = [...groups.values()];
+  const groupCentroids = groupList.map((cs) => groupWorldCentroid(cs, batchList));
+  const centers = fitPointsToBox(groupCentroids, axA, axB, canvasW, canvasH);
+  groupList.forEach((cs, gi) => {
+    const center = centers[gi];
+    const gc = groupCentroids[gi];
+    const maxSize = Math.max(1, ...cs.map((c) => {
+      const s = styleFor(c.fixtureType, typeOverrides); return Math.max(s.sizeX, s.sizeY);
+    }));
+    const spacing = maxSize * 1.6;
+    const radius = Math.max(maxSize * 1.5, (cs.length * spacing) / (2 * Math.PI));
+    for (const c of cs) {
+      const cen = clusterCentroid(c, batchList);
+      const bearing = Math.atan2(cen[axB] - gc[axB], cen[axA] - gc[axA]);
+      const x = center.x + radius * Math.cos(bearing);
+      const y = center.y - radius * Math.sin(bearing); // screen Y flips
+      placements.set(c.fixKey, { x: round1(x), y: round1(y), rot: rot15(-bearing * 180 / Math.PI) });
+    }
+  });
+  return placements;
+}
+
+// One horizontal row per fixture, ordered by (group, name) — the "logical"
+// strands view. Rows are centered on canvasW/2 and stacked top→down.
+//
+// The comparison is NATURAL (numeric-aware), not plain lexicographic — see
+// src/core/natural_sort.js for why (report 20260725_44 §2, D1: a plain
+// `localeCompare` sorts "Group 10" before "Group 2", so the lanes view
+// presented a chain order no other surface agreed with). That module is now
+// the single shared comparator for every name-sorted list in the sim UI; the
+// local alias is kept only so the call sites below stay readable.
+const NATURAL = compareNatural;
+
+function seedLanes(clusters, batchList, canvasW, canvasH, typeOverrides) {
+  const placements = new Map();
+  const ordered = [...clusters].sort((a, b) => {
+    const g = NATURAL(a.group, b.group);
+    return g !== 0 ? g : NATURAL(a.fixKey, b.fixKey);
+  });
+  const rowPitch = Math.max(1, ...clusters.map((c) => styleFor(c.fixtureType, typeOverrides).sizeY)) + 10;
+  const topPad = Math.max(rowPitch, canvasH * 0.08);
+  ordered.forEach((c, r) => {
+    placements.set(c.fixKey, { x: round1(canvasW / 2), y: round1(topPad + r * rowPitch), rot: 0 });
+  });
+  return placements;
+}
+
+// Planar anchors: ALL fixtures in the panel share ONE anchor (the canvas
+// center), rot 0. Planar is a SHARED-FRAME layout — every fixture's real pixel
+// world coords are projected into one common plane/scale at expand time
+// (planarPanelPositions), so two fixtures that physically interlock (e.g. the
+// TE Sign V3 A/B halves along their diagonal seam) render interlocked, not
+// normalized apart. A per-fixture anchor would spread near-identical centroids
+// to opposite corners — exactly the artifact this avoids.
+function seedPlanar(clusters, canvasW, canvasH) {
+  const placements = new Map();
+  const cx = round1(canvasW / 2), cy = round1(canvasH / 2);
+  for (const c of clusters) placements.set(c.fixKey, { x: cx, y: cy, rot: 0 });
+  return placements;
+}
+
+/** Seed anchor placements for a resolved panel subset (see §5).
+ *  @returns {Map<string,{x,y,rot}>} fixKey → anchor. */
+export function seedPanel(panelDef, clusters, batchList, canvasW, canvasH, typeOverrides) {
+  if (!clusters || !clusters.length) return new Map();
+  const layout = (panelDef && panelDef.layout) || 'spatial';
+  const projection = (panelDef && panelDef.projection) || 'top';
+  const w = canvasW || DEFAULT_CANVAS.w, h = canvasH || DEFAULT_CANVAS.h;
+  switch (layout) {
+    case 'radial': return seedRadial(clusters, batchList, projection, w, h, typeOverrides);
+    case 'lanes': return seedLanes(clusters, batchList, w, h, typeOverrides);
+    case 'planar': return seedPlanar(clusters, w, h);
+    case 'spatial':
+    default: return seedLayout(clusters, batchList, projection, w, h, typeOverrides);
+  }
+}
+
+// Every pixel's real world point (for best-fit plane detection).
+function panelPixelWorld(clusters, batchList) {
+  const pts = [];
+  for (const c of clusters) {
+    for (const px of c.pixels) {
+      const e = batchList[px.gi];
+      pts.push({ x: e.wx || 0, y: e.wy || 0, z: e.wz || 0 });
+    }
+  }
+  return pts;
+}
+
+// Layouts that are TRUE projections: they compute every position from world
+// coordinates and therefore IGNORE `placements`. A move on one of these is an
+// OFFSET (see validateOffsets); a move on radial/lanes is an absolute anchor.
+export const PROJECTED_LAYOUTS = new Set(['spatial', 'planar']);
+
+/** Allowed quarter-turns for a projected panel (`panel.rotate`, degrees CCW). */
+export const PANEL_ROTATIONS = [0, 90, 180, 270];
+
+/**
+ * Quarter-turn of a projected (u, v) point, `deg` degrees COUNTER-CLOCKWISE as
+ * the viewer sees it.
+ *
+ * In `projectedPanelPixels` screen X grows with u and screen Y grows as v
+ * SHRINKS (world "up" is screen up), i.e. the projected point in ordinary
+ * maths orientation is (u, v). A CCW turn there is (u, v) → (−v, u), and the
+ * fit box is recomputed on the rotated coordinates afterwards, so the panel
+ * still fills the canvas with the new aspect. This ONLY re-orients the picture
+ * — no point moves relative to any other, and no distance changes.
+ */
+export function rotateProjected(u, v, deg) {
+  switch (deg) {
+    case 0: return [u, v];
+    case 90: return [-v, u];
+    case 180: return [-u, -v];
+    case 270: return [v, -u];
+    default:
+      throw new Error(`[PixelMap] panel rotate must be one of ` +
+        `${PANEL_ROTATIONS.join(' | ')} degrees, got ${JSON.stringify(deg)}`);
+  }
+}
+
+/**
+ * Paint order inside a projected panel: MANY-pixel clusters first, FEW-pixel
+ * clusters last (stable — equal counts keep their batch order).
+ *
+ * A 40-px LED strand or an 18-px bar projects to a continuous ribbon; a par is
+ * a SINGLE pixel. Where a par physically sits inside a strand fan (the chimney
+ * rings do — they crown the stack the strands hang off), the top-down
+ * projection stacks them on the same spot, and in batch order the ribbon was
+ * painted last and swallowed the par whole: the operator's ring of ten read as
+ * three or four dots (his Top-Down review, report 20260725_48). Painting the
+ * sparse fixture last leaves it legible on top of the run it sits inside.
+ * Occlusion only — every pixel keeps its true projected position.
+ */
+function byPaintOrder(clusters) {
+  return clusters
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (b.c.pixels.length - a.c.pixels.length) || (a.i - b.i))
+    .map((e) => e.c);
+}
+
+/**
+ * ⚠ OPERATOR-ORDERED DEPARTURE FROM THE TRUE PROJECTION (Sina, 2026-07-30,
+ * Top-Down only): "bring the 2 sides closer so they are seen easier together."
+ *
+ * The titanic's two halves stand ~26 world units apart with NOTHING between
+ * them, and the two small smoke stacks sit another ~14 and ~8 units outboard.
+ * On the real scene that is **48.3 of the 90.5 world units of width — 53 % of
+ * the view is empty**, and because `spatial` fits the whole cloud
+ * aspect-preserving, that emptiness is paid for by shrinking every fixture.
+ *
+ * This collapses each MAXIMAL EMPTY BAND along the projected horizontal axis
+ * that is wider than `minWorldGap` down to exactly `gapWorld`. It is a
+ * PIECEWISE TRANSLATION: every point on one side of a band shifts by the same
+ * amount, so within a side **every distance, angle and ordering is exactly
+ * preserved** and the per-side scale is untouched. Only the inter-side spacing
+ * changes — precisely the licence he gave, and nothing more.
+ *
+ * Why a threshold rather than hand-written per-side offsets: hardcoded offsets
+ * would have to name sides or groups, and this session has now repaired that
+ * exact failure mode three times (report 20260725_48 addendum 2) — an offset
+ * table goes stale the moment he moves a fixture. The threshold reads the
+ * geometry, so it cannot go stale; it is made non-silent by `minWorldGap` being
+ * a declared constant, by the returned band list, and by a one-line console
+ * report of every band it collapsed.
+ *
+ * Margin on the real scene: the bands it collapses are 26.5 / 13.8 / 8.1 world
+ * units; the largest gap it must NOT touch (inside the left half) is 1.5. A
+ * `minWorldGap` of 5 therefore sits with >3× headroom on both sides.
+ *
+ * @param {Array} P projected points, mutated in place (`u` remapped)
+ * @param {{minWorldGap:number, gapWorld:number}} spec
+ * @returns {{bands: Array<{from:number,to:number,width:number,shrink:number}>, removed:number}}
+ */
+export function compressProjectedGaps(P, spec) {
+  const { minWorldGap, gapWorld } = spec;
+  const sorted = [...new Set(P.map((p) => p.u))].sort((a, b) => a - b);
+  const bands = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const width = sorted[i] - sorted[i - 1];
+    if (width > minWorldGap) {
+      bands.push({ from: sorted[i - 1], to: sorted[i], width, shrink: width - gapWorld });
+    }
+  }
+  if (!bands.length) return { bands, removed: 0 };
+  for (const p of P) {
+    let shift = 0;
+    for (const b of bands) if (p.u >= b.to) shift += b.shrink;
+    p.u -= shift;
+  }
+  return { bands, removed: bands.reduce((a, b) => a + b.shrink, 0) };
+}
+
+/**
+ * ⚠ SECOND OPERATOR-ORDERED DEPARTURE (Sina, 2026-07-30, Front view):
+ * "resize the vintage pixels to 6 circles that are a bit bigger."
+ *
+ * A VintageLed fixture really is **6 LEDs** (confirmed against the live model —
+ * every VintageLed cluster carries exactly 6 pixels), but they sit inside a
+ * ~0.38-world-unit diagonal, i.e. a pitch of 0.075 world units. At the Front
+ * view's whole-side scale that is under 3 design units between LED centres, so
+ * six 15-unit discs fuse into one capsule — the "cramped smear" he circled.
+ * No glyph size can fix that: to separate them the discs would have to be ~2
+ * design units, i.e. invisible. The only way to show six circles is to stretch
+ * the fixture's INTERNAL pitch.
+ *
+ * So, for the declared fixture types only, a cluster's pixels are re-laid along
+ * **its own projected axis** (first→last pixel) at exactly `pitch` world units,
+ * centred on the cluster's **true projected centroid**. The fixture stays where
+ * it physically is, keeps its real orientation and its real LED order; only the
+ * spacing between its own LEDs is stretched. Nothing else on the panel moves.
+ *
+ * Declared per fixtureType on purpose: applied to `ShehdsBar` (18 px at the same
+ * sub-pitch) this would draw a bar eighteen pitches long and wreck the view.
+ *
+ * @param {Array} P projected points, mutated in place (`u`/`v` re-laid)
+ * @param {Object<string,number>} pitchByType world units between LED centres
+ * @returns {{expanded: number, types: Array<string>}}
+ */
+export function expandFixturePitch(P, pitchByType) {
+  const byFix = new Map();
+  for (const p of P) {
+    if (!(p.fixtureType in pitchByType)) continue;
+    if (!byFix.has(p.fixKey)) byFix.set(p.fixKey, []);
+    byFix.get(p.fixKey).push(p);
+  }
+  const types = new Set();
+  for (const pts of byFix.values()) {
+    if (pts.length < 2) continue;
+    const pitch = pitchByType[pts[0].fixtureType];
+    const cu = pts.reduce((a, p) => a + p.u, 0) / pts.length;
+    const cv = pts.reduce((a, p) => a + p.v, 0) / pts.length;
+    // VintageLed is six heads on a vertical body — expand to 2×3 so the Front
+    // view reads as two distinct rows of three circles, not one cramped column
+    // (operator, 2026-08-18).
+    if (pts[0].fixtureType === 'VintageLed' && pts.length === 6) {
+      pts.sort((a, b) => (a.gi || 0) - (b.gi || 0));
+      const du = pts[pts.length - 1].u - pts[0].u;
+      const dv = pts[pts.length - 1].v - pts[0].v;
+      const len = Math.hypot(du, dv);
+      let ux = 1; let uv = 0; let px = 0; let pv = 1;
+      if (len > 1e-9) {
+        ux = du / len; uv = dv / len;
+        px = -uv; pv = ux;
+      }
+      const cols = 3; const rows = 2;
+      pts.forEach((p, i) => {
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        const tCol = (col - (cols - 1) / 2) * pitch;
+        const tRow = (row - (rows - 1) / 2) * pitch;
+        p.u = cu + ux * tCol + px * tRow;
+        p.v = cv + uv * tCol + pv * tRow;
+      });
+      types.add(pts[0].fixtureType);
+      continue;
+    }
+    // The fixture's own projected direction, from its first to its last LED.
+    const du = pts[pts.length - 1].u - pts[0].u;
+    const dv = pts[pts.length - 1].v - pts[0].v;
+    const len = Math.hypot(du, dv);
+    // A fixture whose pixels project to a single point has no axis to stretch
+    // along — leave it exactly where it is rather than inventing a direction.
+    if (!(len > 1e-9)) continue;
+    const [ux, uv] = [du / len, dv / len];
+    const half = (pts.length - 1) / 2;
+    pts.forEach((p, i) => {
+      const t = (i - half) * pitch;
+      p.u = cu + ux * t;
+      p.v = cv + uv * t;
+    });
+    types.add(pts[0].fixtureType);
+  }
+  return { expanded: byFix.size, types: [...types] };
+}
+
+const _reportedLayoutTweaks = new Set();
+
+/** Say ONCE, per distinct outcome, that a panel departed from the true
+ *  projection — an operator-ordered departure must never be silent. */
+function reportLayoutTweak(panelId, line) {
+  const key = `${panelId}::${line}`;
+  if (_reportedLayoutTweaks.has(key)) return;
+  _reportedLayoutTweaks.add(key);
+  console.info(`[PixelMap] panel '${panelId}': ${line}`);
+}
+
+/**
+ * Whole-panel TRUE projection: place EVERY pixel at its real world position
+ * projected onto the (axA,axB) plane, so the pane looks like the physical rig
+ * from that direction — top-down really is the ship from above, front really is
+ * the front, the TE-sign halves interlock along their real seam. Two scale
+ * modes:
+ *   - 'fit'  (spatial): scale + letterbox the whole projected cloud to fill the
+ *            canvas, aspect-preserved, padded for pixel size. The rig is
+ *            screen-fitting and spatially representative (operator priority).
+ *   - 'cell' (planar): scale so the tightest world cell = the style pitch (true,
+ *            un-normalized size) and center — for a self-contained grid/logo.
+ * Positions come straight from world coords (no per-fixture centroid+line
+ * abstraction, no collision relaxation), so nothing is distorted or pushed
+ * off-canvas. Front/Side put world up at screen-up; Top follows the Aerial
+ * camera convention, where +Z/front is screen-down.
+ */
+function projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, canvasW, canvasH,
+  scaleMode, rotate = 0, tweaks = {}, invertV = true) {
+  const P = [];
+  let maxHalf = 1, pitch = 1;
+  for (const c of byPaintOrder(clusters)) {
+    const style = styleFor(c.fixtureType, typeOverrides);
+    maxHalf = Math.max(maxHalf, style.sizeX / 2, style.sizeY / 2);
+    pitch = Math.max(pitch, style.sizeX + style.gap);
+    for (const px of c.pixels) {
+      const e = batchList[px.gi];
+      // `rotate` is specified in SCREEN-space CCW degrees. A Top projection
+      // maps world +Z to screen-down (no vertical inversion), so its world-
+      // plane rotation needs the opposite sign to preserve that UI contract.
+      const screenSpaceRotation = invertV ? rotate : (360 - rotate) % 360;
+      const [u, v] = rotateProjected(e[axAWorld(axA)] || 0,
+        e[axAWorld(axB)] || 0, screenSpaceRotation);
+      P.push({
+        gi: px.gi,
+        fixKey: c.fixKey,
+        fixtureType: c.fixtureType,
+        group: c.group,
+        style,
+        u,
+        v,
+      });
+    }
+  }
+  if (!P.length) return [];
+
+  // Operator-ordered departures from the true projection, in this order:
+  // stretch a fixture's own LED pitch first (it changes where pixels sit), then
+  // collapse whatever dead bands remain. Both are no-ops unless the panel asks.
+  const panelId = tweaks.panelId || 'panel';
+  if (tweaks.expandPitch) {
+    const r = expandFixturePitch(P, tweaks.expandPitch);
+    if (r.expanded) {
+      reportLayoutTweak(panelId, `LED pitch stretched on ${r.expanded} fixture(s) ` +
+        `[${r.types.join(', ')}] so their own LEDs read as separate dots — ` +
+        'fixture positions unchanged (operator order, 2026-07-30).');
+    }
+  }
+  if (tweaks.compress) {
+    const r = compressProjectedGaps(P, tweaks.compress);
+    if (r.bands.length) {
+      reportLayoutTweak(panelId, `${r.bands.length} empty band(s) collapsed along the ` +
+        `horizontal axis (${r.bands.map((b) => b.width.toFixed(1)).join(' + ')} → ` +
+        `${tweaks.compress.gapWorld} world units each, ${r.removed.toFixed(1)} removed) ` +
+        'so the ship\'s two halves read together — within-side geometry is ' +
+        'untouched (operator order, 2026-07-30).');
+    }
+  }
+  const us = P.map((p) => p.u), vs = P.map((p) => p.v);
+  const u0 = Math.min(...us), u1 = Math.max(...us), v0 = Math.min(...vs), v1 = Math.max(...vs);
+  const uR = (u1 - u0) || 1, vR = (v1 - v0) || 1;
+  let scale, ox, oy;
+  if (scaleMode === 'cell') {
+    const gU = minPositiveGap(us), gV = minPositiveGap(vs);
+    const worldCell = Math.min(gU || gV || 1, gV || gU || 1) || 1;
+    scale = pitch / worldCell;
+    ox = (canvasW - uR * scale) / 2;
+    oy = (canvasH - vR * scale) / 2;
+  } else { // 'fit'
+    const pad = maxHalf + 24;
+    const boxW = Math.max(1, canvasW - pad * 2), boxH = Math.max(1, canvasH - pad * 2);
+    scale = Math.min(boxW / uR, boxH / vR);
+    ox = pad + (boxW - uR * scale) / 2;
+    oy = pad + (boxH - vR * scale) / 2;
+  }
+  // Operator MOVE offsets (report 20260725_55): a per-fixture delta in DESIGN
+  // units, applied AFTER the fit. Post-fit on purpose — an offset folded into
+  // the world coords would re-run the fit on every pointermove and rubber-band
+  // the whole panel while he drags. Post-fit, his move is exactly the distance
+  // he dragged and nothing else on the panel shifts.
+  const off = tweaks.offsets;
+  const base = P.map((p) => ({
+    p,
+    x: ox + (p.u - u0) * scale,
+    y: invertV ? oy + (v1 - p.v) * scale : oy + (p.v - v0) * scale,
+  }));
+
+  // A planar fixture group is one authored visual body. The Titanic TE sign is
+  // two fixture records (A/B) only because of its controller split; rotating
+  // either half must rotate the complete logo around their shared centroid.
+  // Each member persists the SAME offsets.rot value so offsets remains the one
+  // source of truth. A hand-edited mismatch is refused loudly instead of
+  // rendering a torn logo.
+  const groupRotations = new Map();
+  if (tweaks.atomicGroupRotation && off) {
+    const fixturesByGroup = new Map();
+    for (const p of P) {
+      if (!p.group) continue;
+      if (!fixturesByGroup.has(p.group)) fixturesByGroup.set(p.group, new Set());
+      fixturesByGroup.get(p.group).add(p.fixKey);
+    }
+    for (const [group, fixtures] of fixturesByGroup) {
+      if (fixtures.size < 2) continue;
+      const angles = [...fixtures].map((key) => (off[key] && off[key].rot) || 0);
+      if (angles.some((angle) => Math.abs(angle - angles[0]) > 1e-6)) {
+        throw new Error(`[PixelMap] projected group '${group}' has mismatched ` +
+          'offsets.rot values; grouped fixtures must rotate as one body');
+      }
+      if (Math.abs(angles[0]) > 1e-6) groupRotations.set(group, angles[0]);
+    }
+  }
+
+  const centers = new Map();
+  for (const group of groupRotations.keys()) {
+    const members = base.filter(({ p }) => p.group === group);
+    centers.set(group, {
+      x: members.reduce((sum, point) => sum + point.x, 0) / members.length,
+      y: members.reduce((sum, point) => sum + point.y, 0) / members.length,
+    });
+  }
+
+  return base.map(({ p, x, y }) => {
+    const d = off && off[p.fixKey];
+    const groupAngle = groupRotations.get(p.group) || 0;
+    if (groupAngle) {
+      const center = centers.get(p.group);
+      const rad = groupAngle * Math.PI / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      const dx = x - center.x, dy = y - center.y;
+      x = center.x + dx * cos - dy * sin;
+      y = center.y + dx * sin + dy * cos;
+    }
+    const localAngle = d ? (d.rot || 0) : 0;
+    const washAngle = p.style.effect === 'upwash' ? (tweaks.washAngle || 0) : 0;
+    return {
+      gi: p.gi, fixKey: p.fixKey,
+      cx: x + (d ? d.dx : 0),
+      cy: y + (d ? d.dy : 0),
+      sizeX: p.style.sizeX, sizeY: p.style.sizeY, shape: p.style.shape,
+      effect: p.style.effect,
+      rot: p.style.effect === 'upwash' || groupAngle ? washAngle + localAngle : 0,
+    };
+  });
+}
+
+/** Expand a resolved panel subset into per-pixel screen positions (see §5).
+ *  spatial + planar are TRUE whole-panel projections (spatially representative,
+ *  screen-fitting — operator priority, 2026-07-24); radial + lanes keep the
+ *  per-fixture anchor/line model (editable arrangements). Design space is the
+ *  fixed DEFAULT_CANVAS; the pane letterboxes it into its sub-rect.
+ *  @returns {Array<{gi,cx,cy,sizeX,sizeY,shape,rot,fixKey}>} flat over all clusters. */
+export function expandPanel(panelDef, clusters, batchList, placements, typeOverrides, offsets) {
+  if (!clusters || !clusters.length) return [];
+  const layout = (panelDef && panelDef.layout) || 'spatial';
+  const W = DEFAULT_CANVAS.w, H = DEFAULT_CANVAS.h;
+  // `rotate` (degrees CCW, quarter turns) re-orients a TRUE projection whose
+  // natural axis pick lands sideways — the TE Sign V3 pair sits on a vertical
+  // plane whose widest axis is world Y, so `bestTwoAxes` drew world-up along
+  // screen-X and the logo read a quarter turn off (operator, report
+  // 20260725_48). Only spatial/planar honour it; the schema rejects it
+  // elsewhere (pixel_map_views.validatePanelDef).
+  const rotate = (panelDef && panelDef.rotate) || 0;
+  if (layout === 'spatial') {
+    const [axA, axB, invertV] = planeAxes((panelDef && panelDef.projection) || 'top');
+    // `compress` / `expandPitch` are the two operator-ordered departures from the
+    // true projection (2026-07-30). They ride ONLY on `spatial`, where the axes
+    // are real world axes and the change is explainable; the schema rejects them
+    // elsewhere (pixel_map_views.validatePanelDef).
+    const tweaks = {
+      panelId: (panelDef && panelDef.id) || 'panel',
+      compress: panelDef && panelDef.compress,
+      expandPitch: panelDef && panelDef.expandPitch,
+      washAngle: panelDef && panelDef.washAngle,
+      offsets,
+    };
+    return projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, W, H,
+      'fit', rotate, tweaks, invertV);
+  }
+  if (layout === 'planar') {
+    const [axA, axB] = bestTwoAxes(panelPixelWorld(clusters, batchList));
+    const scaleMode = panelDef && panelDef.fit ? 'fit' : 'cell';
+    return projectedPanelPixels(clusters, batchList, typeOverrides, axA, axB, W, H, scaleMode, rotate,
+      {
+        panelId: (panelDef && panelDef.id) || 'panel',
+        atomicGroupRotation: true,
+        washAngle: panelDef && panelDef.washAngle,
+        offsets,
+      });
+  }
+  // radial | lanes → per-fixture anchor + local-line expansion (editable).
+  const out = [];
+  if (!placements) return out;
+  for (const c of clusters) {
+    const pl = placements.get(c.fixKey);
+    if (!pl) continue; // seedPanel fills every cluster; a miss is a caller bug
+    const style = styleFor(c.fixtureType, typeOverrides);
+    // Stamp fixKey so the pane can render per-fixture selection + resolve
+    // edit-mode hit tests (S4 seam — the §5 expandPanel shape documents fixKey).
+    for (const p of clusterPixelPositions(c, pl, style)) { p.fixKey = c.fixKey; out.push(p); }
+  }
+  return out;
 }
 
 /** Topmost fixture whose bounds contain design-space point (px,py), or null. */

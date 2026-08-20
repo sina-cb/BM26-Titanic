@@ -1,118 +1,80 @@
 /*
   00_golden_hour_wash.js — "Golden Hour Wash"
-  Extremely warm, ambient, shifting sunset lighting. A soft warm NOISE WASH
-  drifts across the rig in an analogous red -> sunset-orange palette
-  (cp1H ~ 0.0, cp2H ~ 0.08). This is the SIGNATURE VINTAGE-BLINDER pattern:
-  the vintage heads (sectionId == 2) act as audience blinders — on the KICK we
-  drive the W (white) channel HARD on those fixtures via rgbwau, for contrast on
-  an otherwise calm analogous warm palette.
 
-  CORE (non-repeating) MATH — the wash field is a sum of incommensurate waves
-  evaluated at a drifting coordinate:
-      v = nx*SX*radius + ny*SY*radius*0.61803 - nz*SZ*radius*0.41421 + driftA
-      noise = wave(v) blended with wave(v*1.73205 + driftB*0.7) ; cubed for soft cores
-  driftA / driftB accumulate at irrational-ratio rates (√2, √3, φ) so the field
-  never visibly re-locks. Direction auto-varies via a slow incommensurate
-  oscillator that occasionally flips the drift sign on its own.
+  The bread-and-butter warm look: late sunlight moving across a ship that is
+  already glowing from within. The red-to-sunset-orange palette and soft wash
+  remain recognizable on the test bench, while fixture capability gives the
+  full ship a deliberate hierarchy:
 
-  CONTROLS (UI order = declaration order)
-    - localSpeed : FIRST control. Drives wash drift rate via pow(2,(v-0.5)*4).
-                   v=0 still creeps, v=1 clearly faster.
-    - direction  : drift direction. Slider-center freeze guard; effective sign
-                   never exactly 0. Combined with autonomous auto-switching.
-    - sliderLevel  : overall brightness (PRIMARY audio target).
-    - sliderKick   : kick brightness pop on the warm colour body.
-    - sliderRadius : movement RADIUS / scale of the wash features.
-    - sliderWarmth : warm glow lift (pushes value toward cp2 + warm floor).
-    - sliderWhiteLevel : overall WHITE amount / always-on warm-white keep on the
-                   vintage blinder heads (sectionId == 2).
-    - sliderWhiteKick  : kick-driven WHITE pop — the audience BLINDER bite on the
-                   vintage heads (drives the W channel hard).
-    - sliderWhiteWarmth: tint of the white: warm amber (A channel) at 0 ->
-                   cool / UV (U channel) at 1. Lets the blinder read tungsten-warm
-                   for golden-hour or punch cool-white for a hard hit.
-    - colorPalette1/2 : strict cp1<->cp2 warm palette.
+    - Bars carry the broad moving sunset field.
+    - Vintage rail lights are the jewelry. They alone emit matched W+A, giving
+      them the bright golden-white signature and the beat flash.
+    - TE signs carry a calm, spatially graded palette treatment with a firm
+      RGB floor: the letterforms stay readable without borrowing the Jewelry's
+      iconic golden-white emitter treatment.
+    - Every other light carries a calmer RGB-only contour so strands remain
+      readable and pars feel like a warm interior glow.
 
-  AUDIO (modulators-only — never read CPC audio globals natively). The block
-  below is the STRICT source of truth a generator parses to build the deploy
-  playlist; keep it in sync with the math.
+  No direction control: this is an ambient drift, not a directional chase.
+  Three ordinary controls are intentionally strong audio targets: level moves
+  the whole look, emberSwell expands the warm body, and jewelryFlash makes the
+  Vintage rails visibly answer a kick. The pattern never reads audio directly.
 
 AUDIO_MODULATION_V1:
-  sliderLevel      <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
-  sliderKick       <- micKick range 0.00..1.00 curve pow2    # warm-body kick pop
-  sliderRadius     <- micFlux range 0.40..0.90 curve linear  # wash feature scale / build
-  sliderWarmth     <- micMid  range 0.30..0.85 curve linear  # warm glow reshape (secondary)
-  sliderWhiteLevel <- micLow  range 0.30..0.80 curve linear  # vintage warm-white keep
-  sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # vintage W blinder bite
-  # STATIC (omit from audio): localSpeed, direction, whiteWarmth, colorPalette1/2
+  sliderLevel        <- micLow  range 0.42..0.92 curve ease  # whole-ship breathing
+  sliderEmberSwell   <- micFlux range 0.08..0.95 curve ease  # broad warm expansion
+  sliderJewelryFlash <- micKick range 0.00..1.00 curve pow2  # Vintage-only golden-white hit
+  # STATIC (omit from audio): localSpeed, grain, jewelryWhite, jewelrySpeed, colorPalette1/2
 */
 
-// ── Exported controls (UI order = declaration order) ─────────────────────────
-export var localSpeed = 0.5;   // FIRST: wash drift rate
-export var direction  = 1.0;   // drift direction. STORED as a signed value (-1..1);
-                               // default 1.0 = full-speed forward. (0.5 was read as a
-                               // half-strength sign and halved the og wash drift rate.)
-export var level      = 0.5;   // overall brightness (PRIMARY) — mid, audio swings up
-export var kick       = 0.0;   // kick brightness pop on the warm colour body —
-                               // transient target; a steady lift floods red and
-                               // collapses the analogous hueSpread below spec.
-export var radius     = 0.5;   // movement radius / feature scale
-export var warmth     = 0.5;   // warm glow lift
-export var whiteLevel = 0.45;  // WHITE: overall white amount / vintage keep
-export var whiteKick  = 0.2;   // WHITE: kick-driven blinder bite (vintage W pop) —
-                               // low static default: it is a transient blinder; a
-                               // steady 0.5 washes the warm hue below spec (hueSpread).
-export var whiteWarmth = 0.25; // WHITE: warm(A) <-> cool/UV(U) tint of the white —
-                               // low default keeps golden-hour tungsten-warm; UV at
-                               // 1 cools it. (0.5 introduces blue that breaks identity.)
+// Exported controls — declaration order is physical MIDI knob order.
+export var localSpeed    = 0.42;
+export var level         = 0.62;
+export var grain         = 0.36;
+export var emberSwell    = 0.28;
+export var jewelryWhite  = 0.56;
+export var jewelrySpeed  = 0.50;
+export var jewelryFlash  = 0.0;
 
-export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red (og default)
-export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0;  // sunset orange (og default cp2H=0.08)
+export var cp1H = 0.0,   cp1S = 1.0, cp1V = 1.0;
+export var cp2H = 0.085, cp2S = 1.0, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-// Identity sliders — store v DIRECTLY; scale inside render3D / beforeRender.
-export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) {
-  // Guard the slider center so the effective sign is never exactly 0.
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06;
-  else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
-}
-export function sliderLevel(v)  { level = v; }
-export function sliderKick(v)   { kick = v; }
-export function sliderRadius(v) { radius = v; }
-export function sliderWarmth(v) { warmth = v; }
-export function sliderWhiteLevel(v)  { whiteLevel = v; }
-export function sliderWhiteKick(v)   { whiteKick = v; }
-export function sliderWhiteWarmth(v) { whiteWarmth = v; }
+export function sliderLocalSpeed(v)    { localSpeed = v; }
+export function sliderLevel(v)         { level = v; }
+export function sliderGrain(v)         { grain = v; }
+export function sliderEmberSwell(v)    { emberSwell = v; }
+export function sliderJewelryWhite(v)  { jewelryWhite = v; }
+export function sliderJewelrySpeed(v)  { jewelrySpeed = v; }
+export function sliderJewelryFlash(v)  { jewelryFlash = v; }
 
-// ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 1.05;          // drift turns/sec at localSpeed = 1.0 — tuned so that at
-                              // default sliders (direction=1, localMult=1) the wash drifts
-                              // at og-ballpark per-frame motion (og: tPhase += delta/1310.72;
-                              // raised vs 0.55 because the 2-wave blend is gentler than og's
-                              // single cubed wave, so a higher phase rate matches the look).
-var BASE_RATE = 0.10;         // creep so motion never fully stops at localSpeed=0
-// driftA/driftB feed wave() (period 1.0) with integer-coefficient terms, so an
-// INTEGER wrap is seam-free; 1000.0 keeps them far from float-precision breakdown.
+var FULL_TURN = 6.283185307179586;
+// Optional accent role. Self-declaring the canonical append-only id keeps this
+// shared pattern portable on models with no TE signs; no load-bearing role is
+// hidden or substituted.
+var FIX_TE_SIGN = 7;
+// Every phase consumer below uses a coefficient whose product with 1000 is an
+// integer. A large 1000-turn wrap therefore preserves every wave/sin/cos value
+// exactly instead of injecting the visible jumps caused by the old 1-turn wrap.
 var PHASE_WRAP = 1000.0;
-// dirOsc feeds sin(); wrap it at a MULTIPLE OF 2π (not an arbitrary big number) so
-// sin(dirOsc) is continuous across the wrap — otherwise the wrap injects a phase
-// seam that makes the auto-reverse fire spuriously. 200π ≈ 628.3 (≈22.9 min @0.137).
-var OSC_WRAP = 628.31853071795862;  // 100 * 2π
 
-// ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
-var pr1 = 1, pg1 = 0, pb1 = 0;
-var pr2 = 0, pg2 = 0, pb2 = 1;
+var pr1 = 1.0, pg1 = 0.0, pb1 = 0.0;
+var pr2 = 1.0, pg2 = 0.5, pb2 = 0.0;
+
+function clamp01(v) {
+  if (v < 0.0) return 0.0;
+  if (v > 1.0) return 1.0;
+  return v;
+}
+
 function _hsv2rgb1() {
-  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
-  var iv = floor(hv * 6) % 6;
-  var fv = hv * 6 - floor(hv * 6);
-  var pv = cp1V * (1 - cp1S);
-  var qv = cp1V * (1 - fv * cp1S);
-  var tv = cp1V * (1 - (1 - fv) * cp1S);
+  var hv = cp1H - floor(cp1H); if (hv < 0.0) hv += 1.0;
+  var iv = floor(hv * 6.0) % 6;
+  var fv = hv * 6.0 - floor(hv * 6.0);
+  var pv = cp1V * (1.0 - cp1S);
+  var qv = cp1V * (1.0 - fv * cp1S);
+  var tv = cp1V * (1.0 - (1.0 - fv) * cp1S);
   if      (iv == 0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
   else if (iv == 1) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
   else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
@@ -120,13 +82,14 @@ function _hsv2rgb1() {
   else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
   else              { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
 }
+
 function _hsv2rgb2() {
-  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
-  var iv = floor(hv * 6) % 6;
-  var fv = hv * 6 - floor(hv * 6);
-  var pv = cp2V * (1 - cp2S);
-  var qv = cp2V * (1 - fv * cp2S);
-  var tv = cp2V * (1 - (1 - fv) * cp2S);
+  var hv = cp2H - floor(cp2H); if (hv < 0.0) hv += 1.0;
+  var iv = floor(hv * 6.0) % 6;
+  var fv = hv * 6.0 - floor(hv * 6.0);
+  var pv = cp2V * (1.0 - cp2S);
+  var qv = cp2V * (1.0 - fv * cp2S);
+  var tv = cp2V * (1.0 - (1.0 - fv) * cp2S);
   if      (iv == 0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
   else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
   else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
@@ -135,25 +98,15 @@ function _hsv2rgb2() {
   else              { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
 }
 
-function clamp01(v) {
-  if (v < 0.0) return 0.0;
-  if (v > 1.0) return 1.0;
-  return v;
-}
-
-// ── Persistent state ─────────────────────────────────────────────────────────
-var driftA = 0.0;      // primary wash drift accumulator
-var driftB = 0.0;      // secondary (incommensurate) drift accumulator
-var dirOsc = 0.0;      // autonomous direction oscillator accumulator
-var autoSign = 1.0;    // current autonomous drift sign — CONTINUOUS soft-clipped
-                       // sin(dirOsc) in [-1,1], eases through reversals (no kink)
-var levGain = 1.0;     // resolved overall brightness gain this frame
-var radScale = 0.5;    // resolved radius this frame
-var kickBody = 0.0;    // resolved kick pop on the warm colour body this frame
-var warmLift = 0.0;    // resolved warm glow lift this frame
-var whiteKeep = 0.0;   // resolved always-on white keep this frame
-var whiteBite = 0.0;   // resolved kick-driven blinder bite this frame
-var whiteTint = 0.0;   // resolved white tint: 0 warm(A) -> 1 cool/UV(U)
+var phaseA = 0.0;
+var phaseB = 0.0;
+var phaseC = 0.0;
+var jewelryPhase = 0.0;
+var levelGain = 0.0;
+var grainScale = 0.0;
+var emberAmount = 0.0;
+var jewelryKeep = 0.0;
+var jewelryHit = 0.0;
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -163,57 +116,29 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // localSpeed drives drift rate (canonical idiom). Keep a base creep so the
-  // wash still moves at localSpeed = 0.
+  // Global speed is already inside delta; localSpeed is only the local trim.
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
-  var rate = (BASE_RATE + MAX_RATE * localMult);
+  // Wide but useful range: localSpeed=0 stays an ambient creep, while 1.0 is
+  // unmistakably fast even with the engine's global SPEED around halfway.
+  var rate = 0.008 + 0.080 * localMult;
+  phaseA += dt * rate;
+  phaseB += dt * rate * 1.41421356237;
+  phaseC += dt * rate * 0.61803398875;
+  // The Vintage white crest intentionally travels faster than the broad wash.
+  // JewelrySpeed is its dedicated 1/4x..4x trim; midpoint preserves the
+  // operator-approved roughly ten-second cadence near localSpeed ~= 0.39.
+  var jewelryMult = pow(2.0, (jewelrySpeed - 0.5) * 4.0);
+  jewelryPhase += dt * (0.035 + 0.080 * localMult) * jewelryMult;
+  if (phaseA >= PHASE_WRAP) phaseA -= PHASE_WRAP;
+  if (phaseB >= PHASE_WRAP) phaseB -= PHASE_WRAP;
+  if (phaseC >= PHASE_WRAP) phaseC -= PHASE_WRAP;
+  if (jewelryPhase >= PHASE_WRAP) jewelryPhase -= PHASE_WRAP;
 
-  // Autonomous direction VARIATION: a slow oscillator. The autonomous drift sign
-  // is a CONTINUOUS odd function of sin(dirOsc) — clock-driven, ~half-period 22.9s,
-  // so the wash drifts one way for ~23s then eases back the other way, organically.
-  // CRITICAL #1: dirOsc must wrap at a multiple of 2π so sin(dirOsc) is continuous
-  //   across the wrap (otherwise a phase seam appears at the wrap).
-  // CRITICAL #2: the autonomous sign must change CONTINUOUSLY, never with a discrete
-  //   ±1 flip. A discrete flip leaves brightness continuous but instantly reverses
-  //   the drift VELOCITY — a sharp motion kink the wash visibly jerks through every
-  //   ~917 frames (a 2nd-difference / "accel" spike of ~6× the local median, ~9σ).
-  //   So autoSign is a SOFT-CLIPPED sin: it saturates to ±1 for most of each swing
-  //   (preserving the "drift this way, then that way" identity) but passes smoothly
-  //   through 0 at the reversal, so the velocity reverses without a discontinuity.
-  //   (The old code compared sin(dirOsc) against sin(dirOsc*1.41421) — two different
-  //   functions — so flips burst to ~1200/min once dirOsc grew, stalling/jittering.)
-  dirOsc = dirOsc + dt * 0.137;        // slow, ~0.137 rad/s
-  if (dirOsc >= OSC_WRAP) dirOsc = dirOsc - OSC_WRAP;  // wrap at 100*2π (seam-free)
-  var osc = sin(dirOsc);
-  // Soft clip: osc / sqrt(osc^2 + k^2) is a smooth odd sigmoid in [-1,1]. Small k
-  // (=0.06) makes it saturate near ±1 quickly so the drift spends most of its time
-  // at full speed (matching the old ±1 look) but eases through the reversal.
-  autoSign = osc / sqrt(osc * osc + 0.0036);   // k=0.06 -> k^2=0.0036
-
-  // Effective drift sign: user direction (guarded, never 0) * autonomous sign.
-  var effDir = direction;
-  if (effDir >= 0.0 && effDir < 0.06) effDir = 0.06;
-  else if (effDir < 0.0 && effDir > -0.06) effDir = -0.06;
-  var signedRate = rate * effDir * autoSign;
-
-  // Two accumulators at irrational-ratio rates -> non-repeating field.
-  driftA = driftA + dt * signedRate;
-  if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
-  else if (driftA <= -PHASE_WRAP) driftA = driftA + PHASE_WRAP;
-  driftB = driftB + dt * signedRate * 0.61803;  // φ-related ratio
-  if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
-  else if (driftB <= -PHASE_WRAP) driftB = driftB + PHASE_WRAP;
-
-  // Resolve audio-driven controls once per frame (clean level->gain; no phase
-  // wobble so the PRIMARY correlation stays high).
-  levGain = 0.20 + 1.00 * clamp01(level);     // calm non-black floor at level=0;
-                                              // mid default ~0.70, level=1 -> 1.20 push
-  radScale = 0.35 + clamp01(radius) * 1.3;    // feature scale
-  kickBody = clamp01(kick);                    // kick pop on the warm colour body
-  warmLift = clamp01(warmth);
-  whiteKeep = clamp01(whiteLevel);             // always-on white keep amount
-  whiteBite = clamp01(whiteKick);              // kick-driven blinder bite
-  whiteTint = clamp01(whiteWarmth);            // 0 warm(A) -> 1 cool/UV(U)
+  levelGain = 0.26 + 0.86 * clamp01(level);
+  grainScale = 0.75 + 3.25 * clamp01(grain);
+  emberAmount = clamp01(emberSwell);
+  jewelryKeep = clamp01(jewelryWhite);
+  jewelryHit = clamp01(jewelryFlash);
 }
 
 export function render3D(index, x, y, z) {
@@ -221,86 +146,91 @@ export function render3D(index, x, y, z) {
   var ny = clamp01(y);
   var nz = clamp01(z);
 
-  // Drifting incommensurate noise field (the wash).
-  var v = nx * 2.3 * radScale
-        + ny * 1.7 * radScale * 0.61803
-        - nz * 1.9 * radScale * 0.41421
-        + driftA;
-  var n1 = wave(v);
-  var n2 = wave(v * 1.73205 + driftB * 0.7);    // √3 -> second incommensurate layer
-  var nraw = n1 * 0.6 + n2 * 0.4;               // 0..1 field, evenly distributed
-  var noise = nraw * nraw * nraw;               // soft, gentle cores (brightness)
+  // Three phase orbits use irrationally related rates. They wrap only after a
+  // large integer number of turns, with every consumer remaining phase-exact.
+  var ox = sin(phaseA * FULL_TURN) * 0.22;
+  var oy = cos(phaseB * FULL_TURN) * 0.18;
+  var oz = sin(phaseC * FULL_TURN) * 0.14;
+  var q = (nx + ox) * 1.35 * grainScale
+        + (ny + oy) * 0.90 * grainScale * 0.61803398875
+        - (nz + oz) * 1.10 * grainScale * 0.41421356237;
+  var n1 = wave(q + phaseA);
+  var n2 = wave(q * 1.41421356237 - phaseB * 0.7);
+  var n3 = wave(q * 0.61803398875 + phaseC * 1.3);
+  var field = n1 * 0.50 + n2 * 0.32 + n3 * 0.18;
+  var core = field * field;
 
-  // Warm palette blend in RGB space (cp1 deep red -> cp2 sunset amber-gold). Use
-  // the RAW field, then push it toward the two ENDS (smootherstep-style contrast)
-  // so the rig reads as two warm colours, not a muddy single mid-hue. This keeps
-  // hue energy at both cp1 and cp2 -> healthy hueSpread on an analogous palette.
-  var tc = clamp01(nraw);
-  // Hard contrast curve -> hue energy concentrates at BOTH ends (cp1 & cp2),
-  // giving real hueSpread on this analogous warm palette while staying smooth
-  // enough to look like a wash (not a hard split).
-  var tcol;
-  if (tc < 0.5) { var lo = 2.0 * tc; tcol = 0.5 * lo * lo * lo * lo * lo; }
-  else { var u = 2.0 * (1.0 - tc); tcol = 1.0 - 0.5 * u * u * u * u * u; }
-  var r = pr1 + (pr2 - pr1) * tcol;
-  var g = pg1 + (pg2 - pg1) * tcol;
-  var b = pb1 + (pb2 - pb1) * tcol;
+  // Strict palette blend. The contrast curve preserves both warm endpoints
+  // instead of collapsing the ship into one muddy orange.
+  var blend = field * field * (3.0 - 2.0 * field);
+  var r = pr1 + (pr2 - pr1) * blend;
+  var g = pg1 + (pg2 - pg1) * blend;
+  var b = pb1 + (pb2 - pb1) * blend;
 
-  // Value: cubed noise core + a LEVEL-coupled flat warm base + warm glow lift.
-  // The flat base (0.20) is uniform across the rig and rides levGain cleanly with
-  // NO wash-phase wobble, so total brightness tracks `level` -> tight PRIMARY corr.
-  // The cubed noise stays as the spatial texture on top.
-  var bri = noise * 0.70 + 0.20 + warmLift * 0.12;
-  bri = bri * levGain;
+  var emberWave = wave(phaseB + nx * 0.31 + nz * 0.17);
+  var body = 0.24 + core * 0.50
+           + emberAmount * (0.10 + emberWave * 0.30);
 
-  r = r * bri;
-  g = g * bri;
-  b = b * bri;
-
-  // Small kick pop on the warm colour body (keeps the wash alive on the beat
-  // without relying on white). Additive, gentle, gain-scaled.
-  r = r + kickBody * 0.10 * levGain;
-  g = g + kickBody * 0.04 * levGain;
-
-  var w = 0.0;
-  var a = 0.0;
-  var u = 0.0;
-
-  // VINTAGE BLINDER: sectionId == 2 heads carry the WHITE. Always-on warm-white
-  // keep (whiteLevel) gives the golden-hour glow; on the kick, whiteKick drives
-  // the W channel HARD for the audience blinder bite. whiteWarmth splits the
-  // white tint between amber (A) for tungsten warmth and UV (U) for a cool punch.
-  // White stays ADDITIVE on top of the cp1<->cp2 wash — pars/bars keep colour.
-  if (sectionId == 2) {
-    // MOVING base white: like og line 81 (w = noise * 2.5), the W channel tracks
-    // the drifting `noise` field so the white ANIMATES at silence (no audio). The
-    // keep term is scaled BY noise (not a flat +constant) so it too goes to 0 in
-    // the dark troughs of the wash, instead of holding the W channel always-on.
-    var moveW = noise * 1.8;                          // og-style moving white core
-    var ambW  = whiteKeep * 0.55 * noise;            // warm white keep — FULLY noise
-                                                      // gated (no flat term) so it
-                                                      // vanishes in the wash troughs
-    var hitW  = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick (additive)
-    var wRaw  = moveW + ambW + hitW * 2.0;           // moving base + keep + kick bite
-    // LOWER THRESHOLD so the white truly reaches 0 at low signal (fixes "white never
-    // fully turns off"). Subtract a floor then clamp >=0: in the wash troughs (and at
-    // low whiteLevel) wRaw < W_FLOOR and W collapses to genuine 0, while a bright wash
-    // core / raised whiteLevel / a kick still drives W up normally. With ambW now
-    // fully noise-gated, the only constant survivor would be hitW, so the resting
-    // (silence, kick=0) state floors to 0 across the dark troughs of the field.
-    var w_floor = 0.28;
-    w = wRaw - w_floor;
-    if (w < 0.0) w = 0.0;
-    w = w * (0.35 + 0.65 * levGain);                // still gated by overall level
-    if (w > 1.0) w = 1.0;
-    // Tint the white: warm amber A when whiteTint low, cool/UV U when high.
-    var wmag = w;
-    a = wmag * (1.0 - whiteTint) * 0.6;             // tungsten warmth
-    u = wmag * whiteTint * 0.5;                      // cool / UV bite
-    // Lift the warm colour core slightly so the heads glow warm, not just white.
-    r = r + whiteKeep * 0.10 + whiteBite * 0.10;
-    g = g + whiteKeep * 0.04 + whiteBite * 0.04;
+  // Bars are the broad canvas. Other non-Vintage fixtures use a steadier RGB
+  // contour so silhouettes and letterforms stay readable while the wash moves.
+  if (fixtureType == FIX_BAR_18) {
+    body += emberAmount * field * 0.12;
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity treatment: a broad sunset horizon rises and falls through the
+    // XYZ letter volume, leaving a slower warm afterglow along each letter path.
+    // This reads as Golden Hour within seconds rather than as generic noise.
+    // The firm RGB-only floor preserves legibility; Vintage remains the only
+    // fixture family receiving the signature authored golden white below.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signSpace = clamp01(nx * 0.43 + ny * 0.34 + nz * 0.23);
+    var sunHeight = wave(phaseA * 2.0);
+    var sunEdge = 1.0 - clamp01(abs(signSpace - sunHeight) * 4.6);
+    sunEdge = sunEdge * sunEdge * (3.0 - 2.0 * sunEdge);
+    var sunLift = clamp01(0.50 + (sunHeight - signSpace) * 1.45);
+    var afterglow = wave(phaseC * 2.0 + signSpace * 0.38
+                       + signPath * 0.08);
+    var signBlend = clamp01(0.08 + signSpace * 0.45 + sunLift * 0.25
+                           + sunEdge * 0.22 + afterglow * 0.08);
+    r = pr1 + (pr2 - pr1) * signBlend;
+    g = pg1 + (pg2 - pg1) * signBlend;
+    b = pb1 + (pb2 - pb1) * signBlend;
+    body = 0.58 + sunLift * 0.14 + sunEdge * 0.22
+         + afterglow * 0.08 + field * 0.04
+         + emberAmount * (0.055 + emberWave * 0.055);
+  } else if (fixtureType != FIX_VINTAGE_6) {
+    var contour = wave(phaseC * 0.55 + pixelLocalIndex * 0.018 + nx * 0.13);
+    body = 0.42 + field * 0.20 + contour * 0.07
+         + emberAmount * (0.08 + emberWave * 0.12);
   }
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(a), clamp01(u));
+  var w = 0.0;
+  var u = 0.0;
+
+  if (fixtureType == FIX_VINTAGE_6) {
+    // Jewelry treatment: an incandescent RGB body with the only authored white
+    // in the pattern. Matched W+A reads as rich golden white on six-head rails.
+    // A narrow traveling crest restores the original occasional white swipe.
+    var jewelDrift = wave(phaseA * 0.65 + pixelLocalIndex * 0.137
+                        + nx * 0.23 + nz * 0.11);
+    var glint = jewelDrift * jewelDrift;
+    glint = glint * glint;
+    var swipe = wave(nx * 0.85 - jewelryPhase);
+    swipe = swipe * swipe;
+    swipe = swipe * swipe;
+    swipe = swipe * swipe;
+    body = 0.48 + field * 0.20 + emberAmount * 0.16;
+    w = jewelryKeep * (0.10 + glint * 0.22 + swipe * 1.35)
+      + jewelryHit * (0.34 + glint * 0.66);
+    r += jewelryKeep * (0.10 + swipe * 0.13) + jewelryHit * 0.14;
+    g += jewelryKeep * (0.045 + swipe * 0.075) + jewelryHit * 0.07;
+  }
+
+  body *= levelGain;
+  r *= body;
+  g *= body;
+  b *= body;
+  w = clamp01(w * (0.45 + levelGain * 0.72));
+
+  // White is Vintage-only; W and A remain byte-identical by construction.
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), w, w, u);
 }

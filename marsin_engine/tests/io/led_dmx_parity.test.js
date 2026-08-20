@@ -161,9 +161,13 @@ test('computeLedProjection: bad-IP LED controller still projects + flags', () =>
 
 // ── LED output mapper (RGBW write + native white pass-through) ───────────
 
-test('LED mapper: writes R,G,B,W per order; native passes W raw (0 stays 0)', () => {
+test('LED mapper: strand pixel goes out as the clip-proof composite split', () => {
   const router = makeRouter();
-  // Plain rgb() pattern: W rendered as 0. Native LED must NOT synth white.
+  // Plain rgb() pattern, no white lane: the strand still gets a W byte —
+  // the SHARED FLOOR of the colour — because the LED controller re-derives
+  // exactly that split itself (report 20260725_25). What must hold on the
+  // wire is that the per-channel composite (RGB + W) is the intended colour
+  // and can never clip.
   const entry = {
     type: 'led',
     patch: { universe: 2, addr: 1, footprint: 4, led: true },
@@ -173,13 +177,14 @@ test('LED mapper: writes R,G,B,W per order; native passes W raw (0 stays 0)', ()
   };
   mapPixelsToSacn([entry], router);
   const f = router.getFullFrame(2);
-  assert.equal(f[0], Math.trunc(0.5 * 255)); // R (127, Uint8 truncates)
-  assert.equal(f[1], 255);                    // G
-  assert.equal(f[2], Math.trunc(0.25 * 255)); // B
-  assert.equal(f[3], 0);                       // W native pass-through (raw 0)
+  assert.equal(f[0] + f[3], Math.round(0.5 * 255));  // composite R
+  assert.equal(f[1] + f[3], 255);                    // composite G
+  assert.equal(f[2] + f[3], Math.round(0.25 * 255)); // composite B
+  // Native white policy holds: no white lane in, no white byte out.
+  assert.equal(f[3], 0);
 });
 
-test('LED mapper: explicit rgbwau W passes through on native LED', () => {
+test('LED mapper: explicit rgbwau W reaches the strand as white', () => {
   const router = makeRouter();
   const entry = {
     type: 'led',
@@ -191,23 +196,63 @@ test('LED mapper: explicit rgbwau W passes through on native LED', () => {
   mapPixelsToSacn([entry], router);
   const f = router.getFullFrame(3);
   assert.equal(f[0], 0);
-  assert.equal(f[3], 255); // explicit white lane
+  assert.equal(f[3], 255); // pure white → all of it on the white channel
 });
 
-test('LED mapper: whiteMode:synth opts an LED back into min(R,G,B) white', () => {
+test('LED mapper: a TINTED white keeps its tint (the white bug regression)', () => {
+  const router = makeRouter();
+  // Warm-white family pattern: tungsten RGB + a full white lane. The old
+  // mapper sent (255,173,82,W=255); the controller folded that to
+  // (255,255,255) and the strand showed NEUTRAL white.
+  const entry = {
+    type: 'led',
+    patch: { universe: 8, addr: 1, footprint: 4, led: true },
+    channels: { ...LED_CHANNEL_ORDERS.RGBW },
+    whiteMode: 'native',
+    r: 1.0, g: 0.68, b: 0.32, w: 1.0, a: 0, u: 0,
+  };
+  mapPixelsToSacn([entry], router);
+  const f = router.getFullFrame(8);
+  const composite = [f[0] + f[3], f[1] + f[3], f[2] + f[3]];
+  assert.ok(composite.every(c => c <= 255), 'composite must not clip');
+  assert.equal(Math.max(...composite), 255, 'peak channel uses the full range');
+  // Warm ordering survives, and blue is nowhere near neutral.
+  assert.ok(composite[0] > composite[1] && composite[1] > composite[2]);
+  assert.ok(composite[2] < 200, `blue ${composite[2]} — tint was flattened`);
+});
+
+test('LED mapper: amber is folded into the strand RGB (pars keep their amber lane)', () => {
   const router = makeRouter();
   const entry = {
     type: 'led',
-    patch: { universe: 4, addr: 1, footprint: 4, led: true },
+    patch: { universe: 9, addr: 1, footprint: 4, led: true },
     channels: { ...LED_CHANNEL_ORDERS.RGBW },
-    whiteMode: 'synth',
-    r: 0.4, g: 0.6, b: 0.8, w: 0,
+    whiteMode: 'native',
+    r: 0, g: 0, b: 0, w: 0, a: 0.5, u: 0,
   };
   mapPixelsToSacn([entry], router);
-  const f = router.getFullFrame(4);
-  // synth W = min(R,G,B) bytes = min(102,153,204) = 102.
-  assert.equal(f[3], Math.min(f[0], f[1], f[2]));
-  assert.ok(f[3] > 0);
+  const f = router.getFullFrame(9);
+  const composite = [f[0] + f[3], f[1] + f[3], f[2] + f[3]];
+  assert.ok(composite[0] > 0 && composite[1] > 0, 'amber must light the strand');
+  assert.ok(composite[0] > composite[1] && composite[1] > composite[2], 'and read warm');
+});
+
+test('LED mapper: whiteMode changes only the split, never the composite', () => {
+  const router = makeRouter();
+  const mk = (universe, whiteMode) => ({
+    type: 'led',
+    patch: { universe, addr: 1, footprint: 4, led: true },
+    channels: { ...LED_CHANNEL_ORDERS.RGBW },
+    whiteMode,
+    r: 0.4, g: 0.6, b: 0.8, w: 0,
+  });
+  mapPixelsToSacn([mk(4, 'synth'), mk(5, 'native')], router);
+  const a = router.getFullFrame(4), b = router.getFullFrame(5);
+  // Same colour on the wire (identical composites) …
+  for (let i = 0; i < 3; i++) assert.equal(a[i] + a[3], b[i] + b[3]);
+  // … but synth parks the shared floor on the white emitter, native does not.
+  assert.equal(a[3], Math.min(a[0] + a[3], a[1] + a[3], a[2] + a[3]));
+  assert.equal(b[3], 0);
 });
 
 test('DMX mapper unchanged: fixture with W channel still synths min(R,G,B)', () => {
@@ -237,12 +282,14 @@ test('LED mapper: GRBW order swaps R/G bytes', () => {
   };
   mapPixelsToSacn([entry], router);
   const f = router.getFullFrame(7);
-  // GRBW: g→ch1, r→ch2, b→ch3, w→ch4.
-  assert.equal(f[0], Math.trunc(0.5 * 255)); // ch1 = G
-  assert.equal(f[1], 255);                    // ch2 = R
+  // GRBW: g→ch1, r→ch2, b→ch3, w→ch4. Composites (byte + W) carry the colour.
+  assert.equal(f[0] + f[3], Math.round(0.5 * 255)); // ch1 = G
+  assert.equal(f[1] + f[3], 255);                   // ch2 = R
 });
 
-// ── Strand RGBWAU → RGB sim mix (firmware toRGBFallback weights) ─────────
+// ── Generic RGBWAU → RGB sim mix ────────────────────────────────────────
+// (LED STRANDS no longer use this: their preview is derived from the wire
+//  bytes + the LED controller's white processing — simulation/src/dmx/led_wire.js.)
 
 test('mixRgbwauToRgb: pure white shows white (w drives all channels)', () => {
   const [r, g, b] = mixRgbwauToRgb(0, 0, 0, 1, 0, 0);

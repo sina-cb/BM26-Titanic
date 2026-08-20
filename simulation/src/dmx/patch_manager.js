@@ -84,9 +84,9 @@ function deriveSubscribedUniverses(fixtures) {
  * first frame; this closes the validation/config gap so the loud mismatch
  * banner only fires for a universe that genuinely cannot be subscribed.
  *
- * Loud by design: every auto-added universe is logged and the bridge is
- * re-notified. No silent failure — if `params.sacn_universes` is missing the
- * derived universes still flow through and the merge is reported.
+ * Loud by design: every auto-added universe is logged. No silent failure — if
+ * `params.sacn_universes` is missing the derived universes still flow through
+ * and the merge is reported.
  * @returns {number[]} universes that were newly added (empty if no change)
  */
 function autoSubscribePatchUniverses(fixtures) {
@@ -110,9 +110,20 @@ function autoSubscribePatchUniverses(fixtures) {
     `from patches — subscribed set now [${merged.join(', ')}].`
   );
 
-  // Persist + re-notify the bridge so its routing/subscription picks up the
-  // freshly-patched universes (saveAndNotify debounces the save).
-  if (typeof window.debounceAutoSave === 'function') saveAndNotify();
+  // Persist: arm the SAME debounced save every other mutation arms — this
+  // path deliberately does NOT force a write (slice S4). Auto-subscribe is an
+  // incidental side effect of a patch recompute, and the operator runs with
+  // `config.autoSave: false` precisely so nothing writes the scene behind his
+  // back; forcing `exportConfig()` here would turn every merged universe into
+  // a surprise full-scene save (and would make read-only agent tools that
+  // stub `debounceAutoSave` start saving scenes).
+  //
+  // No bridge notify here either: the bridge rebuilds its relay routes by
+  // re-reading `patches.yaml` ON DISK, so notifying before (or without) a
+  // write only makes it re-read the OLD file and look like progress. When the
+  // debounced save actually lands, `exportConfig`'s own post-save notify tells
+  // the bridge — after the write, never 500 ms into it.
+  if (typeof window.debounceAutoSave === 'function') window.debounceAutoSave();
 
   return added;
 }
@@ -320,6 +331,16 @@ function applyPatchTree(patchTree, fixturesArray) {
 /**
  * Notify the sACN bridge server to reload routes from patches.yaml.
  * Call this after any patch change that has been saved to disk.
+ *
+ * REPORTS ITS OUTCOME (slice S1): resolves to `{ ok: boolean, reason?: string }`
+ * and never rejects. "WebSocket not connected" is a FAILURE of this step, not a
+ * console footnote — the bridge rebuilds its relay routes only on this message,
+ * so a missed notify means the freshly saved patches.yaml is never read and the
+ * hardware keeps following the old routes. The push flow renders the reason
+ * verbatim; the other callers go through `notifySacnBridgeLoud` (slice S4),
+ * which adds the toast + monitor line.
+ *
+ * @returns {Promise<{ok: boolean, scene?: string, reason?: string}>}
  */
 async function notifySacnBridge() {
   try {
@@ -327,22 +348,106 @@ async function notifySacnBridge() {
       const activeScene = window.__activeScene || 'titanic';
       window.sacnInput._ws.send(JSON.stringify({ type: 'setScene', scene: activeScene }));
       console.log('[PatchManager] sACN bridge notified to reload routes via WebSocket');
-    } else {
-      console.warn('[PatchManager] sACN bridge WebSocket not connected, cannot notify');
+      return { ok: true, scene: activeScene };
     }
+    const reason = 'sACN bridge WebSocket not connected — the bridge did NOT reload its routes';
+    console.warn(`[PatchManager] ${reason}`);
+    return { ok: false, reason };
   } catch (e) {
-    console.warn('[PatchManager] Failed to notify sACN bridge:', e.message);
+    const reason = `failed to notify the sACN bridge: ${e.message}`;
+    console.warn(`[PatchManager] ${reason}`);
+    return { ok: false, reason };
   }
 }
 
 /**
- * Trigger a save (which extracts patches.yaml server-side) and notify sACN bridge.
- * Use after auto-patch, clear-patch, or manual patch edits.
+ * Surface a save/notify failure where the operator actually looks (slice S4).
+ * A stale sACN feed is invisible from the sim's own render — the sim paints
+ * from memory while the hardware follows the bridge's routes — so a swallowed
+ * `console.warn` here is exactly how a controller stays dark for a day.
+ *
+ * Three surfaces, cheapest to loudest:
+ *   1. `console.error` — always, unconditionally.
+ *   2. the save toast (`window.showSaveToast`, red/6 s — same element the
+ *      "SAVE FAILED" toast uses).
+ *   3. a red line in the sACN-IN monitor's activity log (`window.sacnLog`).
+ *
+ * The two DOM surfaces are only present once the GUI has mounted (unit tests,
+ * boot, static host have neither) — the console line is the one that can never
+ * be missed, so nothing is ever swallowed.
+ */
+function _surfaceFailure(message) {
+  console.error(`[PatchManager] ${message}`);
+  if (typeof window.showSaveToast === 'function') window.showSaveToast(`⚠ ${message}`, true);
+  if (typeof window.sacnLog === 'function') window.sacnLog(message, 'error');
+}
+
+/**
+ * `notifySacnBridge` + the loud surface on failure. Use this from every path
+ * that has no other way to report the outcome (the post-save notify, the
+ * save-and-notify helper). The LED per-output push deliberately calls the
+ * QUIET `notifySacnBridge` instead: it renders the same failure in its own
+ * push dialog and toast, and a second toast would just repeat itself.
+ *
+ * @returns {Promise<{ok: boolean, scene?: string, reason?: string}>}
+ */
+async function notifySacnBridgeLoud() {
+  const result = await notifySacnBridge();
+  if (!result.ok) {
+    _surfaceFailure(
+      `sACN bridge NOT notified — ${result.reason}. The bridge is still routing ` +
+      'from the patches.yaml it last read: the hardware will NOT follow this change. ' +
+      'The page re-sends the notify automatically when the bridge WebSocket reconnects.'
+    );
+  }
+  return result;
+}
+
+/**
+ * Force a full scene save (which extracts patches.yaml server-side), then —
+ * and only then — notify the sACN bridge. Use after an explicit, operator-
+ * initiated patch change (auto-patch, clear-patch, manual patch edits).
+ *
+ * ORDERING (slice S4): the notify is chained on the AWAITED save, replacing
+ * the old `setTimeout(notify, 500)`. That timer raced the save it was meant to
+ * follow — and always lost when the save went through the 2 s debounce, so the
+ * bridge re-read a STALE patches.yaml and reported success. On a failed save
+ * the bridge is NOT notified at all: re-reading the old file is not progress,
+ * it just makes a stale feed look fresh.
+ *
+ * Both failures are surfaced loudly (toast + monitor line + console). Never
+ * rejects — fire-and-forget callers must not become unhandled rejections.
+ *
+ * @returns {Promise<{save: {ok: boolean, reason?: string},
+ *                    notify: {ok: boolean, reason?: string}|null}>}
  */
 async function saveAndNotify() {
-  if (window.debounceAutoSave) window.debounceAutoSave();
-  // Give the save a moment to complete before notifying bridge
-  setTimeout(() => { notifySacnBridge(); }, 500);
+  if (typeof window.exportConfig !== 'function') {
+    const reason = 'window.exportConfig is not installed — nothing was saved and the ' +
+      'sACN bridge was NOT notified';
+    _surfaceFailure(reason);
+    return { save: { ok: false, reason }, notify: null };
+  }
+
+  let save;
+  try {
+    save = await window.exportConfig();
+  } catch (e) {
+    save = { ok: false, reason: `the scene save threw: ${e.message}` };
+  }
+  // A save step that answers with no `{ok}` is a REFUSAL, not an assumed
+  // success — same rule the push flow applies to its steps.
+  if (!save || save.ok !== true) {
+    const reason = (save && save.reason) || 'the scene save reported no result';
+    _surfaceFailure(
+      `scene NOT saved — ${reason}. The sACN bridge was NOT notified (it would only ` +
+      're-read the stale patches.yaml); the hardware keeps following the old routes.'
+    );
+    return { save: save || { ok: false, reason }, notify: null };
+  }
+
+  const notify = await notifySacnBridgeLoud();
+  return { save, notify };
 }
 
 // ─── Safety Poll ─────────────────────────────────────────────────────────
@@ -369,10 +474,17 @@ const PatchManager = {
   getTotalCount,
   applyPatchTree,
   notifySacnBridge,
+  notifySacnBridgeLoud,
   saveAndNotify,
   deriveSubscribedUniverses,
   autoSubscribePatchUniverses,
 };
 window.PatchManager = PatchManager;
 export default PatchManager;
-export { deriveSubscribedUniverses, autoSubscribePatchUniverses };
+export {
+  deriveSubscribedUniverses,
+  autoSubscribePatchUniverses,
+  notifySacnBridge,
+  notifySacnBridgeLoud,
+  saveAndNotify,
+};

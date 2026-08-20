@@ -1296,6 +1296,12 @@ export class GlobalEffectSlotManager {
         return !!c.beatPump.enabled && c.beatPump.presetId === slot.presetId;
       case 'waterlineSweep':
         return !!c.sweep.enabled && c.sweep.presetId === slot.presetId;
+      // MOVEMENT Trace: singleton with several presets, same preset guard as
+      // the party effects above. Without this case the default arm below
+      // reports it inactive, which makes disableAll skip it as "already off"
+      // and a toggle press never reach deactivate — it would run forever.
+      case 'movementTrace':
+        return !!c.movement.enabled && c.movement.presetId === slot.presetId;
       // Kick Punch: the AUTO router is the toggle-able state. The one-shot
       // trigger fires a dropHit and holds no lasting state of its own, so
       // active-ness tracks the armed router — but the router now stamps the
@@ -1489,6 +1495,9 @@ export class GlobalEffectSlotManager {
         return;
       case 'waterlineSweep':
         this._dispatchToggleEffect({ resolved, action, on: 'setWaterlineSweep' });
+        return;
+      case 'movementTrace':
+        this._dispatchToggleEffect({ resolved, action, on: 'setMovementTrace' });
         return;
       case 'kickPunch':
         this._dispatchKickPunch({ resolved, action, nowMs });

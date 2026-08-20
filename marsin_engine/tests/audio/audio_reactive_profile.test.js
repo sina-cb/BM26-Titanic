@@ -111,7 +111,7 @@ test('nextDelayMs is null (event-driven)', () => {
 test('a switchPattern pulse requests an advance', () => {
   const pc = fakeParamCenter({
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 160,
-    audioSwitchPattern: 0, audioSilence: 0, audioParty: 1,
+    audioSwitchPatternSeq: 0, audioSilence: 0, audioParty: 1,
   });
   const { ctx, calls } = fakeCtx(pc);
   const p = new AudioReactiveProfile();
@@ -119,7 +119,7 @@ test('a switchPattern pulse requests an advance', () => {
   // Force the re-guard window open (attach set _lastAdvanceMs = now).
   p._lastAdvanceMs = Date.now() - 999999;
 
-  pc.fire('audioSwitchPattern', 1);
+  pc.fire('audioSwitchPatternSeq', 1);
   assert.equal(calls.advances, 1, 'a >0 switchPattern should advance');
   p.detach();
 });
@@ -128,15 +128,15 @@ test('a switchPattern pulse requests an advance', () => {
 test('minInterval re-guard blocks a too-soon second advance', () => {
   const pc = fakeParamCenter({
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 160,
-    audioSwitchPattern: 0, audioSilence: 0, audioParty: 1,
+    audioSwitchPatternSeq: 0, audioSilence: 0, audioParty: 1,
   });
   const { ctx, calls } = fakeCtx(pc);
   const p = new AudioReactiveProfile();
   p.attach(ctx);
   p._lastAdvanceMs = Date.now() - 999999;
 
-  pc.fire('audioSwitchPattern', 1);   // advances, resets _lastAdvanceMs = now
-  pc.fire('audioSwitchPattern', 1);   // within minIntervalMs → blocked
+  pc.fire('audioSwitchPatternSeq', 1);   // advances, resets _lastAdvanceMs = now
+  pc.fire('audioSwitchPatternSeq', 2);   // within minIntervalMs → blocked
   assert.equal(calls.advances, 1, 'second pulse inside minInterval must be blocked');
   p.detach();
 });
@@ -145,13 +145,13 @@ test('minInterval re-guard blocks a too-soon second advance', () => {
 test('silence suppresses the advance', () => {
   const pc = fakeParamCenter({
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 160,
-    audioSwitchPattern: 0, audioSilence: 1, audioParty: 1,
+    audioSwitchPatternSeq: 0, audioSilence: 1, audioParty: 1,
   });
   const { ctx, calls } = fakeCtx(pc);
   const p = new AudioReactiveProfile();
   p.attach(ctx);
   p._lastAdvanceMs = Date.now() - 999999;
-  pc.fire('audioSwitchPattern', 1);
+  pc.fire('audioSwitchPatternSeq', 1);
   assert.equal(calls.advances, 0, 'silence must suppress advances');
   p.detach();
 });
@@ -159,13 +159,13 @@ test('silence suppresses the advance', () => {
 test('non-party suppresses the advance', () => {
   const pc = fakeParamCenter({
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 160,
-    audioSwitchPattern: 0, audioSilence: 0, audioParty: 0.2,
+    audioSwitchPatternSeq: 0, audioSilence: 0, audioParty: 0.2,
   });
   const { ctx, calls } = fakeCtx(pc);
   const p = new AudioReactiveProfile();
   p.attach(ctx);
   p._lastAdvanceMs = Date.now() - 999999;
-  pc.fire('audioSwitchPattern', 1);
+  pc.fire('audioSwitchPatternSeq', 1);
   assert.equal(calls.advances, 0, 'audioParty<0.5 must suppress advances');
   p.detach();
 });
@@ -214,7 +214,7 @@ function colorCtx(noteHue = 0.33, palettes = [
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 160,
     audioSilence: 0, audioParty: 1,
     audioEnergyRatio: 0.4, audioSlowZone: 0.1, audioStructure: 1, audioNote: 4,
-    audioSwitchColor: 0, audioNoteHue: noteHue,
+    audioSwitchColorSeq: 0, audioNoteHue: noteHue,
   });
   return { ...fakeCtx(pc, palettes), pc };
 }
@@ -226,7 +226,7 @@ test('a bare switchColor transient does NOT recolour (must hold)', () => {
   // Seed the envelope with a couple of ticks so a descriptor exists.
   p._tick(); p._tick();
   // A raw switchColor pulse with no sustained descriptor change → no recolour.
-  pc.fire('audioSwitchColor', 1);
+  pc.fire('audioSwitchColorSeq', 1);
   assert.deepEqual(calls.palettesApplied, [], 'a raw pulse must not recolour');
   p.detach();
 });
@@ -381,7 +381,7 @@ test('F2: a paused autopilot does not advance, recolour, or drive speed', () => 
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 160,
     audioSilence: 0, audioParty: 1, audioEnergyRatio: 0.9, audioDropPulse: 1,
     audioSlowZone: 0.1, audioStructure: 1, audioNote: 4, audioNoteHue: 0.33,
-    audioSwitchPattern: 0,
+    audioSwitchPatternSeq: 0,
   }, );
   // state().active === false → paused.
   const { ctx, calls } = fakeCtx(pc, [{ id: 'mid', c1: 0.35 }], { active: false });
@@ -390,7 +390,7 @@ test('F2: a paused autopilot does not advance, recolour, or drive speed', () => 
   const scaleAtArm = calls.speedScale;   // attach applies scale 1 once
   // Drive lots of ticks with hot audio + a switchPattern pulse: nothing should fire.
   driveTicks(p, 20, 100);
-  pc.fire('audioSwitchPattern', 1);
+  pc.fire('audioSwitchPatternSeq', 1);
   assert.equal(calls.advances, 0, 'paused → no advance');
   assert.deepEqual(calls.palettesApplied, [], 'paused → no recolour');
   assert.equal(calls.speedScale, scaleAtArm, 'paused → speed scale unchanged (no arc)');
@@ -412,7 +412,7 @@ test('energy pickup still honours minIntervalMs (no double-fire with a pulse)', 
   driveTicks(p, 8, 100);  // sustained pickup → advance (1), which re-sets _lastAdvanceMs
   const afterPickup = calls.advances;
   assert.ok(afterPickup >= 1, 'sanity: the sustained pickup advanced once');
-  pc.fire('audioSwitchPattern', 1);          // immediate pulse → blocked by guard
+  pc.fire('audioSwitchPatternSeq', 1);       // first sequence event → blocked by guard
   assert.equal(calls.advances, afterPickup,
     'a pulse inside minInterval after a pickup must not double-fire');
   p.detach();

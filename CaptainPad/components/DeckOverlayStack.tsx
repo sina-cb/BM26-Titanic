@@ -25,13 +25,19 @@
 // (incl. the 4xx `code`) as a friendly Alert; no silent fallback.
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
+import { opError, opWarn } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
+import { accentWash, glowFor, identityDot, useGlobalStyles } from '@/styles/globalStyles';
+import { Radius, Type } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { AutopilotTimerPills } from '@/components/DeckTransitionControls';
+import { ViewSelectionPicker } from '@/components/ViewSelectionPicker';
+import { type NamedView } from '@/components/view_selection_picker_logic';
 import { fetchViewSelectionOptions } from '@/utils/api';
 import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
@@ -48,7 +54,6 @@ import {
 } from '@/utils/deckOverlaysApi';
 
 // ── View-selection helpers ─────────────────────────────────────────────────
-type ViewMaskOption = { name: string; bit: number; inUse: boolean };
 
 // Human label for a viewSelection, mirroring the mixer strip's inline logic.
 // Prefixed with the kind so the operator reads "GROUP: bow" / "MASK: starboard"
@@ -70,70 +75,10 @@ function blendLabel(mode: string | undefined): string {
   return (mode || 'blend_screen').replace(/^(blend_|trans_)/, '').toUpperCase();
 }
 
-// ── View picker modal (reuse of the mixer's view-selection modal pattern) ──
-// "all" is intentionally OMITTED — a deck overlay must target a specific view
-// (the engine refuses {type:'all'} with DECK_OVERLAY_VIEW_REQUIRED, and an
-// all-view overlay defeats the never-dark feature).
-const ViewPickerModal: React.FC<{
-  visible: boolean;
-  groups: string[];
-  viewMasks: ViewMaskOption[];
-  current: ViewSelection | null;
-  onSelect: (v: ViewSelection) => void;
-  onClose: () => void;
-}> = ({ visible, groups, viewMasks, current, onSelect, onClose }) => {
-  const C = usePalette();
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <View style={{ width: '100%', maxWidth: 420, backgroundColor: C.surfaceContainerLowest, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginBottom: 12 }}>
-            OVERLAY VIEW
-          </Text>
-          <ScrollView style={{ maxHeight: 420 }}>
-            {groups.length > 0 && (
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginTop: 4, marginBottom: 4, paddingHorizontal: 8 }}>GROUPS</Text>
-            )}
-            {groups.map((g) => {
-              const active = current?.type === 'group' && current?.target === g;
-              return (
-                <TouchableOpacity
-                  key={`g_${g}`}
-                  style={{ paddingVertical: 12, paddingHorizontal: 8, borderRadius: 8, backgroundColor: active ? C.surfaceContainerHigh : 'transparent' }}
-                  onPress={() => { onSelect({ type: 'group', target: g, invert: false }); onClose(); }}
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: active ? C.primary : C.text }}>GROUP · {g.toUpperCase()}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            {viewMasks.length > 0 && (
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginTop: 12, marginBottom: 4, paddingHorizontal: 8 }}>VIEW MASKS</Text>
-            )}
-            {viewMasks.map((vm) => {
-              const active = current?.type === 'viewMask' && current?.target === vm.name;
-              return (
-                <TouchableOpacity
-                  key={`vm_${vm.name}`}
-                  style={{ paddingVertical: 12, paddingHorizontal: 8, borderRadius: 8, backgroundColor: active ? C.surfaceContainerHigh : 'transparent', opacity: vm.inUse ? 1 : 0.5 }}
-                  onPress={() => { onSelect({ type: 'viewMask', target: vm.name, invert: false }); onClose(); }}
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: active ? C.primary : C.text }}>MASK · {vm.name.toUpperCase()}{vm.inUse ? '' : ' (NO PIXELS)'}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            {groups.length === 0 && viewMasks.length === 0 && (
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, textAlign: 'center', marginTop: 8 }}>NO GROUPS OR VIEW MASKS IN MODEL</Text>
-            )}
-          </ScrollView>
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
-};
+// The overlay view picker is the shared <ViewSelectionPicker> (includeAll
+// omitted): a deck overlay MUST target a specific view — the engine refuses
+// {type:'all'} with DECK_OVERLAY_VIEW_REQUIRED, and an all-view overlay
+// defeats the never-dark feature.
 
 // ── Blend-mode picker modal (only steady channel-blend modes) ──────────────
 const BlendPickerModal: React.FC<{
@@ -143,24 +88,26 @@ const BlendPickerModal: React.FC<{
   onClose: () => void;
 }> = ({ visible, current, onSelect, onClose }) => {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const on = accentWash(C.primary);
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
       <TouchableOpacity
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
         activeOpacity={1}
         onPress={onClose}
       >
-        <View style={{ width: '100%', maxWidth: 320, backgroundColor: C.surfaceContainerLowest, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginBottom: 12 }}>BLEND MODE</Text>
+        <View style={[globalStyles.panel, { width: '100%', maxWidth: 320, padding: 16 }]}>
+          <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', fontSize: 11, color: C.secondary, marginBottom: 12 }}>BLEND MODE</Text>
           {DECK_OVERLAY_BLEND_MODES.map((m) => {
             const active = m === (current || 'blend_screen');
             return (
               <TouchableOpacity
                 key={m}
-                style={{ paddingVertical: 12, paddingHorizontal: 8, borderRadius: 8, backgroundColor: active ? C.surfaceContainerHigh : 'transparent' }}
+                style={{ paddingVertical: 12, paddingHorizontal: 8, borderRadius: Radius.control, backgroundColor: active ? on.backgroundColor : 'transparent' }}
                 onPress={() => { onSelect(m); onClose(); }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: active ? C.primary : C.text }}>{blendLabel(m)}</Text>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: active ? on.color : C.text }}>{blendLabel(m)}</Text>
               </TouchableOpacity>
             );
           })}
@@ -177,12 +124,11 @@ const OverlayCard: React.FC<{
   count: number;
   expanded: boolean;
   onToggleExpand: () => void;
-  groups: string[];
-  viewMasks: ViewMaskOption[];
+  namedViews: NamedView[] | undefined;
   playlistLibrary: string[];
   disabled: boolean;
   onReorder: (id: string, direction: -1 | 1) => void;
-}> = ({ overlay, index, count, expanded, onToggleExpand, groups, viewMasks, playlistLibrary, disabled, onReorder }) => {
+}> = ({ overlay, index, count, expanded, onToggleExpand, namedViews, playlistLibrary, disabled, onReorder }) => {
   const C = usePalette();
   // PERFORMANCE MODE: overlay STRUCTURE (remove, reorder, view re-target) is
   // 409-gated while a show is live. Runtime controls (enable eye, blend mode,
@@ -207,9 +153,9 @@ const OverlayCard: React.FC<{
     if (!res.ok) {
       const code = (res.data && res.data.code) as string | undefined;
       if (code === 'DECK_OVERLAY_VIEW_TAKEN') {
-        Alert.alert('View already in use', 'That view already has an overlay. Pick a different view.');
+        opWarn('View already in use', 'That view already has an overlay. Pick a different view.');
       } else {
-        Alert.alert(failTitle, res.error || 'Unknown error');
+        opError(failTitle, res.error || 'Unknown error');
       }
     }
   }, [overlay.id]);
@@ -217,14 +163,16 @@ const OverlayCard: React.FC<{
   const onRemove = useCallback(async () => {
     setConfirmRemove(false);
     const res = await deleteDeckOverlay(overlay.id);
-    if (!res.ok) Alert.alert('Remove failed', res.error || 'Unknown error');
+    if (!res.ok) opError('Remove failed', res.error || 'Unknown error');
   }, [overlay.id]);
 
   return (
     <View
       style={{
         backgroundColor: C.surfaceContainerLowest,
-        borderRadius: 10,
+        // `cardOnPanel` radius (docs/54 row 15) — the overlay cards are the
+        // same kind of object as the DECK MAIN / autopilot cards.
+        borderRadius: Radius.card,
         // QA round8 #5: the full-perimeter border previously took the
         // overlay's accent color. With a red accent that read as an
         // error/alarm. Reserve red for destructive/error — keep the
@@ -245,13 +193,15 @@ const OverlayCard: React.FC<{
         activeOpacity={0.7}
         style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 9 }}
       >
-        {/* Accent color chip */}
-        <View style={{ width: 12, height: 12, borderRadius: 3, backgroundColor: accent }} />
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }} numberOfLines={1}>
+        {/* Identity dot in the overlay's own accent — the accent is DATA
+            (operator-assigned per overlay), so it stays; only the shape moves
+            to the shared dot grammar (docs/54 row 15). */}
+        <View style={identityDot(accent, 10)} />
+        <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', fontSize: 11, color: C.text }} numberOfLines={1}>
           {viewLabel}
         </Text>
         {/* Blend chip */}
-        <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: C.surfaceContainerHigh }}>
+        <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: Radius.chip, backgroundColor: C.surfaceContainerHigh }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.5, color: C.secondary }}>{blendLabel(overlay.mode)}</Text>
         </View>
         <View style={{ flex: 1 }} />
@@ -293,7 +243,7 @@ const OverlayCard: React.FC<{
             <TouchableOpacity
               onPress={() => setShowViewPicker(true)}
               disabled={disabled || perfLocked}
-              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh, opacity: perfLocked ? 0.45 : 1 }}
+              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh, opacity: perfLocked ? 0.45 : 1 }}
               accessibilityState={{ disabled: disabled || perfLocked }}
             >
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>VIEW: {viewLabel} ▾</Text>
@@ -301,7 +251,7 @@ const OverlayCard: React.FC<{
             <TouchableOpacity
               onPress={() => setShowBlendPicker(true)}
               disabled={disabled}
-              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
+              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
             >
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>BLEND: {blendLabel(overlay.mode)} ▾</Text>
             </TouchableOpacity>
@@ -330,7 +280,7 @@ const OverlayCard: React.FC<{
 
           {/* Fader */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1, color: C.secondary, width: 44 }}>LEVEL</Text>
+            <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, width: 44 }}>LEVEL</Text>
             <View style={{ flex: 1 }}>
               <HorizontalFader
                 value={faderLocal}
@@ -359,11 +309,11 @@ const OverlayCard: React.FC<{
         </View>
       )}
 
-      <ViewPickerModal
+      <ViewSelectionPicker
         visible={showViewPicker}
-        groups={groups}
-        viewMasks={viewMasks}
+        namedViews={namedViews}
         current={overlay.viewSelection || null}
+        title="OVERLAY VIEW"
         onSelect={(v) => onPatch({ viewSelection: v }, 'Set view failed')}
         onClose={() => setShowViewPicker(false)}
       />
@@ -393,12 +343,18 @@ export const DeckOverlayStack: React.FC<{
   disabled?: boolean;
 }> = ({ overlays, overlayAutopilot, playlistLibrary, disabled = false }) => {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  // Same on-state / live-state pair as the two autopilot cards next door.
+  const on = accentWash(C.primary);
+  const live = accentWash(C.tertiary);
   // PERFORMANCE MODE: adding an overlay is structural (engine 409s
   // POST /deck/overlays while a show is live). The shared AUTO/SHUFFLE/timer
   // controls are runtime (allowed) and stay live.
   const perfLocked = usePerfLock();
-  const [groups, setGroups] = useState<string[]>([]);
-  const [viewMasks, setViewMasks] = useState<ViewMaskOption[]>([]);
+  // The engine's full named-view catalog (groups + composites + Tier-A
+  // auto-views). `undefined` until the fetch lands / when the payload omits it
+  // — the shared picker fails LOUD on a missing catalog (codex P0).
+  const [namedViews, setNamedViews] = useState<NamedView[] | undefined>(undefined);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Add flow: pick a view (required) then a playlist, then POST.
@@ -413,8 +369,9 @@ export const DeckOverlayStack: React.FC<{
     (async () => {
       const res = await fetchViewSelectionOptions();
       if (cancelled || !res.ok || !res.data) return;
-      setGroups(Array.isArray(res.data.groups) ? res.data.groups : []);
-      setViewMasks(Array.isArray(res.data.viewMasks) ? res.data.viewMasks : []);
+      // Pass through as-is (possibly undefined on a stale engine); the picker
+      // surfaces a missing catalog loudly rather than us masking it here.
+      setNamedViews(res.data.namedViews as NamedView[] | undefined);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -435,7 +392,7 @@ export const DeckOverlayStack: React.FC<{
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
     const res = await reorderDeckOverlays(next);
-    if (!res.ok) Alert.alert('Reorder failed', res.error || 'Unknown error');
+    if (!res.ok) opError('Reorder failed', res.error || 'Unknown error');
   }, [overlays]);
 
   // Shared autopilot writes (the ONE unison cadence for all overlays).
@@ -444,9 +401,9 @@ export const DeckOverlayStack: React.FC<{
     if (!res.ok) {
       const code = (res.data && res.data.code) as string | undefined;
       if (code === 'AUTOCYCLE_BAD_DELAY') {
-        Alert.alert('Bad delay', 'Auto-cycle delay must be at least 1 second.');
+        opWarn('Bad delay', 'Auto-cycle delay must be at least 1 second.');
       } else {
-        Alert.alert('Auto-cycle failed', res.error || 'Unknown error');
+        opError('Auto-cycle failed', res.error || 'Unknown error');
       }
     }
   }, []);
@@ -454,7 +411,7 @@ export const DeckOverlayStack: React.FC<{
   // Add an overlay with the chosen view + playlist (or default playlist).
   const handleAdd = useCallback(async (playlist?: string) => {
     if (!addView) {
-      Alert.alert('Pick a view', 'An overlay needs a specific view (a group or view mask) — it cannot target the whole rig.');
+      opWarn('Pick a view', 'An overlay needs a specific view (a group or view mask) — it cannot target the whole rig.');
       return;
     }
     // The engine requires a playlist OR pattern — the "DEFAULT" choice maps
@@ -468,13 +425,13 @@ export const DeckOverlayStack: React.FC<{
     if (!res.ok) {
       const code = (res.data && res.data.code) as string | undefined;
       if (code === 'DECK_OVERLAY_VIEW_REQUIRED') {
-        Alert.alert('View required', 'Pick a specific view for the overlay (not the whole rig).');
+        opWarn('View required', 'Pick a specific view for the overlay (not the whole rig).');
       } else if (code === 'DECK_OVERLAY_VIEW_TAKEN') {
-        Alert.alert('View already in use', 'That view already has an overlay. Pick a different view.');
+        opWarn('View already in use', 'That view already has an overlay. Pick a different view.');
       } else if (code === 'DECK_OVERLAY_OVER_CAP') {
-        Alert.alert('Overlay limit reached', `You can have at most ${DECK_OVERLAY_MAX} deck overlays.`);
+        opWarn('Overlay limit reached', `You can have at most ${DECK_OVERLAY_MAX} deck overlays.`);
       } else {
-        Alert.alert('Add overlay failed', res.error || 'Unknown error');
+        opError('Add overlay failed', res.error || 'Unknown error');
       }
       return;
     }
@@ -486,13 +443,15 @@ export const DeckOverlayStack: React.FC<{
     if (newId) setExpandedId(newId);
   }, [addView]);
 
-  const labelCaps = { fontFamily: 'SpaceGrotesk_700Bold' as const, fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' as const };
+  // The shared caps recipe (docs/54 §1.1) — this file used to restate it.
+  const labelCaps = { ...Type.labelCaps, textTransform: 'uppercase' as const, color: C.secondary };
 
   return (
     <View style={{ marginBottom: 12 }}>
       {/* ── Shared header: OVERLAYS title + shared AUTO cadence + ADD ────── */}
-      <View style={{ paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, gap: 6, marginBottom: 8 }}>
+      <View style={{ paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: Radius.card, backgroundColor: C.surfaceContainerLowest, borderWidth: 1, borderColor: C.ghostBorder, gap: 6, marginBottom: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <View style={identityDot(C.tertiary)} />
           <Text style={labelCaps}>OVERLAYS</Text>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary }}>{overlays.length}/{DECK_OVERLAY_MAX}</Text>
           <View style={{ flex: 1 }} />
@@ -500,20 +459,29 @@ export const DeckOverlayStack: React.FC<{
           <TouchableOpacity
             onPress={() => setAuto({ active: !overlayAutopilot.active })}
             disabled={disabled}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: overlayAutopilot.active ? C.primary : 'transparent', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: overlayAutopilot.active ? 'transparent' : C.ghostBorder }}
+            style={[
+              { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: overlayAutopilot.active ? live.backgroundColor : 'transparent', paddingHorizontal: 10, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: overlayAutopilot.active ? live.borderColor : C.ghostBorder },
+              overlayAutopilot.active && { boxShadow: glowFor(C.tertiary) },
+            ]}
           >
-            <IconSymbol name={overlayAutopilot.active ? 'pause.fill' : 'play.fill'} size={14} color={overlayAutopilot.active ? '#FFF' : C.text} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: overlayAutopilot.active ? '#FFF' : C.text }}>
+            <IconSymbol name={overlayAutopilot.active ? 'pause.fill' : 'play.fill'} size={14} color={overlayAutopilot.active ? live.color : C.text} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: overlayAutopilot.active ? live.color : C.text }}>
               AUTO (ALL)
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => setAuto({ shuffle: !overlayAutopilot.shuffle })}
             disabled={disabled}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 7 }}
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 6,
+              paddingHorizontal: 8, paddingVertical: 7,
+              borderRadius: Radius.control, borderWidth: 1,
+              borderColor: overlayAutopilot.shuffle ? on.borderColor : 'transparent',
+              backgroundColor: overlayAutopilot.shuffle ? on.backgroundColor : 'transparent',
+            }}
           >
-            <IconSymbol name="shuffle" size={14} color={overlayAutopilot.shuffle ? C.primary : C.icon} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: overlayAutopilot.shuffle ? C.primary : C.icon, letterSpacing: 0.5 }}>SHUFFLE</Text>
+            <IconSymbol name="shuffle" size={14} color={overlayAutopilot.shuffle ? on.color : C.icon} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: overlayAutopilot.shuffle ? on.color : C.icon, letterSpacing: 0.5 }}>SHUFFLE</Text>
           </TouchableOpacity>
         </View>
         {/* Shared cadence timer pills (one unison clock for ALL overlays).
@@ -545,8 +513,7 @@ export const DeckOverlayStack: React.FC<{
               count={overlays.length}
               expanded={expandedId === o.id}
               onToggleExpand={() => setExpandedId((cur) => (cur === o.id ? null : o.id))}
-              groups={groups}
-              viewMasks={viewMasks}
+              namedViews={namedViews}
               playlistLibrary={playlistLibrary}
               disabled={disabled}
               onReorder={handleReorder}
@@ -563,7 +530,7 @@ export const DeckOverlayStack: React.FC<{
         <TouchableOpacity
           onPress={() => { setAddView(null); setShowAdd(true); }}
           disabled={disabled || perfLocked}
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ghostBorder, opacity: (disabled || perfLocked) ? 0.5 : 1 }}
+          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: Radius.control, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ghostBorder, opacity: (disabled || perfLocked) ? 0.5 : 1 }}
           accessibilityState={{ disabled: disabled || perfLocked }}
         >
           <IconSymbol name="plus" size={16} color={C.primary} />
@@ -572,18 +539,18 @@ export const DeckOverlayStack: React.FC<{
       )}
 
       {/* ── Add overlay sheet: view (required) + playlist ─────────────── */}
-      <Modal transparent visible={showAdd} animationType="fade" onRequestClose={() => setShowAdd(false)}>
+      <Modal transparent visible={showAdd} animationType="fade" onRequestClose={() => setShowAdd(false)} supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}>
         <TouchableOpacity
           style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
           activeOpacity={1}
           onPress={() => setShowAdd(false)}
         >
-          <TouchableOpacity activeOpacity={1} style={{ width: '100%', maxWidth: 420, backgroundColor: C.surfaceContainerLowest, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder, padding: 16, gap: 12 }}>
+          <TouchableOpacity activeOpacity={1} style={[globalStyles.panel, { width: '100%', maxWidth: 420, padding: 16, gap: 12 }]}>
             <Text style={labelCaps}>ADD OVERLAY</Text>
             {/* Step 1: required view */}
             <TouchableOpacity
               onPress={() => setShowAddViewPicker(true)}
-              style={{ paddingHorizontal: 12, paddingVertical: 11, borderRadius: 8, borderWidth: 1, borderColor: addView ? C.primary : C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
+              style={{ paddingHorizontal: 12, paddingVertical: 11, borderRadius: Radius.control, borderWidth: 1, borderColor: addView ? C.borderStrong : C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
             >
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: addView ? C.primary : C.text }}>
                 {addView ? `VIEW: ${viewSelectionLabel(addView)}` : 'PICK A VIEW (required) ▾'}
@@ -595,7 +562,7 @@ export const DeckOverlayStack: React.FC<{
               <TouchableOpacity
                 onPress={() => handleAdd(undefined)}
                 disabled={!addView}
-                style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: 8, opacity: addView ? 1 : 0.4 }}
+                style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: Radius.control, opacity: addView ? 1 : 0.4 }}
               >
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>DEFAULT</Text>
               </TouchableOpacity>
@@ -609,7 +576,7 @@ export const DeckOverlayStack: React.FC<{
                   key={name}
                   onPress={() => handleAdd(name)}
                   disabled={!addView}
-                  style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: 8, opacity: addView ? 1 : 0.4 }}
+                  style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: Radius.control, opacity: addView ? 1 : 0.4 }}
                 >
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>{name.toUpperCase()}</Text>
                 </TouchableOpacity>
@@ -619,11 +586,11 @@ export const DeckOverlayStack: React.FC<{
         </TouchableOpacity>
       </Modal>
 
-      <ViewPickerModal
+      <ViewSelectionPicker
         visible={showAddViewPicker}
-        groups={groups}
-        viewMasks={viewMasks}
+        namedViews={namedViews}
         current={addView}
+        title="OVERLAY VIEW"
         onSelect={(v) => setAddView(v)}
         onClose={() => setShowAddViewPicker(false)}
       />

@@ -130,8 +130,8 @@ export const AUDIO_REACTIVE_DEFAULTS = Object.freeze({
 // CPC keys this profile reads / writes. Named so a registry rename surfaces
 // here rather than as a silent dead subscription.
 const KEY = Object.freeze({
-  switchPattern: 'audioSwitchPattern',
-  switchColor: 'audioSwitchColor',
+  switchPattern: 'audioSwitchPatternSeq',
+  switchColor: 'audioSwitchColorSeq',
   noteHue: 'audioNoteHue',
   note: 'audioNote',
   energyRatio: 'audioEnergyRatio',
@@ -158,6 +158,8 @@ export class AudioReactiveProfile {
     this._tickTimer = null;
     this._lastAdvanceMs = 0;
     this._lastColorMs = 0;
+    this._lastSwitchPatternSeq = NaN;
+    this._lastSwitchColorSeq = NaN;
     // Energy-arc envelope state (per-tick loop).
     this._energyFast = null;   // null = un-seeded; seeds to first sample
     this._energySlow = null;
@@ -187,6 +189,8 @@ export class AudioReactiveProfile {
     this._lastAdvanceMs = now;
     this._lastColorMs = now;
     this._lastTickMs = now;
+    this._lastSwitchPatternSeq = this._getNum(KEY.switchPattern);
+    this._lastSwitchColorSeq = this._getNum(KEY.switchColor);
 
     // SPEED: arm bpmSpeedSync so `speed` tracks tempo within a fixed window.
     // Capture prior values so detach restores them verbatim. The energy arc
@@ -270,22 +274,26 @@ export class AudioReactiveProfile {
     // still has to pass the stable-descriptor hold gate in _tick(). So here we
     // just re-evaluate the descriptor immediately (a pulse coinciding with a
     // real settled change recolours; a bare transient does not).
-    if (ev.changedKeys.includes(KEY.switchColor) && this._pulseHigh(ev, KEY.switchColor)) {
+    if (ev.changedKeys.includes(KEY.switchColor) && this._sequenceAdvanced(ev, KEY.switchColor)) {
       this._evaluateColorDescriptor(Date.now(), /* candidateNow */ true);
     }
     // PATTERN ADVANCE (trigger a): a switchPattern pulse → same requestAdvance
     // path as the energy pickup, both gated by minIntervalMs.
-    if (ev.changedKeys.includes(KEY.switchPattern) && this._pulseHigh(ev, KEY.switchPattern)) {
+    if (ev.changedKeys.includes(KEY.switchPattern) && this._sequenceAdvanced(ev, KEY.switchPattern)) {
       this._maybeAdvance(Date.now());
     }
   }
 
   // LEVEL-triggered (Spike 0): treat "value > 0 on this event" as the trigger —
   // do NOT require a strict rising edge (the wire drops single-hop pulses).
-  _pulseHigh(ev, key) {
+  _sequenceAdvanced(ev, key) {
     const slot = ev.state && ev.state.params && ev.state.params[key];
     const v = slot ? Number(slot.value) : NaN;
-    return Number.isFinite(v) && v > 0;
+    if (!Number.isInteger(v) || v <= 0) return false;
+    const field = key === KEY.switchPattern ? '_lastSwitchPatternSeq' : '_lastSwitchColorSeq';
+    if (v === this[field]) return false;
+    this[field] = v;
+    return true;
   }
 
   // ── Per-tick energy loop ───────────────────────────────────────────────────

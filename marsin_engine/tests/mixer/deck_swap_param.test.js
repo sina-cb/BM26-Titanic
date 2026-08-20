@@ -27,7 +27,9 @@ function makeWasmHostStub() {
 }
 
 function makeMixer(wasmHost) {
-  return new PatternMixer({ wasmHost, pixelCount: 4, maxChannels: 4 });
+  const mixer = new PatternMixer({ wasmHost, pixelCount: 4, maxChannels: 4 });
+  mixer.blendHandles.trans_crossfade = { id: 'trans_crossfade' };
+  return mixer;
 }
 
 // ── item 8: warmInactiveDeckHandle leak safety ─────────────────────────
@@ -104,4 +106,180 @@ test('_extractVisInto keeps DISTINCT buffers per key (no cross-channel corruptio
   assert.notEqual(deck, overlay, 'different keys must NOT share a buffer');
   assert.deepEqual([...deck], [1, 1, 1, 1, 1, 1]);
   assert.deepEqual([...overlay], [2, 2, 2, 2, 2, 2]);
+});
+
+test('Deck landing atomically promotes the incoming handle and its phase clock', () => {
+  const host = makeWasmHostStub();
+  const mixer = makeMixer(host);
+  const outgoing = { id: 'outgoing' };
+  const incoming = { id: 'incoming' };
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: outgoing });
+  mixer.deckChannel._phaseSeconds = 12.5;
+  mixer.deckChannel._lastPhaseElapsed = 20;
+  mixer.triggerDeckPatternSwap({ newHandle: incoming, patternName: 'p_b', durationMs: 1000 });
+  mixer._inactiveDeckChannel._phaseSeconds = 1.25;
+  mixer._inactiveDeckChannel._lastPhaseElapsed = 20;
+
+  mixer.finishDeckSwapNow();
+
+  assert.equal(mixer.deckChannel.handle, incoming);
+  assert.equal(mixer.deckChannel.pattern, 'p_b');
+  assert.equal(mixer.deckChannel._phaseSeconds, 1.25);
+  assert.equal(mixer.deckChannel._lastPhaseElapsed, 20);
+  assert.equal(mixer._inactiveDeckChannel.handle, outgoing);
+  assert.equal(mixer._inactiveDeckChannel._phaseSeconds, 12.5);
+  assert.equal(mixer.isInactiveDeckHandleFresh(), false);
+});
+
+test('a demoted, previously-running handle cannot be reused as a fresh incoming phase', () => {
+  const mixer = makeMixer(makeWasmHostStub());
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: { id: 'a' } });
+  mixer.triggerDeckPatternSwap({ newHandle: { id: 'b' }, patternName: 'p_b', durationMs: 1000 });
+  mixer.finishDeckSwapNow();
+
+  assert.throws(
+    () => mixer.triggerDeckPatternSwap({ newHandle: null, patternName: 'p_a', durationMs: 1000 }),
+    /no fresh precompiled handle is parked/,
+  );
+});
+
+test('a parked precompiled handle stays eligible for deterministic zero-phase reuse', () => {
+  const mixer = makeMixer(makeWasmHostStub());
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: { id: 'a' } });
+  const parked = { id: 'b' };
+  assert.equal(mixer.warmInactiveDeckHandle('p_b', parked), true);
+  assert.equal(mixer.isInactiveDeckHandleFresh(), true);
+  assert.ok(mixer.triggerDeckPatternSwap({ newHandle: null, patternName: 'p_b', durationMs: 1000 }));
+});
+
+test('a parked precompile does not advance until its transition starts', () => {
+  const host = makeWasmHostStub();
+  const calls = [];
+  host.beginFrame = (handle, phase) => calls.push({ handle, phase });
+  const mixer = makeMixer(host);
+  const active = { id: 'a' };
+  const parked = { id: 'b' };
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: active });
+  mixer.forceLayerSetting('deck', 'test');
+  mixer.warmInactiveDeckHandle('p_b', parked);
+
+  mixer.beginFrame(10);
+  assert.equal(calls.some((call) => call.handle === parked), false, 'parked B must remain zero-phase');
+
+  mixer.triggerDeckPatternSwap({ newHandle: null, patternName: 'p_b', durationMs: 1000 });
+  mixer.beginFrame(10.025);
+  assert.equal(calls.some((call) => call.handle === parked), true, 'B begins ticking only after selection');
+  assert.ok(mixer._inactiveDeckChannel._phaseSeconds <= 0.0251);
+});
+
+test('an unknown Deck transition fails loudly and never becomes a crossfade', () => {
+  const host = makeWasmHostStub();
+  const mixer = makeMixer(host);
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: { id: 'a' } });
+  const incoming = { id: 'b' };
+  assert.throws(
+    () => mixer.triggerDeckPatternSwap({
+      newHandle: incoming,
+      patternName: 'p_b',
+      transitionMode: 'trans_does_not_exist',
+      durationMs: 1000,
+    }),
+    /invalid Deck transition mode/,
+  );
+  assert.equal(mixer.isDeckSwapInFlight(), false);
+  assert.ok(host.destroyed.includes(incoming), 'failed transition must release incoming handle');
+});
+
+test('a cataloged transition with no compiled script fails loudly', () => {
+  const host = makeWasmHostStub();
+  const mixer = makeMixer(host);
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: { id: 'a' } });
+  const incoming = { id: 'b' };
+  assert.throws(
+    () => mixer.triggerDeckPatternSwap({
+      newHandle: incoming,
+      patternName: 'p_b',
+      transitionMode: 'trans_flash',
+      durationMs: 1000,
+    }),
+    /missing or failed to compile/,
+  );
+  assert.equal(mixer.isDeckSwapInFlight(), false);
+  assert.ok(host.destroyed.includes(incoming));
+});
+
+test('Deck crossfade dispatches trans_crossfade, never blend_screen', () => {
+  let usedBlendHandle = null;
+  const host = {
+    destroy() {},
+    beginFrame() {},
+    getExports() { return []; },
+    renderAll6ch(handle, output) { output.fill(handle.value); return output; },
+    renderBlend6ch(handle, _count, from, to, progress, output = null) {
+      usedBlendHandle = handle;
+      const target = output || new Uint8Array(from.length);
+      for (let i = 0; i < target.length; i++) {
+        target[i] = Math.round(from[i] + (to[i] - from[i]) * progress);
+      }
+      return target;
+    },
+  };
+  const mixer = new PatternMixer({ wasmHost: host, pixelCount: 4, maxChannels: 4 });
+  const crossfadeHandle = { id: 'trans_crossfade' };
+  mixer.blendHandles.trans_crossfade = crossfadeHandle;
+  mixer.blendHandles.blend_screen = { id: 'blend_screen' };
+  mixer.setDeckChannel({ id: 'ch_base', name: 'Base', pattern: 'p_a', handle: { value: 20 } });
+  mixer.forceLayerSetting('deck', 'test');
+  mixer.triggerDeckPatternSwap({
+    newHandle: { value: 180 },
+    patternName: 'p_b',
+    transitionMode: 'trans_crossfade',
+    durationMs: 1000,
+  });
+  mixer._inactiveDeckChannel.fader = 0.5;
+
+  const output = mixer.renderAll6ch();
+  assert.equal(usedBlendHandle, crossfadeHandle);
+  assert.equal(output[0], 100, 'true midpoint interpolation');
+});
+
+test('mixer crossfade also installs the real trans_crossfade script at exact progress zero', () => {
+  const mixer = makeMixer(makeWasmHostStub());
+  mixer.addMixerChannel({
+    id: 'overlay_a', name: 'A', pattern: 'p_a', handle: { id: 'a' },
+    mode: 'blend_screen', enabled: true, fader: 1,
+  });
+  const target = mixer.addMixerChannel({
+    id: 'overlay_b', name: 'B', pattern: 'p_b', handle: { id: 'b' },
+    mode: 'blend_screen', enabled: true, fader: 0,
+  });
+
+  const id = mixer.triggerMixerTransition({
+    targetChannelId: 'overlay_b',
+    durationMs: 1000,
+    transitionMode: 'trans_crossfade',
+  });
+
+  assert.ok(id);
+  assert.equal(target.mode, 'trans_crossfade');
+  assert.equal(target._savedMode, 'blend_screen');
+  assert.equal(target.fader, 0, 'first frame must be the exact A endpoint');
+});
+
+test('mixer transition rejects a removed/unknown id without mutating channel state', () => {
+  const mixer = makeMixer(makeWasmHostStub());
+  const target = mixer.addMixerChannel({
+    id: 'overlay_b', name: 'B', pattern: 'p_b', handle: { id: 'b' },
+    mode: 'blend_screen', enabled: false, fader: 0.4,
+  });
+
+  assert.equal(mixer.triggerMixerTransition({
+    targetChannelId: 'overlay_b',
+    durationMs: 1000,
+    transitionMode: 'trans_morse_blink',
+  }), null);
+  assert.equal(target.mode, 'blend_screen');
+  assert.equal(target.enabled, false);
+  assert.equal(target.fader, 0.4);
+  assert.equal(mixer.transitions.length, 0);
 });

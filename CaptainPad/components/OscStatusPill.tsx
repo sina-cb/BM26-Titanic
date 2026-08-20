@@ -13,6 +13,7 @@
 
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Modal } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { useOscStatus, OscPillState } from '@/hooks/useEngineState';
@@ -174,7 +175,9 @@ function OscDiagnosticSheet({ visible, onClose, status }: SheetProps) {
     : `${Math.max(0, Math.floor((referenceTime - stats.lastSeenMs) / 1000))}s ago`;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <View style={{
         flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
         justifyContent: 'center', alignItems: 'center',

@@ -13,24 +13,25 @@
     the attractors never re-phase. Phases accumulate continuously and wrap at a
     large multiple of TAU (PHASE_WRAP = 10000*TAU) far from any in-frame use, so
     there is no seam (skill 12 §7).
-    Autonomous direction: each phase is multiplied by a SMOOTHLY-varying rate
-    sway (0.3 + 0.7*cos(slowClock)) * dirSign on two incommensurate slow clocks,
-    so the effective rate eases through zero and occasionally reverses — never an
-    instant sign flip (which would seam a wrapped phase), and the attractors
-    never reverse in lockstep.
+    Each phase is multiplied by a smooth positive rate sway on two
+    incommensurate slow clocks. Heading is fixed forward; Local Speed is the
+    only motion-rate control.
 
   AUDIO_MODULATION_V1:
     sliderLevel  <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
     sliderKick   <- micKick range 0.00..1.00 curve linear # beat brightness pop
     sliderRadius <- micFlux range 0.40..0.90 curve linear # attractor travel / movement
     sliderDetail <- micHigh range 0.30..0.90 curve linear # glow sharpness / sparkle
-  # Static (not audio-mapped): localSpeed, direction, focus, trailBlend,
+  # Static (not audio-mapped): localSpeed, focus, trailBlend,
   # colorPalette1/2 — operator-set geometry/colour, not modulated.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
+// Canonical append-only optional fixture roles; absent roles match no pixels.
+var FIX_RAW_LED = 1;
+var FIX_TE_SIGN = 7;
+
 export var localSpeed = 0.5;   // motion rate (0 still creeps, 1 ~4x faster)
-export var direction = 0.5;    // 0.5 = balanced; <0.5 reverse, >0.5 forward (guarded)
 export var level = 0.5;        // PRIMARY audio: overall brightness gain (micLow); mid = calm-but-lit
 export var kick = 0.0;         // audio: kick brightness pop (micKick); 0 = no pop until beat
 export var radius = 0.5;       // audio: movement radius / attractor travel (micFlux)
@@ -44,11 +45,6 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) {
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
-}
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
@@ -63,7 +59,7 @@ var pA = 0.0, pB = 0.0, pC = 0.0, pD = 0.0, pE = 0.0, pF = 0.0;
 var qA = 0.0, qB = 0.0, qC = 0.0, qD = 0.0, qE = 0.0;
 var trailPhase = 0.0, mixPhase = 0.0;
 var autoClockA = 0.0, autoClockB = 0.0; // slow clocks for autonomous reversal
-var dirSign = 1.0;       // resolved slider direction this frame
+var dirSign = 1.0;       // fixed forward heading
 var travel = 0.42;       // resolved movement radius this frame
 var glowSharp = 1.6;
 var PHASE_WRAP = 62831.853; // 10000*TAU — wrap far from any in-frame use (§7)
@@ -106,14 +102,7 @@ export function beforeRender(delta) {
   if (dt > 0.1) dt = 0.1;
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  // Slider direction (guarded away from 0) — never sits at a static center.
-  dirSign = direction;
-  if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
-  else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
-
-  // Autonomous direction variation: two SLOW incommensurate clocks whose cosine
-  // smoothly crosses zero, so the effective rate eases through a reversal (no
-  // seam). They run on different periods so attractors never flip in lockstep.
+  // Two slow incommensurate clocks vary the positive forward rate smoothly.
   autoClockA = autoClockA + dt * 0.105 * localMultiplier;
   autoClockB = autoClockB + dt * 0.071 * localMultiplier;
   if (autoClockA >= PHASE_WRAP) autoClockA = autoClockA - PHASE_WRAP;
@@ -122,8 +111,7 @@ export function beforeRender(delta) {
   // swimming at the guarded-center default instead of stalling at half rate. The
   // cosine sway stays away from zero (range ~[0.2..1.0]) so the effective rate
   // never dips to ~0 — motion floor — while still easing the speed up and down.
-  var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
-  var swayMag = dirSign + dirMag * 0.7;     // never near-zero at center
+  var swayMag = 1.0;
   var swayA = (0.6 + 0.4 * cos(autoClockA)) * swayMag;
   var swayB = (0.6 + 0.4 * cos(autoClockB + 1.1)) * swayMag;
 
@@ -155,6 +143,7 @@ export function render3D(index, x, y, z) {
   // Coords arrive already normalized in [0,1]; use directly (clamped).
   var nx = max(0.0, min(1.0, x));
   var ny = max(0.0, min(1.0, y));
+  var nz = max(0.0, min(1.0, z));
 
   var ax = 0.5 + travel * sin(pA) * cos(qB);
   var ay = 0.5 + travel * sin(pB + 0.8) * 0.62 + sin(qC) * 0.09;
@@ -175,10 +164,25 @@ export function render3D(index, x, y, z) {
   // attractors read as discrete swimming nodes, not a wash.
   var glow = pow(max(0.0, 1.0 - nearest * focusK), glowSharp) * 1.15;
 
-  var trail = wave((dA - dB + dC) * 3.0 + trailPhase);
+  // Spatial afterimages: sample each attractor at a small phase offset behind
+  // its current motion. Trail Blend now controls genuine echo geometry rather
+  // than an unrelated present-frame distance-interference weave.
+  var lag = 0.16 + trailBlend * 0.62;
+  var axLag = 0.5 + travel * sin(pA - lag * dirSign) * cos(qB - lag * 0.31 * dirSign);
+  var ayLag = 0.5 + travel * sin(pB + 0.8 - lag * 0.73 * dirSign) * 0.62
+            + sin(qC - lag * 0.27 * dirSign) * 0.09;
+  var bxLag = 0.5 + travel * sin(pC + 2.1 - lag * 0.83 * dirSign) * 0.75;
+  var byLag = 0.5 + travel * sin(pD - qE - lag * 0.61 * dirSign) * 0.55;
+  var cxLag = 0.5 + travel * sin(pE - 1.4 - lag * 0.77 * dirSign)
+            * cos(qD - lag * 0.23 * dirSign) * 0.8;
+  var cyLag = 0.5 + travel * sin(pF + qA + 1.2 - lag * 0.69 * dirSign) * 0.58;
+  var lagNear = min(hypot(nx - axLag, ny - ayLag),
+                min(hypot(nx - bxLag, ny - byLag), hypot(nx - cxLag, ny - cyLag)));
+  var trail = pow(max(0.0, 1.0 - lagNear * focusK), glowSharp + 0.8)
+            * trailBlend * 0.72;
   // Small clock-driven base floor so silence stays calm-but-visible, but low
   // enough that the negative space reads near-black (high-def contrast).
-  var v = 0.018 + glow + trail * trailBlend * 0.14;
+  var bval = 0.018 + glow + trail;
 
   // PRIMARY: overall brightness from micLow. A small level-driven ambient floor
   // lifts the WHOLE rig with the bass (clean monotonic coupling, no phase wobble),
@@ -194,7 +198,7 @@ export function render3D(index, x, y, z) {
   // Kick pop: a clean additive brightness lift from micKick (kept secondary so
   // micLow stays the dominant brightness driver for PRIMARY corr).
   var pop = kick * 0.38;
-  v = min(1.0, ambient + (v + pop) * gain);
+  bval = min(1.0, ambient + (bval + pop) * gain);
 
   // Colour identity per attractor so BOTH palette ends span the rig (hueSpread):
   // attractor A pulls toward cp1 (mix 0.04), B toward cp2 (mix 0.96), C sits mid
@@ -214,9 +218,108 @@ export function render3D(index, x, y, z) {
   mixVal = max(0.0, min(1.0, mixVal));
 
   // Strict RGB lerp — no hsv() interpolation, no hue drift past cp1/cp2.
-  var r = (pr1 + (pr2 - pr1) * mixVal) * v;
-  var g = (pg1 + (pg2 - pg1) * mixVal) * v;
-  var b = (pb1 + (pb2 - pb1) * mixVal) * v;
+  var r = (pr1 + (pr2 - pr1) * mixVal) * bval;
+  var g = (pg1 + (pg2 - pg1) * mixVal) * bval;
+  var b = (pb1 + (pb2 - pb1) * mixVal) * bval;
 
-  rgb(r, g, b);
+  // White is reserved for a true three-body event. It rises only when two
+  // attractor centers approach one another and this pixel is inside their
+  // shared glow, leaving the continuously moving trails fully palette-coloured.
+  var nearAB = max(0.0, 1.0 - hypot(ax - bx, ay - by) * 3.4);
+  var nearBC = max(0.0, 1.0 - hypot(bx - cx, by - cy) * 3.4);
+  var nearCA = max(0.0, 1.0 - hypot(cx - ax, cy - ay) * 3.4);
+  var collision = pow(max(nearAB, max(nearBC, nearCA)), 2.4);
+  var collisionGlint = collision * pow(glow, 1.7)
+                     * (0.18 + detail * 0.82);
+
+  // Portable five-instrument staging. Bars carry the nodes, raw LEDs carry
+  // orbit traces, pars pulse warmly near cores, signs hold a readable substrate,
+  // and Vintage rails receive sparse golden-white pinpricks.
+  var white = 0.0;
+  if (fixtureType == FIX_RAW_LED) {
+    r = r * 0.86; g = g * 0.96; b = b * 1.08;
+  } else if (fixtureType == FIX_PAR) {
+    r = r + glow * 0.10; g = g + glow * 0.045; b = b * 0.62;
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity is a true three-body observatory. Each 2D attractor gains an
+    // independent parametric Z orbit; continuous line-segment distances draw
+    // its recent path, while inverse-distance potential creates changing
+    // gravitational contours. No hash or generic traveling wash is involved.
+    var az = 0.5 + travel * sin(qA + pC * 0.31) * 0.52;
+    var bz = 0.5 + travel * sin(qC - pE * 0.27 + 2.1) * 0.48;
+    var cz = 0.5 + travel * sin(qD + pF * 0.23 - 1.1) * 0.56;
+    var azLag = 0.5 + travel * sin(qA - lag * 0.29 * dirSign
+                                  + (pC - lag * 0.83 * dirSign) * 0.31) * 0.52;
+    var bzLag = 0.5 + travel * sin(qC - lag * 0.27 * dirSign
+                                  - (pE - lag * 0.77 * dirSign) * 0.27 + 2.1) * 0.48;
+    var czLag = 0.5 + travel * sin(qD - lag * 0.23 * dirSign
+                                  + (pF - lag * 0.69 * dirSign) * 0.23 - 1.1) * 0.56;
+
+    var sdxA = nx - ax, sdyA = ny - ay, sdzA = nz - az;
+    var sdxB = nx - bx, sdyB = ny - by, sdzB = nz - bz;
+    var sdxC = nx - cx, sdyC = ny - cy, sdzC = nz - cz;
+    var signDA = sqrt(sdxA * sdxA + sdyA * sdyA + sdzA * sdzA * 0.72);
+    var signDB = sqrt(sdxB * sdxB + sdyB * sdyB + sdzB * sdzB * 0.72);
+    var signDC = sqrt(sdxC * sdxC + sdyC * sdyC + sdzC * sdzC * 0.72);
+
+    var signReach = 1.95 + focus * 0.65;
+    var signPower = 1.35 + detail * 0.85;
+    var signA = pow(max(0.0, 1.0 - signDA * signReach), signPower);
+    var signB = pow(max(0.0, 1.0 - signDB * signReach), signPower);
+    var signC = pow(max(0.0, 1.0 - signDC * signReach), signPower);
+
+    var svx = ax - axLag, svy = ay - ayLag, svz = az - azLag;
+    var swx = nx - axLag, swy = ny - ayLag, swz = nz - azLag;
+    var segT = (swx * svx + swy * svy + swz * svz)
+             / (svx * svx + svy * svy + svz * svz + 0.0001);
+    segT = max(0.0, min(1.0, segT));
+    swx = swx - svx * segT; swy = swy - svy * segT; swz = swz - svz * segT;
+    var signTrailA = pow(max(0.0, 1.0
+      - sqrt(swx * swx + swy * swy + swz * swz * 0.72) * (signReach * 0.88)),
+      signPower + 0.40);
+    svx = bx - bxLag; svy = by - byLag; svz = bz - bzLag;
+    swx = nx - bxLag; swy = ny - byLag; swz = nz - bzLag;
+    segT = (swx * svx + swy * svy + swz * svz)
+         / (svx * svx + svy * svy + svz * svz + 0.0001);
+    segT = max(0.0, min(1.0, segT));
+    swx = swx - svx * segT; swy = swy - svy * segT; swz = swz - svz * segT;
+    var signTrailB = pow(max(0.0, 1.0
+      - sqrt(swx * swx + swy * swy + swz * swz * 0.72) * (signReach * 0.88)),
+      signPower + 0.40);
+    svx = cx - cxLag; svy = cy - cyLag; svz = cz - czLag;
+    swx = nx - cxLag; swy = ny - cyLag; swz = nz - czLag;
+    segT = (swx * svx + swy * svy + swz * svz)
+         / (svx * svx + svy * svy + svz * svz + 0.0001);
+    segT = max(0.0, min(1.0, segT));
+    swx = swx - svx * segT; swy = swy - svy * segT; swz = swz - svz * segT;
+    var signTrailC = pow(max(0.0, 1.0
+      - sqrt(swx * swx + swy * swy + swz * swz * 0.72) * (signReach * 0.88)),
+      signPower + 0.40);
+    var signNode = max(signA, max(signB, signC));
+    var signTrail = max(signTrailA, max(signTrailB, signTrailC)) * trailBlend;
+    var signPotential = 1.0 / (0.12 + signDA)
+                      + 0.81 / (0.12 + signDB) + 0.63 / (0.12 + signDC);
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signGravity = wave(signPotential * 0.32 + trailPhase * 0.18
+                           + signPath * 0.04);
+    var signBri = (0.33 + signGravity * 0.08
+                  + signNode * 0.24 + signTrail * 0.15)
+                * (0.80 + level * 0.20);
+    var signWeights = signA + signB + signC + 0.001;
+    var signAttractorMix = (signA * 0.06 + signB * 0.94 + signC * 0.50)
+                         / signWeights;
+    var signMix = max(0.0, min(1.0, 0.07 + signGravity * 0.20
+                            + signAttractorMix * 0.46 + signTrail * 0.18));
+    r = (pr1 + (pr2 - pr1) * signMix) * signBri;
+    g = (pg1 + (pg2 - pg1) * signMix) * signBri;
+    b = (pb1 + (pb2 - pb1) * signMix) * signBri;
+    white = collision * pow(signNode, 1.8) * detail * 0.10;
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    white = min(1.0, pow(glow, 2.4) * 0.28 + trail * 0.12
+      + collisionGlint * 1.25);
+    r = r + white * 0.16;
+    g = g + white * 0.07;
+  }
+
+  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, white, 0.0);
 }

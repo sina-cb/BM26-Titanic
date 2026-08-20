@@ -80,9 +80,89 @@ parLights:
     value: false
     label: Show Light Cones
   generatorsVisible:
-    value: false
+    value: true
     label: Show Generators
   fixtures:
+    - group: Left Vintage
+      name: Left Vintage 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: -4
+      rotX: -10.142106156573984
+      rotY: -153.43494882292202
+      rotZ: 41.20267222364876
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: -2
+      rotX: -14.363302674070399
+      rotY: -140.19442890773482
+      rotZ: 38.37880233734616
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: 0
+      rotX: -20.374527188735197
+      rotY: -111.80140948635183
+      rotZ: 29.72955125255403
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: 2
+      rotX: -20.374527188735193
+      rotY: -68.19859051364818
+      rotZ: 13.873267720149599
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 5
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: 4
+      rotX: -14.363302674070406
+      rotY: -39.8055710922652
+      rotZ: 5.224016635357475
+      traceGenerated: true
+      enabled: true
+      brightness: 100
     - group: Left Bar
       name: Left Bar 1
       fixtureType: ShehdsBar
@@ -147,35 +227,67 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Bar
-      name: Right Bar 1
-      fixtureType: ShehdsBar
-      color: '#33aaff'
-      intensity: 12
-      angle: 30
+    - group: Back Vintage
+      name: Back Vintage 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
       penumbra: 0.5
-      x: 6
-      'y': 1.5
-      z: -2
-      rotX: -21.80140948635181
-      rotY: -90
-      rotZ: 0
+      x: -4.5
+      'y': 1
+      z: -4
+      rotX: -10.519734890658619
+      rotY: -111.8014094863518
+      rotZ: 15.48680956469612
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Bar
-      name: Right Bar 2
-      fixtureType: ShehdsBar
-      color: '#33aaff'
-      intensity: 12
-      angle: 30
+    - group: Back Vintage
+      name: Back Vintage 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
       penumbra: 0.5
-      x: 6
-      'y': 1.5
-      z: 2
-      rotX: -21.80140948635181
-      rotY: -90
-      rotZ: 0
+      x: -1.5
+      'y': 1
+      z: -4
+      rotX: -19.47122063449069
+      rotY: -135
+      rotZ: 44.99999999999999
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Vintage
+      name: Back Vintage 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 1.5
+      'y': 1
+      z: -4
+      rotX: -24.094842552110688
+      rotY: 153.43494882292202
+      rotZ: -84.23152048359228
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Vintage
+      name: Back Vintage 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 4.5
+      'y': 1
+      z: -4
+      rotX: -12.604382648379179
+      rotY: 116.56505117707796
+      rotZ: -20.263093765060837
       traceGenerated: true
       enabled: true
       brightness: 100
@@ -243,86 +355,6 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Vintage
-      name: Left Vintage 1
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -6
-      'y': 1
-      z: -4
-      rotX: -10.142106156573984
-      rotY: -153.43494882292202
-      rotZ: 41.20267222364876
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Vintage
-      name: Left Vintage 2
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -6
-      'y': 1
-      z: -2
-      rotX: -14.363302674070399
-      rotY: -140.19442890773482
-      rotZ: 38.37880233734615
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Vintage
-      name: Left Vintage 3
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -6
-      'y': 1
-      z: 0
-      rotX: -20.374527188735197
-      rotY: -111.80140948635183
-      rotZ: 29.72955125255403
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Vintage
-      name: Left Vintage 4
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -6
-      'y': 1
-      z: 2
-      rotX: -20.374527188735193
-      rotY: -68.19859051364818
-      rotZ: 13.873267720149599
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Vintage
-      name: Left Vintage 5
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -6
-      'y': 1
-      z: 4
-      rotX: -14.363302674070406
-      rotY: -39.805571092265204
-      rotZ: 5.224016635357474
-      traceGenerated: true
-      enabled: true
-      brightness: 100
     - group: Right Vintage
       name: Right Vintage 1
       fixtureType: VintageLed
@@ -334,7 +366,7 @@ parLights:
       'y': 1
       z: -4
       rotX: -10.99320149859691
-      rotY: 150.94539590092285
+      rotY: 150.94539590092288
       rotZ: -40.746015135133554
       traceGenerated: true
       enabled: true
@@ -367,71 +399,39 @@ parLights:
       z: 4
       rotX: -13.088476085833271
       rotY: 35.537677791974374
-      rotZ: -4.210838401837984
+      rotZ: -4.210838401837983
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Back Vintage
-      name: Back Vintage 1
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
+    - group: Right Bar
+      name: Right Bar 1
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
       penumbra: 0.5
-      x: -4.5
-      'y': 1
-      z: -4
-      rotX: -10.519734890658619
-      rotY: -111.80140948635182
-      rotZ: 15.486809564696124
+      x: 6
+      'y': 1.5
+      z: -2
+      rotX: -21.80140948635181
+      rotY: -90
+      rotZ: 0
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Back Vintage
-      name: Back Vintage 2
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
+    - group: Right Bar
+      name: Right Bar 2
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
       penumbra: 0.5
-      x: -1.5
-      'y': 1
-      z: -4
-      rotX: -19.47122063449069
-      rotY: -135
-      rotZ: 44.99999999999999
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Back Vintage
-      name: Back Vintage 3
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: 1.5
-      'y': 1
-      z: -4
-      rotX: -24.094842552110688
-      rotY: 153.43494882292202
-      rotZ: -84.23152048359228
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Back Vintage
-      name: Back Vintage 4
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: 4.5
-      'y': 1
-      z: -4
-      rotX: -12.604382648379179
-      rotY: 116.56505117707799
-      rotZ: -20.263093765060837
+      x: 6
+      'y': 1.5
+      z: 2
+      rotX: -21.80140948635181
+      rotY: -90
+      rotZ: 0
       traceGenerated: true
       enabled: true
       brightness: 100
@@ -589,98 +589,4 @@ ledStrands:
     value: true
     label: Master Enabled
   strands: []
-pixelMap2d:
-  enabled: true
-  canvas:
-    w: 1200
-    h: 1000
-  fixtures:
-    Left Vintage 1:
-      x: 112
-      'y': 912
-      rot: -180
-    Left Vintage 2:
-      x: 112
-      'y': 704
-      rot: -180
-    Left Vintage 3:
-      x: 112
-      'y': 496
-      rot: -180
-    Left Vintage 4:
-      x: 112
-      'y': 296
-      rot: -180
-    Left Vintage 5:
-      x: 112
-      'y': 72
-      rot: -180
-    Left Bar 1:
-      x: 56
-      'y': 808
-      rot: -90
-    Left Bar 2:
-      x: 56
-      'y': 600
-      rot: -90
-    Left Bar 3:
-      x: 56
-      'y': 400
-      rot: -90
-    Left Bar 4:
-      x: 56
-      'y': 184
-      rot: -90
-    Back Vintage 1:
-      x: 384
-      'y': 112
-      rot: 90
-    Back Vintage 2:
-      x: 592
-      'y': 112
-      rot: 90
-    Back Vintage 3:
-      x: 792
-      'y': 112
-      rot: 90
-    Back Vintage 4:
-      x: 1008
-      'y': 112
-      rot: 90
-    Back Bar 1:
-      x: 264
-      'y': 48
-      rot: 0
-    Back Bar 2:
-      x: 488
-      'y': 56
-      rot: 0
-    Back Bar 3:
-      x: 696
-      'y': 56
-      rot: 0
-    Back Bar 4:
-      x: 904
-      'y': 64
-      rot: 0
-    Right Vintage 1:
-      x: 1072
-      'y': 688
-      rot: 0
-    Right Vintage 2:
-      x: 1072
-      'y': 488
-      rot: 0
-    Right Vintage 3:
-      x: 1088
-      'y': 288
-      rot: 0
-    Right Bar 1:
-      x: 1144
-      'y': 592
-      rot: -90
-    Right Bar 2:
-      x: 1144
-      'y': 392
-      rot: -90
 traces: *ref_0

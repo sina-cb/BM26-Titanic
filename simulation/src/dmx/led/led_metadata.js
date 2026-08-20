@@ -10,9 +10,13 @@
 //   1. DMX-first: projectControllerMappings (DMX numbering) always runs before
 //      projectLedStrandPatches (this pass) at every call site, so the DMX
 //      section/fixture ids are FINAL here. This module floors its counters at
-//      the DMX max, so every LED id it mints is strictly greater than every
-//      DMX id — mutually exclusive AND monotonically increasing (DMX 1..N ⇒
-//      LED N+1..).
+//      the max over the DMX ∪ LED union, so every LED id it mints is strictly
+//      greater than every id already in use — mutual exclusion.
+//      projectOntoConfigs floors on that SAME union (it takes params.ledStrands
+//      for exactly this reason), so neither pass can mint an id the other owns.
+//      Note the guarantee is EXCLUSION, not global ordering: a one-time DMX
+//      collision repair there (report 20260725_34) can lift a DMX id above an
+//      existing LED id. Nothing may assume "all LED ids > all DMX ids".
 //   2. Namespace isolation: the LED group→section map is separate from DMX's,
 //      so a DMX group and an LED group that happen to share a name still get
 //      different section ids.

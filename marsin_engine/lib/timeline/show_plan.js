@@ -13,6 +13,7 @@
  * checks (a phase-trigger's phase, a look-action's look, a mood whenPhase must
  * all be defined in the plan) fail loud on a dangling reference.
  */
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
 import yaml from 'js-yaml';
@@ -20,6 +21,7 @@ import yaml from 'js-yaml';
 import { computeSunEvents } from './sun.js';
 import { anchorToMs, dateClockToEpochMs } from './triggers.js';
 import { festivalDateFor } from './festival.js';
+import { DECK_TRANSITION_MODES } from '../transition_modes.js';
 
 // Sun events a sun anchor / sun trigger may reference (mirrors sun.js output).
 export const SUN_EVENTS = Object.freeze([
@@ -41,12 +43,7 @@ const CUE_KINDS = Object.freeze(['program', 'mood', 'ambient']);
 // Mirrors the engine's deck transition-config `mode` (api_server.js) — the swap
 // runs as a soft double-buffer fade in this style. The cue editor exposes the
 // FULL blend set (all 16), matching the live deck's Deck TX picker.
-export const CUE_TRANSITION_MODES = Object.freeze([
-  'trans_crossfade', 'trans_flash', 'trans_color_burst', 'trans_dissolve',
-  'trans_wipe_right', 'trans_wipe_left', 'trans_wipe_down', 'trans_diagonal_wipe',
-  'trans_wave_sweep', 'trans_iris', 'trans_iris_close', 'trans_diamond_wipe',
-  'trans_split_horizontal', 'trans_split_vertical', 'trans_ripple_in', 'trans_morse_blink',
-]);
+export const CUE_TRANSITION_MODES = DECK_TRANSITION_MODES;
 // A playlist action's `overlays` field: enable (honor configured overlays) or
 // disable (turn ALL deck overlays off). Absent → no change (docs/38 §16.9).
 const CUE_OVERLAY_MODES = Object.freeze(['enable', 'disable']);
@@ -420,11 +417,14 @@ function validateCueColorAutopilot(ca, label) {
   return { active: ca.active, palettes, delay_s: ca.delay_s, shuffle, transitionMs };
 }
 
-function validateAction(action, label, lookNames) {
+function validateAction(action, label, lookNames, depth = 0) {
   if (!isPlainObject(action)) throw new Error(`${label} must be an object`);
+  if (depth > 4) throw new Error(`${label} exceeds the maximum sequence nesting depth of 4`);
   switch (action.type) {
     case 'playlist': {
       const out = { type: 'playlist', name: assertSlug(action.name, `${label}.name`) };
+      if (action.entryId !== undefined) out.entryId = assertString(action.entryId, `${label}.entryId`);
+      if (action.palette !== undefined) out.palette = assertSlug(action.palette, `${label}.palette`);
       out.target = validateTarget(action.target, `${label}.target`);
       if (action.autopilot !== undefined) out.autopilot = validateAutopilot(action.autopilot, `${label}.autopilot`);
       // transition + overlays are DECK-ONLY knobs (docs/38 §16.9): they configure
@@ -467,10 +467,13 @@ function validateAction(action, label, lookNames) {
         }
         out.hue = ((action.hue % 360) + 360) % 360;
       }
-      // globals: rig-wide CPC knobs (SPEED/SIZE/bpmSpeedSync) applied when the
+      // globals: rig-wide CPC knobs (SPEED/bpmSpeedSync) applied when the
       // cue fires, via the SAME setParams path a look's `globals` uses. Gated
       // to a deck target for consistency with the other authored knobs (the
-      // maker is deck-only). Reuses validateGlobalsMap (Number or {h,s,v}).
+      // maker is deck-only). Reuses validateGlobalsMap (Number or {h,s,v}) —
+      // the map stays GENERIC, so a hand-authored key (e.g. the legacy
+      // cue-level `size`, removed from the maker 2026-08-03) still validates
+      // and applies; the maker just never emits it anymore.
       if (action.globals !== undefined) {
         if (out.target.channel !== 'deck') {
           throw new Error(`${label}.globals is only valid for a deck target`);
@@ -478,6 +481,30 @@ function validateAction(action, label, lookNames) {
         out.globals = validateGlobalsMap(action.globals, `${label}.globals`);
       }
       return out;
+    }
+    case 'sequence': {
+      if (depth > 0) throw new Error(`${label}: nested sequence actions are not supported`);
+      if (!Array.isArray(action.steps) || action.steps.length === 0) {
+        throw new Error(`${label}.steps must be a non-empty array`);
+      }
+      let previousOffset = -1;
+      const steps = action.steps.map((step, index) => {
+        const stepLabel = `${label}.steps[${index}]`;
+        if (!isPlainObject(step)) throw new Error(`${stepLabel} must be an object { afterSec, action }`);
+        const afterSec = assertNumber(step.afterSec, `${stepLabel}.afterSec`);
+        if (!Number.isFinite(afterSec) || afterSec < 0) {
+          throw new Error(`${stepLabel}.afterSec must be a finite number >= 0, got ${JSON.stringify(step.afterSec)}`);
+        }
+        if (afterSec < previousOffset) {
+          throw new Error(`${stepLabel}.afterSec must be >= the previous offset ${previousOffset}, got ${afterSec}`);
+        }
+        previousOffset = afterSec;
+        return {
+          afterSec,
+          action: validateAction(step.action, `${stepLabel}.action`, lookNames, depth + 1),
+        };
+      });
+      return { type: 'sequence', steps };
     }
     case 'look': {
       const look = assertSlug(action.look, `${label}.look`);
@@ -522,7 +549,7 @@ function validateAction(action, label, lookNames) {
       return out;
     }
     default:
-      throw new Error(`${label}.type must be one of playlist, look, scene, globals, tasks, effect, got ${JSON.stringify(action.type)}`);
+      throw new Error(`${label}.type must be one of playlist, sequence, look, scene, globals, tasks, effect, got ${JSON.stringify(action.type)}`);
   }
 }
 
@@ -821,6 +848,80 @@ export function validateShowPlan(plan) {
   return out;
 }
 
+// ── plan LINT (authoring diagnostics that are not schema errors) ─────────────
+
+/**
+ * FIX 4 (report `_98`) — the PROGRAM-LOOK DECK FREEZE.
+ *
+ * A `kind: program` cue is dispatched with `autopilotOff: true`: the service
+ * disarms the plan's baseline autopilot FIRST and then applies the cue's action
+ * (`timeline_service._dispatchArbitratedAction`). If that action carries no
+ * `autopilot` block of its own, NOTHING re-arms pattern cycling — the deck sits
+ * on a single pattern for the whole hold. Measured on the shipped plan (report
+ * `_93` §5.4): `c_sunrise` froze the boat on one pattern for 90 minutes; the
+ * burn-night and temple holds for 120 minutes each.
+ *
+ * That is an AUTHORING error, and the codex's no-fallback rule says it must be
+ * loud — the engine will not invent an autopilot block the author did not write.
+ * It is reported HERE, at validation time, instead of being discovered at 2am on
+ * the playa.
+ *
+ * It is a LINT, not a `throw`, and deliberately so: the operator's shipped
+ * `playa_default.yaml` trips it today (four looks), as does this file's own
+ * `defaultShowPlan()`. Throwing would refuse to LOAD the running show — trading
+ * a frozen pattern for a dark boat. The finding is surfaced loudly instead
+ * (`TimelineService` console.errors every finding on load and exposes them as
+ * `planWarnings` on `/timeline/state`), and the plan edit is the operator's.
+ *
+ * PURE: no IO, the plan is never mutated.
+ *
+ * @param {object} plan a NORMALIZED plan (the output of validateShowPlan)
+ * @returns {Array<{code:string, severity:'error', cueId:string, look:string|null,
+ *                  message:string}>} findings, empty when the plan is clean
+ */
+export function lintShowPlan(plan) {
+  const findings = [];
+  if (!isPlainObject(plan) || !Array.isArray(plan.cues)) return findings;
+  // With the plan-level baseline disabled the deck was never cycling in the
+  // first place, so a program look that does not cycle is not a regression.
+  if (plan.autopilot && plan.autopilot.enabled === false) return findings;
+  for (const cue of plan.cues) {
+    if (cue.kind !== 'program' || cue.enabled === false) continue;
+    const action = cue.action;
+    if (!action) continue;
+    let autopilot;
+    let target;
+    let lookName = null;
+    if (action.type === 'look') {
+      const look = plan.looks ? plan.looks[action.look] : undefined;
+      if (!look) continue;                       // validateShowPlan already rejects this
+      lookName = action.look;
+      autopilot = look.autopilot;
+      target = look.target;
+    } else if (action.type === 'playlist') {
+      autopilot = action.autopilot;
+      target = action.target;
+    } else {
+      continue;                                   // scene/globals/tasks/effect drive no deck content
+    }
+    const channel = target ? target.channel : 'deck';
+    if (channel !== 'deck' && channel !== 'all') continue;
+    if (autopilot !== undefined) continue;
+    findings.push({
+      code: 'program_action_no_autopilot',
+      severity: 'error',
+      cueId: cue.id,
+      look: lookName,
+      message: `cue "${cue.id}" (${cue.label || cue.id}) is kind:program and its `
+        + `${lookName ? `look "${lookName}"` : 'playlist action'} declares no "autopilot" block — `
+        + 'a program dispatch disarms the plan\'s baseline autopilot first, so the deck will '
+        + 'FREEZE on one pattern for the whole hold. Author an autopilot block '
+        + '({ active, delay_s, shuffle }) on it, or make the cue kind:ambient.',
+    });
+  }
+  return findings;
+}
+
 /**
  * Load a show plan from disk. A MISSING file is the only non-error path → the
  * built-in default plan. Any present-but-broken file THROWS (codex P0).
@@ -845,10 +946,34 @@ export function loadShowPlan(filePath) {
   return validateShowPlan(parsed);
 }
 
-/** Validate-then-write a plan to disk (never persist an invalid plan). */
+/**
+ * Validate, then atomically replace the authored plan on disk.
+ *
+ * A unique sibling temp file keeps overlapping writers from sharing partial
+ * output. renameSync is the commit point: until it succeeds, the previous plan
+ * remains intact and callers receive a thrown error rather than a false save.
+ */
 export function saveShowPlan(plan, filePath) {
   const normalized = validateShowPlan(plan);
-  fs.writeFileSync(filePath, dumpShowPlan(normalized), 'utf8');
+  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, dumpShowPlan(normalized), 'utf8');
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    let cleanupError = null;
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch (cleanupErr) {
+      if (cleanupErr?.code !== 'ENOENT') cleanupError = cleanupErr;
+    }
+    const cleanupMessage = cleanupError
+      ? `; temporary-file cleanup also failed: ${cleanupError.message}`
+      : '';
+    throw new Error(
+      `show plan write failed (${filePath}): ${err.message}${cleanupMessage}`,
+      { cause: err },
+    );
+  }
   return normalized;
 }
 

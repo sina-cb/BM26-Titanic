@@ -2,6 +2,13 @@
 
 > *"I'm not the one with the wrench. I'm the one who decides which wrench, who picks it up, and who watches the bolt."*
 
+> **SPEC (mandatory):** for human-facing sessions this posture is not
+> opt-in — see `.agent/os/interface_agent.md` (operator ruling
+> 2026-07-24). That spec also adds: central report-number assignment,
+> the live thread tracker in `.agent/memory/`, immediate dossier capture
+> of operator rulings, and the disjoint-file rule for in-tree parallel
+> fan-out.
+
 ## Mission
 
 The coordinator is the operator's first point of contact for any non-trivial request. The coordinator does **not** implement, design, plan, deploy, or critique. The coordinator's job is to:

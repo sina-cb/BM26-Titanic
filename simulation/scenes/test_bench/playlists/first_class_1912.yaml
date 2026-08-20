@@ -1,0 +1,130 @@
+schemaVersion: 1
+name: first_class_1912
+entries:
+  - id: e_first_class_1912_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_1_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.26
+      sliderLevel: 0.68
+      sliderDetail: 0.9
+      sliderKick: 0.86
+      sliderJewelryWhite: 0.82
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_2_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.87
+      sliderKick: 0.13
+      sliderBreathDepth: 0.69
+      sliderBreathShape: 0.23
+      sliderBloom: 0.94
+      sliderRibbing: 0.19
+      sliderSparkle: 0.37
+      sliderWhiteGlow: 0.69
+      sliderFieldDetail: 0.91
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_3_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
+      sliderBrilliance: 0.59
+      sliderTwinkleFocus: 0.88
+      sliderAfterglow: 0.13
+      sliderStarChorus: 0.63
+      sliderBurst: 0.15
+      sliderJewelryWhite: 0.81
+      sliderUvStars: 0.78
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_4_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderCounterPhase: 0.5
+      sliderFloorLevel: 0.45
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0
+      sliderWhiteSpread: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_5_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.39
+      sliderKick: 0.29
+      sliderRadius: 0.85
+      sliderDetail: 0.24
+      sliderFocus: 0.67
+      sliderTrailBlend: 0.11
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_6_26_dom_dancers_chevron
+    pattern: 26_dom_dancers_chevron
+    label: null
+    defaults:
+      sliderBall1Energy: 0.333333
+      sliderBall2Energy: 0.333333
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_7_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderSwell: 0.13
+      sliderBlinder: 1
+      sliderShimmer: 0.5
+      sliderNoiseScale: 0.75
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_8_52_silk_ribbons
+    pattern: 52_silk_ribbons
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_9_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

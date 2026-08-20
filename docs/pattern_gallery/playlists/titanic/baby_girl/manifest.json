@@ -1,0 +1,605 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "baby_girl",
+  "seconds": 10,
+  "fps": 8,
+  "globalSpeed": 1,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/baby_girl.yaml",
+  "playlistDigest": "24cd2997020b0d24e47ed3a71c27a3558814ff0c05db81c920e565aae7abcdbc",
+  "goalsDigest": "db1ff26dc63feb9e49bf72cc8329ec2d45c336379a94739a3c7604fb44a2e034",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "baby/37_girl_constellation_flow",
+      "title": "Baby Girl - Constellation Flow",
+      "goal": "Baby-pink drifting constellation lattice. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarSize",
+          "label": "Star Size",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Star Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderConstellationDensity",
+          "label": "Constellation Density",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "gif": "001_baby__37_girl_constellation_flow.gif",
+      "video": "001_baby__37_girl_constellation_flow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "01ec3c247c1372c6c84c9d8c89a02c94700916ff5bb35b661aea379a451b88ea"
+    },
+    {
+      "index": 1,
+      "pattern": "baby/31_girl_orbit_glow",
+      "title": "Baby Girl - Orbit Glow",
+      "goal": "Baby-pink orbital shells for long photo holds. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.84,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRingWidth",
+          "label": "Ring Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "gif": "002_baby__31_girl_orbit_glow.gif",
+      "video": "002_baby__31_girl_orbit_glow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "6d3fb2da91fc0bffb3d0e85708a84e3055ef319d86f0acdfb10fa4e085379099"
+    },
+    {
+      "index": 2,
+      "pattern": "baby/33_girl_rose_glow",
+      "title": "Baby Girl - Rose Glow",
+      "goal": "Baby-pink counter-wound rose for long photo holds. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderPetalWidth",
+          "label": "Petal Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.7,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "gif": "003_baby__33_girl_rose_glow.gif",
+      "video": "003_baby__33_girl_rose_glow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "cdea67fc66003751d7f6c18b04381b80cab902ab1033bdab80f90b271282fa6b"
+    },
+    {
+      "index": 3,
+      "pattern": "baby/39_girl_ribbon_braid",
+      "title": "Baby Girl - Ribbon Braid",
+      "goal": "Baby-pink three-strand ribbon braid. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibbonWidth",
+          "label": "Ribbon Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBraidAmount",
+          "label": "Braid Amount",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Braid Amount character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "gif": "004_baby__39_girl_ribbon_braid.gif",
+      "video": "004_baby__39_girl_ribbon_braid.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5b403c5c6fd6ab593425747c0e154e47e71de6ae635b572d6e5b22db6c6376e1"
+    },
+    {
+      "index": 4,
+      "pattern": "baby/41_girl_lighthouse_fans",
+      "title": "Baby Girl - Lighthouse Fans",
+      "goal": "Baby-pink mirrored lighthouse fans. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderFanCount",
+          "label": "Fan Count",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "gif": "005_baby__41_girl_lighthouse_fans.gif",
+      "video": "005_baby__41_girl_lighthouse_fans.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "9229bb25682581bb22987e2c94a80d6f5697dbb44e9d5db646a6ea002941dd04"
+    },
+    {
+      "index": 5,
+      "pattern": "baby/40_girl_bubble_chorus",
+      "title": "Baby Girl - Bubble Chorus",
+      "goal": "Baby-pink breathing bubble field. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.49,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBubbleSize",
+          "label": "Bubble Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Bubble Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCellDensity",
+          "label": "Cell Density",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "gif": "006_baby__40_girl_bubble_chorus.gif",
+      "video": "006_baby__40_girl_bubble_chorus.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "20eb38d7fc6a73fe9395ba97e6030f3a180e743ed4bed74914ce0e9aa857c7ff"
+    },
+    {
+      "index": 6,
+      "pattern": "baby/44_girl_diamond_quilt",
+      "title": "Baby Girl - Diamond Quilt",
+      "goal": "Baby-pink travelling diamond quilt. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.65,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSeamWidth",
+          "label": "Seam Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderQuiltScale",
+          "label": "Quilt Scale",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Quilt Scale character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "gif": "007_baby__44_girl_diamond_quilt.gif",
+      "video": "007_baby__44_girl_diamond_quilt.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "060135447f015c2afffac4fdefb28832dae74fa8c474e3b1b4611f66a81ea88d"
+    },
+    {
+      "index": 7,
+      "pattern": "baby/36_girl_comet_lullaby",
+      "title": "Baby Girl - Comet Lullaby",
+      "goal": "Baby-pink smooth comet procession. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Tail Length character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCometCount",
+          "label": "Comet Count",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "gif": "008_baby__36_girl_comet_lullaby.gif",
+      "video": "008_baby__36_girl_comet_lullaby.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c7eded59aa6aad9df1e03b00ac9c5b75d3df7cf6687c8ddd70b38d324073a9f6"
+    },
+    {
+      "index": 8,
+      "pattern": "baby/42_girl_heartbeat_bloom",
+      "title": "Baby Girl - Heartbeat Bloom",
+      "goal": "Baby-pink nested heartbeat blooms. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloomSharpness",
+          "label": "Bloom Sharpness",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderEchoDepth",
+          "label": "Echo Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "gif": "009_baby__42_girl_heartbeat_bloom.gif",
+      "video": "009_baby__42_girl_heartbeat_bloom.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "3e5478ad8b1ebb01a93e17347617a3167592f95edd9366593f7fd90aeccea4ca"
+    },
+    {
+      "index": 9,
+      "pattern": "baby/45_girl_celebration_burst",
+      "title": "Baby Girl - Celebration Burst",
+      "goal": "Baby-pink repeating celebration bursts. Hard-coded baby-pink photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstWidth",
+          "label": "Burst Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstReach",
+          "label": "Burst Reach",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "gif": "010_baby__45_girl_celebration_burst.gif",
+      "video": "010_baby__45_girl_celebration_burst.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a92c00522dabd45cf378318674f48ef22f7a4c06d03c0d2c2c95715a28c1ad69"
+    }
+  ]
+}

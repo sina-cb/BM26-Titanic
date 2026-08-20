@@ -22,6 +22,7 @@
  */
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { usePalette } from '@/hooks/use-theme';
 import { isFavoritePreset } from './effect_picker_logic';
 
@@ -103,7 +104,9 @@ export const LibraryEffectPicker: React.FC<Props> = ({
   const grouped = useMemo(() => (library ? groupByCategory(library) : []), [library]);
 
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable
         onPress={onClose}
         style={{

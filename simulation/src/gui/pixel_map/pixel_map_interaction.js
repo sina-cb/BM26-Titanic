@@ -1,235 +1,263 @@
 /**
- * pixel_map_interaction.js — pointer/keyboard input for the 2D Pixel Map.
+ * pixel_map_interaction.js — per-pane pointer/keyboard input for the 2D Pixel
+ * Map MULTIVIEW (S4). Each pane's canvas gets its own handler bound to that
+ * pane's PixelMapPaneView + an edit context (from the store) that reads/writes
+ * the pane's BOUND VIEW placements.
  *
- * View mode: left-drag pans; hover updates the status strip. Edit mode:
- * drag a fixture to move (8u snap, Alt bypass), drag the rotation handle to
- * rotate (15° snap, Alt=1°), Q/E rotate, arrows nudge, drag empty space to
- * pan, click empty to clear selection. Space/middle-drag always pans; wheel
- * zooms to the cursor. Panning/zoom are per-session view transform (never
- * persisted). Layout edits persist once per gesture (commitEdit), not per
- * mousemove — a continuous relayout would reset the autosave debounce forever.
- * All canvas key/pointer events are isolated so the 3D scene shortcuts
- * (T/R/S/M/Delete…) never fire while editing here.
+ * View mode: left-drag pans, wheel zooms to the cursor, hover updates the
+ * status strip, double-click on a multi-panel pane toggles panel focus-maximize
+ * (else fits). Edit mode: click a fixture to select (Shift toggles / adds),
+ * RIGHT-click selects its whole GROUP (Shift adds the group), drag to move
+ * (8u snap, Alt bypass), Q/E rotate the selection, arrows nudge,
+ * Escape/empty-click clears. Layout edits persist once per gesture
+ * (ctx.commit), never per pointermove — a continuous relayout would reset the
+ * autosave debounce forever.
+ *
+ * MOVE MODEL (report 20260725_55). A move goes through `ctx.getAnchor` /
+ * `ctx.setAnchor`, which route it to whichever model the fixture's PANEL uses:
+ * an OFFSET from the projected position on a spatial/planar panel, or the
+ * absolute anchor on radial/lanes. Before that routing existed the drag wrote a
+ * `placement` that the projected layouts never read, so dragging in the shipped
+ * views silently did nothing — the operator's "the edit view … has no move".
+ *
+ * EVERY key/pointer event on the pane canvas is stopPropagation'd so the 3D
+ * scene shortcuts (T/R/S/M/…) can never fire while a pane has focus.
  */
 
-import { hitTestFixture, fixturesInRect, fixturesInGroup } from './pixel_map_layout.js';
-
 const DEAD = 3; // px of movement before a press counts as a drag (not a click)
+const ZOOM_MIN = 0.3, ZOOM_MAX = 8;
+const HIT_SLOP = 6; // extra CSS px for touch / coarse pointer hit testing
 
-export function attachPixelMapInteraction(canvas, renderer, store) {
-  let drag = null;      // fixture move: { startDesign, origins:Map }
-  let rotDrag = null;   // { key, pl, startRot, startAngle }
+const normRot = (r) => ((r + 180) % 360 + 360) % 360 - 180;
+
+/**
+ * Attach interaction to one pane canvas.
+ * @param {HTMLCanvasElement} canvas
+ * @param {import('./pixel_map_pane_view.js').PixelMapPaneView} paneView
+ * @param {object} ctx  edit context (see store.makeEditCtx)
+ * @returns {() => void} detach
+ */
+export function attachPaneInteraction(canvas, paneView, ctx) {
   let panning = null;   // { sx, sy, ox, oy }
-  let marquee = null;   // box-select: { x0, y0, add }
-  let pendingClear = false;
+  let drag = null;      // fixture move: { start:{x,y}, origins:Map<fixKey,{x,y}> }
+  let warnedRotate = false;
   let downX = 0, downY = 0, moved = false;
   let spaceDown = false;
+
+  if (!canvas.hasAttribute('tabindex')) canvas.setAttribute('tabindex', '0');
 
   const rectPt = (e) => {
     const r = canvas.getBoundingClientRect();
     return { cx: e.clientX - r.left, cy: e.clientY - r.top };
   };
-  const toDesign = (e) => { const { cx, cy } = rectPt(e); return renderer.clientToDesign(cx, cy); };
-
-  const relayoutVisual = () => {
-    renderer.setLayout(store.clusters, store.placements, store.typeOverrides, store.canvas);
-    store.editTick.value++;
-  };
-  const commitEdit = () => { if (store.__markEdited) store.__markEdited(); };
-  const setSelection = (keys) => { store.selection.value = new Set(keys); };
-
-  function clampPan(p, z) {
-    const scale = renderer.fit * z;
-    const w = renderer.design.w * scale, h = renderer.design.h * scale;
-    const cx0 = (renderer.cssW - w) / 2, cy0 = (renderer.cssH - h) / 2;
-    const M = 80; // ≥80 CSS px of the design rect always visible
-    return {
-      x: Math.max(M - w - cx0, Math.min(renderer.cssW - M - cx0, p.x)),
-      y: Math.max(M - h - cy0, Math.min(renderer.cssH - M - cy0, p.y)),
-    };
-  }
-  const normRot = (rot) => ((rot + 180) % 360 + 360) % 360 - 180;
 
   const onMove = (e) => {
+    if (drag && ctx.getMode() !== 'edit') {
+      drag = null;
+      return;
+    }
     const p = rectPt(e);
     if (!moved && Math.hypot(p.cx - downX, p.cy - downY) >= DEAD) moved = true;
-    const d = renderer.clientToDesign(p.cx, p.cy);
 
     if (panning) {
-      store.pan.value = clampPan({ x: panning.ox + (p.cx - panning.sx), y: panning.oy + (p.cy - panning.sy) }, store.zoom.value);
-      return;
-    }
-    if (marquee) {
-      renderer.setMarquee({ x0: marquee.x0, y0: marquee.y0, x1: d.x, y1: d.y });
-      return;
-    }
-    if (rotDrag) {
-      const a = Math.atan2(d.y - rotDrag.pl.y, d.x - rotDrag.pl.x);
-      let rot = rotDrag.startRot + (a - rotDrag.startAngle) * 180 / Math.PI;
-      rot = e.altKey ? Math.round(rot) : Math.round(rot / 15) * 15;
-      rotDrag.pl.rot = normRot(rot);
-      relayoutVisual();
+      paneView.setViewTransform(paneView.zoom, {
+        x: panning.ox + (p.cx - panning.sx),
+        y: panning.oy + (p.cy - panning.sy),
+      });
       return;
     }
     if (drag) {
-      const snap = !e.altKey;
-      const dx = d.x - drag.startDesign.x, dy = d.y - drag.startDesign.y;
-      for (const [key, o] of drag.origins) {
-        let nx = o.x + dx, ny = o.y + dy;
-        if (snap) { nx = Math.round(nx / 8) * 8; ny = Math.round(ny / 8) * 8; }
-        const pl = store.placements.get(key);
-        if (pl) { pl.x = Math.round(nx * 2) / 2; pl.y = Math.round(ny * 2) / 2; }
+      const hit0 = paneView.clientToContent(p.cx, p.cy);
+      if (hit0) {
+        const snap = !e.altKey;
+        let dx = hit0.x - drag.start.x, dy = hit0.y - drag.start.y;
+        for (const [key, o] of drag.origins) {
+          let nx = o.x + dx, ny = o.y + dy;
+          if (snap) { nx = Math.round(nx / 8) * 8; ny = Math.round(ny / 8) * 8; }
+          ctx.setAnchor(key, Math.round(nx * 2) / 2, Math.round(ny * 2) / 2, o.rot);
+        }
+        ctx.rebuild();
       }
-      relayoutVisual();
       return;
     }
 
-    // Idle hover: status-strip color + edit-mode hull highlight.
-    const px = renderer.pixelAt(d.x, d.y);
-    const col = px ? renderer.colorOf(px.gi) : null;
-    store.hover.value = col ? { name: col.name, hex: col.hex } : null;
-    if (store.mode.value === 'edit') {
-      const hov = hitTestFixture(store.clusters, store.placements, store.typeOverrides, d.x, d.y);
-      renderer.setHover(hov ? hov.fixKey : null);
-      canvas.style.cursor = hov ? 'grab' : 'default';
-    } else {
-      canvas.style.cursor = 'grab';
-    }
+    // Idle hover: status-strip color.
+    const px = paneView.pixelAt(p.cx, p.cy, { slop: HIT_SLOP });
+    ctx.setHover(px ? ctx.colorOf(px.gi) : null);
+    canvas.style.cursor = (ctx.getMode() === 'edit' && px) ? 'grab' : (ctx.getMode() === 'edit' ? 'default' : 'grab');
   };
 
-  const startPan = (p) => { panning = { sx: p.cx, sy: p.cy, ox: store.pan.value.x, oy: store.pan.value.y }; canvas.style.cursor = 'grabbing'; };
+  const startPan = (p) => {
+    panning = { sx: p.cx, sy: p.cy, ox: paneView.pan.x, oy: paneView.pan.y };
+    canvas.style.cursor = 'grabbing';
+  };
 
   const onDown = (e) => {
     canvas.focus();
     e.stopPropagation();
+    if (typeof canvas.setPointerCapture === 'function' && e.pointerId != null) {
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* already captured */ }
+    }
     const p = rectPt(e);
-    downX = p.cx; downY = p.cy; moved = false; pendingClear = false;
-    const d = renderer.clientToDesign(p.cx, p.cy);
+    downX = p.cx; downY = p.cy; moved = false;
 
-    // Space / middle button → pan (overrides everything, even over a fixture).
+    if (ctx.getMode() !== 'edit') drag = null;
+
+    // Space / middle button → pan (overrides everything).
     if (e.button === 1 || (e.button === 0 && spaceDown)) { startPan(p); e.preventDefault(); return; }
+
+    // RIGHT button in edit mode → select this fixture's whole GROUP; Shift adds
+    // it to what is already selected (operator order, 2026-07-30). The browser
+    // context menu is suppressed separately, on `contextmenu`.
+    if (e.button === 2) {
+      if (ctx.getMode() !== 'edit' || !ctx.groupOf) return;
+      e.preventDefault();
+      const hit = paneView.pixelAt(p.cx, p.cy, { slop: HIT_SLOP });
+      if (!hit || !hit.fixKey) { if (!e.shiftKey) ctx.setSelection(new Set()); return; }
+      const group = ctx.groupOf(hit.fixKey);
+      const sel = e.shiftKey ? new Set(ctx.getSelection()) : new Set();
+      for (const k of group) sel.add(k);
+      ctx.setSelection(sel);
+      return;
+    }
     if (e.button !== 0) return;
 
-    if (store.mode.value === 'edit') {
-      // Rotation handle first.
-      const h = renderer._rotHandle;
-      if (h && Math.hypot(d.x - h.x, d.y - h.y) <= h.r * 1.8) {
-        const pl = store.placements.get(h.fixKey);
-        if (pl) { rotDrag = { key: h.fixKey, pl, startRot: pl.rot || 0, startAngle: Math.atan2(d.y - pl.y, d.x - pl.x) }; canvas.style.cursor = 'grabbing'; return; }
-      }
-      const hit = hitTestFixture(store.clusters, store.placements, store.typeOverrides, d.x, d.y);
-      if (hit) {
-        let sel = new Set(store.selection.value);
-        if (e.shiftKey) { sel.has(hit.fixKey) ? sel.delete(hit.fixKey) : sel.add(hit.fixKey); }
-        else if (!sel.has(hit.fixKey)) { sel = new Set([hit.fixKey]); }
-        setSelection([...sel]);
+    if (ctx.getMode() === 'edit') {
+      ctx.materialize();                       // ensure every fixture has a stored anchor
+      const px = paneView.pixelAt(p.cx, p.cy, { slop: HIT_SLOP });
+      if (px && px.fixKey) {
+        let sel = new Set(ctx.getSelection());
+        if (e.shiftKey) { sel.has(px.fixKey) ? sel.delete(px.fixKey) : sel.add(px.fixKey); }
+        else if (!sel.has(px.fixKey)) sel = new Set([px.fixKey]);
+        ctx.setSelection(sel);
+        const start = paneView.clientToContent(p.cx, p.cy);
         const origins = new Map();
-        for (const key of sel) { const pl = store.placements.get(key); if (pl) origins.set(key, { x: pl.x, y: pl.y }); }
-        drag = { startDesign: d, origins };
+        for (const key of sel) {
+          const a = ctx.getAnchor(key);
+          if (a) origins.set(key, { x: a.x, y: a.y, rot: a.rot || 0 });
+        }
+        if (start) drag = { start, origins };
         canvas.style.cursor = 'grabbing';
         return;
       }
-      // Empty edit space → box-select (marquee). Pan is space/middle-drag.
-      // A click with no movement clears the selection (unless Shift).
-      pendingClear = !e.shiftKey;
-      marquee = { x0: d.x, y0: d.y, add: e.shiftKey };
+      // Empty edit space → left-drag pans; a click clears the selection.
+      if (!e.shiftKey) ctx.setSelection(new Set());
+      startPan(p);
       return;
     }
     // View mode → left-drag pans.
     startPan(p);
   };
 
-  const onUp = () => {
-    if (rotDrag) { if (moved) commitEdit(); rotDrag = null; }
-    if (drag) { if (moved) commitEdit(); drag = null; }
-    if (marquee) {
-      if (moved) {
-        const p = renderer.marquee;
-        const inRect = p ? fixturesInRect(store.clusters, store.placements, store.typeOverrides, p.x0, p.y0, p.x1, p.y1) : [];
-        const next = marquee.add ? new Set([...store.selection.value, ...inRect]) : new Set(inRect);
-        setSelection([...next]);
-      } else if (pendingClear) {
-        setSelection([]);
-      }
-      marquee = null; renderer.setMarquee(null); pendingClear = false;
+  const onUp = (e) => {
+    if (e && typeof canvas.releasePointerCapture === 'function' && e.pointerId != null) {
+      try { if (canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     }
-    if (panning) { panning = null; }
-    canvas.style.cursor = store.mode.value === 'edit' ? 'default' : 'grab';
+    if (drag) {
+      if (moved && ctx.getMode() === 'edit') ctx.commit();
+      drag = null;
+    }
+    if (panning) panning = null;
+    canvas.style.cursor = ctx.getMode() === 'edit' ? 'default' : 'grab';
   };
 
   const onWheel = (e) => {
     e.preventDefault();
     e.stopPropagation();
     const { cx, cy } = rectPt(e);
-    const before = renderer.clientToDesign(cx, cy);
-    const z = Math.max(0.5, Math.min(8, store.zoom.value * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
-    const scale = renderer.fit * z;
-    store.zoom.value = z;
-    store.pan.value = clampPan({
-      x: cx - before.x * scale - (renderer.cssW - renderer.design.w * scale) / 2,
-      y: cy - before.y * scale - (renderer.cssH - renderer.design.h * scale) / 2,
-    }, z);
+    const before = paneView.clientToContent(cx, cy);       // design point under cursor
+    const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, paneView.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    paneView.setViewTransform(z, paneView.pan);            // recomputes xforms
+    if (before) {
+      const xf = paneView._xforms.get(before.panelId);      // where the point lands now
+      if (xf) {
+        const sx = before.x * xf.scale + xf.ox;
+        const sy = before.y * xf.scale + xf.oy;
+        paneView.setViewTransform(z, { x: paneView.pan.x + (cx - sx), y: paneView.pan.y + (cy - sy) });
+      }
+    }
   };
 
   const onDblClick = (e) => {
     e.stopPropagation();
-    const d = toDesign(e);
-    const hit = hitTestFixture(store.clusters, store.placements, store.typeOverrides, d.x, d.y);
-    if (hit && store.mode.value === 'edit' && hit.group) {
-      // Select the whole logical group (Left Vintage, Back Bar, …) for group move.
-      setSelection(fixturesInGroup(store.clusters, hit.group));
-    } else if (!hit) {
-      store.zoom.value = 1; store.pan.value = { x: 0, y: 0 };   // Fit
+    const p = rectPt(e);
+    const hit = paneView.clientToContent(p.cx, p.cy);
+    if (paneView.panels.length > 1 && hit) {
+      // Click-to-focus maximize of a panel section (design §2.3).
+      paneView.setFocusPanel(paneView.focusPanel === hit.panelId ? null : hit.panelId);
+    } else {
+      paneView.fit();
     }
   };
 
   const rotateSelection = (deg) => {
-    let any = false;
-    for (const key of store.selection.value) {
-      const pl = store.placements.get(key);
-      if (pl) { pl.rot = normRot((pl.rot || 0) + deg); any = true; }
+    let any = false, refused = 0;
+    for (const key of ctx.getSelection()) {
+      // A projected fixture's angle comes from its real world coordinates —
+      // there is nothing to rotate. Say so ONCE rather than doing nothing,
+      // which is exactly the silent no-op this whole change is fixing.
+      if (ctx.canRotate && !ctx.canRotate(key)) { refused += 1; continue; }
+      const a = ctx.getAnchor(key);
+      if (a) { ctx.setAnchor(key, a.x, a.y, normRot((a.rot || 0) + deg)); any = true; }
     }
-    if (any) { relayoutVisual(); commitEdit(); }
+    if (refused && !warnedRotate) {
+      warnedRotate = true;
+      console.info(`[PixelMap] ${refused} selected fixture(s) sit on a TRUE projection — ` +
+        'their angle comes from the real world coordinates, so there is nothing to ' +
+        'rotate. Move (drag / arrows) works on them; rotation does not.');
+    }
+    if (any) { ctx.rebuild(); ctx.commit(); }
   };
   const nudge = (dx, dy) => {
     let any = false;
-    for (const key of store.selection.value) {
-      const pl = store.placements.get(key);
-      if (pl) { pl.x += dx; pl.y += dy; any = true; }
+    for (const key of ctx.getSelection()) {
+      const a = ctx.getAnchor(key);
+      if (a) { ctx.setAnchor(key, a.x + dx, a.y + dy, a.rot || 0); any = true; }
     }
-    if (any) { relayoutVisual(); commitEdit(); }
+    if (any) { ctx.rebuild(); ctx.commit(); }
   };
 
   const onKeyDown = (e) => {
-    e.stopPropagation();
+    e.stopPropagation();                 // never leak to the 3D scene shortcuts
     if (e.key === ' ') { spaceDown = true; return; }
-    if (store.mode.value !== 'edit') return;
+    if (ctx.getMode() !== 'edit') return;
     const step = e.shiftKey ? 8 : 1;
     switch (e.key) {
       case 'q': case 'Q': rotateSelection(e.shiftKey ? -1 : -15); break;
       case 'e': case 'E': rotateSelection(e.shiftKey ? 1 : 15); break;
-      case 'ArrowLeft': nudge(-step, 0); e.preventDefault(); break;
-      case 'ArrowRight': nudge(step, 0); e.preventDefault(); break;
-      case 'ArrowUp': nudge(0, -step); e.preventDefault(); break;
-      case 'ArrowDown': nudge(0, step); e.preventDefault(); break;
-      case 'Escape': setSelection([]); break;
+      case 'ArrowLeft':  if (!e.altKey && !e.ctrlKey) { nudge(-step, 0); e.preventDefault(); } break;
+      case 'ArrowRight': if (!e.altKey && !e.ctrlKey) { nudge(step, 0); e.preventDefault(); } break;
+      case 'ArrowUp':    if (!e.altKey && !e.ctrlKey) { nudge(0, -step); e.preventDefault(); } break;
+      case 'ArrowDown':  if (!e.altKey && !e.ctrlKey) { nudge(0, step); e.preventDefault(); } break;
+      case 'Escape': ctx.setSelection(new Set()); break;
       default: break;
     }
   };
   const onKeyUp = (e) => { e.stopPropagation(); if (e.key === ' ') spaceDown = false; };
 
+  // The canvas owns the right button in edit mode, so the browser menu must
+  // never appear over it; suppressed unconditionally so a right-drag that
+  // starts on a pixel and ends on empty space cannot pop one either.
+  const onContextMenu = (e) => { e.preventDefault(); e.stopPropagation(); };
+
+  canvas.addEventListener('contextmenu', onContextMenu);
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerdown', onDown);
   window.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('keydown', onKeyDown);
   canvas.addEventListener('keyup', onKeyUp);
 
   return () => {
+    canvas.removeEventListener('contextmenu', onContextMenu);
     canvas.removeEventListener('pointermove', onMove);
     canvas.removeEventListener('pointerdown', onDown);
     window.removeEventListener('pointerup', onUp);
+    canvas.removeEventListener('pointerup', onUp);
+    canvas.removeEventListener('pointercancel', onUp);
     canvas.removeEventListener('wheel', onWheel);
     canvas.removeEventListener('dblclick', onDblClick);
     canvas.removeEventListener('keydown', onKeyDown);

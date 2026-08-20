@@ -169,7 +169,7 @@ def scan_changes(include_unstaged: bool) -> int:
 
 
 def hook_gate() -> int:
-    """Claude Code PreToolUse gate: only act on `git commit` commands."""
+    """PreToolUse gate: only act on `git commit` commands."""
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -182,6 +182,9 @@ def hook_gate() -> int:
     if scan_changes(include_unstaged=True) != 0:
         # Exit 2 blocks the Bash call; stderr is fed back to the agent.
         return 2
+    # Cursor command hooks require valid JSON when a matched command emits
+    # output. Claude Code safely ignores this allow response.
+    print(json.dumps({"permission": "allow"}))
     return 0
 
 

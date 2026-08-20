@@ -1,0 +1,51 @@
+version: 1
+slotsPerPage: 8
+slots:
+  - slotId: 1
+    page: 0
+    effectId: strobe
+    presetId: pulse_2hz
+    name: 2 Hz Pulse
+    color: '#1e78ff'
+  - slotId: 2
+    page: 0
+    effectId: strobe
+    presetId: punch_5hz
+    name: 5 Hz Punch
+    color: '#ffffff'
+  - slotId: 3
+    page: 0
+    effectId: colorWash
+    presetId: ocean_blue
+    name: Ocean Blue
+    color: '#a03cff'
+  - slotId: 4
+    page: 0
+    effectId: feedbackTrails
+    presetId: cosmic_trails
+    name: Cosmic Trails
+    color: '#ff8c00'
+  - slotId: 5
+    page: 0
+    effectId: beatPump
+    presetId: deep
+    name: Deep Pump
+    color: '#fff0d2'
+  - slotId: 6
+    page: 0
+    effectId: sparkle
+    presetId: fizz
+    name: Fizz
+    color: '#00c8dc'
+  - slotId: 7
+    page: 0
+    effectId: dropHit
+    presetId: vintage_burst
+    name: Vintage Burst
+    color: '#50e6a0'
+  - slotId: 8
+    page: 0
+    effectId: uvBlast
+    presetId: default
+    name: UV Blast
+    color: '#c828ff'

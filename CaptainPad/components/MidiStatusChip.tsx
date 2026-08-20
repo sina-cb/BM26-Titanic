@@ -12,11 +12,8 @@ import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native'
 import { useRouter } from 'expo-router';
 
 import { usePalette } from '@/hooks/use-theme';
-import { Palette } from '@/constants/theme';
+import { Palette, Radius, Type } from '@/constants/theme';
 import { useMidiStatus, midiChipState } from '@/hooks/useMidiControl';
-
-// '#00a86b' MOD_GREEN — matches the engine "CONNECTED" badge on both themes.
-const MOD_GREEN = '#00a86b';
 
 export function MidiStatusChip() {
   const palette = usePalette();
@@ -27,8 +24,12 @@ export function MidiStatusChip() {
   const state = useMidiStatus();
   const chip = midiChipState(state);
 
+  // `tertiary` is the palette's "connected / auto-driven" green — the SAME
+  // token the engine CONNECTED badge two chips to the left now wears (docs/54
+  // §1.1 retires the old shared '#00a86b' literal). Keeping them on one token
+  // is the point: two greens side by side in one toolbar was the drift.
   const color =
-    chip.kind === 'connected' ? MOD_GREEN
+    chip.kind === 'connected' ? palette.tertiary
       : chip.kind === 'error' ? palette.error
         : palette.icon; // unavailable / disconnected → grey
 
@@ -46,7 +47,7 @@ export function MidiStatusChip() {
     >
       <View style={[styles.dot, { backgroundColor: color }]} />
       {!isPortrait && (
-        <Text style={[styles.label, { color }]}>🎹 APC</Text>
+        <Text numberOfLines={1} style={[styles.label, { color }]}>🎹 APC</Text>
       )}
     </TouchableOpacity>
   );
@@ -55,22 +56,21 @@ export function MidiStatusChip() {
 function makeStyles(C: Palette) {
   return {
     badge: {
+      minHeight: 44,
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       gap: 8,
       backgroundColor: C.surfaceContainerHigh,
       paddingHorizontal: 12,
       paddingVertical: 6,
-      borderRadius: 8,
+      borderRadius: Radius.control,
       borderWidth: 1,
       borderColor: C.ghostBorder,
     },
     dot: { width: 8, height: 8, borderRadius: 4 },
     label: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
-      letterSpacing: 1.2,
-      textTransform: 'uppercase' as const,
+      ...Type.labelCaps,
+      textTransform: Type.labelCaps.textTransform as 'uppercase',
     },
   };
 }

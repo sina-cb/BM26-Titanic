@@ -6,12 +6,98 @@ import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./
 import { computeLedProjection, LED_CHANNEL_ORDERS, MAX_UNIVERSE } from "./controller_registry.js";
 import { computeLedStrandPatches, projectLedStrandPixels } from "./led/led_patch_projection.js";
 import { groupKeyForStrand } from "./led/led_metadata.js";
+import { isLedBusFixture, ledMappableCounts } from "./led/led_fixture_kind.js";
+import { getDefinition } from "./fixture_definition_registry.js";
+import {
+  isReversed, wireSlot, pixelOrderSinglePixelRefusal,
+} from "./pixel_order_store.js";
+import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
+import { fixtureModelScale } from "../fixtures/fixture_model_scale.js";
+
+/**
+ * The LED-bus lane table: name → { universe, addr, stride, order, whiteMode,
+ * wire, controllerId, … } for every LED strand AND every LED pixel fixture the
+ * registry addresses. Absent name = UNPATCHED (the caller emits the loud
+ * marker); it is never an address to guess.
+ *
+ * Two projections of the SAME registry. `computeLedProjection` is the sim's
+ * GENERIC per-port model (each port restarts at the controller's base lane).
+ * `computeLedStrandPatches` is the DEVICE-linear model (the per-output cursor)
+ * — the firmware's real byte layout, and exactly what patches.yaml records.
+ *
+ * The DEVICE-linear projection decides WHICH things are patched and at WHAT
+ * address; the generic lane supplies only the firmware semantics (order,
+ * stride, whiteMode, wire) read from the SAME `controller.led`.
+ *
+ * WHAT IS PATCHED = WHAT IS CHAINED (operator ruling 2026-08-03, report
+ * 20260725_123: *"unbound should not cause the lights to go off or unpatched
+ * red."*). `computeLedStrandPatches` projects every LED card carrying chain
+ * entries, at any binding grade — VERIFIED, PROVISIONAL, or none at all. Device
+ * binding is about hardware CLAIMS (first-contact reconcile, push receipts), not
+ * about addresses. Only a strand/fixture that is chained NOWHERE exports
+ * UNPATCHED.
+ *
+ * `patches.yaml` is the scene's patch truth and it is written from
+ * `computeLedStrandPatches` ALONE (main.js `projectLedStrandPatches`), and the
+ * sACN bridge builds its relay table from that same file, keying the destination
+ * off each record's controller IP. So the model, patches.yaml and the relay table
+ * agree by construction; a chained card with NO IP patches and renders here while
+ * the bridge honestly refuses to invent a destination (`led_no_destination_ip`).
+ * Exporting an address for something chained nowhere would make the model claim
+ * universes nothing routes — the silent-dark shape codex P0 bans, and what the
+ * scene↔model parity gate reports as `strand_model_patched_without_record` +
+ * `strand_missing_unpatched_marker` (plan 20260725_33 §4).
+ *
+ * A device-linear entry with no generic lane is impossible (both projections
+ * walk the same ports/chains); if it ever happens the registry is internally
+ * inconsistent — fail LOUD (codex P0), never guess an address.
+ */
+function computeLedLaneFields() {
+  const registry = (typeof window !== 'undefined' && window.__controllerRegistry) || null;
+  const fields = new Map();
+  if (!registry) return fields;
+
+  const dmxList = (params.dmxFixtures && params.dmxFixtures.length > 0)
+    ? params.dmxFixtures : params.parLights;
+  const counts = ledMappableCounts(params.ledStrands, dmxList, getDefinition);
+
+  const genericProj = computeLedProjection(registry, counts);
+  const deviceProj = computeLedStrandPatches(registry, counts);
+  for (const v of genericProj.violations) console.warn(`[LED Patch] ✋ ${v.message}`);
+  for (const v of deviceProj.violations) console.warn(`[LED Patch/device] ✋ ${v.message}`);
+
+  for (const [name, dev] of deviceProj.fields) {
+    const gen = genericProj.fields.get(name);
+    if (!gen) {
+      throw new Error(`[pixelblaze] LED-bus entry '${name}' has a device-linear patch but no ` +
+        'generic projection lane — the controller registry is internally inconsistent (a ' +
+        'device-bound entry must also resolve in computeLedProjection). Refusing to export ' +
+        'a guessed address.');
+    }
+    fields.set(name, {
+      ...gen,
+      universe: dev.dmxUniverse,
+      addr: dev.dmxAddress,
+      deviceLinear: true,
+    });
+  }
+  return fields;
+}
 
 export function generatePixelMap() {
   const pixels = [];
   const specialEffects = [];
   if (window._isRebuildingFixtures) return { pixels, specialEffects };
+
+  // ── The LED-bus lane table, resolved ONCE for the whole export ────────
+  // Two kinds of thing ride the LED bus and take the identical per-output
+  // addressing: LED STRANDS (`params.ledStrands`) and LED PIXEL FIXTURES (a
+  // `parLights` entry whose definition declares `bus: led` — the TE Sign V3
+  // halves). `ledMappableCounts` is that union, and both projections key purely
+  // off it. Resolved up here because the DMX-transport loop below runs FIRST
+  // and needs it to emit an LED-bus fixture as `type: 'led'`.
+  const ledLaneFields = computeLedLaneFields();
 
   function standardizeChannels(ch) {
     if (!ch) return null;
@@ -63,22 +149,104 @@ export function generatePixelMap() {
       if (fixture && fixture.pixels && fixture.pixels.length > 0) {
         if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);
         if (fixture.group) fixture.group.updateMatrixWorld(true);
+        // The type's RENDER multiplier (fixture_model_scale.js — the one table
+        // that says "draw fixture type X at N× its physical size"), read from
+        // the same authority DmxFixtureRuntime uses to build px.renderPos, so
+        // the exported drawn geometry below cannot drift from what is drawn.
+        // A class that renders 1:1 carries no fixtureDef here and gets 1.
+        const renderScale = fixtureModelScale(fixture.fixtureDef);
+
+        // ── LED PIXEL FIXTURE (definition `bus: led` — the TE Sign V3 halves)
+        // Same geometry path as any other model fixture (its `dots` ARE the
+        // logo), but it is WIRED like a strand: one MarsinLED output, cursor at
+        // (port universe, ch 1), `stride` bytes per pixel, no pixel straddling
+        // ch 512. So it takes the strand's per-pixel patch, the controller's
+        // channel order, and `type: 'led'` — never a whole-fixture DMX
+        // footprint. Operator correction 2026-07-31: *"make sure the TE sign
+        // fixtures are clearly of type LED not DMX to avoid confusion later on
+        // in the cycle of this system."* Unmapped (no lane) = LOUD unpatched
+        // marker, exactly like a strand.
+        const ledBus = isLedBusFixture(light, getDefinition);
+        const ledProj = ledBus ? (ledLaneFields.get(light.name) || null) : null;
+        let ledWalk = null;
+        if (ledBus) {
+          if (ledProj) {
+            const walk = projectLedStrandPixels(
+              ledProj.universe, ledProj.addr, ledProj.stride, fixture.pixels.length);
+            if (walk.overflow) {
+              throw new Error(`[pixelblaze] LED fixture '${light.name}' spills past the sACN ` +
+                `universe ceiling ${MAX_UNIVERSE} (stride ${ledProj.stride} × ` +
+                `${fixture.pixels.length} px from U${ledProj.universe} ch${ledProj.addr}) — ` +
+                'refusing to export a truncated model.');
+            }
+            ledWalk = walk.pixels;
+          } else {
+            console.warn(`[LED Patch] LED fixture '${light.name}' is not bound to a MarsinLED ` +
+              'controller output — it exports UNPATCHED (no sACN output). Chain it on an ' +
+              'LED-type controller in the Controller Mapping panel to light it on hardware.');
+          }
+        }
+
+        // ── PIXEL ORDER (Mechanism A, design 20260806_174 §2.6) ────────────
+        // The scene's name-keyed `pixelOrder` store says whether THIS fixture is
+        // wired opposite to the model. When it is, the exporter permutes ONLY
+        // the WIRE ASSOCIATION — the DMX `channels` map for a DMX pixel, the
+        // `ledWalk` patch entry for an LED-bus pixel (its channels are the
+        // controller's order map, identical on every pixel, so permuting THEM
+        // would reverse nothing). Geometry, `localIndex`, `pixelSize`, the name
+        // suffix and the sim's `apply` all stay at the model slot `j`: patterns
+        // stay spatial and the 3D preview keeps showing MODEL INTENT, which is
+        // the point — the flag exists to make the hardware match the sim.
+        // An invalid enum value throws out of isReversed and, because
+        // exportConfig() runs saveModelJS() FIRST, aborts the whole save.
+        const pixelCount = fixture.pixels.length;
+        const pixelsReversed = isReversed(params.pixelOrder, light.name);
+        if (pixelsReversed && pixelCount < 2) {
+          throw new Error(pixelOrderSinglePixelRefusal(light.name, pixelCount));
+        }
+
         fixture.pixels.forEach((px, j) => {
+          // The slot this pixel's WIRE bytes come from: j when NORMAL,
+          // N-1-j when REVERSED.
+          const wireJ = wireSlot(pixelsReversed, j, pixelCount);
+          // TWO positions, deliberately. `worldPos` is the PHYSICAL one (from
+          // px.localPos) — it is what the engine model, the sACN patching and
+          // the analytic light pool sample, and an exported model must describe
+          // the real rig, never the exaggerated drawing of it. `renderWorld` is
+          // the DRAWN one (localPos × renderScale — the same product
+          // DmxFixtureRuntime stores as px.renderPos) and exists ONLY for the
+          // sim's own scene-wide instanced-dot mesh, which is a render path.
+          // They are equal at render scale 1.
           const worldPos = new THREE.Vector3();
+          const renderWorld = new THREE.Vector3();
           if (fixture.group && px.localPos) {
             worldPos.copy(px.localPos).applyMatrix4(fixture.group.matrixWorld);
+            renderWorld.copy(px.localPos).multiplyScalar(renderScale)
+              .applyMatrix4(fixture.group.matrixWorld);
           } else {
             worldPos.set(light.x || 0, light.y || 0, light.z || 0);
+            renderWorld.copy(worldPos);
           }
             let u = light.dmxUniverse;
             let addr = light.dmxAddress;
             const fp = fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
-            
-            // Only create a valid patch if actually patched (no silent auto-assign)
-            const patchObj = (u && u > 0 && addr && addr > 0) ? { universe: u, addr: addr, footprint: fp } : null;
+
+            // Only create a valid patch if actually patched (no silent auto-assign).
+            // An LED-bus fixture takes the per-pixel LED walk instead: each pixel
+            // owns `stride` bytes at its own {universe, addr}, exactly like a strand.
+            const ledOrderMap = ledProj
+              ? (LED_CHANNEL_ORDERS[ledProj.order] || LED_CHANNEL_ORDERS.RGBW) : null;
+            const patchObj = ledBus
+              ? (ledWalk
+                ? { universe: ledWalk[wireJ].universe, addr: ledWalk[wireJ].addr,
+                  footprint: ledProj.stride, led: true }
+                : null)
+              : ((u && u > 0 && addr && addr > 0) ? { universe: u, addr: addr, footprint: fp } : null);
 
             pixels.push({
-              type: 'dmx',
+              // The pixel's TRANSPORT, and the taxonomy the whole downstream
+              // reads (2D `kind`, engine lanes, the parity gate's roster).
+              type: ledBus ? 'led' : 'dmx',
               fixtureType: light.type || light.fixtureType || 'UkingPar',
               name: (light.name || `Fixture ${i + 1}`) + (px.model ? ` - ${px.model.id}` : ` (Ch ${j + 1})`),
               // Runtime-only grouping keys for the 2D Pixel Map: fixIndex is an
@@ -87,6 +255,15 @@ export function generatePixelMap() {
               fixIndex: i,
               fixKey: light.name || `Fixture ${i + 1}`,
               group: light.group || '',
+              // Runtime-only LIVE handle on this pixel's fixture config (NOT in
+              // the saveModelJS field list, so the engine model is unchanged).
+              // It is the SAME object applyFixtureOutputOverrides reads as
+              // `fixture.config`, which is what lets the last-layer DMX entry
+              // gate (animate.js) resolve the group master by exactly the key
+              // the universe-buffer gate uses — no `group`-string join, no
+              // keying drift, and the per-fixture On/Off + Brightness comes
+              // along for free (report 20260724_40).
+              fixtureConfig: light,
               x: +(worldPos.x).toFixed(3),
               y: +(worldPos.y).toFixed(3),
               z: +(worldPos.z).toFixed(3),
@@ -102,12 +279,63 @@ export function generatePixelMap() {
               // physical order, so a sweep keyed on localIndex runs ALONG the
               // bar. See marsin_engine/lib/pixel_local_index.js (consumer).
               localIndex: j,
+              // BOTH view words. `vMask`/`vMaskHi` mirror the config's
+              // `viewMask`/`viewMaskHi` — a custom view resolves its
+              // per-fixture members out of the field of its OWN word
+              // (view_registry `pixelMaskField`), and word 1 is where the
+              // allocator puts new custom views. Carrying only vMask made
+              // every word-1 fixture-clicked view export EMPTY.
               vMask: light.viewMask || 0,
+              vMaskHi: light.viewMaskHi || 0,
               _prePatched: true,
               patch: patchObj,
-              channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
-              // Per-pixel size from fixture model definition (in mm)
+              // An LED-bus pixel's channels are the CONTROLLER's order map
+              // (relative to that pixel's own address), never the definition's
+              // absolute 3i+1/3i+2/3i+3 block — the firmware streams stride
+              // bytes per pixel.
+              // A DMX pixel's wire association IS its channel map, so a
+              // REVERSED fixture reads it from slot `wireJ`. The whole per-pixel
+              // map moves as ONE unit — RGBWAU blocks stay intact, w/a are never
+              // swapped, and a definition's non-contiguous per-head lanes
+              // (Vintage `value` 3..8 + `rgb` 16..33) permute head-wise for
+              // free. Channels no pixel claims (dimmer/strobe/aux/macros) are
+              // not touched here at all — they are not per-pixel data.
+              channels: ledBus
+                ? (ledOrderMap ? { ...ledOrderMap } : null)
+                : standardizeChannels(
+                  fixture.pixels[wireJ].model && fixture.pixels[wireJ].model.channels
+                    ? fixture.pixels[wireJ].model.channels : null),
+              ...(ledBus ? {
+                whiteMode: ledProj ? ledProj.whiteMode : 'native',
+                ledWire: (ledProj && ledProj.wire) ? ledProj.wire : null,
+                unpatched: !ledProj,
+                // Runtime-only (NOT serialized). An LED-type pixel is scaled by
+                // the LED last-layer output gate (animate.js `_applyLedOutputGate`),
+                // which keys on `displayGroup` — the SAME bucket the LED Fixtures
+                // panel's group master writes under (gui_builder renders every
+                // `bus: led` fixture there). Without it the gate would resolve
+                // `undefined` and the panel's On/Brightness would move the
+                // fixture's own meshes while the raw entry, the 2D map tap and
+                // the sACN map stayed bright — the split report 20260724_40
+                // closed for DMX.
+                displayGroup: ledDisplayGroup(light),
+              } : {}),
+              // Per-pixel size from fixture model definition (in mm). PHYSICAL,
+              // like x/y/z above — it goes into the exported model.
               pixelSize: px.model && typeof px.model.size === 'number' ? px.model.size : 14,
+              // ── Runtime-only DRAWN geometry (NOT in the saveModelJS field
+              // list, so the engine model is byte-identical). The sim renders a
+              // scene-wide instanced-dot mesh over EVERY pixel (animate.js);
+              // that is a render path, so it must place and size its dots from
+              // the DRAWN geometry, not from the physical x/y/z + pixelSize
+              // above. Without these the dots ignored fixture_model_scale
+              // entirely: a 2.5× Vintage LED drew its heads at pre-scale size,
+              // clustered at pre-scale spacing inside a 2.5× housing — visible
+              // only on fixtures whose dots are lit, i.e. the PATCHED ones.
+              rx: +(renderWorld.x).toFixed(3),
+              ry: +(renderWorld.y).toFixed(3),
+              rz: +(renderWorld.z).toFixed(3),
+              renderScale,
               // Bind the apply callback natively for the simulator
               apply: (r, g, b) => {
                 if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
@@ -119,7 +347,14 @@ export function generatePixelMap() {
 
 
       } else if (fixture && fixture.light) {
-        // Simple fixture
+        // Simple fixture — ONE emitter, so a pixel-order flag on it is
+        // meaningless. The UI never offers the control here (single-pixel
+        // definitions render no toggle), so an entry can only be a hand edit:
+        // refuse the export rather than silently exporting an identity
+        // permutation that would hide the mistake (codex P0).
+        if (isReversed(params.pixelOrder, light.name)) {
+          throw new Error(pixelOrderSinglePixelRefusal(light.name, 1));
+        }
         const worldPos = new THREE.Vector3();
         if (fixture.group) {
            if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);
@@ -149,6 +384,9 @@ export function generatePixelMap() {
             fixIndex: i,
             fixKey: light.name || `Fixture ${i + 1}`,
             group: light.group || '',
+            // Runtime-only LIVE fixture-config handle for the last-layer DMX
+            // output gate — see the multi-pixel push above.
+            fixtureConfig: light,
             x: +(worldPos.x).toFixed(3),
             y: +(worldPos.y).toFixed(3),
             z: +(worldPos.z).toFixed(3),
@@ -156,10 +394,21 @@ export function generatePixelMap() {
             cId: light.controllerId || 0,
             sId: light.sectionId || 0,
             fId: light.fixtureId || 0,
+            // Runtime-only DRAWN geometry (see the multi-pixel push above). This
+            // branch's fixture has no pixel model — its single emitter sits at
+            // the GROUP ORIGIN, and a uniform scale about that origin cannot
+            // move it, so the drawn position IS the physical one. The size
+            // multiplier still applies.
+            rx: +(worldPos.x).toFixed(3),
+            ry: +(worldPos.y).toFixed(3),
+            rz: +(worldPos.z).toFixed(3),
+            renderScale: fixtureModelScale(fixture.fixtureDef),
             // localIndex: a simple/single-pixel DMX fixture is its own fixture
             // with exactly one pixel, so its within-fixture ordinal is 0.
             localIndex: 0,
+            // Both view words — see the multi-pixel push above.
             vMask: light.viewMask || 0,
+            vMaskHi: light.viewMaskHi || 0,
             _prePatched: true, // We polyfill dynamically, so they are practically patched
             patch: patchObj,
             channels: (fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire')) ? null : (standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null) || chFallback),
@@ -235,57 +484,16 @@ export function generatePixelMap() {
   // — never a silent skip (codex P0): the engine logs it and the sim
   // paints it as undriven.
   if (params.ledStrands) {
-    const ledCounts = new Map();
-    params.ledStrands.forEach((strand) => {
-      if (strand && typeof strand.name === 'string' && strand.name.length > 0) {
-        ledCounts.set(strand.name, strand.ledCount || 10);
-      }
-    });
-    const registry = (typeof window !== 'undefined' && window.__controllerRegistry) || null;
-    // Two projections of the SAME registry. `computeLedProjection` is the
-    // sim's GENERIC per-port model (each port restarts at the controller's
-    // base lane). `computeLedStrandPatches` is the DEVICE-linear model (one
-    // contiguous cursor across the enabled outputs, skipping disabled ones) —
-    // the firmware's real byte layout, and exactly what patches.yaml records.
-    // A controller carrying a `device:` binding declares those firmware
-    // semantics, so its strands MUST export the device-linear addresses or the
-    // engine model would disagree with both the hardware and patches.yaml
-    // (report 20260710_1; docs/41 §3). NON-bound controllers have no hardware
-    // to agree with, so they keep the generic per-port projection unchanged.
-    const genericProj = registry
-      ? computeLedProjection(registry, ledCounts)
-      : { fields: new Map(), violations: [] };
-    const deviceProj = registry
-      ? computeLedStrandPatches(registry, ledCounts)
-      : { fields: new Map(), violations: [] };
-    for (const v of genericProj.violations) console.warn(`[LED Patch] ✋ ${v.message}`);
-    for (const v of deviceProj.violations) console.warn(`[LED Patch/device] ✋ ${v.message}`);
+    const ledFields = ledLaneFields;
 
-    // Merge: the generic per-strand projection is the base; every DEVICE-bound
-    // strand OVERRIDES its universe/addr with the firmware's contiguous start.
-    // Order, stride and whiteMode are firmware semantics read from the SAME
-    // `controller.led`, so they carry over from the generic entry unchanged —
-    // only the address differs. A device-linear strand with no generic lane is
-    // impossible (both projections walk the same ports/chains); if it ever
-    // happens the registry is internally inconsistent — fail LOUD (codex P0),
-    // never guess an address.
-    const ledFields = new Map(genericProj.fields);
-    for (const [name, dev] of deviceProj.fields) {
-      const gen = genericProj.fields.get(name);
-      if (!gen) {
-        throw new Error(`[pixelblaze] LED strand '${name}' has a device-linear patch but no ` +
-          'generic projection lane — the controller registry is internally inconsistent (a ' +
-          'device-bound strand must also resolve in computeLedProjection). Refusing to export ' +
-          'a guessed address.');
-      }
-      ledFields.set(name, {
-        ...gen,
-        universe: dev.dmxUniverse,
-        addr: dev.dmxAddress,
-        deviceLinear: true,
-      });
-    }
-
+    // Strands continue the DMX cluster-index space so every strand becomes its
+    // OWN 2D-Pixel-Map cluster (fixIndex is the cluster key). DMX fixtures used
+    // 0..dmxList.length-1, so the first strand starts at dmxList.length — no
+    // collision. fixIndex/fixKey are runtime-only grouping keys (like the DMX
+    // pixels above): NOT serialized by saveModelJS, so the engine model stays
+    // byte-identical. Without them buildClusters (fixIndex-contiguity) collapsed
+    // ALL strands into one mega-cluster (report 20260724_9 §1.3).
+    const dmxIndexBase = dmxList ? dmxList.length : 0;
     params.ledStrands.forEach((strand, i) => {
       const fixture = window.ledStrandFixtures && window.ledStrandFixtures[i] ? window.ledStrandFixtures[i] : null;
       const count = strand.ledCount || 10;
@@ -293,6 +501,14 @@ export function generatePixelMap() {
       const ex = +(strand.endX || 0), ey = +(strand.endY || 0), ez = +(strand.endZ || 0);
       const proj = ledFields.get(strand.name);
       const orderMap = proj ? (LED_CHANNEL_ORDERS[proj.order] || LED_CHANNEL_ORDERS.RGBW) : null;
+      // The strand's DISPLAY group — the SINGLE key the GUI group master + Master
+      // Enabled write under and the exporter's paint scale reads. Distinct from
+      // `groupKeyForStrand` below (which keys an UNGROUPED strand by its NAME for
+      // section/view numbering); the master keys ungrouped strands by the shared
+      // 'Ungrouped' bucket. Carried on every LED pixel as `displayGroup` so the
+      // last-layer output gate (animate.js) resolves the master by the SAME key
+      // the bulb-mesh apply closure uses — never by the name-based `group` field.
+      const dispGroup = ledDisplayGroup(strand);
       // EVERY patched strand — device-bound AND generic (unbound) — places its
       // per-pixel {universe, addr} through the SAME contiguous walker
       // (projectLedStrandPixels), the ONE source of truth for the firmware's
@@ -346,15 +562,32 @@ export function generatePixelMap() {
         const px = {
           type: 'led',
           fixtureType: '',
+          // Runtime-only 2D-Pixel-Map cluster keys (NOT serialized — see
+          // saveModelJS field list). fixIndex makes each strand its own cluster;
+          // fixKey is the stable per-strand persist/placement key.
+          fixIndex: dmxIndexBase + i,
+          fixKey: strand.name || `Strand ${i + 1}`,
           name: strand.name || 'Strand',
           // Effective group key — the SINGLE source of truth shared with the
           // section-numbering pass (led_metadata.assignLedStrandMetadata), so a
           // named group and its section id can never disagree. Ungrouped
           // strands key off their name (unchanged bit-for-bit for old scenes).
           group: groupKeyForStrand(strand),
+          // Runtime-only display-group key (NOT serialized — see saveModelJS
+          // field list) for the last-layer LED output gate; keeps ungrouped
+          // strands under the shared 'Ungrouped' master bucket.
+          displayGroup: dispGroup,
           x: +(sx + (ex - sx) * t).toFixed(3),
           y: +(sy + (ey - sy) * t).toFixed(3),
           z: +(sz + (ez - sz) * t).toFixed(3),
+          // Runtime-only DRAWN geometry (see the DMX push above). A strand's
+          // pixels are laid out directly on its start→end line — led_strand.js
+          // draws them at exactly these coordinates — and no strand carries a
+          // fixture type, so there is no render multiplier: drawn === physical.
+          rx: +(sx + (ex - sx) * t).toFixed(3),
+          ry: +(sy + (ey - sy) * t).toFixed(3),
+          rz: +(sz + (ez - sz) * t).toFixed(3),
+          renderScale: 1,
           nx: 0, ny: 0, nz: 0,
           cId: (proj ? proj.controllerId : strand.controllerId) || 0,
           sId: strand.sectionId || 0,
@@ -365,10 +598,15 @@ export function generatePixelMap() {
           // localIndex runs ALONG the strand in true pixel order. The engine
           // consumes this directly instead of re-deriving from (group,fId).
           localIndex: j,
+          // Both view words — see the DMX push above.
           vMask: strand.viewMask || 0,
+          vMaskHi: strand.viewMaskHi || 0,
           patch: pxPatch,
           channels: pxChannels,
           whiteMode: proj ? proj.whiteMode : 'native',
+          // Scene-level LED colour-encode override (null unless the
+          // controller config sets one) — see led_wire.js.
+          ledWire: (proj && proj.wire) ? proj.wire : null,
           unpatched: !proj,
         };
         // The batch-render loop (animate.js) and the inbound sACN demap
@@ -382,7 +620,15 @@ export function generatePixelMap() {
         px.apply = fixture
           ? ((r, g, b) => {
             if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-            fixture.setLedColorRGB(j, r || 0, g || 0, b || 0);
+            // LED-strand GLOBAL master (params.strandsEnabled) + per-group master
+            // (On/Off + Brightness) — a REAL last-layer output override on the
+            // direct-paint path, the LED analogue of applyFixtureOutputOverrides
+            // for DMX. Read live each frame (keyed by the strand DISPLAY group) so
+            // a slider move dims the group on the very next frame; either OFF ⇒
+            // black. Same authority (ledOutputScale) the raw-color paths gate on.
+            const [sr, sg, sb] = scaleRgbForLedOutput(
+              params.strandsEnabled, params.ledGroupOverrides, dispGroup, r || 0, g || 0, b || 0);
+            fixture.setLedColorRGB(j, sr, sg, sb);
           })
           : (() => {});
         pixels.push(px);
@@ -443,14 +689,27 @@ export function saveModelJS() {
         `footprint: ${p.patch.footprint}${p.patch.led ? ', led: true' : ''} }`;
     }
     const chStr = p.channels ? JSON.stringify(p.channels) : 'null';
+    // LED strands may carry a scene-level colour-encode override
+    // (`ledWire`) — serialized ONLY when the scene sets one, so a default
+    // rig exports byte-for-byte the same model file as before.
     const extra = (p.type === 'led')
-      ? `, whiteMode: '${p.whiteMode || 'native'}'${p.unpatched ? ', unpatched: true' : ''}`
+      ? `, whiteMode: '${p.whiteMode || 'native'}'` +
+        `${p.ledWire ? `, ledWire: ${JSON.stringify(p.ledWire)}` : ''}` +
+        `${p.unpatched ? ', unpatched: true' : ''}`
       : '';
     // localIndex is the exporter-emitted 0-based within-fixture ordinal
     // (DMX: per-fixture pixel order; LED: per-strand pixel order). The
     // engine prefers it over its (group,fId) heuristic; a NEW export always
     // carries it on every pixel, so it is serialized unconditionally.
-    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, localIndex: ${p.localIndex || 0}, vMask: ${p.vMask || 0}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
+    //
+    // `vMaskHi` (the Tier-C high view word, views 31..61 — engine lane 6) is
+    // serialized ONLY when the pixel actually carries word-1 membership. The
+    // engine's declared default is `px.vMaskHi ?? 0` (engine.js), so an
+    // absent field is the zero it already assumed, and a scene with no
+    // word-1 per-fixture view exports a byte-identical model to before —
+    // the same rule `ledWire` / `unpatched` follow above.
+    const hiStr = (p.vMaskHi || 0) !== 0 ? `, vMaskHi: ${p.vMaskHi}` : '';
+    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, localIndex: ${p.localIndex || 0}, vMask: ${p.vMask || 0}${hiStr}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
   });
 
   lines.push('];');

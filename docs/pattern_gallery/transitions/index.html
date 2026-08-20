@@ -1,0 +1,403 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BM26 · Titanic Deck Transition Gallery</title>
+<style>
+:root{--bg:#06090e;--panel:#0e141e;--line:#253247;--text:#edf3fb;--muted:#93a4bb;--gold:#f6bd39;--blue:#5bb7ff;--pink:#ff71bf;--red:#ff665f;--green:#73d6a5}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -20%,#182235 0,#06090e 48%);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}main{width:min(1720px,100%);margin:auto;padding:34px clamp(10px,2.2vw,38px) 90px}.hero{padding:12px 4px 30px;border-bottom:1px solid var(--line)}.back{color:var(--gold);text-decoration:none;font-weight:700}.eyebrow{margin:0;color:var(--muted);font:700 11px/1.2 ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase}h1{font-size:clamp(30px,4vw,56px);letter-spacing:-.035em;margin:14px 0 7px}.hero>p{max-width:1040px;color:var(--muted);font-size:17px}.facts,.audit{display:flex;gap:8px;flex-wrap:wrap}.facts span,.audit span{border:1px solid #33425a;border-radius:999px;padding:5px 10px;color:#cad5e3;background:#0a1018}.facts .p0,.audit .p0{color:#ffd1cf;border-color:#7f342f;background:#25110f}.transition{margin-top:28px;padding:clamp(12px,1.5vw,24px);background:linear-gradient(145deg,#101824,#0a1018);border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 55px #0008;overflow:hidden}.transition header{display:flex;align-items:center;gap:13px;margin-bottom:14px}.number{display:grid;place-items:center;flex:0 0 48px;height:42px;border-radius:11px;background:#251e0c;color:var(--gold);font-weight:900}.transition h2{font-size:clamp(20px,2vw,27px);letter-spacing:-.02em;margin:2px 0 0}.verdict{margin-left:auto;border:1px solid;border-radius:999px;padding:5px 10px;font:800 11px ui-monospace,monospace}.verdict.keep{color:var(--green)}.verdict.tune{color:var(--gold)}.verdict.remove{color:var(--red)}.sequence{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:10px;margin:10px 0 15px}.sequence>span{display:flex;flex-direction:column;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-weight:900}.sequence small{font-weight:500;color:var(--muted)}.sequence b{align-self:center}.sequence .a{border-color:#2d78a7;color:var(--blue)}.sequence .tx{border-color:#786423;color:var(--gold)}.sequence .b{border-color:#9a396e;color:var(--pink)}.view-labels{display:grid;grid-template-columns:repeat(3,1fr);font:700 11px ui-monospace,monospace;letter-spacing:.08em;color:#aebbd0;text-align:center;background:#09101a}.view-labels span{padding:10px}.clip-player{background:#04070c;border:1px solid #2b3a50}.clip-player video{display:block;width:100%;height:auto;background:#04070c}.transport{display:grid;grid-template-columns:auto auto auto auto minmax(90px,auto) minmax(180px,1fr) auto;gap:8px;align-items:center;padding:10px;background:#09101a}.transport button,.transport a{border:1px solid #40516a;border-radius:8px;background:#111b29;color:var(--text);padding:7px 9px;font:700 12px inherit;text-decoration:none;cursor:pointer}.transport input{width:100%}.stage{color:var(--gold);font:900 11px ui-monospace,monospace}.audit{margin-top:13px}.audit .clean{color:var(--green)}.reason{color:#c5d0df;margin-bottom:0}@media(max-width:800px){.transport{grid-template-columns:repeat(2,1fr)}.transport input{grid-column:1/-1}.sequence{grid-template-columns:1fr}.sequence b{display:none}.transition{padding-inline:8px}.view-labels{font-size:9px}}
+</style></head><body><main><div class="hero"><a class="back" href="../index.html">← All galleries</a><p class="eyebrow">BM26 · Titanic’s End · production transition oracle</p><h1>Deck Transition Gallery</h1><p>Every row is the same deterministic, full-rig sequence: exact saved Baby Boy Keel Breath in blue, the selected Deck transition, then exact saved Baby Girl Keel Breath in pink. Both endpoint VMs share one synchronized 40 fps phase clock so the visual comparison isolates transition behavior. MP4s are seekable; GIFs are downloadable.</p><div class="facts"><span>15 transitions</span><span>964 Titanic pixels</span><span>1s A · 2s transition · 1s B</span><span>20 fps media · 40 fps audit</span><span class="clean">ENDPOINT ORACLE · PASS</span></div></div><article class="transition" id="trans_color_burst">
+      <header><span class="number">01</span><div>
+        <p class="eyebrow">trans_color_burst · actual blend trans_color_burst</p>
+        <h2>Color Burst</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_color_burst</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/001_trans_color_burst.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/001_trans_color_burst.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.43 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Script now owns its full curve and converges exactly to B.</p>
+    </article>
+<article class="transition" id="trans_crossfade">
+      <header><span class="number">02</span><div>
+        <p class="eyebrow">trans_crossfade · actual blend trans_crossfade</p>
+        <h2>Crossfade</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_crossfade</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/002_trans_crossfade.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/002_trans_crossfade.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.43 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">True six-lane linear interpolation with exact A and B endpoints.</p>
+    </article>
+<article class="transition" id="trans_diagonal_wipe">
+      <header><span class="number">03</span><div>
+        <p class="eyebrow">trans_diagonal_wipe · actual blend trans_diagonal_wipe</p>
+        <h2>Diagonal Wipe</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_diagonal_wipe</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/003_trans_diagonal_wipe.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/003_trans_diagonal_wipe.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_diamond_wipe">
+      <header><span class="number">04</span><div>
+        <p class="eyebrow">trans_diamond_wipe · actual blend trans_diamond_wipe</p>
+        <h2>Diamond Wipe</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_diamond_wipe</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/004_trans_diamond_wipe.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/004_trans_diamond_wipe.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_dissolve">
+      <header><span class="number">05</span><div>
+        <p class="eyebrow">trans_dissolve · actual blend trans_dissolve</p>
+        <h2>Dissolve</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_dissolve</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/005_trans_dissolve.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/005_trans_dissolve.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_flash">
+      <header><span class="number">06</span><div>
+        <p class="eyebrow">trans_flash · actual blend trans_flash</p>
+        <h2>Flash</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_flash</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/006_trans_flash.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/006_trans_flash.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.13 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Script now owns its full white-flash curve and converges exactly to B.</p>
+    </article>
+<article class="transition" id="trans_iris">
+      <header><span class="number">07</span><div>
+        <p class="eyebrow">trans_iris · actual blend trans_iris</p>
+        <h2>Iris</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_iris</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/007_trans_iris.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/007_trans_iris.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_iris_close">
+      <header><span class="number">08</span><div>
+        <p class="eyebrow">trans_iris_close · actual blend trans_iris_close</p>
+        <h2>Iris Close</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_iris_close</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/008_trans_iris_close.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/008_trans_iris_close.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_ripple_in">
+      <header><span class="number">09</span><div>
+        <p class="eyebrow">trans_ripple_in · actual blend trans_ripple_in</p>
+        <h2>Ripple In</h2>
+      </div><span class="verdict tune">TUNE</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_ripple_in</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/009_trans_ripple_in.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/009_trans_ripple_in.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.43 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Keep the concept; repair weak or misleading ring controls before blessing.</p>
+    </article>
+<article class="transition" id="trans_split_horizontal">
+      <header><span class="number">10</span><div>
+        <p class="eyebrow">trans_split_horizontal · actual blend trans_split_horizontal</p>
+        <h2>Split Horizontal</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_split_horizontal</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/010_trans_split_horizontal.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/010_trans_split_horizontal.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_split_vertical">
+      <header><span class="number">11</span><div>
+        <p class="eyebrow">trans_split_vertical · actual blend trans_split_vertical</p>
+        <h2>Split Vertical</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_split_vertical</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/011_trans_split_vertical.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/011_trans_split_vertical.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_wave_sweep">
+      <header><span class="number">12</span><div>
+        <p class="eyebrow">trans_wave_sweep · actual blend trans_wave_sweep</p>
+        <h2>Wave Sweep</h2>
+      </div><span class="verdict tune">TUNE</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_wave_sweep</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/012_trans_wave_sweep.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/012_trans_wave_sweep.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Keep the concept; the frequency control did not pass the parameter-truth audit.</p>
+    </article>
+<article class="transition" id="trans_wipe_down">
+      <header><span class="number">13</span><div>
+        <p class="eyebrow">trans_wipe_down · actual blend trans_wipe_down</p>
+        <h2>Wipe Down</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_wipe_down</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/013_trans_wipe_down.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/013_trans_wipe_down.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_wipe_left">
+      <header><span class="number">14</span><div>
+        <p class="eyebrow">trans_wipe_left · actual blend trans_wipe_left</p>
+        <h2>Wipe Left</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_wipe_left</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/014_trans_wipe_left.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/014_trans_wipe_left.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article>
+<article class="transition" id="trans_wipe_right">
+      <header><span class="number">15</span><div>
+        <p class="eyebrow">trans_wipe_right · actual blend trans_wipe_right</p>
+        <h2>Wipe Right</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <div class="sequence" aria-label="Fixed comparison sequence">
+        <span class="a">A · BLUE<small>Baby Boy - Keel Breath</small></span>
+        <b>→</b><span class="tx">TRANSITION<small>trans_wipe_right</small></span>
+        <b>→</b><span class="b">B · PINK<small>Baby Girl - Keel Breath</small></span>
+      </div>
+      <div class="view-labels"><span>TOP · X/Z</span><span>FRONT · X/Y</span><span>IDENTITY · TE SIGNS</span></div>
+      <div class="clip-player" data-hold="1" data-transition="2">
+        <video src="videos/015_trans_wipe_right.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">A · Blue</button>
+          <button type="button" data-seek="1">Transition</button>
+          <button type="button" data-seek="3">B · Pink</button>
+          <span class="stage">A · BLUE</span>
+          <input data-action="seek" type="range" min="0" max="4" step="0.025" value="0" aria-label="Seek sequence">
+          <a href="gifs/015_trans_wipe_right.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="audit"><span class="clean">Completion tracks B baseline</span><span>completion 0.44 RMS</span><span>B baseline 0.13 RMS</span><span>end residual 0 byte</span></div>
+      <p class="reason">Deterministic retained transition with exact endpoint convergence.</p>
+    </article></main>
+<script>
+for(const player of document.querySelectorAll('.clip-player')){
+  const video=player.querySelector('video');const play=player.querySelector('[data-action="play"]');const seek=player.querySelector('[data-action="seek"]');const stage=player.querySelector('.stage');const hold=Number(player.dataset.hold);const transition=Number(player.dataset.transition);
+  const refresh=()=>{const t=video.currentTime||0;seek.value=t;stage.textContent=t<hold?'A · BLUE':t<hold+transition?'TRANSITION':'B · PINK';play.textContent=video.paused?'Play':'Pause'};
+  play.addEventListener('click',()=>video.paused?video.play():video.pause());video.addEventListener('timeupdate',refresh);video.addEventListener('play',refresh);video.addEventListener('pause',refresh);seek.addEventListener('input',()=>{video.currentTime=Number(seek.value);refresh()});for(const button of player.querySelectorAll('[data-seek]'))button.addEventListener('click',()=>{video.currentTime=Number(button.dataset.seek);video.play()});video.play().catch(refresh);refresh();
+}
+</script></body></html>

@@ -460,12 +460,14 @@ export class NumberController extends Controller {
         increment(this._step * this._arrowKeyMultiplier(e) * -1);
       }
     });
-    this.$input.addEventListener('wheel', (e) => {
-      if (this._inputFocused) {
-        e.preventDefault();
-        increment(this._step * this._normalizeMouseWheel(e));
-      }
-    }, { passive: false });
+    // NO wheel handler here — the wheel SCROLLS this GUI, it never edits.
+    // Operator order 2026-07-29 ("I randomly accidentally set some values to 0
+    // when I scroll in the menu"). This used to step the value whenever the
+    // input was focused, which is exactly the click-a-field-then-scroll-on
+    // habit that zeroed his values. Deleted rather than guarded: a guard is a
+    // condition, and every condition here has already been wrong once.
+    // `src/gui/wheel_guard.js` additionally disarms the BROWSER's own stepping
+    // of `<input type="number">`, which no JS handler could have stopped.
     this.$input.addEventListener('focus', () => { this._inputFocused = true; });
     this.$input.addEventListener('blur', () => {
       this._inputFocused = false;
@@ -598,18 +600,14 @@ export class NumberController extends Controller {
       this._callOnFinishChange();
     });
 
-    // Wheel — identical step math to lil-gui, debounced finish-change.
-    const finishChange = this._callOnFinishChange.bind(this);
-    let wheelFinishTimeout;
-    this.$slider.addEventListener('wheel', (e) => {
-      if (Math.abs(e.deltaX) < Math.abs(e.deltaY) && this._hasScrollBar) return;
-      e.preventDefault();
-      const delta = this._normalizeMouseWheel(e) * this._step;
-      this._snapClampSetValue(this.getValue() + delta);
-      this.$input.value = this.getValue();
-      clearTimeout(wheelFinishTimeout);
-      wheelFinishTimeout = setTimeout(finishChange, 400);
-    }, { passive: false });
+    // NO wheel handler on the fader track either (operator order 2026-07-29).
+    // What was here was lil-gui's wheel-to-value with the guard
+    // `if (vertical && this._hasScrollBar) return` — it yielded to the scroll
+    // ONLY while the root children container happened to overflow. A short
+    // panel, a collapsed section or a docked pane sized to fit made that false,
+    // and then every vertical tick over a fader was a value edit with
+    // `preventDefault()` eating the scroll as well. Drag, click and keyboard
+    // arrows are the deliberate ways to move a fader; the wheel scrolls.
   }
 
   _setDraggingStyle(active, axis = 'horizontal') {
@@ -629,16 +627,6 @@ export class NumberController extends Controller {
       this._initSlider();
       this.updateDisplay();
     }
-  }
-
-  _normalizeMouseWheel(e) {
-    let { deltaX, deltaY } = e;
-    if (Math.floor(e.deltaY) !== e.deltaY && e.wheelDelta) {
-      deltaX = 0;
-      deltaY = -e.wheelDelta / 120;
-      deltaY *= this._stepExplicit ? 1 : 10;
-    }
-    return deltaX + -deltaY;
   }
 
   _arrowKeyMultiplier(e) {
@@ -661,11 +649,6 @@ export class NumberController extends Controller {
 
   _snapClampSetValue(value) {
     this.setValue(this._clamp(this._snap(value)));
-  }
-
-  get _hasScrollBar() {
-    const root = this.parent.root.$children;
-    return root.scrollHeight > root.clientHeight;
   }
 
   get _hasMin() {

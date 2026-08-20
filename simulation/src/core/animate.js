@@ -1,28 +1,31 @@
 /**
  * animate.js — Main render/animation loop with gradient and Pixelblaze lighting.
  */
-import chroma from "chroma-js";
 import {
   controls, composer, renderer, params,
   frameCount, lastFpsTime, setFrameCount, setLastFpsTime,
   lightingEnabled, lightingMode, engineReady, engineEnabled,
   scene, selectedFixtureIndices, selectedDmxIndices
 } from "./state.js";
-import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
+import { pixelInView } from "../dmx/view_registry.js";
 import { isStaticHost, logStaticHostSkip } from "./static_host.js";
 import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 import { getProfileDef } from "./profile_registry.js";
+import { applyCanvasVisibility } from "./canvas_visibility.js";
 import { updateLightPool } from "./light_pool.js";
 import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
 import { engineHttpUrl } from "./engine_endpoint.js";
-import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
-import { blendRgbwau } from "./rgbwau_blend.js";
+import { applyFixtureOutputOverrides, applyDmxEntryOutputGate } from "../dmx/dmx_output_overrides.js";
+import { blendEntryRgbwau } from "./rgbwau_blend.js";
 import { entryPaintsDirect } from "./render_paint_rule.js";
+import { ledOutputScale } from "./group_lock.js";
+import { buildGradientLut } from "./color_transition.js";
+import { createLowFpsAlarm, LOW_FPS_THRESHOLD, LOW_FPS_SUSTAIN_SECONDS } from "./low_fps_alarm.js";
+import { dotDrawnRadius, writeDotMatrix } from "./pixel_dot_geometry.js";
+import { adapterWarningText, adapterLogLine } from "./gpu_adapter.js";
 // sACN output — lazily initialized
-let sacnOutputClient = null;
-let sacnOutputEnabled = false;
 
 // ─── Per-frame pixel observers (2D Pixel Map, future taps) ────────────────
 // Listeners fire once per rendered frame AFTER every color source has written
@@ -57,18 +60,24 @@ function _dispatchPixelFrame() {
 
 // Warning banner + patch state managed by PatchManager (../dmx/patch_manager.js)
 
-// Cached chroma scale — rebuilt when stops change
-let chromaScale = null;
+// Cached gradient LUT — rebuilt when stops change. Perceptual (OKLCH,
+// shortest hue arc, gamut-mapped) via color_transition.js; replaced the old
+// per-pixel chroma.js CIELAB scale (2026-07-24), which both bent hues in the
+// blue region and allocated a chroma Color object per pixel per frame.
+// POWER OF TWO so the per-pixel sample is a mask, not a bounds check.
+const GRADIENT_LUT_SIZE = 1024;
+const GRADIENT_LUT_MASK = GRADIENT_LUT_SIZE - 1;
+let gradientLut = null;
 let lastStopsKey = '';
 
-function getChromaScale() {
+function getGradientLut() {
   const stops = params.gradientStops || ['#8cc0ff', '#cc8cff'];
   const key = stops.join(',');
-  if (key !== lastStopsKey) {
-    chromaScale = chroma.scale(stops).mode('lab');
+  if (key !== lastStopsKey || !gradientLut) {
+    gradientLut = buildGradientLut(stops, GRADIENT_LUT_SIZE);
     lastStopsKey = key;
   }
-  return chromaScale;
+  return gradientLut;
 }
 
 // ─── Metadata-Aware Batch Cache ──────────────────────────────────────────
@@ -106,12 +115,9 @@ window.updatePixelInstancedScale = function(newScale) {
   const n = _batchRenderList.length;
   for (let i = 0; i < n; i++) {
     const e = _batchRenderList[i];
-    const sizeMm = e.pixelSize || 14;
-    const worldRadius = sizeMm * 0.001 * newScale;
-    _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
-    _pixelTransformObj.scale.setScalar(worldRadius);
-    _pixelTransformObj.updateMatrix();
-    _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+    // DRAWN position + radius — never the physical x/y/z + pixelSize. See
+    // pixel_dot_geometry.js for why the distinction exists.
+    writeDotMatrix(_pixelInstancedMesh, i, e, dotDrawnRadius(e, newScale), _pixelTransformObj);
   }
   _pixelTransformObj.scale.setScalar(1); // reset for future use
   _pixelInstancedMesh.instanceMatrix.needsUpdate = true;
@@ -187,13 +193,9 @@ function _rebuildBatchCache() {
   const globalScale = params.globalPixelScale || 1.0;
   for (let i = 0; i < n; i++) {
      const e = list[i];
-     // Convert pixelSize (mm) to world units, apply global scale
-     const sizeMm = e.pixelSize || 14; // default 14mm if missing
-     const worldRadius = sizeMm * 0.001 * globalScale;
-     _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
-     _pixelTransformObj.scale.setScalar(worldRadius);
-     _pixelTransformObj.updateMatrix();
-     _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+     // DRAWN position + radius (pixel_dot_geometry.js) — never the physical
+     // x/y/z + pixelSize, which describe the real rig, not the drawing of it.
+     writeDotMatrix(_pixelInstancedMesh, i, e, dotDrawnRadius(e, globalScale), _pixelTransformObj);
      _pixelColorCache.setRGB(0, 0, 0); // start black
      _pixelInstancedMesh.setColorAt(i, _pixelColorCache);
   }
@@ -245,6 +247,97 @@ function _applyUnpatchedRedOverlay() {
   _unpatchedOverlayWasActive = show;
 }
 
+// ─── LED-strand last-layer output gate ────────────────────────────────────
+// The LED analogue of applyFixtureOutputOverrides: apply the GLOBAL LED master
+// (params.strandsEnabled) and each strand's per-group master (On/Off +
+// Brightness, params.ledGroupOverrides) to the entry's rendered RGBWAU IN PLACE,
+// for LED entries only. Runs AFTER every color source (pattern / gradient / sACN
+// demap) has written the entry colors and BEFORE every consumer that reads the
+// RAW entry color — the sACN output map (mapPixelsToSacn), the global
+// instanced-dot flush, and the 2D Pixel Map frame tap — so an OFF group or
+// master is BLACK on EVERY path, not only the per-strand bulb/halo meshes (which
+// the exporter apply closure + the static preview already scale). Keyed by
+// entry.displayGroup — the 'Ungrouped'-bucket key the GUI master writes under,
+// NOT the name-based entry.group used for section/view numbering. Off ⇒ 0;
+// brightness scales linearly; a full-on group (scale 1) is left untouched so
+// there is zero behavior change when nothing is disabled.
+function _applyLedOutputGate(list) {
+  if (!list) return;
+  const strandsEnabled = params.strandsEnabled;
+  const overrides = params.ledGroupOverrides;
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry || entry.type !== 'led') continue;
+    const s = ledOutputScale(strandsEnabled, overrides, entry.displayGroup);
+    if (s >= 1) continue;
+    if (s <= 0) {
+      entry.r = 0; entry.g = 0; entry.b = 0;
+      entry.w = 0; entry.a = 0; entry.u = 0;
+      continue;
+    }
+    entry.r *= s; entry.g *= s; entry.b *= s;
+    entry.w *= s; entry.a *= s; entry.u *= s;
+  }
+}
+
+// ─── DMX last-layer output gate (rendered-color side) ─────────────────────
+// `applyFixtureOutputOverrides` makes the DMX group/fixture master real on the
+// UNIVERSE BUFFER — which covers the sACN output and, through applyDmxFrame(),
+// the patched fixture bulbs. It does NOT cover the consumers that read the RAW
+// _batchRenderList entry color: the global V2 instanced-dot flush and the 2D
+// Pixel Map frame tap. And when NOTHING is patched (window._patchesActive ===
+// false — the state the titanic show scene ships in) it covers nothing at all:
+// it skips every fixture whose universe < 1, so the bulbs, painted directly
+// from the entry by entry.apply(), stay lit too. Measured pre-fix on the live
+// show scene: group Off left entry, 2D decode, dot and bulb ALL at their full
+// ON values (report 20260724_40).
+//
+// This runs AFTER every color source AND AFTER applyFixtureOutputOverrides /
+// applyDmxFrame — never before mapPixelsToSacn, or a dimmed group would be
+// scaled twice on the wire (once here, once on the buffer) — and BEFORE the
+// dot flush and the 2D tap. `entry.fixtureConfig` is the live config object the
+// buffer gate reads, so the two can never key differently.
+let _dmxGateConfigWarned = false;
+
+function _applyDmxOutputGate(list, headless) {
+  if (!list) return;
+  const overrides = params.groupOverrides;
+  const patchesActive = window._patchesActive;
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry || entry.type !== 'dmx') continue;
+    if (!entry.fixtureConfig) {
+      // A DMX pixel with no config handle cannot be gated — say so once, loudly
+      // (codex P0: never fail silently), then keep the render loop alive.
+      if (!_dmxGateConfigWarned) {
+        _dmxGateConfigWarned = true;
+        console.error(`[DmxOutputGate] DMX pixel '${entry.name}' carries no fixtureConfig — ` +
+          'its group/fixture master CANNOT be applied to the dots or the 2D map. The exporter ' +
+          'must attach it (pixelblaze_model_exporter.js).');
+      }
+      continue;
+    }
+    const scale = applyDmxEntryOutputGate(entry, overrides);
+    if (scale >= 1) continue;
+    // While unpatched a DMX entry paints its fixture visual DIRECTLY (the color
+    // sources already called apply() with the un-gated color this frame), and
+    // no universe buffer exists to gate. Repaint from the gated color so the
+    // bulb/halo/cone match the dots. Patched entries never take this branch —
+    // applyDmxFrame owns their visual, from the already-gated buffer.
+    if (!headless && entry.apply && entryPaintsDirect(entry, patchesActive)) {
+      const [rn, gn, bn] = blendEntryRgbwau(entry);
+      entry.apply(rn, gn, bn);
+    }
+  }
+}
+
+// Sustained-low-FPS latch. A slow badge is easy to shrug off; ten straight
+// seconds under 20 FPS is a broken measurement environment, and the ONE fact
+// that explains it (which GPU is rendering) has to be in the same log line —
+// see report `20260725_38`, where a sustained 10 FPS was hunted through the
+// render path for a session and turned out to be the Intel iGPU. Fires once.
+const _lowFpsAlarm = createLowFpsAlarm(LOW_FPS_THRESHOLD, LOW_FPS_SUSTAIN_SECONDS);
+
 export function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -259,6 +352,19 @@ export function animate() {
       // Color bands match HUD theme: green ≥30 (good), amber 15–29 (ok), red <15 (poor).
       const quality = frameCount >= 30 ? "good" : frameCount >= 15 ? "ok" : "poor";
       if (fpsEl.dataset.quality !== quality) fpsEl.dataset.quality = quality;
+    }
+    if (_lowFpsAlarm.sample(frameCount)) {
+      // `window.__gpuAdapter` is set at boot by detectGpuAdapter(). Naming it
+      // here covers the case the banner cannot: the RIGHT (discrete) adapter,
+      // contended by something else — leftover probe windows, another sim tab.
+      const adapter = window.__gpuAdapter;
+      console.error(
+        `[LowFPS] ${frameCount} FPS — under ${LOW_FPS_THRESHOLD} FPS for ` +
+        `${LOW_FPS_SUSTAIN_SECONDS} consecutive seconds. ` +
+        `${adapterLogLine(adapter, window.__rendererMode)}. ` +
+        `${adapterWarningText(adapter) || 'The adapter looks correct — check for other windows ' +
+          'or apps contending for the GPU (close leftover probe browsers and extra sim tabs).'}`,
+      );
     }
     setFrameCount(0);
     setLastFpsTime(now);
@@ -278,29 +384,45 @@ export function animate() {
   // exit: un-hide the canvas (composer.render() resumes next frame) and hide the
   // 2D map — the 3D vis comes right back. No renderer guard: it exists before
   // the first frame (a missing one is a boot bug that must crash, per repo P0).
+  //
+  // This latch is EDGE-triggered, and that is exactly how the "dark ghost ship"
+  // got on screen: split_layout's resize handler re-showed the canvas behind the
+  // 2D map and the latch, already latched, never took it back. So the hide now
+  // goes through canvas_visibility.applyCanvasVisibility, which BOTH obeys the
+  // profile veto and CLEARS the framebuffer on the way out — after this there is
+  // no stale 3D frame left for any caller to reveal.
   if (_headless !== _headlessLatched) {
-    renderer.domElement.style.display = _headless ? 'none' : '';
+    applyCanvasVisibility(renderer, params.lightingProfile, true);
     if (window.showPixelMap2d) window.showPixelMap2d(_headless);
     _headlessLatched = _headless;
   }
+  // Belt on the latch: split_layout and other resize paths re-ask for a visible
+  // canvas every frame. Re-apply the headless veto so a stale 3D hull can never
+  // sit behind the 2D map after layout settles (report 20260815_265).
+  if (_headless) applyCanvasVisibility(renderer, params.lightingProfile, true);
 
-  // ─── Gradient Mode (chroma.js LAB interpolation) ───
+  // ─── Gradient Mode (OKLCH perceptual interpolation, LUT-sampled) ───
   if (lightingEnabled && lightingMode === 'gradient' && getProfileDef(params.lightingProfile).mappingEnabled) {
-    const scale = getChromaScale();
+    const lut = getGradientLut();
     const speed = (params.waveSpeed || 0.3) * 0.001;
     const t = now * speed;
-    
+
     // Ensure batch cache is fresh so we can map gradient to the unified _batchRenderList
     if (_batchCacheVersion !== _batchLastBuiltVersion) _rebuildBatchCache();
-    
+
     if (_batchRenderList && _batchRenderList.length > 0) {
       const count = _batchRenderList.length;
       for (let i = 0; i < count; i++) {
          const entry = _batchRenderList[i];
          const phase = ((entry.nx || 0) + (entry.ny || 0) + t) % 1.0;
-         const [r, g, b] = scale(phase).gl();
+         // Allocation-free LUT sample; mask handles the phase===1.0 edge.
+         const off = ((phase * GRADIENT_LUT_SIZE) & GRADIENT_LUT_MASK) * 3;
+         const r = lut[off], g = lut[off + 1], b = lut[off + 2];
          entry.r = r; entry.g = g; entry.b = b;
          entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
+         // Locally rendered lanes supersede any wire-derived strand preview
+         // cached by the sACN-in demap (see rgbwau_blend.blendEntryRgbwau).
+         if (entry._ledWirePreview) entry._ledWirePreview = null;
          // Direct-paint when unpatched OR an LED strand (LEDs have no wire
          // read-back — see render_paint_rule.js). Headless skips the visual write.
          if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) entry.apply(r, g, b);
@@ -335,13 +457,16 @@ export function animate() {
         // Capture raw colors logically for sACN mapping
         entry.r = R / 255; entry.g = G / 255; entry.b = B / 255;
         entry.w = W / 255; entry.a = A / 255; entry.u = U / 255;
+        // Locally rendered lanes supersede any wire-derived strand preview
+        // cached by the sACN-in demap (see rgbwau_blend.blendEntryRgbwau).
+        if (entry._ledWirePreview) entry._ledWirePreview = null;
 
         // Direct-paint when unpatched OR an LED strand (LEDs have no wire
         // read-back — see render_paint_rule.js). When a DMX entry is patched the
         // DMX router path repaints it from the universe buffer instead.
         // Headless skips the visual write (nothing renders); colors still stored above.
         if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
-          const [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+          const [rn, gn, bn] = blendEntryRgbwau(entry);
           entry.apply(rn, gn, bn);
         }
       }
@@ -358,6 +483,7 @@ export function animate() {
         const entry = _batchRenderList[i];
         entry.r = 0; entry.g = 0; entry.b = 0;
         entry.w = 0; entry.a = 0; entry.u = 0;
+        if (entry._ledWirePreview) entry._ledWirePreview = null;
         // Clear the visual too — LED strands included, so a patched strand goes
         // black when lighting is disabled instead of freezing (see render_paint_rule.js).
         if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
@@ -375,18 +501,30 @@ export function animate() {
 
     const mappingEnabled = getProfileDef(params.lightingProfile).mappingEnabled;
 
-    // In sacn_in mode, demap only if lighting is enabled — the simulation acts as a bridge/visualizer
-    // regardless of which lighting profile is active
+    // In sacn_in mode, demap only if lighting is enabled — the simulation is a
+    // VISUALIZER here, never a bridge: the sim SERVER routes to the controllers
+    // and this window only paints what it receives, regardless of which lighting
+    // profile is active.
     if (lightingEnabled && lightingMode === 'sacn_in') {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
       }
-      demapSacnToPixels(_batchRenderList, window.dmxRouter);
+      // The undriven-entry treatment answers to the SAME switch as the other
+      // two unpatched indicators below (_applyUnpatchedRedOverlay's shell tint
+      // and the instanced-dot flush): red when on, black when off. Read fresh
+      // every frame so flipping the toggle repaints on the next one.
+      demapSacnToPixels(_batchRenderList, window.dmxRouter, !!params.showUnpatchedRed);
+      // LED master/group blackout AFTER the demap writes entry colors, BEFORE
+      // the global flush + 2D tap read them.
+      _applyLedOutputGate(_batchRenderList);
 
     } else if (mappingEnabled) {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
       }
+      // Gate BEFORE mapping so the LED sACN OUTPUT honors an OFF master/group
+      // too (parity with applyFixtureOutputOverrides zeroing DMX universe bytes).
+      _applyLedOutputGate(_batchRenderList);
       if (window._patchesActive) {
          // Only write to DMX router when patches exist (avoid writing to unmapped addresses)
          mapPixelsToSacn(_batchRenderList, window.dmxRouter);
@@ -427,6 +565,13 @@ export function animate() {
     applyDmx(window.parFixtures);
   }
 
+  // ─── DMX group/fixture master on the RENDERED color ───────────────────────
+  // Last layer, outside the router block (it must run even with no router /
+  // nothing patched — that is exactly when the buffer gate does nothing) and
+  // ahead of BOTH raw-entry consumers below: the instanced-dot flush and the
+  // 2D Pixel Map tap.
+  _applyDmxOutputGate(_batchRenderList, _headless);
+
   // ─── V2 InstancedMesh Raw Flush ─────────────────────────
   // Streams all colors computed in the current frame straight to GPU
   if (_pixelInstancedMesh && getProfileDef(params.lightingProfile).mappingEnabled && !_headless) {
@@ -442,20 +587,23 @@ export function animate() {
 
          let rn = 0, gn = 0, bn = 0;
 
-         const isIsolated = activeView && !(((entry.vMask || 0) & activeView.bit) !== 0 || (activeView.groups && activeView.groups.includes(entry.group)));
+         // Word-aware bit test: `pixelInView` reads `vMask` for a word-0 view
+         // and `vMaskHi` for a word-1 one (the exporter carries both onto
+         // every entry). A flat `entry.vMask` test isolated the wrong dots
+         // for any word-1 view.
+         const isIsolated = activeView && !(pixelInView(entry, activeView) || (activeView.groups && activeView.groups.includes(entry.group)));
 
          if (touchMatrices) {
-            const worldRadius = (entry.pixelSize || 14) * 0.001 * globalScale;
-            _pixelTransformObj.position.set(entry.wx, entry.wy, entry.wz);
-            _pixelTransformObj.scale.setScalar(isIsolated ? 0 : worldRadius);
-            _pixelTransformObj.updateMatrix();
-            _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+            // DRAWN position + radius (pixel_dot_geometry.js); isolation still
+            // hides a non-member instance by zero-scaling its matrix.
+            const worldRadius = isIsolated ? 0 : dotDrawnRadius(entry, globalScale);
+            writeDotMatrix(_pixelInstancedMesh, i, entry, worldRadius, _pixelTransformObj);
          }
 
          if (!isIsolated) {
             if (!window._patchesActive) {
                // All-unpatched direct mode: show pattern colors
-               [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+               [rn, gn, bn] = blendEntryRgbwau(entry);
             } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
                // Mixed mode: unpatched pixels stay black — unless the operator
                // has enabled the unpatched-red overlay (a sim-only diagnostic;
@@ -463,7 +611,7 @@ export function animate() {
                if (params.showUnpatchedRed) { rn = 0.8; gn = 0; bn = 0; }
                else { rn = 0; gn = 0; bn = 0; }
             } else {
-               [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+               [rn, gn, bn] = blendEntryRgbwau(entry);
             }
          }
         
@@ -540,54 +688,25 @@ export function animate() {
     };
   }
 
-  // ─── sACN Output: send DMX to real controllers via bridge ───
-  // Completely disable sACN outbound transmission if in readonly observer mode (e.g. iPad WebView)
-  if (window.dmxRouter && params.parLights && !window.__readonlyMode) {
-    // Lazily enable output client
-    if (!sacnOutputEnabled) {
-      sacnOutputClient = getSacnOutput();
-      sacnOutputClient.enable();
-      sacnOutputEnabled = true;
-    }
-
-    if (sacnOutputClient && sacnOutputClient.connected) {
-      // Group fixtures by universe:controllerIp using deduplicated Map
-      const outputGroups = new Map(); // 'universe:ip' → { universe, ip, priority }
-
-      const isMappingOutput = !window._sacnBlackoutActivated && getProfileDef(params.lightingProfile).mappingEnabled;
-
-      for (const config of params.parLights) {
-        if (!config) continue;
-        const u = config.dmxUniverse;
-        const addr = config.dmxAddress;
-        const ip = config.controllerIp;
-        if (!u || u <= 0 || !addr || addr <= 0 || !ip || ip === '0.0.0.0') continue;
-
-        const fType = config.fixtureType || config.type || '';
-        const isEffect = fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire') || fType.includes('Haze');
-
-        // In sacn_in mode: relay ALL universes to controllers (simulation acts as bridge)
-        // In other modes: only output when mapping is active
-        // Global effects: ALWAYS output
-        if (!isEffect && lightingMode !== 'sacn_in' && !isMappingOutput) continue;
-
-        const key = `${u}:${ip}`;
-        if (!outputGroups.has(key)) {
-          outputGroups.set(key, { universe: u, ip, priority: 150 });
-        }
-      }
-
-      // For each unique universe:ip pair, send the full universe buffer exactly ONCE
-      for (const [, group] of outputGroups) {
-        const fullFrame = window.dmxRouter.getFullFrame(group.universe);
-        if (fullFrame) {
-          sacnOutputClient.sendUniverse(group.universe, group.ip, group.priority, fullFrame);
-        }
-      }
-
-
-    }
-  }
+  // ─── sACN Output: GONE. The browser is not the router. ───
+  //
+  // Operator ruling 2026-08-05: engine → sim SERVER → controllers. This window
+  // renders, monitors and controls; it does not put packets on the wire, and
+  // there is no code here that could. What used to live at this point was a
+  // per-frame loop that unicast every patched universe to its real controller
+  // at priority 150 through :6972 (`_160` T4/T5) — a second writer on the
+  // browser's own clock, so background-tab throttling froze the rig on one
+  // stale frame while the show looked alive.
+  //
+  // The two things that legitimately needed it were rehoused, not dropped:
+  //   • "Hold to Fog" now POSTs the engine's `/fog` (gui_builder.js), which
+  //     writes the fog channels on the normal engine → bridge route;
+  //   • browser-generator bench output (gradient / pixelblaze driving fixtures
+  //     with no engine) was retired with the operator's Option C.
+  //
+  // Do not reintroduce a transmit path here. `server/sacn_output_bridge.js`
+  // refuses DMX by construction — it holds no sender — so a re-added client
+  // would be silently ineffective and loudly logged, not quietly working.
 
   // ─── SpotLight Pool Orchestrator ───
   // Assigns the 10 closest-to-camera pixels to the pre-allocated SpotLight pool.

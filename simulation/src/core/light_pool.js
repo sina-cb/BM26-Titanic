@@ -11,13 +11,39 @@
 import * as THREE from 'three';
 import { scene, camera, modelRadius, renderer, params } from './state.js';
 import { getProfileDef } from './profile_registry.js';
-import { isEffectsOnlyFixture } from '../dmx/view_registry.js';
+import { isEffectsOnlyFixture, fixtureInView } from '../dmx/view_registry.js';
+import { emitsVisibleLight } from './analytic_light_gate.js';
+import {
+  DEFAULT_SPOTLIGHT_SAMPLING_MODE,
+  assertSpotlightSamplingMode,
+  createSpotlightPlanner,
+  isLegacySpotlightSamplingMode,
+  resolveSpotlightSamplingMode,
+} from './spotlight_sampling.js';
 
 // ── Pool Configuration ──────────────────────────────────────────────────
-const _urlParams = new URLSearchParams(window.location.search);
-const DEFAULT_POOL_SIZE = 60;
+// The pool is sized from the RESOLVED boot value of `params.maxSpotlights`
+// (scene YAML → applyBootUrlOverrides(?spotlights=N) → here). There is no
+// module-load URL read and no module-load default: whatever the operator is
+// actually running is what gets allocated, so the "Max Spotlights" slider and
+// the saved scene value are both truthful. See src/core/url_overrides.js.
 export const MAX_SPOTLIGHT_POOL_SIZE = 200; // Manual hard cap for ?spotlights=N and pool allocation
-const DEFAULT_SPOTLIGHT_SAMPLING_MODE = 'uniform';
+
+// The absolute allocation bound. `?spotlights=N` above the hard cap can be
+// raised for ONE session by an explicit operator confirm (see url_overrides.js
+// → buildSpotlightOverCapPrompt), but never above this line.
+//
+// Why 2000: a pooled SpotLight costs ~GPU_SAFE_VECTORS_PER_SPOTLIGHT (16)
+// fragment-uniform vectors, so 2000 lights want ~32,000 — an order of magnitude
+// past any real GPU's budget, and ~12× the ~160 count where Mac WebGPU already
+// renders the scene solid white or black. It is far enough above any budget an
+// operator could sanely want that everything beyond it is a typo by
+// construction (`?spotlights=999999`), and low enough that the allocation loop
+// stays a few thousand small JS objects — a wedged tab, not an out-of-memory
+// browser. Above it we refuse loudly and never prompt: there is nothing to
+// consent to.
+export const SPOTLIGHT_ABSOLUTE_CEILING = 2000;
+
 const SPOTLIGHT_SAMPLING_BUCKET_MIN = 2;
 const SPOTLIGHT_SAMPLING_BUCKET_MAX = 20;
 const DEFAULT_SPOTLIGHT_SAMPLING_BUCKET_DISTANCE = 10;
@@ -32,20 +58,176 @@ const MIN_SPOTLIGHT_INTENSITY_SCALE = 0.75;
 //             white or black on some drivers (especially Mac Metal/WebGPU).
 const SPOTLIGHT_WARN_CAUTION_COUNT = 100;
 const SPOTLIGHT_WARN_CRITICAL_COUNT = 160;
-const _requestedPoolSizeRaw = Number.parseInt(_urlParams.get('spotlights') || `${DEFAULT_POOL_SIZE}`, 10);
-const REQUESTED_POOL_SIZE = Number.isFinite(_requestedPoolSizeRaw)
-  ? Math.max(0, _requestedPoolSizeRaw)
-  : DEFAULT_POOL_SIZE;
 
 // ── Pool State ──────────────────────────────────────────────────────────
 let _pool = [];           // Array of { light: THREE.SpotLight, target: THREE.Object3D, active: bool }
 let _initialized = false;
-let _effectivePoolSize = REQUESTED_POOL_SIZE;
+// How many pixels the last collect pass skipped as dark. Diagnostic only — it
+// is the number the 20260725_82 leak would have shown as wasted pool slots.
+let _lastSkippedDark = 0;
+let _requestedPoolSize = 0;
+let _effectivePoolSize = 0;
 const _frustum = new THREE.Frustum();
 const _projScreenMatrix = new THREE.Matrix4();
 const _tmpVec = new THREE.Vector3();
 
-function showSpotlightCapToast(requestedSize, cappedSize) {
+// ── Per-frame scratch (allocation-free steady state) ────────────────────
+// _collectLightRequests used to allocate, PER PIXEL PER FRAME, a cloned
+// worldPos Vector3, a fresh `new Vector3(0,0,-1)` direction, a cloned Color and
+// a fresh object literal. On the titanic scene that is thousands of objects
+// every frame at 40-60 fps — pure GC pressure for values that are consumed and
+// dropped inside the same function call. The request objects are now pooled and
+// mutated in place, with a fixed shape (monomorphic for the JIT).
+//
+// The pooled objects are FRAME-LOCAL by contract: they are filled by
+// _collectLightRequests and consumed by updateLightPool in the same synchronous
+// call, before anything can rewrite a pixel colour. Nothing outside this module
+// may retain one. The assignment planner enforces that on its side by
+// snapshotting into slot-owned buffers whenever it needs a request to survive a
+// frame boundary (a fading-out light).
+const REQUEST_KEY_STRIDE = 100000;
+const _requestPool = [];
+const _requests = [];
+const _visible = [];
+const _fixtureKeyBases = new WeakMap();
+const _fallbackColors = new WeakMap();
+let _nextFixtureKeyBase = 1;
+const _planner = createSpotlightPlanner();
+
+// ── Session-only over-cap ceiling ───────────────────────────────────────
+// When the operator explicitly accepts an over-cap `?spotlights=N` at boot,
+// the ceiling that bounds the pool is raised to N *for that session*.
+//
+// It is stored on `params` — deliberately, and NOT in the config tree, not in
+// localStorage, not on a module-level variable:
+//   • the config tree is what gets serialized into scene_config.yaml, so a
+//     value living there would persist the raise. It must never survive a
+//     reload (clampPersistedSpotlightBudget enforces the other half of that).
+//   • `params` is the one object every boot step (extractParams →
+//     applyBootUrlOverrides → initLightPool → the GUI) shares, so the ceiling
+//     is visible to all of them without a new module. `reconstructYAML` walks
+//     the config TREE, not `params`, so this key can never reach a file.
+// The key is `__`-prefixed for the same reason `__controllerRegistrySnapshot`
+// in undo.js is: it is machinery riding on `params`, never a config key.
+const SESSION_CEILING_PARAM_KEY = '__spotlightSessionCeiling';
+
+function assertValidSessionCeiling(value, context) {
+  if (
+    !Number.isInteger(value)
+    || value <= MAX_SPOTLIGHT_POOL_SIZE
+    || value > SPOTLIGHT_ABSOLUTE_CEILING
+  ) {
+    throw new RangeError(
+      `[LightPool] ${context}: an over-cap session ceiling must be an integer in ` +
+      `${MAX_SPOTLIGHT_POOL_SIZE + 1}..${SPOTLIGHT_ABSOLUTE_CEILING} ` +
+      `(got ${JSON.stringify(value)}).`
+    );
+  }
+}
+
+/**
+ * Drop any over-cap ceiling. Called at the top of every
+ * applyBootUrlOverrides() — a boot always starts at the hard cap, and only
+ * that boot's own accepted prompt may raise it again.
+ */
+export function clearSpotlightSessionCeiling() {
+  delete params[SESSION_CEILING_PARAM_KEY];
+}
+
+/**
+ * Grant an over-cap SpotLight budget for THIS SESSION ONLY. The single caller
+ * is the accepted branch of the `?spotlights=` over-cap prompt.
+ *
+ * @param {number} acceptedSize integer in (MAX_SPOTLIGHT_POOL_SIZE, SPOTLIGHT_ABSOLUTE_CEILING]
+ * @throws {RangeError} on anything else — a raise is an explicit, bounded act.
+ */
+export function raiseSpotlightSessionCeiling(acceptedSize) {
+  assertValidSessionCeiling(acceptedSize, 'raiseSpotlightSessionCeiling');
+  params[SESSION_CEILING_PARAM_KEY] = acceptedSize;
+}
+
+/**
+ * The ceiling that bounds the pool right now: the hard cap, unless the
+ * operator accepted an over-cap budget at boot.
+ *
+ * @returns {number}
+ * @throws {RangeError} if the session key holds something that is not a valid
+ *   raise — codex P0: garbage in the ceiling is a loud failure, never a quiet
+ *   fall back to the hard cap (that would hide whoever wrote the garbage).
+ */
+export function getSpotlightSessionCeiling() {
+  const raised = params[SESSION_CEILING_PARAM_KEY];
+  if (raised === undefined) return MAX_SPOTLIGHT_POOL_SIZE;
+  assertValidSessionCeiling(raised, `params.${SESSION_CEILING_PARAM_KEY}`);
+  return raised;
+}
+
+/** True while this session runs an operator-accepted over-cap budget. */
+export function isSpotlightSessionCeilingRaised() {
+  return getSpotlightSessionCeiling() > MAX_SPOTLIGHT_POOL_SIZE;
+}
+
+/**
+ * The persistence boundary for the SpotLight budget.
+ *
+ * `reconstructYAML` copies `params.maxSpotlights` straight into the config
+ * tree entry on every save, so a session running an accepted over-cap budget
+ * would otherwise write that budget into scene_config.yaml and resurrect it on
+ * the next plain boot — with no prompt and no consent. Call this immediately
+ * after every `reconstructYAML(configTree)` (explicit save, auto-save, and the
+ * unload beacon) to clamp the value that reaches disk back to the hard cap.
+ *
+ * The clamp is unconditional rather than raised-session-only: a scene file may
+ * never declare more SpotLights than the GPU-safe cap, however the number got
+ * there (hand-edited YAML included). Slider positions inside 1..cap persist
+ * exactly as before — only the over-cap part is dropped.
+ *
+ * @param {Object} tree the live config tree
+ * @returns {number|null} the value that was clamped away, or null for a no-op
+ */
+export function clampPersistedSpotlightBudget(tree) {
+  const entry = tree && tree.parLights && tree.parLights.maxSpotlights;
+  if (!entry || typeof entry !== 'object') return null;
+  const stored = Number(entry.value);
+  if (!Number.isFinite(stored) || stored <= MAX_SPOTLIGHT_POOL_SIZE) return null;
+
+  entry.value = MAX_SPOTLIGHT_POOL_SIZE;
+  console.warn(
+    `[LightPool] Save: maxSpotlights ${stored} is above the hard cap — writing ` +
+    `${MAX_SPOTLIGHT_POOL_SIZE} to the scene file. An over-cap budget is session-only; ` +
+    `boot with ?spotlights=${stored} and accept the prompt to get it back.`
+  );
+  return stored;
+}
+
+/**
+ * The one place the boot SpotLight budget becomes a pool size.
+ *
+ * @param {number} requestedValue resolved `params.maxSpotlights`
+ * @returns {number} integer in 0..getSpotlightSessionCeiling()
+ * @throws {TypeError} if the value is not a finite number — codex P0: a
+ *   malformed budget is a loud failure, never a silent default pool. (`null`
+ *   and `undefined` numify to 0 / NaN, which would look like "pool disabled"
+ *   — a missing scene key must not be able to blackout the analytic rig.)
+ */
+export function resolveBootPoolSize(requestedValue) {
+  if (typeof requestedValue !== 'number' || !Number.isFinite(requestedValue)) {
+    throw new TypeError(
+      `[LightPool] params.maxSpotlights is not a finite number (got ${JSON.stringify(requestedValue)}). ` +
+      'Every scene_config.yaml must declare parLights.maxSpotlights.'
+    );
+  }
+  return THREE.MathUtils.clamp(Math.floor(requestedValue), 0, getSpotlightSessionCeiling());
+}
+
+/**
+ * Loud, operator-visible notice that `?spotlights=N` asked for more SpotLights
+ * than the hard cap allows. Called from applyBootUrlOverrides() — the single
+ * place the URL budget is resolved. Headless (no DOM) is a no-op.
+ */
+export function showSpotlightCapToast(requestedSize, cappedSize) {
+  if (typeof document === 'undefined') return;
+
   const renderToast = () => {
     let toast = document.getElementById('spotlight-cap-toast');
     if (!toast) {
@@ -123,7 +305,12 @@ export function showSpotlightCountWarning(count) {
         `With <span class="sw-count">${safe}</span> SpotLights, the scene may render entirely ` +
         `<strong>white</strong> or <strong>black</strong> on some GPUs — Mac WebGPU ` +
         `in particular tends to break above ~${SPOTLIGHT_WARN_CRITICAL_COUNT} lights. ` +
-        'Lower the <code>Max Spotlights</code> slider in the Lighting panel to recover.';
+        'Lower the <code>Max Spotlights</code> slider in the Lighting panel to recover.' +
+        (isSpotlightSessionCeilingRaised()
+          ? ` This session runs an <strong>accepted over-cap budget</strong> ` +
+            `(${getSpotlightSessionCeiling()}, above the ${MAX_SPOTLIGHT_POOL_SIZE} cap). ` +
+            'It is not saved — reload without <code>?spotlights=</code> to return to the cap.'
+          : '');
     } else if (safe > SPOTLIGHT_WARN_CAUTION_COUNT) {
       severity = 'caution';
       bodyHtml =
@@ -162,17 +349,19 @@ export function showSpotlightCountWarning(count) {
   }
 }
 
-function resolveEffectivePoolSize() {
+function resolveEffectivePoolSize(requestedPoolSize) {
   const backendName = renderer?.backend?.constructor?.name || 'unknown';
-  const manualCap = MAX_SPOTLIGHT_POOL_SIZE;
-  const cappedRequested = Math.min(REQUESTED_POOL_SIZE, manualCap);
+  // The hard cap, unless the operator accepted an over-cap budget for this
+  // session at the boot prompt.
+  const manualCap = getSpotlightSessionCeiling();
+  const cappedRequested = Math.min(requestedPoolSize, manualCap);
 
   if (!renderer || typeof renderer.getContext !== 'function') {
     return {
       backendName,
       manualCap,
       reason: 'renderer context unavailable',
-      requested: REQUESTED_POOL_SIZE,
+      requested: requestedPoolSize,
       size: cappedRequested,
     };
   }
@@ -188,7 +377,7 @@ function resolveEffectivePoolSize() {
         backendName,
         manualCap,
         reason: 'native WebGPU or non-WebGL backend',
-        requested: REQUESTED_POOL_SIZE,
+        requested: requestedPoolSize,
         size: cappedRequested,
       };
     }
@@ -208,7 +397,7 @@ function resolveEffectivePoolSize() {
       backendName,
       manualCap,
       maxVectors,
-      requested: REQUESTED_POOL_SIZE,
+      requested: requestedPoolSize,
       safeSpotLights,
       size: cappedRequested,
       overSafeBudget: cappedRequested > safeSpotLights,
@@ -219,23 +408,79 @@ function resolveEffectivePoolSize() {
       backendName,
       manualCap,
       reason: err?.message || 'uniform query failed',
-      requested: REQUESTED_POOL_SIZE,
+      requested: requestedPoolSize,
       size: cappedRequested,
     };
   }
 }
 
-function getSafeLightColor(sourceColor, fallbackColor) {
+/**
+ * The colour a request carries.
+ *
+ * Returns the LIVE colour object when it is well-formed — no clone. A request
+ * is frame-local (see the scratch block above) and every consumer copies out of
+ * it (`light.color.copy`, the planner's snapshot), so cloning per pixel per
+ * frame was allocating thousands of Colors to hand each one to a `.copy()`.
+ *
+ * The config fallback still needs a real Color object, so it is memoised per
+ * fixture config and rebuilt whenever the operator changes that config's
+ * colour — a cached fallback that went stale would silently paint the old hue.
+ */
+function getSafeLightColor(sourceColor, config) {
   if (
     sourceColor
     && Number.isFinite(sourceColor.r)
     && Number.isFinite(sourceColor.g)
     && Number.isFinite(sourceColor.b)
   ) {
-    return sourceColor.clone();
+    return sourceColor;
   }
 
-  return new THREE.Color(fallbackColor || '#ffaa44');
+  const source = (config && config.color) || '#ffaa44';
+  let cached = _fallbackColors.get(config);
+  if (cached === undefined || cached.source !== source) {
+    cached = { source, color: new THREE.Color(source) };
+    _fallbackColors.set(config, cached);
+  }
+  return cached.color;
+}
+
+/**
+ * A stable per-pixel identity, used by the stable sampling strategies to know
+ * that the light in slot 7 this frame is the same fixture's pixel as last
+ * frame. Fixture ids come from a WeakMap, so a profile rebuild (which replaces
+ * every fixture object) simply produces new keys and the planner releases the
+ * old ones — exactly the right behaviour, with no cleanup pass.
+ */
+function getRequestKey(fixture, pixelIndex) {
+  let base = _fixtureKeyBases.get(fixture);
+  if (base === undefined) {
+    base = _nextFixtureKeyBase++ * REQUEST_KEY_STRIDE;
+    _fixtureKeyBases.set(fixture, base);
+  }
+  return base + pixelIndex;
+}
+
+/** Take the next pooled request object, growing the pool on demand. */
+function nextRequest() {
+  let req = _requestPool[_requests.length];
+  if (req === undefined) {
+    req = {
+      worldPos: new THREE.Vector3(),
+      worldDir: new THREE.Vector3(),
+      color: null,
+      intensity: 5,
+      angle: 20,
+      penumbra: 0.5,
+      fixture: null,
+      key: 0,
+      distSq: 0,
+      score: 0,
+    };
+    _requestPool.push(req);
+  }
+  _requests.push(req);
+  return req;
 }
 
 function getSafeMasterExposure() {
@@ -254,12 +499,23 @@ function getSpotlightIntensityScale(radius) {
   return Math.max(MIN_SPOTLIGHT_INTENSITY_SCALE, radius * SPOTLIGHT_INTENSITY_SCALE_PER_RADIUS);
 }
 
-function getSafeSpotlightSamplingMode() {
-  const mode = params.spotlightSamplingMode;
-  if (mode === 'closest_bucket' || mode === 'uniform') {
-    return mode;
-  }
-  return DEFAULT_SPOTLIGHT_SAMPLING_MODE;
+/**
+ * The active sampling strategy — validated, never coerced.
+ *
+ * This used to accept only `closest_bucket` and `uniform` and silently return
+ * `uniform` for everything else. Two consequences, both bugs:
+ *   • `closest` is offered by the dropdown and has a branch in the selector,
+ *     but could never be reached — picking it silently gave you `uniform`.
+ *   • a typo in a scene file produced a strategy the operator never chose,
+ *     with nothing on any channel saying so. Codex P0 forbids exactly that.
+ * Unknown values now throw (see assertSpotlightSamplingMode). initLightPool
+ * validates once at boot so a bad scene value fails there, loudly, rather than
+ * on the first animation frame — and it is also where an ABSENT value is
+ * resolved to the code default and written onto `params`, which is why this
+ * per-frame reader is a bare assert with no default branch of its own.
+ */
+function getSpotlightSamplingMode() {
+  return assertSpotlightSamplingMode(params.spotlightSamplingMode, 'params.spotlightSamplingMode');
 }
 
 function getSafeSpotlightSamplingBucketDistance() {
@@ -272,62 +528,8 @@ function getSafeSpotlightSamplingBucketDistance() {
   );
 }
 
-function sampleUniformRequests(sortedRequests, sampleCount) {
-  if (sampleCount <= 0 || sortedRequests.length === 0) return [];
-  if (sortedRequests.length <= sampleCount) return sortedRequests;
-  if (sampleCount === 1) return [sortedRequests[sortedRequests.length - 1]];
-
-  const selected = [];
-  for (let i = 0; i < sampleCount; i++) {
-    const start = Math.floor((i * sortedRequests.length) / sampleCount);
-    const end = Math.max(start, Math.floor(((i + 1) * sortedRequests.length) / sampleCount) - 1);
-    const midpoint = Math.floor((start + end) / 2);
-    selected.push(sortedRequests[midpoint]);
-  }
-  return selected;
-}
-
-function selectVisibleRequestsForSampling(visible, camPos, activeLimit) {
-  if (activeLimit <= 0 || visible.length === 0) return [];
-
-  const samplingMode = getSafeSpotlightSamplingMode();
-  if (samplingMode === 'closest') {
-    return visible.slice(0, activeLimit);
-  }
-  if (samplingMode === 'uniform') {
-    return sampleUniformRequests(visible, activeLimit);
-  }
-
-  const closestRequest = visible[0];
-  const closestDistance = Math.sqrt(closestRequest.distSq);
-  if (closestDistance <= 0) {
-    return visible.slice(0, activeLimit);
-  }
-
-  const bucketDistance = getSafeSpotlightSamplingBucketDistance();
-  const bucketMin = closestDistance;
-  const bucketMax = closestDistance + bucketDistance;
-
-  const bucketRequests = [];
-  for (const req of visible) {
-    const distance = Math.sqrt(req.distSq);
-    if (distance >= bucketMin && distance <= bucketMax) {
-      req.bucketDepth = distance;
-      bucketRequests.push(req);
-    }
-  }
-
-  if (bucketRequests.length === 0) {
-    return visible.slice(0, activeLimit);
-  }
-
-  bucketRequests.sort((a, b) => {
-    if (a.bucketDepth !== b.bucketDepth) return a.bucketDepth - b.bucketDepth;
-    return a.distSq - b.distSq;
-  });
-
-  return sampleUniformRequests(bucketRequests, Math.min(activeLimit, bucketRequests.length));
-}
+// The selection strategies themselves live in ./spotlight_sampling.js — this
+// module owns the THREE objects and executes the plan they produce.
 
 /**
  * Initialize the SpotLight pool. Call ONCE after scene and camera are ready.
@@ -337,17 +539,43 @@ function selectVisibleRequestsForSampling(visible, camPos, activeLimit) {
 export function initLightPool() {
   if (_initialized) return;
 
+  const createdLights = [];
+
+  // Resolve and validate the sampling strategy HERE, outside the try, so a
+  // scene file (or a hand-edited common.yaml) naming a strategy that does not
+  // exist fails at boot with the name and the roster in the message — rather
+  // than throwing on the first animation frame, or, as before, silently running
+  // `uniform`.
+  //
+  // The ONE thing that is not an error is the key being absent entirely: that
+  // scene has recorded no opinion, so it gets the code default. Resolving it
+  // once, here, and writing it back onto `params` keeps every later reader
+  // (including the per-frame getSpotlightSamplingMode) a plain assert with no
+  // branch, and makes the GUI dropdown show what is actually running. The
+  // config-tree leaf that persists it is created by the GUI — see
+  // ensureSpotlightSamplingEntry in gui_builder.js.
+  if (params.spotlightSamplingMode === undefined) {
+    params.spotlightSamplingMode = DEFAULT_SPOTLIGHT_SAMPLING_MODE;
+    console.warn(
+      `[LightPool] this scene records no options.spotlightSamplingMode — running the shipped ` +
+      `default "${DEFAULT_SPOTLIGHT_SAMPLING_MODE}". Saving the scene records it in ` +
+      'scenes/common.yaml, and a saved value always wins from then on.'
+    );
+  }
+  resolveSpotlightSamplingMode(
+    params.spotlightSamplingMode,
+    'scenes/common.yaml → options.spotlightSamplingMode'
+  );
+
   try {
     const radius = modelRadius || 50;
-    const sizing = resolveEffectivePoolSize();
+    // params is final by now: extractParams() → applyBootUrlOverrides() →
+    // setupLighting() → here. Sizing from it (rather than from a module-load
+    // constant) is what makes a saved maxSpotlights of 150 actually allocate
+    // 150 slots, and what makes a ?spotlights= session round-trip on save.
+    _requestedPoolSize = resolveBootPoolSize(params.maxSpotlights);
+    const sizing = resolveEffectivePoolSize(_requestedPoolSize);
     _effectivePoolSize = sizing.size;
-
-    if (_urlParams.has('spotlights')) {
-      params.maxSpotlights = _effectivePoolSize;
-      if (Number.isFinite(_requestedPoolSizeRaw) && _requestedPoolSizeRaw > MAX_SPOTLIGHT_POOL_SIZE) {
-        showSpotlightCapToast(_requestedPoolSizeRaw, _effectivePoolSize);
-      }
-    }
 
     // Surface the persistent banner if the boot-time count is already past
     // a threshold (handles both URL ?spotlights=N and scene-config defaults).
@@ -358,7 +586,7 @@ export function initLightPool() {
 
     if (sizing.maxVectors !== undefined) {
       console.log(
-        `[LightPool] WebGL uniform estimate: maxVectors=${sizing.maxVectors}, safeSpotLights=${sizing.safeSpotLights}, requested=${REQUESTED_POOL_SIZE}, manualCap=${sizing.manualCap}, using=${_effectivePoolSize}`
+        `[LightPool] WebGL uniform estimate: maxVectors=${sizing.maxVectors}, safeSpotLights=${sizing.safeSpotLights}, requested=${_requestedPoolSize}, manualCap=${sizing.manualCap}, using=${_effectivePoolSize}`
       );
       if (sizing.overSafeBudget) {
         console.warn(
@@ -367,7 +595,7 @@ export function initLightPool() {
       }
     } else {
       console.log(
-        `[LightPool] Pool sizing: requested=${REQUESTED_POOL_SIZE}, manualCap=${sizing.manualCap}, using=${_effectivePoolSize}, backend=${sizing.backendName}, reason=${sizing.reason}`
+        `[LightPool] Pool sizing: requested=${_requestedPoolSize}, manualCap=${sizing.manualCap}, using=${_effectivePoolSize}, backend=${sizing.backendName}, reason=${sizing.reason}`
       );
     }
 
@@ -388,6 +616,7 @@ export function initLightPool() {
         0.5,                         // penumbra
         0.1                          // decay
       );
+      createdLights.push(light);
       light.castShadow = false;
       light.position.set(0, -9999, 0); // Park off-screen
       scene.add(light);
@@ -414,6 +643,15 @@ export function initLightPool() {
     console.log(`[LightPool] Scene light census: ${spotCount} Spot, ${dirCount} Dir, ${pointCount} Point, ${hemiCount} Hemi, ${otherCount} Other`);
   } catch (err) {
     console.error(`[LightPool] ❌ FAILED to initialize pool:`, err);
+    for (const light of createdLights) {
+      light.removeFromParent();
+      light.target.removeFromParent();
+    }
+    _pool.length = 0;
+    _requestedPoolSize = 0;
+    _effectivePoolSize = 0;
+    _initialized = false;
+    throw err;
   }
 }
 
@@ -422,7 +660,9 @@ export function initLightPool() {
  * Returns an array of { worldPos: Vector3, worldDir: Vector3, color, intensity, angle, penumbra, fixture }
  */
 function _collectLightRequests() {
-  const requests = [];
+  const requests = _requests;
+  requests.length = 0;
+  let skippedDark = 0;
   const profile = params.lightingProfile || 'edit';
   const profileDef = getProfileDef(profile);
 
@@ -430,8 +670,11 @@ function _collectLightRequests() {
   if (profileDef.render.analyticLightMode === 'none') return requests;
 
   const activeView = window.__activePreviewView;
-  const fixtureList = [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])];
-  for (const fixture of fixtureList) {
+  const parList = window.parFixtures || [];
+  const dmxList = window.dmxSceneFixtures || [];
+  const fixtureCount = parList.length + dmxList.length;
+  for (let f = 0; f < fixtureCount; f++) {
+    const fixture = f < parList.length ? parList[f] : dmxList[f - parList.length];
     if (!fixture || !fixture.group) continue;
 
     // Effects fixtures (fog/haze/horn/fire) are infrastructure — always
@@ -440,7 +683,9 @@ function _collectLightRequests() {
     const isFog = isEffectsOnlyFixture(fixture.config);
 
     if (activeView && !isFog) {
-      const isBitMember = ((fixture.config.viewMask || 0) & activeView.bit) !== 0;
+      // Word-aware: the bit is read from the view's own mask field
+      // (`viewMask` for word 0, `viewMaskHi` for word 1) — see view_registry.
+      const isBitMember = fixtureInView(fixture.config, activeView);
       const isGroupMember = activeView.groups && activeView.groups.includes(fixture.config.group);
       if (!isBitMember && !isGroupMember) continue;
     } else {
@@ -459,53 +704,60 @@ function _collectLightRequests() {
     const angle = config.angle || 20;
     const penumbra = config.penumbra || 0.5;
 
+    // The emission direction depends only on the FIXTURE's world matrix, so it
+    // is the same vector for every pixel of the fixture. It used to be rebuilt
+    // (allocation + transformDirection + normalize) once per pixel per frame.
+    _tmpVec.set(0, 0, -1).transformDirection(fixture.group.matrixWorld).normalize();
+
     if (profileDef.render.analyticLightMode === 'pixel') {
       // One request per pixel — use live bulb color if available
-      for (const p of fixture.pixels) {
-        const worldPos = p.localPos.clone().applyMatrix4(fixture.group.matrixWorld);
-        const dirLocal = new THREE.Vector3(0, 0, -1);
-        const worldDir = dirLocal.transformDirection(fixture.group.matrixWorld).normalize();
+      const pixels = fixture.pixels;
+      for (let pi = 0; pi < pixels.length; pi++) {
+        const p = pixels[pi];
 
-        // Read live color from bulb material (set by pattern engine each frame)
-        const liveColor = getSafeLightColor(
-          p.bulbMat && p.bulbMat.color,
-          config.color
-        );
+        // Read live per-pixel color (set by the pattern engine each frame). The
+        // emitter meshes are now instanced, so the per-pixel color lives on
+        // p.color (the source of truth written by _writePixelColor), not a
+        // per-pixel material.
+        const liveColor = getSafeLightColor(p.color, config);
 
-        requests.push({
-          worldPos,
-          worldDir,
-          color: liveColor,
-          intensity,
-          angle,
-          penumbra,
-          fixture,
-        });
+        // A black pixel casts no light — it must not hold a pool slot that a
+        // pixel which IS emitting could use. Recomputed every frame, so the
+        // instant this pixel lights up it competes again on distance as before.
+        // Tested BEFORE the world transform now: a dark pixel is discarded
+        // without ever paying for its matrix multiply.
+        if (!emitsVisibleLight(liveColor)) { skippedDark++; continue; }
+
+        const req = nextRequest();
+        req.worldPos.copy(p.localPos).applyMatrix4(fixture.group.matrixWorld);
+        req.worldDir.copy(_tmpVec);
+        req.color = liveColor;
+        req.intensity = intensity;
+        req.angle = angle;
+        req.penumbra = penumbra;
+        req.fixture = fixture;
+        req.key = getRequestKey(fixture, pi);
       }
     } else if (profileDef.render.analyticLightMode === 'fixture') {
       // One request per fixture — use first pixel's live color
-      const worldPos = new THREE.Vector3().setFromMatrixPosition(fixture.group.matrixWorld);
-      const dirLocal = new THREE.Vector3(0, 0, -1);
-      const worldDir = dirLocal.transformDirection(fixture.group.matrixWorld).normalize();
-
       const firstPixel = fixture.pixels[0];
-      const liveColor = getSafeLightColor(
-        firstPixel && firstPixel.bulbMat && firstPixel.bulbMat.color,
-        config.color
-      );
+      const liveColor = getSafeLightColor(firstPixel && firstPixel.color, config);
 
-      requests.push({
-        worldPos,
-        worldDir,
-        color: liveColor,
-        intensity,
-        angle,
-        penumbra,
-        fixture,
-      });
+      if (!emitsVisibleLight(liveColor)) { skippedDark++; continue; }
+
+      const req = nextRequest();
+      req.worldPos.setFromMatrixPosition(fixture.group.matrixWorld);
+      req.worldDir.copy(_tmpVec);
+      req.color = liveColor;
+      req.intensity = intensity;
+      req.angle = angle;
+      req.penumbra = penumbra;
+      req.fixture = fixture;
+      req.key = getRequestKey(fixture, 0);
     }
   }
 
+  _lastSkippedDark = skippedDark;
   return requests;
 }
 
@@ -523,7 +775,7 @@ export function updateLightPool() {
     const profile = params.lightingProfile || 'edit';
     const profileDef = getProfileDef(profile);
     const fixtures = window.parFixtures || [];
-    console.log(`[LightPool] First update: profile=${profile}, analyticLightMode=${profileDef.render.analyticLightMode}, fixtures=${fixtures.length}, poolSize=${_pool.length}, activeLimit=${getSafeActiveSpotlightLimit()}, samplingMode=${getSafeSpotlightSamplingMode()}, bucketDistance=${getSafeSpotlightSamplingBucketDistance()}`);
+    console.log(`[LightPool] First update: profile=${profile}, analyticLightMode=${profileDef.render.analyticLightMode}, fixtures=${fixtures.length}, poolSize=${_pool.length}, activeLimit=${getSafeActiveSpotlightLimit()}, samplingMode=${getSpotlightSamplingMode()}, bucketDistance=${getSafeSpotlightSamplingBucketDistance()}`);
   }
 
   const profile = params.lightingProfile || 'edit';
@@ -537,6 +789,10 @@ export function updateLightPool() {
         slot.active = false;
       }
     }
+    // The lights are being cut here regardless, so the stable strategies must
+    // drop their assignments too — otherwise re-enabling the profile would
+    // resume fading out fixtures that no longer exist, from stale positions.
+    _planner.reset();
     return;
   }
 
@@ -550,8 +806,10 @@ export function updateLightPool() {
 
   // 3. Frustum cull
   const camPos = camera.position;
-  const visible = [];
-  for (const req of requests) {
+  const visible = _visible;
+  visible.length = 0;
+  for (let i = 0; i < requests.length; i++) {
+    const req = requests[i];
     if (_frustum.containsPoint(req.worldPos)) {
       // Calculate squared distance to camera for sorting
       req.distSq = req.worldPos.distanceToSquared(camPos);
@@ -564,7 +822,7 @@ export function updateLightPool() {
     window._lightPoolAssignLog = true;
     const radius = modelRadius || 50;
     const iScale = getSpotlightIntensityScale(radius);
-    console.log(`[LightPool] Requests: total=${requests.length}, visible=${visible.length}, intensityScale=${iScale.toFixed(2)}, activeLimit=${getSafeActiveSpotlightLimit()}, masterExposure=${getSafeMasterExposure().toFixed(2)}`);
+    console.log(`[LightPool] Requests: total=${requests.length}, visible=${visible.length}, skippedDark=${_lastSkippedDark}, intensityScale=${iScale.toFixed(2)}, activeLimit=${getSafeActiveSpotlightLimit()}, masterExposure=${getSafeMasterExposure().toFixed(2)}`);
     if (requests.length > 0) {
       const r = requests[0];
       console.log(`[LightPool] Sample request: pos=(${r.worldPos.x.toFixed(1)},${r.worldPos.y.toFixed(1)},${r.worldPos.z.toFixed(1)}), intensity=${r.intensity}, color=rgb(${r.color.r.toFixed(2)},${r.color.g.toFixed(2)},${r.color.b.toFixed(2)})`);
@@ -576,37 +834,52 @@ export function updateLightPool() {
     console.log(`[LightPool] Camera: pos=(${camPos.x.toFixed(1)},${camPos.y.toFixed(1)},${camPos.z.toFixed(1)})`);
   }
 
-  // 4. Sort by distance (closest first)
-  visible.sort((a, b) => a.distSq - b.distSq);
+  // 4. Sort by distance (closest first).
+  // ONLY the three positional strategies consume rank, and this O(V log V) sort
+  // exists solely for them. The stable strategies score every request
+  // independently and never look at list position, so for them the sort is pure
+  // waste — skipping it is the largest single per-frame saving in this path.
+  const samplingMode = getSpotlightSamplingMode();
+  if (isLegacySpotlightSamplingMode(samplingMode)) {
+    visible.sort((a, b) => a.distSq - b.distSq);
+  }
 
   // 5. Assign pool slots
   const radius = modelRadius || 50;
   const intensityScale = getSpotlightIntensityScale(radius);
   const masterExposure = getSafeMasterExposure();
-  const activeLimit = Math.min(visible.length, getSafeActiveSpotlightLimit());
-  const sampledRequests = selectVisibleRequestsForSampling(visible, camPos, activeLimit);
+  const plan = _planner.plan({
+    mode: samplingMode,
+    visible,
+    slotBudget: getSafeActiveSpotlightLimit(),
+    poolSize: _pool.length,
+    bucketDistance: getSafeSpotlightSamplingBucketDistance(),
+    modelRadius: radius,
+  });
 
   for (let i = 0; i < _pool.length; i++) {
     const slot = _pool[i];
+    const entry = plan[i];
 
-    if (i < sampledRequests.length) {
-      const req = sampledRequests[i];
+    // `gain` is the crossfade envelope: 1 for the positional strategies (they
+    // have no transitions), and the ramp value for the stable ones. A slot at
+    // gain 0 is off — mid-handoff, or just released.
+    if (entry && entry.gain > 0) {
+      const src = entry.source;
       const light = slot.light;
 
       // Position
-      light.position.copy(req.worldPos);
+      light.position.copy(src.worldPos);
 
       // Target (direction)
-      light.target.position.copy(req.worldPos).add(
-        req.worldDir.clone().multiplyScalar(100)
-      );
+      light.target.position.copy(src.worldPos).addScaledVector(src.worldDir, 100);
       light.target.updateMatrixWorld();
 
       // Properties
-      light.color.copy(req.color);
-      light.intensity = req.intensity * intensityScale * masterExposure;
-      light.angle = Math.min(THREE.MathUtils.degToRad(req.angle), Math.PI / 2 - 0.1);
-      light.penumbra = req.penumbra;
+      light.color.copy(src.color);
+      light.intensity = src.intensity * intensityScale * masterExposure * entry.gain;
+      light.angle = Math.min(THREE.MathUtils.degToRad(src.angle), Math.PI / 2 - 0.1);
+      light.penumbra = src.penumbra;
       light.distance = radius * 3;
 
       slot.active = true;
@@ -638,6 +911,22 @@ export function syncPoolColors() {
 
 /** Get the pool size for diagnostics */
 export function getPoolSize() { return _effectivePoolSize; }
-export function getRequestedPoolSize() { return REQUESTED_POOL_SIZE; }
+export function getRequestedPoolSize() { return _requestedPoolSize; }
 export function getActiveCount() { return _pool.filter(s => s.active).length; }
 export function getMaxSpotlightPoolSize() { return MAX_SPOTLIGHT_POOL_SIZE; }
+export function isPoolInitialized() { return _initialized; }
+
+/**
+ * Upper bound for the GUI "Max Spotlights" slider.
+ *
+ * The pool is allocated once at boot and the per-frame active limit is clamped
+ * to its length, so a slider that ranged past the pool would silently do
+ * nothing above it — exactly the lie this module used to tell. Once the pool
+ * exists the honest ceiling IS the pool. Before it exists (setupGUI is always
+ * called after setupLighting, so this is the no-pool-yet case only) the hard
+ * cap is the only bound that is known.
+ */
+export function getSpotlightSliderMax() {
+  if (!_initialized) return getSpotlightSessionCeiling();
+  return Math.max(1, _effectivePoolSize);
+}

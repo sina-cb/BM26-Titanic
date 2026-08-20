@@ -41,6 +41,12 @@ import {
   setControllerProtocol,
   normalizeLedConfig,
   computeLedProjection,
+  ledOutputIndexForPort,
+  nextLedOutputNumber,
+  parkedUniverseFor,
+  setParkedUniverse,
+  clearParkedUniverse,
+  LED_MAX_OUTPUTS,
   testAutoPatch,
   clearAllPatches,
 } from '../src/dmx/controller_registry.js';
@@ -504,7 +510,7 @@ test('projection writes derived fields, unpatches unmapped, reports drift', () =
   ] }] });
   const mapped = { ...par('Par 1'), controllerIp: '1.2.3.4', dmxUniverse: 9, dmxAddress: 99, controllerId: 3 };
   const stale = { ...par('Par 2'), controllerIp: '1.2.3.4', dmxUniverse: 9, dmxAddress: 1, controllerId: 3 };
-  const { violations, drift } = projectOntoConfigs(r, [mapped, stale], PINS);
+  const { violations, drift } = projectOntoConfigs(r, [mapped, stale], PINS, []);
   assert.equal(violations.length, 0);
   assert.equal(mapped.controllerIp, '10.0.0.7');
   assert.equal(mapped.dmxUniverse, 2);
@@ -550,7 +556,7 @@ test('projectOntoConfigs migrates legacy chains and reports it', () => {
   ] }] });
   const a = par('Par 1');
   const b = par('Par 2');
-  const { violations, migrated } = projectOntoConfigs(r, [a, b], PINS);
+  const { violations, migrated } = projectOntoConfigs(r, [a, b], PINS, []);
   assert.equal(violations.length, 0);
   assert.deepEqual(migrated, ['Par 1', 'Par 2']);
   assert.equal(a.dmxAddress, 1);
@@ -561,7 +567,7 @@ test('projectOntoConfigs migrates legacy chains and reports it', () => {
 test('inactive registry leaves stored patch fields alone', () => {
   const r = reg(null);
   const config = { ...par('Par 1'), controllerIp: '1.2.3.4', dmxUniverse: 9, dmxAddress: 99 };
-  projectOntoConfigs(r, [config], PINS);
+  projectOntoConfigs(r, [config], PINS, []);
   assert.equal(config.dmxUniverse, 9);
 });
 
@@ -576,11 +582,177 @@ test('metadata: sectionId per group (stable), fixtureId monotonic (stable)', () 
   const a = { ...par('Par 1'), sectionId: 4, fixtureId: 12 };
   const b = par('Par 2');
   const c = { ...par('Mast 1', 'Masts') };
-  projectOntoConfigs(r, [a, b, c], PINS);
+  projectOntoConfigs(r, [a, b, c], PINS, []);
   assert.equal(b.sectionId, 4, 'same group reuses the existing sectionId');
   assert.equal(c.sectionId, 5, 'new group gets the next free sectionId');
   assert.equal(a.fixtureId, 12, 'existing fixtureId untouched');
   assert.ok(b.fixtureId > 12 && c.fixtureId > b.fixtureId, 'new fixtureIds are monotonic');
+});
+
+// ── DMX ↔ LED section/fixture id space (report 20260725_34) ────────────
+//
+// DMX fixtures and LED strands share ONE section/fixture id space. The
+// pre-fix metadata pass took its max over DMX configs only, so a DMX
+// fixture added after the strands were numbered was minted straight on
+// top of a strand id (test_bench: TE Sign V3 A == LED_0 at sId 5 /
+// fId 11). These tests pin both halves of the fix: the floors now cover
+// the DMX ∪ LED union, and ids already baked in by the old pass are
+// repaired loudly instead of living forever behind stickiness.
+
+// The exact test_bench fixture/strand inventory that produced the bug.
+function benchDmxConfigs() {
+  return [
+    { ...par('Par 1', 'Pars'), sectionId: 1, fixtureId: 1 },
+    { ...par('Par 2', 'Pars'), sectionId: 1, fixtureId: 2 },
+    { ...par('Vintage Left', 'Vintage'), sectionId: 2, fixtureId: 5 },
+    { ...par('Bar Left', 'Bars'), sectionId: 3, fixtureId: 7 },
+    { ...par('ChauvetHaze4D 10', 'Effects'), sectionId: 4, fixtureId: 9 },
+    { ...par('TEFogMachine 10', 'Effects'), sectionId: 4, fixtureId: 10 },
+  ];
+}
+
+// LED_0 / LED_1 as scene_config.yaml stores them.
+function benchStrands() {
+  return [
+    { name: 'LED_0', group: '', sectionId: 5, fixtureId: 11 },
+    { name: 'LED_1', group: '', sectionId: 6, fixtureId: 12 },
+  ];
+}
+
+function benchRegistry(extraChain = []) {
+  return reg({ controllers: [{ id: 1, name: 'Test Bench 1', ip: '10.1.1.10', ports: [
+    { port: 1, universe: 2, chain: [
+      { fixture: 'Par 1', at: 1 },
+      { fixture: 'Par 2', at: 11 },
+      { fixture: 'Vintage Left', at: 41 },
+      { fixture: 'Bar Left', at: 107 },
+      ...extraChain,
+    ] },
+  ] }] });
+}
+
+function idsOf(configs, strands) {
+  return {
+    sections: [...configs, ...strands].map(x => x.sectionId),
+    fixtures: [...configs, ...strands].map(x => x.fixtureId),
+  };
+}
+
+test('ledStrands is REQUIRED — a missing/non-array argument throws (no silent [])', () => {
+  const r = benchRegistry();
+  assert.throws(() => projectOntoConfigs(r, benchDmxConfigs(), PINS),
+    /`ledStrands` is required/, 'omitted argument throws');
+  assert.throws(() => projectOntoConfigs(r, benchDmxConfigs(), PINS, null),
+    /`ledStrands` is required/, 'null throws');
+  assert.throws(() => projectOntoConfigs(r, benchDmxConfigs(), PINS, { LED_0: {} }),
+    /`ledStrands` is required/, 'a non-array object throws');
+  // Validated BEFORE the inactive-registry early return: an inactive
+  // registry must not hide the misuse.
+  assert.throws(() => projectOntoConfigs(reg(null), [], PINS),
+    /`ledStrands` is required/, 'inactive registry still validates the argument');
+});
+
+test('REGRESSION: a DMX fixture added after the strands can no longer be minted onto a strand id', () => {
+  // The literal bug: TE Sign V3 A/B enter with sectionId/fixtureId 0
+  // while LED_0/LED_1 already hold sId 5/6 and fId 11/12. The pre-fix
+  // pass maxed over DMX only (4 / 10) and handed out 5 / 11 — LED_0.
+  const configs = benchDmxConfigs();
+  const strands = benchStrands();
+  const a = { ...par('TE Sign V3 A', 'TE Sign') };
+  const b = { ...par('TE Sign V3 B', 'TE Sign') };
+  configs.push(a, b);
+  const { collisions } = projectOntoConfigs(
+    benchRegistry([{ fixture: 'TE Sign V3 A', at: 200 }, { fixture: 'TE Sign V3 B', at: 320 }]),
+    configs, PINS, strands);
+
+  assert.deepEqual(collisions, [], 'nothing to repair — the ids were never minted onto the strands');
+  assert.equal(a.sectionId, 7, 'new group clears the LED max (6), not the DMX max (4)');
+  assert.equal(b.sectionId, 7, 'same group shares the section');
+  assert.equal(a.fixtureId, 13, 'new fixtureId clears the LED max (12), not the DMX max (10)');
+  assert.equal(b.fixtureId, 14);
+
+  const { sections, fixtures } = idsOf(configs, strands);
+  assert.equal(new Set(fixtures).size, fixtures.length, 'every fixtureId is unique across DMX ∪ LED');
+  for (const s of strands) {
+    assert.ok(!configs.some(c => c.sectionId === s.sectionId),
+      `no DMX fixture shares LED strand '${s.name}' sectionId ${s.sectionId}`);
+    assert.ok(!configs.some(c => c.fixtureId === s.fixtureId),
+      `no DMX fixture shares LED strand '${s.name}' fixtureId ${s.fixtureId}`);
+  }
+  assert.ok(sections.every(id => id > 0), 'every fixture/strand carries a real section');
+});
+
+test('REPAIR: ids already baked onto strand ids are moved above the union and reported', () => {
+  // test_bench as committed today: TE Sign V3 A stored sId 5 / fId 11
+  // (== LED_0), TE Sign V3 B stored sId 5 / fId 12 (fId == LED_1).
+  const configs = benchDmxConfigs();
+  const strands = benchStrands();
+  const a = { ...par('TE Sign V3 A', 'TE Sign'), sectionId: 5, fixtureId: 11 };
+  const b = { ...par('TE Sign V3 B', 'TE Sign'), sectionId: 5, fixtureId: 12 };
+  configs.push(a, b);
+  const { collisions } = projectOntoConfigs(
+    benchRegistry([{ fixture: 'TE Sign V3 A', at: 200 }, { fixture: 'TE Sign V3 B', at: 320 }]),
+    configs, PINS, strands);
+
+  assert.equal(a.sectionId, 7, 'the colliding DMX section moves above the union max (6)');
+  assert.equal(b.sectionId, 7, 'the whole group moves together — group↔section stays bijective');
+  assert.equal(a.fixtureId, 13);
+  assert.equal(b.fixtureId, 14);
+  assert.deepEqual(strands, benchStrands(), 'the LED side is READ ONLY — strands never renumber');
+
+  assert.deepEqual(collisions, [
+    { name: 'TE Sign V3 A', field: 'sectionId', before: 5, after: 7, strand: 'LED_0' },
+    { name: 'TE Sign V3 A', field: 'fixtureId', before: 11, after: 13, strand: 'LED_0' },
+    { name: 'TE Sign V3 B', field: 'sectionId', before: 5, after: 7, strand: 'LED_0' },
+    { name: 'TE Sign V3 B', field: 'fixtureId', before: 12, after: 14, strand: 'LED_1' },
+  ], 'every repair is reported with the strand it collided with (callers log it loudly)');
+});
+
+test('REPAIR is idempotent — a second pass finds nothing and changes nothing', () => {
+  const configs = benchDmxConfigs();
+  const strands = benchStrands();
+  configs.push(
+    { ...par('TE Sign V3 A', 'TE Sign'), sectionId: 5, fixtureId: 11 },
+    { ...par('TE Sign V3 B', 'TE Sign'), sectionId: 5, fixtureId: 12 });
+  const chain = [{ fixture: 'TE Sign V3 A', at: 200 }, { fixture: 'TE Sign V3 B', at: 320 }];
+
+  const first = projectOntoConfigs(benchRegistry(chain), configs, PINS, strands);
+  assert.equal(first.collisions.length, 4);
+  const afterFirst = idsOf(configs, strands);
+
+  const second = projectOntoConfigs(benchRegistry(chain), configs, PINS, strands);
+  assert.deepEqual(second.collisions, [], 'nothing left to repair');
+  assert.deepEqual(idsOf(configs, strands), afterFirst, 'ids are byte-identical on a re-run');
+});
+
+test('a clean scene is untouched — no repairs, no id churn (existing scenes stay identical)', () => {
+  const configs = benchDmxConfigs();
+  const strands = benchStrands();
+  const before = idsOf(configs, strands);
+  const { collisions } = projectOntoConfigs(benchRegistry(), configs, PINS, strands);
+  assert.deepEqual(collisions, [], 'no collisions to repair');
+  assert.deepEqual(idsOf(configs, strands), before, 'every stored id survives unchanged');
+});
+
+test('two distinct colliding groups get two distinct new sections; a group-less fixture moves alone', () => {
+  const strands = [
+    { name: 'LED_0', group: '', sectionId: 3, fixtureId: 3 },
+    { name: 'LED_1', group: '', sectionId: 4, fixtureId: 4 },
+  ];
+  const a = { ...par('Par 1', 'Pars'), sectionId: 3, fixtureId: 3 };
+  const b = { ...par('Mast 1', 'Masts'), sectionId: 4, fixtureId: 4 };
+  const loose = { name: 'Fog 1', fixtureType: 'TEFogMachine', sectionId: 3, fixtureId: 9 };
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 2, chain: [{ fixture: 'Par 1', at: 1 }, { fixture: 'Mast 1', at: 11 }] },
+  ] }] });
+  projectOntoConfigs(r, [a, b, loose], PINS, strands);
+
+  assert.equal(a.sectionId, 5);
+  assert.equal(b.sectionId, 6, 'a second colliding group does NOT reuse the first repair');
+  assert.equal(loose.sectionId, 7, 'a group-less fixture is repaired on its own');
+  assert.equal(a.fixtureId, 10);
+  assert.equal(b.fixtureId, 11);
+  assert.equal(loose.fixtureId, 9, 'a non-colliding fixtureId is left alone');
 });
 
 // ── Mutations ───────────────────────────────────────────────────────────
@@ -949,4 +1121,201 @@ test('protocol: round-trips through createControllerRegistry (serializes)', () =
   });
   const r2 = reg(JSON.parse(JSON.stringify(r)));
   assert.equal(r2.controllers[0].protocol, CONTROLLER_PROTOCOL_ARTNET);
+});
+
+// ── Report 20260725_70/_71: a port DECLARES the physical board output ────────
+// `port.output` is 1-based (matching the `port:` key next to it and every
+// operator-facing string); the device's 0-based strands[] index is derived at
+// the device boundary only, by ledOutputIndexForPort. These cases pin the LOAD
+// contract: what migrates, what throws, and what loads-but-is-flagged.
+
+function ledCardTree(ports, extra = {}) {
+  return {
+    controllers: [{
+      id: 1, name: 'LeftLeftFront', ip: '10.0.0.60', type: CONTROLLER_TYPE_LED,
+      protocol: CONTROLLER_PROTOCOL_SACN,
+      led: { order: 'RGBW', startAddr: 1 },
+      ports,
+      ...extra,
+    }],
+  };
+}
+
+test('_71 (1): an LED port with no `output` loads as the IDENTITY mapping and round-trips', () => {
+  const r = reg(ledCardTree([
+    { port: 1, universe: 21, chain: ['sA'] },
+    { port: 3, universe: 23, chain: [] },
+  ]));
+  const [p1, p3] = r.controllers[0].ports;
+  assert.equal(p1.output, 1);
+  assert.equal(p3.output, 3);                     // identity, NOT "second row"
+  assert.equal(ledOutputIndexForPort(p1), 0);
+  assert.equal(ledOutputIndexForPort(p3), 2);
+  // Surfaced for ONE log line per CARD (not per port) — never swallowed.
+  assert.deepEqual(r._ledOutputMigrations.get(1), { name: 'LeftLeftFront', ports: [1, 3] });
+  // Materialized at load ⇒ the next save writes it, and re-loading is a no-op.
+  const r2 = reg(JSON.parse(JSON.stringify(r)));
+  assert.equal(r2.controllers[0].ports[0].output, 1);
+  assert.equal(r2.controllers[0].ports[1].output, 3);
+  assert.equal(r2._ledOutputMigrations.size, 0, 'an explicit file migrates nothing');
+});
+
+test('_71 (1): a DMX port gains NO `output` field (port numbers are chain labels there)', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'Deck', ip: '10.0.0.11', type: CONTROLLER_TYPE_DMX,
+      ports: [{ port: 1, universe: 23, chain: [] }],
+    }],
+  });
+  assert.equal('output' in r.controllers[0].ports[0], false);
+  assert.equal(r._ledOutputMigrations.size, 0);
+  // And ledOutputIndexForPort refuses to guess one rather than returning port-1.
+  assert.throws(() => ledOutputIndexForPort(r.controllers[0].ports[0]),
+    /has no integer 'output'/);
+});
+
+test('_71 (2): a non-integer / out-of-range `output` HARD-STOPS the boot', () => {
+  for (const bad of [0, 17, '2', 2.5, null === undefined ? 1 : -1]) {
+    assert.throws(() => reg(ledCardTree([{ port: 1, output: bad, universe: 21, chain: [] }])),
+      /output .* must be an integer in 1–16/,
+      `output ${JSON.stringify(bad)} must throw`);
+  }
+  // The message names the offending field so a playa-night typo is findable.
+  assert.throws(() => reg(ledCardTree([{ port: 1, output: 99, universe: 21, chain: [] }])),
+    /Controller 'LeftLeftFront' port 1: output 99/);
+});
+
+test('_71 (3): TWO ports declaring the SAME output LOAD — the duplicate is operational', () => {
+  // A hand-edited duplicate must be fixable in the pane, not brick the boot: the
+  // row's IDENTITY is intact, only the MAPPING is invalid. The chips flag it and
+  // the push gate refuses it (per_output_push.test.js).
+  const r = reg(ledCardTree([
+    { port: 1, output: 2, universe: 21, chain: ['sA'] },
+    { port: 3, output: 2, universe: 23, chain: ['sB'] },
+  ]));
+  assert.deepEqual(r.controllers[0].ports.map((p) => p.output), [2, 2]);
+});
+
+test('_71 (4): addPort on an LED card takes the lowest output no other port claims', () => {
+  const r = reg({});
+  // addController seeds DEFAULT_PORT_COUNT rows — on a fresh card that is still
+  // exactly the pre-selector behaviour: port N drives board output N.
+  const c = addController(r, { name: 'L', ip: '10.0.0.60', type: CONTROLLER_TYPE_LED });
+  assert.deepEqual(c.ports.map((p) => p.output), [1, 2, 3, 4]);
+  assert.deepEqual(c.ports.map((p) => p.port), [1, 2, 3, 4]);
+  // A card whose rows already claim 1–4 gives the next row output 5…
+  assert.equal(nextLedOutputNumber(c), 5);
+  assert.equal(addPort(r, c).output, 5);
+  // …and a HOLE is refilled, never skipped (the same rule as the port number).
+  c.ports = c.ports.filter((p) => p.output !== 2);
+  assert.equal(nextLedOutputNumber(c), 2);
+  assert.equal(addPort(r, c).output, 2);
+  // A DMX card never gets the field.
+  const dmx = addController(r, { name: 'D', ip: '10.0.0.11', type: CONTROLLER_TYPE_DMX });
+  assert.equal('output' in addPort(r, dmx), false);
+});
+
+test('_71 (4): nextLedOutputNumber refuses past the 16-output device ceiling', () => {
+  const card = { name: 'full', ports: [] };
+  for (let n = 1; n <= LED_MAX_OUTPUTS; n++) card.ports.push({ port: n, output: n });
+  assert.throws(() => nextLedOutputNumber(card), /already drives all 16 board output/);
+});
+
+test('_71 (5): parkedOutputs round-trips, and a malformed entry THROWS', () => {
+  const r = reg(ledCardTree(
+    [{ port: 1, output: 1, universe: 21, chain: ['sA'] }],
+    { parkedOutputs: [{ output: 3, universe: 27 }] },
+  ));
+  const card = r.controllers[0];
+  assert.deepEqual(card.parkedOutputs, [{ output: 3, universe: 27 }]);
+  // 0-based lookup at the device boundary; 1-based in the file.
+  assert.equal(parkedUniverseFor(card, 2), 27);
+  assert.equal(parkedUniverseFor(card, 0), null);
+  // A parked universe moves the monotonic high-water mark — the device really
+  // subscribes to it, so a later addPort must never hand it to real gear.
+  assert.ok(nextFreeUniverse(r) > 27);
+  // Round-trip through a save.
+  assert.deepEqual(reg(JSON.parse(JSON.stringify(r))).controllers[0].parkedOutputs,
+    [{ output: 3, universe: 27 }]);
+
+  const ports = [{ port: 1, output: 1, universe: 21, chain: [] }];
+  assert.throws(() => reg(ledCardTree(ports, { parkedOutputs: 'nope' })),
+    /parkedOutputs must be a list/);
+  assert.throws(() => reg(ledCardTree(ports, { parkedOutputs: [{ universe: 27 }] })),
+    /parkedOutputs output undefined must be an integer/);
+  assert.throws(() => reg(ledCardTree(ports, { parkedOutputs: [{ output: 3 }] })),
+    /parkedOutputs output 3 universe undefined must be an integer/);
+  assert.throws(() => reg(ledCardTree(ports, {
+    parkedOutputs: [{ output: 3, universe: 27 }, { output: 3, universe: 28 }],
+  })), /duplicate parkedOutputs entry for output 3/);
+  // A DMX card cannot carry parks at all — a DMX port is a chain label.
+  assert.throws(() => reg({
+    controllers: [{ id: 1, name: 'D', ip: '10.0.0.11', type: CONTROLLER_TYPE_DMX,
+      ports: [], parkedOutputs: [{ output: 1, universe: 5 }] }],
+  }), /parkedOutputs is only valid on an LED controller/);
+});
+
+test('_71 (5): a park on an output a PORT drives LOADS (operational), and is flagged elsewhere', () => {
+  const r = reg(ledCardTree(
+    [{ port: 1, output: 3, universe: 21, chain: ['sA'] }],
+    { parkedOutputs: [{ output: 3, universe: 27 }] },
+  ));
+  // It loads — the operator fixes it in the pane; validateLedManualUniverses
+  // raises led_parked_output_conflict and the next push drops the stale park.
+  assert.deepEqual(r.controllers[0].parkedOutputs, [{ output: 3, universe: 27 }]);
+});
+
+test('_71 (5): setParkedUniverse / clearParkedUniverse are the ONE place parks move', () => {
+  const card = { name: 'c', ports: [] };
+  setParkedUniverse(card, 2, 27);
+  setParkedUniverse(card, 0, 25);
+  assert.deepEqual(card.parkedOutputs, [{ output: 1, universe: 25 }, { output: 3, universe: 27 }]);
+  setParkedUniverse(card, 2, 28);                       // move, never duplicate
+  assert.deepEqual(card.parkedOutputs, [{ output: 1, universe: 25 }, { output: 3, universe: 28 }]);
+  assert.equal(clearParkedUniverse(card, 0), true);
+  assert.equal(clearParkedUniverse(card, 0), false);
+  assert.deepEqual(card.parkedOutputs, [{ output: 3, universe: 28 }]);
+  assert.equal(clearParkedUniverse(card, 2), true);
+  assert.equal('parkedOutputs' in card, false, 'an empty list is dropped, not left as []');
+  assert.throws(() => setParkedUniverse(card, -1, 5), /outputIndex -1 must be in 0–15/);
+  assert.throws(() => setParkedUniverse(card, 2, 0), /universe 0 must be an integer/);
+});
+
+test('_71: flipping a card DMX → LED materializes `output`; LED → DMX strips it', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'Flip', ip: '10.0.0.9', type: CONTROLLER_TYPE_DMX,
+      ports: [
+        { port: 1, universe: 5, chain: [] },
+        { port: 3, universe: 6, chain: [] },
+      ],
+    }],
+  });
+  const c = r.controllers[0];
+  assert.equal('output' in c.ports[0], false);
+  // Every LED consumer refuses to GUESS an output index, so the flip must
+  // materialize it — otherwise the pane throws on the next render.
+  setControllerType(c, CONTROLLER_TYPE_LED);
+  assert.deepEqual(c.ports.map((p) => p.output), [1, 3]);
+  assert.equal(ledOutputIndexForPort(c.ports[1]), 2);
+  // Flipping back strips it: a DMX port number is a chain label, and the loader
+  // refuses to re-parse `output`/`parkedOutputs` on a DMX card.
+  setParkedUniverse(c, 1, 30);
+  setControllerType(c, CONTROLLER_TYPE_DMX);
+  assert.equal('output' in c.ports[0], false);
+  assert.equal('parkedOutputs' in c, false);
+  assert.doesNotThrow(() => reg(JSON.parse(JSON.stringify(r))));
+});
+
+test('_71: a DMX card with an unaddressable port number takes the lowest free output on flip', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'Wide', ip: '10.0.0.9', type: CONTROLLER_TYPE_DMX,
+      ports: [{ port: 20, universe: 5, chain: [] }],   // no board has a 20th output
+    }],
+  });
+  const c = r.controllers[0];
+  setControllerType(c, CONTROLLER_TYPE_LED);
+  assert.equal(c.ports[0].output, 1);
+  assert.doesNotThrow(() => reg(JSON.parse(JSON.stringify(r))));
 });

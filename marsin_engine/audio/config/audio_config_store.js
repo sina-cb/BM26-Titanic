@@ -30,18 +30,35 @@ import yaml from 'js-yaml';
 
 const SCENE_FILE_NAME = 'audio_state.yaml';
 
+export class AudioPersistenceError extends Error {
+  constructor(message, options = {}) {
+    super(message, options);
+    this.name = 'AudioPersistenceError';
+    this.code = 'AUDIO_PERSISTENCE_ERROR';
+  }
+}
+
 const FILE_HEADER =
   '# Auto-written by MarsinEngine — per-scene audio state.\n' +
   '# Contains:\n' +
   '#   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)\n' +
   '#   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})\n' +
-  '# Written by `engine.js --choose_mic --model <scene>` (mic) and by\n' +
-  '# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while\n' +
-  '# the engine is running.\n';
+  '#   - derivedSignals groups the operator has actually live-patched; every\n' +
+  '#     group absent here is owned by config.yaml and follows its retunes\n' +
+  '# The ENGINE is the SOLE writer: `engine.js --choose_mic --model <scene>` (mic)\n' +
+  '# and PATCH /audio/config (tuning — including Audio Companion edits, which the\n' +
+  '# Companion writes THROUGH to the engine rather than to this file).\n' +
+  '# Do not hand-edit while the engine is running.\n';
 
 // Fields that count as "mic selection" — preserved together by
 // saveSelectedMic, wiped together by clearSavedMic.
 const MIC_FIELDS = ['platform', 'inputFormat', 'device', 'deviceId', 'deviceLabel', 'selectedAt'];
+
+function isYamlMapping(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
 
 // ── Paths ─────────────────────────────────────────────────────────────────
 
@@ -51,17 +68,45 @@ export function sceneAudioPath(sceneDir) {
 
 // ── Load / save (whole file) ──────────────────────────────────────────────
 
-/** Read the per-scene audio file. Returns {} on missing / malformed. */
+/**
+ * Read the per-scene audio file.
+ *
+ * MISSING file → `{}`: a scene that has never been tuned legitimately has no
+ * state, and the caller's config.yaml defaults are the whole truth.
+ *
+ * PARSE FAILURE → THROWS (codex P0, no fallback). Returning `{}` here was
+ * destructive, not graceful: every caller does `load → merge → save`, so one
+ * unparseable byte made the engine boot-write its own defaults straight over
+ * the operator's saved mic + tuning — the file was destroyed by the very read
+ * that "recovered" from it. Fail loudly instead; the operator fixes or deletes
+ * the file. The thrown message names the full path so that fix is one step.
+ */
 export function loadSceneAudio(sceneDir) {
   const p = sceneAudioPath(sceneDir);
   if (!fs.existsSync(p)) return {};
+  let raw;
   try {
-    const obj = yaml.load(fs.readFileSync(p, 'utf8'));
-    return (obj && typeof obj === 'object') ? obj : {};
+    raw = fs.readFileSync(p, 'utf8');
   } catch (err) {
-    console.warn(`[audio_config_store] failed to parse ${SCENE_FILE_NAME}: ${err.message}; ignoring`);
-    return {};
+    throw new AudioPersistenceError(`failed to read ${p}: ${err.message}`, { cause: err });
   }
+  let obj;
+  try {
+    obj = yaml.load(raw);
+  } catch (err) {
+    throw new AudioPersistenceError(
+      `failed to parse ${p}: ${err.message} — fix or delete the file; ` +
+      'the engine will NOT overwrite a state file it could not read',
+      { cause: err },
+    );
+  }
+  if (!isYamlMapping(obj)) {
+    throw new AudioPersistenceError(
+      `invalid ${p}: existing audio state must contain a YAML object; ` +
+      'empty, scalar, and array roots are refused and will NOT be overwritten',
+    );
+  }
+  return obj;
 }
 
 /**
@@ -71,8 +116,11 @@ export function loadSceneAudio(sceneDir) {
  */
 export function saveSceneAudio(sceneDir, fullObj) {
   if (!sceneDir) throw new Error('saveSceneAudio requires a sceneDir');
+  if (!isYamlMapping(fullObj)) {
+    throw new TypeError('saveSceneAudio requires a non-array object');
+  }
   try { fs.mkdirSync(sceneDir, { recursive: true }); } catch { /* exists */ }
-  _atomicWrite(sceneAudioPath(sceneDir), fullObj || {});
+  _atomicWrite(sceneAudioPath(sceneDir), fullObj);
 }
 
 // ── Mic-selection helpers (operate on the same file) ──────────────────────
@@ -139,12 +187,27 @@ export function clearSavedMic(sceneDir) {
 
 // ── Internal ──────────────────────────────────────────────────────────────
 
+/**
+ * Write the state file atomically (temp + rename).
+ *
+ * THROWS on any failure (codex P0). Swallowing the error with a console.warn
+ * made PATCH /audio/config answer 200 on a persist that never happened: the
+ * operator saw the knob take, and the next boot silently restored the old
+ * value. The temp name carries the writer's PID so two processes writing the
+ * same scene can't clobber each other's half-written temp file.
+ */
 function _atomicWrite(targetPath, obj) {
-  const tmp = `${targetPath}.tmp`;
+  const tmp = `${targetPath}.${process.pid}.tmp`;
   try {
     fs.writeFileSync(tmp, FILE_HEADER + yaml.dump(obj, { sortKeys: false }));
     fs.renameSync(tmp, targetPath);
   } catch (err) {
-    console.warn(`[audio_config_store] failed to write ${targetPath}: ${err.message}`);
+    // Best-effort cleanup so a failed write doesn't leave litter behind; the
+    // original error is what the caller must see.
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    throw new AudioPersistenceError(
+      `failed to write ${targetPath}: ${err.message}`,
+      { cause: err },
+    );
   }
 }

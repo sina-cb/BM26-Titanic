@@ -1,5 +1,16 @@
 # 2026-07-10 — LED patching parity, grouping, and pixel look (plan)
 
+> **STANDING CORRECTION (2026-08-05, operator ruling).** Steps below tell the
+> reader to add a `controllers:` entry to `marsin_engine/config.yaml`, to set
+> `alsoFlat: true`, and to unit-test in `marsin_engine/tests/output_dispatch.test.js`.
+> **That whole mechanism is REMOVED.** The engine has exactly one output path —
+> sACN to `sacn.destinations` — and the simulation's input bridge is the single
+> router to every controller, so an LED universe needs NO engine config at all.
+> `lib/output_dispatch.js`, `lib/artnet_output.js` and that test file no longer
+> exist, and a config that still declares `controllers:` makes the engine
+> **refuse to boot** by name (`marsin_engine/lib/output_config_guard.js`).
+> This plan is a dated historical record: do not follow those steps.
+
 **Branch:** `feat/led_integration` (worktree `kind-banach-95157b`).
 **Parent plan:** `.agent/plans/20260709_0_led_integration_execution.md` (P1–P6 +
 Round 2 all landed; sim suite baseline **200 pass / 0 fail**, verified

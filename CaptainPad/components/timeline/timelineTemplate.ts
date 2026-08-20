@@ -186,6 +186,8 @@ export function actionSummary(a: CueAction): string {
       if (a.overlays) parts.push(a.overlays === 'disable' ? 'ovl-off' : 'ovl-on');
       return parts.join(' · ');
     }
+    case 'sequence':
+      return `sequence / ${a.steps.length} steps`;
     case 'globals':
       return 'globals';
     default:

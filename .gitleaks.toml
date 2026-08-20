@@ -136,6 +136,10 @@ paths = [
   '''(^|/)yarn\.lock$''',
   '''(^|/)pnpm-lock\.yaml$''',
   '''(^|/)\.claude/''',
+  # Offline pattern galleries are generated binary render products. Scanning
+  # compressed GIF/MP4 bytes as text creates random email/token matches; their
+  # HTML, JSON manifests, generator, and source patterns remain fully scanned.
+  '''(^|/)docs/pattern_gallery/.+\.(gif|mp4)$''',
   # Crypto DOCUMENTATION that intentionally prints example AES-GCM vectors
   # (the real PSK lives in the gitignored secret.yaml, never here). A
   # generated 16-byte key is indistinguishable from a real one by pattern,

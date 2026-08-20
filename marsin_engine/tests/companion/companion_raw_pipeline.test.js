@@ -1,0 +1,175 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
+import {
+  buildRawMirrorWrites,
+  RAW_MIRROR_SOURCES,
+} from '../../audio/companion/audio_pipeline.js';
+import {
+  buildAudioAnalyzerOptions,
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
+} from '../../audio/config/audio_analysis_config.js';
+import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
+import { DerivedSignals } from '../../audio/signals/derived_signals.js';
+import { SYNTHS } from '../../audio/synth/test_synths.js';
+import { ParamCenter } from '../../lib/param_center.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_DIR = path.resolve(__dirname, '..', '..');
+// HERMETIC: tracked config.yaml only. The publication test below drives the
+// REAL analyzer, and the operator's live overlay moves what it measures — on
+// one box the full_track maxima came out micOnsetLowRaw 0.955 vs 0.699 tracked,
+// micSubRaw 0.897 vs 0.489, audioGenreConf 0.007 vs 0.036. The `> 0` assertions
+// survived that, but the pipeline being scored was not the shipped one.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
+
+test('production raw publication includes every derived-signal analyzer input', () => {
+  const fields = Object.fromEntries(
+    RAW_MIRROR_SOURCES.map(({ analyzerField }, index) => [analyzerField, index / 20]),
+  );
+  const writes = buildRawMirrorWrites(fields);
+  assert.deepEqual(writes.map(({ key }) => key), [
+    'micLowRaw',
+    'micMidRaw',
+    'micHighRaw',
+    'micKickRaw',
+    'micFluxRaw',
+    'micDomFreq1',
+    'micDomEnergy1',
+    'micDomFreq2',
+    'micDomEnergy2',
+    'micOnsetLowRaw',
+    'micOnsetMidRaw',
+    'micOnsetHighRaw',
+    'micSubRaw',
+    'micTonalStabilityRaw',
+    'micChromaFluxRaw',
+    'micChromaTiltRaw',
+  ]);
+  assert.deepEqual(writes.map(({ value }) => value), RAW_MIRROR_SOURCES.map((_, index) => index / 20));
+
+  const derivedSource = fs.readFileSync(
+    path.join(ENGINE_DIR, 'audio', 'signals', 'derived_signals.js'),
+    'utf8',
+  );
+  const consumedAnalyzerKeys = [...derivedSource.matchAll(/\bg\('([^']+)'\)/g)]
+    .map((match) => match[1])
+    .filter((key) => key.endsWith('Raw') || key.startsWith('micDom'));
+  const producedKeys = new Set(RAW_MIRROR_SOURCES.map(({ key }) => key));
+  const missing = [...new Set(consumedAnalyzerKeys)]
+    .filter((key) => !producedKeys.has(key))
+    .sort();
+  assert.deepEqual(missing, [], `DerivedSignals consumes unpublished analyzer inputs: ${missing}`);
+});
+
+test('raw publication fails loudly instead of replacing a missing analyzer field with zero', () => {
+  const fields = Object.fromEntries(
+    RAW_MIRROR_SOURCES.map(({ analyzerField }) => [analyzerField, 0]),
+  );
+  delete fields.micSub;
+  assert.throws(() => buildRawMirrorWrites(fields), /micSub/);
+});
+
+test('the Companion can retune the published-BPM slew live, and rejects bad input', () => {
+  // The tracker runs in the COMPANION process, so a PATCH /audio/config echo
+  // lands here — on DerivedSignals — rather than on the engine's analyzer.
+  const audioConfig = AUDIO_CONFIG;
+  const derived = new DerivedSignals({
+    paramCenter: new ParamCenter(null),
+    bpmTracker: buildBpmTrackerOptions(audioConfig),
+    derivedSignals: buildDerivedSignalsOptions(audioConfig),
+  });
+  assert.deepEqual(derived.getStatus().bpmSlew, {
+    enabled: audioConfig.bpmTracker.outputSlewEnabled,
+    bpmPerSec: audioConfig.bpmTracker.outputSlewBpmPerSec,
+  });
+  derived.setBpmOutputSlew({ enabled: true, bpmPerSec: 32 });
+  assert.deepEqual(derived.getStatus().bpmSlew, { enabled: true, bpmPerSec: 32 });
+  assert.throws(() => derived.setBpmOutputSlew({ enabled: true, bpmPerSec: 0 }),
+    /outputSlewBpmPerSec/);
+  assert.throws(() => derived.setBpmOutputSlew({ enabled: 'on', bpmPerSec: 32 }),
+    /outputSlewEnabled/);
+  // A rejected retune must not have half-applied.
+  assert.deepEqual(derived.getStatus().bpmSlew, { enabled: true, bpmPerSec: 32 });
+  assert.equal(derived.getStatus().bpmRaw, 0);
+});
+
+test('real Companion analyzer publication makes onset, chest-hit, chroma, and genre inputs live', () => {
+  const audioConfig = AUDIO_CONFIG;
+  const paramCenter = new ParamCenter(null);
+  const detector = new AudioStructureDetector({
+    paramCenter,
+    broadcast: () => {},
+    getConfig: () => audioConfig.structureDetector,
+  });
+  const derived = new DerivedSignals({
+    paramCenter,
+    bpmTracker: buildBpmTrackerOptions(audioConfig),
+    derivedSignals: buildDerivedSignalsOptions(audioConfig),
+  });
+  let clockMs = 0;
+  let lastMs = 0;
+  const hopMs = (audioConfig.hopSize / audioConfig.capture.sampleRate) * 1000;
+  const maxima = Object.fromEntries([
+    'micOnsetLowRaw',
+    'micOnsetMidRaw',
+    'micOnsetHighRaw',
+    'micSubRaw',
+    'micTonalStabilityRaw',
+    'micChromaFluxRaw',
+    'micChromaTiltRaw',
+    'micOnsetLow',
+    'micOnsetMid',
+    'micOnsetHigh',
+    'audioChestHit',
+    'audioGenreConf',
+  ].map((key) => [key, 0]));
+  const analyzer = new AudioAnalyzer(buildAudioAnalyzerOptions(audioConfig, {
+    nowFn: () => clockMs,
+    onAnalysis: (analysis) => {
+      const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000;
+      lastMs = clockMs;
+      paramCenter.setMany(buildRawMirrorWrites(analysis), 'companion');
+      detector.tick(clockMs, dt);
+      derived.tick(clockMs, dt);
+      for (const key of Object.keys(maxima)) {
+        maxima[key] = Math.max(maxima[key], paramCenter.get(key));
+      }
+    },
+  }));
+  const synth = SYNTHS.full_track;
+  const frame = new Int16Array(audioConfig.hopSize);
+  const durationSamples = audioConfig.capture.sampleRate * 18;
+  for (let offset = 0; offset < durationSamples; offset += frame.length) {
+    for (let index = 0; index < frame.length; index++) {
+      frame[index] = Math.round(32767 * synth.sample(
+        offset + index,
+        audioConfig.capture.sampleRate,
+        synth.defaults,
+      ));
+    }
+    clockMs += hopMs;
+    analyzer.pushSamples(frame);
+  }
+  detector.dispose();
+
+  for (const key of ['micOnsetLowRaw', 'micOnsetMidRaw', 'micOnsetHighRaw', 'micSubRaw']) {
+    assert.ok(maxima[key] > 0, `${key} must leave zero through production publication`);
+  }
+  for (const key of ['micOnsetLow', 'micOnsetMid', 'micOnsetHigh', 'audioChestHit']) {
+    assert.ok(maxima[key] > 0, `${key} must leave zero through the real derived chain: ` +
+      JSON.stringify(maxima));
+  }
+  assert.ok(maxima.micTonalStabilityRaw > 0);
+  assert.ok(maxima.micChromaFluxRaw > 0);
+  assert.ok(maxima.micChromaTiltRaw > 0);
+  assert.ok(Number.isFinite(paramCenter.get('audioGenre')));
+  assert.ok(Number.isFinite(paramCenter.get('audioGenreConf')));
+});

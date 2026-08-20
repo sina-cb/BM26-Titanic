@@ -46,23 +46,34 @@ function beatInfo(n, SR, bpm) {
 // ── the synthesizers ─────────────────────────────────────────────────────────
 // Each: { label, description, defaults, sample(n, SR, p) -> float [-1,1] }.
 export const SYNTHS = {
-  // Legacy compatibility — the original companion test generator. Steady tones
-  // in each band plus a periodic kick. Kept so the default 'test' look is
-  // unchanged for anyone relying on it.
+  // The classic companion test generator: steady tones in each band plus a
+  // periodic kick.
+  //
+  // Kick-detector fix (2026-07-24): the steady sub tone is at 55 Hz, which sits
+  // INSIDE the analyzer's 50–110 Hz kick window. At the previous levels
+  // (subLevel 0.5, kickLevel 0.8, 12% duty / 30 ms decay) that constant in-band
+  // tone dominated the kick band, so the adaptive kick EMA settled near the
+  // per-hop kick-band energy and the brief 80 Hz transient could never clear the
+  // `instant > ema × 2.4` fire test — micKick read ALWAYS OFF on this source
+  // (verified 0 fires at every inputGain, FFT 1024 and 2048). The transient must
+  // stand well above the steady in-band floor to be detected as a kick: drop the
+  // steady sub level so it no longer masks the transient, and make the kick a
+  // stronger, slightly longer burst. Now fires ~10 kicks / 6 s at both FFT sizes
+  // while low/mid/high all stay active (~0.6). See report 202607/20260724_39.
   tone: {
     label: 'Tones + kick',
     description: 'Steady sub/mid/high tones + periodic kick (the classic test source).',
-    defaults: { subLevel: 0.5, midLevel: 0.3, highLevel: 0.25, kickLevel: 0.8, kickHz: 2.0, noiseLevel: 0.02 },
+    defaults: { subLevel: 0.28, midLevel: 0.3, highLevel: 0.25, kickLevel: 1.0, kickHz: 2.0, noiseLevel: 0.02 },
     sample(n, SR, p) {
       const t = n / SR;
-      let s = Math.sin(TAU * 55 * t) * (p.subLevel ?? 0.5)
+      let s = Math.sin(TAU * 55 * t) * (p.subLevel ?? 0.28)
             + Math.sin(TAU * 1000 * t) * (p.midLevel ?? 0.3)
             + Math.sin(TAU * 9000 * t) * (p.highLevel ?? 0.25)
             + noise(n) * (p.noiseLevel ?? 0.02);
       const kHz = p.kickHz ?? 2.0;
       if (kHz > 0) {
         const period = SR / kHz, phase = n % period;
-        if (phase < period * 0.12) s += Math.sin(TAU * 80 * t) * (p.kickLevel ?? 0.8) * Math.exp(-phase / (period * 0.03));
+        if (phase < period * 0.18) s += Math.sin(TAU * 80 * t) * (p.kickLevel ?? 1.0) * Math.exp(-phase / (period * 0.06));
       }
       return Math.max(-1, Math.min(1, s));
     },

@@ -30,15 +30,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { computeSunEvents, formatLocal } from './sun.js';
-import { loadShowPlan, saveShowPlan, defaultShowPlan, validateShowPlan } from './show_plan.js';
+import {
+  loadShowPlan, saveShowPlan, defaultShowPlan, validateShowPlan, lintShowPlan,
+} from './show_plan.js';
 import {
   resolveDayTimes, evaluateTick, activePhase, dayKeyFor, anchorToMs, dateClockToEpochMs,
+  snapshotMoodBookkeeping, rollbackMoodFire,
 } from './triggers.js';
 import {
   applicableCues, festivalDayIndex, festivalDateFor, festivalStartsInDays,
 } from './festival.js';
-import { loadTimelineState, saveTimelineState } from './timeline_state.js';
+import {
+  loadTimelineState, saveTimelineState, partyConfigOf, PARTY_PLAYLIST_DEFAULT,
+  PARTY_TIMING_DEFAULTS, PARTY_TIMING_BOUNDS, PARTY_TOGGLE_DEFAULTS,
+} from './timeline_state.js';
 import { arbitrate, resolveHold } from './arbiter.js';
+import { resolveDeckStateAt, buildDaySegments } from './resolve_deck_state.js';
 
 // Event-log ring cap. The ring carries cue FIRES *and* plan LIFECYCLE events
 // (pause/resume/hold/autopilot/takeover/program-end/lease — see
@@ -88,6 +95,16 @@ function weekdayFor(dateKey, tz) {
  * festival), each with that date's sun events (HH:MM local or null) and the cues
  * that apply that day with their resolved `atLocal` (clock/sun cues → 'HH:MM';
  * mood/phase/manual → null).
+ *
+ * DAY ZOOM (report _94 §2.2) adds two ADDITIVE per-day fields, both resolved
+ * against that day's own sun anchors:
+ *   phases:   [{name, startLocal, endLocal}]  — the phase bands (previously only
+ *             on /timeline/state, and only for TODAY)
+ *   segments: [{fromLocal, toLocal, owner, playlist, palette, controller,
+ *             source}] — the RESOLVED RIBBON: what actually owns the deck and
+ *             which playlist plays across the day (buildDaySegments, which
+ *             samples the shared pure resolver at that day's boundaries)
+ * Old clients simply ignore both.
  *
  * @param {object} plan   — a normalized (v2) plan
  * @param {number} [nowMs]
@@ -150,7 +167,22 @@ export function buildOverview(plan, nowMs) {
       return overviewCue;
     });
 
-    return { index, date, weekday: weekdayFor(date, tz), sun, cues };
+    // DAY ZOOM (_94 §2.2.1): the day's PHASE BANDS, resolved against this day's
+    // own sun anchors. Plan order is preserved — phase overlap resolves
+    // first-in-plan-order (triggers.js activePhase), so the UI must not sort.
+    const dayTimes = resolveDayTimes({ plan: { ...plan, cues: applies }, now: dayNoonMs, sunEvents });
+    const phases = Object.entries(dayTimes.phases).map(([name, win]) => ({
+      name,
+      startLocal: win.startMs !== null ? formatLocal(new Date(win.startMs), tz) : null,
+      endLocal: win.endMs !== null ? formatLocal(new Date(win.endMs), tz) : null,
+    }));
+
+    // DAY ZOOM (_94 §2.2.3): the RESOLVED RIBBON — the honesty layer. Renders
+    // the truth of the shipped plan (including the gaps the _91 audit found);
+    // it does not fix it.
+    const segments = buildDaySegments({ plan, dateKey: date, sunEvents });
+
+    return { index, date, weekday: weekdayFor(date, tz), sun, cues, phases, segments };
   });
 
   return {
@@ -175,7 +207,7 @@ export class TimelineService {
    *
    * `deps` covers everything the old actions.js / engine_link.js did, but as
    * direct in-engine calls (all may be async):
-   *   loadPlaylist({ target, name })        — load a playlist onto a target
+   *   loadPlaylist({ target, name, entryId? }) — load a playlist, optionally at one exact entry
    *   setAutopilot({ target, state })        — set autopilot on a target ({active, delay_s, shuffle})
    *   setParams(obj)                         — CPC write (numbers + {h,s,v} palette HSV)
    *   setMaster(value)                       — DECK GRAND MASTER write (the same
@@ -209,6 +241,11 @@ export class TimelineService {
    *                                            NEVER a real PortWatch hardware lock.
    *   getViewOverrideMode()                  — read-only: current engine view-override ('deck'|null),
    *                                            so getState can surface `forcingDeckView`
+   *   yieldLiveTouch(why)                    — OPTIONAL (api_server always supplies it; unit
+   *                                            harnesses may omit it). TIMELINE PRIORITY, operator
+   *                                            ruling 2026-08-14: force-disarm any active Live Touch
+   *                                            ARM so the plan can take the rig back on resume /
+   *                                            operator-lease expiry. Must never throw.
    * where `target` is { channel:'deck'|'mixer'|'all', id }.
    */
   constructor({ scene, sceneDir, stateDir, getMood, deps, broadcast, config, nowFn }) {
@@ -251,6 +288,10 @@ export class TimelineService {
     this.bootError = null;
     this.lastError = null;
     this.cueErrors = {};        // cueId → last error string
+    // Active-plan save/activate both hot-reload through awaited device work.
+    // Serialize them so overlapping HTTP requests cannot interleave two plans
+    // across disk, memory, and catch-up execution.
+    this._planMutationTail = Promise.resolve();
     // The EVENT LOG ring (docs/38 §15.2). Field name kept `recentFires` for
     // wire compat; entries are { kind:'fire'|'lifecycle', cueId?, label,
     // reason, source, atMs }. 'fire' = a cue application; 'lifecycle' = a
@@ -259,6 +300,14 @@ export class TimelineService {
     // (never persisted) — matches the pre-existing recentFires behavior.
     this.recentFires = [];
     this.wouldFire = [];        // ring of mood-suppressed { cueId, reason, atMs }
+    // FIX 1 (report `_98`): cueId → the controller that suppressed it on the LAST
+    // tick, so a continuous suppression episode lands ONE wouldFire entry rather
+    // than one per tick (a suppressed trigger now stays armed and re-asks).
+    this._suppressionEpisode = new Map();
+    // Runtime-only relative-time cue sequence. Never persisted: an engine
+    // restart must not revive a stale delayed deck change.
+    this._activeSequence = null;
+    this._lastSequence = null;
     this.sunCache = { dayKey: null, events: null };
     this._tickHandle = null;
     this._ticking = false;      // re-entrancy guard for the async tick
@@ -267,6 +316,10 @@ export class TimelineService {
     // transition. Flipping every tick would reset the autopilot delay timer and
     // the deck would never advance.
     this._baselineArmed = false;
+    // PARTY: whether the LIVE session started in FOLLOW-THE-MUSIC mode. Runtime
+    // only — a session does not survive an engine restart (neither does any
+    // other cue's deck window), and boot catchUp re-derives the right owner.
+    this._partySessionFollowsMusic = false;
     // ── default-cue / durationMin bookkeeping (docs/38 §16.11) ───────────────
     // A cue with `durationMin` OWNS the deck for [fireTime, fireTime+durationMin).
     // While a window is open the default cue must NOT fill the deck. These are
@@ -279,6 +332,30 @@ export class TimelineService {
     // tick (log spam). Latch the failed signature (plan + defaultCue action);
     // back off until the plan/cue changes. null → no failure latched.
     this._defaultCueFailKey = null;
+    // FIX 5 (report `_98`): the OPEN-ENDED deck owner a TIMED cue displaced. An
+    // ambient cue with no `durationMin` owns the deck "until the next deck cue";
+    // a party session IS a next deck cue, but a temporary one. Before `_98` the
+    // first session permanently evicted it for the night (the elapsed window
+    // handed the deck to the defaultCue and a phase trigger is rising-edge, so
+    // it never re-fired) — the night's whole shape depended on whether music
+    // ever happened. Runtime-only; re-derived by catchUp on a restart.
+    this._displacedDeckOwnerCueId = null;
+    // FIX 4 (report `_98`): authoring findings from `lintShowPlan` for the ACTIVE
+    // plan. Surfaced loudly on load and on `getState().planWarnings` — never a
+    // silent freeze.
+    this.planWarnings = [];
+  }
+
+  // FIX 4 (report `_98`): run the plan LINT for the active plan, surface every
+  // finding LOUDLY (console.error, once per load) and keep it for the wire.
+  // Findings are AUTHORING errors, not schema errors — the plan still loads (see
+  // the rationale in show_plan.js lintShowPlan).
+  _lintActivePlan() {
+    this.planWarnings = lintShowPlan(this.plan);
+    for (const f of this.planWarnings) {
+      console.error(`  ⚠ [timeline] plan "${this.activePlan}" authoring error [${f.code}]: ${f.message}`);
+    }
+    return this.planWarnings;
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────
@@ -291,6 +368,20 @@ export class TimelineService {
   async start() {
     if (this._tickHandle) return;
     this._loadSceneFiles();
+    // BOOT RE-ARM (D2, operator semantics 2026-07-28): `moodArmed:false` is only
+    // ever meaningful DURING a live session, and a session does not survive a
+    // restart (deck windows are runtime-only). A persisted `false` is therefore
+    // always a session that died with the process — re-arm it so an engine
+    // restart never kills party for the rest of the night. The cooldown stamp
+    // (`moodLastFire`) is separate, persisted, and still honoured: no free
+    // session. Deliberately in start() (once per process) and NOT in _catchUp,
+    // which also runs on savePlan/resume/lease-release where a `false` latch
+    // means a genuinely LIVE session that must not re-fire.
+    const bootPartyCue = this._partyCue();
+    if (bootPartyCue && this.state.moodArmed
+        && this.state.moodArmed[bootPartyCue.id] === false) {
+      this.state.moodArmed[bootPartyCue.id] = true;
+    }
     // The plan coming alive on boot/scene-switch is a lifecycle event — the
     // operator sees WHICH plan the engine woke up driving (docs/38 §15.2).
     this._recordLifecycle(`Plan activated: ${this.activePlan}`, 'boot', { source: 'auto' });
@@ -310,6 +401,7 @@ export class TimelineService {
   }
 
   stop() {
+    this._cancelSequence('engine stopped');
     if (this._tickHandle) {
       clearInterval(this._tickHandle);
       this._tickHandle = null;
@@ -349,6 +441,7 @@ export class TimelineService {
       console.log(`  📝 [timeline] wrote default plan → ${planPath}`);
     }
     this.plan = loadShowPlan(planPath);
+    this._lintActivePlan();
     if (!this.state.activePlan) this.state.activePlan = this.activePlan;
     // Seed the runtime autopilot toggle from the plan's baseline only when the
     // state predates the §14 model. Once toggled, the runtime value wins.
@@ -357,6 +450,12 @@ export class TimelineService {
     if (this.state.pendingProgram === undefined) this.state.pendingProgram = null;
     if (this.state.operatorLease === undefined) this.state.operatorLease = null;
     if (this.state.controller === undefined) this.state.controller = 'autopilot';
+    // PARTY AUTHORITY: copy the plan's party-cue session numbers into the
+    // persisted party config ONCE (see _seedPartyTiming). From here on
+    // /party-config is the only place those numbers are read from, so an
+    // operator edit takes effect without a plan reload and the plan YAML can
+    // never silently disagree with what the show is doing.
+    this._seedPartyTiming();
   }
 
   // ── sun / day-time helpers ────────────────────────────────────────────────
@@ -417,8 +516,8 @@ export class TimelineService {
     };
   }
 
-  async _loadPlaylistOnTarget(target, name, steps) {
-    await this.deps.loadPlaylist({ target, name });
+  async _loadPlaylistOnTarget(target, name, steps, entryId = null) {
+    await this.deps.loadPlaylist({ target, name, entryId });
     steps.push(target.kind === 'deck'
       ? `deck ← playlist "${name}"`
       : `mixer:${target.id} ← playlist "${name}"`);
@@ -576,7 +675,12 @@ export class TimelineService {
   }
 
   // Execute a 'look' bundle: palette → globals → playlist → autopilot → tasks.
-  async _applyLook(look, name, steps) {
+  //
+  // `playlistOverride` (PARTY OVERRIDE, 2026-07-27) replaces the look's own
+  // `playlist` for this application only. The party cue resolves it at FIRE
+  // TIME from the engine's persisted party config, so changing the party
+  // playlist takes effect on the NEXT session without touching the plan.
+  async _applyLook(look, name, steps, playlistOverride = null) {
     if (look.palette) {
       await this.deps.setParams(this._resolvePalette(look.palette));
       steps.push(`look "${name}" palette "${look.palette}"`);
@@ -585,8 +689,9 @@ export class TimelineService {
       await this._writeGlobals(look.globals, steps, `look "${name}" globals`);
     }
     const targets = await this._resolveTargets(look.target);
-    if (look.playlist) {
-      for (const target of targets) await this._loadPlaylistOnTarget(target, look.playlist, steps);
+    const playlist = playlistOverride || look.playlist;
+    if (playlist) {
+      for (const target of targets) await this._loadPlaylistOnTarget(target, playlist, steps);
     }
     if (look.autopilot) {
       for (const target of targets) await this._setAutopilotOnTarget(target, look.autopilot, steps);
@@ -619,20 +724,112 @@ export class TimelineService {
     return { steps };
   }
 
-  /** Execute one validated cue action object. Returns { steps }. THROWS loud. */
-  async _applyAction(action) {
+  /**
+   * Execute one validated cue action object. Returns { steps }. THROWS loud.
+   *
+   * `opts.playlistOverride` (PARTY OVERRIDE) swaps the playlist a `look` action
+   * loads, resolved by the caller at FIRE TIME. Only a `look` action honours it
+   * — the party cue is authored as a look, and a blanket override would silently
+   * rewrite unrelated `playlist` cues.
+   */
+  _cancelSequence(reason) {
+    if (!this._activeSequence) return false;
+    const active = this._activeSequence;
+    this._lastSequence = {
+      cueId: active.cueId,
+      status: 'cancelled',
+      reason,
+      startedAtMs: active.startedAtMs,
+      endedAtMs: this.nowFn(),
+      completedSteps: active.nextIndex,
+      totalSteps: active.steps.length,
+    };
+    this._activeSequence = null;
+    return true;
+  }
+
+  _startSequence(action, cueId, steps) {
+    this._cancelSequence('replaced by a newly fired sequence');
+    this._activeSequence = {
+      cueId,
+      startedAtMs: this.nowFn(),
+      steps: action.steps,
+      nextIndex: 0,
+    };
+    this._lastSequence = null;
+    steps.push(`sequence "${cueId || 'anonymous'}" started (${action.steps.length} steps)`);
+  }
+
+  async _advanceSequence(now, appliedSteps = []) {
+    while (this._activeSequence) {
+      const active = this._activeSequence;
+      const step = active.steps[active.nextIndex];
+      if (!step) {
+        this._lastSequence = {
+          cueId: active.cueId,
+          status: 'completed',
+          reason: null,
+          startedAtMs: active.startedAtMs,
+          endedAtMs: now,
+          completedSteps: active.steps.length,
+          totalSteps: active.steps.length,
+        };
+        this._activeSequence = null;
+        return;
+      }
+      const dueAtMs = active.startedAtMs + step.afterSec * 1000;
+      if (now < dueAtMs) return;
+      const stepIndex = active.nextIndex;
+      active.nextIndex += 1;
+      try {
+        const result = await this._applyAction(step.action, {
+          cueId: active.cueId,
+          sequenceStep: true,
+        });
+        appliedSteps.push(`sequence step ${stepIndex + 1}/${active.steps.length} @ ${step.afterSec}s`);
+        if (result && Array.isArray(result.steps)) appliedSteps.push(...result.steps);
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        this._lastSequence = {
+          cueId: active.cueId,
+          status: 'failed',
+          reason: message,
+          startedAtMs: active.startedAtMs,
+          endedAtMs: now,
+          completedSteps: stepIndex,
+          totalSteps: active.steps.length,
+        };
+        this._activeSequence = null;
+        if (active.cueId) this.cueErrors[active.cueId] = `sequence step ${stepIndex + 1}: ${message}`;
+        this.lastError = `sequence "${active.cueId || 'anonymous'}" step ${stepIndex + 1}: ${message}`;
+        throw error;
+      }
+    }
+  }
+
+  async _applyAction(action, opts = {}) {
     if (!action || typeof action !== 'object') throw new Error('applyAction: action must be an object');
+    if (this._activeSequence && !opts.sequenceStep && action.type !== 'sequence'
+        && await this._actionDrivesDeck(action)) {
+      this._cancelSequence('superseded by another deck action');
+    }
     const steps = [];
     switch (action.type) {
       case 'playlist': {
         const targets = await this._resolveTargets(action.target);
         const onDeck = targets.some((t) => t.kind === 'deck');
+        if (action.palette) {
+          await this.deps.setParams(this._resolvePalette(action.palette));
+          steps.push(`cue palette "${action.palette}"`);
+        }
         // Deck transition + overlays are validated DECK-ONLY (show_plan.js), so
         // they only ever apply when a deck target is in play. Configure the
         // transition BEFORE the load so the swap that loads the playlist uses
         // the requested style/duration (docs/38 §16.9).
         if (action.transition && onDeck) await this._applyDeckTransition(action.transition, steps);
-        for (const target of targets) await this._loadPlaylistOnTarget(target, action.name, steps);
+        for (const target of targets) {
+          await this._loadPlaylistOnTarget(target, action.name, steps, action.entryId || null);
+        }
         if (action.overlays && onDeck) await this._applyDeckOverlays(action.overlays, steps);
         if (action.autopilot) {
           for (const target of targets) await this._setAutopilotOnTarget(target, action.autopilot, steps);
@@ -645,18 +842,29 @@ export class TimelineService {
         // is in play. Applies the DECK CHANNEL's per-channel hue alongside
         // the deck swap (per-channel only — no global shifter).
         if (action.hue !== undefined && onDeck) await this._applyHue(action.hue, steps);
-        // globals (SPEED/SIZE/bpmSpeedSync) — validated DECK-ONLY (show_plan.js).
-        // Routes through _writeGlobals → setParams, exactly like a look's globals.
+        // globals (SPEED/bpmSpeedSync; the map is generic — a legacy
+        // hand-authored `size` still passes through) — validated DECK-ONLY
+        // (show_plan.js). Routes through _writeGlobals → setParams, exactly
+        // like a look's globals. The maker stopped emitting cue-level `size`
+        // (operator ruling 2026-08-03).
         if (action.globals && onDeck) await this._writeGlobals(action.globals, steps, 'cue globals');
         // The plan is driving the DECK → pin engine output to the deck (docs/38
         // §16.9). Reuses the existing viewOverride machinery via the injected dep.
         if (onDeck) await this._forceDeckView(steps);
         break;
       }
+      case 'sequence': {
+        if (opts.sequenceStep) {
+          throw new Error('nested sequence actions are not supported');
+        }
+        this._startSequence(action, opts.cueId || null, steps);
+        await this._advanceSequence(this.nowFn(), steps);
+        break;
+      }
       case 'look': {
         const look = this.plan && this.plan.looks ? this.plan.looks[action.look] : undefined;
         if (!look) throw new Error(`look "${action.look}" not defined in plan`);
-        await this._applyLook(look, action.look, steps);
+        await this._applyLook(look, action.look, steps, opts.playlistOverride || null);
         break;
       }
       case 'scene': {
@@ -692,6 +900,12 @@ export class TimelineService {
   // same way _resolveTargets does, including a 'look' action's own look.target.
   async _actionDrivesDeck(action) {
     if (!action || typeof action !== 'object') return false;
+    if (action.type === 'sequence') {
+      for (const step of action.steps || []) {
+        if (await this._actionDrivesDeck(step.action)) return true;
+      }
+      return false;
+    }
     if (action.type === 'look') {
       const look = this.plan && this.plan.looks ? this.plan.looks[action.look] : undefined;
       if (!look) return false;
@@ -716,9 +930,35 @@ export class TimelineService {
   async _noteDeckWindow(cueId, durationMin, action, now) {
     const drivesDeck = await this._actionDrivesDeck(action);
     if (!drivesDeck) return;
+    // PARTY (D1/D3): a DIFFERENT deck cue taking ownership mid-party-session IS
+    // the end of that session (a scheduled look cue winning the deck). Stamp the
+    // cooldown + re-arm before the latch is reassigned, so the next session is
+    // governed by the cooldown instead of being latched dead for the night.
+    // Guarded on a real handover — a party cue re-firing over its own session
+    // (or the resume rejoin) is untouched.
+    const timed = typeof durationMin === 'number' && durationMin > 0;
+    const prevOwner = (this._deckWindowCueId !== null && cueId !== this._deckWindowCueId
+      && this.plan && Array.isArray(this.plan.cues))
+      ? this.plan.cues.find((c) => c.id === this._deckWindowCueId) : null;
+    if (prevOwner && this._isPartyCue(prevOwner)) this._notePartySessionEnd(now, 'superseded');
+    // FIX 5 (report `_98`): remember an OPEN-ENDED AMBIENT owner that a TIMED cue
+    // is punching through. `kind: ambient` is the plan's BACKGROUND LAYER — it
+    // "owns the deck until the next deck cue" — and a durationMin cue (a party
+    // session) is only a TEMPORARY next cue. When that window elapses the
+    // background layer comes BACK (see _restoreDisplacedDeckOwner) instead of
+    // being evicted for the whole night. Only `ambient` qualifies: a program's
+    // ownership is governed by its hold, and re-applying a displaced MOOD cue
+    // would RESURRECT a party session (forbidden by D4).
+    if (!timed) {
+      // A new OPEN-ENDED owner IS the background layer from here on.
+      this._displacedDeckOwnerCueId = null;
+    } else if (prevOwner && prevOwner.kind === 'ambient' && prevOwner.enabled !== false
+        && this._deckWindowUntilMs === null) {
+      this._displacedDeckOwnerCueId = prevOwner.id;
+    }
     this._defaultCueActive = false;
     this._deckWindowCueId = cueId;
-    if (typeof durationMin === 'number' && durationMin > 0) {
+    if (timed) {
       this._deckWindowUntilMs = now + durationMin * 60000;
     } else {
       // No durationMin → the cue owns the deck with no timed window (until the
@@ -837,6 +1077,22 @@ export class TimelineService {
     }
     // An elapsed durationMin window → revert to the default cue.
     if (hasElapsedWindow) {
+      // PARTY (D1/D3): a fixed-duration party session that just ran out its
+      // window is the single most common session END. Stamp the cooldown at the
+      // SCHEDULED window end (≤ now by at most one tick — the honest end
+      // instant) and re-arm, BEFORE _applyDefaultCue nulls the latches.
+      const elapsedOwner = this.plan && Array.isArray(this.plan.cues)
+        ? this.plan.cues.find((c) => c.id === this._deckWindowCueId) : null;
+      if (this._isPartyCue(elapsedOwner)) {
+        this._notePartySessionEnd(this._deckWindowUntilMs, 'window-elapsed');
+        this._recordLifecycle(
+          'Party session ended (window elapsed)',
+          'party-window-elapsed', { cueId: elapsedOwner.id, source: 'auto' },
+        );
+      }
+      // FIX 5 (report `_98`): before the defaultCue fills, give the OPEN-ENDED
+      // AMBIENT owner this timed window punched through its deck back.
+      if (await this._restoreDisplacedDeckOwner(now)) return;
       await this._applyDefaultCue('window-elapsed');
       return;
     }
@@ -844,6 +1100,61 @@ export class TimelineService {
     // driving the deck right now). Idempotent: only apply once.
     if (!this._defaultCueActive) {
       await this._applyDefaultCue('no-owning-cue');
+    }
+  }
+
+  /**
+   * FIX 5 (report `_98`) — return the deck to the OPEN-ENDED AMBIENT owner that a
+   * just-elapsed timed window displaced.
+   *
+   * The bug this fixes (`_93` §5.5, extends `_91` G2): `c_party_start` is a
+   * `kind: ambient` phase cue with no `durationMin`, so it owns the deck "until
+   * the next deck cue". The first mood session took ownership; when that
+   * session's 12-minute window elapsed the deck went to the `defaultCue` and the
+   * phase cue NEVER re-fired (phase triggers are rising-edge, once per night).
+   * So the shipped plan had two completely different nights — a quiet one where
+   * the ambient background held unbroken, and a musical one where a single
+   * session destroyed it permanently. Nothing in the plan says that.
+   *
+   * ELIGIBILITY (fail closed — anything unmet falls through to the defaultCue):
+   *   • the cue is still in the plan, enabled, and still drives the deck;
+   *   • it is still `kind: ambient` (a program's ownership is its hold; a mood
+   *     cue must never be resurrected — D4);
+   *   • a PHASE-triggered owner is restored only while its phase is STILL ACTIVE
+   *     — the party-night ramp must not come back at 07:00.
+   *
+   * @param {number} now
+   * @returns {Promise<boolean>} whether the deck was handed back
+   */
+  async _restoreDisplacedDeckOwner(now) {
+    const cueId = this._displacedDeckOwnerCueId;
+    if (!cueId) return false;
+    this._displacedDeckOwnerCueId = null;       // one shot, whatever the outcome
+    const cue = this.plan && Array.isArray(this.plan.cues)
+      ? this.plan.cues.find((c) => c.id === cueId) : null;
+    if (!cue || cue.enabled === false || cue.kind !== 'ambient') return false;
+    if (!(await this._actionDrivesDeck(cue.action))) return false;
+    if (cue.trigger && cue.trigger.type === 'phase') {
+      const sunEvents = this._sunEventsFor(now);
+      const dayPlan = { ...this.plan, cues: applicableCues(this.plan, now) };
+      const dayTimes = resolveDayTimes({ plan: dayPlan, now, sunEvents });
+      if (activePhase({ plan: dayPlan, now, dayTimes }) !== cue.trigger.phase) return false;
+    }
+    // Drop the elapsed owner's latch BEFORE dispatching so _noteDeckWindow does
+    // not read the outgoing (party) cue as a live owner and re-stamp its
+    // session-end bookkeeping at `now` — the caller already booked that end at
+    // the honest scheduled instant.
+    this._deckWindowCueId = null;
+    this._deckWindowUntilMs = null;
+    try {
+      const result = await this._dispatchCue(cue.id, 'owner-restored');
+      console.log(`  ↩ [timeline] deck returned to "${cue.id}": ${result.steps.join('; ')}`);
+      return true;
+    } catch (e) {
+      this.cueErrors[cue.id] = `owner restore failed: ${e && e.message}`;
+      this.lastError = `owner restore "${cue.id}": ${e && e.message}`;
+      console.warn(`  ⚠ [timeline] owner restore "${cue.id}" failed: ${e && e.message}`);
+      return false;
     }
   }
 
@@ -906,12 +1217,462 @@ export class TimelineService {
     if (this.recentFires.length > RECENT_MAX) this.recentFires.shift();
   }
 
+  // ── PARTY OVERRIDE (operator authority, 2026-07-27) ────────────────────────
+
+  /** A cue that moves the show INTO party (the detection-driven session cue). */
+  _isPartyCue(cue) {
+    return !!(cue && cue.trigger && cue.trigger.type === 'mood' && cue.trigger.to === 'party');
+  }
+
+  /**
+   * The persisted party authority: `{ enabled, playlist, minDwellSec,
+   * durationMin, cooldownSec }`. The timing numbers are resolved through the
+   * seed (so they are never null once a plan has loaded).
+   */
+  getPartyConfig() {
+    const cfg = partyConfigOf(this.state || {});
+    const seeded = this._partyTimingSeed();
+    const out = {
+      ...cfg,
+      playlist: (this.state && this.state.partyPlaylist) ? this.state.partyPlaylist : this._partyPlaylistSeed(),
+      minDwellSec: cfg.minDwellSec === null ? seeded.minDwellSec : cfg.minDwellSec,
+      durationMin: cfg.durationMin === null ? seeded.durationMin : cfg.durationMin,
+      cooldownSec: cfg.cooldownSec === null ? seeded.cooldownSec : cfg.cooldownSec,
+    };
+    // EFFECTIVE values, so a UI can grey out what is currently inert instead of
+    // showing a number the show is not using.
+    //   • FOLLOW-THE-MUSIC (durationEnabled:false) has NO cooldown at all —
+    //     cooldownEnabled is forced off and the effective cooldown is 0.
+    //   • `minDwellSec` has no toggle: sustain before a trigger is always on.
+    out.effectiveCooldownEnabled = out.durationEnabled ? out.cooldownEnabled : false;
+    out.effectiveCooldownSec = out.effectiveCooldownEnabled ? out.cooldownSec : 0;
+    out.effectiveDurationMin = out.durationEnabled ? out.durationMin : null;
+    return out;
+  }
+
+  /**
+   * Where an UNSEEDED timing number comes from: the active plan's party cue
+   * (so the shipped plan's authored numbers are honoured on first boot), else
+   * the shipped defaults. Read-only — `_seedPartyTiming` is what persists it.
+   */
+  _partyTimingSeed() {
+    const cue = this._partyCue();
+    if (!cue) return { ...PARTY_TIMING_DEFAULTS };
+    const t = cue.trigger || {};
+    return {
+      minDwellSec: typeof t.minDwellSec === 'number' ? t.minDwellSec : PARTY_TIMING_DEFAULTS.minDwellSec,
+      durationMin: typeof cue.durationMin === 'number' ? cue.durationMin : PARTY_TIMING_DEFAULTS.durationMin,
+      cooldownSec: typeof t.cooldownSec === 'number' ? t.cooldownSec : PARTY_TIMING_DEFAULTS.cooldownSec,
+    };
+  }
+
+  /**
+   * Where an UNSEEDED party playlist comes from: the playlist the plan's own
+   * party look already loads. Seeding from the plan (rather than jumping
+   * straight to `party_high`) means adopting this feature never silently
+   * repoints an existing plan at a playlist it does not name.
+   */
+  _partyPlaylistSeed() {
+    const cue = this._partyCue();
+    const action = cue && cue.action;
+    if (action && action.type === 'look' && this.plan && this.plan.looks) {
+      const look = this.plan.looks[action.look];
+      if (look && typeof look.playlist === 'string' && look.playlist) return look.playlist;
+    }
+    if (action && action.type === 'playlist' && typeof action.name === 'string' && action.name) {
+      return action.name;
+    }
+    return PARTY_PLAYLIST_DEFAULT;
+  }
+
+  /**
+   * Seed the persisted session numbers ONCE, from the active plan's party cue
+   * (or the shipped defaults). After this, `/party-config` is the SINGLE
+   * authority for minDwellSec / durationMin / cooldownSec — the plan YAML's
+   * copies are never read again, so an operator edit takes effect on the NEXT
+   * evaluation with no plan reload. Idempotent: a field already set is left
+   * alone (including a deliberate 0).
+   *
+   * @returns {boolean} whether anything was written
+   */
+  _seedPartyTiming() {
+    if (!this.state) return false;
+    const seed = this._partyTimingSeed();
+    let wrote = false;
+    if (this.state.partyPlaylist === undefined || this.state.partyPlaylist === null) {
+      this.state.partyPlaylist = this._partyPlaylistSeed();
+      wrote = true;
+    }
+    for (const key of Object.keys(PARTY_TIMING_BOUNDS)) {
+      const field = `party${key[0].toUpperCase()}${key.slice(1)}`;
+      if (this.state[field] === undefined || this.state[field] === null) {
+        this.state[field] = seed[key];
+        wrote = true;
+      }
+    }
+    return wrote;
+  }
+
+  /**
+   * The playlist a cue should load, resolved AT FIRE TIME. Party cues take the
+   * operator's configured playlist; every other cue keeps its authored one
+   * (null = no override).
+   */
+  _partyPlaylistOverrideFor(cue) {
+    if (!this._isPartyCue(cue)) return null;
+    return this.getPartyConfig().playlist;
+  }
+
+  /**
+   * The deck-window length a cue owns, resolved AT FIRE TIME. A party cue takes
+   * `/party-config`'s `durationMin` (single authority); every other cue keeps
+   * its authored `durationMin`.
+   */
+  _effectiveDurationMin(cue) {
+    if (this._isPartyCue(cue)) return this.getPartyConfig().effectiveDurationMin;
+    return cue ? cue.durationMin : undefined;
+  }
+
+  /**
+   * Record the SHAPE a party session started with. A session keeps the mode it
+   * STARTED in for its whole life (the least-surprising choice): flipping
+   * `durationEnabled` mid-session must not silently convert a running fixed
+   * 12-minute session into an open-ended one, or cut an open-ended one short.
+   * The new mode applies from the NEXT session.
+   */
+  _notePartySessionStart(cue) {
+    if (!this._isPartyCue(cue)) return;
+    this._partySessionFollowsMusic = this.getPartyConfig().durationEnabled === false;
+  }
+
+  /**
+   * FOLLOW-THE-MUSIC release. When a party session started with
+   * `durationEnabled:false` it has no window — it ends the moment the party
+   * SIGNAL DROPS. There is deliberately no extra timeline-side sustain: the
+   * drop already carries the detector's own `offConfirmMs` (default 30 s of
+   * continuous disqualification), and stacking a second wait on top would
+   * double the operator's music-stop → lights-calm time for no benefit.
+   *
+   * This is also the path a STALE mood takes: the staleness guard forces CALM,
+   * so a dead companion ends an open-ended session instead of pinning it
+   * forever — the same designed failure state the rest of the timeline honours.
+   *
+   * @param {number} moodParty — this tick's mood (1 = party)
+   */
+  async _reconcilePartyFollowMusic(moodParty) {
+    const cue = this._partyCue();
+    if (!cue || this._deckWindowCueId !== cue.id) return;
+    if (this._partySessionFollowsMusic !== true) return;
+    if (moodParty) return;
+    // Release: drop the ownership latches, then let the default cue reclaim the
+    // deck through the SAME path a window-elapsed session uses.
+    this._deckWindowCueId = null;
+    this._deckWindowUntilMs = null;
+    this._defaultCueActive = false;
+    // ONE definition of "a party session ended" (D1/D3). Functionally near a
+    // no-op in this mode (the effective cooldown is 0 and the calm edge re-arms
+    // anyway) — kept so every end path shares the same bookkeeping.
+    this._notePartySessionEnd(this.nowFn(), 'follow-music-release');
+    this._recordLifecycle(
+      'Party session ended: the music stopped (follow-the-music)',
+      'party-follow-music', { cueId: cue.id, source: 'auto' },
+    );
+    // HUMAN > EVERYTHING — never re-apply under a takeover (see _endPartySessionNow).
+    if (!this._isPlanDrivingDeck()) return;
+    try {
+      await this._applyDefaultCue('party-music-stopped');
+    } catch (e) {
+      console.warn(`  ⚠ [timeline] follow-the-music release: default cue failed: ${e && e.message}`);
+    }
+  }
+
+  /**
+   * Set the operator's PARTY OVERRIDE. Validates strictly and applies NOTHING on
+   * a bad field (codex P0 — no clamping, no partial writes): an unknown playlist
+   * or a non-boolean `enabled` throws, and the caller turns that into a 400.
+   *
+   * Disabling while a party session is LIVE ends it immediately — the deck goes
+   * back to the plan's default cue. The detector is never touched: it keeps
+   * running and publishing `audioPartyStrong`, so the companion's PARTY meters
+   * stay live while the policy says no.
+   *
+   * @param {{enabled?:boolean, playlist?:string}} patch
+   * @returns {Promise<{enabled:boolean, playlist:string}>} the full new state
+   */
+  async setPartyConfig(patch) {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new Error('party config: an object body is required');
+    }
+    const timingKeys = Object.keys(PARTY_TIMING_BOUNDS);
+    const toggleKeys = Object.keys(PARTY_TOGGLE_DEFAULTS);
+    const known = ['enabled', 'playlist', ...timingKeys, ...toggleKeys];
+    // D10: an EMPTY patch is as meaningless as a non-object body under the
+    // documented all-or-nothing contract — and `readBody` maps an empty request
+    // body to `{}`, so both reach here identically. Refuse both, loudly.
+    if (Object.keys(patch).length === 0) {
+      throw new Error(`party config: at least one writable field is required (${known.join(', ')})`);
+    }
+    for (const k of Object.keys(patch)) {
+      if (!known.includes(k)) {
+        throw new Error(`party config: unknown field "${k}" (known: ${known.join(', ')})`);
+      }
+    }
+    if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') {
+      throw new Error(`party config: "enabled" must be a boolean, got ${JSON.stringify(patch.enabled)}`);
+    }
+    // Session numbers: validated against loud bounds, ALL-OR-NOTHING (validate
+    // every field before writing any) — a rejected value never leaves a
+    // half-applied config behind. No clamping (codex P0).
+    for (const k of timingKeys) {
+      if (patch[k] === undefined) continue;
+      const v = patch[k];
+      const b = PARTY_TIMING_BOUNDS[k];
+      if (typeof v !== 'number' || !Number.isFinite(v)) {
+        throw new Error(`party config: "${k}" must be a finite number, got ${JSON.stringify(v)}`);
+      }
+      if (v < b.min || v > b.max) {
+        throw new Error(`party config: "${k}" must be ${b.min}..${b.max}, got ${v}`);
+      }
+    }
+    for (const k of toggleKeys) {
+      if (patch[k] !== undefined && typeof patch[k] !== 'boolean') {
+        throw new Error(`party config: "${k}" must be a boolean, got ${JSON.stringify(patch[k])}`);
+      }
+    }
+    if (patch.playlist !== undefined) {
+      if (typeof patch.playlist !== 'string' || !patch.playlist.trim()) {
+        throw new Error(`party config: "playlist" must be a non-empty string, got ${JSON.stringify(patch.playlist)}`);
+      }
+      const available = this.listAvailablePlaylists();
+      if (!available.includes(patch.playlist)) {
+        throw new Error(
+          `party config: unknown playlist "${patch.playlist}" `
+          + `(available: ${available.join(', ') || 'none'})`);
+      }
+    }
+    const before = this.getPartyConfig();
+    if (patch.enabled !== undefined) this.state.partyEnabled = patch.enabled;
+    if (patch.playlist !== undefined) this.state.partyPlaylist = patch.playlist;
+    for (const k of [...timingKeys, ...toggleKeys]) {
+      if (patch[k] === undefined) continue;
+      this.state[`party${k[0].toUpperCase()}${k.slice(1)}`] = patch[k];
+    }
+    const after = this.getPartyConfig();
+
+    // Turning party OFF ends a live session right now: an operator who kills
+    // party mode must not wait out the remaining durationMin.
+    if (before.enabled === true && after.enabled === false) {
+      await this._endPartySessionNow();
+    }
+    this._recordLifecycle(
+      `Party mode ${after.enabled ? 'ARMED' : 'DISABLED'} — playlist "${after.playlist}", `
+      + `dwell ${after.minDwellSec}s · session ${after.durationMin}min · cooldown ${after.cooldownSec}s`,
+      'party-config', { source: 'manual' },
+    );
+    this._persistAndBroadcast();
+    return after;
+  }
+
+  /** The plan's party cue (the mood→party session cue), or null. */
+  _partyCue() {
+    if (!this.plan || !Array.isArray(this.plan.cues)) return null;
+    return this.plan.cues.find((c) => this._isPartyCue(c) && c.enabled !== false) || null;
+  }
+
+  /**
+   * The operator-facing PARTY STATUS: the persisted policy PLUS the derived
+   * `effectiveState` a client should show, so nobody paints a misleading
+   * "ARMED" while the plan isn't even running.
+   *
+   * `effectiveState` (additive to the `{enabled, playlist}` contract):
+   *   'disabled'   — the operator turned party mode off (policy)
+   *   'no_plan'    — no active plan / no party cue / outside the festival window:
+   *                  the mood trigger lives IN the plan, so with no plan driving
+   *                  there is no dwell, no session, ever — structurally
+   *   'manual'     — a human has taken over; the plan (and therefore party) yields
+   *   'in_session' — a party session owns the deck right now
+   *   'cooldown'   — a session ended and the cue's cooldownSec has not elapsed
+   *   'armed'      — party mode can fire
+   *
+   * Precedence of the states mirrors the real precedence: HUMAN > operator
+   * disable > plan automation. `disabled` is reported ahead of `manual` because
+   * it is the operator's own standing decision, and both are ahead of anything
+   * the automation would do.
+   */
+  getPartyStatus() {
+    const cfg = this.getPartyConfig();
+    const now = this.nowFn();
+    const cue = this._partyCue();
+    const inWindow = this._inFestivalWindow();
+    const planDriving = !!(this.plan && this.state) && this._isPlanDrivingDeck();
+    const controller = (this.state && this.state.controller) || 'autopilot';
+    const mode = (this.state && this.state.mode) || 'armed';
+
+    let sessionEndsAtMs = null;
+    let inSession = false;
+    if (cue && this._deckWindowCueId === cue.id) {
+      inSession = this._deckWindowUntilMs === null || this._deckWindowUntilMs > now;
+      sessionEndsAtMs = typeof this._deckWindowUntilMs === 'number' ? this._deckWindowUntilMs : null;
+    }
+
+    // The cooldown starts AT SESSION END (D3), so it is 0 for the whole session:
+    // reporting a countdown while the session runs is what made CaptainPad's
+    // cooldown copy describe a state that could never occur.
+    let cooldownRemainingSec = 0;
+    if (!inSession && cue && this.state && this.state.moodLastFire) {
+      const last = this.state.moodLastFire[cue.id];
+      const cdSec = cfg.effectiveCooldownSec || 0;   // party-config is the authority
+      if (typeof last === 'number' && cdSec > 0) {
+        cooldownRemainingSec = Math.max(0, Math.ceil((last + cdSec * 1000 - now) / 1000));
+      }
+    }
+
+    let effectiveState;
+    if (!cfg.enabled) effectiveState = 'disabled';
+    else if (mode === 'overridden' || (this.state && this.state.operatorLease)) effectiveState = 'manual';
+    else if (!cue || !this.plan || !this.state || !inWindow || !planDriving) effectiveState = 'no_plan';
+    else if (inSession) effectiveState = 'in_session';
+    else if (cooldownRemainingSec > 0) effectiveState = 'cooldown';
+    else effectiveState = 'armed';
+
+    return {
+      ...cfg,
+      effectiveState,
+      // Raw inputs so a client can be MORE precise than the summary if it wants.
+      planActive: planDriving && inWindow,
+      inFestivalWindow: inWindow,
+      controller,
+      mode,
+      partyCueId: cue ? cue.id : null,
+      // FIX 1 (report `_98`) — the raw one-fire-per-arrival ARM LATCH, so a client
+      // can be exact instead of inferring it. Before `_98` a SUPPRESSED fire burnt
+      // this latch and `effectiveState` still said 'armed' for the rest of the
+      // night — party was structurally impossible while the card claimed
+      // otherwise. Suppression no longer consumes the latch, so 'armed' is now
+      // truthful; `triggerArmed` is false only DURING a live session (which
+      // reports 'in_session') or after a dispatch that threw, which surfaces as
+      // `cues[].lastError`.
+      triggerArmed: cue
+        ? !(this.state && this.state.moodArmed && this.state.moodArmed[cue.id] === false)
+        : null,
+      // Whether the LIVE session is open-ended (it keeps the mode it started in).
+      sessionFollowsMusic: inSession ? this._partySessionFollowsMusic === true : null,
+      sessionEndsAtMs,
+      cooldownRemainingSec,
+    };
+  }
+
+  /** Playlist names the party cue may point at (engine playlist library). */
+  listAvailablePlaylists() {
+    if (typeof this.deps.listPlaylists !== 'function') {
+      throw new Error('party config: deps.listPlaylists is required to validate a playlist');
+    }
+    const names = this.deps.listPlaylists();
+    if (!Array.isArray(names)) {
+      throw new Error('party config: deps.listPlaylists() must return an array of names');
+    }
+    // The engine's playlistManager.list() returns plain names; some callers /
+    // fakes hand back `{ name }` rows. Accept both SHAPES (not a fallback —
+    // both are the same data), and reject anything else loudly.
+    return names.map((n) => {
+      if (typeof n === 'string') return n;
+      if (n && typeof n.name === 'string') return n.name;
+      throw new Error(`party config: playlist listing entry is not a name: ${JSON.stringify(n)}`);
+    });
+  }
+
+  /**
+   * PARTY SESSION END bookkeeping (operator semantics 2026-07-28).
+   *
+   * With a time limit, party sessions REPEAT: session (durationMin) → cooldown
+   * stamped AT SESSION END → the trigger re-arms → the next session fires while
+   * the music sustains. Both halves live HERE, not in `triggers.js` (whose
+   * fire-time bookkeeping is what prevents a re-fire DURING a session and stays
+   * byte-identical):
+   *
+   *   • D3 — the cooldown clock starts at SESSION END, not at the fire:
+   *     re-stamp `moodLastFire` with the end instant (overwriting the
+   *     evaluator's fire-time stamp), so `cooldownSec` finally governs the gap
+   *     BETWEEN sessions instead of burning inside the first one.
+   *   • D1 — the trigger RE-ARMS at session end. With continuous music the next
+   *     session fires the moment the cooldown expires: `moodSince` is never
+   *     touched, so a continuously-party mood carries its own sustain (dwell is
+   *     already satisfied — operator-decided, least surprising).
+   *
+   * `moodArmed`/`moodLastFire` live in `this.state` → persisted on the next
+   * save, so a restart mid-cooldown keeps BOTH the stamp and the armed latch.
+   * Call this from EVERY path a party session can end on.
+   *
+   * @param {number} endMs — the honest end instant (a scheduled window end when
+   *        the window elapsed, else `now`)
+   * @param {string} reason — diagnostic only
+   */
+  _notePartySessionEnd(endMs, reason) {
+    const cue = this._partyCue();
+    if (!cue) return;
+    if (!this.state.moodLastFire) this.state.moodLastFire = {};
+    if (!this.state.moodArmed) this.state.moodArmed = {};
+    this.state.moodLastFire[cue.id] = endMs;   // D3: cooldown anchored at END
+    this.state.moodArmed[cue.id] = true;       // D1: re-arm for the next session
+    this._partySessionFollowsMusic = false;
+    this._lastPartySessionEndReason = reason || null;
+  }
+
+  /**
+   * End a LIVE party session immediately (party mode was just disabled). Only
+   * acts when a party cue actually owns the deck — otherwise there is nothing
+   * to end and the deck is left exactly as it is.
+   */
+  async _endPartySessionNow() {
+    const ownerId = (this.state.activeProgram && this.state.activeProgram.cueId)
+      || this._deckWindowCueId || null;
+    if (!ownerId) return;
+    const cue = this.plan && Array.isArray(this.plan.cues)
+      ? this.plan.cues.find((c) => c.id === ownerId) : null;
+    if (!this._isPartyCue(cue)) return;
+    // Drop the ownership latch BEFORE applying the default cue so the apply is
+    // not refused by its own "a live cue owns the deck" guard.
+    this._deckWindowCueId = null;
+    this._deckWindowUntilMs = null;
+    this._defaultCueActive = false;
+    // ONE definition of "a party session ended" (D1/D3): stamp the cooldown at
+    // this instant and re-arm. Disabling while merely ARMED (no live session)
+    // early-returned above, so "disable never consumes the trigger" still holds.
+    this._notePartySessionEnd(this.nowFn(), 'party-disabled');
+    if (this.state.activeProgram && this.state.activeProgram.cueId === ownerId) {
+      this.state.activeProgram = null;
+      if (this.state.autopilotEnabled !== false) this.state.controller = 'autopilot';
+    }
+    this._recordLifecycle(
+      `Party session ended: party mode disabled by operator`,
+      'party-disabled', { cueId: ownerId, source: 'manual' },
+    );
+    // HUMAN > EVERYTHING. If a human has taken over (or the plan is otherwise
+    // not driving the deck), we do NOT reach in and re-apply the default cue —
+    // that would be a party-special bypass of the takeover the timeline already
+    // honours everywhere else. Clearing the ownership latches above is enough:
+    // the deck stays exactly where the human left it, and the plan's normal
+    // `_reconcileDefaultCue` fills it when the plan resumes driving.
+    if (!this._isPlanDrivingDeck()) return;
+    try {
+      await this._applyDefaultCue('party-disabled');
+    } catch (e) {
+      // _applyDefaultCue already latched + recorded lastError loudly; the config
+      // change itself still stands (the session is over either way).
+      console.warn(`  ⚠ [timeline] party disable: default cue failed: ${e && e.message}`);
+    }
+  }
+
   async _dispatchCue(cueId, reason) {
     const cue = this.plan.cues.find((c) => c.id === cueId);
     if (!cue) throw new Error(`cue "${cueId}" not in active plan`);
-    const result = await this._applyAction(cue.action);
+    const result = await this._applyAction(cue.action, {
+      cueId: cue.id,
+      playlistOverride: this._partyPlaylistOverrideFor(cue),
+    });
     // Open/clear the deck-ownership window for the default-cue fallback (§16.11).
-    await this._noteDeckWindow(cue.id, cue.durationMin, cue.action, this.nowFn());
+    await this._noteDeckWindow(cue.id, this._effectiveDurationMin(cue), cue.action, this.nowFn());
+    this._notePartySessionStart(cue);
     delete this.cueErrors[cueId];
     this.state.lastFiredCueId = cueId;
     this.state.lastFiredAtMs = this.nowFn();
@@ -987,39 +1748,129 @@ export class TimelineService {
     return festivalDayIndex(this.plan, this.nowFn()) !== null;
   }
 
-  // True when the plan is currently DRIVING the rig (docs/38 §16). Mirrors the
-  // `planActive` computed in getState(): autopilot-or-program controller, not
-  // overridden (operator takeover), AND in the festival window. When false the
+  // ══ OPERATOR-CRITICAL INVARIANT — PLAN DISABLED MEANS TOTALLY INERT ══════
+  //
+  // `planEnabled()` is the AUTHORITATIVE answer to "is the show plan switched
+  // on at all". When it is false the plan must own NOTHING: no cue may fire, no
+  // pending-program lease may arm or auto-start, no autopilot baseline may
+  // cycle the deck, no deck-pin / 'plan' controlLock may be raised, and any cue
+  // that WAS running ends IMMEDIATELY (see `_goDormant`, the shared teardown).
+  // The operator ruling behind this: a disabled plan that still shows a plan
+  // warning, still holds the deck, or lets a scheduled program auto-start 30 s
+  // later is a broken show, not a nuance.
+  //
+  // DO NOT re-derive this from `controller`, `mode`, or a local flag anywhere
+  // else — every consumer (tick gate, catchUp gate, planActive, the status/WS
+  // payload, CaptainPad's banners) must funnel through this predicate and
+  // `_isPlanDrivingDeck()` below so the answer can never disagree with itself.
+  planEnabled() {
+    return this.state ? this.state.autopilotEnabled !== false : false;
+  }
+
+  // ══ TIMELINE PRIORITY OVER LIVE TOUCH — OPERATOR RULING 2026-08-14 ═══════
+  //
+  // "The timeline resume when live touch takes over needs to disarm and switch
+  // back to timeline when resume is pressed OR when the lease is expired —
+  // EVEN IF THE ARM IS ACTIVE. The timeline is high priority."
+  //
+  // Both hand-back paths (`resume()` and `_releaseOperatorLease()`) call this
+  // FIRST. The engine dep runs the ordinary Live Touch disarm — the same code
+  // path a clean disarm uses — so brightness authority, the owner-local Live
+  // session, the param-centre source lock and the ARM lease all go away, and
+  // the Live client is told over WS why it just lost the desk.
+  //
+  // A broken Live client must NEVER hold the show hostage: the dep is written
+  // so it cannot throw, and a failure inside it is logged loudly and the plan
+  // continues regardless. Nothing here is gated on authentication — taking
+  // over FROM the timeline may be gated, coming BACK to it never is.
+  _yieldLiveTouchToPlan(why) {
+    if (typeof this.deps.yieldLiveTouch !== 'function') return;
+    try {
+      this.deps.yieldLiveTouch(why);
+    } catch (e) {
+      this.lastError = `live touch yield: ${e && e.message}`;
+      console.warn(`  ⚠ [timeline] Live Touch force-disarm reported an error (${why}): `
+        + `${e && e.message} — the plan is taking over anyway.`);
+    }
+  }
+
+  // ══ THE ONE "the plan is driving the rig" PREDICATE ══════════════════════
+  //
+  // True when the plan is currently DRIVING the rig (docs/38 §16): the plan is
+  // ENABLED, an autopilot-or-program controller owns it, no operator takeover
+  // is in force, AND the plan is inside its festival window. When false the
   // plan owns nothing and its soft deck-pin must be released.
+  //
+  // getState().planActive returns EXACTLY this value — the two used to be
+  // hand-copied expressions and must never drift apart again. Every plan
+  // banner / scrim / lock in every client derives from that one field.
   //
   // The festival-window term is the SAME isolation gate as everywhere else
   // (operator request 2026-07-03): out of its scheduled days the plan drives
   // nothing, so it never "drives the deck" for pin/lock purposes.
   _isPlanDrivingDeck() {
+    if (!this.planEnabled()) return false;
     const controller = this.state.controller || 'autopilot';
     return (controller === 'autopilot' || controller === 'program')
       && this.state.mode !== 'overridden'
       && this._inFestivalWindow();
   }
 
-  // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): go fully DORMANT.
-  // Out of the plan's scheduled days the plan must affect NOTHING — no autopilot
-  // baseline cycling the deck, no cue fires, no deck-pin / 'plan' lock, no
-  // takeover. The ONLY out-of-window signal is the timeline tab's "not in time"
-  // note (getState.inFestivalWindow=false). This tears down everything the plan
-  // might own and hands the whole rig back to the operator. Idempotent + cheap
-  // at steady state (the disarm is _baselineArmed-gated; the pin release early-
-  // returns when nothing is pinned; the state writes are all no-ops once set).
+  // ══ THE ONE PLAN-TEARDOWN PATH — OPERATOR-CRITICAL, TREAT AS LOAD-BEARING ══
+  //
+  // Go fully DORMANT: the plan must affect NOTHING — no autopilot baseline
+  // cycling the deck, no active program, no armed/pending program lease, no
+  // cue owning the deck window, no deck-pin / 'plan' lock, no takeover lease.
+  //
+  // TWO CALLERS, ONE PATH, BY DESIGN:
+  //   • FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03) — out of the
+  //     plan's scheduled days. Signalled by getState.inFestivalWindow=false.
+  //   • PLAN DISABLED (operator ruling 2026-08-14) — AUTO off / plan not
+  //     enabled. ALL ACTIVE CUES END RIGHT HERE, RIGHT NOW, rather than at
+  //     their natural expiry. This IS the natural cue-end path: it clears the
+  //     active program and the deck-ownership latches and releases the plan's
+  //     deck-pin, which is precisely what a hold expiring does — only executed
+  //     immediately. It deliberately does NOT re-establish a baseline or load a
+  //     replacement look: a disabled plan drives nothing, so the rig simply
+  //     keeps whatever the operator has on it.
+  //
+  // Whoever calls it, afterwards `_isPlanDrivingDeck()` reads false, so
+  // getState().planActive is false and every client's plan banner/scrim/lock
+  // drops. Idempotent + cheap at steady state (the disarm is _baselineArmed-
+  // gated; the pin release early-returns when nothing is pinned; the state
+  // writes are all no-ops once set), so it is safe to fire redundantly — the
+  // tick does exactly that on every dormant/disabled tick.
   async _goDormant() {
+    // ZOOM (report _94 §3.3): a TIME-TRAVEL zoom is an OPERATOR-owned rehearsal,
+    // not the plan driving the rig — and travel is deliberately ALLOWED while the
+    // plan is dormant ("that is exactly when the operator rehearses"). Everything
+    // the PLAN owns is still torn down below; only an UNEXPIRED travel lease
+    // survives. An expired one is dropped right here, so a dormant plan can never
+    // strand a zoom (the tick's normal lease-release path is not reached out of
+    // window). A PERFORM zoom cannot exist out of window — takeover() refuses to
+    // arm one — so the window closing mid-performance correctly ends it.
+    const rehearsal = this._zoomLease();
+    const keepRehearsal = !!(rehearsal && rehearsal.scope === 'travel'
+      && this.nowFn() < rehearsal.expiresAtMs);
     // Never resume stale runtime driving/manual state out of window.
     this.state.activeProgram = null;
     this.state.pendingProgram = null;
-    this.state.operatorLease = null;
-    if (this.state.mode === 'overridden') this.state.mode = 'armed';
+    if (!keepRehearsal) {
+      this.state.operatorLease = null;
+      if (this.state.mode === 'overridden') this.state.mode = 'armed';
+    }
     this.state.controller = 'manual';
+    // PARTY (D1): the festival window closing mid-session ends that session —
+    // book it properly so the next in-window day starts ARMED, not latched dead.
+    {
+      const dormantOwner = this.plan && Array.isArray(this.plan.cues)
+        ? this.plan.cues.find((c) => c.id === this._deckWindowCueId) : null;
+      if (this._isPartyCue(dormantOwner)) this._notePartySessionEnd(this.nowFn(), 'dormant');
+    }
     this._deckWindowUntilMs = null;
     this._deckWindowCueId = null;
     this._defaultCueActive = false;
+    this._displacedDeckOwnerCueId = null;   // FIX 5 (_98): nothing to restore out of window
     // Stop the plan's baseline autopilot from cycling the deck.
     if (this._baselineArmed) {
       try {
@@ -1074,6 +1925,32 @@ export class TimelineService {
       await this._disarmBaselineAutopilot();
     }
     if (act.action && act.action.type === '__resume_autopilot__') {
+      // FIX 7 (report `_98`) — G1: a PROGRAM HOLD EXPIRING NATURALLY must land on
+      // the plan's AMBIENT defaultCue, not on the autopilot baseline.
+      //
+      // The bug (`_91` G1, `_93`/`_95` F2): `_applyAutopilotBaseline` reloads
+      // `plan.autopilot.playlist` and re-pins the deck but never clears the
+      // deck-OWNERSHIP latch, so `_reconcileDefaultCue` early-returned ("a live
+      // no-duration cue owns the deck") and the defaultCue was unreachable. The
+      // expired program kept OWNING while the BASELINE playlist played under it —
+      // on the shipped plan, `default` (not `ambient`) filled sunset+45 → sunset+120
+      // every night, and the expired look's palette was never reset. That is the
+      // inverse of the operator requirement "ambient is the dominant program".
+      //
+      // The ownership latch is released here (the program is over — it owns
+      // nothing), and with a `defaultCue` authored the deck is handed straight to
+      // it in the SAME tick: one write, no baseline flash. A plan with NO
+      // defaultCue keeps today's behavior exactly (the baseline IS its deck fill).
+      this._deckWindowCueId = null;
+      this._deckWindowUntilMs = null;
+      this._defaultCueActive = false;
+      this._displacedDeckOwnerCueId = null;
+      if (this.plan && this.plan.defaultCue) {
+        // _applyDefaultCue records its own `__default_cue__` fire (reason
+        // 'hold-expired'), arms the baseline latch and pins the deck — so the
+        // synthetic "Autopilot resumed" line would be a second, misleading entry.
+        return this._applyDefaultCue('hold-expired');
+      }
       const result = await this._applyAutopilotBaseline();
       // Autopilot-resume is a synthetic cue id — give it a readable label so the
       // event log shows "Autopilot resumed" rather than the raw sentinel id.
@@ -1082,10 +1959,14 @@ export class TimelineService {
     }
     const cue = this.plan.cues.find((c) => c.id === act.cueId);
     if (!cue) throw new Error(`cue "${act.cueId}" not in active plan`);
-    const result = await this._applyAction(act.action);
+    const result = await this._applyAction(act.action, {
+      cueId: act.cueId,
+      playlistOverride: this._partyPlaylistOverrideFor(cue),
+    });
     // Open/clear the deck-ownership window for the default-cue fallback (§16.11).
     // durationMin comes from the plan cue; the action is the one actually applied.
-    await this._noteDeckWindow(cue.id, cue.durationMin, act.action, this.nowFn());
+    await this._noteDeckWindow(cue.id, this._effectiveDurationMin(cue), act.action, this.nowFn());
+    this._notePartySessionStart(cue);
     delete this.cueErrors[act.cueId];
     this.state.lastFiredCueId = act.cueId;
     this.state.lastFiredAtMs = this.nowFn();
@@ -1107,7 +1988,17 @@ export class TimelineService {
   // Establish baseline + set controller='autopilot' iff the baseline is enabled
   // and the operator hasn't taken over. A dep failure records the error — boot
   // never crashes (codex P0). Ported from establishBaselineIfActive.
-  async _establishBaselineIfActive(reason) {
+  //
+  // `opts.keepRestoredDeck` (FIX 6, report `_98` — F1 the boot-baseline clobber):
+  // catchUp just restored a NON-program cue that still LIVE-owns the deck. Its
+  // complete action is already on the rig (playlist, palette, its own autopilot),
+  // so reloading `plan.autopilot.playlist` here would CLOBBER it — the boot/resume
+  // path landed the deck on the BASELINE playlist instead of the restored cue's.
+  // In that case we only take the baseline's BOOKKEEPING (controller 'autopilot',
+  // `_baselineArmed` so the per-tick reconcile leaves the deck alone), exactly the
+  // way `_applyDefaultCue` marks itself as the deck's baseline driver. The deck
+  // pin was already raised by the restored cue's own dispatch.
+  async _establishBaselineIfActive(reason, opts = {}) {
     const now = this.nowFn();
     // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): out of window the
     // plan never establishes an autopilot baseline (this is the gate for
@@ -1119,6 +2010,11 @@ export class TimelineService {
       return;
     }
     if (this.state.mode === 'overridden') { this.state.controller = 'manual'; return; }
+    if (opts.keepRestoredDeck === true) {
+      this.state.controller = 'autopilot';
+      this._baselineArmed = true;
+      return;
+    }
     try {
       await this._establishAutopilotBaseline(reason);
       this.state.controller = 'autopilot';
@@ -1127,7 +2023,16 @@ export class TimelineService {
       // so an empty-cues plan (or a boot into a gap) shows the default cue on the
       // deck immediately, not only after the first reconcile tick. Absent →
       // the autopilot baseline just established stands (no regression).
-      if (this.plan && this.plan.defaultCue
+      // D7: a LIVE owner blocks the fill — including an OPEN-ENDED one (a
+      // follow-the-music party session owns the deck with `untilMs:null` and
+      // the ownership latch set). Without the ownership term a mid-session
+      // savePlan/lease-release wrote `ambient` here and the resume block wrote
+      // party back one step later: a visible ambient flash on the rig. This is
+      // the SAME F1 rule `_reconcileDefaultCue` honours (an ELAPSED timed
+      // window still yields the deck, so boot/gap behavior is unchanged).
+      const liveOwner = this._deckWindowCueId !== null
+        && !(typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs <= now);
+      if (this.plan && this.plan.defaultCue && !liveOwner
           && !(typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs > now)) {
         await this._applyDefaultCue(reason);
       }
@@ -1149,12 +2054,22 @@ export class TimelineService {
     // palette/global color, colorAutopilot, pattern autopilot, transitions,
     // overlays). On BOOT it is null (fresh runtime) → nothing to re-apply.
     const priorDeckWindowCueId = this._deckWindowCueId;
-    const sunEvents = this._sunEventsFor(now);
-    // catchUp also restricts to TODAY's applicable cues (docs/38 §15.2) — a
-    // burn-night program must not "catch up" on a non-burn day.
-    const dayPlan = { ...this.plan, cues: applicableCues(this.plan, now) };
-    const dayTimes = resolveDayTimes({ plan: dayPlan, now, sunEvents });
-    const dayKey = dayKeyFor(now, this.plan.location.tz);
+    // …and the rest of the prior session, so the resume can REJOIN the ORIGINAL
+    // window instead of granting a fresh one (D5) and keep the shape it started
+    // with (open-ended vs fixed) across a mid-session toggle flip.
+    const priorDeckWindowUntilMs = this._deckWindowUntilMs;
+    const priorPartyFollowsMusic = this._partySessionFollowsMusic === true;
+    // THE SELECTION CORE lives in resolve_deck_state.js (report _94 §4.1, D5):
+    // ONE pure "resolve the plan at instant T" shared by catchUp, /timeline/travel,
+    // /timeline/resolve and the day-zoom ribbon. It restricts to TODAY's applicable
+    // cues (docs/38 §15.2 — a burn-night program must not "catch up" on a non-burn
+    // day), picks the latest already-passed restorable clock/sun cue, resolves its
+    // hold + durationMin window against its TRUE past fire time, and reports the
+    // festival-window gate. It is PURE: the state writes below are all ours.
+    const resolved = resolveDeckStateAt({
+      plan: this.plan, atMs: now, sunEvents: this._sunEventsFor(now),
+    });
+    const dayKey = resolved.dayKey;
     if (!this.state.firedToday) this.state.firedToday = {};
     this.state.dayKey = dayKey;
     // activeProgram is RUNTIME state — never resume a persisted one across a
@@ -1183,55 +2098,99 @@ export class TimelineService {
     // plan is dormant — do NOT restore/fire any cue and do NOT establish the
     // autopilot baseline on boot/activate/resume. Tear down anything owned and
     // return; the plan wakes on the first in-window tick.
-    if (!this._inFestivalWindow()) {
+    if (!resolved.inWindow) {
       await this._goDormant();
       saveTimelineState(this.state, this.stateDir);
       this.lastStateJson = JSON.stringify(this.state);
       return;
     }
 
-    let best = null;
-    for (const cue of dayPlan.cues) {
-      if (cue.enabled === false) continue;
-      const t = cue.trigger;
-      if (t.type !== 'clock' && t.type !== 'sun') continue;
-      const fireMs = dayTimes.cueTimes[cue.id];
-      if (typeof fireMs !== 'number' || fireMs > now) continue;
-      this.state.firedToday[cue.id] = dayKey;
-      const restorable = (cue.action.type === 'look' || cue.action.type === 'playlist') && cue.catchUp !== false;
-      if (restorable && (best === null || fireMs > best.fireMs)) best = { cue, fireMs };
+    // ══ PLAN-DISABLED GATE — OPERATOR-CRITICAL ═════════════════════════════
+    // catchUp is the "put the plan's look for right now on the rig" path, run
+    // on boot, scene switch, plan save/activate, resume and lease release. A
+    // DISABLED plan must never do that: an engine restarted with the plan off
+    // has to come up cue-free and stay that way, and a resume/lease-expiry must
+    // not resurrect a plan the operator switched off. Tear down and return —
+    // the rig keeps whatever non-plan state it already has, exactly like the
+    // out-of-window case above (no fallback guessing, no default playlist).
+    if (!this.planEnabled()) {
+      await this._goDormant();
+      saveTimelineState(this.state, this.stateDir);
+      this.lastStateJson = JSON.stringify(this.state);
+      return;
     }
 
-    let programCaughtUp = false;
-    if (best && best.cue.kind === 'program') {
-      const untilMs = resolveHold(best.cue.hold, best.fireMs, dayTimes);
-      // Only re-arm as an ACTIVE program if it is genuinely still inside a real
-      // (future) hold window. A no-hold (untilMs===null) or already-expired
-      // program from earlier today restores its LOOK (dispatched below) but must
-      // NOT seize the controller forever — otherwise autopilot + mood never run.
-      if (typeof untilMs === 'number' && untilMs > now) {
-        this.state.activeProgram = { cueId: best.cue.id, startedAtMs: best.fireMs, untilMs };
-        this.state.controller = 'manual';
-        programCaughtUp = true;
-      }
+    // Every already-passed clock/sun cue of today is latched fired (the resolver
+    // reports them in plan order; the latch itself is ours — the resolver is pure).
+    for (const cueId of resolved.passedCueIds) this.state.firedToday[cueId] = dayKey;
+
+    // `resolved.restored` is the SELECTION CORE's pick — the cue catchUp
+    // re-applies. (NOT `resolved.owner`, which additionally yields an ELAPSED
+    // durationMin window to the default cue: catchUp deliberately re-applies the
+    // complete action first and lets _reconcileDefaultCue / the baseline step
+    // reclaim the deck afterwards.)
+    const restored = resolved.restored;
+    const best = restored
+      ? { cue: this.plan.cues.find((c) => c.id === restored.cueId), fireMs: restored.fireMs }
+      : null;
+
+    // The resolver already applied the "genuinely still inside a real (future)
+    // hold window" rule: a no-hold or already-expired program from earlier today
+    // restores its LOOK (dispatched below) but must NOT seize the controller
+    // forever — otherwise autopilot + mood never run.
+    const programCaughtUp = !!(restored && restored.programLive);
+    if (programCaughtUp) {
+      this.state.activeProgram = {
+        cueId: restored.cueId, startedAtMs: restored.fireMs, untilMs: restored.holdUntilMs,
+      };
+      this.state.controller = 'manual';
     }
 
+    let restoredOwnsDeck = false;
     if (best) {
       try {
+        // FIX 2 (report `_98`) — DISARM ORDER. The baseline autopilot is disarmed
+        // BEFORE the caught-up program's action is applied, exactly like the live
+        // fire path (_dispatchArbitratedAction: autopilotOff → apply). It used to
+        // run AFTER, which cancelled the autopilot the program's own look had just
+        // asked for: a restart / scene switch / savePlan / takeover hand-back
+        // inside ANY program hold froze the deck on one pattern for the rest of
+        // the hold (measured `_93` §5.2: `ap OFF` for a full 90 minutes, where
+        // firing the same cue live gave `ap 90s seq`).
+        if (programCaughtUp) await this._disarmBaselineAutopilot();
         const result = await this._dispatchCue(best.cue.id, 'catchUp');
         console.log(`  ⏪ [timeline] catchUp restored "${best.cue.id}": ${result.steps.join('; ')}`);
         // §16.11: _dispatchCue opened the deck window at `now`, but a caught-up
         // cue actually fired in the PAST (best.fireMs). Re-anchor the window to
         // its true start so an already-elapsed durationMin lets the default cue
         // fill the gap immediately rather than granting a fresh full window.
+        // (`restored.windowUntilMs` IS best.fireMs + durationMin, or null when
+        // the cue has no timed window — the resolver's own re-anchor.)
         if (this._deckWindowCueId === best.cue.id
-            && typeof best.cue.durationMin === 'number' && best.cue.durationMin > 0) {
-          this._deckWindowUntilMs = best.fireMs + best.cue.durationMin * 60000;
+            && typeof restored.windowUntilMs === 'number') {
+          this._deckWindowUntilMs = restored.windowUntilMs;
         }
         if (programCaughtUp) {
-          await this._disarmBaselineAutopilot();
           this.state.controller = 'program';
+        } else if (restored.holdExpired && this._deckWindowCueId === best.cue.id) {
+          // FIX 7 (report `_98`) — the boot half of G1. A program whose hold
+          // already elapsed earlier today has its complete action re-applied
+          // above (palette / globals / master), but it OWNS NOTHING afterwards.
+          // Release the ownership latch so the baseline step below hands the deck
+          // to the plan's ambient defaultCue — the same answer the live
+          // hold-expiry path now gives, so boot and runtime agree.
+          this._deckWindowCueId = null;
+          this._deckWindowUntilMs = null;
+          this._defaultCueActive = false;
         }
+        // FIX 6 (report `_98`) — F1, the BOOT-BASELINE CLOBBER. A restored
+        // NON-program cue that still LIVE-owns the deck must not have
+        // `plan.autopilot.playlist` reloaded on top of it by the baseline step
+        // below. Invisible on the shipped plan only because every look already
+        // points at `default`; it bites the moment a look points somewhere else.
+        restoredOwnsDeck = !programCaughtUp
+          && this._deckWindowCueId === best.cue.id
+          && !(typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs <= now);
       } catch (e) {
         this.cueErrors[best.cue.id] = `catchUp failed: ${e && e.message}`;
         this.bootError = `catchUp "${best.cue.id}": ${e && e.message}`;
@@ -1239,7 +2198,7 @@ export class TimelineService {
       }
     }
 
-    if (!programCaughtUp) await this._establishBaselineIfActive('boot');
+    if (!programCaughtUp) await this._establishBaselineIfActive('boot', { keepRestoredDeck: restoredOwnsDeck });
 
     // RESUME / lease-release FULL RESET (Task 3, docs/38 §16). Re-apply the
     // COMPLETE action of the cue that OWNED the deck window before this catchUp,
@@ -1258,7 +2217,75 @@ export class TimelineService {
         && !(best && best.cue && best.cue.id === priorDeckWindowCueId)
         && this.state.mode !== 'overridden') {
       const owner = this.plan.cues.find((c) => c.id === priorDeckWindowCueId);
-      if (owner && owner.enabled !== false && await this._actionDrivesDeck(owner.action)) {
+
+      if (!owner || owner.enabled === false || !(await this._actionDrivesDeck(owner.action))) {
+        // D8: the owner is GONE from the (reloaded) plan — never leave an
+        // orphaned ownership latch pointing at a deleted cue. It blocks the
+        // default-cue fill until the phantom window elapses, stranding the deck
+        // on the autopilot baseline instead of the plan's defaultCue. Clear it
+        // and let the default cue reclaim NOW.
+        if (this._deckWindowCueId === priorDeckWindowCueId) {
+          this._deckWindowCueId = null;
+          this._deckWindowUntilMs = null;
+          this._partySessionFollowsMusic = false;
+          // Only write the deck when the default cue is not already on it (the
+          // baseline step above may have filled it): one apply, never a flash.
+          if (this._isPlanDrivingDeck() && !this._defaultCueActive) {
+            try {
+              await this._applyDefaultCue('resume-owner-gone');
+            } catch (e) {
+              console.warn(`  ⚠ [timeline] resume: default cue failed: ${e && e.message}`);
+            }
+          }
+        }
+      } else if (this._isPartyCue(owner)) {
+        // D4: a party session's precondition is a live SIGNAL + a live POLICY,
+        // not the clock. Re-applying it unconditionally RESURRECTED sessions:
+        // a fresh full durationMin from the lease-release instant, and party on
+        // the deck with the mood at CALM. Re-apply only when both still hold AND
+        // the original window has time left — and then rejoin the REMAINING
+        // window, never a fresh one.
+        const windowExpired = typeof priorDeckWindowUntilMs === 'number'
+          && priorDeckWindowUntilMs <= now;
+        const moodPartyNow = !!(this.getMood() && this.getMood().party);
+        const policyOn = this.getPartyConfig().enabled === true;
+        if (!policyOn || windowExpired || !moodPartyNow) {
+          // END the session (never resurrect). The cooldown is anchored at the
+          // TRUE end: the scheduled window end when it expired during the
+          // takeover (the operator gets the elapsed cooldown credit), else now.
+          this._deckWindowCueId = null;
+          this._deckWindowUntilMs = null;
+          this._notePartySessionEnd(windowExpired ? priorDeckWindowUntilMs : now, 'not-resumed');
+          this._recordLifecycle(
+            'Party session ended (not resumed: '
+            + (!policyOn ? 'party disabled' : windowExpired ? 'window expired' : 'music stopped') + ')',
+            'party-not-resumed', { cueId: owner.id, source: 'auto' },
+          );
+          // Only write the deck when the default cue is not already on it.
+          if (this._isPlanDrivingDeck() && !this._defaultCueActive) {
+            try {
+              await this._applyDefaultCue('party-not-resumed');
+            } catch (e) {
+              console.warn(`  ⚠ [timeline] party resume-end: default cue failed: ${e && e.message}`);
+            }
+          }
+        } else {
+          // REJOIN: re-apply the party look (overwriting operator edits made
+          // during the takeover), then put the ORIGINAL window + shape back —
+          // _dispatchCue's _noteDeckWindow/_notePartySessionStart re-anchored
+          // them to now / the CURRENT config (D5).
+          try {
+            const result = await this._dispatchCue(owner.id, 'resume');
+            this._deckWindowUntilMs = priorDeckWindowUntilMs;
+            this._partySessionFollowsMusic = priorPartyFollowsMusic;
+            console.log(`  ⟳ [timeline] resume re-applied party cue "${owner.id}": ${result.steps.join('; ')}`);
+          } catch (e) {
+            this.cueErrors[owner.id] = `resume re-apply failed: ${e && e.message}`;
+            this.lastError = `resume re-apply "${owner.id}": ${e && e.message}`;
+            console.warn(`  ⚠ [timeline] resume re-apply "${owner.id}" failed: ${e && e.message}`);
+          }
+        }
+      } else {
         try {
           const result = await this._dispatchCue(owner.id, 'resume');
           console.log(`  ⟳ [timeline] resume re-applied deck cue "${owner.id}": ${result.steps.join('; ')}`);
@@ -1290,6 +2317,7 @@ export class TimelineService {
       // Nothing below runs, so no cue fires, no lock raises, no takeover arms —
       // only the timeline tab's inFestivalWindow=false note remains.
       if (!this._inFestivalWindow()) {
+        this._cancelSequence('timeline left the festival window');
         await this._goDormant();
         // A scene action inside a dep could have torn the service down.
         if (this._tickHandle === null) return;
@@ -1300,6 +2328,40 @@ export class TimelineService {
         }
         this._broadcastState();
         return;
+      }
+
+      // ══ PLAN-DISABLED GATE — OPERATOR-CRITICAL, KEEP IT FIRST ═══════════
+      // A DISABLED plan is totally inert (see `planEnabled()`). This gate sits
+      // beside the festival-window gate and before EVERYTHING that could make
+      // the plan own something: sequence advance, cue evaluation, the arbiter
+      // (whose pending-program lease would otherwise AUTO-START a scheduled
+      // show 30 s after it comes due, even with AUTO off), baseline re-arm and
+      // the deck-pin. `_goDormant()` is the shared teardown, so a disable that
+      // lands mid-flight is reconciled here on the very next tick and cannot
+      // leave a half-active cue behind. Idempotent and cheap at steady state.
+      if (!this.planEnabled()) {
+        this._cancelSequence('the show plan is disabled');
+        await this._goDormant();
+        // A scene action inside a dep could have torn the service down.
+        if (this._tickHandle === null) return;
+        const disabledJson = JSON.stringify(this.state);
+        if (disabledJson !== this.lastStateJson) {
+          saveTimelineState(this.state, this.stateDir);
+          this.lastStateJson = disabledJson;
+        }
+        this._broadcastState();
+        return;
+      }
+
+      // Relative-time event sequences run on the service's injected clock.
+      // Due steps execute before ordinary cue evaluation for this tick; a
+      // failure is surfaced and cancels all later steps.
+      if (this._activeSequence) {
+        try {
+          await this._advanceSequence(now);
+        } catch (e) {
+          console.warn(`  [timeline] sequence failed: ${e && e.message}`);
+        }
       }
 
       // Operator-takeover lease auto-release (docs/38 §16): if the operator
@@ -1360,7 +2422,42 @@ export class TimelineService {
       const prevPendingCueId = this.state.pendingProgram
         ? this.state.pendingProgram.cueId : null;
 
-      const { fires, state: nextState } = evaluateTick({ now, plan: dayPlan, state: this.state, mood, dayTimes });
+      // ── D3: pending-program DEFERRAL under an event zoom (report _94 §3.2) ──
+      // Normally a program that comes due while the deck is manual arms a lease
+      // that AUTO-STARTS after programLeaseSec and seizes the controller even
+      // from a takeover ("the show goes on", arbiter.js:87-104 I2). That is
+      // exactly the "main cue change control" the operator excluded while zoomed.
+      // While a lease with scope ∈ {perform, travel} is alive we push the pending
+      // lease's expiry out to the ZOOM lease's own expiry — a SERVICE-LEVEL nudge
+      // BEFORE arbitrate(), so the arbiter itself stays pure and unchanged.
+      // DEFERRED, NEVER DISMISSED: no firedToday latch is burned, ENABLE still
+      // starts it now, and the exit path (resume → catchUp) fires it if its hold
+      // is still live. A PLAIN takeover keeps the I2 auto-start byte-identical.
+      const zoomLease = this._zoomLease();
+      if (zoomLease && this.state.pendingProgram
+          && typeof this.state.pendingProgram.expiresAtMs === 'number'
+          && this.state.pendingProgram.expiresAtMs < zoomLease.expiresAtMs) {
+        this.state.pendingProgram.expiresAtMs = zoomLease.expiresAtMs;
+      }
+
+      // FIX 1 (report `_98`): snapshot the mood arm-latch + cooldown stamp BEFORE
+      // the evaluation, so a fire the arbiter then DROPS can be un-booked below.
+      const moodBookkeeping = snapshotMoodBookkeeping(this.state);
+
+      const { fires, state: nextState } = evaluateTick({
+        now, plan: dayPlan, state: this.state, mood, dayTimes,
+        // PARTY OVERRIDE: show policy gates the mood→party cue, and the session
+        // numbers come from /party-config, NOT the plan. Both read every tick so
+        // an operator edit takes effect on the next second — no plan reload.
+        partyEnabled: this.getPartyConfig().enabled,
+        // `effectiveCooldownSec` is 0 in FOLLOW-THE-MUSIC mode (no cooldown at
+        // all) and when the operator turned cooldown off — so re-triggering
+        // needs only the always-enforced minDwellSec sustain.
+        partyTiming: {
+          minDwellSec: this.getPartyConfig().minDwellSec,
+          cooldownSec: this.getPartyConfig().effectiveCooldownSec,
+        },
+      });
       this.state = nextState;
       this.state.currentMood = mood.party ? 'party' : 'calm';
 
@@ -1376,12 +2473,41 @@ export class TimelineService {
       // fold them into a ring exposed by getState() (control WS carries only
       // timelineState).
       const dispatchedCues = new Set(actions.map((a) => a.cueId));
+      // EDGE-ONLY suppression logging. Before `_98` a suppressed mood fire burnt
+      // its own arm latch, so an episode could only ever be logged ONCE — the ring
+      // was self-limiting by virtue of the bug. Now the trigger stays armed and
+      // legitimately re-asks every tick (that is what makes party start the
+      // INSTANT the program's hold ends), so the ring must record one entry per
+      // continuous episode instead of one per second.
+      const suppressedNow = new Map();
       for (const fire of fires) {
         if (!dispatchedCues.has(fire.cueId)) {
-          this.wouldFire.push({ cueId: fire.cueId, reason: fire.reason, controller: this.state.controller, atMs: now });
-          if (this.wouldFire.length > RECENT_MAX) this.wouldFire.shift();
+          suppressedNow.set(fire.cueId, this.state.controller);
+          if (this._suppressionEpisode.get(fire.cueId) !== this.state.controller) {
+            this.wouldFire.push({ cueId: fire.cueId, reason: fire.reason, controller: this.state.controller, atMs: now });
+            if (this.wouldFire.length > RECENT_MAX) this.wouldFire.shift();
+          }
+          // FIX 1 (report `_98`) — A SUPPRESSED FIRE CONSUMES NOTHING.
+          //
+          // `triggers.js` is PURE: it cannot know whether the arbiter will let a
+          // mood fire drive the lights, so it stamps the cooldown (`moodLastFire`)
+          // and burns the one-fire-per-arrival latch (`moodArmed`) at evaluation
+          // time. When the arbiter then drops the fire — a program owns the deck,
+          // or the operator has taken over — the trigger was spent on a show that
+          // never played, and `moodArmed` only re-arms on a return to CALM. Cost
+          // on the real plan (`_93` §5.1): ONE suppression at 21:02 inside the
+          // burn-night hold produced ZERO party sessions for the whole night, even
+          // after the hold expired; the same plan and music on a non-burn day gave
+          // 35. The CaptainPad PARTY card read ARMED throughout.
+          //
+          // This is the SERVICE — the only layer that knows what actually played —
+          // so it rolls the bookkeeping back. Same invariant the operator's
+          // `partyEnabled` gate already states in triggers.js: suppression
+          // suppresses the SHOW, it does not consume the trigger.
+          if (fire.reason === 'mood') rollbackMoodFire(this.state, fire.cueId, moodBookkeeping);
         }
       }
+      this._suppressionEpisode = suppressedNow;
 
       // ── lifecycle edges out of the arbiter (docs/38 §15.2, edge-only) ──────
       // Logged BEFORE the dispatch loop so the transition precedes the fire it
@@ -1392,11 +2518,20 @@ export class TimelineService {
       // armed a countdown lease instead of firing (docs/38 §16.5). cueId edge —
       // a lease re-observed on later ticks (same cue) is never re-logged.
       if (pendNow && pendNow.cueId && pendNow.cueId !== prevPendingCueId) {
-        const inSec = Math.max(0, Math.round((pendNow.expiresAtMs - now) / 1000));
-        this._recordLifecycle(
-          `Show pending: ${pendNow.label || pendNow.cueId} (auto-starts in ${inSec}s)`,
-          'lease-armed', { cueId: pendNow.cueId, source: 'auto' },
-        );
+        if (zoomLease) {
+          // D3: under a zoom the "auto-starts in Ns" line would be a lie — the
+          // start is deferred to the zoom exit. Say so.
+          this._recordLifecycle(
+            `Show deferred: ${pendNow.label || pendNow.cueId} (starts when you exit the zoom)`,
+            'lease-deferred', { cueId: pendNow.cueId, source: 'auto' },
+          );
+        } else {
+          const inSec = Math.max(0, Math.round((pendNow.expiresAtMs - now) / 1000));
+          this._recordLifecycle(
+            `Show pending: ${pendNow.label || pendNow.cueId} (auto-starts in ${inSec}s)`,
+            'lease-armed', { cueId: pendNow.cueId, source: 'auto' },
+          );
+        }
       }
       // Pending-program lease AUTO-START: the lease expired un-actioned and the
       // arbiter promoted it to the active program this tick (docs/38 §16.5 I2).
@@ -1451,6 +2586,16 @@ export class TimelineService {
         console.warn(`  ⚠ [timeline] deck-pin reconcile failed: ${e && e.message}`);
       }
 
+      // FOLLOW-THE-MUSIC release (durationEnabled:false): an open-ended party
+      // session ends the moment the party signal drops. Runs BEFORE the
+      // default-cue reconcile so the release and the refill happen in one tick.
+      try {
+        await this._reconcilePartyFollowMusic(mood && mood.party ? 1 : 0);
+      } catch (e) {
+        this.lastError = `party follow-music: ${e && e.message}`;
+        console.warn(`  ⚠ [timeline] party follow-music release failed: ${e && e.message}`);
+      }
+
       // Reconcile the DEFAULT CUE against the deck-ownership window (§16.11): a
       // durationMin window that just elapsed (or a plan with no owning cue right
       // now) reverts the deck to plan.defaultCue. No-op when defaultCue is absent
@@ -1479,6 +2624,35 @@ export class TimelineService {
     }
   }
 
+  // ── multi-day overview (cached off the request path) ──────────────────────
+  //
+  // J1 (report _116 / _113): `buildOverview` (the day ribbon) is O(days×cues²)
+  // and used to run SYNCHRONOUSLY on the HTTP thread on every GET/POST
+  // /timeline/overview — up to 296 s frozen at the 512-cue cap, starving the
+  // render loop / sACN out / tick. The pure builder is now far cheaper (Intl
+  // formatters cached + per-day `dayTimes` injected — see triggers.js /
+  // resolve_deck_state.js), but the ACTIVE-plan GET is also MEMOISED here so a
+  // ribbon is built at most once per (plan, calendar-day) no matter how often
+  // day-zoom re-opens. The cache key is the plan-object identity (a new object
+  // on every activate/savePlan/reload) plus the day bucket (a non-festival plan
+  // renders "today", which rolls at midnight). Invalidates itself on plan swap;
+  // no stale ribbon can survive an edit. The POST path (an arbitrary UNSAVED
+  // draft) is not cacheable per-service and calls `buildOverview` directly —
+  // bounded now by the same pure-builder speed-ups.
+  getOverview(nowMs) {
+    const now = typeof nowMs === 'number' ? nowMs : this.nowFn();
+    if (!this.plan) return buildOverview(this.plan, now);
+    // Day bucket only matters when the plan has no festival span (renders today).
+    const dayBucket = this.plan.festival ? 'festival' : dayKeyFor(now, this.plan.location.tz);
+    const cache = this._overviewCache;
+    if (cache && cache.plan === this.plan && cache.dayBucket === dayBucket) {
+      return cache.value;
+    }
+    const value = buildOverview(this.plan, now);
+    this._overviewCache = { plan: this.plan, dayBucket, value };
+    return value;
+  }
+
   // ── timelineState (preserved shape) ───────────────────────────────────────
 
   getState() {
@@ -1490,11 +2664,18 @@ export class TimelineService {
         controller: 'autopilot', planActive: false, forcingDeckView: false,
         inFestivalWindow: this._inFestivalWindow(), festivalStartsInDays: festivalStartsInDays(this.plan, now),
         autopilotEnabled: true, activeProgram: null, activeCue: null,
+        activeSequence: null, lastSequence: null,
         pendingProgram: null, operatorLease: null, operatorLeaseSec: this.operatorLeaseSec,
+        zoom: null,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
+        moodKey: null, moodStale: false, moodStaleForSec: null, moodStaleSec: null,
+        moodRawValue: null, moodStaleEpisodes: 0,
+        // PARTY OVERRIDE — no state loaded yet ⇒ the shipped policy.
+        partyEnabled: true, partyPlaylist: PARTY_PLAYLIST_DEFAULT,
         engineConnected: true,
         waiting: true, nextCue: null,
         sun: {}, phases: {}, cues: [], recentFires: [], wouldFire: [],
+        planWarnings: this.planWarnings,
         lastError: this.bootError || this.lastError,
       };
     }
@@ -1556,13 +2737,14 @@ export class TimelineService {
     }
     const controller = this.state.controller || 'autopilot';
     // planActive (docs/38 §16): the timeline is actively DRIVING the rig.
-    // OUT OF THE FESTIVAL WINDOW this is ALWAYS false (operator request
-    // 2026-07-03): the plan drives nothing out of its scheduled days, so the
-    // deck/mixer lock, the takeover flow, and the plan indicator all stay off —
-    // only the timeline tab's inFestivalWindow=false note shows.
-    const planActive = (controller === 'autopilot' || controller === 'program')
-      && this.state.mode !== 'overridden'
-      && inWindow;
+    // THE SINGLE SOURCE OF TRUTH is `_isPlanDrivingDeck()` — do not re-derive
+    // it here. It is false whenever the plan is DISABLED (operator-critical
+    // invariant: a disabled plan owns nothing and shows no warning anywhere)
+    // and whenever the plan is out of its festival window (operator request
+    // 2026-07-03) — so the deck/mixer lock, the takeover flow, and every client
+    // plan banner/scrim all stay off; only the timeline tab's
+    // inFestivalWindow=false / autopilotEnabled=false notes show.
+    const planActive = this._isPlanDrivingDeck();
     // forcingDeckView (docs/38 §16.9): the plan is active AND the engine output
     // is currently pinned to the deck under plan control. CaptainPad reads this
     // to know a switch-to-mixer needs the confirm prompt + 1-min auto-revert
@@ -1588,6 +2770,23 @@ export class TimelineService {
         cueId: this.state.activeProgram.cueId,
         startedAtMs: this.state.activeProgram.startedAtMs,
         untilMs: this.state.activeProgram.untilMs !== undefined ? this.state.activeProgram.untilMs : null,
+      };
+    }
+
+    let activeSequence = null;
+    if (this._activeSequence) {
+      const sequence = this._activeSequence;
+      const nextStep = sequence.steps[sequence.nextIndex] || null;
+      const nextAtMs = nextStep
+        ? sequence.startedAtMs + nextStep.afterSec * 1000
+        : now;
+      activeSequence = {
+        cueId: sequence.cueId,
+        startedAtMs: sequence.startedAtMs,
+        nextStepIndex: sequence.nextIndex,
+        totalSteps: sequence.steps.length,
+        nextAtMs,
+        nextInSec: Math.max(0, (nextAtMs - now) / 1000),
       };
     }
 
@@ -1635,13 +2834,39 @@ export class TimelineService {
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
       activeCue,
+      activeSequence,
+      lastSequence: this._lastSequence,
       pendingProgram,
       operatorLease,
       operatorLeaseSec: this.operatorLeaseSec,
+      // EVENT ZOOM (report _94 §4.2): null unless the operator holds a SCOPED
+      // takeover. Runtime-only — cleared wherever the lease already clears, so
+      // an engine restart / lease expiry / autopilot OFF / plan save all drop it
+      // and the clients fall back to the TIMELINE level.
+      zoom: this._zoomWire(),
       currentPhase: phaseNow,
       currentMood: mood.party ? 'party' : 'calm',
       party: mood.party,
       moodValue: mood.value,
+      // MOOD SOURCE HEALTH (report 20260725_10 build item 5). The mood key is
+      // produced by a SEPARATE process (the audio companion); when it stops
+      // publishing the CPC freezes rather than going quiet, so the guard forces
+      // CALM. That is a DESIGNED failure state and it must be visible on the
+      // API: `moodStale` true means party detection is DOWN and the ambient
+      // program is running BECAUSE of it — `moodRawValue` shows the frozen
+      // value we are refusing. Absent fields ⇒ a mood source without the guard.
+      moodKey: mood.key !== undefined ? mood.key : null,
+      moodStale: mood.stale === true,
+      moodStaleForSec: mood.staleForSec !== undefined ? mood.staleForSec : null,
+      moodStaleSec: mood.staleSec !== undefined ? mood.staleSec : null,
+      moodRawValue: mood.rawValue !== undefined ? mood.rawValue : null,
+      moodStaleEpisodes: mood.staleEpisodes !== undefined ? mood.staleEpisodes : 0,
+      // PARTY OVERRIDE (operator authority): show POLICY, observable next to the
+      // mood it gates. `partyEnabled:false` ⇒ the mood cue cannot fire even
+      // while `currentMood` reads 'party' — the detector is deliberately still
+      // sensing. `partyPlaylist` is what the next party session will load.
+      partyEnabled: this.getPartyConfig().enabled,
+      partyPlaylist: this.getPartyConfig().playlist,
       engineConnected: true,
       waiting: false,
       nextCue,
@@ -1650,6 +2875,11 @@ export class TimelineService {
       cues,
       recentFires: this.recentFires.slice(-RECENT_MAX),
       wouldFire: this.wouldFire.slice(-RECENT_MAX),
+      // FIX 4 (report `_98`): AUTHORING findings for the active plan (additive —
+      // old clients ignore it). Today's only rule is the program-look deck
+      // freeze; see show_plan.js lintShowPlan for why it is a loud diagnostic
+      // rather than a load-time throw.
+      planWarnings: this.planWarnings,
       lastError: this.bootError || this.lastError,
     };
   }
@@ -1658,7 +2888,281 @@ export class TimelineService {
     this.broadcast(this.getState());
   }
 
+  // ── ZOOM: scoped takeovers + time travel (report _94 §3, §4.2) ────────────
+  //
+  // EVENT ZOOM is a SCOPED OPERATOR TAKEOVER — the human layer the arbiter
+  // already puts above program and autopilot (arbiter.js:5-18). The ONLY
+  // addition is a `scope` tag on the operator lease:
+  //   scope 'perform' — the event is LIVE and the operator performs it
+  //   scope 'travel'  — the event is not live; the deck shows the plan's
+  //                     resolved state at the target instant (a STATIC snapshot)
+  // The zoom is carried ON the lease object itself, so EVERY existing path that
+  // clears the lease (catchUp, resume, lease expiry, autopilot OFF, dormancy,
+  // enableProgram, the orphan-lease self-heal) clears the zoom for free — it is
+  // structurally impossible to strand a zoom. Runtime-only, exactly like the
+  // lease: an engine restart boots into the plan-at-now.
+
+  /** The live ZOOM lease, or null. A plain (unscoped) takeover is not a zoom. */
+  _zoomLease() {
+    if (!this.state || this.state.mode !== 'overridden') return null;
+    const lease = this.state.operatorLease;
+    if (!lease || (lease.scope !== 'perform' && lease.scope !== 'travel')) return null;
+    return lease;
+  }
+
+  /** The `zoom` wire field (null when no zoom is held). */
+  _zoomWire() {
+    const lease = this._zoomLease();
+    if (!lease) return null;
+    const tz = this.plan.location.tz;
+    const zoom = {
+      scope: lease.scope,
+      cueId: lease.cueId !== undefined ? lease.cueId : null,
+      label: lease.label !== undefined ? lease.label : null,
+      targetMs: lease.targetMs !== undefined ? lease.targetMs : null,
+      targetLocal: typeof lease.targetMs === 'number'
+        ? formatLocal(new Date(lease.targetMs), tz) : null,
+      targetDate: lease.targetDate !== undefined ? lease.targetDate : null,
+      pendingDeferred: null,
+    };
+    // D3: a program that came due mid-zoom is DEFERRED, never dismissed. Surface
+    // it so the banner can say "Show due: <label> — starts when you exit" and
+    // offer the existing ENABLE (POST /timeline/program/enable) to start it now.
+    const pend = this.state.pendingProgram;
+    if (pend && pend.cueId) {
+      zoom.pendingDeferred = {
+        cueId: pend.cueId,
+        label: pend.label || pend.cueId,
+        dueAtLocal: typeof pend.armedAtMs === 'number'
+          ? formatLocal(new Date(pend.armedAtMs), tz) : null,
+      };
+    }
+    return zoom;
+  }
+
+  // Every applicable + enabled TIMED (clock/sun) cue of a calendar day, with its
+  // resolved fire instant, sorted. Backs the event steppers and cueId targeting.
+  _dayCueTimes(dateKey) {
+    const tz = this.plan.location.tz;
+    const dayNoonMs = dateClockToEpochMs(dateKey, '12:00', tz);
+    const sunEvents = computeSunEvents({
+      lat: this.plan.location.lat, lon: this.plan.location.lon, date: new Date(dayNoonMs), tz,
+    });
+    const dayPlan = { ...this.plan, cues: applicableCues(this.plan, dayNoonMs) };
+    const dayTimes = resolveDayTimes({ plan: dayPlan, now: dayNoonMs, sunEvents });
+    const out = [];
+    for (const cue of dayPlan.cues) {
+      if (cue.enabled === false) continue;
+      const atMs = dayTimes.cueTimes[cue.id];
+      if (typeof atMs !== 'number') continue;
+      out.push({ cueId: cue.id, label: cue.label || cue.id, atMs });
+    }
+    out.sort((a, b) => a.atMs - b.atMs);
+    return out;
+  }
+
+  /**
+   * Resolve a TARGET spec → { date, time, atMs, cueId }. THROWS loud on anything
+   * unresolvable (no fallback to "now", no silent clamp).
+   *
+   *   { date:'YYYY-MM-DD', time:'HH:MM' }  — an explicit instant
+   *   { cueId, date? }                     — a cue's fire instant on that date
+   *                                          (date defaults to the current travel
+   *                                          target's date, else today)
+   *   { step:'prev'|'next' }               — the neighbouring event on the
+   *                                          current travel target's day
+   */
+  _resolveTarget(spec) {
+    if (!this.plan) throw new Error('no active plan');
+    const tz = this.plan.location.tz;
+    const body = spec || {};
+    const zoomLease = this._zoomLease();
+    const currentDate = zoomLease && zoomLease.targetDate ? zoomLease.targetDate : null;
+
+    if (body.step !== undefined) {
+      if (body.step !== 'prev' && body.step !== 'next') {
+        throw new Error(`step must be "prev" or "next", got ${JSON.stringify(body.step)}`);
+      }
+      if (!zoomLease || typeof zoomLease.targetMs !== 'number' || !currentDate) {
+        throw new Error('step requires an active time-travel target');
+      }
+      const events = this._dayCueTimes(currentDate);
+      const from = zoomLease.targetMs;
+      const hit = body.step === 'next'
+        ? events.find((e) => e.atMs > from)
+        : [...events].reverse().find((e) => e.atMs < from);
+      if (!hit) throw new Error(`no ${body.step} event on ${currentDate}`);
+      return {
+        date: currentDate, time: formatLocal(new Date(hit.atMs), tz), atMs: hit.atMs, cueId: hit.cueId,
+      };
+    }
+
+    if (body.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) {
+      throw new Error(`date must be YYYY-MM-DD, got ${JSON.stringify(body.date)}`);
+    }
+
+    if (body.cueId !== undefined) {
+      if (typeof body.cueId !== 'string' || !body.cueId) {
+        throw new Error(`cueId must be a non-empty string, got ${JSON.stringify(body.cueId)}`);
+      }
+      const date = body.date !== undefined ? body.date
+        : (currentDate || dayKeyFor(this.nowFn(), tz));
+      const hit = this._dayCueTimes(date).find((e) => e.cueId === body.cueId);
+      if (!hit) {
+        throw new Error(`cue "${body.cueId}" has no resolvable time on ${date} (not applicable, disabled, or not a clock/sun cue)`);
+      }
+      return {
+        date, time: formatLocal(new Date(hit.atMs), tz), atMs: hit.atMs, cueId: hit.cueId,
+      };
+    }
+
+    if (body.date === undefined || body.time === undefined) {
+      throw new Error('target requires { date, time } or { cueId } or { step }');
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(body.time))) {
+      throw new Error(`time must be HH:MM (24 h), got ${JSON.stringify(body.time)}`);
+    }
+    return {
+      date: body.date, time: body.time,
+      atMs: dateClockToEpochMs(body.date, body.time, tz), cueId: null,
+    };
+  }
+
+  // The WIRE shape of a resolver answer (the internal dayTimes/sunEvents/latch
+  // bookkeeping stays inside the engine).
+  _resolveWire(r) {
+    const tz = this.plan.location.tz;
+    const local = (ms) => (typeof ms === 'number' ? formatLocal(new Date(ms), tz) : null);
+    return {
+      atMs: r.atMs,
+      atLocal: local(r.atMs),
+      date: r.dayKey,
+      tz,
+      inWindow: r.inWindow,
+      festivalDayIndex: r.festivalDayIndex,
+      phase: r.phase,
+      owner: r.owner,
+      action: r.action,
+      playlist: r.playlist,
+      palette: r.palette,
+      windowUntilMs: r.windowUntilMs,
+      windowUntilLocal: local(r.windowUntilMs),
+      holdUntilMs: r.holdUntilMs,
+      holdUntilLocal: local(r.holdUntilMs),
+      fireMs: r.fireMs,
+      fireLocal: local(r.fireMs),
+      controller: r.controller,
+      source: r.source,
+    };
+  }
+
+  /**
+   * READ-ONLY resolver peek (GET /timeline/resolve). Zero side effects: nothing
+   * is dispatched, no latch is written, no lease is armed. THROWS on an
+   * unresolvable or out-of-festival-window target (→ 400).
+   */
+  resolveAt(spec) {
+    const target = this._resolveTarget(spec);
+    const r = resolveDeckStateAt({ plan: this.plan, atMs: target.atMs });
+    if (!r.inWindow) {
+      throw new Error(`target ${target.date} ${target.time} is outside the festival window`);
+    }
+    return { ...this._resolveWire(r), target };
+  }
+
+  // Put the plan's RESOLVED state at the travel target on the deck, through the
+  // NORMAL dispatch path (_applyAction — the same one catchUp uses to restore a
+  // cue). Deliberately does NOT touch the live plan's bookkeeping: no firedToday
+  // latch, no cooldown stamp, no activeProgram, no deck-ownership window, no
+  // party session. The resolver is read-only and the apply happens under the
+  // human layer, so the real night is untouched (_94 §3.3).
+  async _applyResolvedSnapshot(r) {
+    if (r.action) return this._applyAction(r.action);
+    // owner 'baseline': no defaultCue authored, so what would play is the plan's
+    // autopilot baseline playlist. Loaded WITHOUT touching `_baselineArmed` —
+    // under a takeover the controller is manual and _reconcileBaselineArm must
+    // not see a phantom armed baseline to disarm.
+    const ap = this.plan.autopilot;
+    if (!ap || !ap.playlist) return { steps: [] };
+    const steps = [];
+    const targets = await this._resolveTargets(ap.target);
+    for (const target of targets) await this._loadPlaylistOnTarget(target, ap.playlist, steps);
+    const state = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
+    for (const target of targets) await this._setAutopilotOnTarget(target, state, steps);
+    return { steps };
+  }
+
+  /**
+   * TIME TRAVEL (POST /timeline/travel, _94 §3.3): enter a scoped takeover and
+   * put the plan's resolved deck state at the target instant on the rig. A
+   * STATIC snapshot in plan-time (operator ruling D4) — it does NOT tick, and the
+   * live service clock is NEVER warped (a clock warp would latch firedToday for
+   * the simulated day and silently cancel the real night).
+   *
+   * Idempotent retarget: calling it while already travelling moves the target.
+   * Exits are the existing ones — POST /timeline/resume, lease expiry, autopilot
+   * OFF, plan save/activate, engine restart — all of which funnel through
+   * resume()/_catchUp, so the rig can never stay stuck in a zoom.
+   *
+   * @param {{date?:string, time?:string, cueId?:string, step?:'prev'|'next'}} spec
+   * @returns {Promise<{ok:true, zoom:object, resolved:object, steps:string[]}>}
+   */
+  async travel(spec) {
+    if (!this.plan || !this.state) throw new Error('no active plan');
+    const target = this._resolveTarget(spec);
+    const r = resolveDeckStateAt({ plan: this.plan, atMs: target.atMs });
+    if (!r.inWindow) {
+      throw new Error(`target ${target.date} ${target.time} is outside the festival window`);
+    }
+    const label = r.owner ? r.owner.label : null;
+    const wasZoomed = !!this._zoomLease();
+    // Enter (or retarget) the scoped takeover. Same human layer as any takeover:
+    // mode 'overridden' → controller manual → the plan drives nothing.
+    this.state.mode = 'overridden';
+    this.state.controller = 'manual';
+    this.state.operatorLease = {
+      expiresAtMs: this.nowFn() + this.operatorLeaseSec * 1000,
+      scope: 'travel',
+      cueId: target.cueId !== null ? target.cueId : (r.owner ? r.owner.cueId : null),
+      label,
+      targetMs: target.atMs,
+      targetDate: target.date,
+    };
+    this._recordLifecycle(
+      `Time travel${wasZoomed ? ' retargeted' : ''}: ${target.date} ${target.time} → ${label || 'nothing'}`,
+      wasZoomed ? 'travel-retarget' : 'travel', { cueId: this.state.operatorLease.cueId, source: 'manual' },
+    );
+    // The operator owns the rig now → drop the plan's soft deck-pin, exactly as
+    // takeover() does.
+    try {
+      await this._reconcileDeckPin();
+    } catch (e) {
+      this.lastError = `travel deck-pin release: ${e && e.message}`;
+    }
+    let steps = [];
+    try {
+      const result = await this._applyResolvedSnapshot(r);
+      steps = result.steps || [];
+      this.lastError = null;
+      console.log(`  🕰 [timeline] travel ${target.date} ${target.time}: ${steps.join('; ')}`);
+    } catch (e) {
+      this.lastError = `travel ${target.date} ${target.time}: ${e && e.message}`;
+      this._persistAndBroadcast();
+      throw e;
+    }
+    this._persistAndBroadcast();
+    return {
+      ok: true, zoom: this._zoomWire(), resolved: { ...this._resolveWire(r), target }, steps,
+    };
+  }
+
   // ── plan library CRUD (backs the CaptainPad maker) ────────────────────────
+
+  _serializePlanMutation(operation) {
+    const result = this._planMutationTail.then(operation);
+    this._planMutationTail = result.catch(() => undefined);
+    return result;
+  }
 
   _assertPlanName(name) {
     if (typeof name !== 'string' || !PLAN_NAME_RE.test(name)) {
@@ -1683,21 +3187,59 @@ export class TimelineService {
 
   /** Validate-then-write an authored plan. THROWS on an invalid plan (no fallback). */
   async savePlan(plan) {
+    return this._serializePlanMutation(() => this._savePlan(plan));
+  }
+
+  async _savePlan(plan) {
     if (!plan || typeof plan !== 'object') throw new Error('savePlan: plan must be an object');
     const normalized = validateShowPlan(plan);
     this._assertPlanName(normalized.name);
     if (!fs.existsSync(this.sceneDir)) fs.mkdirSync(this.sceneDir, { recursive: true });
-    saveShowPlan(normalized, this._planPath(normalized.name));
+    const planPath = this._planPath(normalized.name);
+    const updatesActivePlan = normalized.name === this.activePlan;
+    const priorPlan = updatesActivePlan ? this.plan : null;
+
+    // An active-plan save must later persist the re-derived runtime state. Prove
+    // that commit path BEFORE replacing authored YAML; otherwise a broken/full
+    // state directory makes the endpoint report failure after the plan file has
+    // already landed (a false NOT SAVED response in CaptainPad).
+    if (updatesActivePlan) saveTimelineState(this.state, this.stateDir);
+    saveShowPlan(normalized, planPath);
     // Saving OVER the ACTIVE plan hot-reloads it. Previously the engine kept
     // running the stale in-memory copy until re-activate (disk/memory
     // divergence), which also left freshly-saved cues invisible to the live
     // overview — the maker's FIRE buttons stayed dead after SAVE. Swap the
     // plan in place (the event ring is PRESERVED — unlike activatePlan) and
     // catchUp so cue windows / baseline re-derive from the new content.
-    if (normalized.name === this.activePlan) {
-      this.plan = normalized;
-      this._recordLifecycle(`Plan updated (live): ${normalized.name}`, 'save', { source: 'manual' });
-      await this._catchUp();
+    if (updatesActivePlan) {
+      try {
+        this._cancelSequence('active plan was updated');
+        this.plan = normalized;
+        this._lintActivePlan();   // FIX 4 (_98): re-surface authoring findings on every save
+        await this._catchUp();
+        this._recordLifecycle(`Plan updated (live): ${normalized.name}`, 'save', { source: 'manual' });
+      } catch (error) {
+        const rollbackFailures = [];
+        try {
+          saveShowPlan(priorPlan, planPath);
+        } catch (rollbackWriteError) {
+          rollbackFailures.push(`authored plan: ${rollbackWriteError.message}`);
+        }
+        this._cancelSequence('active plan update failed and was rolled back');
+        this.plan = priorPlan;
+        this._lintActivePlan();
+        try {
+          await this._catchUp();
+        } catch (rollbackRuntimeError) {
+          rollbackFailures.push(`runtime restore: ${rollbackRuntimeError.message}`);
+        }
+        const rollbackDetail = rollbackFailures.length > 0
+          ? `; rollback failures: ${rollbackFailures.join('; ')}`
+          : '; prior authored and runtime plan restored';
+        this.lastError = `active plan update failed: ${error.message}${rollbackDetail}`;
+        this._broadcastState();
+        throw new Error(this.lastError, { cause: error });
+      }
     }
     return normalized;
   }
@@ -1712,11 +3254,17 @@ export class TimelineService {
 
   /** Switch to a different plan name (reload + re-run catchUp). */
   async activatePlan(name) {
+    return this._serializePlanMutation(() => this._activatePlan(name));
+  }
+
+  async _activatePlan(name) {
     this._assertPlanName(name);
     const planPath = this._planPath(name);
     if (!fs.existsSync(planPath)) throw new Error(`plan "${name}" not found in ${this.sceneDir}`);
+    this._cancelSequence('another plan was activated');
     this.plan = loadShowPlan(planPath);
     this.activePlan = name;
+    this._lintActivePlan();     // FIX 4 (_98): authoring findings for the incoming plan
     this.state.activePlan = name;
     this.state.firedToday = {};
     // Stale fires/errors belong to the OUTGOING plan — clearing firedToday alone
@@ -1732,6 +3280,7 @@ export class TimelineService {
     this._deckWindowCueId = null;
     this._defaultCueActive = false;
     this._defaultCueFailKey = null;
+    this._displacedDeckOwnerCueId = null;   // FIX 5 (_98): per-plan runtime
     // Event log (docs/38 §15.2): the activation opens the (just-cleared) ring —
     // logged BEFORE _catchUp so it precedes the plan's catch-up fire.
     this._recordLifecycle(`Plan activated: ${name}`, 'activate', { source: 'manual' });
@@ -1753,6 +3302,14 @@ export class TimelineService {
    * explicit hand-back.
    */
   async resume() {
+    // ══ TIMELINE PRIORITY (operator ruling 2026-08-14) ═══════════════════
+    // RESUME outranks a Live Touch ARM. Force-disarm the Live session BEFORE
+    // anything else so its source lock is released and the catchUp below can
+    // actually write params — an armed desk holds a 'global'/'api' source lock
+    // that would otherwise make every catchUp colour/speed write bounce with
+    // reason 'source_lock'. Never gated on auth: getting BACK to the plan is
+    // always free.
+    this._yieldLiveTouchToPlan('timeline resume pressed');
     // Event log (docs/38 §15.2): explicit operator hand-back. EDGE-ONLY — a
     // resume that changes nothing (already armed, no lease) logs nothing.
     // Logged BEFORE _catchUp so the resume precedes its catchUp fire.
@@ -1778,25 +3335,69 @@ export class TimelineService {
    * operatorLeaseSec unless refreshed by /activity pings or cleared by /resume.
    * Idempotent: re-calling refreshes the expiry.
    *
-   * @returns {{ok:true, operatorLease:{expiresAtMs:number}}}
+   * ZOOM (report _94 §3.2): an OPTIONAL body `{scope:'perform', cueId?}` tags the
+   * lease as an EVENT ZOOM — the same takeover, plus (a) a `zoom` field on the
+   * broadcast state so every client renders the PERFORM banner, and (b) the D3
+   * deferral of a pending program's auto-start (see the tick). A BODYLESS call
+   * is today's plain takeover, byte-identical — no scope, no zoom, and the I2
+   * 30 s pending-program auto-start behaves exactly as shipped. A bodyless call
+   * made WHILE a scoped lease is alive is a REFRESH (the deck/mixer touch-takeover
+   * hook re-calls it), so it preserves the scope rather than silently downgrading
+   * a live performance; the documented zoom exit is resume().
+   *
+   * @param {{scope?:'perform', cueId?:string}} [opts]
+   * @returns {{ok:true, operatorLease:{expiresAtMs:number}|null, zoom?:object|null}}
    */
-  takeover() {
+  takeover(opts) {
+    const o = opts || {};
+    if (o.scope !== undefined && o.scope !== 'perform') {
+      throw new Error(`takeover scope must be "perform" (time travel uses POST /timeline/travel), got ${JSON.stringify(o.scope)}`);
+    }
+    if (o.cueId !== undefined && o.cueId !== null) {
+      if (typeof o.cueId !== 'string' || !o.cueId) {
+        throw new Error(`takeover cueId must be a non-empty string, got ${JSON.stringify(o.cueId)}`);
+      }
+      if (!this.plan || !this.plan.cues.find((c) => c.id === o.cueId)) {
+        throw new Error(`cue "${o.cueId}" not in active plan`);
+      }
+    }
+    return this._takeover(o);
+  }
+
+  _takeover(o) {
     // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): out of window the
     // plan drives nothing, so there is nothing to take over — refuse to arm a
     // lease. Defense in depth: CaptainPad won't even offer takeover out of
     // window (planActive is false), but a stray call must never resurrect the
     // "taken over" banner while the plan is dormant.
     if (!this._inFestivalWindow()) {
-      return { ok: true, operatorLease: null };
+      return { ok: true, operatorLease: null, zoom: null };
     }
+    this._cancelSequence('operator takeover');
     const expiresAtMs = this.nowFn() + this.operatorLeaseSec * 1000;
     // Event log (docs/38 §15.2): the ARM edge only — takeover() is idempotent
     // and CaptainPad re-calls it to refresh the lease; refreshes log nothing.
     if (this.state.mode !== 'overridden') {
-      this._recordLifecycle('Operator takeover (lease armed)', 'takeover', { source: 'manual' });
+      this._recordLifecycle(
+        o.scope === 'perform' ? 'Operator PERFORM zoom (lease armed)' : 'Operator takeover (lease armed)',
+        'takeover', { cueId: o.cueId !== undefined ? o.cueId : undefined, source: 'manual' },
+      );
     }
+    const priorZoom = this._zoomLease();
     this.state.mode = 'overridden';
     this.state.operatorLease = { expiresAtMs };
+    if (o.scope === 'perform') {
+      this.state.operatorLease.scope = 'perform';
+      this.state.operatorLease.cueId = o.cueId !== undefined ? o.cueId : null;
+      this.state.operatorLease.label = o.cueId ? this._cueLabelFor(o.cueId) : null;
+    } else if (priorZoom) {
+      // Bodyless refresh under a live zoom → keep the scope (see the doc block).
+      this.state.operatorLease.scope = priorZoom.scope;
+      this.state.operatorLease.cueId = priorZoom.cueId;
+      this.state.operatorLease.label = priorZoom.label;
+      if (priorZoom.targetMs !== undefined) this.state.operatorLease.targetMs = priorZoom.targetMs;
+      if (priorZoom.targetDate !== undefined) this.state.operatorLease.targetDate = priorZoom.targetDate;
+    }
     // Reflect the takeover in the controller immediately (don't read stale
     // 'autopilot' until the next tick) — overridden is operator manual.
     this.state.controller = 'manual';
@@ -1807,7 +3408,11 @@ export class TimelineService {
       this.lastError = `takeover deck-pin release: ${e && e.message}`;
     });
     this._persistAndBroadcast();
-    return { ok: true, operatorLease: { expiresAtMs: this.state.operatorLease.expiresAtMs } };
+    return {
+      ok: true,
+      operatorLease: { expiresAtMs: this.state.operatorLease.expiresAtMs },
+      zoom: this._zoomWire(),
+    };
   }
 
   /**
@@ -1832,6 +3437,12 @@ export class TimelineService {
    * tick when now ≥ operatorLease.expiresAtMs.
    */
   async _releaseOperatorLease() {
+    // ══ TIMELINE PRIORITY (operator ruling 2026-08-14) ═══════════════════
+    // The lease expiring outranks a Live Touch ARM exactly like RESUME does —
+    // "EVEN IF THE ARM IS ACTIVE". Same force-disarm, same reasons (the source
+    // lock must be gone before the catchUp below writes), same freedom from
+    // any auth gate. See `_yieldLiveTouchToPlan`.
+    this._yieldLiveTouchToPlan('timeline operator lease expired');
     const expiry = this.state.operatorLease && this.state.operatorLease.expiresAtMs;
     this.state.mode = 'armed';
     this.state.operatorLease = null;
@@ -1869,21 +3480,25 @@ export class TimelineService {
         }
         await this._establishBaselineIfActive('operator');
       } else {
-        // Turning the plan's autopilot OFF is an explicit operator "stop
-        // driving" — it must ALSO END any takeover in progress (clear the
-        // operator lease + exit 'overridden'), so no stale "taken over — plan
-        // resumes in M:SS" banner lingers (operator report 2026-07-03:
-        // disabling the plan after a takeover left the warning up). With the
-        // lease cleared and mode armed, planActive AND leaseHeld both read
-        // false → the deck/mixer lock banner and the lease countdown both drop.
-        this.state.operatorLease = null;
-        this.state.mode = 'armed';
-        await this._disarmBaselineAutopilot();
-        if (!this.state.activeProgram) this.state.controller = 'manual';
-        // The baseline no longer owns the deck (docs/38 §16.9). If a program is
-        // still active it keeps its own deck-pin; otherwise release the plan's
-        // soft deck-pin so the 'plan' controlLock clears (yellow lock drops).
-        await this._reconcileDeckPin();
+        // ══ DISABLE = TOTAL TEARDOWN, RIGHT NOW — OPERATOR-CRITICAL ═══════
+        // Turning the plan OFF is an explicit operator "stop driving", and the
+        // operator ruling is that it is ABSOLUTE: the plan is not active any
+        // more and ALL ACTIVE CUES END IMMEDIATELY, not at their natural end.
+        //
+        // This runs the ONE shared teardown (`_goDormant`) rather than a
+        // bespoke partial cleanup, because the partial version leaked twice:
+        //   • an ACTIVE PROGRAM survived the disable (controller stayed
+        //     'program' → planActive stayed true → the plan warning and the
+        //     deck-pin stayed up on a plan the operator had switched off);
+        //   • a PENDING program lease survived and auto-started the show ~30 s
+        //     later, so a disabled plan still seized the rig.
+        // `_goDormant` clears the active program, the pending lease, the
+        // deck-ownership latches, the takeover lease/'overridden' mode, disarms
+        // the baseline and releases the plan's soft deck-pin — the same work a
+        // natural hold expiry does, executed now. The tick's plan-disabled gate
+        // re-runs it every tick, so this transition is idempotent and a disable
+        // that races a cue fire is reconciled within one tick.
+        await this._goDormant();
         this.lastError = null;
       }
     } catch (e) {

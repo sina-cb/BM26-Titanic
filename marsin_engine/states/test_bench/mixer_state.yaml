@@ -1,10 +1,10 @@
-master: 0.9212598425196851
+master: 1
 channels:
   - id: ch_1783569272925_219
     name: latency_0
     pattern: 29_kick_shockwave
     mode: blend_screen
-    fader: 0
+    fader: 0.271828
     enabled: true
     locked: false
     faderLocked: false
@@ -55,7 +55,7 @@ channels:
     name: latency_1
     pattern: 09_cyclone
     mode: blend_screen
-    fader: 0
+    fader: 1
     enabled: true
     locked: false
     faderLocked: false
@@ -122,7 +122,7 @@ channels:
     name: hil3_0
     pattern: 06_neon_elevator
     mode: blend_screen
-    fader: 0
+    fader: 1
     enabled: true
     locked: false
     faderLocked: false
@@ -134,7 +134,7 @@ channels:
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.5932234683882963
+        v0: 0.58
         v1: 0
         v2: 0
       '1628509418':
@@ -186,5 +186,5 @@ channels:
     followLeaderId: null
     followScale: 1
 mixGroups: []
-tempoBpm: 83
-tempoSourcePref: osc
+tempoBpm: 120
+tempoSourcePref: tap

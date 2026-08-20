@@ -1,12 +1,44 @@
 import { Platform } from 'react-native';
 import { engineEvents } from './engineEvents';
+import {
+  parseLayerSettingsState,
+} from './layer_settings';
+import type { LayerSettingId, LayerSettingsState } from './layer_settings';
 // Engine address resolution lives in the dependency-free apiBase.ts —
 // engineBus.ts needs it too, and importing it from here created the
 // require cycle api → engineEvents → engineBus → api. Re-exported so
 // every existing `from './api'` call site keeps working.
-import { api_base, getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase } from './apiBase';
+import {
+  api_base,
+  getApiBase,
+  getApiBaseAsync,
+  getDefaultApiBase,
+  setApiBase as setApiBaseValue,
+} from './apiBase';
+import {
+  clearPrivilegedSession,
+  getPrivilegedSession,
+  type PrivilegedSession,
+} from './privileged_session';
+import { sessionBelongsToEngineOrigin } from './captainpad_access_logic';
+import { principalReadonlyMessage, TAKEOVER_PASSCODE_HEADER } from './edit_session';
+import {
+  isEngineOriginRequest,
+  normalizedOrigin,
+  shouldClearPrivilegedSession,
+  shouldClearSessionForEngineOriginChange,
+} from './privileged_request_scope';
 
-export { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase };
+export { getApiBase, getApiBaseAsync, getDefaultApiBase };
+
+export async function setApiBase(value: string): Promise<void> {
+  const previousBase = api_base;
+  await setApiBaseValue(value);
+  if (shouldClearSessionForEngineOriginChange(previousBase, value)) {
+    await clearPrivilegedSession();
+    await (await import('./passcode_waiver')).clearPasscodeWaiver();
+  }
+}
 
 // ── Fetch with timeout ────────────────────────────────────────────────────
 // RN's `fetch` has NO default timeout. A flaky packet or a server that
@@ -27,6 +59,7 @@ export async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  sessionOverride: PrivilegedSession | null = null,
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -39,7 +72,27 @@ export async function fetchWithTimeout(
     else caller.addEventListener('abort', onCallerAbort);
   }
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
+    const headers = new Headers(init.headers || {});
+    const currentSession = getPrivilegedSession();
+    const candidateSession = sessionOverride ?? currentSession;
+    const engineOrigin = normalizedOrigin(api_base);
+    const engineOriginRequest = isEngineOriginRequest(url, api_base);
+    const scopedSession = sessionBelongsToEngineOrigin(candidateSession, engineOrigin)
+      ? candidateSession
+      : null;
+    if (currentSession && !sessionBelongsToEngineOrigin(currentSession, engineOrigin)) {
+      await clearPrivilegedSession();
+    }
+    if (!engineOriginRequest || !scopedSession) {
+      headers.delete('X-CaptainPad-Session');
+    } else {
+      headers.set('X-CaptainPad-Session', scopedSession.token);
+    }
+    const response = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    if (shouldClearPrivilegedSession(response.status, engineOriginRequest, !!scopedSession)) {
+      await clearPrivilegedSession();
+    }
+    return response;
   } finally {
     clearTimeout(t);
     if (caller) caller.removeEventListener('abort', onCallerAbort);
@@ -121,6 +174,14 @@ export interface ConnectionResult {
     // `deckRestoreDegraded:null`).
     renderHealth?: RenderHealth | null;
     deckRestoreDegraded?: DeckRestoreDegraded | null;
+    // SIZE LOCK (engine: marsin_engine/lib/size_lock.js). The global SIZE
+    // fader is pinned at 0.5 (coordinate identity) by operator ruling
+    // 2026-08-06 and the engine refuses every write. There is no SIZE
+    // control left in this app, so this string is the ONLY way the operator
+    // learns that a saved state file carried a stale size, or that something
+    // is still trying to change it. A string (not an object) so the health
+    // snapshot stays reference-stable across probes. Null / absent = clean.
+    sizeLockWarning?: string | null;
   };
   error?: string;
   latencyMs?: number;
@@ -168,6 +229,23 @@ export interface ApiResult<T> {
    *  Lets callers branch on the reason (the MIDI runtime quiets a 409 that is a
    *  performance-mode lock rather than counting it as a dispatch failure). */
   code?: string;
+}
+
+/**
+ * Turn an engine rejection body into operator-facing copy.
+ *
+ * Almost always the engine's own `error` string is the right thing to show — it
+ * is written for humans and is the honest reason. The one substitution is the
+ * principal-readonly 403 (docs/56): "this edit session may not write rig state"
+ * is accurate but says nothing about what to DO, so `principalReadonlyMessage`
+ * names the session and the way out. Never echoes a passcode: that string is
+ * fixed client copy keyed off the machine code, and the engine's own refusals
+ * never contain the attempted secret either.
+ */
+function refusalMessage(data: any, status: number): string {
+  return principalReadonlyMessage({ ok: false, code: data?.code, data })
+    || data?.error
+    || `HTTP ${status}`;
 }
 
 export async function sendControl(id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {
@@ -334,8 +412,16 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
 // operator saves explicitly — a restart reverts to the last save. Mirrors the
 // deck-transition-config fetch/set posture (GET returns it, POST accepts a
 // partial patch; the engine 400s a non-boolean autoSave — no coercion).
+//
+// `bootMode` (report _236) is a persisted ENGINE preference — which face the
+// engine comes up in on its NEXT start ('performance' = the docs/56 D1 boot
+// lock, 'edit' = boot unlocked with the passcode gate still shut). It rides
+// this same route because it lives in the same file the engine already persists
+// `autoSave` in (settings_state.yaml); the engine 400s an unknown value rather
+// than coercing it, and OMITTING the field leaves the stored preference alone.
 export type EngineSettings = {
   autoSave: boolean;
+  bootMode?: 'performance' | 'edit';
 };
 
 export async function fetchEngineSettings(): Promise<ApiResult<EngineSettings>> {
@@ -384,9 +470,20 @@ export type PerformanceModeState = {
   // Pending dirty deck tuning (present since the save-ask exit sheet landed).
   dirtyCount?: number;
   dirtyEntries?: { playlist: string; entryId: string; label: string | null }[];
+  // WHO holds the engine-global edit session (docs/56). The public enum NAME
+  // only — never credential material, never a session token.
+  editPrincipal?: 'owner' | 'collaborator' | 'bringup' | null;
+  // Whether this engine has privileged auth enabled (i.e. whether the
+  // persistence gates exist at all). Stated by the engine, never guessed.
+  authRequired?: boolean;
 };
 
 export type PerformanceExitAction = 'keep' | 'keep-save' | 'restore';
+
+/** Canonical home: utils/edit_session.ts (a dependency-free leaf, so a suite
+ *  that mocks this transport cannot make the header vanish). Re-exported
+ *  because `from '@/utils/api'` is where callers already look for it. */
+export { TAKEOVER_PASSCODE_HEADER };
 
 export async function fetchPerformanceMode(): Promise<ApiResult<PerformanceModeState>> {
   try {
@@ -399,24 +496,70 @@ export async function fetchPerformanceMode(): Promise<ApiResult<PerformanceModeS
   }
 }
 
+/**
+ * Enter or leave the show lock.
+ *
+ * ENTERING is never gated. LEAVING requires operator passcode or a valid
+ * 30-minute passcode waiver (docs/56 D2, operator ruling 2026-08-18).
+ */
 export async function setPerformanceMode(
   body: { active: true } | { active: false; exitAction: PerformanceExitAction },
+  auth?: import('./takeover_passcode').OperatorAuthSendInput,
 ): Promise<ApiResult<PerformanceModeState>> {
   try {
+    const headers = await (await import('./operator_auth')).operatorAuthHeaders(auth || {});
     const res = await fetchWithTimeout(`${api_base}/performance-mode`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    // Codex P0 — fail loud: surface the engine's rejection (+ code) so the
-    // control can show the real error instead of a phantom success.
     if (!res.ok) {
+      await (await import('./operator_auth')).clearOperatorAuthOnRefusal(
+        headers,
+        res.status,
+        `${api_base}/performance-mode`,
+      );
       return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
     }
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set performance mode failed:', 'Set performance mode failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Re-assert WHO owns persistence while already in edit mode (docs/56 D3).
+ */
+export async function assertEditSession(
+  auth: import('./takeover_passcode').OperatorAuthSendInput,
+): Promise<ApiResult<PerformanceModeState>> {
+  try {
+    const headers = await (await import('./operator_auth')).operatorAuthHeaders(auth);
+    const res = await fetchWithTimeout(`${api_base}/edit-session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: '{}',
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      await (await import('./operator_auth')).clearOperatorAuthOnRefusal(
+        headers,
+        res.status,
+        `${api_base}/edit-session`,
+      );
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Assert edit session failed:', 'Assert edit session failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -430,8 +573,22 @@ export async function setPerformanceMode(
 // fetchColorPalettes / getCachedColorPalettes).
 //
 // Wire shape (GET returns it, POST accepts the same subset):
-//   { active: boolean, palettes: string[] (>=1 known palette id),
+//   { active: boolean, palettes: (string | {c1,c2})[] (>=1 entry),
 //     delay_s: number > 0, shuffle?: boolean, transitionMs?: number >= 0 }
+//
+// A palettes entry is EITHER a known library id OR an INLINE colour pair
+// `{ c1, c2 }` — the Deck COLORS window's PALETTE TURNS rotates
+// five ad-hoc colours that have no library id, and inventing one would be a
+// lie (docs/53 §5.3, engine slice E1). Both forms resolve to the same CPC
+// params engine-side; a UI that renders palette chips MUST handle both (an
+// id-only `byId.get()` lookup silently hides the TURNS entries).
+//
+// Each CHANNEL of an inline pair is EITHER a hue number in 0..1 (which the
+// engine resolves at s=1, v=1 — the original wire, byte-unchanged) OR a full
+// `{h,s,v}` object (D2, docs/55 §1). The full form exists because the Live
+// Touch MASTER/HUE scheme generators vary brightness, and a hue-only wire
+// could not express them at all. Clients emit the NUMBER form whenever
+// s=1 ∧ v=1, so no existing config changes shape.
 //
 // `transitionMs` is the CROSSFADE duration on a palette switch (0 = hard cut),
 // the palette analogue of the DECK TX crossfade time — the engine ramps the
@@ -440,15 +597,56 @@ export async function setPerformanceMode(
 // Partial PATCH-style writes are supported (POST any subset of fields — the
 // engine merges over the live config before validating), so the deck UI can
 // post a single toggle/stepper change optimistically.
+/** One channel of an inline pair: a HUE in 0..1 (engine pins S/V to 1) or a
+ *  full colour. See the D2 note above for why both forms exist. */
+export type ColorPairChannel = number | { h: number; s: number; v: number };
+/** An inline colour pair — the two CPC slots for one turn of a rotation. */
+export type InlineColorPair = { c1: ColorPairChannel; c2: ColorPairChannel };
+/** One entry of a colour-autopilot set: a library id or an inline pair. */
+export type ColorPaletteEntry = string | InlineColorPair;
+
+/** The FOLLOW NOTE block (docs/59 §4.1) — the note drives the base hue, the
+ *  scheme generator applied to it cycles on `methodHoldS`. */
+export type DeckFollowNoteConfig = {
+  schemes: string[];
+  methodHoldS: number;
+  methodFadeS: number;
+  noteFadeMs: number;
+  sel: [number, number];
+  shuffle: boolean;
+  /** The scheme-tap override, present only in flight. */
+  method?: string;
+};
+
 export type DeckColorAutopilotConfig = {
   active: boolean;
-  palettes: string[];
+  palettes: ColorPaletteEntry[];
+  /** Hold between turns, in seconds. 0 == CONTINUOUS (no hold — the fades run
+   *  back to back), which the engine only accepts with transitionMs >= 100. */
   delay_s: number;
   shuffle: boolean;
   // Optional so existing seed objects (e.g. the deck screen's initial state)
   // stay valid without churn; the engine ALWAYS returns it on GET, and the UI
   // defaults an absent value to 0 (hard cut).
   transitionMs?: number;
+  /** WHICH ROTATION FAMILY the daemon is running (docs/59 §4.1). Absent ≡
+   *  'palettes', so every config written before FOLLOW NOTE existed reads
+   *  unchanged; a live engine always sends it. The payload is MODE-SCOPED —
+   *  a follow-note broadcast carries no `palettes` at all — so decide what is
+   *  running from THIS, never by sniffing palette shapes. */
+  mode?: 'palettes' | 'followNote';
+  /** Present in follow-note mode; also carried INERT in palettes mode so a mode
+   *  toggle round-trips the operator's cycle tuning instead of erasing it. */
+  followNote?: DeckFollowNoteConfig;
+  // ── Runtime facts, follow-note mode only (read-only; never posted back) ──
+  /** The generator on the rig right now. */
+  currentScheme?: string | null;
+  /** The committed pitch class (0-11) the daemon last acted on. */
+  notePc?: number | null;
+  /** The hue that pitch class maps to through the companion's noteColors wheel. */
+  noteHue?: number | null;
+  /** Wall-clock ms of the next METHOD advance — the card's countdown. */
+  nextMethodAtMs?: number | null;
 };
 
 export async function fetchDeckColorAutopilot(): Promise<ApiResult<DeckColorAutopilotConfig>> {
@@ -484,6 +682,40 @@ export async function setDeckColorAutopilot(patch: Partial<DeckColorAutopilotCon
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set deck color autopilot failed:', 'Set deck color autopilot failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * LIVE RETUNE (docs/59 §5.2): PATCH the moved knob of a RUNNING rotation.
+ *
+ * The difference from `setDeckColorAutopilot` is the whole feature. A POST is a
+ * full replace — the daemon bumps its generation, kills the in-flight tween,
+ * resets the cursor and re-arms the hold from zero, so the rotation visibly
+ * restarts under the operator's finger. A PATCH applies the field in place:
+ * generation untouched, tween never cancelled, holds re-armed
+ * phase-preserving, fades landing from the next fade.
+ *
+ * `active` and `mode` are REFUSED by the engine here on purpose — starting,
+ * stopping and switching mode are takeovers and belong on the POST, where the
+ * clean break is the point rather than a bug.
+ */
+export async function patchDeckColorAutopilot(patch: Record<string, unknown>): Promise<ApiResult<DeckColorAutopilotConfig>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/color-autopilot`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    // Codex P0 — fail loud: a refused retune must surface, or the pill would
+    // show a cadence the daemon is not running.
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Patch deck color autopilot failed:', 'Patch deck color autopilot failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -585,16 +817,30 @@ export async function fetchGroupFixedColors(): Promise<ApiResult<GroupFixedColor
   }
 }
 
+/**
+ * Paint a group a flat colour.
+ *
+ * `ownerId` opts the write into the engine's TOUCH CONTROL deadman lease: the
+ * override is held only while that owner keeps renewing (WS
+ * `touchControlHeartbeat`), is released the moment the owner's socket closes,
+ * and is NOT persisted to globals_state.yaml — so a panel that dies can never
+ * leave a group frozen, and a restart cannot resurrect it.
+ *
+ * Omit `ownerId` for a PERMANENT, persisted override (the pre-existing
+ * behaviour that saved operator looks depend on). The engine echoes
+ * `{ leased, leaseMs }` so the caller can verify which it got.
+ */
 export async function setGroupFixedColor(
   group: string,
   color: number[],
   brightness: number,
+  ownerId?: string,
 ): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/group-fixed-colors/${encodeURIComponent(group)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ color, brightness }),
+      body: JSON.stringify(ownerId ? { color, brightness, ownerId } : { color, brightness }),
     });
     if (!res.ok) {
       const txt = await res.text();
@@ -619,6 +865,64 @@ export async function clearGroupFixedColor(group: string): Promise<ApiResult<any
     return { ok: true, data: await res.json() };
   } catch (err: any) {
     warnThrottled(`clear-group-fixed-color-${group}`, `Failed to clear fixed color for group ${group}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Ramp the grand master to `target` over `durationMs` instead of snapping.
+ *
+ * `PATCH /mixer { master }` routes to setMaster(), whose FIRST statement is
+ * `this._masterFade = null` — a direct write deliberately cancels any in-flight
+ * fade, so it can only ever snap. That is correct for a fader the operator is
+ * dragging, and wrong for engaging a manual surface, where the rig should ease
+ * in. This uses the engine's existing timed-fade path instead.
+ */
+export async function fadeMaster(target: number, durationMs: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/mixer/master/fade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, durationMs }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fade-master', 'Failed to fade master:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Per-pixel geometry for surfaces that must reproduce the sim's 2D pixel view.
+ *
+ * Carries RAW world x/y/z as well as normalized nx/ny/nz — the sim's gap
+ * compression works in WORLD units, so a client given only the normalized
+ * coords could not compute the same bands and could not match the picture.
+ *
+ * ~168 KB on titanic (964 pixels). Fetch ONCE when the spatial pad opens, not
+ * per frame.
+ */
+export async function fetchPixelLayout(): Promise<ApiResult<{
+  scene: string | null;
+  pixelCount: number;
+  returnedCount: number;
+  pixels: Array<{
+    i: number; x: number; y: number; z: number;
+    nx: number; ny: number; nz: number;
+    group: string | null; type: string | null; fixtureType: string | null;
+    fId: number; sId: number; localIndex: number;
+  }>;
+}>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/model/pixel-layout`, {}, 20000);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-pixel-layout', 'Failed to fetch pixel layout:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -668,20 +972,62 @@ export async function setGlobalEffect(effect: string, state: boolean): Promise<A
   }
 }
 
-export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<any>> {
-  // The deck is always bound to its base channel — the old `deckChannel`
-  // override argument was removed along with the TARGET CHANNEL picker
-  // in May 2026. See docs/16_captain_pad.md §"Target channel removal".
+export type ActivateLayerSettingOptions = {
+  durationMs?: number;
+  reason?: string;
+  ownerId?: string;
+};
+
+async function layerSettingsError(response: Response): Promise<string> {
+  let body: unknown;
   try {
-    const res = await fetchWithTimeout(`${api_base}/mixer/view`, {
+    body = await response.json();
+  } catch (error) {
+    throw new Error(`Layer settings returned HTTP ${response.status} with invalid JSON: ${String(error)}`);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error(`Layer settings returned HTTP ${response.status} with an invalid error body`);
+  }
+  const errorBody = body as { code?: unknown; error?: unknown };
+  if (typeof errorBody.code !== 'string' || typeof errorBody.error !== 'string') {
+    throw new Error(`Layer settings returned HTTP ${response.status} without code and error`);
+  }
+  return `${errorBody.code}: ${errorBody.error}`;
+}
+
+export async function fetchLayerSettingsState(): Promise<ApiResult<LayerSettingsState>> {
+  try {
+    const response = await fetchWithTimeout(`${api_base}/layers/state`);
+    if (!response.ok) return { ok: false, error: await layerSettingsError(response) };
+    return { ok: true, data: parseLayerSettingsState(await response.json()) };
+  } catch (err: any) {
+    warnThrottled('fetch-layer-settings', 'Failed to fetch layer settings:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function activateLayerSetting(
+  target: LayerSettingId,
+  options: ActivateLayerSettingOptions = {},
+): Promise<ApiResult<LayerSettingsState>> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (options.ownerId) headers['X-Touch-Control-Owner'] = options.ownerId;
+
+    const response = await fetchWithTimeout(`${api_base}/layers/activate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ view }),
+      headers,
+      body: JSON.stringify({
+        target,
+        ...(options.durationMs === undefined ? {} : { durationMs: options.durationMs }),
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+        ...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
+      }),
     });
-    const data = await res.json();
-    return { ok: true, data };
-  } catch(err: any) {
-    warnThrottled(`set-mixer-view-${view}`, `Failed to set mixer view to ${view}:`, err);
+    if (!response.ok) return { ok: false, error: await layerSettingsError(response) };
+    return { ok: true, data: parseLayerSettingsState(await response.json()) };
+  } catch (err: any) {
+    warnThrottled(`activate-layer-setting-${target}`, `Failed to activate layer setting ${target}:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -1039,6 +1385,95 @@ export async function fetchColorPalettes(): Promise<ApiResult<Array<{ id: string
   }
 }
 
+// ── Saved colour pairs (the COLORS window's SAVE PAIR gallery) ────────────
+// SCENE-OWNED, not per-tablet. The operator ruled saved pairs are SHARED across
+// every iPad, so they live in the engine's scene state dir
+// (states/<scene>/color_pairs_state.yaml) and reach every tablet — a browser
+// localStorage copy would be a per-device shadow of show state, and the
+// prototype's localStorage is scaffolding only (report _199 §1.6).
+//
+// Distinct from /color-palettes: that is the CURATED, named library from
+// config.yaml; this is the operator's own gallery (max 24, whole-list writes).
+//
+// _242 widened the ENTRY, not the protocol: `{c1,c2}` is still required and
+// still means the same thing, and an entry may additionally carry `name`,
+// `ring`/`sel` and `scheme`/`base` (see `PalettePreset` in
+// components/deck/colors_window_logic.ts). The wire stays untyped here on
+// purpose — this module moves the bytes; the deck module owns what they mean
+// and validates them loudly on the way in.
+export type ColorPairWire = Record<string, unknown> & { c1: number; c2: number };
+
+export async function fetchColorPairs(): Promise<ApiResult<ColorPairWire[]>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-pairs`);
+    const data = await res.json();
+    // Codex P0 — fail loud: a non-ok GET surfaces the engine error rather than
+    // handing the gallery a half-formed list it would render as truth.
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data: Array.isArray(data?.pairs) ? data.pairs : [] };
+  } catch (err: any) {
+    warnThrottled('color-pairs', 'Fetch saved colour pairs failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/** Replace the whole gallery. The engine validates strictly and 400s on junk. */
+export async function saveColorPairs(pairs: ColorPairWire[]): Promise<ApiResult<ColorPairWire[]>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-pairs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data: Array.isArray(data?.pairs) ? data.pairs : [] };
+  } catch (err: any) {
+    warnThrottled('color-pairs-save', 'Save colour pairs failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export type ColorPaletteVisibility = { hiddenPaletteIds: string[] };
+
+/** Scene-shared menu visibility for curated palettes. */
+export async function fetchColorPaletteVisibility(): Promise<ApiResult<ColorPaletteVisibility>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-palette-visibility`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    if (!data || !Array.isArray(data.hiddenPaletteIds)) {
+      return { ok: false, error: 'Engine returned malformed color palette visibility state' };
+    }
+    return { ok: true, data: { hiddenPaletteIds: data.hiddenPaletteIds } };
+  } catch (err: any) {
+    warnThrottled('color-palette-visibility', 'Fetch color palette visibility failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+/** Replace the scene-shared hidden curated-palette id list. */
+export async function saveColorPaletteVisibility(
+  hiddenPaletteIds: string[],
+): Promise<ApiResult<ColorPaletteVisibility>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-palette-visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hiddenPaletteIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    if (!data || !Array.isArray(data.hiddenPaletteIds)) {
+      return { ok: false, error: 'Engine returned malformed color palette visibility state' };
+    }
+    return { ok: true, data: { hiddenPaletteIds: data.hiddenPaletteIds } };
+  } catch (err: any) {
+    warnThrottled('color-palette-visibility-save', 'Save color palette visibility failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Color palette cache ─────────────────────────────────────────────────
 // Reported bug: "color palette presets are not showing again" — the modal
 // re-fetches on every open and that fetch can race the engine's first
@@ -1245,11 +1680,35 @@ export async function fetchViewSelectionOptions(): Promise<ApiResult<{
   // strip's view-selection picker renders these in a dedicated
   // "VIEW MASKS" section, alongside ALL and GROUPS.
   viewMasks: { name: string; bit: number; inUse: boolean }[];
+  // The FULL Tier-A named-view catalog the engine's MaskRegistry interns:
+  // base groups (kind:'group'), composites (kind:'composite'), and every
+  // derived auto-view (kind:'pixelSet' — LEFT/RIGHT/FRONT/BACK, the scene's
+  // structural bands if any survive dedup, Strands / TE Signs / @PAR / @BAR /
+  // @VINTAGE, CTRL_<n>). `bit` is the in-VM viewMask
+  // bit (0 for bit-less Tier-A views); `memberCount` is the live pixel count.
+  // Consumed by the shared ViewSelectionPicker (report 20260724_8). Optional
+  // in the type so a stale engine that omits it is detectable — the picker
+  // fails LOUD (visible banner) rather than silently hiding the catalog.
+  namedViews?: {
+    name: string;
+    kind: string;
+    bit: number;
+    memberCount: number;
+    groupNames?: string[];
+    partialGroupNames?: string[];
+  }[];
   pixelCount: number;
 }>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/model/view-selection-options`);
+    // Codex P0 — fail loud: a non-2xx or non-object body must not be fed to
+    // the picker as if it were a valid enumeration (the old `return {ok:true,
+    // data}` would have handed an `{error:...}` payload straight through).
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
+    if (!data || typeof data !== 'object') {
+      return { ok: false, error: 'Malformed /model/view-selection-options response' };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -1622,7 +2081,12 @@ export async function savePlaylist(
     const data = await res.json();
     invalidatePlaylistCache(playlist.name);
     invalidatePlaylistsCache();
-    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+    return {
+      ok: res.ok,
+      data,
+      code: res.ok ? undefined : data?.code,
+      error: res.ok ? undefined : refusalMessage(data, res.status),
+    };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -1634,7 +2098,12 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
     const data = await res.json();
     invalidatePlaylistCache(name);
     invalidatePlaylistsCache();
-    return { ok: res.ok, data };
+    return {
+      ok: res.ok,
+      data,
+      code: res.ok ? undefined : data?.code,
+      error: res.ok ? undefined : refusalMessage(data, res.status),
+    };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -2673,6 +3142,33 @@ export function migrateModulationMode(mode: unknown): ModulationMode {
 }
 export type ModulationPolarity = 'unipolar' | 'bipolar';
 export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';
+
+/**
+ * The pattern author's RECOMMENDED audio binding for one parameter, as
+ * declared in the pattern source's `AUDIO_MODULATION_V1` header block and
+ * stamped onto the export by the engine (`annotateCodeDefaults` in
+ * api_server.js). See report 20260806_184.
+ *
+ * It is METADATA and nothing else:
+ *   - it never changes the parameter's name or value;
+ *   - it is never applied automatically — the operator's saved mapping is the
+ *     only truth, and a suggestion only ever PREFILLS the create flow when the
+ *     operator explicitly taps the suggestion badge;
+ *   - absent means absent. A parameter with no suggestion simply has no field,
+ *     and nothing infers one.
+ *
+ * `curve` is the token the header declared; `modulationCurve` is the same
+ * curve named in this app's `ModulationCurve` vocabulary, translated ONCE by
+ * the engine so no client keeps a private lookup table.
+ */
+export type AudioSuggestion = {
+  version: string;
+  signal: ModulationSourceKey;
+  range: [number, number];
+  curve: 'linear' | 'pow2' | 'ease';
+  modulationCurve: ModulationCurve;
+  note?: string;
+};
 
 export type ModulationMapping = {
   id: string;

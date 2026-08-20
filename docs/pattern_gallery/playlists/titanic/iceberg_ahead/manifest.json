@@ -1,0 +1,1419 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "iceberg_ahead",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/iceberg_ahead.yaml",
+  "playlistDigest": "1acc0537551f34f8e2f8737db09d44ca1638c17c911e5e0caf01ecd4127602eb",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "02_phase_cathedral",
+      "title": "Phase Cathedral",
+      "goal": "Build luminous interference arches across the ship, with stained-glass Identity and architectural depth rather than a generic wash.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.16,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.73,
+          "valueSource": "playlist saved value",
+          "description": "final whole-pattern brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "final whole-pattern brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.08,
+          "valueSource": "playlist saved value",
+          "description": "whole-ship light strike + W/A punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "whole-ship light strike + W/A punch"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "visible arch expands from apex to hull",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.08,
+            "max": 0.92,
+            "curve": "linear",
+            "note": "visible arch expands from apex to hull"
+          }
+        },
+        {
+          "name": "sliderSharpness",
+          "label": "Sharpness",
+          "value": 0.83,
+          "valueSource": "playlist saved value",
+          "description": "node-crush reshape (secondary geometry)",
+          "audio": {
+            "slider": "sliderSharpness",
+            "signal": "micMid",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "node-crush reshape (secondary geometry)"
+          }
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.59,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.17,
+        "sliderDirection": 0.16,
+        "sliderLevel": 0.73,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.92,
+        "sliderSharpness": 0.83,
+        "sliderCount": 0.59
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.17,
+        "sliderDirection": 0.16,
+        "sliderLevel": 0.73,
+        "sliderKick": 0.08,
+        "sliderRadius": 0.92,
+        "sliderSharpness": 0.83,
+        "sliderCount": 0.59
+      },
+      "gif": "001_02_phase_cathedral.gif",
+      "video": "001_02_phase_cathedral.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4efc929732aa673e2bd7d00e44bf052b2f48c84075ca2bd90abafd82e380f83f"
+    },
+    {
+      "index": 1,
+      "pattern": "08_ocean_liner",
+      "title": "Ocean Liner",
+      "goal": "Turn the ship into a nocturnal liner: deep palette water, warm cabin-light detail, and a calm crest moving through Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "water + porthole brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "water + porthole brightness"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "decisive porthole flare",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "decisive porthole flare"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "porthole count/texture",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "porthole count/texture"
+          }
+        },
+        {
+          "name": "sliderPortholeWhite",
+          "label": "Porthole White",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.12,
+        "sliderDetail": 0.89,
+        "sliderPortholeWhite": 0.87
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.12,
+        "sliderDetail": 0.89,
+        "sliderPortholeWhite": 0.87
+      },
+      "gif": "002_08_ocean_liner.gif",
+      "video": "002_08_ocean_liner.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1ea09ab70a943276dea0c9e86b354e59a3e2f68abd89374b4236b13224622165"
+    },
+    {
+      "index": 2,
+      "pattern": "14_lunar_current",
+      "title": "Lunar Current",
+      "goal": "A bounded moonlit river with banks, shadow depth, and internal caustic lace—not a repeating full-rig field.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.39,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "whole-look energy",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.22,
+            "max": 0.74,
+            "curve": "linear",
+            "note": "whole-look energy"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.26,
+          "valueSource": "playlist saved value",
+          "description": "lunar crest flash",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.72,
+            "curve": "pow2",
+            "note": "lunar crest flash"
+          }
+        },
+        {
+          "name": "sliderCurrentWidth",
+          "label": "Current Width",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "river opens on builds",
+          "audio": {
+            "slider": "sliderCurrentWidth",
+            "signal": "micFlux",
+            "min": 0.16,
+            "max": 0.78,
+            "curve": "ease",
+            "note": "river opens on builds"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.82,
+          "valueSource": "playlist saved value",
+          "description": "caustic lace energy",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micMid",
+            "min": 0.12,
+            "max": 0.82,
+            "curve": "linear",
+            "note": "caustic lace energy"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvUndertow",
+          "label": "Uv Undertow",
+          "value": 0.66,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.39,
+        "sliderLevel": 0.85,
+        "sliderKick": 0.26,
+        "sliderCurrentWidth": 0.89,
+        "sliderShimmer": 0.82,
+        "sliderDetail": 0.88,
+        "sliderJewelryWhite": 0.75,
+        "sliderUvUndertow": 0.66
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.39,
+        "sliderLevel": 0.85,
+        "sliderKick": 0.26,
+        "sliderCurrentWidth": 0.89,
+        "sliderShimmer": 0.82,
+        "sliderDetail": 0.88,
+        "sliderJewelryWhite": 0.75,
+        "sliderUvUndertow": 0.66
+      },
+      "gif": "003_14_lunar_current.gif",
+      "video": "003_14_lunar_current.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "deaf17b61ab6f2fbd1c1cb7c2aad1752cba9aef3ae61c24109f71acc404f9e04"
+    },
+    {
+      "index": 3,
+      "pattern": "16_ghost_tide_uv",
+      "title": "Ghost Tide Uv",
+      "goal": "A sparse oblique foam front traveling through mist and a separately phased UV undertow.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.15,
+            "max": 1,
+            "curve": "ease",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.31,
+          "valueSource": "playlist saved value",
+          "description": "foam / white crest pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "foam / white crest pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "true surge excursion, independent of foam width",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.1,
+            "max": 0.95,
+            "curve": "ease",
+            "note": "true surge excursion, independent of foam width"
+          }
+        },
+        {
+          "name": "sliderTideWidth",
+          "label": "Tide Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvLevel",
+          "label": "Uv Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "UV undertow glow (highs / sparkle band)",
+          "audio": {
+            "slider": "sliderUvLevel",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "UV undertow glow (highs / sparkle band)"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKick": 0.31,
+        "sliderRadius": 0.5,
+        "sliderTideWidth": 0.5,
+        "sliderWhiteLevel": 0.6,
+        "sliderUvLevel": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.86,
+        "sliderKick": 0.31,
+        "sliderRadius": 0.5,
+        "sliderTideWidth": 0.5,
+        "sliderWhiteLevel": 0.6,
+        "sliderUvLevel": 0.45
+      },
+      "gif": "004_16_ghost_tide_uv.gif",
+      "video": "004_16_ghost_tide_uv.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "7fb9d1a99378b5ec5e7bc309c1b2cc4de475c47c7ecda61fed9ec31eb616c73b"
+    },
+    {
+      "index": 4,
+      "pattern": "18_deep_space_lattice",
+      "title": "Deep Space Lattice",
+      "goal": "A rigid cosmic crossed-grid and diagonal constellation over near-black voids, with a stable deep-space Identity.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.18,
+          "valueSource": "playlist saved value",
+          "description": "beat pop on the lattice",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "beat pop on the lattice"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "lattice displacement excursion",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "lattice displacement excursion"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "star/node microstructure",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "star/node microstructure"
+          }
+        },
+        {
+          "name": "sliderLatticeScale",
+          "label": "Lattice Scale",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Lattice Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLineSoftness",
+          "label": "Line Softness",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Line Softness character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0.18,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderLineSoftness": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0.18,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderLineSoftness": 0.5
+      },
+      "gif": "005_18_deep_space_lattice.gif",
+      "video": "005_18_deep_space_lattice.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d024b05d201d4087b863c9cfd3a29c4863809dbfef45a7f3ff0545cfef518c32"
+    },
+    {
+      "index": 5,
+      "pattern": "32_caustic_shimmer",
+      "title": "Caustic Shimmer",
+      "goal": "Calm refracted pool-light cells: broad lenses and cell walls shimmer without behaving like Moon River.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY: hats/highs create visible white scintillation",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0.05,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY: hats/highs create visible white scintillation"
+          }
+        },
+        {
+          "name": "sliderRipple",
+          "label": "Ripple",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "kick: expanding travelling ring highlight",
+          "audio": {
+            "slider": "sliderRipple",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "kick: expanding travelling ring highlight"
+          }
+        },
+        {
+          "name": "sliderDepth",
+          "label": "Depth",
+          "value": 0.6,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderShimmer": 0.75,
+        "sliderRipple": 0,
+        "sliderDepth": 0.6,
+        "sliderBase": 0.12
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderShimmer": 0.75,
+        "sliderRipple": 0,
+        "sliderDepth": 0.6,
+        "sliderBase": 0.12
+      },
+      "gif": "006_32_caustic_shimmer.gif",
+      "video": "006_32_caustic_shimmer.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "82a1c1c412eacba49c892975a7ce431b1bc71ae6fe8c25137d12c3aeb9c08c48"
+    },
+    {
+      "index": 6,
+      "pattern": "39_tide_riser",
+      "title": "Tide Riser",
+      "goal": "A saved Tide Riser look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderRise",
+          "label": "Rise",
+          "value": 0.25,
+          "valueSource": "code default",
+          "description": "PRIMARY build/riser: flux climbs the tide height + body brightness",
+          "audio": {
+            "slider": "sliderRise",
+            "signal": "micFlux",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "PRIMARY build/riser: flux climbs the tide height + body brightness"
+          }
+        },
+        {
+          "name": "sliderSpray",
+          "label": "Spray",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick: flings the warm crest spray up above the waterline",
+          "audio": {
+            "slider": "sliderSpray",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick: flings the warm crest spray up above the waterline"
+          }
+        },
+        {
+          "name": "sliderFoam",
+          "label": "Foam",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Fine highlight texture.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderRise": 0.25,
+        "sliderSpray": 0,
+        "sliderFoam": 0.5,
+        "sliderBase": 0.06
+      },
+      "gif": "007_39_tide_riser.gif",
+      "video": "007_39_tide_riser.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f5f54bef17c76724a6aca1bbcf4636b0d0bc254480d458d48e2c0cea7888e165"
+    },
+    {
+      "index": 7,
+      "pattern": "47_quasicrystal_dunes",
+      "title": "Quasicrystal Dunes",
+      "goal": "A saved Quasicrystal Dunes look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDuneHeight",
+          "label": "Dune Height",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness/dune height",
+          "audio": {
+            "slider": "sliderDuneHeight",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "PRIMARY brightness/dune height"
+          }
+        },
+        {
+          "name": "sliderSurf",
+          "label": "Surf",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "2nd dim: crest sharpness/surf shimmer",
+          "audio": {
+            "slider": "sliderSurf",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.85,
+            "curve": "pow2",
+            "note": "2nd dim: crest sharpness/surf shimmer"
+          }
+        },
+        {
+          "name": "sliderDuneScale",
+          "label": "Dune Scale",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Dune Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloor",
+          "label": "Floor",
+          "value": 0.1,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDuneHeight": 0.5,
+        "sliderSurf": 0.5,
+        "sliderDuneScale": 0.5,
+        "sliderFloor": 0.1
+      },
+      "gif": "008_47_quasicrystal_dunes.gif",
+      "video": "008_47_quasicrystal_dunes.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "9e62d2db3a9917469466ec6ca852f2f28f0533a1f797366861713b6521b72d3e"
+    },
+    {
+      "index": 8,
+      "pattern": "58_lighthouse_solo",
+      "title": "Lighthouse Solo",
+      "goal": "A true horizontal XZ lighthouse fan rotates around the vessel, with steady sources and readable night-blue Identity between passes.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeam",
+          "label": "Beam",
+          "value": 0.15,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY beam brightness + width",
+          "audio": {
+            "slider": "sliderBeam",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY beam brightness + width"
+          }
+        },
+        {
+          "name": "sliderFlash",
+          "label": "Flash",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "KICK: bright flash / double-pulse",
+          "audio": {
+            "slider": "sliderFlash",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "KICK: bright flash / double-pulse"
+          }
+        },
+        {
+          "name": "sliderWidth",
+          "label": "Width",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "MOVEMENT: build expands the beam sweep reach",
+          "audio": {
+            "slider": "sliderWidth",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "MOVEMENT: build expands the beam sweep reach"
+          }
+        },
+        {
+          "name": "sliderSafetyFloor",
+          "label": "Safety Floor",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderBeam": 0.15,
+        "sliderFlash": 0.54,
+        "sliderWidth": 0.2,
+        "sliderSafetyFloor": 0.12
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderBeam": 0.15,
+        "sliderFlash": 0.54,
+        "sliderWidth": 0.2,
+        "sliderSafetyFloor": 0.12
+      },
+      "gif": "009_58_lighthouse_solo.gif",
+      "video": "009_58_lighthouse_solo.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f4922887a3cbe862cbdcfe2b4910478c05d953d44a72ce334c18f0d8f03e0f07"
+    },
+    {
+      "index": 9,
+      "pattern": "62_white_shimmer",
+      "title": "White Shimmer",
+      "goal": "Broad crossing frost planes sweep through a complete white ship while deterministic facets and sparks reveal crystalline detail.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "Broad crossing frost planes sweep through a complete white ship while deterministic facets and sparks reveal crystalline detail.",
+        "design_intent": "Replace low-resolution whole-rig glitter with legible crystalline motion: broad Hull sweeps, a protected counter-moving contour edge, hero Jewelry diamonds, restrained Organ cohorts, and a fully engraved Identity surface.",
+        "why_exists": "It provides the white family's fine-detail vocabulary without risking blackout or making every fixture sparkle equally.",
+        "visual_goal_titanic": "From playa distance the outline and signs remain stable; nearby, the rail diamonds should be the clearest and brightest native-white points over subtler frost elsewhere.",
+        "unique_topology": "Two broad oblique crystalline planes intersect over deterministic XYZ facets and point sparks; fixture-local six-head diamonds and a complete folded 74-pixel frost engraving refine the direct-view families.",
+        "distance_silhouette": "The Silhouette carries a continuous white floor plus sparse stars, never a field of disconnected black gaps.",
+        "close_detail": "High-power Jewelry diamonds, crystalline Hull grain, fixture-cohort Organ stars, and fine sign frost create multiple scales of detail.",
+        "motion_grammar": "Counter-moving signed frost planes create large readable sweeps while deterministic facets and sparks move at subordinate rates; long wraps and parameter slew prevent seams and edit jumps.",
+        "xyz_use": "Centered X/Y/Z feed both deterministic hashes and the oblique frost bed; pixelLocalIndex authors the six-head Jewelry. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Low crystalline grain with distributed, restrained catchlights.",
+          "Silhouette": "Continuous contour with sparse white stars.",
+          "Jewelry": "Hero six-head diamond glints with the strongest native-white peaks.",
+          "Organs": "Sparse structural stars phased by fixture identity.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel frost plaque from signIndex=index%74, with fine shimmer over a stable full-surface floor."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel frost plaque from signIndex=index%74, with fine shimmer over a stable full-surface floor.",
+        "jewelry_white": "Jewelry gets exclusive hero treatment: the largest native-white accent rides crisp six-head diamonds while RGB maintains a visible rail between events.",
+        "palette_white_material": "No palette exports; warm-neutral RGB plus explicit W=A and U=0 makes the frost untintable and hardware-consistent.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets independent sparkle clocks and the slow frost-bed rate.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses both the sparkle clocks and slow spatial frost drift without a center freeze.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets the complete frost look's intensity above the non-black beds.",
+            "code_default_value": 0.7
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Pops active sparkles while leaving the stable beds intact.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets the literal spatial scale of the slow frost material.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDensity",
+            "behavior": "Smoothly expands the fraction of active sparkle sites.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderSharpness",
+            "behavior": "Sets sparkle exponent from soft glints to crisp pinpoints.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves white output from neutral RGB toward matched native W/A.",
+            "code_default_value": 0.6
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Raises native-white accent peaks, strongest on Jewelry.",
+            "code_default_value": 0.3
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets subtle warm-neutral RGB temperature without introducing hue.",
+            "code_default_value": 0.1
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.3,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "Sparkle pop."
+          },
+          {
+            "target": "sliderDensity",
+            "source": "micHigh",
+            "range": [
+              0.25,
+              0.95
+            ],
+            "curve": "linear",
+            "intent": "How much of the rig glitters."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Each role owns a stable positive bed independent of density and sparkle phase; no sparse state can erase the whole ship.",
+        "anti_duplication_notes": "Keep it the sparse fine-detail member. Do not broaden glints into White Wash material, synchronize them into Breathe, line them up as Chase, or warm them into Temple candles.",
+        "review_state": "TUNE",
+        "evidence_notes": "The old test-bench capture showed isolated bright points over large near-black regions and no role hierarchy. The bold source retains exact controls/defaults/audio handles while broad crossing crystal planes make the motion legible and six-head Jewelry remains the fine-detail hero. At the saved review tune 121/166 test-bench pixels change materially over three seconds; all 74 Identity pixels are dynamic and both Titanic signs match exactly. Cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Sets independent sparkle clocks and the slow frost-bed rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "Reverses both the sparkle clocks and slow spatial frost drift without a center freeze.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "Sets the complete frost look's intensity above the non-black beds.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Pops active sparkles while leaving the stable beds intact.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "sparkle pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Sets the literal spatial scale of the slow frost material.",
+          "audio": null
+        },
+        {
+          "name": "sliderDensity",
+          "label": "Density",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Smoothly expands the fraction of active sparkle sites.",
+          "audio": {
+            "slider": "sliderDensity",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "how much of the rig glitters"
+          }
+        },
+        {
+          "name": "sliderSharpness",
+          "label": "Sharpness",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Sets sparkle exponent from soft glints to crisp pinpoints.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Moves white output from neutral RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Raises native-white accent peaks, strongest on Jewelry.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.1,
+          "valueSource": "code default",
+          "description": "Sets subtle warm-neutral RGB temperature without introducing hue.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.55,
+        "sliderDirection": 1,
+        "sliderLevel": 0.7,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDensity": 0.55,
+        "sliderSharpness": 0.55,
+        "sliderWhiteLevel": 0.6,
+        "sliderWhiteKick": 0.3,
+        "sliderWarmth": 0.1
+      },
+      "gif": "010_62_white_shimmer.gif",
+      "video": "010_62_white_shimmer.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5ccb5048f495c08c67372a111644ae1bcb14889505482d1bd216161156e9a819"
+    },
+    {
+      "index": 10,
+      "pattern": "63_white_chase",
+      "title": "White Chase",
+      "goal": "A white procession crosses the ship in role-specific ribbons, tracers, pearls, strikes, and sign scans.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "A white procession crosses the ship in role-specific ribbons, tracers, pearls, strikes, and sign scans.",
+        "design_intent": "Retain a clear directional chase but stop projecting the same bar onto every fixture family; each instrument should express travel at its own scale.",
+        "why_exists": "It is the white family's explicit motion look and the strongest manual-direction performance handle.",
+        "visual_goal_titanic": "Broad Hull ribbons and a fine outline tracer should establish direction at distance, while six-head Jewelry marquee motion and discrete Organ hits provide close and structural authority.",
+        "unique_topology": "A fixed longitudinal X projection creates mirrored bow-to-stern processions; separate coordinates create a counter-moving Silhouette tracer, six-head Jewelry pearls, Organ cohorts, and one complete folded 74-pixel cross-scan.",
+        "distance_silhouette": "A narrower bright tracer travels across a permanently visible Silhouette, making both motion direction and ship outline legible.",
+        "close_detail": "Six-pearl rail marquees, fixture-cohort par strikes, broad Hull ribbon edges, and a restrained sign scan resolve at close range.",
+        "motion_grammar": "A manually signed long-wrap phase drives broad mirrored bow-to-stern travel; a counter-tracer and role-specific subordinate phases prevent lockstep repetition while controls slew without geometry jumps.",
+        "xyz_use": "Normalized longitudinal X establishes bow-to-stern travel while Y/Z preserve exact port-starboard mirroring and add vertical/depth facets; pixelLocalIndex builds Jewelry chases, and fixtureId builds Organ cohorts. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical 40+34 signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Broad white searchlight ribbons revealing Hull material.",
+          "Silhouette": "Narrower, brighter tracer over a continuous outline.",
+          "Jewelry": "Hero six-pearl marquee chase with strong native-white cores.",
+          "Organs": "Discrete structural strikes phased across fixtures.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel scan from signIndex=index%74, moving across one full readable plaque rather than restarting per panel."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel scan from signIndex=index%74, moving across one full readable plaque rather than restarting per panel.",
+        "jewelry_white": "Six-head Vintage rails carry the brightest native-white chase cores and the shortest local tail, preserving a fine Jewelry read.",
+        "palette_white_material": "No color palettes bind. RGB remains warm-neutral, W=A exactly, and UV=0 through every moving bar.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets chase travel and slow axis-rotation speed.",
+            "code_default_value": 0.5
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses all signed chase motion with manual endpoints dominant.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets chase intensity above role-specific visibility floors.",
+            "code_default_value": 0.75
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Pops current moving bars and strengthens Organ strikes.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets literal bar width across ship and local chase variants.",
+            "code_default_value": 0.4
+          },
+          {
+            "exported_name": "sliderTailLength",
+            "behavior": "Sets the trailing decay length behind each chase core.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderCount",
+            "behavior": "Selects one through five simultaneous procession bars.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves white output from RGB toward matched native W/A.",
+            "code_default_value": 0.6
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Raises the dedicated-white cores, strongest on Jewelry and Organ strikes.",
+            "code_default_value": 0.35
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets a subtle warm-neutral RGB temperature for the chase.",
+            "code_default_value": 0.05
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.3,
+              1
+            ],
+            "curve": "linear",
+            "intent": "Overall intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "A restrained kick adds one crisp bar accent without turning the chase into a full-rig flash."
+          },
+          {
+            "target": "sliderRadius",
+            "source": "micFlux",
+            "range": [
+              0.25,
+              0.75
+            ],
+            "curve": "linear",
+            "intent": "Bar width swells on the build."
+          },
+          {
+            "target": "sliderWhiteKick",
+            "source": "micKick",
+            "range": [
+              0,
+              1
+            ],
+            "curve": "pow2",
+            "intent": "W-emitter blinder bite."
+          }
+        ],
+        "safety_floor": "Every instrument retains a white bed between processional cores; count, radius, and phase cannot create a whole-rig blackout.",
+        "anti_duplication_notes": "Protect explicit signed travel and multiple bar cores. It must not soften into Breathe, randomize into Shimmer, flatten into Wash, or slow into Temple's vigil.",
+        "review_state": "TUNE",
+        "evidence_notes": "The previous capture looked like one projection shared by the whole test bench. The bold rework preserves every public value and exact audio handle while replacing the generic projection with a mirrored bow-to-stern procession and distinct role counterpoint. At the saved review tune 101/166 test-bench pixels change materially over three seconds; all 74 Identity pixels are dynamic and both Titanic signs match exactly. Cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Sets chase travel and slow axis-rotation speed.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "Reverses all signed chase motion with manual endpoints dominant.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.75,
+          "valueSource": "code default",
+          "description": "Sets chase intensity above role-specific visibility floors.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Pops current moving bars and strengthens Organ strikes.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "bar pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Sets literal bar width across ship and local chase variants.",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.25,
+            "max": 0.75,
+            "curve": "linear",
+            "note": "bar width swells on the build"
+          }
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Sets the trailing decay length behind each chase core.",
+          "audio": null
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Selects one through five simultaneous procession bars.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Moves white output from RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Raises the dedicated-white cores, strongest on Jewelry and Organ strikes.",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "W-emitter blinder bite"
+          }
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.05,
+          "valueSource": "code default",
+          "description": "Sets a subtle warm-neutral RGB temperature for the chase.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 1,
+        "sliderLevel": 0.75,
+        "sliderKick": 0,
+        "sliderRadius": 0.4,
+        "sliderTailLength": 0.45,
+        "sliderCount": 0.35,
+        "sliderWhiteLevel": 0.6,
+        "sliderWhiteKick": 0.35,
+        "sliderWarmth": 0.05
+      },
+      "gif": "011_63_white_chase.gif",
+      "video": "011_63_white_chase.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "5df4dbdc7df4a9f4b353ab9c2e7cd3ba46d1bd093922d428f8824ea6c175ea18"
+    }
+  ]
+}

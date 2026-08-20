@@ -34,6 +34,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 
+import {
+  DERIVED_SIGNALS_LIVE_FIELDS,
+  validateDerivedSignalsPatch,
+} from './derived_signals_config.js';
+
 // `bands` lost `smoothingAlpha` (2026-05-25) in favour of asymmetric
 // `attackMs`/`releaseMs` + a `noiseGate` floor. See audio_analyzer.js
 // header for the engineering rationale. Per codex P0 "no fallback
@@ -57,6 +62,11 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz). Live-
   // tunable like kick; analyzer.reconfigure rebinds the sub bin in place.
   sub:   ['minHz', 'maxHz'],
+  // bpmTracker — ONLY the published-BPM slew. The detector's band, evidence
+  // and silence knobs shape the tempo model itself and stay config-only (a
+  // mid-show change there re-shapes the lock); the slew is a pure output
+  // smoother the operator legitimately trims while the lights run.
+  bpmTracker: ['outputSlewEnabled', 'outputSlewBpmPerSec'],
   // structureDetector — audio build/drop/sustain detector (docs/30).
   // Disabled by default; the detector module is instantiated at boot
   // regardless (so its surface exists) but `tick()` no-ops until the
@@ -87,6 +97,7 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
  */
 const LIVE_BOOLEAN_FIELDS = Object.freeze({
   structureDetector: Object.freeze(['enabled', 'dropLevelAssist']),
+  bpmTracker: Object.freeze(['outputSlewEnabled']),
 });
 
 const LIVE_STRING_ENUMS = Object.freeze({
@@ -128,6 +139,13 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     lowGate:  (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
     midGate:  (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
     highGate: (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
+  }),
+  // Published-BPM slew rate. Must be > 0 — a zero rate would freeze the
+  // published tempo forever instead of smoothing it. The ceiling is well past
+  // "instant" at the ~86 Hz hop rate, so the operator can effectively disable
+  // the walk from the top of the range too.
+  bpmTracker: Object.freeze({
+    outputSlewBpmPerSec: (v) => (v > 0 && v <= 240) ? null : `must be in (0, 240]; got ${v}`,
   }),
   // analyzer_features (slot 3): sub-bass window edges (Hz). Validated like the
   // kick window — both positive, below Nyquist; the analyzer enforces min<max.
@@ -215,20 +233,35 @@ export const AUDIO_SCENE_SCALARS = Object.freeze(['enabled', 'fftSize', 'hopSize
 
 const AUDIO_OVERRIDE_FILE = 'audio_config.yaml';
 
+function isYamlMapping(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 /**
- * Read the optional audio_config.yaml overrides. Returns {} on
- * missing / malformed file (operator can always re-set from the UI).
+ * Read the optional audio_config.yaml overrides. Missing file → `{}` (a rig
+ * that never overrode anything). A PARSE failure THROWS with the path (codex
+ * P0): same reasoning as loadSceneAudio — every caller reads to merge and
+ * write back, so "recovering" to `{}` overwrites the operator's file with
+ * defaults instead of telling them it's broken.
  */
 export function loadAudioConfig(engineDir) {
   const p = path.join(engineDir, AUDIO_OVERRIDE_FILE);
   if (!fs.existsSync(p)) return {};
+  let obj;
   try {
-    const obj = yaml.load(fs.readFileSync(p, 'utf8'));
-    return (obj && typeof obj === 'object') ? obj : {};
+    obj = yaml.load(fs.readFileSync(p, 'utf8'));
   } catch (err) {
-    console.warn(`[audio_config] failed to parse ${AUDIO_OVERRIDE_FILE}: ${err.message}; ignoring`);
-    return {};
+    throw new Error(`failed to parse ${p}: ${err.message} — fix or delete the file`);
   }
+  if (!isYamlMapping(obj)) {
+    throw new TypeError(
+      `invalid ${p}: existing audio config must contain a YAML object; ` +
+      'empty, scalar, and array roots are refused',
+    );
+  }
+  return obj;
 }
 
 /** Atomically write audio_config.yaml from the live-tunable subset. */
@@ -242,7 +275,10 @@ export function saveAudioConfig(engineDir, livePartial) {
     fs.writeFileSync(tmp, header + yaml.dump(livePartial, { sortKeys: false }));
     fs.renameSync(tmp, p);
   } catch (err) {
-    console.warn(`[audio_config] failed to write ${AUDIO_OVERRIDE_FILE}: ${err.message}`);
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    const failure = new Error(`failed to write ${p}: ${err.message}`, { cause: err });
+    failure.code = 'AUDIO_PERSISTENCE_ERROR';
+    throw failure;
   }
 }
 
@@ -257,7 +293,18 @@ export function mergeAudioConfig(...layers) {
   for (const layer of layers) {
     if (!layer || typeof layer !== 'object') continue;
     for (const [k, v] of Object.entries(layer)) {
-      if (v && typeof v === 'object' && !Array.isArray(v)) {
+      if (k === 'derivedSignals' && isYamlMapping(v)) {
+        const current = out.derivedSignals || {};
+        const merged = { ...current };
+        for (const [group, values] of Object.entries(v)) {
+          if (isYamlMapping(values)) {
+            merged[group] = { ...(current[group] || {}), ...values };
+          } else {
+            merged[group] = values;
+          }
+        }
+        out.derivedSignals = merged;
+      } else if (isYamlMapping(v)) {
         out[k] = { ...(out[k] || {}), ...v };
       } else if (v !== undefined) {
         out[k] = v;
@@ -275,8 +322,21 @@ export function mergeAudioConfig(...layers) {
  * This is what gets serialized into states/<scene>/audio_state.yaml on
  * every PATCH /audio/config so the scene file always reflects current
  * truth. Capture is excluded — that's per-machine.
+ *
+ * `derivedSignals` is DELIBERATELY NOT projected wholesale. The merged
+ * config always carries the COMPLETE tree (config.yaml supplies every
+ * group), so persisting all of it stamped a full copy of config.yaml's
+ * derived tuning into the scene state on the very first knob turn — and
+ * from then on the scene file SHADOWED every future config.yaml retune,
+ * permanently and invisibly. Instead the caller passes
+ * `opts.derivedSignalsGroups`: the groups actually live-patched THIS
+ * runtime. Only those are persisted, and only their live-tunable fields —
+ * everything the operator did not touch keeps deferring to config.yaml.
+ *
+ * @param {object} cfg  merged audio config
+ * @param {{derivedSignalsGroups?: Iterable<string>}} [opts]
  */
-export function pickLiveFields(cfg) {
+export function pickLiveFields(cfg, opts = {}) {
   const out = {};
   for (const k of AUDIO_SCENE_SCALARS) {
     if (cfg && cfg[k] !== undefined) out[k] = cfg[k];
@@ -288,6 +348,22 @@ export function pickLiveFields(cfg) {
     for (const f of fields) {
       if (src[f] !== undefined) out[group][f] = src[f];
     }
+  }
+  const dirtyGroups = opts.derivedSignalsGroups ? [...opts.derivedSignalsGroups] : [];
+  if (dirtyGroups.length > 0 && cfg?.derivedSignals && typeof cfg.derivedSignals === 'object') {
+    const derivedOut = {};
+    for (const group of dirtyGroups) {
+      const fields = DERIVED_SIGNALS_LIVE_FIELDS[group];
+      if (!fields) throw new TypeError(`pickLiveFields: unknown derivedSignals group "${group}"`);
+      const src = cfg.derivedSignals[group];
+      if (!src || typeof src !== 'object') continue;
+      const groupOut = {};
+      for (const f of fields) {
+        if (src[f] !== undefined) groupOut[f] = src[f];
+      }
+      derivedOut[group] = groupOut;
+    }
+    if (Object.keys(derivedOut).length > 0) out.derivedSignals = derivedOut;
   }
   // Persist the operator's mic selection (capture.*) into the scene
   // state. AUDIO_LIVE_CAPTURE_FIELDS only — runtime knobs like
@@ -308,8 +384,11 @@ export function pickLiveFields(cfg) {
  * keys. The api_server uses this to issue 400s with a useful message.
  */
 export function validateLivePatch(partial) {
-  if (!partial || typeof partial !== 'object') {
-    return { ok: false, error: 'patch body must be an object' };
+  if (!partial || typeof partial !== 'object' || Array.isArray(partial)) {
+    return { ok: false, error: 'patch body must be a non-array object' };
+  }
+  if (Object.keys(partial).length === 0) {
+    return { ok: false, error: 'patch body must contain at least one live-tunable field' };
   }
   const live = {};
   // Whether this patch touches the capture stream — used by the engine
@@ -329,10 +408,22 @@ export function validateLivePatch(partial) {
       continue;
     }
 
+    if (key === 'derivedSignals') {
+      try {
+        live.derivedSignals = validateDerivedSignalsPatch(value);
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+      continue;
+    }
+
     // Nested groups: bands, kick, capture.
     if (key === 'capture') {
-      if (!value || typeof value !== 'object') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return { ok: false, error: `"capture" must be an object of {field: value}` };
+      }
+      if (Object.keys(value).length === 0) {
+        return { ok: false, error: '"capture" must contain at least one live-tunable field' };
       }
       live.capture = {};
       for (const [k, v] of Object.entries(value)) {
@@ -354,8 +445,11 @@ export function validateLivePatch(partial) {
     if (!allowedFields) {
       return { ok: false, error: `field "${key}" is not live-tunable; restart the engine to change it` };
     }
-    if (!value || typeof value !== 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return { ok: false, error: `"${key}" must be an object of {field: value}` };
+    }
+    if (Object.keys(value).length === 0) {
+      return { ok: false, error: `"${key}" must contain at least one live-tunable field` };
     }
     const groupValidators = LIVE_FIELD_VALIDATORS[key] || null;
     live[key] = {};
@@ -399,4 +493,31 @@ export function validateLivePatch(partial) {
     }
   }
   return { ok: true, live, requiresCaptureRestart };
+}
+
+/** Validate the complete structure-detector boot block without filling gaps. */
+export function validateStructureDetectorConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new TypeError('audio analysis config requires object "audio.structureDetector"');
+  }
+  const allowed = AUDIO_LIVE_FIELDS.structureDetector;
+  for (const field of allowed) {
+    if (!(field in config)) {
+      throw new TypeError(
+        `audio analysis config requires "audio.structureDetector.${field}"`,
+      );
+    }
+  }
+  for (const field of Object.keys(config)) {
+    if (!allowed.includes(field)) {
+      throw new TypeError(
+        `audio analysis config has unknown key "audio.structureDetector.${field}"`,
+      );
+    }
+  }
+  const validated = validateLivePatch({ structureDetector: config });
+  if (!validated.ok) {
+    throw new RangeError(`invalid audio structure detector config: ${validated.error}`);
+  }
+  return config;
 }

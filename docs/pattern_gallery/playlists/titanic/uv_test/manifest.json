@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "uv_test",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/uv_test.yaml",
+  "playlistDigest": "6af99401603c627a68112900fe8ac6a72f34a14ba7980c4e4ed8d955ba7781f3",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "65_uv_only",
+      "title": "Uv Only",
+      "goal": "A saved Uv Only look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.8,
+          "valueSource": "code default",
+          "description": "UV intensity (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "UV intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "violet slam",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "violet slam"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSharpness",
+          "label": "Sharpness",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvFloor",
+          "label": "Uv Floor",
+          "value": 0.12,
+          "valueSource": "code default",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        },
+        {
+          "name": "sliderRgbViolet",
+          "label": "Rgb Violet",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Rgb Violet character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderDirection": 1,
+        "sliderLevel": 0.8,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderSharpness": 0.35,
+        "sliderUvFloor": 0.12,
+        "sliderRgbViolet": 0
+      },
+      "gif": "001_65_uv_only.gif",
+      "video": "001_65_uv_only.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4b75f400f1d57a54be1d46dd3c782bb75e4aa09a8ca1fc2b0c8eed4cc27f18e4"
+    }
+  ]
+}

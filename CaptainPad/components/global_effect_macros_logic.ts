@@ -55,6 +55,33 @@ export const EFFECTS_PAGE_COUNT = 4;
 export const SHOW_EFFECT_PAGES = false;
 
 /**
+ * Operator surface policy for global effects.
+ *
+ * Performance mode is intentionally stricter than the edit-authority lock:
+ * even an authenticated edit principal must see trigger buttons only while
+ * the Performance face is active. Configuration affordances are removed from
+ * layout instead of being dimmed, so a live-show tap cannot open a slot,
+ * intensity, mode, or binding editor.
+ */
+export function effectSurfacePolicy(
+  performanceModeActive: boolean,
+  performanceModeReady: boolean = true,
+): {
+  configurationVisible: boolean;
+  boundEffectsTriggerable: true;
+  emptySlotsInteractive: boolean;
+  showBlackout: boolean;
+} {
+  const editSurfaceVisible = performanceModeReady && !performanceModeActive;
+  return {
+    configurationVisible: editSurfaceVisible,
+    boundEffectsTriggerable: true,
+    emptySlotsInteractive: editSurfaceVisible,
+    showBlackout: editSurfaceVisible,
+  };
+}
+
+/**
  * The page the strip should actually RENDER. When the pager UI is hidden
  * (SHOW_EFFECT_PAGES=false, the party single-page layout) we pin page 0
  * regardless of the engine's active `effectsPage`; when it's shown we honour the
@@ -66,6 +93,30 @@ export function resolveEffectsPage(
   showPages: boolean = SHOW_EFFECT_PAGES,
 ): number {
   return showPages ? enginePage : 0;
+}
+
+/**
+ * Split the strip's visible slots into fixed-size CLIENT-SIDE pages.
+ *
+ * This is a VIEW-ONLY pager for the portrait mixer/deck bottom strip (operator
+ * request 2026-07-27: "no scrolling in the effects bar"). It has NOTHING to do
+ * with the engine's `effectsPage` — SHOW_EFFECT_PAGES stays false and the strip
+ * still renders engine page 0's 8 slots; this only decides which 4 of those 8
+ * are on screen at once so each chip is wide enough for a single-line label.
+ *
+ * Total + pure: an empty input yields NO pages (the caller renders nothing
+ * rather than an empty page), and a partial last group is kept as-is (never
+ * padded) so callers can't mistake a spacer for a slot. Throws on a
+ * non-positive size — a 0 chunk would loop forever, and silently "fixing" it
+ * would be a fallback (codex P0).
+ */
+export function chunkStripPages<T>(slots: readonly T[], size: number): T[][] {
+  if (!Number.isFinite(size) || size < 1) {
+    throw new Error(`chunkStripPages: size must be >= 1, got ${size}`);
+  }
+  const pages: T[][] = [];
+  for (let i = 0; i < slots.length; i += size) pages.push(slots.slice(i, i + size));
+  return pages;
 }
 
 /** Flat slot id (1..32) for the `index0`-th visible cell on `page`. */
@@ -253,14 +304,13 @@ export function bankBadgeLabel(state: EffectBanksState): string {
  *  CaptainPad effects UI must ALWAYS look and behave the same regardless of the
  *  VSN1 profile). `showEditAffordances` gates the swap ⋯ pencil AND the
  *  value/mode detail badge; `showEmptySockets` gates the tappable "+" bind
- *  sockets; `cellHeightScale` multiplies the base chip height; `showBlackout` is
- *  the e-stop. All constant now — the profile no longer touches the grid.
+ *  sockets; `cellHeightScale` multiplies the base chip height. All constant now
+ *  — the profile no longer touches the grid.
  *  (Structural affordances are still dimmed by PERFORMANCE MODE — a separate
  *  concern handled in the component via usePerfLock, not here.) */
 export interface EffectsPresentation {
   showEditAffordances: boolean;
   showEmptySockets: boolean;
-  showBlackout: boolean;
   cellHeightScale: number;
 }
 
@@ -272,8 +322,93 @@ export function resolveEffectsPresentation(): EffectsPresentation {
   return {
     showEditAffordances: true,
     showEmptySockets: true,
-    showBlackout: true,
     cellHeightScale: 1,
+  };
+}
+
+// ── Effects bar geometry — shared Deck/Mixer bottom strip contract ─────────────
+// Both tabs mount `<RigGlobals variant="mixer" />`, which renders GEM in
+// `mixer-strip` mode. These tokens are the single layout authority so the two
+// surfaces stay visually lockstep while the bar sheds wasted vertical padding.
+
+/** iOS HIG / operator minimum — chip row height never drops below this. */
+export const EFFECTS_BAR_MIN_TOUCH_TARGET = 44;
+
+export type EffectsBarVariant = 'deck' | 'mixer-strip';
+
+export interface EffectsBarGeometry {
+  btnHeight: number;
+  btnFont: number;
+  gap: number;
+  labelLines: number;
+  /** Inner GEM top inset. Strip = 0 (host `globalRigBar` owns outer padding). */
+  containerPaddingTop: number;
+  /** RigGlobals wrapper top inset. Strip = 0 to avoid double-padding the host. */
+  stripWrapperPaddingTop: number;
+  chipMetaPaddingTop: number;
+  metaBadgeHeight: number;
+  metaInsetTop: number;
+  dividerMarginHorizontal: number;
+  stripLabelMarginRight: number;
+  deckCols: number;
+  rowMarginBottom: number;
+  skeletonPaddingTop: number;
+}
+
+/**
+ * Derive the effects-bar geometry for a variant + orientation. Pure so Deck and
+ * Mixer share one tested contract without react-native.
+ */
+export function resolveEffectsBarGeometry(args: {
+  variant: EffectsBarVariant;
+  isPortrait: boolean;
+  cellHeightScale?: number;
+}): EffectsBarGeometry {
+  const { variant, isPortrait, cellHeightScale = 1 } = args;
+  const isStrip = variant === 'mixer-strip';
+  const scaledHeight = (base: number) => Math.max(
+    EFFECTS_BAR_MIN_TOUCH_TARGET,
+    Math.round(base * cellHeightScale),
+  );
+
+  const metaInsetTop = 2;
+  const metaBadgeHeight = 12;
+  const chipMetaPaddingTop = metaInsetTop + metaBadgeHeight;
+
+  if (isStrip) {
+    return {
+      btnHeight: scaledHeight(44),
+      btnFont: isPortrait ? 10 : 12,
+      gap: 4,
+      labelLines: 1,
+      containerPaddingTop: 0,
+      stripWrapperPaddingTop: 0,
+      chipMetaPaddingTop,
+      metaBadgeHeight,
+      metaInsetTop,
+      dividerMarginHorizontal: 4,
+      stripLabelMarginRight: 4,
+      deckCols: isPortrait ? 3 : 4,
+      rowMarginBottom: 4,
+      skeletonPaddingTop: 2,
+    };
+  }
+
+  return {
+    btnHeight: scaledHeight(isPortrait ? 48 : 44),
+    btnFont: isPortrait ? 9 : 11,
+    gap: 4,
+    labelLines: 2,
+    containerPaddingTop: 2,
+    stripWrapperPaddingTop: 2,
+    chipMetaPaddingTop,
+    metaBadgeHeight,
+    metaInsetTop,
+    dividerMarginHorizontal: 4,
+    stripLabelMarginRight: 4,
+    deckCols: isPortrait ? 3 : 4,
+    rowMarginBottom: 4,
+    skeletonPaddingTop: 2,
   };
 }
 
@@ -318,17 +453,29 @@ export function modeBadge(perfLocked: boolean): ModeBadge | null {
 // surfaces the reason; a later `ok` clears it. Pure so the derivation is tested
 // without react-native.
 
-/** Fold a `vsn1LayoutDeploy` broadcast into the deploy-error banner state.
+/** The deploy banner, with its SEVERITY.
+ *
+ *  `offline` exists because "the controller is not plugged in" is a completely
+ *  normal state — the operator runs CaptainPad without the VSN1 all the time —
+ *  and it must NOT look like a failure. Before the engine had an attach state
+ *  (report _30 §4) a detached device produced a real deploy error per edit, so
+ *  the only available idiom was the red NOT-deployed banner. Now the engine
+ *  reports `skipped-detached` and this renders as a neutral, informational
+ *  badge. Red stays reserved for something actually being wrong. */
+export type DeployBanner = { kind: 'error' | 'offline'; message: string };
+
+/** Fold a `vsn1LayoutDeploy` broadcast into the deploy banner state.
  *  Returns:
  *    - `undefined` → NO CHANGE (an unrelated message, or an in-flight
  *      `deploying:true` frame — the previous banner holds until a result lands),
  *    - `null` → CLEAR the banner (a successful `ok` result), or
- *    - a string → SHOW this error message (a settled `error` result).
+ *    - a `DeployBanner` → SHOW it (`error` = a settled failure, `offline` = the
+ *      engine skipped the deploy because no device is attached).
  *  The caller stores the last non-`undefined` value in component state and may
  *  additionally set it to `null` on an operator dismiss. */
 export function deployBannerMessage(
   msg: { type?: unknown; deploying?: unknown; lastResult?: unknown; lastError?: unknown },
-): string | null | undefined {
+): DeployBanner | null | undefined {
   if (!msg || msg.type !== 'vsn1LayoutDeploy') return undefined;
   // Only ACT on a settled result. An in-flight frame (deploying:true) carries a
   // STALE lastResult from the previous flash, so ignore it — the previous banner
@@ -339,7 +486,10 @@ export function deployBannerMessage(
     const detail = typeof msg.lastError === 'string' && msg.lastError.trim()
       ? msg.lastError.trim()
       : 'unknown error';
-    return `VSN1 layout NOT deployed: ${detail}`;
+    return { kind: 'error', message: `VSN1 layout NOT deployed: ${detail}` };
+  }
+  if (msg.lastResult === 'skipped-detached') {
+    return { kind: 'offline', message: 'VSN1 offline — layout deploy skipped' };
   }
   // Any other result (e.g. 'disabled', or a frame with no result yet) — no change.
   return undefined;

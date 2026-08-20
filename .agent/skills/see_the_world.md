@@ -81,6 +81,7 @@ All commands run from `simulation/agent_tools/`:
 | `node agent_render.cjs --current` | Capture the current view without moving the camera |
 | `node agent_render.cjs --view front` | Navigate to a specific view and capture |
 | `node agent_render.cjs --view <key>` | Works with ANY preset key from `scenes/titanic/cameras.yaml` |
+| `node agent_render.cjs --camera x,y,z --target x,y,z [--label slug]` | Frame an **arbitrary** pose (world units) and capture — for a detail (one fixture, one seam) that no preset covers |
 | `node agent_render.cjs` | Capture all preset views (dynamically loaded from YAML) |
 | Add `--show-ui` to any | Keep the menus/panels (Pattern Editor, Lighting Controls, view buttons, …) visible in the capture; by default they are hidden |
 | Add `--viewport WxH` to any | Override screenshot resolution (default `1920x1080`) |
@@ -88,9 +89,29 @@ All commands run from `simulation/agent_tools/`:
 
 > **⚠️ Agent tip:** The `--view` flag dynamically reads presets from `simulation/scenes/titanic/cameras.yaml`. You can add new camera presets to the YAML file (or save them from the live UI) and render from them immediately — no code changes needed.
 
+> **⚠️ Agent tip (one-off framing):** `scenes/**` is operator-owned — never write a
+> throwaway preset there just to see a detail. Use
+> `--camera x,y,z --target x,y,z --label <slug>` instead: it flies the camera to
+> that exact pose (via `window.animateCameraToPose`, `src/gui/view_presets.js`)
+> and saves `.agent_renders/{unix_seconds}_{slug}.png`. Example — framing the TE
+> Sign on the titanic scene:
+> `node agent_render.cjs --camera -12.7,9,11.7 --target -15.5,9,8.5 --label te_sign`
+
 > **⚠️ Agent tip:** Run the script from `simulation/agent_tools/` (it resolves `node_modules/` from `simulation/`). Do NOT create temp puppeteer scripts in `/tmp/` or other locations — puppeteer won't resolve. If you need a one-off render, use `node agent_render.cjs --view <key>` instead of writing custom scripts.
 
 > **⚠️ Agent tip (software rendering):** On machines without a real GPU (SwiftShader), use `--viewport 1280x720`. At 1920×1080 the WebGL context can be lost on geometry-heavy close-up views (e.g. `night-walk`), which produces an all-black canvas.
+
+> **⚠️ Agent tip (fresh browser + which GPU):** Launch a **fresh browser per
+> measurement and close it when done** — leftover probe windows steal the GPU
+> from the operator's own sim. And **never report an FPS number without the
+> adapter that produced it**: read `window.__gpuAdapter` in the page
+> (`{ renderer, integrated, detectionFailed }`). On a dual-GPU box the same
+> scene runs 59.9 FPS on the discrete GPU and 10–20 FPS on the Intel iGPU
+> (report `20260725_38`), so an `integrated: true` (or `detectionFailed: true`)
+> adapter **invalidates the measurement** — the sim shows a red
+> `#gpu-adapter-warning` banner and logs `console.error` in that case, and it
+> will appear in your screenshots on purpose. Full rule:
+> `.agent/ops/sim_auto_checks.md` → "GPU Adapter Check".
 
 ---
 

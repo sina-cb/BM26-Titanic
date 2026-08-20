@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { signalFeel, flickerRate, percentile } from './signal_metrics.mjs';
+import { distributionMetrics, signalFeel, flickerRate, percentile } from './signal_metrics.mjs';
 
 const HOP = 11.6; // ms/hop ≈ 512/44100
 
@@ -48,4 +48,14 @@ test('signalFeel returns finite numbers on a constant signal', () => {
   for (const k of ['flickerHz', 'meanAbsDelta', 'variance', 'pulseDepth', 'mean']) {
     assert.ok(Number.isFinite(f[k]), `${k} not finite: ${f[k]}`);
   }
+});
+
+test('distributionMetrics reports quantiles, dead range, saturation, and non-finite values', () => {
+  const metrics = distributionMetrics([0, 0, 0.25, 0.5, 1, Number.NaN]);
+  assert.equal(metrics.n, 6);
+  assert.equal(metrics.zeroFraction, 2 / 6);
+  assert.equal(metrics.saturationFraction, 1 / 6);
+  assert.equal(metrics.nonFinite, 1);
+  assert.ok(metrics.p5 <= metrics.p50 && metrics.p50 <= metrics.p95);
+  assert.ok(metrics.usefulRange > 0);
 });

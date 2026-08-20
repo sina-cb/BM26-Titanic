@@ -4,28 +4,47 @@
 // (lib/color_autopilot.js) persist their runtime state by dumping the ENTIRE
 // parsed config.yaml back to disk (js-yaml strips every comment). A test that
 // spawns the real engine and activates autopilot would therefore rewrite the
-// tracked, comment-bearing marsin_engine/config.yaml — wiping the documented
-// `controllers:` routing examples and appending a `colorAutopilot:` block.
+// tracked, comment-bearing marsin_engine/config.yaml — wiping its documentation
+// and appending a `colorAutopilot:` block.
 //
 // Both modules resolve their persistence path from MARSIN_CONFIG_FILE (falling
-// back to the real config.yaml when unset). Here we point that env var at a
-// scratch COPY of config.yaml, so: (a) the engine still boots from real
-// settings, and (b) every autopilot save lands in the scratch file. Spawned
+// back to the real config.yaml when unset), and since report _100 so does
+// engine.js's own boot read. Here we point that env var at a scratch COPY of
+// config.yaml, then disables the production OSC and fire-sync listeners in
+// that scratch copy. The engine otherwise boots from the real settings, and
+// every autopilot save lands in the scratch file. Spawned
 // engine subprocesses inherit the env var (they inherit process.env), so this
 // one hook covers the whole suite — no per-test wiring.
+//
+// A harness that needs DIFFERENT settings (the timeline e2e suite writes a
+// black-holed `sacn.destinations` config so its engines can never reach the
+// rig) sets MARSIN_CONFIG_FILE itself, or hands the child its own value — this
+// hook honours an override that is already set.
 //
 // Idempotent: honours an override the caller already set.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
 
 if (!process.env.MARSIN_CONFIG_FILE) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   // tests/helpers → tests → marsin_engine/config.yaml
   const realConfig = path.join(here, '..', '..', 'config.yaml');
   const scratch = path.join(os.tmpdir(), `bm26_engine_config_test_${process.pid}.yaml`);
-  fs.copyFileSync(realConfig, scratch);
+  const isolatedConfig = yaml.load(fs.readFileSync(realConfig, 'utf8'));
+  if (!isolatedConfig || typeof isolatedConfig !== 'object') {
+    throw new Error(`test config guard could not parse ${realConfig}`);
+  }
+  // A random HTTP port and a TEST-NET sACN destination are not sufficient
+  // isolation: the production config also opens the normal OSC and Stoker
+  // fire-sync UDP listeners.  Real-engine tests must never contend with, read
+  // from, or influence those live control ports.  Suites that explicitly test
+  // OSC provide their own MARSIN_CONFIG_FILE and therefore bypass this guard.
+  isolatedConfig.osc = { ...(isolatedConfig.osc || {}), enabled: false };
+  isolatedConfig.fire_sync = { ...(isolatedConfig.fire_sync || {}), enabled: false };
+  fs.writeFileSync(scratch, yaml.dump(isolatedConfig), 'utf8');
   process.env.MARSIN_CONFIG_FILE = scratch;
   process.on('exit', () => {
     try { fs.rmSync(scratch, { force: true }); } catch { /* best-effort cleanup */ }

@@ -50,7 +50,21 @@ export const clampInt = (raw, lo, hi, dflt) => {
 // runs unchanged — `groupRuntime` may be omitted by those callers.
 export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) {
   if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
-  const usable = pl.entries.filter(e => !e._missing);
+  // I3 (report _116 / _112): a `usable` entry is one that is NOT `_missing` (file
+  // absent), NOT `_broken` (present but won't compile — flagged by the caller so
+  // the autopilot advances PAST it instead of wedging forever), and NOT a
+  // DUPLICATE id (a repeated entry id otherwise pinned the sequential walk at
+  // cursor 0 with no log — the silent twin). De-dupe keeps the FIRST occurrence,
+  // preserving plan order so the sequential/shuffle behaviour is unchanged for
+  // well-formed playlists.
+  const seenIds = new Set();
+  const usable = [];
+  for (const e of pl.entries) {
+    if (e._missing || e._broken) continue;
+    if (seenIds.has(e.id)) continue; // duplicate id → keep first
+    seenIds.add(e.id);
+    usable.push(e);
+  }
   if (usable.length === 0) return null;
   // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
   // entries. No-op (fall through) unless armed AND the playlist is bigger than
@@ -99,12 +113,11 @@ export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) 
     const others = usable.filter(e => e.id !== curEntryId);
     return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
   }
-  // Sequential: walk forward from the current index, skipping _missing.
-  const idx = pl.entries.findIndex(e => e.id === curEntryId);
-  let nextIdx = (idx + 1) % pl.entries.length;
-  for (let i = 0; i < pl.entries.length; i++) {
-    if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
-    nextIdx = (nextIdx + 1) % pl.entries.length;
-  }
-  return null;
+  // Sequential: walk forward over the USABLE list (already excludes
+  // _missing/_broken/duplicates), from the current entry. If the current entry
+  // is not itself usable (it was removed, or it is the broken one we are trying
+  // to advance PAST), start from the first usable — so a broken current entry
+  // can never trap the walk. Preserves plan order for well-formed playlists.
+  const uIdx = usable.findIndex(e => e.id === curEntryId);
+  return usable[(uIdx + 1) % usable.length];
 }

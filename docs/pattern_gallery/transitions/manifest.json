@@ -1,0 +1,723 @@
+{
+  "schemaVersion": 1,
+  "model": "titanic",
+  "pixelCount": 964,
+  "endpointA": {
+    "playlist": "baby_boy",
+    "entryId": "e_baby_boy_keel_breath",
+    "color": "blue",
+    "shortLabel": "A · BLUE",
+    "label": "Baby Boy - Keel Breath",
+    "pattern": "baby/51_boy_keel_breath",
+    "defaults": {
+      "sliderLocalSpeed": 0.3,
+      "sliderLevel": 0.86,
+      "sliderKeelWidth": 0.52,
+      "sliderBreathDepth": 0.46
+    }
+  },
+  "endpointB": {
+    "playlist": "baby_girl",
+    "entryId": "e_baby_girl_keel_breath",
+    "color": "pink",
+    "shortLabel": "B · PINK",
+    "label": "Baby Girl - Keel Breath",
+    "pattern": "baby/66_girl_keel_breath",
+    "defaults": {
+      "sliderLocalSpeed": 0.3,
+      "sliderLevel": 0.86,
+      "sliderKeelWidth": 0.52,
+      "sliderBreathDepth": 0.46
+    }
+  },
+  "phasePolicy": "incoming B zero-seeded and parked until transition start; phase state promoted atomically",
+  "holdSeconds": 1,
+  "transitionSeconds": 2,
+  "totalSeconds": 4,
+  "internalFps": 40,
+  "outputFps": 20,
+  "deckExecution": {
+    "faderCurve": "smoothstep",
+    "crossfadeBlend": "trans_crossfade",
+    "tailCut": false
+  },
+  "p0CompletionExcessRmsThreshold": 2,
+  "p0OpenCount": 0,
+  "items": [
+    {
+      "transition": "trans_color_burst",
+      "source": "marsin_engine/patterns/transitions/trans_color_burst.js",
+      "actualBlend": "trans_color_burst",
+      "verdict": "KEEP",
+      "reason": "Script now owns its full curve and converges exactly to B.",
+      "gif": "001_trans_color_burst.gif",
+      "video": "001_trans_color_burst.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.42647514719577384,
+          "maxByteDelta": 2,
+          "changedPixels": 949,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.29899287820384474,
+        "largestFrameJump": {
+          "rmsBytes": 3.8034571519939515,
+          "maxByteDelta": 9,
+          "changedPixels": 964,
+          "frameIndex": 102,
+          "timeSeconds": 2.55
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_crossfade",
+      "source": "marsin_engine/patterns/transitions/trans_crossfade.js",
+      "actualBlend": "trans_crossfade",
+      "verdict": "KEEP",
+      "reason": "True six-lane linear interpolation with exact A and B endpoints.",
+      "gif": "002_trans_crossfade.gif",
+      "video": "002_trans_crossfade.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4313124491236231,
+          "maxByteDelta": 2,
+          "changedPixels": 942,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.303830180131694,
+        "largestFrameJump": {
+          "rmsBytes": 0.6673578712760345,
+          "maxByteDelta": 4,
+          "changedPixels": 946,
+          "frameIndex": 93,
+          "timeSeconds": 2.325
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_diagonal_wipe",
+      "source": "marsin_engine/patterns/transitions/trans_diagonal_wipe.js",
+      "actualBlend": "trans_diagonal_wipe",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "003_trans_diagonal_wipe.gif",
+      "video": "003_trans_diagonal_wipe.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4386654601084022,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3111831911164731,
+        "largestFrameJump": {
+          "rmsBytes": 2.0438231335864474,
+          "maxByteDelta": 18,
+          "changedPixels": 765,
+          "frameIndex": 82,
+          "timeSeconds": 2.05
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_diamond_wipe",
+      "source": "marsin_engine/patterns/transitions/trans_diamond_wipe.js",
+      "actualBlend": "trans_diamond_wipe",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "004_trans_diamond_wipe.gif",
+      "video": "004_trans_diamond_wipe.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4378764928149139,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3103942238229848,
+        "largestFrameJump": {
+          "rmsBytes": 1.911827133281633,
+          "maxByteDelta": 7,
+          "changedPixels": 688,
+          "frameIndex": 74,
+          "timeSeconds": 1.85
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_dissolve",
+      "source": "marsin_engine/patterns/transitions/trans_dissolve.js",
+      "actualBlend": "trans_dissolve",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "005_trans_dissolve.gif",
+      "video": "005_trans_dissolve.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4386654601084022,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3111831911164731,
+        "largestFrameJump": {
+          "rmsBytes": 1.699605356520001,
+          "maxByteDelta": 17,
+          "changedPixels": 298,
+          "frameIndex": 84,
+          "timeSeconds": 2.1
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_flash",
+      "source": "marsin_engine/patterns/transitions/trans_flash.js",
+      "actualBlend": "trans_flash",
+      "verdict": "KEEP",
+      "reason": "Script now owns its full white-flash curve and converges exactly to B.",
+      "gif": "006_trans_flash.gif",
+      "video": "006_trans_flash.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0,
+        "largestFrameJump": {
+          "rmsBytes": 7.708220719898118,
+          "maxByteDelta": 11,
+          "changedPixels": 964,
+          "frameIndex": 102,
+          "timeSeconds": 2.55
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_iris",
+      "source": "marsin_engine/patterns/transitions/trans_iris.js",
+      "actualBlend": "trans_iris",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "007_trans_iris.gif",
+      "video": "007_trans_iris.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4378764928149139,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3103942238229848,
+        "largestFrameJump": {
+          "rmsBytes": 1.9742463590014365,
+          "maxByteDelta": 12,
+          "changedPixels": 624,
+          "frameIndex": 81,
+          "timeSeconds": 2.025
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_iris_close",
+      "source": "marsin_engine/patterns/transitions/trans_iris_close.js",
+      "actualBlend": "trans_iris_close",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "008_trans_iris_close.gif",
+      "video": "008_trans_iris_close.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4386654601084022,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3111831911164731,
+        "largestFrameJump": {
+          "rmsBytes": 1.9628288502657802,
+          "maxByteDelta": 12,
+          "changedPixels": 629,
+          "frameIndex": 80,
+          "timeSeconds": 2
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_ripple_in",
+      "source": "marsin_engine/patterns/transitions/trans_ripple_in.js",
+      "actualBlend": "trans_ripple_in",
+      "verdict": "TUNE",
+      "reason": "Keep the concept; repair weak or misleading ring controls before blessing.",
+      "gif": "009_trans_ripple_in.gif",
+      "video": "009_trans_ripple_in.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4313124491236231,
+          "maxByteDelta": 2,
+          "changedPixels": 942,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.303830180131694,
+        "largestFrameJump": {
+          "rmsBytes": 0.7823255045188972,
+          "maxByteDelta": 6,
+          "changedPixels": 876,
+          "frameIndex": 69,
+          "timeSeconds": 1.725
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_split_horizontal",
+      "source": "marsin_engine/patterns/transitions/trans_split_horizontal.js",
+      "actualBlend": "trans_split_horizontal",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "010_trans_split_horizontal.gif",
+      "video": "010_trans_split_horizontal.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.43708610138926,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3096038323973309,
+        "largestFrameJump": {
+          "rmsBytes": 1.5848522233469768,
+          "maxByteDelta": 9,
+          "changedPixels": 454,
+          "frameIndex": 74,
+          "timeSeconds": 1.85
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_split_vertical",
+      "source": "marsin_engine/patterns/transitions/trans_split_vertical.js",
+      "actualBlend": "trans_split_vertical",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "011_trans_split_vertical.gif",
+      "video": "011_trans_split_vertical.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4378764928149139,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3103942238229848,
+        "largestFrameJump": {
+          "rmsBytes": 2.18159026849339,
+          "maxByteDelta": 13,
+          "changedPixels": 753,
+          "frameIndex": 80,
+          "timeSeconds": 2
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_wave_sweep",
+      "source": "marsin_engine/patterns/transitions/trans_wave_sweep.js",
+      "actualBlend": "trans_wave_sweep",
+      "verdict": "TUNE",
+      "reason": "Keep the concept; the frequency control did not pass the parameter-truth audit.",
+      "gif": "012_trans_wave_sweep.gif",
+      "video": "012_trans_wave_sweep.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4378764928149139,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3103942238229848,
+        "largestFrameJump": {
+          "rmsBytes": 1.7815036308472658,
+          "maxByteDelta": 15,
+          "changedPixels": 418,
+          "frameIndex": 94,
+          "timeSeconds": 2.35
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_wipe_down",
+      "source": "marsin_engine/patterns/transitions/trans_wipe_down.js",
+      "actualBlend": "trans_wipe_down",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "013_trans_wipe_down.gif",
+      "video": "013_trans_wipe_down.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.43708610138926,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3096038323973309,
+        "largestFrameJump": {
+          "rmsBytes": 1.7179187446669322,
+          "maxByteDelta": 7,
+          "changedPixels": 547,
+          "frameIndex": 76,
+          "timeSeconds": 1.9
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_wipe_left",
+      "source": "marsin_engine/patterns/transitions/trans_wipe_left.js",
+      "actualBlend": "trans_wipe_left",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "014_trans_wipe_left.gif",
+      "video": "014_trans_wipe_left.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4386654601084022,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3111831911164731,
+        "largestFrameJump": {
+          "rmsBytes": 2.0611334485349153,
+          "maxByteDelta": 12,
+          "changedPixels": 495,
+          "frameIndex": 71,
+          "timeSeconds": 1.775
+        },
+        "p0Open": false
+      }
+    },
+    {
+      "transition": "trans_wipe_right",
+      "source": "marsin_engine/patterns/transitions/trans_wipe_right.js",
+      "actualBlend": "trans_wipe_right",
+      "verdict": "KEEP",
+      "reason": "Deterministic retained transition with exact endpoint convergence.",
+      "gif": "015_trans_wipe_right.gif",
+      "video": "015_trans_wipe_right.mp4",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "audit": {
+        "endpointAResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "endpointBResidual": {
+          "rmsBytes": 0,
+          "maxByteDelta": 0,
+          "changedPixels": 0
+        },
+        "completionJump": {
+          "rmsBytes": 0.4378764928149139,
+          "maxByteDelta": 2,
+          "changedPixels": 952,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionBaseline": {
+          "rmsBytes": 0.1274822689919291,
+          "maxByteDelta": 2,
+          "changedPixels": 83,
+          "frameIndex": 120,
+          "timeSeconds": 3
+        },
+        "completionExcessRms": 0.3103942238229848,
+        "largestFrameJump": {
+          "rmsBytes": 2.1554796843006705,
+          "maxByteDelta": 14,
+          "changedPixels": 514,
+          "frameIndex": 91,
+          "timeSeconds": 2.275
+        },
+        "p0Open": false
+      }
+    }
+  ]
+}

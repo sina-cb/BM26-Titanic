@@ -1,0 +1,29 @@
+# Line-ending policy.
+#
+# WHY THIS FILE EXISTS (RCA 2026-07-28, .agent/reports/202607/20260725_30_…):
+# the VSN1 layout-deploy tool compiles Lua templates into device action
+# strings, and its comment stripper split on '\n'. This repo has
+# core.autocrlf=true and had NO .gitattributes, so every checkout materialized
+# the templates as CRLF — every line then ended in '\r', the comment regex
+# could never match, not one comment was stripped, and the encoder INIT action
+# string went 904 → 5960 chars against a 909-char device limit. Every deploy
+# failed, on every boot and every effect change.
+#
+# The stripper now splits on /\r?\n/ (lua_action_string.cjs), so CRLF is
+# harmless on its own. This file kills the drift class at the source: Lua is
+# consumed byte-for-byte by a device compiler and must stay LF in the working
+# tree, on every platform.
+#
+# NOTE: adding an attribute does NOT rewrite an ALREADY-CHECKED-OUT tree. Run
+#   git add --renormalize .
+# once (see the _31 report) to bring existing working copies into line.
+/.gitattributes text eol=lf
+*.lua text eol=lf
+
+# Operator control paths are reviewed with `git diff --check`; pin the files
+# changed by the live-control-panel work so a Windows checkout cannot recommit
+# CRLF and turn one API edit into a 12k-line whitespace diff.
+/marsin_engine/lib/api_server.js -text diff whitespace=cr-at-eol
+/CaptainPad/live_touch/touch_control.html text eol=lf
+/CaptainPad/live_touch/touch_control_wire.js text eol=lf
+/CaptainPad/app/(tabs)/touch_control.tsx text eol=lf

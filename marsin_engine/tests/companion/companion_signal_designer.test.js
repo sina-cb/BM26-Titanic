@@ -21,7 +21,9 @@ import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, VIEW_TYPES,
   defaultCompanionConfig, validateCompanionConfig, validateSignal, validateView,
   dumpCompanionConfig, loadCompanionConfig, saveCompanionConfig,
-  parseCaptureDevice, captureDeviceString, resolveOscOut,
+  parseCaptureDevice, captureDeviceString, resolveCompanionBootSource,
+  resolveOscOut, missingCuratedOutputs,
+  COMPANION_CONFIG_PATH,
 } from '../../audio/companion/companion_config.js';
 import { ParamCenter } from '../../lib/param_center.js';
 import { OscListener } from '../../lib/osc_listener.js';
@@ -29,6 +31,29 @@ import { OscListener } from '../../lib/osc_listener.js';
 function makePc() {
   return new ParamCenter(null);
 }
+
+test('the built-in design publishes every curated engine-bound signal', () => {
+  const config = defaultCompanionConfig();
+  assert.deepEqual(missingCuratedOutputs(config), []);
+  const flux = config.signals.find(signal => signal.id === 'flux');
+  flux.chain[flux.chain.length - 1].enabled = false;
+  assert.deepEqual(missingCuratedOutputs(config), ['micFlux']);
+});
+
+test('the built-in and shipped YAML designs have identical curated chains', () => {
+  const project = (config) => config.signals.map((signal) => ({
+    id: signal.id,
+    label: signal.label,
+    source: signal.source,
+    type: signal.type,
+    output: signal.output,
+    chain: signal.chain,
+  }));
+  const builtIn = validateCompanionConfig(defaultCompanionConfig());
+  const shipped = loadCompanionConfig(COMPANION_CONFIG_PATH);
+  assert.deepEqual(project(shipped), project(builtIn));
+  assert.deepEqual(missingCuratedOutputs(shipped), []);
+});
 
 // ── 1) osc_out op ─────────────────────────────────────────────────────────────
 
@@ -390,6 +415,7 @@ test('every curated contract address routes to its CPC key', async () => {
     ['/marsin/mic/mid', 'micMid', 0.31],
     ['/marsin/mic/high', 'micHigh', 0.27],
     ['/marsin/mic/kick', 'micKick', 1.0],
+    ['/marsin/mic/flux', 'micFlux', 0.38],
     ['/marsin/dom/freq1', 'micDomFreq1', 110.0],
     ['/marsin/dom/freq2', 'micDomFreq2', 880.0],
     ['/marsin/audio/bpm', 'audioBpm', 128.0],
@@ -510,6 +536,31 @@ test('captureDeviceString is the inverse (Companion source → capture.device)',
   assert.equal(captureDeviceString({ mode: 'file', file: '/songs/a.wav' }), 'file:/songs/a.wav');
   assert.equal(captureDeviceString({ mode: 'mic', device: 'hw:1,0' }), 'hw:1,0');
   assert.equal(captureDeviceString({ mode: 'mic', device: null }), '');
+});
+
+test('Companion boot treats persisted source sentinels as sources, never microphones', () => {
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'mic', captureDevice: 'test',
+  }), { mode: 'test' });
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'mic', captureDevice: 'file:/songs/a.wav',
+  }), { mode: 'file', file: '/songs/a.wav' });
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'test', captureDevice: 'audio=Amazon USB Mic',
+  }), { mode: 'mic', device: 'audio=Amazon USB Mic' });
+});
+
+test('explicit Companion source/device and CLI source overrides remain authoritative', () => {
+  assert.deepEqual(resolveCompanionBootSource({
+    companionSource: 'mic', companionDevice: 'audio=Booth Mic', captureDevice: 'test',
+  }), { mode: 'mic', device: 'audio=Booth Mic' });
+  assert.deepEqual(resolveCompanionBootSource({
+    sourceOverride: 'test', companionSource: 'mic', companionDevice: 'audio=Booth Mic',
+    captureDevice: 'audio=Amazon USB Mic',
+  }), { mode: 'test' });
+  assert.throws(() => resolveCompanionBootSource({
+    companionSource: 'bogus', captureDevice: undefined,
+  }), /one of: mic, test, file/);
 });
 
 test('source mode round-trips through capture.device (two-way sync)', () => {

@@ -6,7 +6,9 @@ import { ComponentProps } from 'react';
 import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
 
 type IconMapping = Record<SymbolViewProps['name'], ComponentProps<typeof MaterialIcons>['name']>;
-type IconSymbolName = keyof typeof MAPPING;
+// Exported so data files that CARRY an icon name (e.g. the tab policy) are
+// checked against this mapping at compile time instead of rendering a blank.
+export type IconSymbolName = keyof typeof MAPPING;
 
 /**
  * Add your SF Symbols to Material Icons mappings here.
@@ -18,11 +20,13 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  // Timeline zoom ladder (_94): the DAY view's "◀ WEEK" zoom-out affordance.
+  // Unmapped SF names render a blank 0×0 glyph on web, so map it explicitly.
+  'chevron.left': 'chevron-left',
   // Playlist reorder (slot 5, May 2026): up/down nudges on each entry row.
   'chevron.up': 'keyboard-arrow-up',
   'chevron.down': 'keyboard-arrow-down',
   'slider.vertical.3': 'tune',
-  'desktopcomputer': 'monitor',
   'shippingbox.fill': 'local-shipping',
   'curlybraces': 'code',
   'gear': 'settings',
@@ -39,6 +43,9 @@ const MAPPING = {
   'pin.fill': 'push-pin',
   'pin.slash.fill': 'location-off',
   'waveform': 'graphic-eq',
+  // PARTY MODE card (audio tab) — the hard enable/disable gate for party
+  // sessions. Unmapped SF names render a blank 0×0 glyph on web, so map it.
+  'sparkles': 'celebration',
   'waveform.path.ecg': 'monitor-heart',
   'mic': 'mic',
   'power': 'power-settings-new',

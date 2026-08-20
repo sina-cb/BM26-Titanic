@@ -242,7 +242,15 @@ export function rebuildDmxFixtures(force = false) {
         );
         fixture.patchDef = patchDef;
         window.dmxSceneFixtures[index] = fixture;
-      } else if (fixtureModel) {
+      } else if (fixtureModel && fixtureModel.bus !== 'led') {
+        // LED-bus fixtures NEVER take the legacy ModelFixture path. ModelFixture
+        // renders each pixel as its own dark-dot Mesh with NO halo and no
+        // updateScales hook, so a TE Sign / TE LED Grid added through the "DMX
+        // Light Fixtures" section (its type dropdown lists every registered
+        // model) would render haloless — the same defect the LED-bus fixtures in
+        // parLights had. Routing them to DmxFixtureRuntime keeps ONE LED render
+        // path: instanced bulb + the shared led_halo rim, obeying the global
+        // halo settings like every other LED fixture.
         fixture = new ModelFixture(
           config,
           index,

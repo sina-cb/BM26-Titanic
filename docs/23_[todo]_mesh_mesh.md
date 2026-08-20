@@ -7,8 +7,8 @@
 > - `docs/22_server_bridge.md` (today's hub-and-spoke architecture)
 > - `.agent/00_gol/12_operating_raspberry_pi.md` (server / Pi
 >   operational model — unchanged by this design)
-> - `control_podium/comms/frame.py` (wire format we're extending)
-> - `control_podium/comms/replay.py` (dedup pattern we're porting to
+> - `LookingGlass/control_podium/comms/frame.py` (wire format we're extending)
+> - `LookingGlass/control_podium/comms/replay.py` (dedup pattern we're porting to
 >   firmware)
 
 ---
@@ -1167,26 +1167,26 @@ PortWatch's PEERS card update lag is bounded by the PUB cadence
 
 | Phase | File | Change |
 | --- | --- | --- |
-| 1 | `control_podium/comms/frame.py` | Add `ttl` to `Frame`; update `encode`/`decode`. |
-| 1 | `control_podium/comms/secure.py` | Verify AAD excludes TTL. |
-| 1 | `control_podium/firmware/src/titanic_common.h` | Parse TTL field in Frame helpers. |
-| 1 | `control_podium/comms/bridge.py::_send` | Accept TTL param; default `ttl=1` initially. |
-| 1 | `control_podium/companions/client_companion.py::_send` | Same. |
-| 1 | `control_podium/tests/test_comms_frame.py` | New TTL round-trip tests. |
-| 2 | `control_podium/firmware/src/titanic_mesh.h` | NEW. `SeenSet`, `RelayQueue`, `mesh_evaluate(frame, rssi)`. |
-| 2 | `control_podium/firmware/src/podium_tx/main.cpp` | Call `mesh_evaluate` from RX path. |
-| 2 | `control_podium/firmware/src/server_rx/main.cpp` | Same, but `mesh_evaluate` is a no-op for server. |
-| 2 | `control_podium/tests/hil/test_hil_mesh_2hop.py` | NEW. Multi-hop HIL fixture. |
-| 3 | `control_podium/comms/bridge.py::_send_reply` | Pass `ttl=3` for outbound REP/ACK/NAK. |
-| 4 | `control_podium/comms/bridge.py::_status_publisher` | Pass `ttl=3` for PUBs. |
-| 5 | `control_podium/comms/bridge.py` | NEW `Roster` class. Inject `roster/` into PUBs. Handle `qry mesh/roster`. |
-| 5 | `control_podium/comms/registry.py` | Add `mesh/roster` to qry allowlist for captain+crew. |
-| 5 | `control_podium/PortWatch/src/status/parse.ts` | Parse `roster/` field; new `mesh.peers` array on `EngineStatus`. |
-| 5 | `control_podium/PortWatch/src/frame/ops.ts` | `buildMeshRosterQuery()` helper. |
-| 5 | `control_podium/PortWatch/src/state/store.ts` | `peers` field + setter. |
-| 5 | `control_podium/PortWatch/src/ui/StatusScreen.tsx` | NEW PEERS card. |
-| 6 | `control_podium/comms/bridge_health.py` | Add `mesh.per_source` to `/health`. |
-| 6 | `control_podium/PortWatch/src/ui/StatusScreen.tsx` | Extend PEERS row to show self-relay stats. |
+| 1 | `LookingGlass/control_podium/comms/frame.py` | Add `ttl` to `Frame`; update `encode`/`decode`. |
+| 1 | `LookingGlass/control_podium/comms/secure.py` | Verify AAD excludes TTL. |
+| 1 | `LookingGlass/control_podium/firmware/src/titanic_common.h` | Parse TTL field in Frame helpers. |
+| 1 | `LookingGlass/control_podium/comms/bridge.py::_send` | Accept TTL param; default `ttl=1` initially. |
+| 1 | `LookingGlass/control_podium/companions/client_companion.py::_send` | Same. |
+| 1 | `LookingGlass/control_podium/tests/test_comms_frame.py` | New TTL round-trip tests. |
+| 2 | `LookingGlass/control_podium/firmware/src/titanic_mesh.h` | NEW. `SeenSet`, `RelayQueue`, `mesh_evaluate(frame, rssi)`. |
+| 2 | `LookingGlass/control_podium/firmware/src/podium_tx/main.cpp` | Call `mesh_evaluate` from RX path. |
+| 2 | `LookingGlass/control_podium/firmware/src/server_rx/main.cpp` | Same, but `mesh_evaluate` is a no-op for server. |
+| 2 | `LookingGlass/control_podium/tests/hil/test_hil_mesh_2hop.py` | NEW. Multi-hop HIL fixture. |
+| 3 | `LookingGlass/control_podium/comms/bridge.py::_send_reply` | Pass `ttl=3` for outbound REP/ACK/NAK. |
+| 4 | `LookingGlass/control_podium/comms/bridge.py::_status_publisher` | Pass `ttl=3` for PUBs. |
+| 5 | `LookingGlass/control_podium/comms/bridge.py` | NEW `Roster` class. Inject `roster/` into PUBs. Handle `qry mesh/roster`. |
+| 5 | `LookingGlass/control_podium/comms/registry.py` | Add `mesh/roster` to qry allowlist for captain+crew. |
+| 5 | `LookingGlass/control_podium/PortWatch/src/status/parse.ts` | Parse `roster/` field; new `mesh.peers` array on `EngineStatus`. |
+| 5 | `LookingGlass/control_podium/PortWatch/src/frame/ops.ts` | `buildMeshRosterQuery()` helper. |
+| 5 | `LookingGlass/control_podium/PortWatch/src/state/store.ts` | `peers` field + setter. |
+| 5 | `LookingGlass/control_podium/PortWatch/src/ui/StatusScreen.tsx` | NEW PEERS card. |
+| 6 | `LookingGlass/control_podium/comms/bridge_health.py` | Add `mesh.per_source` to `/health`. |
+| 6 | `LookingGlass/control_podium/PortWatch/src/ui/StatusScreen.tsx` | Extend PEERS row to show self-relay stats. |
 
 ---
 

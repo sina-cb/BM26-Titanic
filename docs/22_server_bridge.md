@@ -43,7 +43,7 @@ engine comes back.
 
 - CaptainPad connects over Wi-Fi to MarsinEngine (HTTP + WS base authored in MarsinEngine's own config).
 - PortWatch takes the BLE → Heltec → LoRa path through the Raspberry Pi bridge, which terminates on USB‑CDC into the server Heltec.
-- Bridge-side topology lives in `control_podium/.config.bridge.yaml` (engine URL) and `control_podium/server_bridge/.ssh.secret` (Pi SSH credentials, gitignored).
+- Bridge-side topology lives in `LookingGlass/control_podium/.config.bridge.yaml` (engine URL) and `LookingGlass/control_podium/server_bridge/.ssh.secret` (Pi SSH credentials, gitignored).
 
 Historical ASCII diagram trimmed to avoid drifting literals; mentally overlay the LAN addresses from topology when tracing packets.
 
@@ -80,7 +80,7 @@ laptop becomes a laptop again.
 ### server_bridge lives at
 
 ```
-control_podium/server_bridge/
+LookingGlass/control_podium/server_bridge/
   __init__.py              ← package marker + entrypoint notes
   __main__.py              ← `python -m server_bridge` → runner.main()
   runner.py                ← the bridge runtime (was companions/bridge_companion.py)
@@ -272,7 +272,7 @@ retries.
 ```bash
 # 1. Pi SSH credentials (gitignored):
 
-cd control_podium/server_bridge
+cd LookingGlass/control_podium/server_bridge
 cp .ssh.secret.example .ssh.secret
 $EDITOR .ssh.secret   # fill in HOST / USER / INSTALL_ROOT (+ PASSWORD / ENGINE_URL)
 
@@ -282,14 +282,14 @@ $EDITOR .ssh.secret   # fill in HOST / USER / INSTALL_ROOT (+ PASSWORD / ENGINE_
 # 3. Deploy from repository root:
 
 cd ../..
-PYTHONPATH=control_podium python -m server_bridge.deploy
+PYTHONPATH=LookingGlass/control_podium python -m server_bridge.deploy
 ```
 
 The deploy runs 8 steps and prints each:
 
 1. SSH smoke test (host reachable, sudo works).
 2. `apt-get install python3-venv python3-pip rsync` (skipped if cache fresh).
-3. `rsync` the `control_podium/` tree + `marsin_engine/secret.yaml`
+3. `rsync` the `LookingGlass/control_podium/` tree + `marsin_engine/secret.yaml`
    + `docs/22_server_bridge.md` to `INSTALL_ROOT`. Excludes PortWatch,
    tests, firmware, pycache.
 4. Create `INSTALL_ROOT/venv` and `pip install -r requirements.txt`.
@@ -315,7 +315,7 @@ sshpass -e ssh titanic@your-pi-hostname \
 
 # Or one-shot health check (no rsync, no restart):
 
-PYTHONPATH=control_podium python -m server_bridge.deploy --verify-only
+PYTHONPATH=LookingGlass/control_podium python -m server_bridge.deploy --verify-only
 ```
 
 A healthy bridge prints the boot banner once, then one log line per
@@ -333,20 +333,20 @@ live), shipping the four ``.bin`` images to the Pi, and running
 
 ```bash
 # Code change only — push Python:
-PYTHONPATH=control_podium python -m server_bridge.deploy
+PYTHONPATH=LookingGlass/control_podium python -m server_bridge.deploy
 
 # Firmware change only — flash the Heltec, leave bridge code alone:
-PYTHONPATH=control_podium python -m server_bridge.deploy --firmware-only
+PYTHONPATH=LookingGlass/control_podium python -m server_bridge.deploy --firmware-only
 
 # Both at once (e.g. for a release that needs new C + new bridge code):
-PYTHONPATH=control_podium python -m server_bridge.deploy --firmware
+PYTHONPATH=LookingGlass/control_podium python -m server_bridge.deploy --firmware
 ```
 
 Under the hood (see ``server_bridge/deploy.py`` for the source):
 
 1. **Build local.** Calls ``firmware/deploy.py --node 0x01 --build-only``
    on the laptop. That run produces
-   ``control_podium/firmware/.pio/build/server_rx/{bootloader,
+   ``LookingGlass/control_podium/firmware/.pio/build/server_rx/{bootloader,
    partitions, boot_app0, firmware}.bin``. Building on the laptop
    takes ~30 s; building on a Pi 5 takes 5+ minutes and bloats the
    Pi install by half a gigabyte of toolchain.
@@ -506,7 +506,7 @@ The bridge exposes a local HTTP server (binding to `0.0.0.0:7099` by default, or
 ### 7.1 Unit tests on the dev laptop
 
 ```bash
-cd control_podium
+cd LookingGlass/control_podium
 PYTHONPATH=. ../.venv-dev/bin/python -m pytest tests/ -q
 ```
 
@@ -534,7 +534,7 @@ After deploying, the smoke test that proves the contract end-to-end:
 sshpass -e ssh titanic@pi 'sudo systemctl restart ssh'
 # Wait for ssh to be reachable again, then verify the bridge:
 sleep 10
-PYTHONPATH=control_podium python -m server_bridge.deploy --verify-only
+PYTHONPATH=LookingGlass/control_podium python -m server_bridge.deploy --verify-only
 
 # Unplug the Heltec mid-run. The bridge MUST log a reopen attempt
 # and recover when you plug it back in. No process exit.
@@ -637,7 +637,7 @@ Recovery:
 ## 10. Change log
 
 * **2026-05-17** — Initial draft. Created the
-  `control_podium/server_bridge/` package, the deploy.py script, the
+  `LookingGlass/control_podium/server_bridge/` package, the deploy.py script, the
   systemd unit template, and `.ssh.secret(.example)`.
 * **2026-05-19** — Moved the bridge runtime out of the
   `companions/` test-fixtures directory into `server_bridge/runner.py`.

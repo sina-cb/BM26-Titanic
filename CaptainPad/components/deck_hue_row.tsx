@@ -22,6 +22,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
+import { Type } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
@@ -64,7 +65,9 @@ export const DeckHueRow: React.FC<{
           knob drives the FOCUSED channel's HUE trim, which wears its own
           badge there. */}
       <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 6 }} />
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
+      {/* The shared caps recipe (docs/54 §1.1) — the row label is the same
+          object as every other 10pt caps label on the deck. */}
+      <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, width: 40 }}>HUE</Text>
       {/* The track is wrapped in a flex:1 / minWidth:0 spacer (it fills that
           wrapper at width:100%) so it spans the row on react-native-web; the
           value stays right-aligned in its fixed column.

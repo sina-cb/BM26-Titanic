@@ -31,46 +31,41 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { WasmHost } from '../../lib/wasm_host.js';
+import { pixelCount as TITANIC_PIXEL_COUNT, pixels as TITANIC_PIXELS } from '../../models/titanic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TRANS_DIR = path.resolve(__dirname, '../../patterns/transitions');
 
-// 5x5 grid of pixels covering the unit square. Spatial transitions
-// (iris, wipe, split, etc.) need varied (x,y) to actually exercise
-// their edge function — a 1-pixel test would only ever land at a
-// single pp threshold and miss endpoint cleanliness checks for the
-// other pixels.
-const GRID = 5;
-const PIXELS = [];
-for (let yi = 0; yi < GRID; yi++) {
-  for (let xi = 0; xi < GRID; xi++) {
-    PIXELS.push({ nx: xi / (GRID - 1), ny: yi / (GRID - 1), nz: 0 });
-  }
-}
-const N = PIXELS.length;
+// Production Titanic geometry: every spatial transition is exercised across
+// the actual 964-pixel fixture layout.
+const PIXELS = TITANIC_PIXELS;
+const N = TITANIC_PIXEL_COUNT;
 const BYTES_PER_PIXEL = 6; // RGBWAU
 const BUF_LEN = N * BYTES_PER_PIXEL;
 
-// Deterministic FROM/TO buffers:
-//   FROM = pure red, no white/amber/uv      → (255, 0, 0, 0, 0, 0)
-//   TO   = cyan with half-white + half-amber → (0, 255, 255, 128, 64, 0)
-// Choosing distinctive bytes per channel makes mis-mapped channel
-// indices (e.g. accidentally swapping W and A) visible as wrong bytes
-// rather than benign zeros.
+// Deterministic blue A / pink B buffers use representative non-binary bytes
+// in every RGBWAU lane. This exposes quantization, residue, and lane swaps.
 function buildFrom() {
   const buf = new Uint8Array(BUF_LEN);
   for (let i = 0; i < N; i++) {
-    buf[i*6 + 0] = 255;
+    buf[i*6 + 0] = 17 + ((i * 7) % 29);
+    buf[i*6 + 1] = 37 + ((i * 11) % 47);
+    buf[i*6 + 2] = 131 + ((i * 13) % 91);
+    buf[i*6 + 3] = 9 + ((i * 17) % 41);
+    buf[i*6 + 4] = 21 + ((i * 19) % 53);
+    buf[i*6 + 5] = 5 + ((i * 23) % 31);
   }
   return buf;
 }
 function buildTo() {
   const buf = new Uint8Array(BUF_LEN);
   for (let i = 0; i < N; i++) {
-    buf[i*6 + 1] = 255;
-    buf[i*6 + 2] = 255;
-    buf[i*6 + 3] = 128;
-    buf[i*6 + 4] = 64;
+    buf[i*6 + 0] = 149 + ((i * 5) % 79);
+    buf[i*6 + 1] = 23 + ((i * 7) % 43);
+    buf[i*6 + 2] = 83 + ((i * 11) % 71);
+    buf[i*6 + 3] = 31 + ((i * 13) % 59);
+    buf[i*6 + 4] = 47 + ((i * 17) % 67);
+    buf[i*6 + 5] = 11 + ((i * 19) % 37);
   }
   return buf;
 }
@@ -106,6 +101,15 @@ function firstDiff(a, b) {
   return 'identical';
 }
 
+function rmsByteDiff(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    const delta = a[i] - b[i];
+    sum += delta * delta;
+  }
+  return Math.sqrt(sum / a.length);
+}
+
 for (const file of transitionFiles()) {
   test(`${file} — pixel-perfect oracle`, async (t) => {
     const code = fs.readFileSync(path.join(TRANS_DIR, file), 'utf8');
@@ -125,6 +129,9 @@ for (const file of transitionFiles()) {
       const out25  = host.renderBlend6ch(handle, N, FROM, TO, 0.25);
       const out50  = host.renderBlend6ch(handle, N, FROM, TO, 0.5);
       const out75  = host.renderBlend6ch(handle, N, FROM, TO, 0.75);
+      const last40HzLinear = 39 / 40;
+      const last40HzProgress = last40HzLinear * last40HzLinear * (3 - 2 * last40HzLinear);
+      const outLast40Hz = host.renderBlend6ch(handle, N, FROM, TO, last40HzProgress);
       const out100 = host.renderBlend6ch(handle, N, FROM, TO, 1);
 
       // 1. Buffer length checks (catches a misconfigured channel layout
@@ -157,15 +164,19 @@ for (const file of transitionFiles()) {
         !(mid_eq_from && mid_eq_to),
         `${file}: at p=0.5 the buffer equals both FROM and TO simultaneously — that's impossible unless FROM===TO, transition is broken`
       );
-      // Allow EITHER mid==from (transition still pre-rolling, e.g.
-      // morse_blink in a dark gap) OR mid==to (instant cut style); but
-      // at LEAST one of the quarter samples must differ from both.
-      const off25 = !bytesEqual(out25, FROM) || !bytesEqual(out25, TO);
-      const off75 = !bytesEqual(out75, FROM) || !bytesEqual(out75, TO);
+      // At least one quarter/mid sample must differ from BOTH endpoints.
+      // The old OR predicate was vacuous for any pair of distinct endpoints.
+      const off25 = !bytesEqual(out25, FROM) && !bytesEqual(out25, TO);
+      const off75 = !bytesEqual(out75, FROM) && !bytesEqual(out75, TO);
       const off50 = !bytesEqual(out50, FROM) && !bytesEqual(out50, TO);
       assert.ok(
         off25 || off50 || off75,
         `${file}: none of progress=0.25/0.5/0.75 differ from BOTH endpoints — transition appears to be a no-op or an instant cut`
+      );
+      const completionRms = rmsByteDiff(outLast40Hz, TO);
+      assert.ok(
+        completionRms < 2,
+        `${file}: final 40 Hz scripted frame is too far from B (${completionRms.toFixed(3)} RMS bytes)`,
       );
     } finally {
       host.destroy(handle);

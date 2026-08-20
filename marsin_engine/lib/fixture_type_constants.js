@@ -55,6 +55,13 @@ const REGISTRY = [
   { id: 4, role: 'FIX_BAR_18', count: 18, types: ['ShehdsBar'], aliases: [] },
   { id: 5, role: 'FIX_HAZE', count: null, types: ['ChauvetHaze4D'], aliases: [] },
   { id: 6, role: 'FIX_FOG', count: null, types: ['TEFogMachine'], aliases: [] },
+  // The TE signs. Both panel variants (A = 40 px, B = 34 px) are ONE role:
+  // a pattern that says "the sign" means the letterform, not the panel SKU.
+  // Appended (id 7) rather than folded into an existing id — the 148 sign
+  // pixels were UNTYPED (id 0) before, so this is purely additive: nothing
+  // that resolved to a FIX_* role changes, and the sign pixels become
+  // targetable for the first time (report 20260804_145 §3).
+  { id: 7, role: 'FIX_TE_SIGN', count: null, types: ['TeSignV3A40', 'TeSignV3B34'], aliases: [] },
 ];
 
 // Build the string → id and role → id lookups once. The empty string is

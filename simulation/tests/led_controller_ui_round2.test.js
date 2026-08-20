@@ -25,7 +25,14 @@ import {
   CONTROLLER_TYPE_DMX,
   CONTROLLER_TYPE_LED,
 } from '../src/dmx/controller_registry.js';
-import { pushAllLedControllers } from '../src/gui/led_discovery_panel.js';
+import {
+  pushAllLedControllers,
+  persistAndNotifyAfterPush,
+  describePushCompletion,
+  computeSyncState,
+  describeSyncChipTooltip,
+  outputSelectorOptions,
+} from '../src/gui/led_discovery_panel.js';
 
 // ── R1 — default tray includes unmapped strands ──────────────────────────────
 
@@ -122,7 +129,11 @@ function ledCard(id, ip, universe, strandName, bound = true) {
   return card;
 }
 
-/** Mock per-output device I/O: getStatus / getConfig / pushPerOutputUniverses / awaitReboot. */
+/**
+ * Mock per-output device I/O: getStatus / getConfig / pushPerOutputUniverses /
+ * awaitReboot. The push takes the whole PLAN (report 20260725_70) — a bare
+ * universe map cannot say which outputs the push must enable.
+ */
 function makeMockIo(devices, calls) {
   return {
     getStatus: async (ip) => {
@@ -132,11 +143,13 @@ function makeMockIo(devices, calls) {
       return clone(d.status);
     },
     getConfig: async (ip) => { calls.push(`getConfig:${ip}`); return clone(devices[ip].config); },
-    pushPerOutputUniverses: async (ip, { universeByOutputIndex }) => {
+    pushPerOutputUniverses: async (ip, { plan }) => {
       calls.push(`push:${ip}`);
       const d = devices[ip];
       if (d.throwOnPush) throw new Error('device rejected: HTTP 400');
+      const universeByOutputIndex = plan.universeByOutputIndex;
       d.pushed = universeByOutputIndex;
+      d.pushedPlan = plan;
       // The device reports the plan back UNLESS configured to mismatch on verify.
       if (!d.verifyMismatch) {
         d.status.sacn.perOutput = Object.entries(universeByOutputIndex)
@@ -152,9 +165,14 @@ function makeCtx(reg, counts) {
   return {
     registry: () => reg,
     strandLedCounts: () => counts,
+    // Registry-wide universe claims for the per-output plan gate (slice S2).
+    // These cards sit on distinct universes with nothing else in the rig, so the
+    // index is empty here; the gate itself is covered in per_output_push.test.js.
+    claimedUniverses: () => new Map(),
     mutate: (_msg, fn) => fn(),
     refresh: () => {},
     showToast: () => {},
+    activeScene: () => 'test',   // sync/MAC caches are scene-scoped (G7)
   };
 }
 
@@ -255,4 +273,240 @@ test('R5: a controller with no valid IP is SKIPPED (no device I/O)', async () =>
   assert.equal(results.length, 1);
   assert.equal(results[0].state, 'skipped');
   assert.equal(calls.length, 0, 'no device I/O for a controller without a valid IP');
+});
+
+// ── S1 — push-all completes the loop ONCE, after the sequence ────────────────
+// Same principle as the single push (report 20260725_58 §5.4): the fleet's
+// device writes move only the device layer; the scene save + bridge notify run
+// exactly once at the end, in startPushAll. A save per controller would rewrite
+// the same files N times and notify the bridge against a half-updated registry.
+
+test('S1: pushAllLedControllers is DEVICE-LAYER ONLY — it never saves or notifies', async () => {
+  const reg = createControllerRegistry({
+    controllers: [ledCard(1, '10.0.0.1', 3, 'sA', true), ledCard(2, '10.0.0.2', 4, 'sB', true)],
+  });
+  const counts = new Map([['sA', 40], ['sB', 40]]);
+  const devices = {
+    '10.0.0.1': { config: deviceConfig(), status: deviceStatus('titanic_1') },
+    '10.0.0.2': { config: deviceConfig(), status: deviceStatus('titanic_2') },
+  };
+  const calls = [];
+  const io = makeMockIo(devices, calls);
+  io.persistScene = async () => { calls.push('persistScene'); return { ok: true }; };
+  io.notifyBridge = async () => { calls.push('notifyBridge'); return { ok: true }; };
+
+  const results = await pushAllLedControllers(makeCtx(reg, counts), io);
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'pushed']);
+  assert.equal(calls.includes('persistScene'), false, 'the fleet loop must not save per controller');
+  assert.equal(calls.includes('notifyBridge'), false);
+});
+
+test('S1: the fleet completion saves once, notifies, then READS the routes back — one sentence', async () => {
+  const calls = [];
+  let seenExpectations = null;
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
+    notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
+    confirmBridgeRoutes: async (expectations) => {
+      calls.push('confirmRoutes');
+      seenExpectations = expectations;
+      return { ok: true, detail: 'U3→10.0.0.1, U4→10.0.0.2' };
+    },
+  }, [
+    { ip: '10.0.0.1', controllerName: 'a', expected: [3], parkedAbsent: [] },
+    { ip: '10.0.0.2', controllerName: 'b', expected: [4], parkedAbsent: [] },
+  ]);
+  assert.deepEqual(calls, ['persistScene', 'notifyBridge', 'confirmRoutes']);
+  assert.equal(seenExpectations.length, 2, 'the read-back covers the WHOLE fleet');
+
+  const outcome = describePushCompletion(steps, {
+    lead: 'done — 2 pushed · 0 skipped · 0 failed',
+    deviceNote: 'the device(s) WERE written (cannot be rolled back)',
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.text,
+    'done — 2 pushed · 0 skipped · 0 failed · ✓ scene saved (patches projected) · ' +
+    '✓ bridge routes confirmed (U3→10.0.0.1, U4→10.0.0.2)');
+});
+
+test('_127: a fleet where NOTHING pushed confirms nothing — explicitly, not silently', async () => {
+  const calls = [];
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+    confirmBridgeRoutes: async () => { calls.push('confirmRoutes'); return { ok: true, detail: 'x' }; },
+  }, []);
+  assert.equal(calls.length, 0, 'no expectation — the bridge is not queried');
+  const outcome = describePushCompletion(steps, { lead: 'done — 0 pushed · 2 skipped · 0 failed' });
+  assert.equal(outcome.ok, true);
+  assert.match(outcome.text, /✓ bridge notified — nothing was pushed, no routes to confirm/);
+});
+
+test('_127: pushed fleet results CARRY their route expectation for the one completion', async () => {
+  const reg = createControllerRegistry({
+    controllers: [ledCard(1, '10.0.0.1', 3, 'sA', true), ledCard(2, '10.0.0.2', 4, 'sB', true)],
+  });
+  const counts = new Map([['sA', 40], ['sB', 40]]);
+  const devices = {
+    '10.0.0.1': { config: deviceConfig(), status: deviceStatus('titanic_1') },
+    '10.0.0.2': { config: deviceConfig(), status: deviceStatus('titanic_2') },
+  };
+  const results = await pushAllLedControllers(makeCtx(reg, counts), makeMockIo(devices, []));
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'pushed']);
+  assert.deepEqual(results[0].expectation.expected, [3]);
+  assert.equal(results[0].expectation.ip, '10.0.0.1');
+  assert.deepEqual(results[1].expectation.expected, [4]);
+  assert.equal(results[1].expectation.ip, '10.0.0.2');
+});
+
+test('S1: a fleet whose save fails says the devices WERE written and never notifies', async () => {
+  const calls = [];
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => { calls.push('persistScene'); return { ok: false, reason: 'save server responded 500' }; },
+    notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
+  });
+  assert.deepEqual(calls, ['persistScene']);
+  const outcome = describePushCompletion(steps, {
+    lead: 'done — 2 pushed · 0 skipped · 0 failed',
+    deviceNote: 'the device(s) WERE written (cannot be rolled back)',
+  });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.failedStep, 'scene save');
+  assert.match(outcome.text, /the device\(s\) WERE written \(cannot be rolled back\)/);
+  assert.match(outcome.text, /LEDs will not follow until a successful save\./);
+});
+
+// ── _71: the chip measures the FULL output map, and the output selector ──────
+// Report 20260725_70 §5: the sync chip compares device ≡ plan across the WHOLE
+// post-push map — assigned, PARKED and pending-enable — using the same claims
+// and the same derive as the push, so the chip and the push can never disagree.
+// No DOM, no device: `computeSyncState` reads through a stubbed global fetch.
+
+function jsonResponse(body, { ok = true, status = 200, statusText = 'OK' } = {}) {
+  return { ok, status, statusText, json: async () => body };
+}
+
+async function withFetch(stub, fn) {
+  const original = globalThis.fetch;
+  globalThis.fetch = stub;
+  try { return await fn(); } finally { globalThis.fetch = original; }
+}
+
+/** A 4-output board; `enabledFlags` says which outputs the hardware has ON. */
+function board(enabledFlags) {
+  return {
+    strands: enabledFlags.map((on, i) => strandDev(on, 40, 35 + i)),
+    dmx: { enabled: true, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
+    deviceName: 'LeftLeftFront',
+  };
+}
+
+function boardStatus(enabledFlags, perOutput) {
+  return {
+    controllerId: 'titanic_60', boardId: 'angio4', mac: 'AA:BB:CC:DD:00:60',
+    firmwareSHA: 'aa11bb22cc33', strands: board(enabledFlags).strands,
+    capabilitiesExt: { perOutputDmx: true },
+    sacn: { enabled: true, perOutput },
+  };
+}
+
+function outputCard(ports, parkedOutputs) {
+  const card = {
+    id: 60, name: 'LeftLeftFront', ip: '10.0.0.60', type: CONTROLLER_TYPE_LED,
+    led: { order: 'RGBW', startAddr: 1 },
+    device: { vendor: 'marsinled', controllerId: 'titanic_60', deviceName: 'LeftLeftFront' },
+    ports,
+  };
+  if (parkedOutputs) card.parkedOutputs = parkedOutputs;
+  return createControllerRegistry({ controllers: [card] });
+}
+
+const OUT_COUNTS = new Map([['sA', 40], ['sB', 40]]);
+
+async function syncOf(reg, enabledFlags, perOutput) {
+  const card = reg.controllers[0];
+  return withFetch(async (url) => {
+    if (url === 'http://10.0.0.60/api/config') return jsonResponse(board(enabledFlags));
+    if (url === 'http://10.0.0.60/api/status') return jsonResponse(boardStatus(enabledFlags, perOutput));
+    throw new Error(`unexpected fetch ${url}`);
+  }, () => computeSyncState(makeCtx(reg, OUT_COUNTS), card));
+}
+
+test('_71 (21): a PORTLESS enabled output on the wrong universe reads DRIFT (the .60 landmine)', async () => {
+  // Two mapped ports; the board's third output is enabled with no port row and
+  // still carries the stale U23. The card's stored park says U27.
+  const reg = outputCard([
+    { port: 1, output: 1, universe: 21, chain: ['sA'] },
+    { port: 2, output: 2, universe: 22, chain: ['sB'] },
+  ], [{ output: 3, universe: 27 }]);
+
+  const drifted = await syncOf(reg, [true, true, true, false], [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+    { index: 1, universe: 22, startAddress: 1, enabled: true },
+    { index: 2, universe: 23, startAddress: 1, enabled: true },   // stale
+  ]);
+  assert.equal(drifted.state, 'drift');
+  assert.deepEqual(drifted.changes, [{ path: 'output 2', from: 'U23', to: 'U27' }]);
+
+  // One push re-parks it — and then the chip is quiet, because the park is
+  // STICKY (a re-derived park would move and re-drift a card nobody touched).
+  const clean = await syncOf(reg, [true, true, true, false], [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+    { index: 1, universe: 22, startAddress: 1, enabled: true },
+    { index: 2, universe: 27, startAddress: 1, enabled: true },
+  ]);
+  assert.deepEqual(clean, { state: 'in-sync' });
+});
+
+test('_71 (22): a port pointed at a DISABLED output reads drift naming the pending ENABLE', async () => {
+  const reg = outputCard([
+    { port: 1, output: 1, universe: 21, chain: ['sA'] },
+    { port: 2, output: 4, universe: 22, chain: ['sB'] },   // output 4 is OFF today
+  ]);
+  const sync = await syncOf(reg, [true, false, false, false], [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+  ]);
+  assert.equal(sync.state, 'drift');
+  assert.deepEqual(sync.changes, [{ path: 'output 3', from: 'disabled', to: 'enabled · U22' }]);
+  // The chip states what it now measures, so green never over-promises.
+  assert.match(describeSyncChipTooltip(sync), /including the PARKED outputs no port drives/);
+});
+
+test('_71 (23): the output selector offers the BOARD\'s outputs and disables the taken ones', () => {
+  const reg = outputCard([
+    { port: 1, output: 1, universe: 21, chain: ['sA'] },
+    { port: 2, output: 3, universe: 22, chain: ['sB'] },
+  ]);
+  const card = reg.controllers[0];
+  const devOutputs = [
+    { enabled: true, count: 40, universe: 21 },
+    { enabled: true, count: 40, universe: 24 },
+    { enabled: true, count: 40, universe: 22 },
+    { enabled: false, count: 40, universe: null },
+  ];
+
+  const model = outputSelectorOptions(card, card.ports[0], devOutputs);
+  assert.equal(model.verified, true);
+  assert.equal(model.max, 4, 'the device\'s reported output count bounds the range');
+  assert.deepEqual(model.options.map((o) => o.value), [1, 2, 3, 4]);
+  // Option 3 belongs to P2 — UNSELECTABLE, and it says whose it is. The UI
+  // simply cannot express a duplicate association.
+  const taken = model.options[2];
+  assert.equal(taken.disabled, true);
+  assert.equal(taken.takenBy, 2);
+  assert.equal(taken.label, '3 — taken by P2');
+  // Free options carry what the board is doing on them today.
+  assert.equal(model.options[1].disabled, false);
+  assert.equal(model.options[1].label, '2 — enabled, 40 px, U24');
+  assert.equal(model.options[3].label, '4 — disabled (push will enable it)');
+  // This row's OWN output is selected and never reads as taken by itself.
+  assert.equal(model.options[0].selected, true);
+  assert.equal(model.options[0].disabled, false);
+
+  // With no device snapshot the range is the 16-output ceiling, flagged unverified.
+  const blind = outputSelectorOptions(card, card.ports[0], null);
+  assert.equal(blind.verified, false);
+  assert.equal(blind.max, 16);
+  assert.equal(blind.options[1].label, '2');
+  assert.equal(blind.options[2].disabled, true, 'uniqueness holds without a snapshot');
 });

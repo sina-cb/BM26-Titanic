@@ -175,7 +175,7 @@ list that can drift). Signals fall into two origins:
 - **Companion-produced** (the mic analysis this app actually computes):
   `micLow · micMid · micHigh · micKick · micFlux` (+ their `*Raw` mirrors) ·
   `micDomFreq1/2` + `micDomEnergy1/2` (cluster windows are visual-only, not CPC keys — see §2.1) ·
-  `audioStructure · audioBuildScore · audioEnergyRatio · audioVocalsHot ·
+  `audioStructure · audioBuildScore · audioEnergyRatio ·
   audioSlowZone · audioDropPulse` · `audioBpm · audioBeat · audioBeatInBar ·
   audioBarPhase · audioDownbeat` · `audioParty · audioNote · audioNoteHue ·
   audioSwitchPattern · audioSwitchColor`.

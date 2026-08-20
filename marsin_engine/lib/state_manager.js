@@ -2,6 +2,40 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 
+import {
+  LOCKED_SIZE,
+  SIZE_LOCK_KEY,
+  SIZE_LOCK_REASON,
+  isLockedSize,
+} from './size_lock.js';
+
+// ── Engine BOOT MODE (report _236) ──────────────────────────────────────
+//
+// Which face the engine comes up in. Operator order: "in the config, add a new
+// config toggle to go straight to edit mode or performance mode, and make sure
+// that's stored as part of the state persisted". It lives in the engine's
+// persisted settings (settings_state.yaml, alongside autoSave) rather than in
+// CaptainPad's AsyncStorage, because the boot face is decided ENGINE-side —
+// docs/56 D1 — and must therefore survive an engine restart with no pad present.
+//
+//   'performance' — the shipped docs/56 D1 behaviour: an engine with privileged
+//                   auth enabled boots LOCKED, with a reserved pre-show
+//                   snapshot, and a fresh passcode opens edit mode.
+//   'edit'        — boot straight into the edit face. The AUTH GATE IS NOT
+//                   LIFTED: `editSession.principal` still starts null, so on an
+//                   auth-enabled engine `principalMaySave()` is false and NOTHING
+//                   is persisted until a principal is asserted (POST
+//                   /edit-session, the pad's session chip). Structural editing
+//                   is open; writing it down is not. The gate never opens by
+//                   itself — it only stops hiding the rig behind the show lock.
+export const BOOT_MODES = Object.freeze({ PERFORMANCE: 'performance', EDIT: 'edit' });
+
+/** Coerce an unknown value to a known boot mode. Unknown → 'performance': the
+ *  SAFE direction is "the show gate is on" (mirrors autoSave's coerce-to-true). */
+export function normalizeBootMode(value) {
+  return value === BOOT_MODES.EDIT ? BOOT_MODES.EDIT : BOOT_MODES.PERFORMANCE;
+}
+
 // ── Channel serialization (additive de-dup helper) ──────────────────────
 // saveDeckState and saveMixerState both flatten a PatternChannel into the
 // on-disk shape. They diverge slightly (the mixer file carries overlay-only
@@ -118,11 +152,29 @@ export class StateManager {
     return defaultState;
   }
 
-  save(filename, state) {
+  /**
+   * Persist `state` to `filename` in the flat `stateDir`, crash-safe.
+   *
+   * BEST-EFFORT vs STRICT (L5, report _120). The ~80 render-adjacent AUTO-SAVE
+   * triggers call this WITHOUT `strict` and MUST stay best-effort: a transient
+   * disk blip (EBUSY/disk-full) during an auto-save is logged and swallowed so a
+   * momentary write failure can never crash the engine (W1-1's process backstop
+   * exits(1) on any surviving throw — a dark ship). This warn-only default is
+   * the pre-existing behaviour, byte-unchanged.
+   *
+   * The EXPLICIT operator save (POST /settings/save-now) passes `{ strict:true }`
+   * so the write failure PROPAGATES: the CaptainPad "✓ SAVED" badge reads that
+   * endpoint's response, and a swallowed failure here made a failed write report
+   * 200 {saved:true} — the badge lied (red-team _115 L5). Strict re-throws so the
+   * save-now handler returns an honest non-200. `_writeFileAtomic` already
+   * re-throws on failure; strict simply declines to swallow it in this wrapper.
+   */
+  save(filename, state, { strict = false } = {}) {
     const filePath = path.join(this.stateDir, filename);
     try {
       this._writeFileAtomic(filePath, yaml.dump(state));
     } catch (e) {
+      if (strict) throw e;
       console.warn(`Failed to save state to ${filename}:`, e);
     }
   }
@@ -218,23 +270,40 @@ export class StateManager {
   }
 
   /**
-   * Engine-wide settings (currently just `autoSave`). Persisted in its OWN
-   * per-scene file so the toggle survives even when auto-save is OFF — the
-   * setting that GATES the auto-persistence can never live in a file whose
-   * writes it gates (that would make "turn auto-save off" un-persistable).
+   * Engine-wide operator settings. Persisted in its OWN per-scene file so the
+   * toggles survive even when auto-save is OFF — the setting that GATES the
+   * auto-persistence can never live in a file whose writes it gates (that would
+   * make "turn auto-save off" un-persistable).
    *
-   * DEFAULT autoSave = TRUE (auto-persist on, the pre-feature behaviour).
+   * `autoSave` — DEFAULT TRUE (auto-persist on, the pre-feature behaviour).
    * A missing file returns the default. A present-but-malformed `autoSave`
    * (hand-edited junk) coerces to TRUE, not false: the SAFE direction is
    * "keep saving the operator's work", never "silently stop persisting".
+   *
+   * `bootMode` — which face the engine comes up in on an auth-enabled show
+   * engine (operator order, report `_236`: "add a new config toggle to go
+   * straight to edit mode or performance mode, and make sure that's stored as
+   * part of the state persisted"). DEFAULT `'performance'`, which is the
+   * shipped docs/56 D1 behaviour: an engine that has passcodes boots LOCKED.
+   * Anything unrecognised — a missing key on an older file, a typo, junk —
+   * coerces to `'performance'` for the same reason `autoSave` coerces to true:
+   * the safe direction is "the show gate is ON", and a gate that opens itself
+   * because a YAML value was unreadable is precisely the quiet fallback the
+   * codex forbids.
    */
   loadSettingsState() {
-    const raw = this.load('settings_state.yaml', { autoSave: true });
-    return { autoSave: typeof raw.autoSave === 'boolean' ? raw.autoSave : true };
+    const raw = this.load('settings_state.yaml', { autoSave: true, bootMode: BOOT_MODES.PERFORMANCE });
+    return {
+      autoSave: typeof raw.autoSave === 'boolean' ? raw.autoSave : true,
+      bootMode: normalizeBootMode(raw.bootMode),
+    };
   }
 
   saveSettingsState(settings) {
-    this.save('settings_state.yaml', { autoSave: !!(settings && settings.autoSave) });
+    this.save('settings_state.yaml', {
+      autoSave: !!(settings && settings.autoSave),
+      bootMode: normalizeBootMode(settings && settings.bootMode),
+    });
   }
 
   loadGlobalsState() {
@@ -260,6 +329,137 @@ export class StateManager {
       delete state.hueShift;
     }
     return state;
+  }
+
+  /**
+   * One-time boot migration for the operator-pinned global SIZE value.
+   *
+   * The lock already guarantees the live engine runs at LOCKED_SIZE, but an
+   * older globals_state.yaml can keep carrying a stale value forever. Every
+   * restart would then report the same permanent DEGRADED condition even
+   * though no live writer is fighting the lock. Converge that one persisted
+   * field before applyGlobalsState sees it, and persist the schema/lock repair
+   * independently of the operator's normal auto-save preference.
+   *
+   * This method is deliberately boot-only. Snapshot/look recall continues
+   * through applyGlobalsState with an explicit restoreLabel, so a stale
+   * snapshot remains a real, correctly-attributed runtime violation and is
+   * never rewritten into globals_state.yaml by this migration.
+   *
+   * @param {object} globalsState the object loaded from globals_state.yaml
+   * @returns {boolean} true iff the file was rewritten
+   */
+  convergeBootSizeLock(globalsState) {
+    if (!globalsState || typeof globalsState !== 'object'
+        || !globalsState.params || typeof globalsState.params !== 'object') {
+      return false;
+    }
+    const paramData = globalsState.params.params || globalsState.params;
+    if (!paramData || typeof paramData !== 'object'
+        || !Object.prototype.hasOwnProperty.call(paramData, SIZE_LOCK_KEY)) {
+      return false;
+    }
+    const entry = paramData[SIZE_LOCK_KEY];
+    const persisted = entry && typeof entry === 'object' && entry.value !== undefined
+      ? entry.value
+      : entry;
+    if (isLockedSize(persisted)) return false;
+
+    const statePath = path.join(this.stateDir, 'globals_state.yaml');
+    console.warn(
+      `[StateManager] ${statePath} carried legacy SIZE=${JSON.stringify(persisted)}; ` +
+      `migrating it to the operator-locked ${LOCKED_SIZE} before restore.`);
+    if (entry && typeof entry === 'object' && entry.value !== undefined) {
+      entry.value = LOCKED_SIZE;
+    } else {
+      paramData[SIZE_LOCK_KEY] = LOCKED_SIZE;
+    }
+
+    // This is a deterministic schema/lock migration, not an operator tuning
+    // save. Use the atomic strict writer directly so autoSave=false cannot
+    // strand the legacy value and a failed convergence aborts boot loudly.
+    this.save('globals_state.yaml', globalsState, { strict: true });
+    console.log(
+      `[StateManager] globals_state.yaml SIZE migration persisted at ${LOCKED_SIZE}; ` +
+      'future boots start clean.');
+    return true;
+  }
+
+  /**
+   * One-time forward migration (2026-08, dimmer stable keys): persisted
+   * per-group dimmer state used to be keyed by NUMERIC section id. Section
+   * ids are minted by the simulation's controller registry ("next free id"
+   * per group, floored over the DMX ∪ LED union) and are RE-MINTED whenever
+   * the operator regenerates the scene/model — which orphaned every saved
+   * brightness (the Dimmer Rack fell back to its 1.0 default). Group NAMES
+   * are the stable identity across regenerations, so dimmer state is keyed
+   * by group name from now on.
+   *
+   * `groupToSectionId` is the CURRENT model's { groupName: sectionId } map
+   * (api_server builds it from model.pixels — same source as
+   * GET /dimmer-groups). Rules (codex P0 — loud, never lossy):
+   *
+   *  - a numeric key whose id maps to a current group is rewritten to that
+   *    group's name;
+   *  - if the name key ALREADY exists (file half-migrated), the name-keyed
+   *    value wins — it is the newer format — and the numeric duplicate is
+   *    dropped with a warning;
+   *  - a numeric key that maps to NO current group is an ORPHAN: warned
+   *    loudly, preserved in the file untouched (never silently deleted or
+   *    defaulted);
+   *  - a name key unknown to the current model (group renamed/removed in
+   *    the scene) is likewise warned and preserved untouched.
+   *
+   * Mutates `globalsState.dimmers` in place; the next globals save persists
+   * the migrated shape (same precedent as the legacy hueShift discard in
+   * loadGlobalsState — no forced write, so the auto-save gate is honored).
+   * Idempotent: a second run over migrated state changes nothing.
+   * Returns { migrated, orphaned } for logging/tests.
+   */
+  migrateDimmersToGroupKeys(globalsState, groupToSectionId) {
+    const result = { migrated: 0, orphaned: [] };
+    const dimmers = globalsState && globalsState.dimmers;
+    if (!dimmers || typeof dimmers !== 'object') return result;
+    const groups = groupToSectionId || {};
+    const idToGroup = new Map();
+    for (const [name, sId] of Object.entries(groups)) {
+      if (!idToGroup.has(sId)) idToGroup.set(sId, name);
+    }
+    for (const key of Object.keys(dimmers)) {
+      if (Object.prototype.hasOwnProperty.call(groups, key)) continue; // already name-keyed
+      if (/^\d+$/.test(key)) {
+        const name = idToGroup.get(parseInt(key, 10));
+        if (name === undefined) {
+          result.orphaned.push(key);
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(dimmers, name)) {
+          console.warn(
+            `[StateManager] dimmers migration: legacy id key '${key}' duplicates group ` +
+            `'${name}' — keeping the name-keyed value ${dimmers[name]}, dropping legacy ${dimmers[key]}.`);
+        } else {
+          dimmers[name] = dimmers[key];
+          result.migrated += 1;
+        }
+        delete dimmers[key];
+      } else {
+        result.orphaned.push(key);
+      }
+    }
+    if (result.migrated > 0) {
+      console.log(
+        `[StateManager] dimmer state migrated to stable group-name keys: ` +
+        `${result.migrated} entr${result.migrated === 1 ? 'y' : 'ies'} rewritten ` +
+        '(persists on the next globals save).');
+    }
+    if (result.orphaned.length > 0) {
+      console.warn(
+        `[StateManager] dimmers: ${result.orphaned.length} orphaned key(s) match no group in the ` +
+        `loaded model — [${result.orphaned.join(', ')}]. Likely saved against an older model ` +
+        'generation (section ids re-minted / group renamed). Preserved on disk untouched; those ' +
+        'groups run at the 1.0 default until set again.');
+    }
+    return result;
   }
 
   /**
@@ -302,18 +502,78 @@ export class StateManager {
     });
   }
 
-  applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {
+  /**
+   * @param {object} globalsState
+   * @param {object|null} paramCenter
+   * @param {object|null} intensityController
+   * @param {object|null} globalEffectsController
+   * @param {object|null} [groupToSectionId]
+   * @param {string} [restoreLabel] — what this restore came FROM, used only to
+   *   name the offender when a refused write is reported (today: the SIZE
+   *   lock). Defaults to the scene's globals_state.yaml, which is the boot
+   *   path; a snapshot / look recall passes its own name.
+   */
+  applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController,
+                    groupToSectionId = null, restoreLabel = null) {
     if (paramCenter && globalsState.params) {
       // The saved canonical state is { revision, sourceLock, params: { speed: { value }, ... } }
+      //
+      // A PERSISTED sourceLock IS DELIBERATELY NEVER RESTORED.
+      //
+      // getCanonicalState() writes the lock to disk, and the touch panel takes
+      // one while armed (six params leased to 'api'). Restoring it would boot a
+      // ship that REJECTS its own autopilot, timeline and BPM writes with
+      // reason:'source_lock' — an unchangeable show, held by a panel that is by
+      // definition no longer there. The holder of a lock cannot survive the
+      // process that knew about it.
+      //
+      // This was already true only BY ACCIDENT: the loop below reads
+      // .params.params and simply never looks at .sourceLock. That is one
+      // refactor away from a locked-out ship, so it is now stated and logged.
+      const persistedLock = globalsState.params.sourceLock;
+      if (persistedLock && persistedLock.mode && persistedLock.mode !== 'open') {
+        console.warn(`  ⚠ [state] globals_state.yaml carries a sourceLock (mode: ${persistedLock.mode}) — ` +
+          'a lock whose holder is gone is NEVER restored; the param centre boots OPEN so the ' +
+          'autopilot and timeline can drive.');
+      }
       const paramData = globalsState.params.params || globalsState.params;
+      const label = restoreLabel || path.join(this.stateDir, 'globals_state.yaml');
       for (const k in paramData) {
         const entry = paramData[k];
         // Extract the .value from canonical { value, lastSource, ... } wrappers
         const val = (entry && typeof entry === 'object' && entry.value !== undefined) ? entry.value : entry;
-        paramCenter.set(k, val, 'init');
+        const r = paramCenter.set(k, val, 'init');
+        // SIZE LOCK (lib/size_lock.js): the CPC refuses the write and logs
+        // it, but only WE know which file carried the stale value — record
+        // it by name so the operator sees WHERE to look. Codex P0: a
+        // discarded persisted value is never swallowed silently.
+        // `r.noop` marks a restore that asked for the locked value anyway —
+        // a clean file, nothing to report.
+        if (r && r.status === 'ignored' && r.reason === SIZE_LOCK_REASON && r.noop !== true
+            && typeof paramCenter.noteSizeLockRestoreFile === 'function') {
+          paramCenter.noteSizeLockRestoreFile(label, val);
+        }
       }
     }
     if (intensityController && globalsState.blackout !== undefined) {
+      // A PERSISTED BLACKOUT IS NEVER RESTORED.
+      //
+      // Disarming the touch panel writes blackout: true, and POST
+      // /global-blackout persists it. So a crash any time after a disarm — or
+      // during one — used to boot the ship DARK, and the show-server supervisor
+      // would relaunch straight back into that darkness, forever. The engine's
+      // own /shutdown route already names this hazard in prose ("the next start
+      // would come up dark") and refuses to use /global-blackout because of it;
+      // this closes the same hole on the restore side.
+      //
+      // Blackout is an e-stop, not a look. If the operator wants the ship dark
+      // after a boot, they press it again. Mission rule: the Titanic being
+      // visible at night beats honouring a stale switch position.
+      if (globalsState.blackout) {
+        console.warn('  ⚠ [state] globals_state.yaml had blackout: true — a persisted ' +
+          'blackout is NEVER restored; a crash must not leave the Titanic dark. Forcing blackout OFF.');
+        globalsState.blackout = false;
+      }
       intensityController.setBlackout(globalsState.blackout);
     }
     if (globalEffectsController && globalsState.effects) {
@@ -330,8 +590,29 @@ export class StateManager {
       }
     }
     if (intensityController && globalsState.dimmers) {
-      for (const [sId, bright] of Object.entries(globalsState.dimmers)) {
-        intensityController.setSectionBrightness(parseInt(sId, 10), bright);
+      // Dimmer state is keyed by STABLE GROUP NAME (see
+      // migrateDimmersToGroupKeys); resolve each name to the CURRENT model's
+      // section id via `groupToSectionId`. Numeric keys are legacy section
+      // ids (pre-migration file, or an old snapshot restored through this
+      // same path) — applied verbatim, exactly the pre-fix behaviour: inert
+      // when no pixel carries the id. A NAME key with no current mapping
+      // (group renamed/removed, or the caller passed no map) is warned and
+      // skipped — never silently guessed.
+      // Dimmer Rack is the persistent operator authority, including an
+      // intentional all-zero table. Live Touch owns separate transient
+      // multipliers and no recovery path may "repair" the rack behind the
+      // operator's back.
+      const groups = groupToSectionId || {};
+      for (const [key, bright] of Object.entries(globalsState.dimmers)) {
+        if (Object.prototype.hasOwnProperty.call(groups, key)) {
+          intensityController.setSectionBrightness(groups[key], bright);
+        } else if (/^\d+$/.test(key)) {
+          intensityController.setSectionBrightness(parseInt(key, 10), bright);
+        } else {
+          console.warn(
+            `[StateManager] dimmers: group '${key}' is not in the loaded model — ` +
+            `brightness ${bright} not applied (state preserved on disk).`);
+        }
       }
     }
     // NOTE: the legacy global `hueShift` is NOT restored — the global hue
@@ -353,7 +634,7 @@ export class StateManager {
     }
   }
 
-  saveMixerState(mixer) {
+  saveMixerState(mixer, { strict = false } = {}) {
     // Mixer state file contains ONLY overlay channels. The deck channel
     // lives in deck_state.yaml — they are persisted separately, just as
     // they are owned separately at runtime. See the channel-split note
@@ -386,15 +667,11 @@ export class StateManager {
           faderLocked: core.faderLocked,
           transitionMode: c.transitionMode || 'trans_crossfade',
           transitionTime: c.transitionTime || 1.0,
-          // Mixer channel PARAMETERS are NEVER persisted (operator ruling,
-          // 2026-07 auto-save wave): mixer overlays are ephemeral live
-          // tweaks, not saved show state. We emit an EMPTY localControls map
-          // (not core.localControls) so a restart restores the channel's
-          // playlist-entry defaults only — the on-disk key + its position are
-          // preserved for byte-shape compatibility, just always `{}`. The
-          // restore path (buildChannelFromSaved) mirrors this by skipping the
-          // localControls replay for the mixer role.
-          localControls: {},
+          // Mixer parameters are channel-owned show state. Persist this
+          // channel's live controls so a restart restores the saved look.
+          // Shared playlist-entry defaults remain untouched; only the explicit
+          // playlist capture route can rewrite those presets.
+          localControls: core.localControls,
           playlist: core.playlist,
           viewSelection: core.viewSelection,
           // Additive (channel_features wave): persisted AFTER the existing
@@ -442,7 +719,7 @@ export class StateManager {
       // without this key loads to 'osc').
       tempoSourcePref: mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc',
     };
-    this.save('mixer_state.yaml', state);
+    this.save('mixer_state.yaml', state, { strict });
   }
 
   /**
@@ -454,7 +731,7 @@ export class StateManager {
    *                         adding new YAML files for one-shot operator
    *                         settings.
    */
-  saveDeckState(mixer, extras = null) {
+  saveDeckState(mixer, extras = null, { strict = false } = {}) {
     const baseCh = typeof mixer.getDeckChannel === 'function'
       ? mixer.getDeckChannel()
       : mixer.getChannel(mixer.baseChannelId);
@@ -469,10 +746,10 @@ export class StateManager {
     if (extras && typeof extras === 'object') {
       Object.assign(state, extras);
     }
-    this.save('deck_state.yaml', state);
+    this.save('deck_state.yaml', state, { strict });
   }
 
-  saveGlobalsState(globalsState, paramCenter) {
+  saveGlobalsState(globalsState, paramCenter, { strict = false } = {}) {
     if (paramCenter) globalsState.params = paramCenter.getCanonicalState();
     // Strip session-scoped bypass-dimmer flags before write — they
     // must not survive restarts (see applyGlobalsState for rationale).
@@ -487,6 +764,6 @@ export class StateManager {
       }
       out.effects = filtered;
     }
-    this.save('globals_state.yaml', out);
+    this.save('globals_state.yaml', out, { strict });
   }
 }

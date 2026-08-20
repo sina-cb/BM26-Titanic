@@ -30,6 +30,7 @@ import { Palette } from '@/constants/theme';
 import { View, Text, TouchableOpacity, FlatList, ActivityIndicator, StyleSheet } from 'react-native';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
+import { PerformanceRouteGuard } from '@/components/performance_route_guard';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { engineEvents } from '@/utils/engineEvents';
 import {
@@ -120,6 +121,14 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 }
 
 export default function SchedulerScreen() {
+  return (
+    <PerformanceRouteGuard routeName="scheduler">
+      <SchedulerScreenContent />
+    </PerformanceRouteGuard>
+  );
+}
+
+function SchedulerScreenContent() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);

@@ -12,6 +12,11 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 
 import { audioRegistryEntries, isLiveAudioSharedFnName } from '../audio/postproc/audio_signals.js';
+import { makeHsvTransition } from './color_transition.js';
+import {
+  LOCKED_SIZE, SIZE_LOCK_KEY, SIZE_LOCK_REASON, SIZE_LOCK_MESSAGE,
+  isLockedSize, SizeLockReport,
+} from './size_lock.js';
 
 // ── Shared Parameter Registry ─────────────────────────────────────────────
 //
@@ -50,15 +55,30 @@ const PARAM_REGISTRY = [
   // pattern and they'll surface in the per-channel local controls.
   // See report .agent/reports/202605/20260508_1 §6 for context.
   {
-    // Engine-owned (see comment on `speed` above).
-    key: 'size', label: 'Size', type: 'float',
-    default: 0.5, range: [0, 1], clamp: true, persist: true,
-    engineOwned: true,
+    // Engine-owned (see comment on `speed` above) AND **LOCKED** since
+    // 2026-08-06: the operator ruled SIZE is pinned at LOCKED_SIZE (0.5 =
+    // coordinate identity) and no path may change it. `default` is the
+    // constant itself so the pin has exactly one source of truth; the
+    // refusal lives in `_setNoFire`, the boot pin in `_loadFromDisk`, and
+    // the rationale in lib/size_lock.js.
+    key: 'size', label: 'Size (LOCKED)', type: 'float',
+    default: LOCKED_SIZE, range: [0, 1], clamp: true, persist: true,
+    engineOwned: true, locked: true,
     oscAddress: '/marsin/param/size', sharedFnName: 'size',
   },
   {
+    // `slew: true` on a FLOAT rides the same ramp machinery the colour
+    // palettes use, but timed by `motionTransitionMs` instead of
+    // `colorTransitionMs` — a colour crossfade and a motion glide are
+    // different musical decisions and must be tunable apart.
+    //
+    // motionTransitionMs defaults to 0, so by default this is EXACTLY the
+    // previous snap behaviour: `t` is forced to 1 on the first tick and the
+    // rendered value equals the target. Nothing glides until an operator (or
+    // the TOUCH CONTROL engage ramp) asks for it.
     key: 'rotate', label: 'Rotate', type: 'float',
     default: 0.0, range: [0, 1], clamp: true, persist: true,
+    slew: true,
     oscAddress: '/marsin/param/rotate', sharedFnName: 'rotate',
   },
   {
@@ -87,6 +107,21 @@ const PARAM_REGISTRY = [
     key: 'colorTransitionMs', label: 'Color Fade', type: 'float',
     default: 800, range: [0, 10000], clamp: true, persist: true,
     oscAddress: '/marsin/param/colorTransitionMs', sharedFnName: 'colorTransitionMs',
+  },
+  {
+    // Duration (ms) of the glide applied to slewed FLOAT params (currently
+    // `rotate`). The motion sibling of colorTransitionMs.
+    //
+    // DEFAULT 0 = instant, i.e. byte-for-byte the behaviour before float slew
+    // existed. This is deliberate: a rig that silently started easing its
+    // motion after an upgrade would be a nasty surprise mid-show. The TOUCH
+    // CONTROL engage ramp raises it for the crossfade and puts it back.
+    //
+    // Not itself slewed (a fade time that fades is nonsense), and no pattern
+    // exports it — it is read directly by tickParamTransitions().
+    key: 'motionTransitionMs', label: 'Motion Glide', type: 'float',
+    default: 0, range: [0, 10000], clamp: true, persist: true,
+    oscAddress: '/marsin/param/motionTransitionMs', sharedFnName: 'motionTransitionMs',
   },
   // ── Audio signal family (mic / stems / gains / raw mirrors / tempoBpm /
   //    structure-detector keys) — GENERATED from lib/audio_signals.js.
@@ -199,27 +234,15 @@ function easeInOut(t) {
   return t * t * (3 - 2 * t);
 }
 
-// Hue lives on a circle (0..1 wraps). Interpolate the SHORTEST arc so
-// e.g. 0.95 → 0.05 crosses red, not the entire spectrum.
-function lerpHue(a, b, t) {
-  let d = b - a;
-  if (d > 0.5) d -= 1;
-  if (d < -0.5) d += 1;
-  return (a + d * t + 1) % 1;
-}
-
-function lerpFloat(a, b, t) {
-  return a + (b - a) * t;
-}
-
-// Interpolate an {h,s,v} value: hue along the short arc, s/v linear.
-function lerpHsv(from, to, t) {
-  return {
-    h: lerpHue(from.h ?? 0, to.h ?? 0, t),
-    s: lerpFloat(from.s ?? 1, to.s ?? 1, t),
-    v: lerpFloat(from.v ?? 1, to.v ?? 1, t),
-  };
-}
+// The color path itself is PERCEPTUAL: makeHsvTransition (lib/
+// color_transition.js) converts both endpoints to OKLab once per ramp,
+// interpolates lightness/chroma linearly with hue on the shortest OKLCH
+// arc (achromatic endpoints adopt the other side's hue), gamut-maps back
+// to sRGB, and re-expresses the result as {h,s,v} for VM injection.
+// This replaced the old naive HSV lerp (2026-07-24): HSV's hue wheel is
+// perceptually lumpy, so equal ramp time used to produce visibly uneven
+// color motion. Endpoints are returned EXACTLY at t=0/t=1 (no round-trip
+// drift). See .agent/reports/202607/20260724_38_color_transition_optimization.md.
 
 /**
  * Extract the semantic role from a shared function name.
@@ -300,6 +323,10 @@ export class ParamCenter {
     // Persistence: debounce timer
     this._saveTimer = null;
 
+    // SIZE lock bookkeeping (lib/size_lock.js). Built BEFORE _loadFromDisk so
+    // a persisted non-locked size is recorded by the very first read.
+    this._sizeLock = new SizeLockReport();
+
     // Restore from disk if file exists
     if (this._statePath) {
       this._loadFromDisk();
@@ -312,14 +339,22 @@ export class ParamCenter {
     //   _rampFrom[key]   — HSV at the moment the target last changed
     //                      (null === no active ramp)
     //   _rampStartMs[key]— clock at ramp start (null === start on next tick)
+    //   _rampSample[key] — cached perceptual interpolator for the CURRENT
+    //                      (from, to) endpoint pair. Endpoint OKLab
+    //                      conversion happens once per ramp here, not per
+    //                      tick; invalidated whenever either endpoint
+    //                      object changes (set() re-arms with fresh
+    //                      objects, so identity comparison suffices).
     this._slewKeys = this._registry.filter(e => e.slew).map(e => e.key);
     this._rendered = {};
     this._rampFrom = {};
     this._rampStartMs = {};
+    this._rampSample = {};
     for (const key of this._slewKeys) {
       this._rendered[key] = deepCopy(this._store[key].value);
       this._rampFrom[key] = null;
       this._rampStartMs[key] = null;
+      this._rampSample[key] = null;
     }
   }
 
@@ -340,6 +375,32 @@ export class ParamCenter {
   }
 
   /**
+   * Apply one already-interpolated ColorAutopilot frame without arming the
+   * operator's independent `colorTransitionMs` ramp a second time.
+   *
+   * Manual/API writes must continue through set(); this deliberately narrow
+   * method accepts only the two palette keys and pins the source name so no
+   * other caller can silently bypass CPC transition policy.
+   */
+  setColorAutopilotFrame(key, value, origin = null) {
+    if (key !== 'colorPalette1' && key !== 'colorPalette2') {
+      throw new RangeError(
+        `ColorAutopilot frames may only write colorPalette1/2, got '${key}'`,
+      );
+    }
+    const result = this._setNoFire(key, value, 'colorAutopilot', origin);
+    if (result.status !== 'ok') return result;
+
+    this._rendered[key] = deepCopy(this._store[key].value);
+    this._rampFrom[key] = null;
+    this._rampStartMs[key] = null;
+    this._rampSample[key] = null;
+    this._store[key].dirty = true;
+    this._fireOnChange([key]);
+    return result;
+  }
+
+  /**
    * Internal single-write that does NOT fire onChange. Used by both
    * the public set() (which fires after) and setMany() (which fires
    * once after the whole batch). Same return shape as set().
@@ -348,6 +409,30 @@ export class ParamCenter {
   _setNoFire(key, value, source, origin = null) {
     const entry = this._registryByKey[key];
     if (!entry) return { status: 'ignored', reason: 'unknown_key' };
+
+    // ── SIZE LOCK (operator ruling 2026-08-06, lib/size_lock.js) ────────
+    // This is the single choke point for EVERY size writer: REST
+    // POST /param-center, WS setSharedParam, OSC (setMany), timeline cue
+    // globals, colour autopilot, and the boot/snapshot state restore
+    // (state_manager.applyGlobalsState → set(..., 'init')) all land here.
+    // Refuse loudly, change nothing, never throw — a rejected write must
+    // not take the engine down mid-show.
+    //
+    // A write that ASKS for the locked value is still refused (nothing to
+    // do), but it is NOT a violation — a clean state file restoring
+    // `size: 0.5` must not raise an operator warning every boot. Only a
+    // write that would have CHANGED the size is recorded and logged.
+    if (key === SIZE_LOCK_KEY) {
+      const noop = isLockedSize(value);
+      if (!noop) this._sizeLock.noteRefusal(value, source, origin);
+      return {
+        status: 'ignored',
+        reason: SIZE_LOCK_REASON,
+        lockedValue: LOCKED_SIZE,
+        noop,
+        message: SIZE_LOCK_MESSAGE,
+      };
+    }
 
     const lockResult = this._checkSourceLock(key, source);
     if (lockResult) return lockResult;
@@ -503,7 +588,52 @@ export class ParamCenter {
     for (const key in this._store) {
       out[key] = deepCopy(this._store[key].value);
     }
+    out[SIZE_LOCK_KEY] = this._pinnedSize();
     return out;
+  }
+
+  /**
+   * The locked size, with a loud complaint if the store ever drifted off it.
+   * Every write path is pinned, so drift is unreachable — this exists so a
+   * future refactor that opens a new write path is caught at the READ side
+   * (render loop, broadcast, persistence) instead of silently rescaling the
+   * whole rig's coordinates. See lib/size_lock.js.
+   * @private
+   */
+  _pinnedSize() {
+    const slot = this._store[SIZE_LOCK_KEY];
+    if (slot && !isLockedSize(slot.value)) {
+      console.error(
+        `  ⛔ [size-lock] internal store drifted to ${JSON.stringify(slot.value)} — ` +
+        `serving ${LOCKED_SIZE}. ${SIZE_LOCK_MESSAGE}`);
+      this._sizeLock.noteRefusal(slot.value, 'internal-drift', 'param_center');
+      slot.value = LOCKED_SIZE;
+    }
+    return LOCKED_SIZE;
+  }
+
+  /**
+   * JSON-safe SIZE-lock report (boot overrides + refused writes). Surfaced on
+   * GET /status as `sizeLock`; `sizeLockWarning` carries `.warning`.
+   */
+  getSizeLockReport() {
+    return this._sizeLock.toJSON();
+  }
+
+  /** One-line operator warning, or null when nothing fought the lock. */
+  getSizeLockWarning() {
+    return this._sizeLock.warningLine();
+  }
+
+  /**
+   * Record that a named on-disk file carried a non-locked size. Called by
+   * StateManager.applyGlobalsState, which knows the file path the CPC does
+   * not (globals_state.yaml / a recalled snapshot).
+   * @param {string} file
+   * @param {*} value
+   */
+  noteSizeLockRestoreFile(file, value) {
+    this._sizeLock.noteRestoreOverride(file, value);
   }
 
   /**
@@ -514,7 +644,7 @@ export class ParamCenter {
     for (const key in this._store) {
       const s = this._store[key];
       params[key] = {
-        value: deepCopy(s.value),
+        value: key === SIZE_LOCK_KEY ? this._pinnedSize() : deepCopy(s.value),
         lastSource: s.lastSource,
         lastOrigin: s.lastOrigin,
         lastRevision: s.lastRevision,
@@ -548,6 +678,12 @@ export class ParamCenter {
       // CaptainPad can render them with a small "ENGINE" annotation
       // and patterns can stop trying to bind them as pattern vars.
       engineOwned: !!e.engineOwned,
+      // LOCKED params refuse every write (currently only `size`, pinned at
+      // LOCKED_SIZE by operator ruling 2026-08-06 — lib/size_lock.js). A UI
+      // that renders this key must render it read-only; the engine refuses
+      // the write regardless.
+      locked: !!e.locked,
+      lockedValue: e.locked ? LOCKED_SIZE : undefined,
       // Runtime keys registered from the Audio Companion's signal
       // manifest (registerDynamicLiveParam). CaptainPad surfaces them
       // identically to built-in live keys; the flag lets the UI tag
@@ -570,6 +706,21 @@ export class ParamCenter {
   /** Whether `key` is a currently-registered CPC param (built-in OR dynamic). */
   isRegisteredKey(key) {
     return !!this._registryByKey[key];
+  }
+
+  /**
+   * The CPC revision at which `key` was last WRITTEN (0 = never written since
+   * boot). Every write bumps it — including a write of the SAME value — so a
+   * caller can tell "the producer is still publishing" from "the producer died
+   * and this value is frozen". That distinction is what the timeline's mood
+   * staleness guard is built on (a frozen `audioPartyStrong = 1` would otherwise
+   * pin the rig in party mode forever). Returns null for an unknown key.
+   * @param {string} key
+   * @returns {number|null}
+   */
+  getLastRevision(key) {
+    const slot = this._store[key];
+    return slot ? slot.lastRevision : null;
   }
 
   /** Whether `key` was registered at runtime via registerDynamicLiveParam. */
@@ -810,6 +961,7 @@ export class ParamCenter {
       this._rendered[key] = deepCopy(this._store[key].value);
       this._rampFrom[key] = null;
       this._rampStartMs[key] = null;
+      this._rampSample[key] = null;
     }
     for (const chId in this._channels) {
       this._applyToHandle(wasmHost, this._channels[chId]);
@@ -827,22 +979,42 @@ export class ParamCenter {
    * @param {number} nowMs — monotonic clock (engine passes performance.now())
    */
   tickColorTransitions(nowMs) {
-    const transSlot = this._store.colorTransitionMs;
-    const transMs = transSlot ? transSlot.value : 0;
+    const colorMs = this._store.colorTransitionMs ? this._store.colorTransitionMs.value : 0;
+    const motionMs = this._store.motionTransitionMs ? this._store.motionTransitionMs.value : 0;
     for (const key of this._slewKeys) {
       const from = this._rampFrom[key];
       if (from === null) continue; // settled — nothing to do
       if (this._rampStartMs[key] === null) this._rampStartMs[key] = nowMs;
+      const entry = this._registryByKey[key];
+      const isHsv = entry.type === 'hsv';
+      // Colours and motion are timed independently — see motionTransitionMs.
+      const transMs = isHsv ? colorMs : motionMs;
       const target = this._store[key].value;
       const t = transMs <= 0
         ? 1
         : clamp01((nowMs - this._rampStartMs[key]) / transMs);
-      this._rendered[key] = lerpHsv(from, target, easeInOut(t));
+      if (isHsv) {
+        // (Re)build the perceptual interpolator when either endpoint object
+        // changed — set() deep-copies both, so identity checks are exact.
+        let cached = this._rampSample[key];
+        if (!cached || cached.from !== from || cached.to !== target) {
+          cached = { from, to: target, sample: makeHsvTransition(from, target) };
+          this._rampSample[key] = cached;
+        }
+        this._rendered[key] = cached.sample(easeInOut(t));
+      } else {
+        // Numeric glide. Plain eased lerp: a float param has no perceptual
+        // space to correct for the way a colour does, and the same easeInOut
+        // keeps a motion glide feeling like the colour crossfades beside it.
+        const e = easeInOut(t);
+        this._rendered[key] = from + (target - from) * e;
+      }
       this._store[key].dirty = true; // force injection of _rendered
       if (t >= 1) {
         this._rendered[key] = deepCopy(target);
         this._rampFrom[key] = null;
         this._rampStartMs[key] = null;
+        this._rampSample[key] = null;
       }
     }
   }
@@ -873,7 +1045,10 @@ export class ParamCenter {
         const v = this._injectValue(entry, slot);
         wasmHost.setControl(ch.handle, mapping.id, v.h, v.s, v.v);
       } else {
-        wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
+        // _injectValue, not slot.value: a slewed FLOAT must inject its
+        // RAMPED value, exactly as a slewed colour does. For every
+        // non-slewed key this returns slot.value, so nothing else changes.
+        wasmHost.setControl(ch.handle, mapping.id, this._injectValue(entry, slot), 0, 0);
       }
     }
   }
@@ -898,7 +1073,8 @@ export class ParamCenter {
           const v = this._injectValue(entry, slot);
           wasmHost.setControl(ch.handle, mapping.id, v.h, v.s, v.v);
         } else {
-          wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
+          // See _applyToHandle: slewed floats inject their ramped value.
+          wasmHost.setControl(ch.handle, mapping.id, this._injectValue(entry, slot), 0, 0);
         }
       }
     }
@@ -970,7 +1146,9 @@ export class ParamCenter {
       const data = {};
       for (const entry of this._registry) {
         if (!entry.persist) continue;
-        data[entry.key] = deepCopy(this._store[entry.key].value);
+        data[entry.key] = entry.key === SIZE_LOCK_KEY
+          ? this._pinnedSize()
+          : deepCopy(this._store[entry.key].value);
       }
       fs.writeFileSync(this._statePath, yaml.dump(data));
     } catch (e) {
@@ -987,6 +1165,16 @@ export class ParamCenter {
       for (const key in raw) {
         const entry = this._registryByKey[key];
         if (!entry) continue;
+        // SIZE LOCK: the persisted value is NEVER restored. If the file
+        // carried anything but LOCKED_SIZE, say so loudly (naming the file)
+        // and keep the pin — the store already holds LOCKED_SIZE.
+        if (key === SIZE_LOCK_KEY) {
+          if (!isLockedSize(raw[key])) {
+            this._sizeLock.noteRestoreOverride(this._statePath, raw[key]);
+          }
+          this._store[key].value = LOCKED_SIZE;
+          continue;
+        }
         const clamped = clampValue(raw[key], entry);
         this._store[key].value = deepCopy(clamped);
       }

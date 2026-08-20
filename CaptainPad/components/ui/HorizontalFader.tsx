@@ -1,5 +1,7 @@
-import React, { useRef, useEffect } from 'react';
-import { View, Animated, PanResponder } from 'react-native';
+import React, { useCallback, useRef, useEffect } from 'react';
+import { View, Animated, PanResponder, Platform } from 'react-native';
+
+import { acquireScrollLock, type ScrollLockHandle } from '@/components/ui/scroll_lock';
 
 export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillStyle, thumbStyle, onDragStart, fadingTarget, fadingDurationMs }: any) => {
   const widthRef = useRef(1);
@@ -62,6 +64,37 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
 
   const clamp01 = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
 
+  // ── NATIVE SCROLL LOCK (the iPad half of the capture armor below) ────────
+  // The capture handlers + termination refusal are React responder-system
+  // moves, and a native `ScrollView` is a `UIScrollView` whose pan recognizer
+  // never consults that system: under the New Architecture RN drops
+  // `blockNativeResponder`, and the scroll view's own cancel decision only
+  // looks for a JS responder among its ANCESTORS. So on the iPad a fader drag
+  // inside a scroll column scrolled the column and lost the drag. Freezing the
+  // owning scroll view for the life of the gesture is the remedy — the same
+  // one `dimmer_rack.tsx` hand-wires for its fader row. Full citation:
+  // `components/ui/scroll_lock.ts`.
+  //
+  // It is OPT-IN on the host side: only a `LockableScrollView` listens, so
+  // every plain ScrollView in the app (mixer strips, timeline, the dimmer
+  // rack's own already-gated row) behaves exactly as it did.
+  const scrollLockRef = useRef<ScrollLockHandle | null>(null);
+  const lockScroll = useCallback(() => {
+    // WEB IS UNTOUCHED: the browser armor already works there.
+    if (Platform.OS === 'web') return;
+    if (scrollLockRef.current) return;
+    scrollLockRef.current = acquireScrollLock();
+  }, []);
+  const unlockScroll = useCallback(() => {
+    const held = scrollLockRef.current;
+    if (!held) return;
+    scrollLockRef.current = null;
+    held.release();
+  }, []);
+  // A fader unmounted mid-drag (modal dismissed, row re-keyed, tab teardown)
+  // fires neither Release nor Terminate. Without this the host stays frozen.
+  useEffect(() => unlockScroll, [unlockScroll]);
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -76,6 +109,9 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
       onMoveShouldSetPanResponderCapture: () => true,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (evt) => {
+        // FIRST, on touch-down: the scroll view decides whether to cancel the
+        // content view's touches within a few points of travel.
+        lockScroll();
         draggingRef.current = true;
         if (onDragStartRef.current) onDragStartRef.current();
         const v = clamp01(evt.nativeEvent.locationX / widthRef.current);
@@ -90,6 +126,7 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
         if (now - lastSendRef.current > 50) { lastSendRef.current = now; onChangeRef.current(nv); }
       },
       onPanResponderRelease: (_evt, gs) => {
+        unlockScroll();
         const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
         draggingRef.current = false;
         onChangeRef.current(nv);
@@ -100,6 +137,7 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
       // otherwise external value-sync freezes and a modal's backdrop-dismiss
       // guard sticks on forever.
       onPanResponderTerminate: (_evt, gs) => {
+        unlockScroll();
         const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
         draggingRef.current = false;
         onChangeRef.current(nv);

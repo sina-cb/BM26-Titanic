@@ -28,17 +28,25 @@ import { ChannelParamRouter } from './lib/channel_param_router.js';
 import { startApiServer } from './lib/api_server.js';
 import { ModulationController } from './lib/modulation_controller.js';
 import { IntensityController } from './lib/intensity_controller.js';
+import { sameModelGroupSections } from './lib/live_brightness_controller.js';
+import {
+  applyLayerSettingCreativeBuffer,
+  enforceLiveDimmerAuthority,
+} from './lib/live_touch_creative_processor.js';
+import { LiveTouchSessionContext } from './lib/live_touch_session_context.js';
 import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
 import { ParamCenter } from './lib/param_center.js';
 import { OscListener } from './lib/osc_listener.js';
+import { FireSyncListener } from './lib/fire_sync_listener.js';
 import { AudioCapture } from './audio/capture/audio_capture.js';
 import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
 import { TempoArbiter } from './lib/tempo_arbiter.js';
 import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
+import { validateAudioAnalysisConfig } from './audio/config/audio_analysis_config.js';
 import {
-  loadSceneAudio, saveSceneAudio,
+  loadSceneAudio, saveSceneAudio, sceneAudioPath,
 } from './audio/config/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
@@ -52,14 +60,18 @@ import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
 import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './lib/view_word.js';
-import { deriveAutoViews } from './lib/auto_views.js';
+import { appendAutoViews, buildViewTable } from './lib/view_catalog.js';
 import { createBitFreeViewPromoter } from './lib/in_view_intrinsic.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
+import { AudioBindings } from './lib/audio_bindings.js';
+import { resolveModulationSources } from './lib/modulation_engine.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { sceneStateDir, stateOverridesActive } from './lib/state_paths.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
-import { createOutputDispatch } from './lib/output_dispatch.js';
+import { createSacnOutput } from './lib/sacn_output.js';
+import { resolveVisConfig, createVisSampler, describeVisPlan } from './lib/vis_budget.js';
+import { assertNoDirectHardwareRoutes } from './lib/output_config_guard.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
@@ -71,10 +83,20 @@ import { execSync, spawn } from 'child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Node's test runner marks every test worker with NODE_TEST_CONTEXT, and
+// spawned engines inherit it. Make that already-authoritative test boundary an
+// explicit auth-disabled choice so committed integration/HIL harnesses need no
+// private operator secrets. Normal direct engine boots still MUST provide an
+// exact 0/1 (launcher always provides 1); missing production mode fails loud.
+if (process.env.NODE_TEST_CONTEXT && process.env.BM26_CAPTAINPAD_AUTH_REQUIRED === undefined) {
+  process.env.BM26_CAPTAINPAD_AUTH_REQUIRED = '0';
+}
+
 // Shared offline-safe port cleanup (CommonJS, no extra deps) — replaces the
 // old `npx kill-port` which needs the network.
 const require = createRequire(import.meta.url);
 const { freeStackPorts } = require('../tools/port_cleanup.cjs');
+const { resolvePriorityRequest, elevateSelf } = require('../tools/process_priority.cjs');
 
 // Build the 7-lane per-pixel meta array (the buffer WasmHost packs for the
 // VM's *_with_meta render exports). Lane 6 (`viewMaskHi`) carries Tier-C
@@ -103,7 +125,33 @@ function repackMetaIfDirty(wasmHost, pixels) {
   wasmHost.metaDirty = false;
 }
 
+// MARSIN_CONFIG_FILE is the ONE seam that says where the engine's config lives.
+// It already governed the autopilot WRITE-BACK (lib/autopilot.js,
+// lib/color_autopilot.js — see tests/helpers/setup_config_guard.mjs); as of
+// report _100 it governs this BOOT READ too, so the seam means one coherent
+// thing: "this file is the engine's config.yaml".
+//
+// Why that matters (the `_97` §4.4 trap, which cost 30 s of live sACN on the
+// real rig): `--dest <ip>` overrides `sacn.destinations`, and a harness that
+// needs the engine to reach nothing at all writes a black-holed config copy and
+// points MARSIN_CONFIG_FILE at it. There is no longer any second, unoverridable
+// output path for it to miss — the per-controller `controllers:` block that used
+// to carry its own hardware host is REMOVED and refused at boot
+// (lib/output_config_guard.js).
+//
+// An override that is set but missing/unreadable THROWS (codex P0: a silent
+// fallback to the real config here is exactly the accident this prevents).
 function loadConfig() {
+  const override = process.env.MARSIN_CONFIG_FILE;
+  if (override !== undefined) {
+    if (!override || !path.isAbsolute(override)) {
+      throw new Error(`MARSIN_CONFIG_FILE must be an absolute path when set, got: ${JSON.stringify(override)}`);
+    }
+    if (!fs.existsSync(override)) {
+      throw new Error(`MARSIN_CONFIG_FILE points at a file that does not exist: ${override}`);
+    }
+    return yaml.load(fs.readFileSync(override, 'utf8')) || {};
+  }
   try {
     const configPath = path.join(__dirname, 'config.yaml');
     if (fs.existsSync(configPath)) {
@@ -119,6 +167,12 @@ function loadConfig() {
 function parseArgs() {
   const args = process.argv.slice(2);
   const config = loadConfig();
+  // The engine has ONE output path: sACN to `sacn.destinations`, where the
+  // simulation's input bridge is the single router to every controller. A config
+  // that still declares the removed direct-to-hardware `controllers:` block is a
+  // BOOT FAILURE, not something to ignore (codex P0). See
+  // lib/output_config_guard.js for the whole reasoning.
+  assertNoDirectHardwareRoutes(config, process.env.MARSIN_CONFIG_FILE || 'config.yaml');
   const cSacn = config.sacn || {};
   const cEngine = config.engine || {};
   const cServer = config.server || {};
@@ -132,14 +186,14 @@ function parseArgs() {
     list: false,
     destinations: cSacn.destinations || (cSacn.destination ? [cSacn.destination] : ['127.0.0.1']),
     sourceName: cSacn.sourceName || 'MarsinEngine',
-    // Per-controller output routing (sACN vs Art-Net). Optional: with no
-    // `controllers:` block every universe streams sACN to `destinations`
-    // (the long-standing default). A declared controller picks its
-    // transport + host; see lib/output_dispatch.js.
-    controllers: Array.isArray(config.controllers) ? config.controllers : null,
     // Fail loud (below) if neither config nor --port supplies a valid port —
     // never silently guess one.
     port: Number.isInteger(cServer.port) ? cServer.port : null,
+    // OS process-priority request for the render loop. CLI value (may be null);
+    // the config default is captured separately so main() can resolve the full
+    // precedence chain (env > CLI > config > 'high'). See tools/process_priority.cjs.
+    enginePriority: null,
+    enginePriorityConfig: cEngine.priority ?? config.enginePriority ?? null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -148,6 +202,7 @@ function parseArgs() {
       case '--model': case '-m':    opts.modelName = args[++i]; break;
       case '--fps':                 opts.fps = parseInt(args[++i], 10) || 40; break;
       case '--priority':            opts.priority = parseInt(args[++i], 10) || 100; break;
+      case '--engine-priority':     opts.enginePriority = args[++i]; break;
       case '--port':                opts.port = parseInt(args[++i], 10); break;
       case '--dry-run':             opts.dryRun = true; break;
       case '--list': case '-l':     opts.list = true; break;
@@ -164,6 +219,9 @@ function parseArgs() {
     --model, -m <name>     Model file to load (required)
     --fps <n>              Target framerate (default: 40)
     --priority <n>         sACN priority (default: 100)
+    --engine-priority <c>  OS process priority for the render loop: high|realtime
+                           (default: high · HIGH_PRIORITY_CLASS). realtime is
+                           opt-in and usually needs admin; see process_priority.cjs
     --dry-run              Load and compile only, no sACN output
     --list, -l             List available patterns
     --dest <ip>            sACN destination IP (default: 127.0.0.1)
@@ -510,24 +568,25 @@ async function loadModel(modelName, bustCache = false) {
   }
 
   // ── Auto views (Tier-A, ZERO bit cost) — whole-ship view catalog ────
-  // Generalizes the old strand-view derivation (report 20260619_1 §5):
-  // per-strand groups + LED LEFT/RIGHT (unchanged), PLUS whole-ship
-  // PORT/STARBOARD/FORE/AFT, structural WALLS/DECKS/CHIMNEYS/AUDITORIUM,
-  // typed @PAR/@BAR/@VINTAGE/@RAW, vertical BAND_LOW/MID/HIGH, symmetric
-  // <base>_BOTH composites, and per-controller CTRL_<cId> (once patched).
+  // Generalizes the old strand-view derivation (report 20260619_1 §5),
+  // trimmed to the operator's catalog (report 20260804_145): exhaustive
+  // whole-ship LEFT/RIGHT halves + FRONT/BACK ends, per-strand groups,
+  // structural WALLS/DECKS/CHIMNEYS/AUDITORIUM, typed Strands / TE Signs /
+  // @PAR / @BAR / @VINTAGE, and per-controller CTRL_<cId> (once patched).
   // Every entry rides the SAME viewMasks array the mixer's MaskRegistry
   // consumes, but with bit:0 — pure per-pixel membership, NO viewMask bit
   // consumed, so they never pressure titanic's already-heavy 28/31
   // group-bit budget. Names already owned by a base group / declared
-  // preset are skipped (the base group already provides that view).
-  const existingMaskNames = new Set([
-    ...Object.keys(groupBits),
-    ...viewMasks.map(vm => vm.name),
-  ]);
-  const autoViews = deriveAutoViews(mod.pixels, existingMaskNames);
+  // preset are skipped (the base group already provides that view), and a
+  // STRUCTURAL band whose pixels exactly equal an authored view's is retired
+  // in favour of the authored name — on titanic that is WALLS ≡ `Hull Canvas`
+  // and AUDITORIUM ≡ `Auditoriums` (operator ruling, report 20260804_148).
+  // The append sequence itself lives in lib/view_catalog.js so the offline
+  // harnesses build a BYTE-EQUIVALENT catalog from the same code instead of
+  // a hand-mirrored copy that can drift (report 20260804_147).
+  const autoViews = appendAutoViews(mod.pixels, viewMasks, groupBits);
   for (const w of autoViews.warnings) console.warn(`[Model] auto-view: ${w}`);
   if (autoViews.entries.length > 0) {
-    for (const e of autoViews.entries) viewMasks.push(e);
     const fam = autoViews.families;
     const summary = Object.entries(fam)
       .filter(([, names]) => names.length > 0)
@@ -587,14 +646,9 @@ async function loadModel(modelName, bustCache = false) {
   // unknown name fails loudly and a bit-free (Tier-A) view is recognized as
   // PROMOTABLE (bit:0) rather than unknown. Base groups are word-0 views;
   // presets/auto-views carry their own bit+word. A later view name wins on a
-  // (legitimately impossible — names are unique) collision.
-  const viewTable = {};
-  for (const [group, bit] of Object.entries(groupBits)) {
-    viewTable[group] = { bit, word: 0 };
-  }
-  for (const vm of viewMasks) {
-    viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
-  }
+  // (legitimately impossible — names are unique) collision. Built by the
+  // shared lib/view_catalog.js primitive the offline harnesses also use.
+  const viewTable = buildViewTable({ groupBits, viewMasks });
 
   return {
     pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits,
@@ -603,7 +657,8 @@ async function loadModel(modelName, bustCache = false) {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, paramCenter, statsCallback, visConfig, hooks = {}) {
+function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController,
+  globalEffectsController, paramCenter, statsCallback, visConfig, hooks = {}) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -612,6 +667,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   // BEFORE mixer.beginFrame (so modulated control writes participate
   // in this frame's render).
   const beforeFrameHook = typeof hooks.beforeFrame === 'function' ? hooks.beforeFrame : null;
+  const liveTouchSession = hooks.liveTouchSession || null;
   let windowFrames = 0;
   let startTime = 0;
   let lastStatsTime = 0;
@@ -623,59 +679,98 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   // on frames that broadcast vis (see the snapshot point in the render loop);
   // lazily sized to pixelCount*6.
   let preDimmerVisBuf = null;
+  /* Scratch for the per-group effect scope (see the snapshot/restore around the
+     effect chain). Allocated once on first use and only when a scope is set. */
+  let fxMaskBuf = null;
+  let fxMaskIdx = null;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
+  let liveTouchCreativeFrame = false;
+  let liveTouchParticipatedThisFrame = false;
+  let sharedCreativeSignals = {};
+  let liveCreativeSignals = {};
+  let creativeFrameIndex = 0;
+  let creativeNowMs = 0;
+
+  const processCreativeBuffer = (
+    buffer6ch,
+    controller,
+    signals,
+    brightnessController = null,
+    liveTouchOverlayPattern = null,
+  ) => {
+    applyLayerSettingCreativeBuffer({
+      buffer6ch,
+      modelPixels: model.pixels,
+      globalEffectsController: controller,
+      brightnessController,
+      master: mixer.master,
+      frameIndex: creativeFrameIndex,
+      nowMs: creativeNowMs,
+      signals,
+      liveTouchOverlayPattern,
+    });
+  };
+
+  mixer.setLayerSettingOutputProcessor('deck', buffer6ch => {
+    liveTouchCreativeFrame = true;
+    processCreativeBuffer(buffer6ch, globalEffectsController, sharedCreativeSignals);
+  });
+  mixer.setLayerSettingOutputProcessor('mixer', buffer6ch => {
+    liveTouchCreativeFrame = true;
+    processCreativeBuffer(buffer6ch, globalEffectsController, sharedCreativeSignals);
+  });
+  mixer.setLayerSettingOutputProcessor('live_touch', buffer6ch => {
+    liveTouchCreativeFrame = true;
+    liveTouchParticipatedThisFrame = true;
+    if (!liveTouchSession || !liveTouchSession.getState().active) {
+      throw new Error('Live Touch render participant has no active owner-scoped session');
+    }
+    processCreativeBuffer(
+      buffer6ch,
+      liveTouchSession.effectsController,
+      liveCreativeSignals,
+      intensityController.liveBrightness,
+      liveTouchSession.overlayPattern,
+    );
+  });
+  mixer.setLiveTouchPhaseSpeedProvider(channel => {
+    if (!liveTouchSession || !liveTouchSession.getState().active) return 1;
+    const speedRatio = liveTouchSession.speedMultiplier() / globalSpeedMultiplier();
+    if (!channel.followsTempo) return speedRatio;
+    const sharedTempoBpm = typeof mixer.tempoBpm === 'number'
+      && Number.isFinite(mixer.tempoBpm)
+      ? mixer.tempoBpm
+      : 120;
+    const sharedTempoMultiplier = Math.max(0.05, Math.min(8, sharedTempoBpm / 120));
+    return speedRatio * liveTouchSession.tempoMultiplier() / sharedTempoMultiplier;
+  });
 
   // ── Vis broadcast budget (config.yaml → `vis:`) ───────────────────────
-  // The vis broadcast feeds CaptainPad's PixelStrip previews. It is
-  // ADVISORY only — never affects sACN. Two knobs:
+  // The vis broadcast feeds CaptainPad's previews. It is ADVISORY only —
+  // never affects sACN. The whole contract (defaults, per-key overrides,
+  // LOUD validation) lives in lib/vis_budget.js; read its header before
+  // touching any of it. Two knobs, one of them now per key:
   //   * broadcastHz: how often we ship a fresh frame. Default 1 Hz; the
   //     operator only needs a "what's playing" preview, not a live
   //     waveform. Higher rates force the iPad to atob() + re-render N
   //     pixel <View>s per channel N times per second; with 4 mixer
   //     channels open at 10 Hz the iPad UI thread starves and the
   //     operator perceives playlist switches as slow.
-  //   * maxPixels: upper bound on per-channel pixel count. Larger
-  //     models are sampled uniformly down to this cap; smaller models
-  //     are sent verbatim. 100 keeps the per-frame payload small even
-  //     for rigs with thousands of pixels (where the full RGBWAU
-  //     buffer would otherwise dwarf every other broadcast).
-  const visBroadcastHz = (visConfig && visConfig.broadcastHz) > 0
-    ? Number(visConfig.broadcastHz) : 1;
-  const visMaxPixels = (visConfig && visConfig.maxPixels) > 0
-    ? Math.max(1, Math.floor(Number(visConfig.maxPixels))) : 100;
-  const visIntervalMs = Math.max(1, Math.round(1000 / visBroadcastHz));
-  // Sampling index table: built once at boot for this model. `null`
-  // means "no subsampling, copy the whole buffer".
-  let visSampleIdx = null;
-  if (pixelCount > visMaxPixels) {
-    visSampleIdx = new Int32Array(visMaxPixels);
-    for (let i = 0; i < visMaxPixels; i++) {
-      visSampleIdx[i] = Math.floor(i * pixelCount / visMaxPixels);
-    }
-  }
-  const visPxOut = visSampleIdx ? visMaxPixels : pixelCount;
-  // Hot-path scratch buffers — avoid `new Uint8Array(...)` on every
-  // broadcast (allocations are visible at 1 Hz too, especially under
-  // mass channel adds).
-  const visScratch6 = new Uint8Array(visPxOut * 6);
-  function subsampleVis(full6ch) {
-    if (!visSampleIdx) return full6ch;
-    for (let i = 0; i < visMaxPixels; i++) {
-      const src = visSampleIdx[i] * 6;
-      const dst = i * 6;
-      visScratch6[dst]     = full6ch[src];
-      visScratch6[dst + 1] = full6ch[src + 1];
-      visScratch6[dst + 2] = full6ch[src + 2];
-      visScratch6[dst + 3] = full6ch[src + 3];
-      visScratch6[dst + 4] = full6ch[src + 4];
-      visScratch6[dst + 5] = full6ch[src + 5];
-    }
-    return visScratch6;
-  }
-  console.log(`  📊 Vis broadcast: ${visBroadcastHz} Hz · ` +
-    `${visPxOut} px/strip` +
-    (visSampleIdx ? ` (subsampled from ${pixelCount})` : ` (model fits under cap)`));
+  //   * maxPixels: the DEFAULT upper bound on a key's pixel count, and the
+  //     one every per-CHANNEL key takes. Larger models are sampled
+  //     uniformly down to it; smaller models are sent verbatim. 100 keeps
+  //     the per-frame payload small even for rigs with thousands of pixels.
+  //   * keyMaxPixels: per-key overrides for the WHOLE-RIG composites
+  //     (`rig`, `preDimmer`, …), whose consumer is the Deck PIXELS canvas
+  //     (_225/_239) rather than a strip of RN <View>s. `full` = verbatim.
+  const visPlan = resolveVisConfig(visConfig);
+  const visSampler = createVisSampler(pixelCount, visPlan);
+  const visIntervalMs = visPlan.intervalMs;
+  // Per-channel keys all share the default budget; the frame declares this
+  // as its top-level `pixelCount` (see the broadcast below).
+  const visPxOut = visSampler.defaultOutputPixels();
+  console.log(`  📊 Vis broadcast: ${describeVisPlan(visPlan, visSampler, pixelCount)}`);
 
   // We need metadata arrays for 6ch WASM call
   // We can just construct them lazily the first time or pass 0 for null (if memory isn't used)
@@ -734,6 +829,40 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     return SIZE_MIN_MULT * Math.pow(SIZE_MAX_MULT / SIZE_MIN_MULT, clamped);
   }
 
+  function buildCreativeSignals(tempoBpm, nowMs) {
+    const beats = tempoBpm > 0 ? (nowMs / 1000) * (tempoBpm / 60) : 0;
+    return {
+      beatPhase: tempoBpm > 0 ? beats - Math.floor(beats) : 0,
+      barPhase: tempoBpm > 0 ? (beats / 4) - Math.floor(beats / 4) : 0,
+      bpm: tempoBpm,
+      audioPresent: false,
+      micHigh: 0,
+      kick: 0,
+      dropPulse: 0,
+    };
+  }
+
+  function updateCreativeAudioGains(controller, snapshot, tempoBpm, nowMs) {
+    const audioBindings = controller && controller.audioBindings;
+    if (!audioBindings || !controller.setAudioGains) return;
+    const audioTable = audioBindings.getAll();
+    const anyBound = Object.keys(audioTable.effects).length > 0
+      || Object.keys(audioTable.groups).length > 0;
+    if (!anyBound) {
+      controller.setAudioGains(null);
+      return;
+    }
+    const sourceValues = resolveModulationSources({ paramCenterSnapshot: snapshot });
+    if (tempoBpm > 0) {
+      const beats = (nowMs / 1000) * (tempoBpm / 60);
+      const fall = 1 - (beats - Math.floor(beats));
+      sourceValues.bpmPulse = fall * fall;
+    }
+    const dtMs = audioBindings._lastMs ? nowMs - audioBindings._lastMs : 0;
+    audioBindings._lastMs = nowMs;
+    controller.setAudioGains(audioBindings.evaluate(sourceValues, nowMs, dtMs));
+  }
+
   function tick() {
     if (!running) return;
 
@@ -762,6 +891,36 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
     // Flush pending shared parameters (CPC) to all active VMs before frame compute
     if (paramCenter) paramCenter.flushDirty(mixer.wasmHost);
+
+    // Output processors execute inside mixer.renderAll6ch(), so their frame
+    // inputs must be current before render starts. Assigning these afterward
+    // produced a one-frame delay and an empty signal bag on the first frame.
+    const tempoBpm = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0)
+      ? mixer.tempoBpm : 0;
+    const signals = buildCreativeSignals(tempoBpm, now);
+    sharedCreativeSignals = signals;
+    creativeFrameIndex = frameCount;
+    creativeNowMs = now;
+    updateCreativeAudioGains(
+      globalEffectsController,
+      paramCenter ? paramCenter.getAll() : {},
+      tempoBpm,
+      now,
+    );
+
+    if (liveTouchSession && liveTouchSession.getState().active) {
+      liveTouchSession.tickParams(now);
+      const liveTempoBpm = liveTouchSession.tempoBpm;
+      liveCreativeSignals = buildCreativeSignals(liveTempoBpm, now);
+      updateCreativeAudioGains(
+        liveTouchSession.effectsController,
+        liveTouchSession.paramCenter.getAll(),
+        liveTempoBpm,
+        now,
+      );
+    } else {
+      liveCreativeSignals = buildCreativeSignals(0, now);
+    }
 
     // ModulationController: evaluate per-playlist-item audio modulations
     // and write modulated control values to the deck channel's WASM.
@@ -792,6 +951,8 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // Call 6-channel function. 
     // Wait, the runtime needs metaPtr? We can just pass 0 if none.
     // In marsin_wasm_runtime.js, renderAll6ch() allocates internally if coords are set!
+    liveTouchCreativeFrame = false;
+    liveTouchParticipatedThisFrame = false;
     const outBuf = mixer.renderAll6ch();
 
     // Reattach results directly onto model pixels so they have `.r`, `.g`, etc for sacn_mapper
@@ -805,8 +966,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       model.pixels[i].u = outBuf[off + 5] / 255;
     }
 
-    // Apply global DMX-override level effects (Vintage .w boost, UV boost)
-    if (globalEffectsController) globalEffectsController.applyPixels(model.pixels);
+    // Global creative stages run here for Deck/Mixer. When Live Touch is a
+    // render participant they already ran on the isolated Live buffer before
+    // the canonical pair blend; applying them again here would let Live-owned
+    // effects/paint leak onto the outgoing Deck/Mixer surface.
+    if (!liveTouchCreativeFrame && globalEffectsController) {
+      globalEffectsController.applyPixels(model.pixels);
+    }
 
     // Assemble the per-frame audio/beat SIGNALS bag the macros read (B2 fix:
     // the bag was documented as "assembled in engine.js tick()" but never was,
@@ -819,23 +985,63 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // audioPresent:false until the OSC audio path is wired (follow-up: read
     // paramCenter 'micHigh'/'micKick' + Companion drop/beat when audio is live;
     // kick threshold also needs live calibration before the auto router fires).
-    const tempoBpm = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0)
-      ? mixer.tempoBpm : 0;
-    const beats = tempoBpm > 0 ? (now / 1000) * (tempoBpm / 60) : 0;
-    const signals = {
-      beatPhase: tempoBpm > 0 ? beats - Math.floor(beats) : 0,
-      barPhase: tempoBpm > 0 ? (beats / 4) - Math.floor(beats / 4) : 0,
-      audioPresent: false,
-      micHigh: 0,
-      kick: 0,
-      dropPulse: 0,
-    };
+    // `signals` was assembled before render so setting-local processors and
+    // the established post-render Deck/Mixer path consume the same frame.
 
     // NEW: Apply Global Effect Macros (color wash, feedback trails,
     // drop hit envelopes, software sync strobe). Runs before
     // intensity / blackout per docs/28 §2.2 so master dimmers and
     // safety blackout always have the final say.
-    if (globalEffectsController && globalEffectsController.applyMacros) {
+    // AUDIO BINDINGS -> per-slot / per-group gains for THIS frame. Sources are
+    // normalised to 0..1 by the same resolver the modulation engine uses, so a
+    // wide-range signal (a dominant frequency in Hz) means the same thing here
+    // as it does there. Evaluated once and handed to the controller, which
+    // applies effect gains inside the chain and group gains after the paint.
+    // The bindings table lives on the controller so this loop - a separate
+    // function that never sees the engine's own locals - can reach it without
+    // threading another parameter through the signature.
+    // Audio gains were evaluated before mixer.renderAll6ch() so isolated
+    // setting processors see this frame's values. Do not evaluate a second
+    // time here: hit envelopes and decay state must advance exactly once.
+    // ── PRE-PAINT: the operator's colours for the groups effects PLAY ON ────
+    // Laid down BEFORE the chain so the effects modulate the group's chosen
+    // palette instead of being covered by it. Only groups inside the effect
+    // scope; with no scope this is a no-op and the paint behaves exactly as it
+    // always has (all of it after the chain, locked).
+    if (!liveTouchCreativeFrame && globalEffectsController) {
+      globalEffectsController.applyGroupFixedColors(model.pixels, 'pre');
+    }
+
+    // ── PER-GROUP EFFECT SCOPE — snapshot the pixels the chain may NOT touch ─
+    //
+    // Effects are written to sweep every pixel; only group_fixed_color even
+    // looks at `px.group`. Rather than thread a mask through all eleven effect
+    // stages - eleven chances to get it wrong, and a trap for whoever writes
+    // the twelfth - the scope is enforced by putting the out-of-scope pixels
+    // BACK after the chain has run. Whatever an effect did to them, however it
+    // did it, is undone.
+    //
+    // Costs nothing when unrestricted (mask null), which is the default and
+    // every pre-existing caller.
+    const fxMask = !liveTouchCreativeFrame && globalEffectsController
+      ? globalEffectsController.effectGroupMask
+      : null;
+    let fxMaskCount = 0;
+    if (fxMask) {
+      if (!fxMaskBuf) fxMaskBuf = new Float64Array(pixelCount * 6);
+      if (!fxMaskIdx) fxMaskIdx = new Int32Array(pixelCount);
+      for (let i = 0; i < pixelCount; i++) {
+        const px = model.pixels[i];
+        if (!px || fxMask.has(px.group)) continue;      // in scope → let it change
+        const o = fxMaskCount * 6;
+        fxMaskBuf[o] = px.r; fxMaskBuf[o + 1] = px.g; fxMaskBuf[o + 2] = px.b;
+        fxMaskBuf[o + 3] = px.w; fxMaskBuf[o + 4] = px.a; fxMaskBuf[o + 5] = px.u;
+        fxMaskIdx[fxMaskCount] = i;
+        fxMaskCount++;
+      }
+    }
+
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applyMacros) {
       globalEffectsController.applyMacros({
         pixels: model.pixels,
         frameIndex: frameCount,
@@ -853,7 +1059,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // BEFORE group color-locks + intensity/blackout, so a locked group's
     // color and the e-stop safety always have the final say. Zero-cost when
     // off.
-    if (globalEffectsController && globalEffectsController.applyInvert) {
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applyInvert) {
       globalEffectsController.applyInvert(model.pixels);
     }
 
@@ -864,7 +1070,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // after applyInvert per the library design note ("postInvert runs right
     // after applyInvert so a crushed frame inverts crisply"). Zero-cost when
     // no postInvert-anchored effect is enabled.
-    if (globalEffectsController && globalEffectsController.applyPostInvert) {
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applyPostInvert) {
       globalEffectsController.applyPostInvert({
         pixels: model.pixels,
         frameIndex: frameCount,
@@ -878,7 +1084,84 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // but BEFORE intensity/blackout below, so the master cutoffs always
     // keep the final say. Single application point — replaces the
     // summer-camp djLights hack's duplicated post-intensity path.
-    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels);
+    // ── PER-GROUP EFFECT SCOPE — put the out-of-scope pixels back ───────────
+    // Placed AFTER the whole chain (macros + invert + postInvert) and BEFORE
+    // the painted groups, so a group outside the scope carries on showing the
+    // PATTERN exactly as if no effect were running, and paint still wins over
+    // everything as it always did.
+    if (fxMask && fxMaskCount) {
+      for (let n = 0; n < fxMaskCount; n++) {
+        const px = model.pixels[fxMaskIdx[n]];
+        const o = n * 6;
+        px.r = fxMaskBuf[o]; px.g = fxMaskBuf[o + 1]; px.b = fxMaskBuf[o + 2];
+        px.w = fxMaskBuf[o + 3]; px.a = fxMaskBuf[o + 4]; px.u = fxMaskBuf[o + 5];
+      }
+    }
+
+    // POST-PAINT: every OTHER painted group - the ones no effect may touch.
+    // Still after the chain, still locked, exactly as docs/32 describes.
+    if (!liveTouchCreativeFrame && globalEffectsController) {
+      globalEffectsController.applyGroupFixedColors(model.pixels, 'post');
+    }
+
+    // ── SPATIAL PAINT — the operator's live finger, after the paint ────────
+    // The Touch Control SPATIAL pad draws a per-pixel stroke on the hull. It
+    // runs HERE, not in the effects chain, because the chain finishes before
+    // applyGroupFixedColors and paint then repaints its groups wholesale.
+    // MEASURED: a stroke lifting the rig's red 1893 -> 10345 (peak byte 255)
+    // collapsed to exactly 0 the moment all 24 groups were painted — so an
+    // operator who had used the colour slots drew and saw nothing, which is
+    // the reported "spatial mode does not work".
+    // A live gesture outranks a colour the operator set earlier; it does NOT
+    // outrank safety. Everything below — grand master, section dimmers,
+    // blackout — still runs after this and still wins.
+    if (!liveTouchCreativeFrame && globalEffectsController && globalEffectsController.applySpatialStage) {
+      globalEffectsController.applySpatialStage({ pixels: model.pixels, nowMs: now });
+    }
+
+    // ── GRAND MASTER — the last word, no exceptions ───────────────────────
+    // OPERATOR RULING: the Touch Control master IS the master when armed.
+    //
+    // It used to live in pattern_mixer.renderAll6ch(), applied to the pattern
+    // COMPOSITE - which meant it governed patterns and nothing else. Both of
+    // the stages above write AFTER that point, so both escaped it:
+    //   · the global effects chain (a group set to FX)
+    //   · applyGroupFixedColors (a group set to OWN)
+    // MEASURED on the rig: master 0, and the group painted [0.690, 0.4557, 0]
+    // still went out at 175/116 across 24 fixtures.
+    //
+    // Applying it HERE - after the effects and after the paint, before the
+    // section dimmers and the hardware blackout - means nothing downstream of
+    // the composite can outrank the fader. Section dimmers still trim further
+    // and blackout still wins outright, which is the correct precedence: the
+    // grand master scales the show, blackout kills it.
+    //
+    // All six channels, not just RGB: an amber or UV channel left unscaled is
+    // how "the master is down but part of the ship is still lit" happens.
+    // PARKED GROUPS ARE THE ONE EXCEPTION, and it is a deliberate operator
+    // ruling: a LOCKED group holds exactly what it was set to and the grand
+    // master does not touch it. The operator was shown that this contradicts
+    // "the master is the master, no exceptions" and chose it knowingly.
+    // BLACKOUT still kills a parked group - it runs later, in
+    // IntensityController, and an e-stop must never be defeatable from a UI
+    // toggle.
+    if (!liveTouchCreativeFrame && mixer.master < 1) {
+      const gm = mixer.master;
+      const parked = globalEffectsController ? globalEffectsController.parkedGroupMask : null;
+      for (let i = 0; i < pixelCount; i++) {
+        const px = model.pixels[i];
+        if (parked && parked.has(px.group)) continue;   // locked: held as set
+        px.r *= gm; px.g *= gm; px.b *= gm;
+        px.w *= gm; px.a *= gm; px.u *= gm;
+      }
+    }
+
+    // A pair involving Live was composed into byte buffers. Per-setting
+    // bypass metadata cannot be represented in that linear blend, and Live is
+    // explicitly subordinate to the Dimmer Rack. Clear any scratch flags left
+    // by either creative processor so shared rack authority caps every lane of
+    // every blended Live frame.
+    enforceLiveDimmerAuthority(model.pixels, liveTouchParticipatedThisFrame);
 
     // Snapshot the PRE-DIMMER composite (after all global FX, before the
     // section dimmers + blackout) for the deck/mixer master preview. Only on
@@ -925,6 +1208,22 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         blackout: !!(intensityController && intensityController.blackoutActive),
       });
     }
+    // DMX-only effects cannot be numerically blended. Keep the outgoing
+    // setting's hardware state until the canonical pixel blend lands, then
+    // switch at that same transaction boundary. Live's private controller
+    // overlays the shared DMX bytes only while Live is the steady setting or
+    // the outgoing side of a handback; staging can therefore never fire fog.
+    if (liveTouchSession && liveTouchSession.getState().active) {
+      const layerState = mixer.getLayerSettingsState();
+      const liveOwnsDmx = layerState.transition
+        ? layerState.transition.from === 'live_touch'
+        : layerState.active === 'live_touch';
+      if (liveOwnsDmx) {
+        liveTouchSession.effectsController.applyDmx(dmxBuffers, {
+          blackout: !!(intensityController && intensityController.blackoutActive),
+        });
+      }
+    }
 
     // Send sACN using the _read buffers
     sacnOut.sendFrame(dmxBuffers);
@@ -948,22 +1247,29 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       }
     }
 
-    // Vis data broadcast at `visBroadcastHz` (default 1 Hz, see top of
+    // Vis data broadcast at `vis.broadcastHz` (default 1 Hz, see top of
     // createRenderLoop). Per-channel buffers come pre-rendered from
-    // mixer._visData; each one is subsampled down to `visMaxPixels`
-    // here before base64-encoding so a 500-px rig doesn't push a
-    // 3 KB/strip payload at the iPad.
+    // mixer._visData; each one is subsampled down to ITS OWN key budget
+    // here before base64-encoding, so a 500-px rig doesn't push a
+    // 3 KB/strip payload at the iPad while the whole-rig composites can
+    // still run full rate for the Deck PIXELS canvas.
     if (now - lastVisTime > visIntervalMs) {
       lastVisTime = now;
       if (statsCallback) {
         const visData = mixer.getVisData();
         const visPayload = {};
+        // Per-key sample counts. `pixelCount` below stays the DEFAULT-budget
+        // count (what every per-channel key carries, and what pre-_239
+        // clients read); this map is the per-key truth the PIXELS window and
+        // any future mixed-budget consumer needs.
+        const visPixelCounts = {};
         for (const [key, rgb] of Object.entries(visData)) {
           if (!rgb) { visPayload[key] = null; continue; }
-          // subsampleVis returns the shared scratch buffer; we MUST
+          // visSampler.sample() may return a SHARED scratch buffer; we MUST
           // base64-encode immediately (still synchronous here) before
           // the next call overwrites it.
-          visPayload[key] = Buffer.from(subsampleVis(rgb)).toString('base64');
+          visPayload[key] = Buffer.from(visSampler.sample(key, rgb)).toString('base64');
+          visPixelCounts[key] = visSampler.outputPixelsFor(key);
         }
         // `master` is set by pattern_mixer from the pre-dimmer composition,
         // so the UI sees what the show is producing — not the dimmed-down
@@ -986,13 +1292,16 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
           rigBuffer[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
           rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
-        visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
+        visPayload['rig'] = Buffer.from(visSampler.sample('rig', rigBuffer)).toString('base64');
+        visPixelCounts['rig'] = visSampler.outputPixelsFor('rig');
         // Pre-dimmer composite (after global FX, before dimmers/blackout). The
         // deck + mixer master preview use this key so they show the effects
         // while ignoring the section dimmer rack. Encoded
-        // immediately (subsampleVis returns a shared scratch buffer).
+        // immediately (sample() may return a shared scratch buffer).
         if (preDimmerVisBuf) {
-          visPayload['preDimmer'] = Buffer.from(subsampleVis(preDimmerVisBuf)).toString('base64');
+          visPayload['preDimmer'] =
+            Buffer.from(visSampler.sample('preDimmer', preDimmerVisBuf)).toString('base64');
+          visPixelCounts['preDimmer'] = visSampler.outputPixelsFor('preDimmer');
         }
         // Per-channel effective-output METER levels (channel metering).
         // Plain { <visKey>: number(0..1) } keyed identically to visPayload —
@@ -1007,12 +1316,20 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         for (const [key, level] of Object.entries(visLevels)) {
           levelsPayload[key] = level;
         }
-        // `pixelCount` in the message is the number of pixels the iPad
-        // should actually expect in each base64 buffer — that's the
-        // SAMPLED count, not the model's true pixelCount. PixelStrip
-        // already does Math.min(propPixelCount, bytes.length/6) so the
-        // strip never tries to draw past the data.
-        statsCallback({ type: 'vis', vis: visPayload, levels: levelsPayload, pixelCount: visPxOut });
+        // `pixelCount` is the number of samples a DEFAULT-budget (per-channel)
+        // buffer carries — the SAMPLED count, not the model's true pixel
+        // count. `pixelCounts` is the per-key map, and `modelPixelCount` the
+        // model's real size, so a client can tell "full rate" from "capped"
+        // without guessing. PixelStrip derives its own count from the decoded
+        // byte length, so no strip can ever draw past its data.
+        statsCallback({
+          type: 'vis',
+          vis: visPayload,
+          levels: levelsPayload,
+          pixelCount: visPxOut,
+          pixelCounts: visPixelCounts,
+          modelPixelCount: pixelCount,
+        });
       }
     }
   }
@@ -1037,6 +1354,36 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
+// ── Process-level crash backstops (report _116, Family A — _108 / _109) ─────
+// Design intent (codex P0): "never die silently, and never run half-alive."
+// Node's DEFAULT on an uncaught exception or an unhandled promise rejection is
+// to crash the process — but REGISTERING a handler SUPPRESSES that default, so
+// each handler below MUST decide loudly and exit. A handler that merely logged
+// and returned would leave the engine limping in an undefined state (the exact
+// fallback the codex forbids). We log the full error with a NAMED reason and
+// exit(1); a clean non-75 exit is what the launcher watchdog (W1-2) restarts,
+// turning any surviving crash vector into a ~1 s blink rather than a dark ship.
+//
+// These are the LAST RESORT for a genuinely unexpected throw/rejection. The
+// _108 CRITICAL (a malformed WS frame) is fixed at the socket level in
+// api_server.js (per-connection `ws.on('error')`) and never reaches here — that
+// is the primary fix; this is the net beneath it. Registered at module scope so
+// a throw during boot (before main's own `.catch`) is still caught + diagnosed.
+process.on('uncaughtException', (err, origin) => {
+  console.error(`\n  ⛔ ENGINE FATAL — uncaughtException (${origin}): ` +
+    `${err && err.stack ? err.stack : err}`);
+  console.error('  ⛔ Exiting(1) with diagnosis rather than running half-alive — ' +
+    'supervisor should restart. (No fallback masking; see report _116.)');
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  const detail = reason && reason.stack ? reason.stack : reason;
+  console.error(`\n  ⛔ ENGINE FATAL — unhandledRejection: ${detail}`);
+  console.error('  ⛔ Exiting(1) with diagnosis rather than running half-alive — ' +
+    'supervisor should restart. (No fallback masking; see report _116.)');
+  process.exit(1);
+});
+
 async function main() {
   const opts = parseArgs();
   const engineConfig = loadConfig();
@@ -1090,6 +1437,24 @@ async function main() {
   ║    Multichannel Rendering Pipeline       ║
   ╚══════════════════════════════════════════╝
 `);
+
+  // ── Realtime priority for pattern generation (P0: never starve the show) ──
+  // Elevate THIS node process above the NORMAL class Chrome sits in, so the
+  // 40 fps sACN render loop keeps getting scheduled even when a browser window
+  // grabs the foreground boost. This is the authoritative self-elevation
+  // (belt-and-braces with the launcher's parent-side elevation). Precedence:
+  //   env BM26_ENGINE_PRIORITY (set by the launcher) > --engine-priority CLI >
+  //   config engine.priority/enginePriority > 'high'. ALWAYS reads the achieved
+  //   class back and logs it — an un-elevated engine is loud, never silent.
+  // Skipped for --list / --dry-run (they never run the loop).
+  if (!opts.list && !opts.dryRun) {
+    const { request } = resolvePriorityRequest([
+      { value: process.env.BM26_ENGINE_PRIORITY, origin: 'env BM26_ENGINE_PRIORITY' },
+      { value: opts.enginePriority, origin: '--engine-priority' },
+      { value: opts.enginePriorityConfig, origin: 'config engine.priority' },
+    ], { fallback: 'high', label: 'EnginePriority' });
+    elevateSelf(request, { label: 'EnginePriority' });
+  }
 
   // Test/harness state redirect (lib/state_paths.js): announce loudly so a
   // boot whose runtime state is NOT going to the tracked states/ tree is
@@ -1206,7 +1571,7 @@ async function main() {
   // exceeds the new max even if someone writes a tiny gainMax.
   const gainMax = Number((engineConfig.osc || {}).gainMax) || 2;
   const stemGainOverride = { range: [0, gainMax], default: Math.min(1, gainMax) };
-  const paramCenter = new ParamCenter(null, {
+  const paramCenterOptions = {
     registryOverrides: {
       stemsVocalsGain: stemGainOverride,
       stemsBassGain:   stemGainOverride,
@@ -1218,7 +1583,8 @@ async function main() {
       micHighGain: stemGainOverride,
       micKickGain: stemGainOverride,
     },
-  });
+  };
+  const paramCenter = new ParamCenter(null, paramCenterOptions);
 
   const mixer = new PatternMixer({
     wasmHost,
@@ -1329,14 +1695,12 @@ async function main() {
     process.exit(0);
   }
 
-  // 6. Create network output (sACN and/or Art-Net, routed per controller)
-  // `sacnOut` keeps its name — the dispatch exposes the identical sender
-  // interface (start/stop/sendFrame/addUniverse/frameCount) so every call
-  // site below is unchanged. With no `controllers:` config block this is a
-  // single flat-destinations sACN sender, byte-identical to before.
-  const sacnOut = createOutputDispatch({
+  // 6. Create network output — ONE sACN sender to `sacn.destinations`.
+  // There is no per-controller transport and no direct-to-hardware route: the
+  // simulation's input bridge receives this stream on 127.0.0.1 and is the
+  // single router to every physical controller (lib/output_config_guard.js).
+  const sacnOut = createSacnOutput({
     universes: universeIds,
-    controllers: opts.controllers,
     priority: opts.priority,
     destinations: opts.destinations,
     sourceName: opts.sourceName,
@@ -1350,6 +1714,7 @@ async function main() {
   // the engine's actual frame grid.
   const globalEffectsController = new GlobalEffectsController({
     engine: { fps: opts.fps },
+    modelPixelCount: model.pixels.length,
   });
   globalEffectsController.initFromModel(model.specialEffects || model.pixels);
   // Slot manager owns the 6 performance-slot bindings. Default config
@@ -1377,6 +1742,23 @@ async function main() {
   // is a deferred ref filled in by api_server once broadcastWs is
   // in scope — same pattern as broadcastStatsRef above.
   const modulationBroadcastRef = { publish: () => {} };
+  // Operator-facing audio bindings: one signal per effect slot / per group.
+  // Held on engineCore so api_server can read and write the table, and
+  // evaluated once per frame in the render loop below.
+  const audioBindings = new AudioBindings();
+  if (globalEffectsController) globalEffectsController.audioBindings = audioBindings;
+
+  // Live Touch owns an in-memory creative/CPC context. Owner-tagged API
+  // writes are routed here instead of into the durable shared controllers, so
+  // staging or performing a Live look cannot alter Deck/Mixer state or files.
+  const liveTouchSession = new LiveTouchSessionContext({
+    mixer,
+    wasmHost,
+    model,
+    fps: opts.fps,
+    paramCenterOptions,
+  });
+
   const modulationController = new ModulationController({
     mixer,
     paramCenter,
@@ -1397,7 +1779,16 @@ async function main() {
 
   const engineCore = {
     mixer, wasmHost, paramRouter, paramCenter, model, audioState,
+    // The sACN sender. api_server still answers GET /status with an
+    // `outputRouting` field, and its answer is now permanently
+    // `{ controllers: [] }` — this engine declares NO direct-to-hardware route,
+    // by construction. The sim's bridge polls that field to prove there is no
+    // second writer it cannot see; keeping it present (rather than dropping it)
+    // is what lets the bridge tell "no direct routes" from "engine too old to
+    // say", which it must refuse on.
+    sacnOut,
     globalEffectSlotManager,
+    liveTouchSession,
     modulationController,
     modulationBroadcastRef,
     signalPostProcessor,
@@ -1483,6 +1874,7 @@ async function main() {
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {
+    liveTouchSession,
     beforeFrame: (nowMs) => {
       modulationController.applyFrame(nowMs);
       // AUTO-CYCLE (round-2 #2): advance any mixer overlay whose playlist
@@ -1537,9 +1929,18 @@ async function main() {
 
   // 7a. Smart Model Hot Reload
   let modelReloadTimer = null;
+  // TEARDOWN HYGIENE (report _30 step 10): the watcher handle used to be
+  // DISCARDED, so the engine always exited with a live fs.watch handle (plus
+  // its threadpool work) still open. The libuv abort the operator hit —
+  // `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c:94
+  // — can only be tripped WHILE handles are being torn down, and in a Node
+  // process with zero native addons there is no steady-state path to it. So the
+  // fix direction is to shrink what is still live at exit. Keep the handle and
+  // close it in shutdown().
+  let modelWatcher = null;
   const modelsDir = path.join(__dirname, 'models');
   if (fs.existsSync(modelsDir)) {
-    fs.watch(modelsDir, (eventType, filename) => {
+    modelWatcher = fs.watch(modelsDir, (eventType, filename) => {
       if (!filename || (!filename.endsWith(`${opts.modelName}.js`) && !filename.endsWith(`${opts.modelName}.effects.js`) && !filename.endsWith(`${opts.modelName}.viewmasks.js`))) return;
       if (modelReloadTimer) clearTimeout(modelReloadTimer);
       modelReloadTimer = setTimeout(async () => {
@@ -1585,6 +1986,19 @@ async function main() {
              return;
           }
 
+          if (intensityController.liveBrightness.getState().active
+              && !sameModelGroupSections(model.pixels, newModel.pixels)) {
+            const staleMsg = 'Engine model is STALE: group/section mapping changed while Live Touch '
+              + 'is armed. Hot reload refused; disarm Live Touch and restart the engine.';
+            console.log(`  âš ï¸ ${staleMsg}`);
+            engineCore.modelSync.stale = true;
+            engineCore.modelSync.message = staleMsg;
+            if (apiServer && typeof apiServer.broadcastMixerState === 'function') {
+              apiServer.broadcastMixerState();
+            }
+            return;
+          }
+
           // Apply new data in place
           for(let i = 0; i < model.pixelCount; i++) {
              Object.assign(model.pixels[i], newModel.pixels[i]);
@@ -1611,6 +2025,7 @@ async function main() {
           wasmHost.metaDirty = false;
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);
+          if (liveTouchSession) liveTouchSession.refreshModel(model);
 
           // The mixer snapshots the view-mask dictionary at construction
           // and bakes per-channel pixel masks — refresh both, or running
@@ -1712,7 +2127,16 @@ async function main() {
   // means re-running `--choose_mic --model <scene>` once on that rig.
   // The win: a single source of truth, no hidden machine-local file.
   const sceneStateDirPath = sceneStateDir(__dirname, opts.modelName);
-  const sceneAudioOv      = loadSceneAudio(sceneStateDirPath);
+  let sceneAudioOv;
+  try {
+    sceneAudioOv = loadSceneAudio(sceneStateDirPath);
+  } catch (err) {
+    // An unreadable state file is FATAL, not ignorable: booting past it
+    // would immediately boot-write defaults over the operator's saved mic
+    // and tuning (see audio_config_store.loadSceneAudio).
+    console.error(`  ❌ ${err.message}`);
+    process.exit(1);
+  }
   audioState.sceneDir     = sceneStateDirPath;
   // `defaults` is what the operator gets back when they hit "Reset to
   // defaults" in the Audio Analysis tab — the portable `config.yaml`
@@ -1720,6 +2144,51 @@ async function main() {
   // so the reset endpoint doesn't have to re-read disk on every call.
   audioState.defaults = baseAudioCfg;
   audioState.config = mergeAudioConfig(baseAudioCfg, sceneAudioOv);
+
+  // The MERGED boot config must satisfy exactly the contract every live
+  // PATCH is held to (applyLiveUpdate runs the same validator). Without
+  // this the only validated path was the PATCH: a hand-edited or stale
+  // audio_state.yaml could seed the analyzer, the Companion link and the
+  // boot-write with a config the engine would have rejected over REST —
+  // and the boot-write then made that invalid state the persisted truth.
+  // Codex P0: fail loudly at boot instead.
+  try {
+    validateAudioAnalysisConfig(audioState.config);
+  } catch (err) {
+    console.error(`  ❌ Invalid audio config: ${err.message}`);
+    console.error(`     Merged from the config.yaml \`audio:\` block (required) + ${sceneAudioPath(sceneStateDirPath)}`);
+    process.exit(1);
+  }
+
+  // derivedSignals groups LIVE-PATCHED during this runtime. Only these are
+  // written into the scene state (see pickLiveFields): persisting the whole
+  // derived tree on every knob turn used to freeze a copy of config.yaml
+  // into the scene file and shadow every later retune.
+  audioState.derivedDirtyGroups = new Set();
+
+  /**
+   * Persist the per-scene subset (enabled / fftSize / hopSize / bands /
+   * kick / sub / structureDetector / bpmTracker / capture mic-selection,
+   * plus any live-patched derivedSignals groups). MERGE on top of the
+   * existing file so orthogonal sections (`chains:`) survive, and merge
+   * derivedSignals group-wise so a group persisted by an EARLIER runtime
+   * isn't dropped by this one. THROWS on a failed write — the caller
+   * decides whether that is fatal (boot) or a 500 (REST).
+   */
+  function persistSceneAudioState(
+    config = audioState.config,
+    derivedDirtyGroups = audioState.derivedDirtyGroups,
+  ) {
+    const onDisk = loadSceneAudio(audioState.sceneDir);
+    const live = pickLiveFields(config, {
+      derivedSignalsGroups: derivedDirtyGroups,
+    });
+    const next = { ...onDisk, ...live };
+    if (live.derivedSignals) {
+      next.derivedSignals = { ...(onDisk.derivedSignals || {}), ...live.derivedSignals };
+    }
+    saveSceneAudio(audioState.sceneDir, next);
+  }
 
   // docs/29: load the per-scene `chains:` block, if any, on top of
   // the processor's compiled-in DEFAULT_CHAINS. Validation runs
@@ -1997,8 +2466,19 @@ async function main() {
   audioState.applyLiveUpdate = async function applyLiveUpdate(partial, opts = {}) {
     const prev = audioState.config;
     const next = mergeAudioConfig(prev, partial);
+    validateAudioAnalysisConfig(next);
     const captureRestart = !!opts.requiresCaptureRestart
       || (partial && (partial.enabled !== undefined || partial.capture));
+
+    const nextDirtyGroups = new Set(audioState.derivedDirtyGroups);
+    if (partial && partial.derivedSignals && typeof partial.derivedSignals === 'object') {
+      for (const group of Object.keys(partial.derivedSignals)) nextDirtyGroups.add(group);
+    }
+
+    // Commit the candidate to durable state before mutating any runtime truth.
+    // A failed write therefore leaves the analyzer, config and dirty-group set
+    // byte-for-byte unchanged instead of exposing an unsaved value over REST.
+    persistSceneAudioState(next, nextDirtyGroups);
 
     if (captureRestart) {
       // Stop the current capture cleanly before swapping config so we
@@ -2021,13 +2501,7 @@ async function main() {
       audioState.config = next;
     }
 
-    // Persist the per-scene subset (enabled / fftSize / hopSize /
-    // bands / kick / capture mic-selection fields). MERGE on top of
-    // the existing file so we don't wipe orthogonal sections.
-    try {
-      const onDisk = loadSceneAudio(audioState.sceneDir);
-      saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
-    } catch (e) { console.warn(`[audio] failed to persist scene audio state: ${e.message}`); }
+    audioState.derivedDirtyGroups = nextDirtyGroups;
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
     // Rebroadcast the new config to EVERY /ws/control subscriber so the
     // engine stays the single source of truth: CaptainPad mirrors its
@@ -2060,23 +2534,31 @@ async function main() {
       capture: audioState.config?.capture,
       enabled: audioState.config?.enabled,
     });
+    validateAudioAnalysisConfig(next);
+    // Persist first. If read/write fails, reset throws and every in-memory
+    // value remains unchanged; the API must return 5xx rather than success.
+    const onDisk = loadSceneAudio(audioState.sceneDir);
+    const stripped = { ...onDisk };
+    for (const key of [
+      'fftSize',
+      'hopSize',
+      'bands',
+      'kick',
+      'sub',
+      'structureDetector',
+      'bpmTracker',
+      'derivedSignals',
+    ]) {
+      delete stripped[key];
+    }
+    if (typeof stripped.enabled !== 'boolean') stripped.enabled = audioState.config.enabled;
+    saveSceneAudio(audioState.sceneDir, stripped);
+
     if (audioState.analyzer) {
       audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
     }
     audioState.config = next;
-    try {
-      // Strip the live-tunable subset off disk and keep capture.* and
-      // enabled. (See May 2026 #12 above — enabled is sticky across
-      // reset so the operator's mic stays whatever it was.) A future
-      // `audio.lowMaxHz = 222` change in config.yaml still wins next
-      // boot for the tunable analyzer settings.
-      const onDisk = loadSceneAudio(audioState.sceneDir);
-      const stripped = {};
-      if (onDisk?.capture) stripped.capture = onDisk.capture;
-      if (typeof onDisk?.enabled === 'boolean') stripped.enabled = onDisk.enabled;
-      else if (typeof audioState.config?.enabled === 'boolean') stripped.enabled = audioState.config.enabled;
-      saveSceneAudio(audioState.sceneDir, stripped);
-    } catch (e) { console.warn(`[audio] failed to reset scene audio state: ${e.message}`); }
+    audioState.derivedDirtyGroups = new Set();
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
     // Same single-source-of-truth rebroadcast as applyLiveUpdate so a
     // "Reset to defaults" snaps the Companion's live gain / smooth back
@@ -2098,11 +2580,13 @@ async function main() {
    //
    // Same merge pattern as applyLiveUpdate: load → merge → save. Any
    // future top-level sections (e.g. signal routing) are preserved.
+   // `derivedSignals` is NOT stamped here — nothing has been live-patched
+   // yet at boot, so the scene file keeps deferring to config.yaml.
    try {
-     const onDisk = loadSceneAudio(audioState.sceneDir);
-     saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
+     persistSceneAudioState();
    } catch (e) {
-     console.warn(`[audio] failed to boot-write scene audio state: ${e.message}`);
+     console.error(`[audio] fatal boot-write failure: ${e.message}`);
+     process.exit(1);
    }
 
    await buildAndStartAudio();
@@ -2342,6 +2826,46 @@ async function main() {
   // engine restart and causes the EADDRINUSE the operator saw).
   const getOscListener = () => oscState.listener;
 
+  // 7e. FIRE → LIGHTS SYNC listener (BM26-Stoker). Binds last, like OSC, and is
+  // equally non-fatal: a bad config or a busy port disables fire sync and
+  // nothing else. It receives the fire controllers' relay-edge datagrams
+  // (relayed by the Stoker control panel) and drives a global effect through the
+  // SAME /global-effect route CaptainPad uses. Strictly one-way — nothing here
+  // can command or influence fire. See lib/fire_sync_listener.js.
+  const fireSyncState = { listener: null, config: { ...(engineConfig.fire_sync || {}) } };
+  engineCore.fireSyncState = fireSyncState;
+  if (fireSyncState.config.enabled) {
+    try {
+      const fsl = new FireSyncListener({
+        port:        fireSyncState.config.port,
+        host:        fireSyncState.config.host || '0.0.0.0',
+        effect:      fireSyncState.config.effect,
+        triggerMask: fireSyncState.config.triggerMask,
+        minOnMs:     fireSyncState.config.minOnMs,
+        releaseMs:   fireSyncState.config.releaseMs,
+        apiHost:     fireSyncState.config.apiHost || '127.0.0.1',
+        apiPort:     (engineConfig.server && engineConfig.server.port) || 6968,
+        // The RELEASE half is a pixel-value ramp, so it is rendered where pixel
+        // values are written. config.yaml is only the boot default — the Stoker
+        // panel pushes the operator's value (fire_cfg) and re-pushes every 10 s,
+        // which is what heals this engine after a restart.
+        applyRelease: (ms) => globalEffectsController.setVintageWhiteReleaseMs(ms),
+        onStats:     (s) => broadcastStatsRef.publish(s),
+      });
+      await fsl.startAsync();
+      fireSyncState.listener = fsl;
+      console.log(`  🔥 fire-sync listening on ${fsl.host}:${fsl.port} → ` +
+        `${fsl.effect} (mask 0x${fsl.triggerMask.toString(16)}, min-ON ${fsl.minOnMs} ms, ` +
+        `release ${fsl.releaseMs} ms)`);
+    } catch (err) {
+      // Loud and explicit — never a silent "the lights just don't flash tonight".
+      console.error(`  ⚠️  fire-sync DISABLED: ${err && err.message}`);
+      fireSyncState.listener = null;
+    }
+  } else {
+    console.log('  🔥 fire-sync disabled (config.yaml: fire_sync.enabled: false)');
+  }
+
   // 8. Graceful shutdown
   //
   // `afterClose` lets a caller (the scene-switch path) run AFTER every
@@ -2364,7 +2888,20 @@ async function main() {
     if (lOsc) {
       try { lOsc.stop(); } catch (_) { /* ignore */ }
     }
+    // Fire-sync UDP socket, same reasoning: release it before exit so a
+    // replacement engine can re-bind :7703 without an EADDRINUSE race.
+    if (fireSyncState.listener) {
+      try { fireSyncState.listener.stop(); } catch (_) { /* ignore */ }
+      fireSyncState.listener = null;
+    }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
+    // Close the model hot-reload watcher and cancel its debounce (report _30
+    // step 10). Every live handle retired before exit is abort surface removed.
+    if (modelReloadTimer) { clearTimeout(modelReloadTimer); modelReloadTimer = null; }
+    if (modelWatcher) {
+      try { modelWatcher.close(); } catch (e) { console.warn(`  ⚠ model watcher close failed: ${e.message}`); }
+      modelWatcher = null;
+    }
     // Stop the in-engine Timeline tick (docs/38 §15) before tearing the
     // render loop / API down so no late cue fires into a half-shut engine.
     try { apiServer.stopTimeline && apiServer.stopTimeline(); } catch (_) { /* ignore */ }
@@ -2414,8 +2951,23 @@ async function main() {
   process.on('SIGINT', () => shutdown());
   process.on('SIGTERM', () => shutdown());
 
+  // In-band graceful stop (POST /shutdown — see api_server.js). On Windows a
+  // supervisor CANNOT deliver a real SIGTERM: `taskkill /T /F` is
+  // TerminateProcess, and node's process.kill() emulates signals the same way,
+  // so `launcher.js stop` had no way to reach the handler above. The blackout
+  // frame below therefore never went out and the rig held its last live frame
+  // while the ops docs promised "lights OFF" (report 20260805_160 T1).
+  // This hook is that reach — the SAME shutdown(), the SAME single blackout
+  // path, nothing duplicated. It is re-entrancy-guarded by `shuttingDown`.
+  engineCore.requestShutdown = () => shutdown();
+
   // Scene/model coordination hook (sim → engine, see POST /scene in
-  // api_server.js). Cross-scene model swaps change the pixel count and the
+  // api_server.js). TWO callers, one mechanism:
+  //   • POST /scene <other scene>  — cross-scene switch;
+  //   • POST /scene/reload <active scene> — deliberate SAME-scene restart that
+  //     applies a re-exported model the on-disk watcher refused (pixel-count
+  //     change → `modelSync.stale`). Same argv, same ports, one engine.
+  // Cross-scene model swaps change the pixel count and the
   // render loop / WASM buffers are sized once at boot, so an in-process swap
   // is impossible (the existing on-disk hot reloader refuses pixel-count
   // changes and goes STALE). The robust path is a clean restart with the new

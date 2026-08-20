@@ -1,0 +1,328 @@
+schemaVersion: 1
+name: white_only
+entries:
+  - id: e_white_only_0_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.58
+      sliderEvenness: 0.42
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.18
+      sliderWarmth: 0.14
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_1_61_white_breathe
+    pattern: 61_white_breathe
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.28
+      sliderDirection: 0.75
+      sliderLevel: 0.75
+      sliderKick: 0.10
+      sliderRadius: 0.58
+      sliderDepth: 0.68
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.20
+      sliderWarmth: 0.18
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_2_62_white_shimmer
+    pattern: 62_white_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.32
+      sliderDirection: 0.75
+      sliderLevel: 0.70
+      sliderKick: 0.08
+      sliderRadius: 0.42
+      sliderDensity: 0.52
+      sliderSharpness: 0.76
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.22
+      sliderWarmth: 0.08
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_3_63_white_chase
+    pattern: 63_white_chase
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.38
+      sliderTailLength: 0.58
+      sliderCount: 0.42
+      sliderWhiteLevel: 0.70
+      sliderWhiteKick: 0.24
+      sliderWarmth: 0.06
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_4_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.22
+      sliderDirection: 0.75
+      sliderLevel: 0.72
+      sliderKick: 0.06
+      sliderRadius: 0.52
+      sliderCeiling: 0.58
+      sliderWarmth: 0.78
+      sliderWhiteLevel: 0.74
+      sliderWhiteKick: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_01_ivory_cathedral
+    pattern: white_only/01_ivory_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderRadius: 0.5
+      sliderSharpness: 0.5
+      sliderCount: 0.5
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_02_moon_breath
+    pattern: white_only/02_moon_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBreathDepth: 0.55
+      sliderRibbing: 0.45
+      sliderFieldDetail: 0.65
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_03_silver_current
+    pattern: white_only/03_silver_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCurrentWidth: 0.5
+      sliderShimmer: 0.75
+      sliderDetail: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_04_frost_lattice
+    pattern: white_only/04_frost_lattice
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLatticeScale: 0.5
+      sliderDetail: 0.55
+      sliderLevel: 0.72
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_05_snowfall
+    pattern: white_only/05_snowfall
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDensity: 0.68
+      sliderIntensity: 0.95
+      sliderLevel: 0.72
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_06_lighthouse_watch
+    pattern: white_only/06_lighthouse_watch
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderWidth: 0.5
+      sliderSafetyFloor: 0.5
+      sliderLevel: 0.72
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_07_ivory_wake
+    pattern: white_only/07_ivory_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSpiralWidth: 0.5
+      sliderWakeContrast: 0.32
+      sliderLevel: 0.75
+      sliderPulse: 0.3
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_08_horizon_breath
+    pattern: white_only/08_horizon_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderHorizonWidth: 0.42
+      sliderBreathDepth: 0.55
+      sliderAfterglow: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_09_rib_vault
+    pattern: white_only/09_rib_vault
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderRibCount: 0.5
+      sliderRibWidth: 0.52
+      sliderBow: 0.48
+      sliderLevel: 0.68
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_10_marble_caustics
+    pattern: white_only/10_marble_caustics
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.5
+      sliderRipple: 0.35
+      sliderDepth: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_11_pale_garden
+    pattern: white_only/11_pale_garden
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderFrondDensity: 0.5
+      sliderLevel: 0.72
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_12_porthole_liner
+    pattern: white_only/12_porthole_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDetail: 0.5
+      sliderFlare: 0.35
+      sliderLevel: 0.65
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_13_tidal_crossing
+    pattern: white_only/13_tidal_crossing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderWaveWidth: 0.56
+      sliderRecoil: 0.48
+      sliderContrast: 0.58
+      sliderLevel: 0.62
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_14_pale_maelstrom
+    pattern: white_only/14_pale_maelstrom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderArmWidth: 0.58
+      sliderArmCount: 0.32
+      sliderDepth: 0.56
+      sliderLevel: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_15_ivory_louvers
+    pattern: white_only/15_ivory_louvers
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderSlatCount: 0.48
+      sliderOpen: 0.5
+      sliderEdgeGlow: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_16_frosted_panes
+    pattern: white_only/16_frosted_panes
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderPaneSize: 0.5
+      sliderSeamWidth: 0.34
+      sliderDrift: 0.4
+      sliderSeamGlow: 0.62
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_17_moon_pearls
+    pattern: white_only/17_moon_pearls
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderPearlCount: 0.48
+      sliderPearlSize: 0.36
+      sliderLinkGlow: 0.45
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_18_paper_fold
+    pattern: white_only/18_paper_fold
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCreaseCount: 0.48
+      sliderFoldAngle: 0.42
+      sliderCreaseWidth: 0.24
+      sliderFacetDepth: 0.58
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_19_silver_frames
+    pattern: white_only/19_silver_frames
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.76
+      sliderFrameCount: 0.46
+      sliderFrameWidth: 0.24
+      sliderTwist: 0.44
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_20_frost_branch
+    pattern: white_only/20_frost_branch
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBranchCount: 0.52
+      sliderGrowth: 0.58
+      sliderHold: 0.46
+      sliderMelt: 0.34
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null

@@ -1,5 +1,9 @@
 # CaptainPad Configuration
-# Default engine address. This is the single source of truth — the app fails
-# to boot if this key is missing. Use the Config tab in CaptainPad (writes to
-# AsyncStorage) to override per-device at runtime without touching this file.
+# LAST-RESORT engine address. utils/apiBase.ts resolves the engine in a fixed,
+# documented order: (1) the AsyncStorage `API_BASE` override written by the
+# Config tab, (2) the host the app was SERVED from (web page host / native Metro
+# host) on the pinned engine port 6968, (3) this key. So this value only takes
+# effect when CaptainPad runs ON the engine host (bench/dev) or in a bare test
+# env with no serving host — an iPad derives the show machine automatically.
+# The app still fails to boot if this key is missing or not a string.
 api_base: "http://127.0.0.1:6968"

@@ -1,63 +1,61 @@
 /*
-  21_pelagic_manta_rays.js — HD, audio-reactive oceanic manta-ray shadows.
+  21_pelagic_manta_rays.js — two anatomically readable manta rays crossing a
+  deep pelagic current, one swimming bowward and one sternward.
 
-  IDENTITY (preserved): smooth manta-ray silhouettes gliding across the rig in a
-  sea<->reef palette, with white-foam crests and a UV undertow. Strict cp1<->cp2
-  blended in RGB-space.
+  IDENTITY
+    The Hull Canvas and Silhouette carry two broad, swept-wing manta forms:
+    rounded nose, cephalic lobes, spine, attached wing veins, concave trailing
+    edge, and a tapering tail. Jewelry catches sparse white foam. Organs hold
+    quiet palette-colored current markers. Both TE signs use the same fixture-
+    local manta procession, giving them an exact, continuously readable twin.
 
-  WHAT'S NEW
-    - render3D coords are 0..1 (no re-normalize — old (x+1.264)/3.125 was a
-      black-rendering regression).
-    - localSpeed drives delta-accumulated swim phases (creeps at 0, ~4x at 1).
-    - Guarded `direction` control + AUTONOMOUS direction variation: the glide
-      sign is the product of the user dir and a slow incommensurate auto-flip
-      that OCCASIONALLY reverses on its own (period ~1/√7 turns), never in
-      lockstep with the other patterns.
-    - Audio sliders: level (PRIMARY brightness), kick (foam/brightness pop),
-      radius (how far the rays travel + wing span), detail (wing-ripple sparkle).
+  MOTION
+    Independent forward clocks use irrationally related rates (1 and 1/sqrt2)
+    while a third sqrt3-related clock moves the current. All accumulators wrap
+    far from their fractional consumers, so live edits and long runs stay
+    continuous. Local Speed is the only rate control.
 
-  NON-REPEATING MATH
-    Two swim phases accumulate at incommensurate rates (1.0 and 0.47), a third
-    colour drift at 0.31, an auto-direction phase at 1/√7 ≈ 0.37796. Manta Y is
-    sin(swimA + nx*3.6) + 0.5*sin(swimB - nx*5.0): the 3.6/5.0 spatial freqs and
-    the 1.0/0.47 temporal ratio are mutually irrational so the silhouette never
-    re-locks. Phases wrap at PHASE_WRAP=10000 turns (far from any in-frame use).
+  COLOR
+    Every RGB output is a straight RGB-space interpolation between the two
+    operator palette endpoints. No authored third tint exists. White Foam uses
+    the dedicated W+A lanes, and UV Undertow uses only UV-capable fixtures.
+
+  CONTROL OWNERSHIP (physical MIDI order preserved)
+    localSpeed — all manta, current, wing and sign motion rates.
+    level      — visible-water and manta luminance.
+    kick       — transient body, wake, and foam lift.
+    radius     — manta length and wing span, never speed or hardness.
+    detail     — attached anatomy and current-filament definition.
+    whiteFoam  — sparse Jewelry white strength.
+    uvUndertow — violet strength on bars and pars only.
 
   AUDIO_MODULATION_V1:
-    sliderLevel  <- micLow  range 0.40..1.00 curve linear # PRIMARY brightness (bass)
-    sliderKick   <- micKick range 0.00..1.00 curve linear # foam / brightness pop (beat)
-    sliderRadius <- micFlux range 0.40..0.90 curve linear # travel + wing span (build)
-    sliderDetail <- micHigh range 0.30..0.90 curve linear # wing-ripple sparkle
-  # sliderLevel range floor is 0.40 (not 0.30): below ~0.40 the dimmer manta
-  # bodies stop spanning cp2 and hueSpread falls under 0.10.
-  # Static (not audio-mapped): localSpeed, direction, whiteFoam, uvUndertow,
-  # colorPalette1/2 — operator-set, not modulated.
+    sliderLevel  <- micLow  range 0.28..1.00 curve linear # bass reveals the rays
+    sliderKick   <- micKick range 0.00..1.00 curve pow2   # beat foam/ocean punch
+    sliderRadius <- micFlux range 0.32..0.92 curve linear # builds widen coherent wings
+    sliderDetail <- micHigh range 0.25..0.95 curve linear # highs articulate anatomy
+  Static params: localSpeed, whiteFoam, uvUndertow, colorPalette1/2.
 */
 
-// ── Exported controls (UI order = declaration order) ──────────────────────────
-export var localSpeed = 0.5;
-export var direction = 0.75;   // 0..1; 0.5 center (guarded). >0.5 = forward glide;
-                               // a directional glide is the oceanic identity (not 0.5).
-export var level = 0.7;        // PRIMARY: overall brightness (audio: micLow). 0.7 not
-                               // 0.5: below ~0.6 the dimmer manta bodies stop spanning
-                               // cp2 and hueSpread falls under 0.10. 0.7 = lit + 2-colour.
-export var kick = 0.0;         // brightness/foam pop (audio: micKick); 0 = no pop until beat
-export var radius = 0.5;       // travel distance + wing span (audio: micFlux)
-export var detail = 0.5;       // wing-ripple sparkle (audio: micHigh)
-export var whiteFoam = 0.55;   // white foam crest amount (og default: prominent foam crest)
-export var uvUndertow = 0.3;   // UV undertow amount
+// Canonical append-only optional roles. Self-declaration preserves compilation
+// on portable models where an absent role simply has no matching pixels.
+var FIX_RAW_LED = 1;
+var FIX_TE_SIGN = 7;
 
-export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Sea (og default)
-export var cp2H = 0.44, cp2S = 1.0, cp2V = 1.0; // Reef (og default)
+export var localSpeed = 0.5;
+export var level = 0.7;
+export var kick = 0.0;
+export var radius = 0.5;
+export var detail = 0.5;
+export var whiteFoam = 0.55;
+export var uvUndertow = 0.3;
+
+export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0;
+export var cp2H = 0.44, cp2S = 1.0, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) {
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
-}
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
@@ -65,23 +63,8 @@ export function sliderDetail(v) { detail = v; }
 export function sliderWhiteFoam(v) { whiteFoam = v; }
 export function sliderUvUndertow(v) { uvUndertow = v; }
 
-// ── Tunables ──────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.32;          // swim turns/sec at localSpeed = 1
-var PHASE_WRAP = 10000.0;
-
-// ── Persistent phases (delta-accumulated; §6/§7) ──────────────────────────────
-var swimA = 0.0;
-var swimB = 0.0;
-var colDrift = 0.0;
-var autoDir = 0.0;            // slow auto-direction phase
-var swimAng = 0.0;            // swimA*TAU cached for render
-var swimBng = 0.0;
-var colAng = 0.0;
-var effDir = 1.0;             // resolved glide sign this frame
-
-// ── Palette RGB cache ─────────────────────────────────────────────────────────
-var pr1 = 1, pg1 = 0, pb1 = 0;
-var pr2 = 0, pg2 = 0, pb2 = 1;
+var pr1 = 1.0, pg1 = 0.0, pb1 = 0.0;
+var pr2 = 0.0, pg2 = 0.0, pb2 = 1.0;
 function _hsv2rgb1() {
   var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
   var iv = floor(hv * 6) % 6;
@@ -94,7 +77,7 @@ function _hsv2rgb1() {
   else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
   else if (iv == 3) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
   else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
-  else             { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
+  else              { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
 }
 function _hsv2rgb2() {
   var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
@@ -108,94 +91,243 @@ function _hsv2rgb2() {
   else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
   else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
   else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = cp2V; }
-  else             { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
+  else              { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
 }
+
+function clamp01(v) {
+  if (v < 0.0) return 0.0;
+  if (v > 1.0) return 1.0;
+  return v;
+}
+
+function wrappedDelta(v, center) {
+  var d = v - center;
+  if (d > 0.5) d = d - 1.0;
+  if (d < -0.5) d = d + 1.0;
+  return d;
+}
+
+function softCore(distance, width) {
+  var qv = 1.0 - clamp01(distance / max(0.001, width));
+  return qv * qv * (3.0 - 2.0 * qv);
+}
+
+// Planform in the ray's moving frame. `forward` points toward the rounded
+// nose; `lateral` spans the wings. The rear boundary recedes toward each
+// wingtip, producing the manta's characteristic concave trailing edge.
+function mantaBody(forward, lateral, bodyLength, wingSpan, flap) {
+  var side = lateral / max(0.001, wingSpan);
+  var sideAbs = abs(side);
+  if (sideAbs >= 1.0) return 0.0;
+
+  var liftedSide = side - flap * sin(side * PI) * 0.72;
+  sideAbs = abs(liftedSide);
+  if (sideAbs >= 1.0) return 0.0;
+
+  var along = forward / max(0.001, bodyLength);
+  var rear = -0.22 - pow(sideAbs, 1.36) * 0.58;
+  var front = 0.60 - pow(sideAbs, 1.72) * 0.25;
+  if (along <= rear || along >= front) return 0.0;
+
+  var rearFade = clamp01((along - rear) / 0.16);
+  var frontFade = clamp01((front - along) / 0.15);
+  var tipFade = clamp01((1.0 - sideAbs) / 0.12);
+  var core = rearFade * frontFade * tipFade;
+  return core * core * (3.0 - 2.0 * core);
+}
+
+function mantaTail(forward, lateral, bodyLength, wingSpan) {
+  var along = forward / max(0.001, bodyLength);
+  if (along >= -0.14 || along <= -1.58) return 0.0;
+  var tailProgress = clamp01((-along - 0.14) / 1.44);
+  var tailWidth = wingSpan * (0.070 - tailProgress * 0.052);
+  var centerCurl = sin(tailProgress * PI * 1.35) * wingSpan * 0.055;
+  return softCore(abs(lateral - centerCurl), tailWidth)
+       * pow(1.0 - tailProgress, 0.48);
+}
+
+function mantaAnatomy(forward, lateral, bodyLength, wingSpan, body, phase) {
+  if (body <= 0.001) return 0.0;
+  var along = forward / max(0.001, bodyLength);
+  var side = lateral / max(0.001, wingSpan);
+  var sideAbs = abs(side);
+
+  // Spine and two cephalic lobes stay attached to the nose.
+  var spine = softCore(abs(lateral), wingSpan * 0.075)
+            * softCore(abs(along - 0.12), 0.72) * body;
+  var lobeAlong = abs(along - 0.48);
+  var lobeSide = abs(sideAbs - 0.16);
+  var lobes = softCore(lobeAlong, 0.16) * softCore(lobeSide, 0.105) * body;
+
+  // Curved wing ribs radiate from the spine and remain in the moving frame.
+  var ribCoord = sideAbs * (3.20 + detail * 2.35)
+               + along * (0.42 + sideAbs * 0.58) + phase * 0.035;
+  var ribs = pow(wave(ribCoord), 13.0) * body * sideAbs;
+
+  // A thin leading edge makes the swept planform readable at ship distance.
+  var front = 0.60 - pow(sideAbs, 1.72) * 0.25;
+  var edge = softCore(abs(front - along), 0.055) * body;
+  return clamp01(spine * 0.72 + lobes * 0.88 + ribs * 0.78 + edge * 0.62);
+}
+
+var PHASE_WRAP = 10000.0;
+var swimA = 0.08;
+var swimB = 0.57;
+var wingPhase = 0.0;
+var currentPhase = 0.0;
+var levelGain = 1.0;
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
-  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  // Autonomous direction: a slow incommensurate phase whose sin gives a smooth
-  // bias that occasionally crosses zero -> organic self-reversal. Combined with
-  // the user's guarded direction so the user still has authority over the bias.
-  autoDir = autoDir + dt * localMultiplier * 0.37796;   // 1/√7 turns/sec base
-  if (autoDir >= PHASE_WRAP) autoDir = autoDir - PHASE_WRAP;
-  var autoBias = sin(autoDir * 6.2831853 * 0.18);       // slow swell, ~ -1..1
-  var blended = direction * (0.55 + 0.45 * autoBias);   // user dir modulated by auto swell
-  effDir = blended >= 0.0 ? 1.0 : -1.0;
-  if (blended < 0.04 && blended > -0.04) effDir = (autoBias >= 0.0) ? 1.0 : -1.0;
+  var rate = pow(2.0, (localSpeed - 0.5) * 4.0);
+  swimA = swimA + dt * (0.014 + rate * 0.043);
+  swimB = swimB + dt * (0.011 + rate * 0.0304056);
+  wingPhase = wingPhase + dt * (0.019 + rate * 0.071);
+  currentPhase = currentPhase + dt * (0.008 + rate * 0.024826);
 
-  // Travel rate scales gently with radius (audio: bigger reach -> faster glide).
-  var rate = dt * localMultiplier * MAX_RATE * (0.7 + radius * 0.6) * effDir;
-  swimA = swimA + rate;        if (swimA >= PHASE_WRAP) swimA = swimA - PHASE_WRAP; if (swimA < 0.0) swimA = swimA + PHASE_WRAP;
-  swimB = swimB + rate * 0.47; if (swimB >= PHASE_WRAP) swimB = swimB - PHASE_WRAP; if (swimB < 0.0) swimB = swimB + PHASE_WRAP;
-  colDrift = colDrift + dt * localMultiplier * 0.31; if (colDrift >= PHASE_WRAP) colDrift = colDrift - PHASE_WRAP;
+  if (swimA >= PHASE_WRAP) swimA = swimA - PHASE_WRAP;
+  if (swimB >= PHASE_WRAP) swimB = swimB - PHASE_WRAP;
+  if (wingPhase >= PHASE_WRAP) wingPhase = wingPhase - PHASE_WRAP;
+  if (currentPhase >= PHASE_WRAP) currentPhase = currentPhase - PHASE_WRAP;
 
-  swimAng = swimA * 6.2831853;
-  swimBng = swimB * 6.2831853;
-  colAng = colDrift * 6.2831853;
-
+  levelGain = 0.22 + level * 1.12;
   _hsv2rgb1();
   _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
-  var nx = max(0.0, min(1.0, x));
-  var ny = max(0.0, min(1.0, y));
+  var nx = clamp01(x);
+  var ny = clamp01(y);
+  var nz = clamp01(z);
 
-  // Manta silhouette: wing span and vertical travel grow with `radius`.
-  var span = 0.18 + radius * 0.34;
-  var swing = 0.12 + radius * 0.16;
-  var mantaY = 0.48 + sin(swimAng + nx * 3.6) * swing + sin(swimBng - nx * 5.0) * swing * 0.5;
-  var wing = abs(ny - mantaY);
-  var body = max(0.0, 1.0 - wing / span);
-  body = pow(body, 2.0 + (1.0 - radius) * 1.5);  // crisp core; tighter when small
+  var isBar = fixtureType == FIX_BAR_18;
+  var isRaw = fixtureType == FIX_RAW_LED;
+  var isVintage = fixtureType == FIX_VINTAGE_6;
+  var isPar = fixtureType == FIX_PAR;
+  var isSign = fixtureType == FIX_TE_SIGN;
 
-  // Wing ripple sparkle (audio: micHigh -> detail).
-  var wingRipple = wave(nx * 3.2 + sin(swimBng + ny * 4.0) * 0.35);
-  // Rolling ocean swell: a pow curve sharpens it into bright crests over deeper
-  // troughs so the wash reads HIGH-DEF (crisp moving light over darker water),
-  // not a flat field -- while it still sweeps the WHOLE rig (wash identity kept).
-  var rollingLight = wave(ny * 2.0 - nx * 0.7 + colAng * 0.62 / 6.2831853);
-  rollingLight = pow(rollingLight, 2.2);
-  // A low non-black ambient floor (calm-but-visible in silence) + the swell crests
-  // + a crisp manta body crest. The bright cores ride well above the deep troughs
-  // so the bright/dark ratio is high (HD), without losing the lit wash.
-  var ocean = 0.06 + rollingLight * 0.5 + body * (0.6 + wingRipple * (0.12 + detail * 0.5));
+  // Both 74-pixel signs deliberately depend on fixture-local index and shared
+  // clocks only. Matching local indices therefore emit byte-identical RGBW,
+  // an exact left/right energy and legibility proof.
+  if (isSign) {
+    var signX = clamp01(pixelLocalIndex / 73.0);
+    var signCenterA = swimA - floor(swimA);
+    var signCenterB = 1.0 - (swimB - floor(swimB));
+    var signDistA = abs(wrappedDelta(signX, signCenterA));
+    var signDistB = abs(wrappedDelta(signX, signCenterB));
+    var signRayA = softCore(signDistA, 0.155 + radius * 0.115);
+    var signRayB = softCore(signDistB, 0.135 + radius * 0.095);
+    var signWingA = signRayA * (0.74 + wave(signX * 5.0 - wingPhase) * 0.26);
+    var signWingB = signRayB * (0.72 + wave(signX * 4.0 + wingPhase * 0.7071) * 0.28);
+    var signCurrent = wave(signX * 1.61803 - currentPhase * 0.71)
+                    * wave(signX * 2.41421 + currentPhase * 0.43);
+    var signFloor = 0.205 + level * 0.105;
+    var signValue = (signFloor + signCurrent * 0.080
+                    + signWingA * 0.36 + signWingB * 0.31
+                    + kick * (signRayA + signRayB) * 0.16)
+                   * (0.72 + level * 0.28);
+    var signMix = clamp01(0.16 + signCurrent * 0.24
+                         + signRayA * 0.22 + signRayB * 0.66);
+    var signR = (pr1 + (pr2 - pr1) * signMix) * signValue;
+    var signG = (pg1 + (pg2 - pg1) * signMix) * signValue;
+    var signB = (pb1 + (pb2 - pb1) * signMix) * signValue;
+    rgbwau(clamp01(signR), clamp01(signG), clamp01(signB), 0.0, 0.0, 0.0);
+    return;
+  }
 
-  // PRIMARY brightness gain (audio: micLow -> level). Level-driven gain does NOT
-  // wobble with animation phase -> high corr. Small floor keeps silence visible.
-  var gain = 0.16 + level * 1.3 + kick * 0.5;
-  ocean = ocean * gain;
-  ocean = max(0.0, min(1.4, ocean));
+  var centerAX = swimA - floor(swimA);
+  var centerBX = 1.0 - (swimB - floor(swimB));
+  var centerAY = 0.64 + sin(swimB * PI2 * 0.7071) * 0.055;
+  var centerBY = 0.34 + sin(swimA * PI2 * 0.57735 + 1.9) * 0.048;
+  var bodyLength = 0.115 + radius * 0.235;
+  var wingSpan = 0.085 + radius * 0.205;
+  var flapA = sin(wingPhase * PI2) * (0.035 + radius * 0.030);
+  var flapB = sin(wingPhase * PI2 * 0.7071 + 2.2) * (0.030 + radius * 0.027);
 
-  // Colour: a wide spatial gradient sweeps cp1(sea, low nx) -> cp2(reef, high
-  // nx) across the whole rig, and the manta body pushes hard toward cp2 — so
-  // BOTH palette ends are always present (drives hueSpread). Slow drift keeps it
-  // alive even in silence.
-  // Colour spans the rig along nx (the only axis with full 0..1 range on the
-  // bars): left = cp1 sea-blue, right = cp2 reef-green. A slow drift slides the
-  // boundary; the manta body pushes its pixels toward cp2. Both ends always lit.
-  var sweep = nx + 0.18 * sin(colAng * 0.31 + ny * 2.0);
-  // The nx sweep (full 0..1 across the bars) guarantees BOTH palette ends are lit;
-  // the manta body only nudges its pixels toward cp2 (reef) so wide wings (radius
-  // high) don't collapse the rig onto one hue -- keeps hueSpread up at all radii.
-  var colorMix = sweep * (1.0 - body * 0.4) + body * 0.45;
-  colorMix = max(0.0, min(1.0, colorMix));
-  // Gentle S-curve pushes pixels toward the two palette ENDS (more two-colour,
-  // fewer washed mid-hues) while keeping a smooth gradient.
-  colorMix = colorMix * colorMix * (3.0 - 2.0 * colorMix);
-  colorMix = colorMix * colorMix * (3.0 - 2.0 * colorMix);
-  var r = (pr1 + (pr2 - pr1) * colorMix) * ocean;
-  var g = (pg1 + (pg2 - pg1) * colorMix) * ocean;
-  var b = (pb1 + (pb2 - pb1) * colorMix) * ocean;
+  var forwardA = wrappedDelta(nx, centerAX);
+  var forwardB = -wrappedDelta(nx, centerBX);
+  var lateralA = ny - centerAY;
+  var lateralB = ny - centerBY;
+  var bodyA = mantaBody(forwardA, lateralA, bodyLength, wingSpan, flapA);
+  var bodyB = mantaBody(forwardB, lateralB, bodyLength * 0.88,
+                        wingSpan * 0.82, flapB);
+  var tailA = mantaTail(forwardA, lateralA, bodyLength, wingSpan);
+  var tailB = mantaTail(forwardB, lateralB, bodyLength * 0.88, wingSpan * 0.82);
+  var anatomyA = mantaAnatomy(forwardA, lateralA, bodyLength, wingSpan,
+                              bodyA, wingPhase);
+  var anatomyB = mantaAnatomy(forwardB, lateralB, bodyLength * 0.88,
+                              wingSpan * 0.82, bodyB, -wingPhase * 0.7071);
 
-  // White foam crest + UV undertow; foam pops on the kick.
-  var foamLine = pow(max(0.0, 1.0 - abs(ny - 0.88) * 7.0), 2.0);
-  var white = min(1.0, (foamLine * rollingLight + body * 0.22) * whiteFoam * (1.0 + kick * 1.5));
-  var uv = min(1.0, ((1.0 - ny) * rollingLight * 0.5 + body * 0.25) * uvUndertow);
+  // Theme-specific pelagic current: two oblique pressure sheets plus fine
+  // depth filaments. Their irrational ratios prevent generic field repetition.
+  var broadCurrent = wave(nx * 0.83 - ny * 1.37 + nz * 0.61
+                         - currentPhase * 0.83);
+  var crossingCurrent = wave(nx * 1.41421 + ny * 0.71 - nz * 1.19
+                            + currentPhase * 0.57735);
+  var current = broadCurrent * crossingCurrent;
+  var filament = pow(wave(nx * 3.17 - ny * 2.73 + nz * 2.41421
+                         + currentPhase * 0.31), 10.0) * detail;
 
-  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, 0.0, uv);
+  var wakeA = 0.0;
+  var wakeB = 0.0;
+  if (forwardA < -bodyLength * 0.10 && forwardA > -bodyLength * 1.70) {
+    wakeA = softCore(abs(lateralA), wingSpan * 0.58)
+          * clamp01(1.0 + forwardA / (bodyLength * 1.70));
+  }
+  if (forwardB < -bodyLength * 0.09 && forwardB > -bodyLength * 1.48) {
+    wakeB = softCore(abs(lateralB), wingSpan * 0.50)
+          * clamp01(1.0 + forwardB / (bodyLength * 1.48));
+  }
+
+  var body = max(bodyA, bodyB);
+  var tails = max(tailA, tailB);
+  var anatomy = max(anatomyA, anatomyB) * detail;
+  var wakes = wakeA * 0.62 + wakeB * 0.54;
+  var water = 0.072 + current * 0.115 + filament * 0.075;
+  var rayValue = bodyA * 0.72 + bodyB * 0.66 + tails * 0.62
+               + anatomy * 0.72 + wakes * 0.16;
+  var value = (water + rayValue + kick * (body * 0.44 + wakes * 0.12))
+            * levelGain;
+
+  var mixField = 0.18 + broadCurrent * 0.20 + crossingCurrent * 0.12;
+  var colorMix = clamp01(mixField * (1.0 - bodyA * 0.70 - bodyB * 0.70)
+                        + bodyA * 0.14 + bodyB * 0.86
+                        + anatomyB * 0.10);
+
+  var white = 0.0;
+  var uv = 0.0;
+  if (isRaw) {
+    // Direct-view strands emphasize the complete silhouette and tail.
+    value = (water * 0.72 + pow(body, 0.62) * 0.82 + tails * 0.74
+            + anatomy * 0.86 + wakes * 0.12 + kick * body * 0.32) * levelGain;
+  } else if (isVintage) {
+    var foam = pow(wave(pixelLocalIndex * 0.381966 + nx * 1.73
+                       - currentPhase * 0.77 + body * 0.37), 12.0);
+    foam = foam * (body * 0.78 + tails * 0.18 + current * 0.22);
+    value = (0.055 + current * 0.095 + body * 0.42 + anatomy * 0.34
+            + foam * 0.52 + kick * foam * 0.45) * levelGain;
+    white = clamp01(foam * whiteFoam * (1.20 + level * 2.30)
+                  * (1.0 + kick * 1.25));
+  } else if (isPar) {
+    // Single-pixel organs carry slow pressure markers, still palette-only.
+    var organCurrent = wave(nx * 0.71 + ny * 1.13 + nz * 1.61
+                           - currentPhase * 0.57);
+    value = (0.075 + organCurrent * 0.15 + body * 0.31
+            + kick * (0.06 + body * 0.16)) * levelGain;
+    colorMix = clamp01(0.22 + organCurrent * 0.58 + bodyB * 0.18);
+    uv = clamp01((organCurrent * 0.07 + body * 0.12)
+               * uvUndertow * (0.38 + level * 0.60));
+  } else if (isBar) {
+    uv = clamp01((current * 0.075 + body * 0.24 + anatomy * 0.10
+                 + kick * body * 0.12)
+               * uvUndertow * (0.40 + level * 0.72));
+  }
+
+  var r = (pr1 + (pr2 - pr1) * colorMix) * value;
+  var g = (pg1 + (pg2 - pg1) * colorMix) * value;
+  var b = (pb1 + (pb2 - pb1) * colorMix) * value;
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), white, white, uv);
 }

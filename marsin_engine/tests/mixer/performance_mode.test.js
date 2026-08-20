@@ -28,7 +28,10 @@ const h = createEngineHarness({
   scene: SCENE,
   pattern: '13_sparkle',
   prefix: 'marsin-perf',
-  portBase: 6960,
+  // Never overlap the operator stack (:6966-:6972). This suite restarts its
+  // engine and the engine correctly claims its configured port, so a low range
+  // here could kill a supervised live bridge before the test even begins.
+  portBase: 31600,
   portSpan: 30,
 });
 const { api, stateDir, port } = h;
@@ -202,10 +205,13 @@ test('while active: gated routes 409 PERFORMANCE_MODE; allowed routes pass', asy
     ['POST', '/playlists', { name: 'p' }],
     ['DELETE', '/playlists/whatever', null],
     ['PUT', '/api/playlists/p/items/i/midi-mappings/m', {}],
-    ['POST', '/deck/playlist', { name: 'p' }],
+    // NOTE: POST /deck/playlist and POST /mixer/channels/:id/playlist left this
+    // table on 2026-08-16 (report `_283`) — the operator opened playlist
+    // CHANGING during a show. They are asserted OPEN below. The split-pane
+    // BINDING route and both capture routes stay gated: binding a second pane
+    // is structural, and capture writes to disk.
     ['POST', '/deck/playlist/secondary', { name: 'p' }],
     ['POST', '/deck/playlist/capture', {}],
-    ['POST', '/mixer/channels/ch_x/playlist', { name: 'p' }],
     ['POST', '/mixer/channels/ch_x/playlist/capture', {}],
     ['POST', '/mixer/snapshots', { name: 'foo' }],
     ['POST', '/mixer/snapshots/foo/recall', {}],
@@ -257,6 +263,69 @@ test('while active: gated routes 409 PERFORMANCE_MODE; allowed routes pass', asy
   }
 
   await exitKeep();
+});
+
+// ── 3b. PLAYLIST CHANGING IS OPEN DURING A SHOW (report `_283`) ────────────
+// Operator ruling 2026-08-16: "in the performance mode, allow playlist changing
+// in the deck and mixer too." This pins BOTH halves — the switch is accepted
+// and really takes effect, AND it stays non-persistent and non-structural, so
+// the lock keeps meaning what it meant.
+test('while active: deck + mixer playlist SWITCH is accepted, freezes disk, and RESTORE puts back the pre-show playlist', async () => {
+  await ensureInactive();
+  await api('POST', '/settings', { autoSave: true });
+  const chId = await ensureMixerChannel();
+  assert.ok(chId, 'need a mixer channel for the playlist swap probe');
+
+  // Two playlists, built OUTSIDE the show — CRUD is still gated.
+  await api('POST', '/playlists', { name: 'perf_swap_a', entries: [
+    { id: 'psa_1', pattern: '01_cylon_sweep', label: 'A one', defaults: {} },
+  ] });
+  await api('POST', '/playlists', { name: 'perf_swap_b', entries: [
+    { id: 'psb_1', pattern: '13_sparkle', label: 'B one', defaults: {} },
+  ] });
+
+  // Go live on A, on both surfaces.
+  await api('POST', '/deck/playlist', { name: 'perf_swap_a' });
+  await api('POST', `/mixer/channels/${chId}/playlist`, { name: 'perf_swap_a' });
+  await new Promise((r) => setTimeout(r, 200));
+
+  await enter();
+  const deckBefore = readBytes(DECK_FILE());
+  const mixerBefore = readBytes(MIXER_FILE());
+
+  // THE OPERATOR ASK: change the playlist mid-show, on both surfaces.
+  const deckSwap = await api('POST', '/deck/playlist', { name: 'perf_swap_b' });
+  assert.equal(deckSwap.status, 200, 'deck playlist switch accepted while live');
+  const mixSwap = await api('POST', `/mixer/channels/${chId}/playlist`, { name: 'perf_swap_b' });
+  assert.equal(mixSwap.status, 200, 'mixer playlist switch accepted while live');
+  await new Promise((r) => setTimeout(r, 250));
+
+  // It really took effect on both.
+  const deckNow = await api('GET', '/deck/playlist');
+  assert.equal(deckNow.data && deckNow.data.name, 'perf_swap_b', 'deck is playing B');
+  const mixNow = await api('GET', `/mixer/channels/${chId}/playlist`);
+  assert.equal(mixNow.data && mixNow.data.name, 'perf_swap_b', 'mixer channel is playing B');
+
+  // …and wrote NOTHING. The show lock still freezes disk (effectiveAutoSave),
+  // which is exactly why opening this route does not weaken the lock.
+  assert.deepEqual(readBytes(DECK_FILE()), deckBefore, 'deck_state frozen while live');
+  assert.deepEqual(readBytes(MIXER_FILE()), mixerBefore, 'mixer_state frozen while live');
+
+  // The targeted allowance is TARGETED: structural + persistent playlist work
+  // on the very same surfaces is still refused.
+  const create = await api('POST', '/playlists', { name: 'perf_swap_c' });
+  assert.equal(create.status, 409, 'playlist CRUD still 409s while live');
+  const cap = await api('POST', '/deck/playlist/capture', {});
+  assert.equal(cap.status, 409, 'deck playlist capture still 409s while live');
+  const sec = await api('POST', '/deck/playlist/secondary', { name: 'perf_swap_b' });
+  assert.equal(sec.status, 409, 'split-pane binding still 409s while live');
+
+  // RESTORE returns the rig to the playlist it went live with.
+  await exitRestore();
+  await new Promise((r) => setTimeout(r, 400));
+  const deckAfter = await api('GET', '/deck/playlist');
+  assert.equal(deckAfter.data && deckAfter.data.name, 'perf_swap_a',
+    'RESTORE puts back the pre-show deck playlist');
 });
 
 // ── 4. same gated routes are non-409 after exit ────────────────────────────
@@ -377,8 +446,8 @@ test('exit RESTORE reverts fader, shared param, and re-broadcasts mixer', async 
   assert.ok(!fs.existsSync(SNAPSHOT_FILE()), 'snapshot deleted after RESTORE');
 });
 
-// ── 8. crash-restart: SIGKILL mid-performance boots inactive + clean disk ───
-test('SIGKILL mid-performance → respawn boots inactive, state byte-equal pre-show, stale snapshot gone', async () => {
+// ── 8. crash-restart: restore pre-show look but retain global lock ───────────
+test('SIGKILL mid-performance → respawn restores look and resumes global lock', async () => {
   await ensureInactive();
   await api('POST', '/settings', { autoSave: true });
   const chId = await firstMixerChannelId();
@@ -406,10 +475,13 @@ test('SIGKILL mid-performance → respawn boots inactive, state byte-equal pre-s
   await h.waitForReady();
 
   const pm = await api('GET', '/performance-mode');
-  assert.equal(pm.data.active, false, 'crash-restart boots inactive');
-  assert.ok(!fs.existsSync(SNAPSHOT_FILE()), 'stale pre-show snapshot removed at boot');
+  assert.equal(pm.data.active, true, 'crash-restart resumes the fail-safe global lock');
+  assert.ok(fs.existsSync(SNAPSHOT_FILE()), 'pre-show snapshot retained for explicit operator exit');
   assert.deepEqual(readBytes(DECK_FILE()), deckPre, 'deck_state.yaml byte-equal pre-show after crash');
   assert.deepEqual(readBytes(MIXER_FILE()), mixerPre, 'mixer_state.yaml byte-equal pre-show after crash');
+  const explicitExit = await exitKeep();
+  assert.equal(explicitExit.status, 200, 'operator can deliberately end resumed Performance mode');
+  assert.ok(!fs.existsSync(SNAPSHOT_FILE()), 'explicit exit removes the restart marker');
 });
 
 // ── 9. fail-loud 400s ──────────────────────────────────────────────────────
@@ -448,8 +520,9 @@ test('fail-loud 400s: double-enter, idle-exit, missing exitAction, reserved name
 test('dirty deck tuning surfaces in GET + WS connect replay; invalid exitAction 400', async () => {
   await ensureInactive();
   await api('POST', '/settings', { autoSave: true });
-  // A deck playlist with three entries; load it on the deck (all OUTSIDE perf,
-  // since playlist CRUD + deck load are gated while a show is live).
+  // A deck playlist with three entries; load it on the deck OUTSIDE perf, since
+  // playlist CRUD is gated while a show is live. (The deck LOAD itself is open
+  // during a show since report `_283` — this setup just predates the entry.)
   await api('POST', '/playlists', { name: 'dirty_probe', entries: [
     { id: 'dp_a', pattern: '01_cylon_sweep', label: 'Alpha', defaults: {} },
     { id: 'dp_b', pattern: '13_sparkle', label: 'Bravo', defaults: {} },

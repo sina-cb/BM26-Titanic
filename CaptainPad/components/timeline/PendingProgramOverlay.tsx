@@ -3,7 +3,7 @@
 //
 // Why global: the pending-program lease only arms while the operator is
 // hand-driving in MANUAL and a scheduled show wants the deck. The operator
-// could be on ANY tab (Mixer, Deck, Studio, Audio, OSC, Monitor, Timeline,
+// could be on ANY tab (Mixer, Deck, Studio, Audio, OSC, Timeline,
 // Scheduler, Dimmer, Config) when that happens — so the warning has to float
 // over all of them, not hide inside the Timeline tab. This component is mounted
 // ONCE in app/(tabs)/_layout.tsx as an absolutely-positioned sibling of <Tabs>.
@@ -74,6 +74,15 @@ export const PendingProgramOverlay: React.FC = () => {
 
   // Null lease → render nothing (additive; the rest of the app is untouched).
   if (!pending) return null;
+
+  // ZOOM GUARD (report _95 §3.6). While an EVENT ZOOM lease is held, the engine
+  // DEFERS the pending program's auto-start — it pushes `expiresAtMs` forward to
+  // the zoom lease's own expiry every tick. This strip's countdown would then be
+  // a lie ("auto-starts in 0:29" for a show that will not start until the zoom
+  // exits), so it stands down and the ZoomBanner carries the honest line —
+  // "Show due: … — starts when you exit" — with the same ENABLE affordance.
+  // A PLAIN takeover keeps the shipped 30 s auto-start, and this strip with it.
+  if (state?.zoom) return null;
 
   const onEnable = () => { enableProgram().then((ok) => { if (!ok) flashError('Could not enable — still manual'); }); };
   const onDismiss = () => { dismissProgram().then((ok) => { if (!ok) flashError('Could not dismiss lease'); }); };

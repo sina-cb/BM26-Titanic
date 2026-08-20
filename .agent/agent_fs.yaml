@@ -6,7 +6,7 @@ extra_roots:
   - name: Agent Config
     path: .agent
     access: ro
-    description: "Agent OS — codex, laws (os), runbooks (ops), skills, roles, context, memory, plans, projects, reports"
+    description: "Agent OS — codex, specs (os), runbooks (ops), skills, roles, context, memory, plans, projects, reports"
 # Example:
 #  - name: Diet Tracking
 #    path: data/projects/diet

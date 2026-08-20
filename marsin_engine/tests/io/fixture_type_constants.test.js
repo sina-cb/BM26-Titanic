@@ -29,6 +29,11 @@ test('fixtureTypeId: canonical ids are pinned (renumber = silent re-target)', ()
   assert.equal(fixtureTypeId('ShehdsBar'), 4);
   assert.equal(fixtureTypeId('ChauvetHaze4D'), 5);
   assert.equal(fixtureTypeId('TEFogMachine'), 6);
+  // id 7 appended by report 20260804_145 — both TE sign panel variants are
+  // ONE role (the letterform, not the panel SKU). The 148 sign pixels were
+  // UNTYPED before, so nothing that already resolved to a role moved.
+  assert.equal(fixtureTypeId('TeSignV3A40'), 7);
+  assert.equal(fixtureTypeId('TeSignV3B34'), 7);
 });
 
 test('fixtureTypeId: empty string is the RawLed strand marker (additive, not untyped)', () => {
@@ -48,8 +53,10 @@ test('roleForId / allFixtureRoles: role names follow role+count convention', () 
   assert.equal(roleForId(2), 'FIX_PAR');
   assert.equal(roleForId(3), 'FIX_VINTAGE_6');
   assert.equal(roleForId(4), 'FIX_BAR_18');
+  assert.equal(roleForId(7), 'FIX_TE_SIGN');
   assert.equal(roleForId(0), null);
   assert.ok(allFixtureRoles().includes('FIX_BAR_18'));
+  assert.ok(allFixtureRoles().includes('FIX_TE_SIGN'));
 });
 
 // ── presentTypeIds ────────────────────────────────────────────────

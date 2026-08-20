@@ -14,6 +14,9 @@ import {
   mergeAudioConfig, pickLiveFields, validateLivePatch,
   AUDIO_LIVE_FIELDS,
 } from '../../audio/config/audio_config.js';
+import {
+  loadSceneAudio, saveSceneAudio, sceneAudioPath,
+} from '../../audio/config/audio_config_store.js';
 
 function tmpDir() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'marsin-audio-cfg-'));
@@ -154,7 +157,50 @@ test('validateLivePatch rejects non-numeric values', () => {
 test('validateLivePatch rejects non-object payloads', () => {
   assert.equal(validateLivePatch(null).ok, false);
   assert.equal(validateLivePatch('').ok, false);
+  assert.equal(validateLivePatch([]).ok, false);
+  assert.equal(validateLivePatch({}).ok, false);
   assert.equal(validateLivePatch({ bands: 5 }).ok, false);
+});
+
+test('validateLivePatch rejects every empty nested group before side effects', () => {
+  for (const group of [
+    'bands',
+    'kick',
+    'sub',
+    'bpmTracker',
+    'structureDetector',
+    'capture',
+  ]) {
+    const result = validateLivePatch({ [group]: {} });
+    assert.equal(result.ok, false, `${group} must reject an empty object`);
+    assert.match(result.error, /at least one live-tunable field/);
+  }
+});
+
+test('validateLivePatch still accepts one valid field in every nested group', () => {
+  const cases = [
+    ['bands', { sourceSmoothHz: 0 }],
+    ['kick', { threshold: 2 }],
+    ['sub', { minHz: 30 }],
+    ['bpmTracker', { outputSlewEnabled: true }],
+    ['structureDetector', { enabled: true }],
+    ['capture', { device: null }],
+  ];
+  for (const [group, patch] of cases) {
+    const result = validateLivePatch({ [group]: patch });
+    assert.equal(result.ok, true, `${group}: ${result.error}`);
+    assert.deepEqual(result.live[group], patch);
+  }
+});
+
+test('validateLivePatch and complete validation agree at source smoothing Nyquist', () => {
+  const atNyquist = validateLivePatch({ bands: { sourceSmoothHz: 22050 } });
+  assert.equal(atNyquist.ok, true, atNyquist.error);
+  assert.equal(atNyquist.live.bands.sourceSmoothHz, 22050);
+  assert.equal(
+    validateLivePatch({ bands: { sourceSmoothHz: 22050.01 } }).ok,
+    false,
+  );
 });
 
 test('AUDIO_LIVE_FIELDS is the contract surface', () => {
@@ -180,6 +226,10 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz).
     sub:     ['minHz', 'maxHz'],
+    // bpmTracker: the published-BPM slew ONLY. The band/evidence/silence knobs
+    // re-shape the tempo model and stay config-only, so they must NEVER appear
+    // here — the slew is a pure output smoother, safe to trim mid-show.
+    bpmTracker: ['outputSlewEnabled', 'outputSlewBpmPerSec'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
       'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
@@ -189,6 +239,31 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });
+});
+
+test('validateLivePatch round-trips the published-BPM slew and rejects bad values', () => {
+  const ok = validateLivePatch({ bpmTracker: { outputSlewEnabled: true, outputSlewBpmPerSec: 24 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.deepEqual(ok.live.bpmTracker, { outputSlewEnabled: true, outputSlewBpmPerSec: 24 });
+  assert.equal(ok.requiresCaptureRestart, false);
+  // The rate must be a finite number in (0, 240] — no clamping, a 400 instead.
+  assert.equal(validateLivePatch({ bpmTracker: { outputSlewBpmPerSec: 0 } }).ok, false);
+  assert.equal(validateLivePatch({ bpmTracker: { outputSlewBpmPerSec: -8 } }).ok, false);
+  assert.equal(validateLivePatch({ bpmTracker: { outputSlewBpmPerSec: 900 } }).ok, false);
+  assert.equal(validateLivePatch({ bpmTracker: { outputSlewBpmPerSec: 'fast' } }).ok, false);
+  // The flag is a strict boolean, never a truthy coercion.
+  assert.equal(validateLivePatch({ bpmTracker: { outputSlewEnabled: 1 } }).ok, false);
+  // The tempo-model knobs stay config-only.
+  assert.equal(validateLivePatch({ bpmTracker: { minBpm: 90 } }).ok, false);
+  assert.equal(validateLivePatch({ bpmTracker: { silenceResetEnabled: true } }).ok, false);
+  assert.equal(validateLivePatch({ bpmTracker: { activityThreshold: 0.1 } }).ok, false);
+});
+
+test('pickLiveFields carries the published-BPM slew into the scene subset', () => {
+  const picked = pickLiveFields({
+    bpmTracker: { minBpm: 60, outputSlewEnabled: true, outputSlewBpmPerSec: 20 },
+  });
+  assert.deepEqual(picked.bpmTracker, { outputSlewEnabled: true, outputSlewBpmPerSec: 20 });
 });
 
 test('validateLivePatch accepts a valid sub window, rejects bad edges (analyzer_features slot 3)', () => {
@@ -276,16 +351,105 @@ test('validateLivePatch rejects an unknown structureDetector field', () => {
   assert.match(res.error, /not live-tunable/);
 });
 
-test('loadAudioConfig recovers gracefully from a malformed YAML file', () => {
+// A malformed state/override file must FAIL LOUDLY, not "recover" to {}.
+// Recovering was destructive: every caller does load → merge → save, so the
+// empty object got merged with the defaults and written straight back over the
+// operator's file — the read destroyed exactly what it claimed to protect.
+test('loadAudioConfig THROWS on a malformed YAML file, naming the path', () => {
   const d = tmpDir();
-  fs.writeFileSync(path.join(d, 'audio_config.yaml'), ':: not yaml ::');
-  // Squash the warn the loader emits so test output stays clean.
-  const origWarn = console.warn;
-  console.warn = () => {};
-  try {
-    const out = loadAudioConfig(d);
-    assert.deepEqual(out, {});
-  } finally {
-    console.warn = origWarn;
-  }
+  const p = path.join(d, 'audio_config.yaml');
+  fs.writeFileSync(p, ':: not yaml ::');
+  assert.throws(() => loadAudioConfig(d), (err) => {
+    assert.match(err.message, /failed to parse/);
+    assert.ok(err.message.includes(p), `error should name the file, got: ${err.message}`);
+    return true;
+  });
+});
+
+test('saveAudioConfig throws when its atomic rename cannot land', () => {
+  const d = tmpDir();
+  fs.mkdirSync(path.join(d, 'audio_config.yaml'));
+  assert.throws(
+    () => saveAudioConfig(d, { bands: { lowMaxHz: 200 } }),
+    (error) => error.code === 'AUDIO_PERSISTENCE_ERROR',
+  );
+  assert.equal(fs.existsSync(path.join(d, 'audio_config.yaml.tmp')), false);
+});
+
+for (const [label, body] of [
+  ['empty', ''],
+  ['null', 'null\n'],
+  ['scalar', 'enabled\n'],
+  ['timestamp scalar', '2026-08-12\n'],
+  ['array', '- enabled\n- bands\n'],
+]) {
+  test(`loadAudioConfig THROWS on existing ${label} YAML root`, () => {
+    const d = tmpDir();
+    const p = path.join(d, 'audio_config.yaml');
+    fs.writeFileSync(p, body);
+    assert.throws(() => loadAudioConfig(d), /must contain a YAML object/);
+    assert.equal(fs.readFileSync(p, 'utf8'), body);
+  });
+}
+
+test('loadSceneAudio returns {} for a missing file but THROWS on a malformed one', () => {
+  const d = tmpDir();
+  assert.deepEqual(loadSceneAudio(d), {}, 'a never-tuned scene has no state — not an error');
+  const p = sceneAudioPath(d);
+  fs.writeFileSync(p, 'capture:\n  device: ":0"\n bad indent: [\n');
+  assert.throws(() => loadSceneAudio(d), (err) => {
+    assert.match(err.message, /failed to parse/);
+    assert.ok(err.message.includes(p), `error should name the file, got: ${err.message}`);
+    assert.match(err.message, /will NOT overwrite/);
+    return true;
+  });
+  // And the file is still intact — nothing wrote over it.
+  assert.match(fs.readFileSync(p, 'utf8'), /Microphone|device/);
+});
+
+test('saveSceneAudio THROWS when the write cannot land (no silent 200)', () => {
+  const d = tmpDir();
+  // A directory where the state file should be: writeFileSync on the temp
+  // name succeeds, the rename onto a directory does not.
+  fs.mkdirSync(sceneAudioPath(d));
+  assert.throws(() => saveSceneAudio(d, { enabled: true }), /failed to write/);
+  // The temp file was cleaned up rather than left as litter.
+  const litter = fs.readdirSync(d).filter((f) => f.endsWith('.tmp'));
+  assert.deepEqual(litter, []);
+});
+
+// pickLiveFields must NOT stamp the whole derivedSignals tree into scene state:
+// the merged config always carries every group (config.yaml supplies them), so
+// persisting all of it froze a copy of config.yaml into the scene file and
+// shadowed every later retune. Only groups the operator actually live-patched
+// this runtime are persisted, and only their live-tunable fields.
+const CFG_WITH_DERIVED = {
+  ...FULL_CFG,
+  derivedSignals: {
+    party: { wLow: 0.4, wMid: 0.4, wHigh: 0.2, loudTau: 0.4, onThresh: 0.3, offThresh: 0.12, holdMs: 1200, offConfirmMs: 800, warmupMs: 1500 },
+    phrase: { phraseBars: 8, downbeatFire: 0.5, dropFire: 0.5, dropReanchorMs: 1500 },
+  },
+};
+
+test('pickLiveFields persists NO derivedSignals when nothing was live-patched', () => {
+  const out = pickLiveFields(CFG_WITH_DERIVED);
+  assert.equal(out.derivedSignals, undefined);
+});
+
+test('pickLiveFields persists only the live-patched groups, live fields only', () => {
+  const out = pickLiveFields(CFG_WITH_DERIVED, { derivedSignalsGroups: new Set(['party']) });
+  assert.deepEqual(Object.keys(out.derivedSignals), ['party']);
+  // wLow/wMid/wHigh are NOT live-tunable — persisting them would shadow a
+  // future config.yaml re-weighting that the operator never overrode.
+  assert.deepEqual(Object.keys(out.derivedSignals.party).sort(), [
+    'holdMs', 'loudTau', 'offConfirmMs', 'offThresh', 'onThresh', 'warmupMs',
+  ]);
+  assert.equal(out.derivedSignals.party.onThresh, 0.3);
+});
+
+test('pickLiveFields rejects an unknown derivedSignals group', () => {
+  assert.throws(
+    () => pickLiveFields(CFG_WITH_DERIVED, { derivedSignalsGroups: ['bogus'] }),
+    /unknown derivedSignals group "bogus"/,
+  );
 });

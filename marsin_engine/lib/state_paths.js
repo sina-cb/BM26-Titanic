@@ -18,8 +18,17 @@
  *
  *   MARSIN_STATE_DIR      — replaces `<engineDir>/states` (the state root).
  *   MARSIN_PLAYLISTS_DIR  — replaces `<repo>/simulation/scenes/<scene>/playlists`.
+ *   MARSIN_TIMELINE_DIR   — replaces `<repo>/simulation/scenes/<scene>/timeline`
+ *                           (the SHOW PLAN library). Added for the timeline e2e
+ *                           suite (report `_100`): every timeline scenario needs
+ *                           throwaway plans (an in-window fixture, a dormant
+ *                           rehearsal plan), and `POST /timeline/plans` writes
+ *                           them straight into the operator's tracked scene
+ *                           tree. Two prior threads (`_95`, `_97`) had to
+ *                           hand-restore that tree afterwards; this seam means a
+ *                           spawned test engine simply cannot reach it.
  *
- * Both must be ABSOLUTE paths; a set-but-relative/empty value throws at
+ * All three must be ABSOLUTE paths; a set-but-relative/empty value throws at
  * boot (codex P0: no silent fallback — a misconfigured override must fail
  * loudly, not quietly write into the tracked tree anyway).
  */
@@ -72,10 +81,53 @@ export function resolvePlaylistsDir(engineDir, modelName) {
   );
 }
 
-/** True when either state-redirect override is active (for boot logging). */
+/**
+ * Per-scene SHOW PLAN library dir. Defaults to the tracked
+ * `<repo>/simulation/scenes/<scene>/timeline`; `MARSIN_TIMELINE_DIR`
+ * overrides it (all scenes then share the override dir — fine for the
+ * single-scene test harnesses this exists for).
+ *
+ * @param {string} engineDir — absolute path to marsin_engine/
+ * @param {string} modelName — scene/model name (e.g. 'test_bench')
+ * @returns {string}
+ */
+export function resolveTimelineDir(engineDir, modelName) {
+  if (!modelName || typeof modelName !== 'string') {
+    throw new TypeError(`resolveTimelineDir requires a model name, got: ${JSON.stringify(modelName)}`);
+  }
+  return _resolveOverride(
+    'MARSIN_TIMELINE_DIR',
+    () => path.join(engineDir, '..', 'simulation', 'scenes', modelName, 'timeline'),
+  );
+}
+
+/**
+ * Per-scene SPECIAL EVENT show library dir (docs/52). Defaults to the tracked
+ * `<repo>/simulation/scenes/<scene>/special_events`;
+ * `MARSIN_SPECIAL_EVENTS_DIR` overrides it, so the special-events suites can
+ * author throwaway shows (including deliberately BROKEN ones, to prove the
+ * loud-refusal path) without ever writing into the operator's scene tree.
+ *
+ * @param {string} engineDir — absolute path to marsin_engine/
+ * @param {string} modelName — scene/model name (e.g. 'test_bench')
+ * @returns {string}
+ */
+export function resolveSpecialEventsDir(engineDir, modelName) {
+  if (!modelName || typeof modelName !== 'string') {
+    throw new TypeError(`resolveSpecialEventsDir requires a model name, got: ${JSON.stringify(modelName)}`);
+  }
+  return _resolveOverride(
+    'MARSIN_SPECIAL_EVENTS_DIR',
+    () => path.join(engineDir, '..', 'simulation', 'scenes', modelName, 'special_events'),
+  );
+}
+
+/** True when any state-redirect override is active (for boot logging). */
 export function stateOverridesActive() {
   return process.env.MARSIN_STATE_DIR !== undefined
-    || process.env.MARSIN_PLAYLISTS_DIR !== undefined;
+    || process.env.MARSIN_PLAYLISTS_DIR !== undefined
+    || process.env.MARSIN_TIMELINE_DIR !== undefined
+    || process.env.MARSIN_SPECIAL_EVENTS_DIR !== undefined;
 }
 
 function _resolveOverride(envKey, defaultFn) {

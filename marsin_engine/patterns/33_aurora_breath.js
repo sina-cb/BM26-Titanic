@@ -1,84 +1,53 @@
 /*
-  33_aurora_breath.js — a magical, high-def AURORA that BREATHES with the music.
+  33_aurora_breath.js — BOREALIS SAILS: two immense breathing light-veils.
 
-  Soft vertical glowing ribbons of light drift and undulate across the rig:
-  layered sines in x over time give curtains of luminance; a soft falloff
-  (sliderSoft) keeps the ribbons luminous but crisp-edged. Colour blends
-  cp1<->cp2 ACROSS HEIGHT (real aurora gradient: green near the horizon
-  rising into magenta/violet at the crown), so the curtain spans two distinct
-  hues top-to-bottom — hueSpread is structural, not incidental.
-
-  THE BREATH (autonomous, clock-driven — alive even in silence):
-    A slow smooth swell/ebb cycle (breathe, a clean wave on its own clock)
-    expands and contracts the aurora: on the IN-breath the curtains bloom
-    WIDER and a touch brighter, on the OUT-breath they draw back to luminous
-    cores. This breathing runs from the clock alone, so the rig breathes with
-    NO audio mapped. `breathRate` sets how fast it breathes; `localSpeed` sets
-    the drift rate of the ribbons themselves (pow2 idiom).
-
-  TWO AUDIO DIMENSIONS (decoupled so neither fights the other):
-    PRIMARY  — the GLOW LEVEL. A low-band level (sliderLevel <- micLow) is a
-               DIRECT brightness multiplier on the whole curtain. It does NOT
-               reshape geometry or wobble with the breath phase, so the rig's
-               brightness tracks the lows cleanly (corr >= 0.6). The breath's
-               size lives on a SEPARATE axis (breathDepth/breathRate), so the
-               expand/contract motion never decorrelates the brightness.
-    DETAIL   — the SHIMMER. A high-band level (sliderShimmer <- micHigh) adds a
-               fast, fine, crisp sparkle riding on the crests (a different
-               spatial dimension: high-frequency detail, not bulk brightness),
-               so hats/cymbals make the curtain glitter without dominating the
-               glow.
-
-  Amalgamates:
-    00_golden_hour_wash  — wave() coordinate wash + cp1<->cp2 RGB blend
-    11_bioluminescence   — slow ambient swell that breathes
-    15_silk_prism_ribbons— layered ribbon sines drifting through the rig
-    13_sparkle           — crisp deterministic high-band glint detail
-
-  Core equation (per pixel, incommensurate ribbon frequencies):
-    curtain = 0.72*wave(nx*rib*SQRT2 - drift + ny*0.22)
-            + 0.28*wave(nx*rib*PHI*0.5 + drift*0.6 - ny*0.35 + undulate)
-    lum     = curtain^(5 - soft*3.7)
-    extent  = breathBase + breathDepth*breathe      (autonomous breath SIZE)
-    bri     = shaped(lum,extent) * level + shimmerGlint     (level = clean LOW gain)
-    hue t   = 0.12 + 0.76*ny + small drift  (green ny=0 -> violet ny=1)
-  with SQRT2=1.41421, PHI=1.61803, golden-angle GA=2.39996 (radians) for the
-  shimmer hash — irrational, non-integer periods, never repeats.
+  CURRENT DESIGN: two
+  curved, near-orthogonal signed-distance sheets twist through the full XYZ
+  ship volume. Their independent folds travel in opposite directions; their
+  intersection forms a moving magnetic spine. The breath opens and thickens
+  the sails, Ribbons changes their internal fold count, Soft changes physical
+  sheet thickness, and Shimmer illuminates continuous fold nodes—never a
+  random per-pixel sparkle field. TE signs show a strengthened cross-section,
+  PARs act as palette-coloured roots, and Vintage alone receives matched W+A
+  aurora-star glints.
 
   CONTROLS (UI order = declaration order)
-    - localSpeed : drift/undulation rate of the ribbons (pow2; 0 = nearly frozen).
-    - level      : low level -> DIRECT brightness of the aurora (the glow). Modulatable.
-    - shimmer    : high level -> fine crisp sparkle on the crests. Modulatable.
-    - breathRate : how fast the autonomous swell/ebb breathing cycles.
-    - breathDepth: how much the breath expands/contracts the curtain extent.
-    - ribbons    : ribbon count / density across x.
-    - soft       : edge softness (low = crisp curtains, high = wide soft glow).
-    - base       : calm time-based floor so silence still reads.
-    - colorPalette1/2 : cp1 (green, horizon) <-> cp2 (magenta/violet, crown),
-                        blended across height.
+    - localSpeed : magnetic rotation and fold-travel rate.
+    - level      : direct whole-aurora energy. Modulatable.
+    - shimmer    : moving fold-node and intersection brilliance. Modulatable.
+    - breathRate : autonomous sail-opening cadence.
+    - breathDepth: sail separation and breathing width.
+    - ribbons    : structural fold count inside both sails.
+    - soft       : sail thickness and edge softness.
+    - base       : moving palette-coloured visibility floor.
+    - colorPalette1/2 : the two aurora materials.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
 AUDIO_MODULATION_V1:
-  sliderLevel   <- micLow  range 0.35..1.00 curve linear   # PRIMARY brightness: bass directly brightens the whole aurora
+  sliderLevel   <- micLow  range 0.10..1.00 curve pow2     # PRIMARY brightness: keeps detail in quiet lows, then blooms clearly
   sliderShimmer <- micHigh range 0.00..0.85 curve pow2     # detail: highs add fine crisp crest sparkle (distinct axis)
+  sliderBreathDepth <- micFlux range 0.25..0.90 curve linear # musical motion: flux widens the autonomous curtain breath
   # sliderBreathRate  static 0.50  # breath speed (autonomous, not audio-driven)
-  # sliderBreathDepth static 0.50  # breath expand/contract amount (geometry, not audio)
   # sliderRibbons     static 0.50  # ribbon density (geometry, not audio-driven)
   # sliderSoft        static 0.50  # edge softness (geometry, not audio-driven)
-  # sliderBase        static 0.18  # silence visibility floor (static)
+  # sliderBase        static 0.14  # silence visibility floor (static)
   # sliderLocalSpeed  static 0.50  # operator drift rate, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
-export var localSpeed = 0.5;   // ribbon drift / undulation rate
+// Optional accent role: self-declare the append-only canonical registry id so
+// models without TE signs compile without changing their authored output.
+var FIX_TE_SIGN = 7;
+
+export var localSpeed = 0.5;   // magnetic heading / fold-travel rate
 export var level = 0.5;        // LOW level -> DIRECT brightness (the glow); 0.5 =
                                // a bright, blooming aurora with NO audio (Phase-1 default)
-export var shimmer = 0.4;      // HIGH level -> fine crisp sparkle (detail)
-export var breathRate = 0.5;   // autonomous swell/ebb breathing speed
-export var breathDepth = 0.5;  // how much the breath expands/contracts the curtain
-export var ribbons = 0.5;      // ribbon count / density
-export var soft = 0.5;         // edge softness (0 = crisp, 1 = wide soft glow)
-export var base = 0.14;        // calm time-based floor (silence still reads)
+export var shimmer = 0.4;      // HIGH level -> moving fold-node brilliance
+export var breathRate = 0.5;   // autonomous sail-opening speed
+export var breathDepth = 0.5;  // sail separation / breathing width
+export var ribbons = 0.5;      // structural fold count
+export var soft = 0.5;         // sail thickness / edge softness
+export var base = 0.14;        // moving visibility floor (silence still reads)
 
 export var cp1H = 0.34, cp1S = 1.0, cp1V = 1.0; // green (horizon, low ny)
 export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // magenta / violet (crown, high ny)
@@ -99,6 +68,7 @@ var MIN_RIBBONS = 1.5;   // ribbon count at sliderRibbons = 0
 var MAX_RIBBONS = 7.0;   // ribbon count at sliderRibbons = 1
 var SQRT2 = 1.41421;     // incommensurate ribbon frequency A
 var PHI   = 1.61803;     // incommensurate ribbon frequency B (golden ratio)
+var PHASE_WRAP = 10000.0; // large wrap keeps every visible scaled phase continuous
 var GA    = 2.39996;     // golden angle (radians) — shimmer hash, never repeats
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
@@ -140,16 +110,17 @@ function clamp01(v) {
 }
 
 // ── Persistent / per-frame state ──────────────────────────────────────────────
-var drift = 0.0;       // primary ribbon drift phase, 0..1
-var undulate = 0.0;    // slow secondary undulation phase, 0..1
-var shimT = 0.0;       // fast shimmer churn phase (re-rolls the sparkle field)
-var slowShim = 0.0;    // very slow base-shimmer phase, 0..1
+var drift = 0.0;       // magnetic heading phase
+var weaveDrift = 0.0;  // independent fold-travel phase
+var undulate = 0.0;    // slow centerline-bend phase
+var colorWobble = 0.0; // moving polar-haze phase
+var shimT = 0.0;       // continuous fold-node travel phase
+var slowShim = 0.0;    // very slow Identity silk / floor phase
 var breathe = 0.0;     // autonomous breath swell/ebb phase, 0..1
 var ribCount = 3.0;    // resolved ribbon count this frame
-var extent = 0.4;      // resolved breath extent this frame (0..~1)
+var breathSwell = 0.5; // resolved autonomous expansion phase this frame
 var floorV = 0.18;     // resolved calm floor this frame
 var shimGain = 0.0;    // resolved shimmer (high-band) gain this frame
-var shimThresh = 1.0;  // resolved sparkle threshold this frame (high -> lower)
 var briLevel = 1.0;    // resolved DIRECT brightness multiplier (the glow level)
 
 export function beforeRender(delta) {
@@ -161,51 +132,41 @@ export function beforeRender(delta) {
   _hsv2rgb2();
 
   // Local-speed trim, exponential so the fader feels even (matches template).
-  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var localMult = pow(2.0, (localSpeed - 0.5) * 7.0);
+  var shimmerMult = pow(2.0, (localSpeed - 0.5) * 5.0);
 
-  drift    = drift    + dt * 0.090 * localMult; drift    = drift    - floor(drift);
-  undulate = undulate + dt * 0.034 * localMult; undulate = undulate - floor(undulate);
-  slowShim = slowShim + dt * 0.011 * localMult; slowShim = slowShim - floor(slowShim);
-  // Shimmer churn runs fast so the high-band glints twinkle crisply.
-  shimT    = shimT    + dt * 0.900 * localMult; shimT    = shimT    - floor(shimT);
+  drift       = drift       + dt * 0.090 * localMult;
+  weaveDrift  = weaveDrift  + dt * 0.054 * localMult;
+  undulate    = undulate    + dt * 0.034 * localMult;
+  colorWobble = colorWobble + dt * 0.017 * localMult;
+  slowShim    = slowShim    + dt * 0.011 * localMult;
+  // Fold nodes move faster than the monumental sails, but stay continuous.
+  shimT = shimT + dt * 0.900 * shimmerMult;
+  if (drift >= PHASE_WRAP) drift = drift - PHASE_WRAP;
+  if (weaveDrift >= PHASE_WRAP) weaveDrift = weaveDrift - PHASE_WRAP;
+  if (undulate >= PHASE_WRAP) undulate = undulate - PHASE_WRAP;
+  if (colorWobble >= PHASE_WRAP) colorWobble = colorWobble - PHASE_WRAP;
+  if (slowShim >= PHASE_WRAP) slowShim = slowShim - PHASE_WRAP;
+  if (shimT >= PHASE_WRAP) shimT = shimT - PHASE_WRAP;
 
-  // The BREATH runs on its OWN clock (breathRate), independent of localSpeed so
-  // the ribbons can drift fast while the breath stays a slow, calm swell — and
-  // independent of audio so the rig breathes even in silence. Exponential rate
-  // so the breathRate fader feels even (slow ~10 s .. brisk ~3 s per breath; the
+  // The breath runs on its own clock, independent of localSpeed and audio.
+  // Exponential rate
+  // so the breathRate fader feels even (slow ~24 s .. brisk ~1.5 s per breath; the
   // ~6 s default reads as a calm, natural breath).
-  var breathMult = pow(2.0, (breathRate - 0.5) * 3.0);
+  var breathMult = pow(2.0, (breathRate - 0.5) * 4.0);
   breathe = breathe + dt * 0.165 * breathMult; breathe = breathe - floor(breathe);
 
   ribCount = MIN_RIBBONS + ribbons * (MAX_RIBBONS - MIN_RIBBONS);
 
-  // ── BREATH SIZE (autonomous, decoupled from brightness) ───────────────────
-  // A clean swell/ebb wave smoothly expands (in-breath) and contracts
-  // (out-breath) the curtain EXTENT. breathDepth sets the swing; the centre is
-  // a wide, blooming aurora so it always reads. This is the SPATIAL motion —
-  // it does NOT touch the brightness level, so it never decorrelates micLow.
-  var swell = wave(breathe);                 // 0..1 smooth swell/ebb
-  // Keep the breath's EXTENT swing GENTLE: a wide extent lights more of the rig
-  // and so lifts TOTAL brightness, which would decorrelate the micLow response
-  // (the in/out-breath would read as a brightness pulse the lows didn't cause).
-  // A small swing keeps the expand/contract clearly VISIBLE as curtain motion
-  // while the bulk brightness stays governed by micLow.
-  var depth = 0.06 + breathDepth * 0.12;     // breath swing amplitude (visible, gentle)
-  extent = clamp01(0.40 + (swell - 0.5) * 2.0 * depth);
-
-  // ── GLOW LEVEL (the PRIMARY brightness, driven DIRECTLY by micLow) ────────
-  // briLevel is a PURE function of `level` (micLow) — NO breath term — so TOTAL
-  // rig brightness tracks the lows cleanly (corr >= 0.6) and the breathing never
-  // reads as a brightness pulse the lows didn't cause (the exact decorrelation
-  // the review flagged). The breath is fully SPATIAL: it widens/narrows the
-  // curtain via the EXTENT below and rides the drifting curtain-floor glow, so
-  // it reads clearly as expand/contract motion without touching the brightness
-  // budget. Per-pixel motion keeps the rig alive in silence (never dead-static).
+  // A softened full-travel swell opens, separates and thickens both sails.
+  var swell = triangle(breathe);             // 0..1 full-travel swell/ebb
+  swell = swell * swell * (3.0 - 2.0 * swell); // soften the turnarounds
+  breathSwell = swell;
+  // Level remains the primary direct energy handle.
   briLevel = 0.44 + level * 1.55;
 
-  // High-band detail dimension: more highs => brighter, denser crisp sparkle.
-  shimGain   = shimmer * 0.85;
-  shimThresh = 0.94 - shimmer * 0.50;
+  // High-band detail dimension: more highs => brighter fold intersections.
+  shimGain = shimmer;
 
   // Calm base floor — gentle, SWELLS AND EBBS with the breath so even in silence
   // the rig visibly breathes (the floor glow brightens on the in-breath, draws
@@ -215,93 +176,157 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // Vertical aurora curtains: ribbons live along X, undulate along Y, drift in t.
+  // Two curved signed-distance sheets cross the full XYZ volume.
   var nx = clamp01(x);
   var ny = clamp01(y);
+  // Slow magnetic rotation and autonomous breath change the sails' heading,
+  // separation and thickness continuously.
+  var nz = clamp01(z);
+  var cx = nx - 0.5;
+  var cy = ny - 0.5;
+  var cz = nz - 0.5;
 
-  // Layered sines in x give the curtain structure; the y term makes ribbons
-  // undulate so they read as flowing sheets rather than static bars. The two
-  // ribbon frequencies are incommensurate (SQRT2 vs PHI) so the curtain never
-  // exactly repeats.
-  var ribbon = wave(nx * ribCount * SQRT2 - drift + ny * 0.22);
-  var weave  = wave(nx * ribCount * PHI * 0.5 + drift * 0.6 - ny * 0.35 + undulate);
-  var curtain = ribbon * 0.72 + weave * 0.28;
+  // The two centerlines bend independently through height and depth.
+  var heading = (drift * 0.42 + undulate * 0.17
+    + (breathSwell - 0.5) * breathDepth * 0.14) * PI2;
+  var hc = cos(heading);
+  var hs = sin(heading);
+  var sailX = cx * hc - cz * hs;
+  var sailZ = cx * hs + cz * hc;
 
-  // Soft falloff: low `soft` => sharp luminous cores; high `soft` => wide glow.
-  // sharpen exponent runs ~5 (crisp) .. ~1.3 (soft).
-  var sharp = 5.0 - soft * 3.7;
-  var lum = pow(curtain, sharp);
+  var open = (breathSwell - 0.5) * breathDepth * 0.28;
+  var bendA = sin((cy * 1.13 + sailZ * 0.47 + undulate * SQRT2) * PI2)
+    * (0.055 + breathDepth * 0.055);
+  var bendB = sin((cy * 0.91 - sailX * 0.53 - weaveDrift * PHI) * PI2)
+    * (0.050 + breathDepth * 0.060);
+  var distA = abs(sailX - bendA - open);
+  var distB = abs(sailZ - bendB + open);
+  var sailWidth = 0.030 + soft * 0.135
+    + breathSwell * breathDepth * 0.065;
+  var sheetA = clamp01(1.0 - distA / sailWidth);
+  var sheetB = clamp01(1.0 - distB / sailWidth);
+  var edgePower = 2.15 - soft * 1.10;
+  sheetA = pow(sheetA, edgePower);
+  sheetB = pow(sheetB, edgePower);
 
-  // The BREATH shapes the EXTENT (spatial size only): on the in-breath the
-  // threshold drops so ribbons bloom WIDER across the rig; on the out-breath
-  // they draw back to luminous cores. This is the visible expand/contract.
-  var thresh = 1.0 - extent;          // wide breath -> low threshold -> wide curtains
-  var shaped = (lum - thresh) / (1.0 - thresh + 0.0001);
-  shaped = clamp01(shaped);
+  var foldCount = 1.35 + ribCount * 0.72;
+  var foldA = wave(cy * foldCount + sailZ * (1.25 + ribbons * 1.70)
+    - weaveDrift * 3.0 + nx * 0.17);
+  var foldB = wave(cy * foldCount * PHI - sailX * (1.10 + ribbons * 1.45)
+    + drift * 2.0 - nz * 0.13);
+  var veilA = sheetA * (0.26 + foldA * 0.74);
+  var veilB = sheetB * (0.26 + foldB * 0.74);
+  var intersection = sqrt(sheetA * sheetB);
+  var curtain = clamp01(veilA + veilB * 0.92 + intersection * 0.72);
 
-  // ── Brightness field ──────────────────────────────────────────────────────
-  // The whole rig carries a BROAD glow plus the CRISP curtain on top, and the
-  // ENTIRE field is scaled by briLevel (micLow). Because every pixel's
-  // brightness is proportional to briLevel, total rig brightness tracks the
-  // lows cleanly (corr >= 0.6) — the curtain `shaped` only sets the per-pixel
-  // CONTRAST (broad vs crest), it does not break the proportionality. The broad
-  // term (0.30) keeps the aurora reading as a luminous sheet; the curtain term
-  // (0.95*shaped) gives the crisp high-def cores that push the peak past 200.
-  var field = 0.22 + 1.00 * shaped;
-  var bri = field * briLevel;
+  // Soft sets the signed-distance sheet thickness and edge exponent directly.
 
-  // ── High-band SHIMMER (a SECOND dimension: fine crisp detail) ──────────────
-  // Deterministic per-pixel sparkle that rides ONLY on the lit crests, churned
-  // fast by shimT and seeded by the golden angle so it never tiles. It adds
-  // glitter on top of the breath without inflating the bulk brightness floor.
+  // Level owns sail energy; the gentle breath gain makes the opening cadence
+  // legible without taking final brightness authority away from Level.
+  var bri = curtain * briLevel * 0.76;
+  var breathGain = 0.65 + breathSwell * (0.25 + breathDepth * 0.45);
+  bri = bri * breathGain;
+
+  // Shimmer follows continuous fold nodes and the magnetic intersection. It
+  // never hashes or reseeds pixels, so live edits remain visually stable.
   var glint = 0.0;
-  if (shaped > 0.04 && shimGain > 0.0) {
-    var seed = index * 12.9898 + floor(shimT * 240.0) * GA + z * 7.31;
-    var spk = sin(seed) * sin(seed * 1.7 + 1.3) * sin(seed * 3.3 + 2.1);
-    spk = spk * spk; spk = spk * spk;     // sharpen -> crisp glints
-    if (spk > shimThresh) {
-      var amt = (spk - shimThresh) / (1.0 - shimThresh + 0.0001);
-      // Scale the glint by briLevel too so the sparkle dims with the lows — it
-      // rides ON the glow rather than fighting the micLow brightness budget,
-      // keeping the PRIMARY correlation clean and positive.
-      glint = clamp01(amt) * (0.45 + 0.85 * shimGain) * (0.4 + 0.6 * shaped)
-            * (0.45 + 0.55 * briLevel * 0.55);
-    }
+  if (curtain > 0.0 && shimGain > 0.0) {
+    var nodeA = pow(wave(cy * 3.17 + sailZ * 2.31 - shimT * 0.31), 7.0);
+    var nodeB = pow(wave(cy * 2.73 - sailX * 2.57 + shimT * 0.23), 7.0);
+    var foldNode = veilA * nodeA + veilB * nodeB;
+    var spineNode = intersection
+      * pow(wave(cy * 2.19 + (sailX - sailZ) * GA + shimT * 0.17), 5.0);
+    glint = clamp01((foldNode * 0.82 + spineNode * 1.45) * shimGain * 1.35);
   }
-  bri = bri + glint;
+  bri = bri + glint * 0.92;
 
-  // Mission-critical visibility floor: a SMALL audio-independent keep that RIDES
-  // THE DRIFTING CURTAIN (not a flat wash) so even in silence the rig shows a
-  // living aurora glow that visibly DRIFTS with localSpeed. Kept small so it
-  // does NOT flatten the micLow brightness response (the field above carries the
-  // correlation); it only guarantees the rig is never black.
-  var curtainFloor = floorV * (0.40 + 0.90 * lum);
+  // A low moving polar haze protects visibility without flattening the sails.
+  var polarHaze = wave(cy * 0.71 + sailX * 0.43 - sailZ * 0.37
+    + colorWobble * PHI);
+  var curtainFloor = floorV * (0.42 + polarHaze * 0.42);
   if (bri < curtainFloor) bri = curtainFloor;
   bri = clamp01(bri);
 
-  // Colour spans cp1<->cp2 ACROSS HEIGHT: green near the horizon (ny=0) rising
-  // into magenta/violet at the crown (ny=1), with a small drifting wobble so the
-  // gradient breathes. This makes the two distinct hues structural (hueSpread).
-  var traw = clamp01(0.10 + 0.80 * ny + 0.10 * wave(nx * 0.6 + undulate * 0.5 - 0.25));
-  // Drive the blend toward the two palette ENDPOINTS (near-bimodal, 48-idiom):
-  // green<->magenta passes through a muddy desaturated grey at tcol~0.5 that
-  // caps the max RGB channel near 128. A smoothstep pushes most pixels to pure
-  // green OR pure magenta (both peak >200) with only a narrow soft seam, so the
-  // bright cores read past 200 AND both hues stay vivid across the rig.
+  // Each sail owns one palette material; intersections blend them deliberately.
+  var materialTotal = veilA + veilB + 0.0001;
+  var traw = clamp01(veilB / materialTotal + intersection * 0.12
+    + (ny - 0.5) * 0.10);
   var tcol = traw * traw * (3.0 - 2.0 * traw);   // smoothstep(0,1,traw)
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  // White core on the brightest curtain CRESTS (bioluminescence idiom): a crisp
-  // white emitter lift where the curtain peaks, so the high-def cores punch past
-  // 200 on the W channel even where the green<->magenta blend desaturates to a
-  // muddy mid-grey (the palette caps RGB ~128 at mid-height). Gated to the top
-  // of the curtain and scaled by briLevel so it tracks micLow and stays crisp,
-  // never a flat wash. The sparkle glint adds its own crisp white on top.
-  // Crisp white lift on the W channel for the sparkle only — keeps glints punchy
-  // and adds a little crisp white bite without washing the colour.
-  var ww = clamp01(glint * 0.85);
+  // PAR roots stay within the selected palette; Vintage alone gets matched
+  // W+A aurora stars. Both paths remain fixture-capability portable.
+  if (fixtureType == FIX_TE_SIGN) {
+    // Identity is a breathing aurora volume. Rotate X/Z around a Y-dependent
+    // twist, then fold Y through that rotated plane: the ribbons visibly curl
+    // through the sign instead of behaving like ordinary translated sine bars.
+    var signX = nx - 0.5;
+    var signY = ny - 0.5;
+    var signZ = z - 0.5;
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var twistAngle = (signY * (1.30 + breathDepth * 1.40)
+      + drift * 4.0 + undulate * 3.0
+      + (breathSwell - 0.5) * breathDepth * 0.50) * PI2;
+    var twistCos = cos(twistAngle);
+    var twistSin = sin(twistAngle);
+    var foldX = signX * twistCos - signZ * twistSin;
+    var foldZ = signX * twistSin + signZ * twistCos;
+    var foldY = signY + sin((foldX * 1.70 + foldZ * 0.90
+      + undulate * 4.0) * PI2) * (0.06 + breathDepth * 0.12)
+      * (0.70 + breathSwell * 0.30);
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), ww, 0.0, 0.0);
+    var signAxisA = wave(foldX * ribCount * 1.25 + foldY * 0.85
+      + foldZ * 1.35 - drift * 4.0 + signPath * 0.040);
+    var signAxisB = wave(foldZ * ribCount * 0.90 - foldY * 1.10
+      + foldX * 0.70 + weaveDrift * 6.0 - signPath * 0.025);
+    var signFold = 1.0 - clamp01(abs(signAxisA - signAxisB) * 2.20);
+    signFold = signFold * signFold * (3.0 - 2.0 * signFold);
+    var signCurtain = clamp01(0.08 + signAxisA * 0.45
+      + signAxisB * 0.25 + signFold * 0.48);
+    signCurtain = pow(signCurtain, 1.15 + (1.0 - soft) * 0.95);
+
+    // Fine silk follows the folded volume and letter path. Its continuous slow
+    // phase remains subordinate to the broad curling curtain, never noise.
+    var signSilk = wave(foldX * 6.31 + foldY * 3.70 - foldZ * 2.30
+      - slowShim * 12.0 + signPath * 0.17);
+    var signFloor = 0.32 + base * 0.45 + level * 0.40;
+    var signV = signFloor + signCurtain * (0.12 + level * 0.38)
+      + signSilk * shimmer * 0.045;
+    signV = clamp01(signV);
+    var signT = clamp01(0.06 + ny * 0.78 + signCurtain * 0.10
+      + signSilk * 0.06);
+    signT = signT * signT * (3.0 - 2.0 * signT);
+    r = (pr1 + (pr2 - pr1) * signT) * signV;
+    g = (pg1 + (pg2 - pg1) * signT) * signV;
+    b = (pb1 + (pb2 - pb1) * signT) * signV;
+  } else if (fixtureType == FIX_PAR) {
+    var rootV = clamp01(curtainFloor + curtain * briLevel * 0.58
+      + intersection * 0.20);
+    var rootT = clamp01(0.18 + tcol * 0.64);
+    r = (pr1 + (pr2 - pr1) * rootT) * rootV;
+    g = (pg1 + (pg2 - pg1) * rootT) * rootV;
+    b = (pb1 + (pb2 - pb1) * rootT) * rootV;
+  }
+
+  var ww = 0.0;
+  if (fixtureType == FIX_VINTAGE_6) {
+    // Frost catches at the physical overlap of the two sails and intensifies
+    // near the open-breath crest. Fold-node glint remains a smaller secondary
+    // layer, preserving broad palette-coloured aurora between white events.
+    var overlapFrost = pow(intersection, 1.9)
+                     * (0.24 + breathSwell * 0.76) * shimmer;
+    var auroraStar = clamp01(glint * 0.54 + overlapFrost * 1.28);
+    r = r + auroraStar * (pr2 * 0.22 + pr1 * 0.18);
+    g = g + auroraStar * (pg2 * 0.22 + pg1 * 0.18);
+    b = b + auroraStar * (pb2 * 0.22 + pb1 * 0.18);
+    ww = clamp01(auroraStar * 0.62);
+  }
+
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), ww, ww, 0.0);
 }

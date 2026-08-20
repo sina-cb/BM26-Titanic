@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:ios-prebuild": "node scripts/verify_ios_prebuild_scratch.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
@@ -28,6 +29,7 @@
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
+    "@shopify/react-native-skia": "2.2.12",
     "expo": "~54.0.34",
     "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.21",
@@ -37,6 +39,7 @@
     "expo-linking": "~8.0.12",
     "expo-network": "~8.0.8",
     "expo-router": "~6.0.23",
+    "expo-screen-orientation": "~9.0.9",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-symbols": "~1.0.8",
@@ -60,7 +63,8 @@
     "eslint-config-expo": "~10.0.0",
     "js-yaml": "^4.1.1",
     "typescript": "~5.9.2",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "yoga-layout": "^3.2.1"
   },
   "overrides": {
     "react-native": {

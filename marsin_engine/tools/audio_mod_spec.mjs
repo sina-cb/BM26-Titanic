@@ -1,9 +1,12 @@
 /*
   audio_mod_spec.mjs — parse a show pattern's AUDIO_MODULATION_V1 header block.
 
-  SHARED SPEC PARSER for the offline tooling (gallery variation generator +
-  pattern audio harness). Node built-ins only — no deps, no I/O of its own
-  (the caller passes the pattern SOURCE string). Pure + offline-safe.
+  SHARED SPEC PARSER — the ONE parser of the block. Consumed by the offline
+  tooling (gallery variation generator + pattern audio harness) AND, since
+  2026-08-06, by the ENGINE (api_server stamps each slider export with its
+  declared suggestion — see `audioSuggestionsForPattern`). Node built-ins +
+  the pure audio-signal registry only — no third-party deps, no I/O of its
+  own (the caller passes the pattern SOURCE string). Pure + offline-safe.
 
   ── The block ──────────────────────────────────────────────────────────────
   Every show pattern carries one parseable header block declaring which synth
@@ -29,16 +32,31 @@
 
   ── Contract ────────────────────────────────────────────────────────────────
   parseAudioModSpec(patternSource) -> {
-    mappings: [{ slider, signal, min, max, curve }],   // declaration order
+    version,                                             // 'AUDIO_MODULATION_V1'
+    mappings: [{ slider, signal, min, max, curve, note }],  // declaration order
     modString,                                          // harness --mod string
     synth,                                              // musical synth to drive it
   }
 
   - slider : the pattern's slider export name, e.g. "sliderLevel".
-  - signal : one of micLow|micMid|micHigh|micKick|micFlux.
+  - signal : one of micLow|micMid|micHigh|micKick|micFlux — DERIVED from the
+             authoritative registry (audio/postproc/audio_signals.js), never
+             hand-listed here.
   - min,max: the override range floats (a..b), min may exceed max (allowed —
              the engine lerps regardless; we only reject non-numbers).
   - curve  : 'linear' | 'pow2' | 'ease' (token map below; unknown -> error).
+  - note   : the trailing `# ...` short explanation, '' when the line has none.
+             SURFACED as of 2026-08-06 (report 20260806_184) — it is the
+             operator-facing "why this mapping" text CaptainPad shows next to
+             the parameter. It used to be parsed and then STRIPPED here.
+
+  ── Version ─────────────────────────────────────────────────────────────────
+  The block tag stays AUDIO_MODULATION_V1. The 2026-08-06 metadata work
+  ADDED no syntax: `range`, `curve` and the `# note` were already part of the
+  V1 grammar — the note was simply discarded by the parser. Every existing
+  header parses byte-identically, so a version bump would have been a lie.
+  `version` is returned so downstream schema validation (engine + CaptainPad)
+  can assert what it is reading rather than assume.
   - modString: comma list of `<signal>:<slider>:<min>:<max>:<curve>` tokens, the
              exact grammar pattern_audio_harness.mjs --mod accepts (with ranges).
              e.g. "micLow:sliderLevel:0.30:1.00:linear,micKick:sliderKick:0.00:1.00:pow2".
@@ -50,12 +68,38 @@
   decides what to do — the gallery skips the sound clip and reports it).
 */
 
+import { micSignalShortNames } from '../audio/postproc/audio_signals.js';
+
 // Curve tokens accepted in the block -> the canonical harness curve name.
 const CURVE_TOKENS = { linear: 'linear', pow2: 'pow2', ease: 'ease' };
-// Valid synth signal sources (mic<Sig>); mirrors the harness SIG_FIELD keys.
-const VALID_SIGNALS = new Set(['micLow', 'micMid', 'micHigh', 'micKick', 'micFlux']);
+// Valid signal sources (mic<Sig>). DERIVED from the authoritative registry
+// (audio/postproc/audio_signals.js) — this was a hand-typed 5-element Set and
+// the ONLY place in the repo that rejects an unknown signal name, so the
+// hand-listing was the exact drift hazard the registry exists to remove
+// (recon 20260806_183 §"places the signal list is hard-coded MORE THAN ONCE").
+// The harness's SIG_FIELD map derives from the SAME call.
+export const VALID_SIGNALS = new Set(Object.keys(micSignalShortNames()));
 
-const BLOCK_HEADER = 'AUDIO_MODULATION_V1:';
+export const BLOCK_VERSION = 'AUDIO_MODULATION_V1';
+const BLOCK_HEADER = `${BLOCK_VERSION}:`;
+
+// The block's curve vocabulary (the offline harness's names) mapped onto the
+// ENGINE's ModulationCurve vocabulary (`VALID_CURVES` in modulation_engine.js).
+// They were always the same functions under different names:
+//     linear  x              == engine 'linear'
+//     pow2    x²             == engine 'easeIn'
+//     ease    1 - (1 - x)²   == engine 'easeOut'
+// Publishing the translation HERE means no consumer re-derives it — the
+// suggestion metadata carries both the declared token and the modulation-engine
+// token, so CaptainPad can prefill a mapping without a private lookup table
+// (that kind of hand-copied table is exactly what hid the FLUX gap).
+// `tests/tools/audio_mod_spec.test.mjs` pins the targets against
+// MODULATION_VALID_CURVES.
+export const MODULATION_CURVE_BY_BLOCK_CURVE = Object.freeze({
+  linear: 'linear',
+  pow2: 'easeIn',
+  ease: 'easeOut',
+});
 // A mapping line: `slider<Name> <- mic<Sig> range a..b curve <tok>  # note`.
 // Captures: 1=slider 2=signal 3=min 4=max 5=curve 6=note(optional).
 const MAPPING_RE =
@@ -119,14 +163,18 @@ function fmt(n) {
 }
 
 // Parse the AUDIO_MODULATION_V1 block out of a pattern's SOURCE string.
-// Returns { mappings, modString, synth } or null when there is no block.
-// THROWS on a malformed mapping line (fail loud — never drop a mapping).
+// Returns { version, mappings, modString, synth } or null when there is no
+// block. THROWS on a malformed mapping line (fail loud — never drop a mapping).
 //
-// patternName (optional) is used only by pickSynth's beat-name heuristic; pass
-// the source basename without extension when you have it.
+// patternName (optional) feeds pickSynth's beat-name heuristic AND every error
+// message, so a bad header is refused BY NAME (the engine parses arbitrary
+// patterns now — "malformed mapping line" with no pattern name is unactionable
+// on a rig at night). Pass the source basename without extension.
 export function parseAudioModSpec(patternSource, patternName = '') {
+  // Names the offender in every throw: `parseAudioModSpec[13_sparkle]: ...`.
+  const who = patternName ? `parseAudioModSpec[${patternName}]` : 'parseAudioModSpec';
   if (typeof patternSource !== 'string') {
-    throw new Error('parseAudioModSpec: patternSource must be a string');
+    throw new Error(`${who}: patternSource must be a string`);
   }
   const lines = patternSource.split(/\r?\n/);
   let start = -1;
@@ -136,6 +184,7 @@ export function parseAudioModSpec(patternSource, patternName = '') {
   if (start === -1) return null;
 
   const mappings = [];
+  const seenSliders = new Set();
   // The block runs from the header line until the comment block closes (`*/`),
   // the pattern code begins (a line with `export`), or a blank-after-content
   // boundary. We scan forward and pick out mapping lines; we stop at `*/` or
@@ -155,29 +204,38 @@ export function parseAudioModSpec(patternSource, patternName = '') {
     const m = MAPPING_RE.exec(trimmed);
     if (!m) {
       throw new Error(
-        'parseAudioModSpec: malformed AUDIO_MODULATION_V1 mapping line: "' + trimmed + '"');
+        `${who}: malformed ${BLOCK_VERSION} mapping line: "` + trimmed + '"');
     }
     const [, slider, signal, minS, maxS, curveTok, noteRaw] = m;
     if (!VALID_SIGNALS.has(signal)) {
-      throw new Error('parseAudioModSpec: unknown signal "' + signal +
+      throw new Error(`${who}: unknown signal "` + signal +
         '" in line: "' + trimmed + '" (valid: ' + [...VALID_SIGNALS].join(', ') + ')');
     }
     const curve = CURVE_TOKENS[curveTok];
     if (!curve) {
-      throw new Error('parseAudioModSpec: unknown curve token "' + curveTok +
-        '" in line: "' + trimmed + '" (valid: linear, pow2, ease)');
+      throw new Error(`${who}: unknown curve token "` + curveTok +
+        '" in line: "' + trimmed + '" (valid: ' + Object.keys(CURVE_TOKENS).join(', ') + ')');
     }
     const min = parseFloat(minS);
     const max = parseFloat(maxS);
     if (!isFinite(min) || !isFinite(max)) {
-      throw new Error('parseAudioModSpec: non-numeric range in line: "' + trimmed + '"');
+      throw new Error(`${who}: non-numeric range in line: "` + trimmed + '"');
     }
+    if (seenSliders.has(slider)) {
+      // The engine enforces ONE modulation per target parameter
+      // (modulation_engine.js v1 policy), so two header lines claiming the
+      // same slider cannot both be honoured — the second would silently win
+      // in a Map-keyed consumer. Refuse instead (Codex P0).
+      throw new Error(`${who}: duplicate mapping for slider "` + slider +
+        '" — one audio suggestion per parameter');
+    }
+    seenSliders.add(slider);
     const note = (noteRaw || '').trim();
     mappings.push({ slider, signal, min, max, curve, note });
   }
 
   if (!mappings.length) {
-    throw new Error('parseAudioModSpec: AUDIO_MODULATION_V1 block present but no valid mapping lines parsed');
+    throw new Error(`${who}: ${BLOCK_VERSION} block present but no valid mapping lines parsed`);
   }
 
   const modString = mappings
@@ -185,10 +243,62 @@ export function parseAudioModSpec(patternSource, patternName = '') {
     .join(',');
   const synth = pickSynth(mappings, patternName);
 
-  // Strip the internal `note` field from the public mappings (the contract is
-  // { slider, signal, min, max, curve }); keep it only for the synth heuristic.
-  const publicMappings = mappings.map(({ slider, signal, min, max, curve }) =>
-    ({ slider, signal, min, max, curve }));
+  // The `note` rides the PUBLIC contract as of 2026-08-06 — it is the short
+  // operator-facing explanation CaptainPad renders beside the parameter. It
+  // used to be stripped here, which is why the explanation the patterns have
+  // always carried was invisible to every consumer but pickSynth.
+  return { version: BLOCK_VERSION, mappings, modString, synth };
+}
 
-  return { mappings: publicMappings, modString, synth };
+/**
+ * The block's mappings as an AUDIO SUGGESTION map, keyed by the runtime
+ * parameter name (the slider export name — the same identifier the WASM host
+ * reports and `ModulationMapping.target.parameter` stores, so no lookup table
+ * is needed anywhere).
+ *
+ *   { sliderStarCount: {
+ *       version, signal, range: [min, max], curve, modulationCurve, note?
+ *   } }
+ *
+ * `curve` is the token the header declared (linear|pow2|ease);
+ * `modulationCurve` is the SAME curve named in the modulation engine's
+ * vocabulary (linear|easeIn|easeOut), so a client can prefill a mapping
+ * without owning a translation table.
+ *
+ * CONTRACT (report 20260806_184):
+ *   - This is METADATA ONLY. A suggestion never changes a parameter's name or
+ *     its value; it is a hint the operator may accept, and nothing acts on it
+ *     automatically.
+ *   - `note` is OMITTED when the header line carried no `# ...` explanation —
+ *     absent means absent. Nothing is ever inferred to fill a gap.
+ *   - A pattern with no block has NO suggestions (parseAudioModSpec → null →
+ *     `{}` here). A pattern with a MALFORMED block throws out of the parser and
+ *     never reaches this function.
+ *
+ * @param {object|null} spec — a parseAudioModSpec result, or null.
+ * @returns {object} slider name → suggestion (empty object when spec is null)
+ */
+export function audioSuggestionsBySlider(spec) {
+  if (spec === null || spec === undefined) return {};
+  if (spec.version !== BLOCK_VERSION) {
+    throw new Error(`audioSuggestionsBySlider: unsupported block version "${spec.version}" ` +
+      `(this parser speaks ${BLOCK_VERSION})`);
+  }
+  const out = {};
+  for (const m of spec.mappings) {
+    const modulationCurve = MODULATION_CURVE_BY_BLOCK_CURVE[m.curve];
+    if (!modulationCurve) {
+      throw new Error(`audioSuggestionsBySlider: no modulation-engine curve for block curve "${m.curve}"`);
+    }
+    const suggestion = {
+      version: BLOCK_VERSION,
+      signal: m.signal,
+      range: [m.min, m.max],
+      curve: m.curve,
+      modulationCurve,
+    };
+    if (m.note) suggestion.note = m.note;
+    out[m.slider] = suggestion;
+  }
+  return out;
 }

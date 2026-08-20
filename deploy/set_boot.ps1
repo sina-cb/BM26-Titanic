@@ -20,12 +20,6 @@
 #      what a deploy produces. See deploy\overlays\README.md and docs/43.
 #   5. Prints a clear confirmation of what will run at the next titanic logon.
 #
-# -OpenBrowser / -NoOpenBrowser toggle this machine's 'open_browser' manifest
-# key: when true, the supervisor auto-opens the sim + audio companion pages in
-# the default browser on the titanic console at boot (docs/43); default off
-# (servers stay headless). The switch only rewrites the manifest key - the
-# actual opening is done by boot_server.ps1 at the next logon.
-#
 # The change takes effect at the next logon of the `titanic` user (i.e. next
 # reboot / autologon) - it does not restart a running stack.
 #
@@ -43,16 +37,10 @@ param(
     [string]$LauncherProfile = 'prod',
     [string]$Pattern,
     [string]$RepoRoot = 'C:\titanic\BM26-Titanic',
-    [string]$ManifestPath,
-    [switch]$OpenBrowser,
-    [switch]$NoOpenBrowser
+    [string]$ManifestPath
 )
 
 $ErrorActionPreference = 'Stop'
-
-if ($OpenBrowser -and $NoOpenBrowser) {
-    throw "Pass at most one of -OpenBrowser / -NoOpenBrowser (they contradict each other; no fallback)."
-}
 
 if (-not $ManifestPath) {
     $ManifestPath = Join-Path $RepoRoot 'deploy\machines.yaml'
@@ -176,8 +164,7 @@ if ($existingEntry) {
             $fields['pattern'] = $Pattern
         }
     }
-    if ($OpenBrowser) { $fields['open_browser'] = 'true' }
-    elseif ($NoOpenBrowser) { if ($fields.Contains('open_browser')) { $fields.Remove('open_browser') } }
+    if ($fields.Contains('open_browser')) { $fields.Remove('open_browser') }
 } else {
     # Fresh entry: best-effort primary IPv4 for host/share, else the hostname.
     $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -191,7 +178,6 @@ if ($existingEntry) {
         $fields['pattern'] = $Pattern
     }
     $fields['profile'] = $LauncherProfile
-    if ($OpenBrowser) { $fields['open_browser'] = 'true' }
     $fields['dest'] = $RepoRoot
     $fields['share'] = '\\' + $ip + '\titanic'
     $fields['ssh_user'] = 'titanic'
@@ -288,11 +274,7 @@ Write-Host ("  profile  : $LauncherProfile")
 if ($PSBoundParameters.ContainsKey('Pattern') -and -not [string]::IsNullOrWhiteSpace($Pattern)) {
     Write-Host ("  pattern  : $Pattern")
 }
-if ($fields.Contains('open_browser') -and ([string]$fields['open_browser'] -match '^(?i:true|1|yes|on)$')) {
-    Write-Host ("  browser  : ON  (sim :6969 + audio :6966 auto-open on the titanic console at boot)")
-} else {
-    Write-Host ("  browser  : off (servers stay headless; enable with -OpenBrowser)")
-}
+Write-Host ("  browser  : no-launch (use the reconciled desktop shortcuts)")
 Write-Host ("  manifest : $ManifestPath")
 Write-Host ''
 

@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "patterns": {
+    "crisp/01_orbiting_circle": {
+      "balance_mode": "uniform_field",
+      "balance_rationale": "Every hull side samples one continuous orbital field; different moments follow world position, not side-specific omission or a copied left/right mask.",
+      "region_treatments": [
+        {
+          "regions": ["Left Front Wall", "Left Back Wall", "Right Front Wall", "Right Back Wall"],
+          "intent": "All four walls receive the same nested disc, cartographic contour, eclipse-moat, and winner-take-all endpoint rules across world space."
+        },
+        {
+          "regions": ["Left_Front_Left", "Left_Front_Right", "Left_Back_Left", "Left_Back_Right", "Right_Front_Left", "Right_Front_Right", "Right_Back_Left", "Right_Back_Right"],
+          "intent": "Every silhouette rope samples moving orbital rims and sparse recognition traces; front and back ropes remain part of the same field."
+        },
+        {
+          "regions": ["Left Front Rails", "Left Back Rails", "Right Front Rails", "Right Back Rails"],
+          "intent": "All four Jewelry rails receive the same sparse conjunction-pearl rule, with at most two authored heads rather than a brightness bed."
+        },
+        {
+          "regions": ["Left SmokeStack", "Left Small SmokeStack", "Left Auditorium", "Right SmokeStacks", "Right Small SmokeStack", "Right Auditorium"],
+          "intent": "Every Organ group receives moving body anchors derived from its real world position, including both outboard small-stack rings."
+        },
+        {
+          "regions": ["TE Sign", "TE Sign 2"],
+          "intent": "Both 74-pixel signs render complete local planetariums; Sign 2 is counter-chiral and phase-related, never a world-coordinate crop."
+        }
+      ]
+    },
+    "crisp/02_dimensional_slicer": {
+      "balance_mode": "uniform_field",
+      "balance_rationale": "One continuously rotating one-to-three-slab stack crosses both halves; no side receives a permanent color assignment or a two-way partition.",
+      "region_treatments": [
+        {
+          "regions": ["Left Front Wall", "Left Back Wall", "Right Front Wall", "Right Back Wall"],
+          "intent": "All four walls are crossed by the same sparse parallel slab stack, resolved black kerfs, linear engravings, and exact endpoint bevels."
+        },
+        {
+          "regions": ["Left_Front_Left", "Left_Front_Right", "Left_Back_Left", "Left_Back_Right", "Right_Front_Left", "Right_Front_Right", "Right_Back_Left", "Right_Back_Right"],
+          "intent": "Every silhouette rope receives narrow moving section lines and slab bevels instead of a uniform outline overlay."
+        },
+        {
+          "regions": ["Left Front Rails", "Left Back Rails", "Right Front Rails", "Right Back Rails"],
+          "intent": "All Jewelry rails carry one smoothly circulating survey head and preserve black heads between measurements."
+        },
+        {
+          "regions": ["Left SmokeStack", "Left Small SmokeStack", "Left Auditorium", "Right SmokeStacks", "Right Small SmokeStack", "Right Auditorium"],
+          "intent": "Every Organ group participates in a crossfaded cohort at the moving slab edge; small and distant groups are not normalized away."
+        },
+        {
+          "regions": ["TE Sign", "TE Sign 2"],
+          "intent": "Both signs use complete mirrored local slab sections with matched cadence, reversed moving kerfs, and complementary endpoint order across all 74 addresses."
+        }
+      ]
+    },
+    "crisp/03_magnetic_field_collision": {
+      "balance_mode": "mirrored",
+      "balance_rationale": "Port and starboard carry opposing magnetic polarity around a shared saddle; energy is matched while color order and circulation are mirrored.",
+      "region_treatments": [
+        {
+          "regions": ["Left Front Wall", "Left Back Wall", "Right Front Wall", "Right Back Wall"],
+          "intent": "Each wall receives Cassini cages and phase-portrait lanes, mirrored by side around a deliberately black collision saddle."
+        },
+        {
+          "regions": ["Left_Front_Left", "Left_Front_Right", "Left_Back_Left", "Left_Back_Right", "Right_Front_Left", "Right_Front_Right", "Right_Back_Left", "Right_Back_Right"],
+          "intent": "All silhouette ropes trace opposing field circulation; corresponding port and starboard ropes carry matched energy with reversed polarity."
+        },
+        {
+          "regions": ["Left Front Rails", "Left Back Rails", "Right Front Rails", "Right Back Rails"],
+          "intent": "All Jewelry rails act as sparse field probes, paired by station and mirrored by side while preserving dark heads."
+        },
+        {
+          "regions": ["Left SmokeStack", "Left Small SmokeStack", "Left Auditorium", "Right SmokeStacks", "Right Small SmokeStack", "Right Auditorium"],
+          "intent": "Corresponding Organ groups receive mirrored compression probes, with density-independent impulses on the small-stack rings and auditoriums."
+        },
+        {
+          "regions": ["TE Sign", "TE Sign 2"],
+          "intent": "The two complete local signs show matched magnetic phase portraits with mirrored circulation and complementary endpoint ownership."
+        }
+      ]
+    },
+    "crisp/06_impossible_corridor": {
+      "balance_mode": "deliberately_asymmetric",
+      "balance_rationale": "A single corridor translates and folds through the ship, so corresponding sides meet different rooms at a given instant; every region is visited over time.",
+      "region_treatments": [
+        {
+          "regions": ["Left Front Wall", "Left Back Wall", "Right Front Wall", "Right Back Wall"],
+          "intent": "All four walls participate in the traveling passage, jamb frames, black alcoves, split route, and room; instantaneous imbalance is narrative, not omission."
+        },
+        {
+          "regions": ["Left_Front_Left", "Left_Front_Right", "Left_Back_Left", "Left_Back_Right", "Right_Front_Left", "Right_Front_Right", "Right_Back_Left", "Right_Back_Right"],
+          "intent": "Every silhouette rope becomes a moving wall edge or doorway trace as the corridor translates, with front and back ropes visited during the loop."
+        },
+        {
+          "regions": ["Left Front Rails", "Left Back Rails", "Right Front Rails", "Right Back Rails"],
+          "intent": "All Jewelry rails host sparse traveling jamb bolts; head selection follows the corridor split rather than a permanent side bias."
+        },
+        {
+          "regions": ["Left SmokeStack", "Left Small SmokeStack", "Left Auditorium", "Right SmokeStacks", "Right Small SmokeStack", "Right Auditorium"],
+          "intent": "Every Organ group receives threshold lamps when the moving room reaches it, using sparse cohorts so low-density groups remain visible."
+        },
+        {
+          "regions": ["TE Sign", "TE Sign 2"],
+          "intent": "Both signs contain complete local floor plans; their opposite chirality describes two coordinated entrances to the same impossible corridor."
+        }
+      ]
+    },
+    "crisp/08_topology_knot": {
+      "balance_mode": "mirrored",
+      "balance_rationale": "The same two-ribbon knot spans both sides with opposite over-under order, producing matched energy without flattening the topology into symmetry.",
+      "region_treatments": [
+        {
+          "regions": ["Left Front Wall", "Left Back Wall", "Right Front Wall", "Right Back Wall"],
+          "intent": "All four walls carry broad paired ribbons, nested core and edge contours, and black undercuts; crossing order mirrors between sides."
+        },
+        {
+          "regions": ["Left_Front_Left", "Left_Front_Right", "Left_Back_Left", "Left_Back_Right", "Right_Front_Left", "Right_Front_Right", "Right_Back_Left", "Right_Back_Right"],
+          "intent": "Every silhouette rope receives ribbon-edge traces and moving underpass cuts, paired by station with opposite depth order."
+        },
+        {
+          "regions": ["Left Front Rails", "Left Back Rails", "Right Front Rails", "Right Back Rails"],
+          "intent": "All Jewelry rails receive at most two separated crossing beads whose order follows the local over-under state."
+        },
+        {
+          "regions": ["Left SmokeStack", "Left Small SmokeStack", "Left Auditorium", "Right SmokeStacks", "Right Small SmokeStack", "Right Auditorium"],
+          "intent": "Every Organ group receives a sparse crossing anchor selected by real position, including low-count outboard stack groups."
+        },
+        {
+          "regions": ["TE Sign", "TE Sign 2"],
+          "intent": "Both complete local signs render the same knot with opposite chirality and over-under order across all 74 addresses."
+        }
+      ]
+    },
+    "crisp/10_geometric_echo": {
+      "balance_mode": "deliberately_asymmetric",
+      "balance_rationale": "Faceted shells are born off-center and translate through a finite archive; side imbalance tracks shell age and travel direction, never a missing region.",
+      "region_treatments": [
+        {
+          "regions": ["Left Front Wall", "Left Back Wall", "Right Front Wall", "Right Back Wall"],
+          "intent": "Every wall receives shell births, nested facets, black inter-generation gaps, and archived echoes as the finite sequence crosses the model."
+        },
+        {
+          "regions": ["Left_Front_Left", "Left_Front_Right", "Left_Back_Left", "Left_Back_Right", "Right_Front_Left", "Right_Front_Right", "Right_Back_Left", "Right_Back_Right"],
+          "intent": "All silhouette ropes carry leading corners or selected old facets when an echo reaches their real world position."
+        },
+        {
+          "regions": ["Left Front Rails", "Left Back Rails", "Right Front Rails", "Right Back Rails"],
+          "intent": "All Jewelry rails host one advancing marker plus one dim archived head, translated by generation rather than fixed to one side."
+        },
+        {
+          "regions": ["Left SmokeStack", "Left Small SmokeStack", "Left Auditorium", "Right SmokeStacks", "Right Small SmokeStack", "Right Auditorium"],
+          "intent": "Every Organ group receives sparse birth punctuation as shells pass, with fixture-independent intensity for small and distant groups."
+        },
+        {
+          "regions": ["TE Sign", "TE Sign 2"],
+          "intent": "Both signs render complete local nested chevrons; their counter-directed archives remain coordinated and legible across all 74 pixels."
+        }
+      ]
+    }
+  }
+}

@@ -43,7 +43,16 @@ test('colorTransitionMs registered, persistent, default 800, range [0,10000]', (
 test('colorPalette1/2 are flagged slew in the schema-backing registry', () => {
   const pc = new ParamCenter(tmpStatePath());
   // _slewKeys is the runtime projection of `slew: true` entries.
-  assert.deepEqual(pc._slewKeys.sort(), ['colorPalette1', 'colorPalette2']);
+  //
+  // Deliberately still EXHAUSTIVE, so an accidental `slew: true` on some new
+  // param is caught here. `rotate` joined the set when float slew was added
+  // (the MOTION glide — see tests/effects/motion_transition.test.js); it is
+  // timed by motionTransitionMs, which defaults to 0, so rotate still snaps
+  // unless an operator asks for a glide.
+  assert.deepEqual(pc._slewKeys.sort(), ['colorPalette1', 'colorPalette2', 'rotate']);
+  // The colour half of the contract, stated independently of the set's size.
+  assert.ok(pc._slewKeys.includes('colorPalette1'));
+  assert.ok(pc._slewKeys.includes('colorPalette2'));
 });
 
 test('transitionMs=0 snaps to target on the first tick', () => {
@@ -55,6 +64,41 @@ test('transitionMs=0 snaps to target on the first tick', () => {
   pc.tickColorTransitions(1000);
   pc.flushDirty(host);
   assert.equal(host.last[11].h, 0.25, 'snaps straight to target hue');
+});
+
+test('an already-interpolated ColorAutopilot frame bypasses only the secondary CPC slew', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  registerColors(pc);
+  pc.set('colorTransitionMs', 800, 'api');
+  pc.set('colorPalette1', { h: 0.1, s: 1, v: 1 }, 'api');
+  pc.applySnapshot(fakeHost());
+
+  const result = pc.setColorAutopilotFrame('colorPalette1', { h: 0.6, s: 0.8, v: 0.7 });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(pc._rendered.colorPalette1, { h: 0.6, s: 0.8, v: 0.7 });
+  assert.equal(pc._rampFrom.colorPalette1, null, 'daemon frame must not start a second ramp');
+
+  const host = fakeHost();
+  pc.tickColorTransitions(1000);
+  pc.flushDirty(host);
+  assert.deepEqual(host.last[11], { h: 0.6, s: 0.8, v: 0.7 });
+
+  pc.set('colorPalette1', { h: 0.9, s: 1, v: 1 }, 'api');
+  assert.notEqual(pc._rampFrom.colorPalette1, null, 'manual API write still arms colorTransitionMs');
+});
+
+test('ColorAutopilot frame API refuses non-palette keys and preserves source locks', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  assert.throws(
+    () => pc.setColorAutopilotFrame('speed', 0.5),
+    /only write colorPalette1\/2/,
+  );
+
+  pc.setSourceLock({ mode: 'global', source: 'api' });
+  const before = pc.get('colorPalette1');
+  const result = pc.setColorAutopilotFrame('colorPalette1', { h: 0.3, s: 1, v: 1 });
+  assert.deepEqual(result, { status: 'ignored', reason: 'source_lock', lockedTo: 'api' });
+  assert.deepEqual(pc.get('colorPalette1'), before);
 });
 
 test('mid-ramp injects an eased interpolant, not the target', () => {
@@ -73,8 +117,13 @@ test('mid-ramp injects an eased interpolant, not the target', () => {
   pc.flushDirty(host);
   const h = host.last[11].h;
   assert.ok(h > 0.0 && h < 0.5, `mid-ramp hue ${h} strictly between endpoints`);
-  // smoothstep(0.5) = 0.5, so hue ≈ 0.25 at the time-midpoint.
-  assert.ok(Math.abs(h - 0.25) < 1e-6, `eased hue ${h} ≈ 0.25`);
+  // Since 2026-07-24 the ramp runs through OKLCH (perceptual), not linear
+  // HSV, so the time-midpoint hue is the PERCEPTUAL midpoint between red
+  // (h=0) and cyan (h=0.5) — not exactly 0.25. It must still be well clear
+  // of both endpoints, fully saturated-ish, and finite.
+  assert.ok(h > 0.05 && h < 0.45, `mid-ramp hue ${h} well inside (0.05, 0.45)`);
+  assert.ok(Number.isFinite(host.last[11].s) && host.last[11].s >= 0 && host.last[11].s <= 1);
+  assert.ok(Number.isFinite(host.last[11].v) && host.last[11].v >= 0 && host.last[11].v <= 1);
 });
 
 test('ramp completes and stops dirtying after the duration', () => {

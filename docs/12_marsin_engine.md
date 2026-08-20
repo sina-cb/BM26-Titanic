@@ -250,12 +250,12 @@ the other within a frame.
 | Surface       | Transport                                  | Writes                           | Reads                                                                |
 | ------------- | ------------------------------------------ | -------------------------------- | -------------------------------------------------------------------- |
 | CaptainPad    | Wi-Fi → HTTP REST + WebSocket on port 6968 | HTTP POSTs (and WS `setControl`/`setSharedParam`) | WebSocket: `mixer`, `sharedParams`, `autopilot`, `viewOverride`, `pattern`, `playlistLibrary`, `playlistSaved`, `vis` |
-| PortWatch     | BLE → captain Heltec → LoRa → server Heltec → USB → Pi bridge → HTTP REST | Bridge translates `cmd …` frames to engine REST calls (see `control_podium/comms/bridge.py::_exec_cmd`) | Bridge subscribes to engine WS internally and publishes compact `pub` frames + on-demand `rep` responses to PortWatch |
+| PortWatch     | BLE → captain Heltec → LoRa → server Heltec → USB → Pi bridge → HTTP REST | Bridge translates `cmd …` frames to engine REST calls (see `LookingGlass/control_podium/comms/bridge.py::_exec_cmd`) | Bridge subscribes to engine WS internally and publishes compact `pub` frames + on-demand `rep` responses to PortWatch |
 
 The bridge is **the only path** from LoRa to the engine, and is a
 direct mirror of the REST surface — see `docs/21_portwatch_monitor.md`
 §7 for the design rule. Adding a command means adding an entry to
-`control_podium/.config.commands.yaml`, a handler in `Bridge._exec_cmd`,
+`LookingGlass/control_podium/.config.commands.yaml`, a handler in `Bridge._exec_cmd`,
 and a builder in `PortWatch/src/frame/ops.ts`.
 
 ### 7a.2 The broadcast contract
@@ -367,15 +367,15 @@ correctly without a guess-and-correct flash.
 - CaptainPad: `CaptainPad/hooks/useEngineState.ts`,
   `CaptainPad/hooks/useEngineLock.ts`,
   `CaptainPad/utils/engineEvents.ts`.
-- PortWatch: `control_podium/PortWatch/src/state/store.ts`,
-  `control_podium/PortWatch/src/frame/ops.ts`,
-  `control_podium/PortWatch/src/status/parse.ts`,
-  `control_podium/PortWatch/src/ui/DeckScreen.tsx` (renew loop).
-- Bridge: `control_podium/comms/bridge.py::_exec_cmd` /
-  `::_exec_qry`, `control_podium/.config.commands.yaml`,
-  `control_podium/comms/engine_client.py::compact_status` (the
+- PortWatch: `LookingGlass/control_podium/PortWatch/src/state/store.ts`,
+  `LookingGlass/control_podium/PortWatch/src/frame/ops.ts`,
+  `LookingGlass/control_podium/PortWatch/src/status/parse.ts`,
+  `LookingGlass/control_podium/PortWatch/src/ui/DeckScreen.tsx` (renew loop).
+- Bridge: `LookingGlass/control_podium/comms/bridge.py::_exec_cmd` /
+  `::_exec_qry`, `LookingGlass/control_podium/.config.commands.yaml`,
+  `LookingGlass/control_podium/comms/engine_client.py::compact_status` (the
   `lk` / `lku` / `pl` fields).
-- Tests: `control_podium/tests/test_comms_e2e_sim.py` covers
+- Tests: `LookingGlass/control_podium/tests/test_comms_e2e_sim.py` covers
   the full lock + lease + connect-time-hydration surface.
 
 ---

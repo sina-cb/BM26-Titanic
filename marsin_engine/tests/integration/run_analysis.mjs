@@ -44,19 +44,29 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
+import { buildAudioAnalyzerOptions } from '../../audio/config/audio_analysis_config.js';
+import { buildRawMirrorWrites } from '../../audio/companion/audio_pipeline.js';
 import { SignalPostProcessor } from '../../audio/postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { ParamCenter } from '../../lib/param_center.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 import { writeWavMono, readWavMono } from './wav_io.mjs';
 
-const FFT_SIZE = 2048;   // config.yaml audio.fftSize
-const HOP_SIZE = 512;    // config.yaml audio.hopSize
-// config.yaml audio.bands / audio.kick (the PRODUCT defaults).
-const BANDS = { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 };
-const KICK  = { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 70 };
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_DIR = path.resolve(__dirname, '..', '..');
+// HERMETIC: tracked config.yaml only, never the scene-state overlay. This
+// harness IS the detector gate (audio_analysis_validation, detection_metrics),
+// and the overlay's live mic gain took both labelled drop clips to ZERO
+// detected drops. See tests/helpers/tracked_audio_config.mjs.
+const PRODUCTION_AUDIO = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
+const FFT_SIZE = PRODUCTION_AUDIO.fftSize;
+const HOP_SIZE = PRODUCTION_AUDIO.hopSize;
+const BANDS = PRODUCTION_AUDIO.bands;
+const KICK = PRODUCTION_AUDIO.kick;
 
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 
@@ -80,9 +90,27 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
     throw new Error(`runClip: mode must be 'mic-only' or 'stems-fed' (got ${mode})`);
   }
   const sampleRate = clip.sampleRate;
+  if (sampleRate !== PRODUCTION_AUDIO.capture.sampleRate) {
+    throw new Error(`runClip: sampleRate ${sampleRate} does not match production ` +
+      `${PRODUCTION_AUDIO.capture.sampleRate}; decode/resample the corpus first`);
+  }
 
   // Real ParamCenter, no persistence (null statePath → no disk I/O).
   const paramCenter = new ParamCenter(null);
+  if (mode === 'stems-fed') {
+    // Stem signals are Companion-manifest keys, not built-in CPC entries.
+    // Reproduce the production manifest registration before feeding them;
+    // otherwise setMany() correctly ignores the unknown keys and a test
+    // labelled "stems-fed" silently exercises the mic-only path.
+    for (const key of ['stemsBassRaw', 'stemsDrumsRaw', 'stemsVocalsRaw']) {
+      paramCenter.registerDynamicLiveParam({
+        key,
+        label: key,
+        oscAddress: `/test/${key}`,
+        range: [0, 1],
+      });
+    }
+  }
 
   // Synthetic monotonic hop clock (ms). Advanced by exactly one hop per
   // analysis; shared between analyzer nowFn and detector tick.
@@ -125,7 +153,7 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
     'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
     'micLowRaw', 'micFluxRaw',
     'audioStructure', 'audioBuildScore', 'audioEnergyRatio',
-    'audioVocalsHot', 'audioDropPulse',
+    'audioDropPulse',
   ];
 
   // Precompute stem plan lookup for stems-fed mode.
@@ -138,14 +166,15 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
   };
 
   // Wire the analyzer EXACTLY like engine.js onAnalysis.
-  const analyzer = new AudioAnalyzer({
-    sampleRate,
-    fftSize: FFT_SIZE,
-    hopSize: HOP_SIZE,
+  const analyzerConfig = {
+    ...PRODUCTION_AUDIO,
     bands,
     kick,
+  };
+  const analyzer = new AudioAnalyzer(buildAudioAnalyzerOptions(analyzerConfig, {
     nowFn: () => clockMs,
-    onAnalysis: ({ low, mid, high, kick, flux }) => {
+    onAnalysis: (analysis) => {
+      const { low, mid, high, kick, flux } = analysis;
       const nowMs = clockMs;
       const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
       lastAnalysisAtMs = nowMs;
@@ -170,11 +199,7 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
         { kind: 'scalar', key: 'micHigh',    value: highPost },
         { kind: 'scalar', key: 'micKick',    value: kickPost },
         { kind: 'scalar', key: 'micFlux',    value: fluxPost },
-        { kind: 'scalar', key: 'micLowRaw',  value: low      },
-        { kind: 'scalar', key: 'micMidRaw',  value: mid      },
-        { kind: 'scalar', key: 'micHighRaw', value: high     },
-        { kind: 'scalar', key: 'micKickRaw', value: kick     },
-        { kind: 'scalar', key: 'micFluxRaw', value: flux     },
+        ...buildRawMirrorWrites(analysis),
       ];
 
       // stems-fed mode: inject fresh synthetic stem RAW values matching
@@ -213,7 +238,7 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
         if (typeof v !== 'number' || !Number.isFinite(v)) anyNonFinite = true;
       }
     },
-  });
+  }));
 
   // Feed PCM hop-by-hop, advancing the synthetic clock once per hop.
   // We push exactly HOP_SIZE samples at a time and bump the clock so the

@@ -18,6 +18,14 @@ import path from 'node:path';
 import { TimelineService } from '../../lib/timeline/timeline_service.js';
 import { saveShowPlan } from '../../lib/timeline/show_plan.js';
 
+// The service logs a line per cue apply / default-cue reconcile. Run in the full
+// batch that chatter is absorbed, but run ALONE it trips the Windows node:test
+// worker-IPC flake ("Unable to deserialize cloned data") and truncates the run —
+// the same reason party_session_repeat.test.js mutes it (report 20260725_91 §6.1).
+const _origLog = console.log;
+console.log = () => {};
+process.on('exit', () => { console.log = _origLog; });
+
 const PALETTES = [{ id: 'deep_sea', c1: 0.62, c2: 0.48 }];
 
 // A deps fake that mirrors the engine's controlLock machinery closely enough to

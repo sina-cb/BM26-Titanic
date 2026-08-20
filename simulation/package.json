@@ -3,7 +3,11 @@
     "prestart": "node tools/kill-ports.js",
     "start": "node start.js",
     "test": "node --test tests/*.test.js",
-    "check": "npm run test"
+    "pixel-views:export": "node tools/export_touch_control_pixel_views.mjs",
+    "pixel-views:check": "node tools/export_touch_control_pixel_views.mjs --check",
+    "test:live-touch-arm": "node agent_tools/live_touch_arm_lifecycle_test.cjs",
+    "test:live-touch-grid": "node agent_tools/live_touch_grid_collapse_test.cjs",
+    "check": "npm run pixel-views:check && npm run test"
   },
   "dependencies": {
     "acorn": "^8.16.0",

@@ -1,80 +1,72 @@
 /*
-  35_sparkle_rain.js — SPARKLE RAIN (high-def, audio-reactive).
+  35_sparkle_rain.js — crisp falling glints over a living two-color rain field.
 
-  Amalgamates 13_sparkle (crisp deterministic per-pixel glints), 07_shimmer
-  (faint living base) and 24_chromatic_murmuration (strict cp1<->cp2 RGB blend).
+  IDENTITY
+    Fine deterministic droplets fall through a near-black field. Rain and
+    highlights stay inside the selected palette, while fixture roles
+    turn the same portable spatial field into a composed rig-wide shower.
 
-  Dense, fine, crisp glints fall — they DRIFT DOWNWARD in y over time — on a
-  near-black field. Each glint is a deterministic single-pixel threshold test
-  (like 13_sparkle): the sparkle "field" is sampled at a y-coordinate that
-  scrolls upward with time, so the lit cells appear to rain DOWN the rig. No
-  blur, no smoothing — glints stay crisp single points.
+  PORTABLE FIXTURE STAGING
+    FIX_BAR_18     — primary rain canvas and strongest falling field.
+    FIX_RAW_LED    — vertical luminous traces through the falling droplets.
+    FIX_VINTAGE_6 — sparse Jewelry droplets with matched W+A phosphor.
+    FIX_PAR        — restrained beat punctuation, never a full glare wall.
+    FIX_TE_SIGN    — steady, readable identity bed with only a subtle rain echo.
+    World coordinates author the common field. No model-specific group, view,
+    controller, fixture id, or section id is used.
 
-  Audio drives TWO orthogonal dimensions:
-    - `level` (micLow) is the PRIMARY: a whole-rig brightness gain that the bass
-      lifts/drops monotonically (so total brightness tracks micLow, corr >= 0.5).
-      It is a flat per-frame gain — it does NOT wobble with the rain's own
-      animation phase, which would pollute the correlation.
-    - `kick` (micKick) is a DISCRETE spawn event: a beat punches the rain DENSER
-      (lowers the lit threshold) and briefly brighter — a kick-driven shower.
-    - `density` (micHigh) stays a SECONDARY sparkle-detail dimension: the highs
-      add fine glint count + a touch of shimmer brightness (the original sparkle
-      character) without owning the brightness budget.
-  A minimal time-based base keeps the rig readable when silent (mission-critical
-  visibility) without ever going fully black.
+  CLOCKS
+    Fall, sparkle churn, trace, and base color each own a delta-accumulated phase
+    in turns. Each wraps only after 10000 complete turns, so there is no short
+    time() re-lock or irrational post-wrap discontinuity.
 
-  Palette: cp1 = cool white/blue glint, cp2 = pale gold glint; sparkles blend
-  cp1<->cp2 per pixel. Crisp white core is emitted on the W channel via rgbwau.
+  CONTROLS (physical MIDI order preserved)
+    localSpeed — overall pace of fall, churn, traces, and field drift.
+    level      — overall rain brightness; primary low-band handle.
+    density    — spatial count of active droplets; high-band detail handle.
+    kick       — clear beat-driven shower punch: more droplets plus a rain veil.
+    fall       — downward travel speed independent of sparkle churn.
+    intensity  — material peak strength of each glint, not glint count.
+    base       — silence-safe living field floor.
 
-  CONTROLS (UI order = declaration order)
-    - localSpeed : overall animation rate (sparkle churn + fall).
-    - level      : overall rain brightness (PRIMARY, micLow). Modulatable.
-    - density    : how many glints are lit (highs → more sparkle). Modulatable.
-    - kick       : beat-driven density/brightness pop (micKick). Modulatable.
-    - fall       : downward fall speed of the rain.
-    - intensity  : glint brightness.
-    - base       : faint base floor (never fully black).
-    - colorPalette1/2 : cp1 cool white/blue, cp2 pale gold.
-
-  AUDIO (modulators-only — never read CPC audio globals natively):
-AUDIO_MODULATION_V1:
-  sliderLevel   <- micLow  range 0.25..1.00 curve linear   # PRIMARY brightness: bass drives overall rain brightness
-  sliderDensity <- micHigh range 0.30..1.00 curve linear   # SECONDARY sparkle/detail: highs add glint count + shimmer
-  sliderKick    <- micKick range 0.00..1.00 curve pow2      # SPAWN: kick punches the rain denser + brighter on the beat
-  # sliderFall      static 0.50  # rain fall speed (motion, not audio-driven)
-  # sliderIntensity static 0.85  # glint peak brightness (static)
-  # sliderBase      static 0.12  # silence visibility floor (static)
-  # sliderLocalSpeed static 0.50  # operator rain pace, not an audio target
+  AUDIO_MODULATION_V1:
+    sliderLevel   <- micLow  range 0.25..1.00 curve linear  # bass lifts the full shower
+    sliderDensity <- micHigh range 0.18..1.00 curve linear  # highs add spatial droplet count
+    sliderKick    <- micKick range 0.00..1.00 curve pow2    # beat launches a bright shower punch
+  Static params: localSpeed, fall, intensity, base, colorPalette1/2.
 */
 
-// ── Exported controls (UI order = declaration order) ────────────────────────
-export var localSpeed = 0.5;   // overall animation rate
-export var level = 0.5;        // PRIMARY overall brightness (micLow). Modulatable.
-export var density = 0.5;      // glint count 0..1 (highs -> more). Modulatable.
-export var kick = 0.0;         // beat spawn pop 0..1 (micKick). Modulatable.
-export var fall = 0.5;         // downward fall speed
-export var intensity = 0.85;   // glint brightness
-export var base = 0.12;        // faint base floor (never fully black)
+// Canonical append-only optional fixture role; absent roles match no pixels.
+var FIX_RAW_LED = 1;
 
-export var cp1H = 0.58, cp1S = 0.35, cp1V = 1.0; // cool white / blue glint
-export var cp2H = 0.12, cp2S = 0.45, cp2V = 1.0; // pale gold glint
+export var localSpeed = 0.5;
+export var level = 0.5;
+export var density = 0.5;
+export var kick = 0.0;
+export var fall = 0.5;
+export var intensity = 0.85;
+export var base = 0.12;
+
+export var cp1H = 0.58, cp1S = 0.35, cp1V = 1.0;
+export var cp2H = 0.12, cp2S = 0.45, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderLevel(v) { level = v; }           // micLow maps here (PRIMARY)
-export function sliderDensity(v) { density = v; }       // micHigh maps here (secondary)
-export function sliderKick(v) { kick = v; }             // micKick maps here (spawn)
+export function sliderLevel(v) { level = v; }
+export function sliderDensity(v) { density = v; }
+export function sliderKick(v) { kick = v; }
 export function sliderFall(v) { fall = v; }
 export function sliderIntensity(v) { intensity = v; }
 export function sliderBase(v) { base = v; }
 
-// ── Tunables ────────────────────────────────────────────────────────────────
-var FALL_MAX = 0.9;   // y-cells per second of scroll at fall = 1.0
-var CHURN_MAX = 0.6;  // sparkle re-roll rate at localSpeed = 1.0
-var GRID_Y = 16.0;    // vertical quantisation of the falling rain field
+// FIX_TE_SIGN is append-only role id 7 in the canonical fixture registry. It is
+// self-declared so this portable pattern also compiles on models with no sign;
+// such models simply have no fixtureType 7 pixels to stage.
+var FIX_TE_SIGN = 7;
 
-// ── Palette RGB cache (strict cp1<->cp2 blending) ───────────────────────────
+var PHASE_WRAP = 10000.0;
+
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
 function _hsv2rgb1() {
@@ -102,7 +94,7 @@ function _hsv2rgb2() {
   else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
   else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
   else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
-  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = qv;   }
   else              { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
 }
 
@@ -112,128 +104,211 @@ function clamp01(v) {
   return v;
 }
 
-// ── Persistent state ─────────────────────────────────────────────────────────
-var fallPhase = 0.0;  // accumulated downward scroll (cells); the rain falls
-var tChurn = 0.0;     // sparkle re-roll time term
-var tBase = 0.0;      // slow base breathing time term
+var fallPhase = 0.0;
+var churnPhase = 0.0;
+var tracePhase = 0.0;
+var basePhase = 0.0;
+var levelGain = 1.0;
+
+function sparkleSample(seed) {
+  var hash = sin(seed) * sin(seed * 1.713 + 1.3) * sin(seed * 3.117 + 2.1);
+  hash = hash * hash;
+  hash = hash * hash;
+  // Churn is a seam-safe probability modulation, not a discontinuous reseed.
+  var churn = wave(churnPhase + sin(seed * 0.071) * 0.43);
+  return hash * (0.66 + churn * 0.34);
+}
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
 
+  var rate = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var fallRate = 0.055 + fall * fall * 0.72;
+
+  fallPhase = fallPhase + dt * fallRate * rate;
+  churnPhase = churnPhase + dt * 0.19 * rate;
+  tracePhase = tracePhase + dt * 0.11 * rate;
+  basePhase = basePhase + dt * 0.027 * rate;
+
+  if (fallPhase >= PHASE_WRAP) fallPhase = fallPhase - PHASE_WRAP;
+  if (churnPhase >= PHASE_WRAP) churnPhase = churnPhase - PHASE_WRAP;
+  if (tracePhase >= PHASE_WRAP) tracePhase = tracePhase - PHASE_WRAP;
+  if (basePhase >= PHASE_WRAP) basePhase = basePhase - PHASE_WRAP;
+
+  // Wide enough for micLow to read clearly, with a non-black silence floor.
+  levelGain = 0.18 + level * level * 2.95;
   _hsv2rgb1();
   _hsv2rgb2();
-
-  // localSpeed: exponential rate trim (pow(2,(localSpeed-0.5)*4)) so the fader
-  // spans a WIDE, visibly-different rain rate — a slow trickle at 0, a downpour
-  // at 1. A small floor keeps the rain always faintly falling/twinkling at 0
-  // (motion stays > 0 at the bottom — never a frozen field).
-  var rateMult = 0.10 + pow(2.0, (localSpeed - 0.5) * 4.0);
-
-  // Rain scrolls so cells appear to move DOWN (y decreasing) over time. Both the
-  // fall speed AND the sparkle churn ride rateMult so localSpeed clearly changes
-  // the whole rain's pace.
-  fallPhase = fallPhase + dt * (0.15 + fall * FALL_MAX) * rateMult;
-  if (fallPhase > 100000.0) fallPhase = fallPhase - 100000.0; // bound growth
-
-  tChurn = time(0.05 / (0.25 + rateMult * CHURN_MAX));
-  // Base breathing ALSO rides rateMult so localSpeed paces the WHOLE field (base
-  // shimmer + glint churn + fall together) — clearly slower at 0, faster at 1.
-  tBase = time(0.4 / (0.20 + rateMult * 0.9));
 }
 
 export function render3D(index, x, y, z) {
-  // PRIMARY brightness gain: a FLAT per-frame scalar driven by `level` (micLow),
-  // resolved once and applied to BOTH the smooth field and the glints below, so
-  // the whole rain brightens/dims with the bass -> clean micLow->brightness corr.
-  var lvlGain = 0.22 + clamp01(level) * 2.10;
+  var nx = clamp01(x);
+  var ny = clamp01(y);
+  var nz = clamp01(z);
+  var isBar = fixtureType == FIX_BAR_18;
+  var isRaw = fixtureType == FIX_RAW_LED;
+  var isVintage = fixtureType == FIX_VINTAGE_6;
+  var isPar = fixtureType == FIX_PAR;
+  var isSign = fixtureType == FIX_TE_SIGN;
 
-  // Quantise into a falling vertical grid cell. Adding fallPhase to the y
-  // sample point scrolls the field upward, so lit cells drift DOWNWARD.
-  var cellF = y * GRID_Y + fallPhase;
-  var cellY = floor(cellF);
+  // Crisp deterministic cell identity. Two adjacent falling rows crossfade with
+  // a smoothstep, so cell turnover never produces a whole-rig frame jump.
+  var cellTravel = (ny + fallPhase) * 21.0;
+  var row = floor(cellTravel);
+  var cellFrac = cellTravel - row;
+  var rowBlend = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac);
+  var col = floor(nx * 19.0 + nz * 7.0);
+  var seed = index * 12.9898 + row * 78.233 + col * 37.719;
+  var seedNext = seed + 78.233;
+  var sampleNow = sparkleSample(seed);
+  var sampleNext = sparkleSample(seedNext);
+  var candidate = sampleNow + (sampleNext - sampleNow) * rowBlend;
 
-  // Deterministic per-cell, per-pixel-column sparkle hash (crisp, single pixel).
-  // Mix in index + z so neighbouring pixels do not all light together, and a
-  // churn term so glints twinkle/re-roll over time.
-  var seed = index * 12.9898 + cellY * 78.233 + z * 37.719 + tChurn * 53.41;
-  var spk = sin(seed) * sin(seed * 1.7 + 1.3) * sin(seed * 3.3 + 2.1);
-  spk = spk * spk;                 // 0..1, biased low → sparse
-  spk = spk * spk;                 // sharpen → crisp glints
-
-  // SECONDARY dimensions: density (micHigh) lowers the threshold → more cells light
-  // (sparkle/detail), and kick (micKick) ALSO lowers it on the beat → a denser
-  // shower (beat-spawn). They drive glint COUNT/shimmer, NOT the overall brightness
-  // budget (that is `level`, the flat micLow PRIMARY gain on the smooth field).
+  // Density owns count: it moves only the activation threshold. The span is
+  // intentionally large so the fader travels from rare pinpricks to rainfall.
+  var d = clamp01(density);
   var kk = clamp01(kick);
-  var threshold = 0.90 - density * 0.45 - kk * 0.26;
+  var threshold = 0.975 - d * 0.61 - kk * 0.24;
+  if (isVintage) threshold = threshold + 0.12; // Jewelry remains sparse.
+  if (isPar) threshold = threshold + 0.16;     // Pars punctuate, never flood.
 
   var glint = 0.0;
-  if (spk > threshold) {
-    var amt = (spk - threshold) / (1.0 - threshold + 0.0001);
+  if (candidate > threshold) {
+    var amt = (candidate - threshold) / (1.0 - threshold + 0.0001);
     amt = clamp01(amt);
-    // Glint brightness: the highs' sparkle shimmer + a kick pop give the rain its
-    // CHARACTER. The glints are ALSO scaled by the `level` (micLow) PRIMARY gain
-    // (computed once per frame below) so the bass lifts the whole rain together —
-    // field AND glints — keeping total brightness a clean monotonic function of
-    // micLow even as the sparkle COUNT varies (the count rides multiplicatively on
-    // the level signal, so it does not break the correlation).
-    glint = amt * (0.30 + intensity * 0.45) * (0.70 + density * 0.30 + kk * 0.50);
-    glint = clamp01(glint * lvlGain);
+    // Intensity owns peak amplitude and does not change the number of droplets.
+    glint = pow(amt, 0.42) * (0.015 + intensity * intensity * 2.15);
+  }
+  // A narrow pre-glint halo belongs to the same deterministic droplet cell. It
+  // makes Intensity's amplitude travel visible around each peak without moving
+  // the activation threshold that Density owns.
+  var halo = 0.0;
+  var haloThreshold = threshold - 0.19;
+  if (candidate > haloThreshold) {
+    halo = (candidate - haloThreshold) / 0.19;
+    halo = clamp01(halo) * intensity * intensity * 0.44;
+  }
+  glint = glint + halo;
+  // A very narrow continuous crest gives Intensity material peak-brightness
+  // travel even when Density is sparse. It changes amplitude, not the main
+  // droplet activation threshold, so Density remains the count control.
+  var peakField = wave(churnPhase * 0.43 + nx * 7.1 + ny * 11.3 + nz * 3.7);
+  peakField = pow(peakField, 16.0);
+  var intensityPeak = peakField * intensity * intensity * 0.15;
+
+  // Resolve cell-boundary travel into a short head/tail profile. This retains
+  // crisp droplets while making their downward movement legible between rows.
+  var dropHead = wave(cellTravel);
+  dropHead = dropHead * dropHead;
+  glint = glint * (0.36 + dropHead * 0.64);
+
+  // Smooth living field under the points. Bars carry the rain canvas; raw LED
+  // strands carry a narrower descending vertical trace.
+  var fieldWave = wave(ny * 2.6 + fallPhase * 0.34 + nx * 0.31);
+  var wash = 0.22 + 0.78 * wave(nx * 1.7 + ny * 0.63 + nz * 0.41);
+  var baseV = base * (0.42 + wash * 0.58) * (0.74 + fieldWave * 0.26);
+  // A second, much broader curtain makes the rain legible from playa distance.
+  // It is continuous analytic motion—not extra randomized droplets—so the
+  // original crisp points remain visible inside a coherent falling sheet.
+  var curtainColumn = pow(wave(nx * 5.2 + nz * 2.3
+                             + churnPhase * 0.17), 3.0);
+  var curtainFall = pow(wave((ny + fallPhase) * 4.2
+                           + nx * 0.23 - nz * 0.11), 1.65);
+  var rainCurtain = curtainColumn * curtainFall
+                  * (0.035 + d * 0.075);
+  var trace = 0.0;
+  if (isBar) {
+    baseV = baseV * 1.18 + rainCurtain * 1.25;
+    glint = glint * 1.14;
+  } else if (isRaw) {
+    var traceShape = triangle(ny * 3.2 + fallPhase * 0.72
+                            + tracePhase + nx * 0.37);
+    trace = pow(traceShape, 4.2) * (0.070 + d * 0.20)
+          + rainCurtain * 0.92;
+    baseV = baseV * 0.72;
+    glint = glint * 0.92;
+  } else if (isVintage) {
+    baseV = baseV * 0.44;
+    glint = glint * 1.08;
+    intensityPeak = intensityPeak * 0.36;
+  } else if (isPar) {
+    baseV = baseV * 0.52;
+    glint = glint * 0.48;
+    intensityPeak = intensityPeak * 0.24;
+  }
+  if (isSign) intensityPeak = 0.0;
+
+  // Kick is a genuine shower event: a descending spatial veil plus brighter
+  // activated droplets. Pars receive only restrained punctuation.
+  var showerBand = pow(wave(ny * 1.35 + fallPhase * 0.23 + nx * 0.08), 3.4);
+  var kickVeil = kk * (0.055 + showerBand * 0.24);
+  if (isBar) kickVeil = kickVeil * 1.25;
+  else if (isRaw) kickVeil = kickVeil * 0.92;
+  else if (isVintage) kickVeil = kickVeil * 0.42;
+  else if (isPar) kickVeil = kk * (0.025 + showerBand * 0.08);
+
+  glint = clamp01(glint * (1.0 + kk * 0.85));
+  var v = clamp01((baseV + trace + glint * 0.48 + kickVeil) * levelGain);
+
+  var tCol = triangle(nx * 2.3 + ny * 0.6 + basePhase * 0.42);
+  var sparkMix = clamp01(glint * 0.96 + kickVeil * 0.35
+                       + intensityPeak * 1.40);
+  var r = (pr1 + (pr2 - pr1) * tCol) * v + pr1 * sparkMix * 0.46;
+  var g = (pg1 + (pg2 - pg1) * tCol) * v + pg1 * sparkMix * 0.46;
+  var b = (pb1 + (pb2 - pb1) * tCol) * v + pb1 * sparkMix * 0.46;
+
+  var w = 0.0;
+  if (isVintage) {
+    // Jewelry favours palette 2 and adds explicit, byte-matched white/amber.
+    // Its RGB remains strictly palette-derived; no fixed gold/orange tint.
+    var jewelryV = clamp01(v * 0.34 + baseV * 0.40 + glint * 0.56
+                         + kickVeil * 0.18 + intensityPeak * 0.74);
+    var jewelryMix = clamp01(0.72 + tCol * 0.28);
+    r = (pr1 + (pr2 - pr1) * jewelryMix) * jewelryV;
+    g = (pg1 + (pg2 - pg1) * jewelryMix) * jewelryV;
+    b = (pb1 + (pb2 - pb1) * jewelryMix) * jewelryV;
+    w = clamp01((glint * (0.12 + intensity * 0.78)
+               + intensityPeak * 0.85) * levelGain);
+  } else if (isPar) {
+    // Restrained palette punctuation rather than a fixed warm wash.
+    var parPulse = clamp01(glint * 0.20 + kickVeil * 0.52);
+    var parV = clamp01(v * 0.70 + parPulse * 0.42);
+    var parMix = clamp01(0.58 + tCol * 0.35);
+    r = (pr1 + (pr2 - pr1) * parMix) * parV;
+    g = (pg1 + (pg2 - pg1) * parMix) * parV;
+    b = (pb1 + (pb2 - pb1) * parMix) * parV;
+  } else if (isSign) {
+    // Identity is a luminous rain-window. Two broad analytic droplet fronts
+    // descend through XYZ and the traced letter path; neither hashes nor
+    // reseeds, so this reads as falling rain rather than fixed chandelier dots.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var rainCoordA = ny * 7.5 + nz * 0.65 + nx * 0.31
+                   + signPath * 0.08 + fallPhase * 2.50;
+    var rainCoordB = ny * 4.3 + nz * 1.20 - nx * 0.60
+                   + signPath * 0.21 + fallPhase * 1.50 + 0.37;
+    var rainHeadA = wave(rainCoordA);
+    var rainHeadB = wave(rainCoordB);
+    var dropA = pow(rainHeadA, 1.55);
+    var dropB = pow(rainHeadB, 1.95);
+    var rainCoordC = ny * 2.7 - nz * 1.45 + nx * 0.88
+                   + signPath * 0.31 + fallPhase * 0.92 + 0.19;
+    var dropC = pow(wave(rainCoordC), 2.15);
+    var rainColumn = 0.55 + 0.45
+                   * wave(signPath * (1.5 + d * 3.5) + nx * 0.73 + nz * 0.41);
+    var signRain = (dropA * 0.48 + dropB * 0.30 + dropC * 0.22)
+                 * rainColumn;
+    var rainTail = wave(rainCoordA - 0.16) * rainColumn;
+    var signV = clamp01((0.37 + signRain * 0.31 + rainTail * 0.12
+                      + kk * (0.03 + signRain * 0.12))
+                      * (0.55 + level * 0.65));
+    var signMix = clamp01(0.18 + signRain * 0.50 + rainTail * 0.18);
+    r = (pr1 + (pr2 - pr1) * signMix) * signV;
+    g = (pg1 + (pg2 - pg1) * signMix) * signV;
+    b = (pb1 + (pb2 - pb1) * signMix) * signV;
+    w = 0.0;
   }
 
-  // Living rain FIELD — the SMOOTH layer that carries the PRIMARY brightness. It is
-  // a per-pixel falling stripe pattern (rides fallPhase so the bands drift DOWN with
-  // the rain), built as a near ZERO-MEAN ripple around a steady spatial wash. As the
-  // bands scroll, the rig's TOTAL brightness stays ~flat frame-to-frame — only
-  // `level` (micLow) moves it — so the field gives a clean micLow->brightness PRIMARY
-  // corr while the per-pixel bands still read as falling rain (spatial darkFrac,
-  // high contrast). The sparse glints sit on top as character, not the budget.
-  var fieldWv = wave(y * 2.3 + fallPhase * 0.18);   // the falling band phase
-  var bandRipple = (fieldWv - 0.5);                 // zero-mean: crests +, troughs -
-  // Steady spatial wash (a STATIC per-pixel gradient — no time term, so it adds NO
-  // per-frame total variance) gives some pixels a dim floor and others a bright
-  // crest (spatial contrast / darkFrac) while keeping the rig TOTAL flat. A
-  // zero-mean falling ripple sculpts the rain bands on top WITHOUT shifting the
-  // total, so the only thing that moves total brightness is `level` (micLow) ->
-  // clean PRIMARY corr.
-  var wash = 0.16 + 0.84 * (0.5 + 0.5 * sin(y * 6.2831853 * 1.5 + index * 0.21));
-  var baseV = base * (wash + 0.30 * bandRipple) * 2.60;
-  if (baseV < 0.0) baseV = 0.0;                     // troughs clamp to true-dark
-  // Section accent: a faint per-section tint shift, ADDITIVE (test_bench only —
-  // sectionId is 0 elsewhere so this contributes 0 there, base still lights all).
-  if (sectionId > 0) {
-    baseV = baseV + base * 0.08 * (0.5 + 0.5 * wave(tBase + sectionId * 0.13));
-  }
-  // PRIMARY: the field is scaled by the `level` (micLow) gain resolved at the top
-  // of render3D — a single per-frame scalar (no animation-phase wobble), so total
-  // rig brightness rises/falls monotonically with the bass -> clean, strong
-  // micLow->brightness correlation. The gain's floor keeps silence visible.
-  baseV = baseV * lvlGain;
-
-  // The field spans cp1<->cp2 across the rig on a multi-cycle coord field that
-  // REACHES both endpoints (triangle), so the rig alternates cool and gold bands —
-  // a robust two-colour spread (keeps hueSpread up) that ALSO owns the RGB
-  // BRIGHTNESS BUDGET, so total RGB brightness tracks the `level` (micLow) PRIMARY
-  // cleanly. The glints add only a SMALL crisp white-core highlight (mostly on the
-  // W channel + a light RGB sparkle), so the SECONDARY sparkle dimensions (micHigh
-  // count, micKick spawn) shape the TEXTURE without owning — or polluting — the
-  // brightness budget.
-  var tCol = clamp01(triangle(x * 2.3 + y * 0.6 + tBase * 0.4));
-  var v = baseV;
-
-  // A light additive sparkle in RGB (kept SMALL so glint COUNT does not dominate
-  // the brightness budget / micLow correlation), pulled toward cp1 (cool white).
-  var spark = glint * 0.18;
-  var rr = (pr1 + (pr2 - pr1) * tCol) * v + (pr1 * spark);
-  var gg = (pg1 + (pg2 - pg1) * tCol) * v + (pg1 * spark);
-  var bb = (pb1 + (pb2 - pb1) * tCol) * v + (pb1 * spark);
-
-  // Crisp white core on the W channel for the glints (the sparkle headline). Kept
-  // modest so the per-frame glint COUNT noise stays a small fraction of the smooth
-  // field's brightness budget — the field (the micLow PRIMARY) dominates the total.
-  var ww = glint * 0.45;
-
-  rgbwau(clamp01(rr), clamp01(gg), clamp01(bb), clamp01(ww), 0.0, 0.0);
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), w, w, 0.0);
 }

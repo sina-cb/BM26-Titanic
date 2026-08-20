@@ -3,6 +3,7 @@
  * Reads/writes the flat `params` object from the nested YAML structure.
  */
 import { params } from "./state.js";
+import { prunePixelOrder } from "../dmx/pixel_order_store.js";
 
 // Euclidean distance between two {x,y,z} points (plain math — no THREE here,
 // config.js loads before the 3D scene exists).
@@ -73,7 +74,10 @@ export function normalizeTraces(traces) {
 
 /**
  * Return a copy of the group-override map containing only groups that carry a
- * real (non-default) On/Off + Brightness master. Default = enabled & 100 %.
+ * real (non-default) On/Off + Brightness master OR a group LOCK. Default =
+ * enabled & 100 % & unlocked. The `locked` flag (rigid group move) persists
+ * exactly like the master so a saved scene reopens with its groups still
+ * locked. Used for both DMX/par groups and the mirror LED-strand group map.
  */
 export function pruneGroupOverrides(groupOverrides) {
   const clean = {};
@@ -83,8 +87,11 @@ export function pruneGroupOverrides(groupOverrides) {
     if (!g || typeof g !== "object") continue;
     const enabled = g.enabled !== false;
     const brightness = (g.brightness === undefined || g.brightness === null) ? 100 : g.brightness;
-    if (!enabled || brightness !== 100) {
-      clean[name] = { enabled, brightness };
+    const locked = g.locked === true;
+    if (!enabled || brightness !== 100 || locked) {
+      const entry = { enabled, brightness };
+      if (locked) entry.locked = true;
+      clean[name] = entry;
     }
   }
   return clean;
@@ -158,9 +165,62 @@ export function extractParams(node, parentKey = null) {
       params.groupOverrides = node[key];
       continue;
     }
+    // LED-strand group masters + lock, keyed by the strand DISPLAY group. Same
+    // shape as groupOverrides ({ [group]: {enabled, brightness, locked} }) but a
+    // separate namespace (LED strands ≠ DMX/par groups). Plain map — intercept
+    // before the generic { value } recursion.
+    if (key === "ledGroupOverrides" && node[key] && typeof node[key] === "object") {
+      params.ledGroupOverrides = node[key];
+      continue;
+    }
     // 2D Pixel Map per-scene layout (plain data map, like groupOverrides).
     if (key === "pixelMap2d" && node[key] && typeof node[key] === "object") {
       params.pixelMap2d = node[key];
+      continue;
+    }
+    // Per-fixture PIXEL ORDER (normal | reversed), keyed by fixture NAME — the
+    // one identity a generator-generated fixture has. A plain map
+    // ({ [fixtureName]: 'reversed' }), NOT a control sub-section, so intercept
+    // it before the generic { value } recursion below mangles it. It lives at
+    // the top level (not on the fixture literals) precisely so it SURVIVES the
+    // destroy-and-recreate of every regeneration — the groupOverrides idiom.
+    // See src/dmx/pixel_order_store.js.
+    if (key === "pixelOrder") {
+      if (node[key] && typeof node[key] === "object" && !Array.isArray(node[key])) {
+        params.pixelOrder = node[key];
+      } else {
+        // Malformed hand edit (scalar, array, or null). No fallback
+        // interpretation: the key is ignored, remembered so the GUI validation
+        // pass can surface it as a visible warning, and dropped on next save.
+        params.pixelOrderMalformed = JSON.stringify(node[key]);
+        console.error(
+          `[pixelOrder] scene_config.yaml top-level "pixelOrder:" must be a map ` +
+          `of {"<fixture name>": reversed} — got ${JSON.stringify(node[key])}. ` +
+          `The key is IGNORED and will be dropped on the next save.`,
+        );
+      }
+      continue;
+    }
+
+    // This optional control is allowed to be absent so the code default can
+    // seed it. Once the key exists, however, it must be a real control leaf.
+    // Treating a malformed object as a subsection makes it disappear from
+    // `params`, which is indistinguishable from absence and silently replaces
+    // the operator's broken saved value with the default later in boot.
+    if (key === "spotlightSamplingMode") {
+      const entry = node[key];
+      const isControlLeaf = entry
+        && typeof entry === "object"
+        && !Array.isArray(entry)
+        && Object.prototype.hasOwnProperty.call(entry, "value")
+        && entry.value !== undefined;
+      if (!isControlLeaf) {
+        throw new TypeError(
+          '[Config] options.spotlightSamplingMode is present but malformed; ' +
+          'expected a control leaf with a defined "value".'
+        );
+      }
+      params.spotlightSamplingMode = entry.value;
       continue;
     }
 
@@ -197,12 +257,30 @@ export function reconstructYAML(node, parentKey = null) {
     } else {
       delete node.groupOverrides;
     }
+    // LED-strand group masters + lock — mirror the groupOverrides persistence
+    // (same prune, same "clean when default" rule).
+    const ledGroupClean = pruneGroupOverrides(params.ledGroupOverrides);
+    if (Object.keys(ledGroupClean).length > 0) {
+      if (!node.ledGroupOverrides) node.ledGroupOverrides = {};
+    } else {
+      delete node.ledGroupOverrides;
+    }
     // 2D Pixel Map: persist only when non-default; otherwise keep scene clean.
     const pmClean = prunePixelMap2d(params.pixelMap2d);
     if (pmClean) {
       if (!node.pixelMap2d) node.pixelMap2d = {};
     } else {
       delete node.pixelMap2d;
+    }
+    // Pixel order: only non-default (`reversed`) entries persist. A scene with
+    // nothing reversed keeps the key out of the file entirely — absence IS the
+    // normal state, so an all-NORMAL scene saves byte-identically to before this
+    // feature existed.
+    const pixelOrderClean = prunePixelOrder(params.pixelOrder);
+    if (Object.keys(pixelOrderClean).length > 0) {
+      if (!node.pixelOrder) node.pixelOrder = {};
+    } else {
+      delete node.pixelOrder;
     }
   }
   for (const key of Object.keys(node)) {
@@ -246,8 +324,16 @@ export function reconstructYAML(node, parentKey = null) {
       node[key] = pruneGroupOverrides(params.groupOverrides);
       continue;
     }
+    if (key === "ledGroupOverrides") {
+      node[key] = pruneGroupOverrides(params.ledGroupOverrides);
+      continue;
+    }
     if (key === "pixelMap2d") {
       node[key] = prunePixelMap2d(params.pixelMap2d) || {};
+      continue;
+    }
+    if (key === "pixelOrder") {
+      node[key] = prunePixelOrder(params.pixelOrder);
       continue;
     }
 

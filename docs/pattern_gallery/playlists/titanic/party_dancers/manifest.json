@@ -1,0 +1,331 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "party_dancers",
+  "seconds": 12,
+  "fps": 8,
+  "globalSpeed": 1,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/party_dancers.yaml",
+  "playlistDigest": "858d94696d088d6bbc133ac0ea843b83f689de14eeb634f95cbdfeecc366c47f",
+  "goalsDigest": "ae14b34ccb0503511ae9250e5276b04f2e445976eac3a22e395090b69e653b93",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "party_dancers/01_dom_ball_dancers",
+      "title": "DOM Ball Dancers",
+      "goal": "Two dominant-frequency colors paint broad mirrored bands through both hull halves; Spin turns their shared local frame so the dancers travel through front/back depth while LOW and KICK animate only nearby Organs.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.14,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderMinimumWidth",
+          "label": "Minimum Width",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderEnergyWidth",
+          "label": "Energy Width",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackgroundLevel",
+          "label": "Background Level",
+          "value": 0.38,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderOrganEnergy",
+          "label": "Organ Energy",
+          "value": 0.36,
+          "valueSource": "playlist saved value",
+          "description": "sustained spatial Organ breath",
+          "audio": {
+            "slider": "sliderOrganEnergy",
+            "signal": "micLow",
+            "min": 0,
+            "max": 0.88,
+            "curve": "ease",
+            "note": "sustained spatial Organ breath"
+          }
+        },
+        {
+          "name": "sliderOrganKick",
+          "label": "Organ Kick",
+          "value": 0.12,
+          "valueSource": "playlist saved value",
+          "description": "restrained spatial Organ heartbeat",
+          "audio": {
+            "slider": "sliderOrganKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.82,
+            "curve": "pow2",
+            "note": "restrained spatial Organ heartbeat"
+          }
+        },
+        {
+          "name": "sliderIdentityLevel",
+          "label": "Identity Level",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomFreq1",
+          "label": "Dom Freq1",
+          "value": 0.007256,
+          "valueSource": "playlist saved value",
+          "description": "Dom Freq1 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomEnergy1",
+          "label": "Dom Energy1",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Dom Energy1 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomFreq2",
+          "label": "Dom Freq2",
+          "value": 0.079819,
+          "valueSource": "playlist saved value",
+          "description": "Dom Freq2 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomEnergy2",
+          "label": "Dom Energy2",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Dom Energy2 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpin",
+          "label": "Spin",
+          "value": 0.28,
+          "valueSource": "playlist saved value",
+          "description": "Spin character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.14,
+        "sliderLevel": 0.5,
+        "sliderMinimumWidth": 0.42,
+        "sliderEnergyWidth": 0.58,
+        "sliderBackgroundLevel": 0.38,
+        "sliderOrganEnergy": 0.36,
+        "sliderOrganKick": 0.12,
+        "sliderIdentityLevel": 0.48,
+        "sliderDomFreq1": 0.007256,
+        "sliderDomEnergy1": 0.52,
+        "sliderDomFreq2": 0.079819,
+        "sliderDomEnergy2": 0.52,
+        "sliderSpin": 0.28
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.14,
+        "sliderLevel": 0.5,
+        "sliderMinimumWidth": 0.42,
+        "sliderEnergyWidth": 0.58,
+        "sliderBackgroundLevel": 0.38,
+        "sliderOrganEnergy": 0.36,
+        "sliderOrganKick": 0.12,
+        "sliderIdentityLevel": 0.48,
+        "sliderDomFreq1": 0.007256,
+        "sliderDomEnergy1": 0.52,
+        "sliderDomFreq2": 0.079819,
+        "sliderDomEnergy2": 0.52,
+        "sliderSpin": 0.28
+      },
+      "gif": "001_party_dancers__01_dom_ball_dancers.gif",
+      "video": "001_party_dancers__01_dom_ball_dancers.mp4",
+      "seconds": 12,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "ace4f531c937b3a9eaa07a58a5d42f541a9d566445fa14bbe7e79bb5fcae390f"
+    },
+    {
+      "index": 1,
+      "pattern": "party_dancers/02_dom_eq_rise",
+      "title": "DOM EQ Rise",
+      "goal": "A bottom-to-top dual-lane EQ: dominant frequency sets each luminous rise height, matching energy sets brush width and strength, and paired antipodal columns Spin smoothly around the whole ship over a living safety field.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBandWidth",
+          "label": "Band Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBackgroundLevel",
+          "label": "Background Level",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderOrganEnergy",
+          "label": "Organ Energy",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Organ Energy character control.",
+          "audio": {
+            "slider": "sliderOrganEnergy",
+            "signal": "micLow",
+            "min": 0,
+            "max": 0.84,
+            "curve": "ease",
+            "note": ""
+          }
+        },
+        {
+          "name": "sliderOrganKick",
+          "label": "Organ Kick",
+          "value": 0.1,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": {
+            "slider": "sliderOrganKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.78,
+            "curve": "pow2",
+            "note": ""
+          }
+        },
+        {
+          "name": "sliderIdentityLevel",
+          "label": "Identity Level",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpin",
+          "label": "Spin",
+          "value": 0.32,
+          "valueSource": "playlist saved value",
+          "description": "Spin character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomFreq1",
+          "label": "Dom Freq1",
+          "value": 0.007256,
+          "valueSource": "playlist saved value",
+          "description": "Dom Freq1 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomEnergy1",
+          "label": "Dom Energy1",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Dom Energy1 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomFreq2",
+          "label": "Dom Freq2",
+          "value": 0.079819,
+          "valueSource": "playlist saved value",
+          "description": "Dom Freq2 character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDomEnergy2",
+          "label": "Dom Energy2",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Dom Energy2 character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.24,
+        "sliderLevel": 0.58,
+        "sliderBandWidth": 0.48,
+        "sliderBackgroundLevel": 0.3,
+        "sliderOrganEnergy": 0.34,
+        "sliderOrganKick": 0.1,
+        "sliderIdentityLevel": 0.52,
+        "sliderSpin": 0.32,
+        "sliderDomFreq1": 0.007256,
+        "sliderDomEnergy1": 0.54,
+        "sliderDomFreq2": 0.079819,
+        "sliderDomEnergy2": 0.54
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.24,
+        "sliderLevel": 0.58,
+        "sliderBandWidth": 0.48,
+        "sliderBackgroundLevel": 0.3,
+        "sliderOrganEnergy": 0.34,
+        "sliderOrganKick": 0.1,
+        "sliderIdentityLevel": 0.52,
+        "sliderSpin": 0.32,
+        "sliderDomFreq1": 0.007256,
+        "sliderDomEnergy1": 0.54,
+        "sliderDomFreq2": 0.079819,
+        "sliderDomEnergy2": 0.54
+      },
+      "gif": "002_party_dancers__02_dom_eq_rise.gif",
+      "video": "002_party_dancers__02_dom_eq_rise.mp4",
+      "seconds": 12,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4055b53524534d9c52e250f67ef4975e1f902fe30e3b65686bf0ec17e01cbb1f"
+    }
+  ]
+}

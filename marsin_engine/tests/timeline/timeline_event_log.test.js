@@ -235,12 +235,14 @@ test('program hold expiry logs "Program ended (hold expired)" from the tick', as
 
 test('lease armed logs once (no per-tick spam), auto-start logs + fires', async () => {
   const { svc, clock } = await setup();
-  // Move to the NEXT day just before the 12:00 cue, autopilot OFF (idle =
-  // the persistent manual owner now that PAUSE/HOLD are gone).
+  // Move to the NEXT day just before the 12:00 cue and take over (operator
+  // takeover is the manual owner the pending-program lease exists for: "the
+  // show goes on even during a takeover"). NOT autopilot-OFF — a DISABLED plan
+  // is totally inert and arms nothing (operator ruling 2026-08-14).
   clock.now = NEXT_DAY_1159_MS;
   await svc._tick(); // day rollover resets firedToday
-  await svc.setAutopilotEnabled(false);
-  clock.now += 2 * 60 * 1000; // 12:01 → cue due while manual → lease ARMS
+  clock.now += 2 * 60 * 1000; // 12:01 → the cue is now due
+  svc.takeover();             // …and the operator owns the rig when it fires
   await svc._tick();
   clock.now += 1000;
   await svc._tick(); // steady-state tick: nothing new
@@ -264,8 +266,8 @@ test('dismissProgram logs "Show dismissed" once', async () => {
   const { svc, clock } = await setup();
   clock.now = NEXT_DAY_1159_MS;
   await svc._tick();
-  await svc.setAutopilotEnabled(false);
   clock.now += 2 * 60 * 1000;
+  svc.takeover();   // manual owner; a DISABLED plan would arm nothing at all
   await svc._tick(); // lease arms
   const r = svc.dismissProgram();
   assert.equal(r.ok, true);

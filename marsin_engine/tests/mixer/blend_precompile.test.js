@@ -7,9 +7,11 @@
 //
 //   2. A blend that is missing or fails to compile must FAIL LOUDLY: it is
 //      recorded in render-health (getRenderHealth().ok === false, with the
-//      offending mode listed) instead of silently caching null and quietly
-//      falling through to host-side linear interpolation. A successful
-//      (re)compile clears the health error.
+//      offending mode listed) instead of silently caching null. A successful
+//      (re)compile clears the health error. The render hot path additionally
+//      THROWS rather than compositing the layer some other way — there is no
+//      host-side linear-interpolation fallback any more (codex P0: a wrong
+//      look on the ship is worse than a loud stop).
 //
 // Run:  node --test tests/blend_precompile.test.js
 import { test } from 'node:test';
@@ -122,7 +124,7 @@ test('a successful (re)compile CLEARS a prior render-health error', () => {
   assert.ok(mixer.blendHandles['blend_fixme']);
 });
 
-test('render hot-path records health when a channel uses an uncompiled mode', () => {
+test('render hot-path REFUSES (throws) + records health on an uncompiled mode', () => {
   const wasmHost = makeFakeWasmHost();
   const pixels = [{ i: 0 }, { i: 1 }];
   const mixer = new PatternMixer({ wasmHost, pixelCount: 2, maxChannels: 3, pixels });
@@ -132,9 +134,26 @@ test('render hot-path records health when a channel uses an uncompiled mode', ()
   const painter = { fillFn: (buf) => { for (let i = 0; i < buf.length; i++) buf[i] = 100; } };
   mixer.setDeckChannel({ id: 'd', name: 'D', pattern: 'p', handle: painter, mode: 'blend_screen', fader: 1.0, enabled: true });
   mixer.addMixerChannel({ id: 'o', name: 'O', pattern: 'p', handle: painter, mode: 'mode_with_no_script', fader: 1.0, enabled: true });
-  // Render once — should NOT throw, but should record the degraded mode.
-  quiet(() => { mixer.renderAll6ch(); });
+  // Render once — the mixer must REFUSE the frame (no substituted
+  // compositor) AND record the offending mode so /status shows it.
+  quiet(() => {
+    assert.throws(
+      () => mixer.renderAll6ch(),
+      /No compiled blend handle for mode 'mode_with_no_script' on channel 'o'/,
+      'an uncompiled channel mode must fail loudly, never fall back',
+    );
+  });
   const h = mixer.getRenderHealth();
   assert.equal(h.ok, false);
   assert.ok(h.blendErrors.some(e => e.blend === 'mode_with_no_script'));
 });
+
+// Live reachability note (why the throw above is acceptable in a 40 Hz
+// loop): every mode that can reach the hot path is gated. The API only
+// accepts `VALID_CHANNEL_BLEND_MODES` + the cataloged `trans_*` set
+// (isValidBlendMode), state_manager rewrites a persisted live `trans_*`
+// back to blend_screen on save, and setting `patternsDir` precompiles every
+// script in channel_blends/ + transitions/ at boot. So the throw is
+// reachable only if a REQUIRED script is missing or fails to WASM-compile —
+// which boot reports loudly before the loop ever starts, and which
+// tests/mixer/blend_fallback_presence.test.js pins on disk.

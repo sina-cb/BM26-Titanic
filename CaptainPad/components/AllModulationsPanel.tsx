@@ -36,6 +36,17 @@ import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   ModulationPopover, MOD_GREEN, useModulationState,
 } from '@/components/Modulation';
+import { Radius } from '@/constants/theme';
+import { readableInk, useGlobalStyles } from '@/styles/globalStyles';
+import { opError } from '@/utils/op_dialog';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
+
+// Ink for anything FILLED with MOD_GREEN. Derived once (docs/54 §1.1: a
+// fixed accent never hardcodes its ink) instead of the '#fff' literals this
+// file used to carry. MOD_GREEN itself is the modulation subsystem's shared
+// accent and is deliberately NOT re-toned here — it is owned by
+// Modulation.tsx and rendered on the mixer too.
+const MOD_GREEN_INK = readableInk(MOD_GREEN);
 
 type Props = {
   visible: boolean;
@@ -93,10 +104,13 @@ export const AllModulationsPanel: React.FC<Props> = ({
   visible, onClose, playlistName, activeEntryId,
 }) => {
   const C = usePalette();
+  const globalStyles = useGlobalStyles();
   // PERFORMANCE MODE: mapping CRUD is 409-gated while a show is live — the
   // panel stays viewable but CLEAR ALL / per-row edit/toggle/delete go inert.
   const perfLocked = usePerfLock();
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const modulationLive = useModulationState();
@@ -106,23 +120,43 @@ export const AllModulationsPanel: React.FC<Props> = ({
 
   // Initial / on-tick fetch.
   useEffect(() => {
-    if (!visible || !playlistName) { setEntries([]); return; }
+    if (!visible || !playlistName) {
+      setEntries([]);
+      setLoading(false);
+      setLoadError(null);
+      return;
+    }
     let cancelled = false;
-    fetchPlaylistByName(playlistName).then((r) => {
-      if (cancelled) return;
-      if (!r.ok || !r.data) { setEntries([]); return; }
-      const raw = (r.data.entries || []) as any[];
-      setEntries(raw.map((e) => ({
-        id: e.id,
-        pattern: e.pattern,
-        label: e.label ?? null,
-        // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
-        // engine + the deck popover) so the readout never shows a dead mode.
-        modulations: Array.isArray(e.modulations)
-          ? e.modulations.map((m: ModulationMapping) => ({ ...m, mode: migrateModulationMode(m.mode) }))
-          : [],
-      })));
-    });
+    setLoading(true);
+    setLoadError(null);
+    fetchPlaylistByName(playlistName)
+      .then((r) => {
+        if (cancelled) return;
+        if (!r.ok || !r.data) {
+          setEntries([]);
+          setLoadError(r.error || `Could not load ${playlistName}`);
+          setLoading(false);
+          return;
+        }
+        const raw = (r.data.entries || []) as any[];
+        setEntries(raw.map((e) => ({
+          id: e.id,
+          pattern: e.pattern,
+          label: e.label ?? null,
+          // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
+          // engine + the deck popover) so the readout never shows a dead mode.
+          modulations: Array.isArray(e.modulations)
+            ? e.modulations.map((m: ModulationMapping) => ({ ...m, mode: migrateModulationMode(m.mode) }))
+            : [],
+        })));
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setEntries([]);
+        setLoadError(error instanceof Error ? error.message : `Could not load ${playlistName}`);
+        setLoading(false);
+      });
     return () => { cancelled = true; };
   }, [visible, playlistName, tick]);
 
@@ -176,7 +210,11 @@ export const AllModulationsPanel: React.FC<Props> = ({
 
   const handleToggle = useCallback(async (entryId: string, m: ModulationMapping) => {
     if (!playlistName) return;
-    await patchModulation(playlistName, entryId, m.id, { enabled: !m.enabled });
+    const result = await patchModulation(playlistName, entryId, m.id, { enabled: !m.enabled });
+    if (!result.ok) {
+      opError('Modulation not updated', result.error || 'The engine rejected the modulation change.');
+      return;
+    }
     refresh();
   }, [playlistName, refresh]);
 
@@ -185,7 +223,11 @@ export const AllModulationsPanel: React.FC<Props> = ({
   // recreate; the friction of a modal dialog was not worth the safety.
   const handleDelete = useCallback(async (entryId: string, m: ModulationMapping) => {
     if (!playlistName) return;
-    await deleteModulation(playlistName, entryId, m.id);
+    const result = await deleteModulation(playlistName, entryId, m.id);
+    if (!result.ok) {
+      opError('Modulation not removed', result.error || 'The engine rejected the modulation removal.');
+      return;
+    }
     refresh();
   }, [playlistName, refresh]);
 
@@ -196,9 +238,15 @@ export const AllModulationsPanel: React.FC<Props> = ({
   // is recoverable by tapping the per-slider ◎ to recreate.
   const handleClearAll = useCallback(async (entryId: string, mappings: ModulationMapping[]) => {
     if (!playlistName || mappings.length === 0) return;
-    await Promise.all(
+    const results = await Promise.all(
       mappings.map((m) => deleteModulation(playlistName, entryId, m.id)),
     );
+    const failed = results.find((result) => !result.ok);
+    if (failed) {
+      opError('Modulations not cleared', failed.error || 'The engine rejected at least one modulation removal.');
+      refresh();
+      return;
+    }
     refresh();
   }, [playlistName, refresh]);
 
@@ -209,7 +257,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
       <View style={{
         marginBottom: 10,
         padding: 10,
-        borderRadius: 8,
+        borderRadius: Radius.control,
         borderWidth: 1,
         borderColor: isActive ? MOD_GREEN : C.ghostBorder,
         backgroundColor: C.surfaceContainerHigh,
@@ -226,10 +274,10 @@ export const AllModulationsPanel: React.FC<Props> = ({
           </Text>
           {isActive ? (
             <View style={{
-              paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4,
+              paddingHorizontal: 6, paddingVertical: 1, borderRadius: Radius.chip,
               backgroundColor: MOD_GREEN,
             }}>
-              <Text style={{ color: '#fff', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.5 }}>ACTIVE</Text>
+              <Text style={{ color: MOD_GREEN_INK, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.5 }}>ACTIVE</Text>
             </View>
           ) : null}
           {isActive && liveActive ? (
@@ -246,7 +294,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
             accessibilityLabel={`Clear all modulations on ${entry.label || entry.pattern}`}
             accessibilityState={{ disabled: perfLocked }}
             style={{
-              paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
+              paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.chip,
               borderWidth: 1, borderColor: C.error,
               backgroundColor: 'transparent',
               opacity: perfLocked ? 0.45 : 1,
@@ -272,12 +320,27 @@ export const AllModulationsPanel: React.FC<Props> = ({
         ))}
       </View>
     );
-  }, [activeEntryId, liveActive, handleRowTap, handleToggle, handleDelete, handleClearAll, perfLocked]);
+  }, [
+    activeEntryId,
+    liveActive,
+    handleRowTap,
+    handleToggle,
+    handleDelete,
+    handleClearAll,
+    perfLocked,
+    C.error,
+    C.ghostBorder,
+    C.secondary,
+    C.surfaceContainerHigh,
+    C.text,
+  ]);
 
   if (!visible) return null;
 
   return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <View
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
       >
@@ -294,7 +357,9 @@ export const AllModulationsPanel: React.FC<Props> = ({
           accessibilityLabel="Close all-modulations panel (backdrop)"
         />
         <View
-          style={{
+          // Surface / hairline / radius / shadow: the shared `panel` recipe
+          // (docs/54 row 19 — an overlay card is a panel).
+          style={[globalStyles.panel, {
             width: 700,
             maxWidth: '95%',
             // Definite height (not maxHeight) so the body FlatList has
@@ -303,12 +368,8 @@ export const AllModulationsPanel: React.FC<Props> = ({
             // collapses to ~0px — visible as "the list is empty even
             // though entries exist".
             height: '80%',
-            backgroundColor: C.surfaceContainerLowest,
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: C.ghostBorder,
             overflow: 'hidden',
-          }}
+          }]}
         >
           {/* Header */}
           <View style={{
@@ -327,7 +388,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityLabel="Close all-modulations panel"
               style={{
-                paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+                paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.control,
                 borderWidth: 1, borderColor: C.ghostBorder,
               }}
             >
@@ -343,6 +404,30 @@ export const AllModulationsPanel: React.FC<Props> = ({
                 textAlign: 'center',
               }}>
                 No playlist loaded on the deck.
+              </Text>
+            </View>
+          ) : loading ? (
+            <View style={{ padding: 32, alignItems: 'center' }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.secondary,
+                textAlign: 'center', letterSpacing: 0.6,
+              }}>
+                LOADING ALL MODULATIONS...
+              </Text>
+            </View>
+          ) : loadError ? (
+            <View style={{ padding: 32, alignItems: 'center', gap: 8 }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.error,
+                textAlign: 'center',
+              }}>
+                MODULATIONS UNAVAILABLE
+              </Text>
+              <Text style={{
+                fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary,
+                textAlign: 'center',
+              }}>
+                {loadError}
               </Text>
             </View>
           ) : totals.mappings === 0 ? (
@@ -375,7 +460,10 @@ export const AllModulationsPanel: React.FC<Props> = ({
               initialNumToRender={12}
               maxToRenderPerBatch={12}
               windowSize={7}
-              removeClippedSubviews
+              // Entry cards have different heights because each pattern owns
+              // a different number of mappings. Native iPad clipping guesses
+              // those offsets incorrectly and silently drops later rows.
+              removeClippedSubviews={false}
               nestedScrollEnabled
             />
           )}
@@ -469,15 +557,17 @@ function ModulationRow({
           {shortSource(mapping.source.key)}
         </Text>
         <View style={{
-          paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4,
+          paddingHorizontal: 6, paddingVertical: 1, borderRadius: Radius.chip,
           // OVERRIDE replaces the static value — call it out with the green
-          // `!` styling, same family as the deck's OverrideBadge.
-          backgroundColor: mapping.mode === 'override' ? '#00a86b' : C.surfaceContainerLow,
-          borderWidth: 1, borderColor: mapping.mode === 'override' ? '#00a86b' : C.ghostBorder,
+          // `!` styling, same family as the deck's OverrideBadge. The hex was
+          // a duplicate of MOD_GREEN; one declaration now, so the two can
+          // never drift apart.
+          backgroundColor: mapping.mode === 'override' ? MOD_GREEN : C.surfaceContainerLow,
+          borderWidth: 1, borderColor: mapping.mode === 'override' ? MOD_GREEN : C.ghostBorder,
         }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-            color: mapping.mode === 'override' ? '#fff' : C.secondary,
+            color: mapping.mode === 'override' ? MOD_GREEN_INK : C.secondary,
             letterSpacing: 0.4,
           }}>
             {mapping.mode === 'override'

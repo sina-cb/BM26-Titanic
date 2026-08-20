@@ -13,6 +13,6 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.33
-      sliderNoiseScale: 0.15
+      sliderGrain: 0.15
     modulations: []
     notes: null

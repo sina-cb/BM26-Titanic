@@ -8,7 +8,13 @@
   IDENTITY (preserved): the counter-phase "ballet bow" of two interleaved lattice
   fields, the wandering Lissajous pivot, teal->violet palette. Upgrades: 0..1
   coords used directly (no re-normalize), identity-slider convention, audio
-  reactivity, guarded direction with smooth autonomous reversal.
+  reactivity, and a fixed forward ambient drift.
+
+  IDENTITY INSTRUMENT
+    TE signs remain legible on a firm RGB floor while two letter-path cohorts
+    bow in counter-phase around the same wandering pivot as the wider ballet.
+    XYZ gives the bow spatial depth and pixelLocalIndex follows each sign's
+    letter choreography; this is living lattice motion, not a flat sign wash.
 
   NON-REPEATING MATH
     Two sway phases accumulate by delta at an irrational ratio (1 : 1.382) so the
@@ -28,17 +34,20 @@
     sliderDetail     <- micHigh range 0.30..0.90 curve linear # node sharpness / sparkle
     sliderWhiteLevel <- micLow  range 0.30..1.00 curve linear # white keep on crests (bass)
     sliderWhiteKick  <- micKick range 0.00..1.00 curve linear # white accent pop (beat)
-  # Static (not audio-mapped): localSpeed, direction, latticeScale, counterPhase,
+  # Static (not audio-mapped): localSpeed, latticeScale, counterPhase,
   # floorLevel, whiteSpread, colorPalette1/2 — operator-set, not modulated.
   White is ADDITIVE on the lattice nodes: a controllable white ACCENT lights the
   brightest node cores as the corps reaches each sway CREST (peak |sway|), so the
-  bow tips flash white at the apex. whiteSpread biases the accent toward the
-  vintage heads (sectionId==2) vs. the whole rig. White never washes the rig.
+  bow tips flash white at the apex. whiteSpread expands the accent from
+  portable Vintage/Jewelry capability toward the whole rig.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
+// Optional accent role. Self-declaring its canonical append-only id keeps the
+// pattern compiling unchanged on scenes with no TE signs.
+var FIX_TE_SIGN = 7;
+
 export var localSpeed = 0.5;     // sway rate (0 still creeps, 1 ~4x faster)
-export var direction = 0.5;      // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
 export var level = 0.5;          // PRIMARY audio: overall brightness (micLow); mid = calm-but-lit
 export var kick = 0.0;           // audio: kick brightness pop (micKick); 0 = no pop until beat
 export var radius = 0.5;         // audio: sway radius / how far the corps bows (micFlux)
@@ -56,11 +65,6 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDirection(v) {
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
-}
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
@@ -77,8 +81,7 @@ var phaseB = 0.0;        // sway phase B
 var pivotA = 0.0;        // Lissajous pivot phase A
 var pivotB = 0.0;        // Lissajous pivot phase B
 var breathPhase = 0.0;   // slow vertical breath
-var autoClock = 0.0;     // slow clock for autonomous reversal
-var dirSign = 1.0;
+var autoClock = 0.0;     // slow clock for the cadence envelope
 var swayX = 0.0;
 var swayY = 0.0;
 var pivotX = 0.0;
@@ -127,10 +130,6 @@ export function beforeRender(delta) {
   if (dt > 0.1) dt = 0.1;
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  dirSign = direction;
-  if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
-  else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
-
   // Autonomous sway: a smooth rate envelope on a slow incommensurate clock eases
   // the bow between a slow and a faster swing. The envelope keeps a positive
   // floor (0.20..1.00) so the bow NEVER freezes mid-swing — an earlier
@@ -139,13 +138,9 @@ export function beforeRender(delta) {
   // discontinuity detector flagged (a long stall plus breath-only residual pops).
   autoClock = autoClock + dt * 0.057 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  // Signed, guaranteed-non-zero base sway magnitude (like 16/17): direction
-  // steers the bias but the bow never stalls at the guarded-center default. The
-  // phases are RADIANS, so the rate carries TAU (matching the og time()*TAU rate
-  // of ~5.3 rad/s); without TAU the sway crawled ~15x too slow and looked frozen.
-  var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
-  var swayMag = dirSign + dirMag * 0.7;     // never near-zero at center
-  var rate = (0.6 + 0.4 * cos(autoClock)) * swayMag * localMultiplier * 6.2831853;
+  // Fixed forward (+1) motion keeps localSpeed as the sole rate control. The 4.77522
+  // coefficient preserves the current Titanic ambient cadence (0.76 * TAU).
+  var rate = (0.6 + 0.4 * cos(autoClock)) * localMultiplier * 4.77522;
 
   // Two sway phases at an irrational ratio so lattices never re-align.
   phaseA = phaseA + dt * 0.69 * rate;       if (phaseA >= PHASE_WRAP) phaseA -= PHASE_WRAP; else if (phaseA <= -PHASE_WRAP) phaseA += PHASE_WRAP;
@@ -153,7 +148,8 @@ export function beforeRender(delta) {
   // Lissajous pivot walks the sway center on its own incommensurate rates.
   pivotA = pivotA + dt * 0.69 * 0.27 * rate; if (pivotA >= PHASE_WRAP) pivotA -= PHASE_WRAP; else if (pivotA <= -PHASE_WRAP) pivotA += PHASE_WRAP;
   pivotB = pivotB + dt * 0.69 * 0.31 * rate; if (pivotB >= PHASE_WRAP) pivotB -= PHASE_WRAP; else if (pivotB <= -PHASE_WRAP) pivotB += PHASE_WRAP;
-  breathPhase = breathPhase + dt * 0.34 * localMultiplier * dirMag * 6.2831853; if (breathPhase >= PHASE_WRAP) breathPhase -= PHASE_WRAP; else if (breathPhase <= -PHASE_WRAP) breathPhase += PHASE_WRAP;
+  breathPhase = breathPhase + dt * 0.34 * localMultiplier * 6.2831853;
+  if (breathPhase >= PHASE_WRAP) breathPhase -= PHASE_WRAP;
 
   liveScale = 2.5 + latticeScale * 11.0;       // 0..1 -> 2.5..13.5
   liveSoft = 1.2 + detail * 4.5;               // node crispness from micHigh
@@ -179,6 +175,7 @@ export function render3D(index, x, y, z) {
   // Coords are already 0..1 — use directly (clamped). No re-normalize.
   var nx = max(0.0, min(1.0, x));
   var ny = max(0.0, min(1.0, y));
+  var nz = max(0.0, min(1.0, z));
 
   // Lattice A — sways left/right with phaseA, walks with pivot.
   var uxA = (nx - 0.5 - pivotX) * liveScale + swayX;
@@ -206,6 +203,41 @@ export function render3D(index, x, y, z) {
   // the negative space between nodes reads near-black (high-def contrast).
   var floorK = floorLevel * 0.05;
   var bri = floorK + lattice * 1.05 * breath;
+  var signPalette = 0.0;
+
+  if (fixtureType == FIX_TE_SIGN) {
+    // Two woven lattice families bow in counterphase through the XYZ letters.
+    // Each family is the product of two oblique threads; their intersections
+    // form dancing nodes while the wandering pivot shifts which corps leads.
+    // Continuous phase/coordinate math keeps the choreography smooth.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signSpace = nx * 0.41 + ny * 0.37 + nz * 0.22;
+    var bowA = sin(phaseA + signPath * PI2) * liveSway * 0.46;
+    var bowB = sin(phaseB * 0.83 - signPath * PI2) * liveSway * 0.46;
+    var weaveAU = wave(signPath * 3.1 + signSpace * 1.7
+                     + bowA + pivotX * 1.8);
+    var weaveAV = wave(signSpace * 4.3 - signPath * 1.2
+                     - bowA * 0.73 + pivotY * 2.1);
+    var weaveBU = wave((1.0 - signPath) * 3.1 - signSpace * 1.5
+                     + bowB - pivotX * 1.8 + 0.5);
+    var weaveBV = wave(signSpace * 4.3 + signPath * 1.4
+                     - bowB * 0.73 - pivotY * 2.1 + 0.5);
+    var signSoft = 1.35 + detail * 2.2;
+    var corpsA = pow(weaveAU * weaveAV, signSoft);
+    var corpsB = pow(weaveBU * weaveBV, signSoft);
+    var cohort = wave(signPath * 1.7 + nx * 0.17 + nz * 0.13
+                    + pivotX - pivotY);
+    var signBow = corpsA * cohort + corpsB * (1.0 - cohort);
+    var intersection = pow(max(0.0, min(1.0,
+      corpsA * corpsB * 3.2)), 0.72);
+    signBow = max(0.0, min(1.0, signBow * 0.84 + intersection * 0.34));
+    lattice = signBow;
+    bri = 0.32 + signBow * 0.34 + intersection * 0.10
+        + breath * 0.03;
+    signPalette = max(0.0, min(1.0,
+      0.14 + signSpace * 0.46 + (corpsB - corpsA) * 0.31
+      + intersection * 0.16));
+  }
 
   // PRIMARY: overall brightness from micLow. level^2 makes the bass the dominant
   // brightness driver (corr>=0.5); the lattice shapes WHERE, the bass HOW BRIGHT.
@@ -219,6 +251,7 @@ export function render3D(index, x, y, z) {
   var total = nodeA + nodeB + 0.0001;
   var tVal = nodeB / total;
   tVal = max(0.0, min(1.0, tVal));
+  if (fixtureType == FIX_TE_SIGN) tVal = signPalette;
 
   var r = (pr1 + (pr2 - pr1) * tVal) * bri;
   var g = (pg1 + (pg2 - pg1) * tVal) * bri;
@@ -227,16 +260,21 @@ export function render3D(index, x, y, z) {
   // WHITE ACCENT on the sway CREST — additive over the cp1/cp2 lattice. Only the
   // brightest node CORES whiten, and only as the corps reaches a crest (crestEnv
   // peaks at each swing extreme). whiteKick pops it on the beat; whiteLevel sets
-  // the amount; whiteSpread biases toward the vintage heads (sectionId==2) vs.
+  // the amount; whiteSpread biases toward the Vintage rails vs.
   // the whole rig. Gated by lattice so negative space never whitens (no wash).
   var nodeCore = max(0.0, min(1.0, lattice));
   var wAmt = max(0.0, min(1.0, whiteLevel));
   var wKick = max(0.0, min(1.0, whiteKick));
   var crest = 0.35 + 0.65 * crestEnv;                // crest-weighted (always some)
   var sect = 0.7 + 0.5 * whiteSpread;                // whole-rig reach grows w/ spread
-  if (sectionId == 2) sect = sect + 0.5 * (1.0 - whiteSpread); // vintage emphasis
+  if (fixtureType == FIX_TE_SIGN) sect = 0.10 + 0.20 * whiteSpread;
+  else if (fixtureType == FIX_VINTAGE_6) sect = sect + 0.5 * (1.0 - whiteSpread);
   var white = nodeCore * crest * (0.4 + 1.0 * wAmt) * (0.5 + wKick * 1.0) * sect * (0.5 + level);
   white = max(0.0, min(1.0, white));
 
-  rgbwau(max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b)), white, 0.0, 0.0);
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  rgbwau(max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b)), white, white, 0.0);
 }

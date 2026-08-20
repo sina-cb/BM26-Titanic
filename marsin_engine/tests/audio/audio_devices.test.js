@@ -19,6 +19,7 @@ import {
   listAudioDevices,
   defaultInputFormatFor,
   findConfiguredDevice,
+  resolveAudioPlatform,
 } from '../../audio/capture/audio_devices.js';
 
 const MAC_AV_OUTPUT = `
@@ -40,6 +41,37 @@ const WIN_DSHOW_OUTPUT = `
 [dshow @ 0000023a]     Alternative name "@device_cm_{33D9A762-90C8-11D0-BD43}\\wave_{abc}"
 [dshow @ 0000023a]  "Stereo Mix (Realtek Audio)"
 `;
+
+test('resolveAudioPlatform resolves persisted auto and empty values to the host', () => {
+  assert.equal(resolveAudioPlatform('auto'), process.platform);
+  assert.equal(resolveAudioPlatform(''), process.platform);
+  assert.equal(resolveAudioPlatform(null), process.platform);
+  assert.equal(resolveAudioPlatform('darwin'), 'darwin');
+});
+
+test('listAudioDevices enumerates a persisted auto platform on this host', async () => {
+  const outputByPlatform = {
+    darwin: MAC_AV_OUTPUT,
+    win32: WIN_DSHOW_OUTPUT,
+    linux: 'Name: default\nDescription: Default Input',
+  };
+  const fakeSpawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    queueMicrotask(() => {
+      child.stderr.write(outputByPlatform[process.platform] || '');
+      child.stderr.end();
+      child.stdout.end();
+      child.emit('exit', 1);
+    });
+    return child;
+  };
+  const result = await listAudioDevices({ spawnFn: fakeSpawn, platform: 'auto' });
+  assert.equal(result.platform, process.platform);
+  assert.equal(result.inputFormat, defaultInputFormatFor(process.platform));
+  assert.ok(result.devices.length > 0);
+});
 
 test('buildListDevicesArgs — macOS avfoundation', () => {
   const args = buildListDevicesArgs({ platform: 'darwin' });

@@ -1,0 +1,1311 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BM26 · Titanic Global Effects Gallery</title>
+<style>
+:root{--bg:#06090e;--panel:#0e141e;--line:#253247;--text:#edf3fb;--muted:#93a4bb;--gold:#f6bd39;--blue:#5bb7ff;--pink:#ff71bf;--red:#ff665f;--green:#73d6a5;--violet:#a98cff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -20%,#182235 0,#06090e 48%);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{width:min(1720px,100%);margin:auto;padding:34px clamp(10px,2.2vw,38px) 90px}
+.hero{padding:12px 4px 30px;border-bottom:1px solid var(--line)}
+.back{color:var(--gold);text-decoration:none;font-weight:700}
+.eyebrow{margin:0;color:var(--muted);font:700 11px/1.2 ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase}
+h1{font-size:clamp(30px,4vw,56px);letter-spacing:-.035em;margin:14px 0 7px}
+.hero>p{max-width:1040px;color:var(--muted);font-size:17px}
+.facts,.metrics{display:flex;gap:8px;flex-wrap:wrap}
+.facts span,.metrics span{border:1px solid #33425a;border-radius:999px;padding:5px 10px;color:#cad5e3;background:#0a1018;font:600 12px ui-monospace,monospace}
+.metrics .p0{color:#ffd1cf;border-color:#7f342f;background:#25110f}
+.metrics .warn{color:#ffe0a8;border-color:#7d6224;background:#211a08}
+.metrics .lane{color:#d8c9ff;border-color:#54418f;background:#170f28}
+.fx{margin-top:28px;padding:clamp(12px,1.5vw,24px);background:linear-gradient(145deg,#101824,#0a1018);border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 55px #0008;overflow:hidden}
+.fx header{display:flex;align-items:center;gap:13px;margin-bottom:6px;flex-wrap:wrap}
+.number{display:grid;place-items:center;flex:0 0 52px;height:42px;border-radius:11px;background:#251e0c;color:var(--gold);font-weight:900;font-family:ui-monospace,monospace}
+.fx h2{font-size:clamp(20px,2vw,27px);letter-spacing:-.02em;margin:2px 0 0}
+.flag{border:1px solid;border-radius:999px;padding:4px 9px;font:800 10px ui-monospace,monospace}
+.flag.audio{color:var(--violet);border-color:#54418f}
+.flag.dmx{color:var(--muted);border-color:#3a4a63}
+.verdict{margin-left:auto;border:1px solid;border-radius:999px;padding:5px 10px;font:800 11px ui-monospace,monospace}
+.verdict.keep{color:var(--green);border-color:#2f6b4f}
+.verdict.optimize,.verdict.opt{color:var(--gold);border-color:#786423}
+.verdict.fold{color:#7fb4ff;border-color:#2d5a8f}
+.verdict.kill{color:var(--red);border-color:#7f342f}
+.verdict.pending{color:var(--muted);border-color:#3a4a63}
+.identity{margin:2px 0 8px;color:#dbe4f0;font-size:16px}
+.params{margin:0 0 12px}.params code{color:#9fb4cd;font:12px ui-monospace,monospace;word-break:break-word}
+.clip-player{background:#04070c;border:1px solid #2b3a50}
+.clip-player video{display:block;width:100%;height:auto;background:#04070c}
+.transport{display:grid;grid-template-columns:auto auto auto auto minmax(80px,auto) minmax(180px,1fr) auto;gap:8px;align-items:center;padding:10px;background:#09101a}
+.transport button,.transport a{border:1px solid #40516a;border-radius:8px;background:#111b29;color:var(--text);padding:7px 9px;font:700 12px inherit;text-decoration:none;cursor:pointer}
+.transport input{width:100%}
+.stage{color:var(--gold);font:900 11px ui-monospace,monospace}
+.nomedia{padding:26px;border:1px dashed #3a4a63;border-radius:12px;color:var(--muted);text-align:center;font:600 13px ui-monospace,monospace}
+.metrics{margin-top:13px}
+.reason{color:#c5d0df;margin:12px 0 0}
+.note{color:#b6a6e0;margin:8px 0 0;font-size:13px}
+.overlap{margin-top:22px}
+.overlap h3{margin:0 0 8px;font:800 13px ui-monospace,monospace;color:var(--gold);letter-spacing:.06em;text-transform:uppercase}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font:12px ui-monospace,monospace}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid #1a2331;white-space:nowrap}
+thead th{color:var(--muted);text-align:right;background:#0a1018}
+tbody th{text-align:left;color:#cad5e3}
+td.self{color:#42536c}
+td.near{color:#ffd1cf;background:#25110f;font-weight:800}
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+footer code{color:#9fb4cd}
+@media(max-width:800px){.transport{grid-template-columns:repeat(2,1fr)}.transport input{grid-column:1/-1}.fx{padding-inline:8px}}
+</style></head><body><main>
+<div class="hero"><a class="back" href="../index.html">← All galleries</a>
+<p class="eyebrow">BM26 · Titanic's End · global effects audit</p>
+<h1>Global Effects Gallery</h1>
+<p>Every card is the SAME deterministic 12-second sequence on the full 964-pixel Titanic model: 2 s of the untouched base pattern (<code>baby_tease/01_bullseye_tide</code>, saved playlist defaults), the effect ON from 2 s, OFF at 8 s, then 4 s of tail so release behaviour is visible. Trigger effects fire at 2 s, 4.5 s and 7 s. The chain is engine.js's own order — applyPixels → applyMacros → applyInvert → applyPostInvert — with a synthetic steady 120 BPM clock and NO audio.</p>
+<div class="facts"><span>51 presets</span><span>50 rendered</span><span>964 pixels</span><span>12s · 20 fps media</span><span>40 fps chain</span><span>0 visually inert</span></div></div>
+<article class="fx" id="vintageWhite__default">
+      <header><span class="number">001</span><div>
+        <p class="eyebrow">vintageWhite · default · legacy · toggle · tier normal</p>
+        <h2>Vintage White</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Slams every vintage filament head&#039;s W channel to full, with the fire-sync release ramp on exit — the ship&#039;s 1912 signature flash.</p>
+      <p class="params"><code>(no params)</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/001_vintageWhite__default.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/001_vintageWhite__default.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 32.852 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">10.0% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.323</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0214 ms/f</span><span class="lane">W/A/U ONLY</span></div>
+      <p class="reason">Unique hardware identity; fire-sync depends on it.</p>
+
+    </article>
+<article class="fx" id="blastWhite__default">
+      <header><span class="number">002</span><div>
+        <p class="eyebrow">blastWhite · default · legacy · toggle · tier normal</p>
+        <h2>Blast White</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Every channel of every pixel to full white — the photo-moment crowd-hit slam.</p>
+      <p class="params"><code>(no params)</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/002_blastWhite__default.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/002_blastWhite__default.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 192.241 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×4.444</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0245 ms/f</span></div>
+      <p class="reason">The rig&#039;s one honest full-white; release envelope already generalized.</p>
+
+    </article>
+<article class="fx" id="uvBlast__default">
+      <header><span class="number">003</span><div>
+        <p class="eyebrow">uvBlast · default · legacy · toggle · tier normal</p>
+        <h2>UV Blast</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">U channel to full across the rig — blacklight bath.</p>
+      <p class="params"><code>(no params)</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/003_uvBlast__default.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/003_uvBlast__default.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 67.059 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">41.5% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×1.684</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0236 ms/f</span><span class="lane">W/A/U ONLY</span></div>
+      <p class="reason">Only UV gesture in the system.</p>
+
+    </article>
+<article class="fx" id="fogger__default">
+      <header><span class="number">004</span><div>
+        <p class="eyebrow">fogger · default · legacy · toggle · tier normal</p>
+        <h2>Fogger</h2>
+      </div><span class="flag dmx">DMX ONLY</span><span class="verdict keep">KEEP</span></header>
+      <p class="identity">DMX relay to the haze machines; no pixel output.</p>
+      <p class="params"><code>(no params)</code></p>
+      <div class="nomedia">DMX relay (haze machine) — not pixel-renderable</div>
+      <div class="metrics"></div>
+      <p class="reason">Hardware relay, not a pixel effect.</p>
+
+    </article>
+<article class="fx" id="strobe__pulse_2hz">
+      <header><span class="number">005</span><div>
+        <p class="eyebrow">strobe · pulse_2hz · gate · toggle · tier normal</p>
+        <h2>2 Hz Pulse</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same gate at 2 Hz.</p>
+      <p class="params"><code>hz=2 · duty=0.5 · intensity=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/005_strobe__pulse_2hz.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/005_strobe__pulse_2hz.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 27.852 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">44.8% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0265 ms/f</span></div>
+      <p class="reason">A mode-wheel position, not a library identity (docs/74 §4.2).</p>
+
+    </article>
+<article class="fx" id="strobe__sync_4hz">
+      <header><span class="number">006</span><div>
+        <p class="eyebrow">strobe · sync_4hz · gate · toggle · tier normal</p>
+        <h2>4 Hz Sync</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Frame-locked full-rig gate at 4 Hz — the canonical strobe.</p>
+      <p class="params"><code>hz=4 · duty=0.5 · intensity=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/006_strobe__sync_4hz.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/006_strobe__sync_4hz.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 27.822 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">44.8% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0222 ms/f</span></div>
+      <p class="reason">Becomes THE Strobe entry; the Frequency mode wheel walks 2/4/5/10/20 Hz from here.</p>
+
+    </article>
+<article class="fx" id="strobe__punch_5hz">
+      <header><span class="number">007</span><div>
+        <p class="eyebrow">strobe · punch_5hz · gate · toggle · tier warning</p>
+        <h2>5 Hz Punch</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same gate at 5 Hz.</p>
+      <p class="params"><code>hz=5 · duty=0.5 · intensity=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/007_strobe__punch_5hz.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/007_strobe__punch_5hz.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 27.816 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">44.7% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0215 ms/f</span></div>
+      <p class="reason">Mode-wheel position (docs/74 §4.2).</p>
+
+    </article>
+<article class="fx" id="strobe__hard_10hz">
+      <header><span class="number">008</span><div>
+        <p class="eyebrow">strobe · hard_10hz · gate · toggle · tier warning</p>
+        <h2>10 Hz Hard</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same gate at 10 Hz.</p>
+      <p class="params"><code>hz=10 · duty=0.5 · intensity=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/008_strobe__hard_10hz.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/008_strobe__hard_10hz.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 27.824 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">44.8% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0269 ms/f</span></div>
+      <p class="reason">Mode-wheel position; WARNING tier travels with the mode value.</p>
+
+    </article>
+<article class="fx" id="strobe__max_20hz">
+      <header><span class="number">009</span><div>
+        <p class="eyebrow">strobe · max_20hz · gate · toggle · tier warning</p>
+        <h2>20 Hz Max</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same gate at 20 Hz — a two-frame cycle at 40 fps.</p>
+      <p class="params"><code>hz=20 · duty=0.5 · intensity=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/009_strobe__max_20hz.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/009_strobe__max_20hz.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 27.819 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">44.8% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.022 ms/f</span></div>
+      <p class="reason">Stays reachable as the wheel&#039;s expert stop, never a default tile (docs/74 D16).</p>
+
+    </article>
+<article class="fx" id="dropHit__white_drop">
+      <header><span class="number">010</span><div>
+        <p class="eyebrow">dropHit · white_drop · envelope · trigger · tier normal</p>
+        <h2>White Flash</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">400 ms additive white+W pop — the hand-drummed boom primitive.</p>
+      <p class="params"><code>color=[1.00,1.00,1.00,1.00,0.20,0.00] · intensity=1 · attackMs=25 · holdMs=75 · releaseMs=300 · blendMode=add</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/010_dropHit__white_drop.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/010_dropHit__white_drop.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 22.705 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">18.8% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×4.444</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0295 ms/f</span></div>
+      <p class="reason">Distinct envelope and colour; the VSN1 drum voice.</p>
+
+    </article>
+<article class="fx" id="dropHit__iceberg_flash">
+      <header><span class="number">011</span><div>
+        <p class="eyebrow">dropHit · iceberg_flash · envelope · trigger · tier normal</p>
+        <h2>Iceberg Flash</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Icy cyan pop with UV and a longer 500 ms ring-out.</p>
+      <p class="params"><code>color=[0.30,0.70,1.00,0.15,0.00,0.20] · intensity=1 · attackMs=20 · holdMs=90 · releaseMs=500 · blendMode=add</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/011_dropHit__iceberg_flash.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/011_dropHit__iceberg_flash.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 20.834 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">30.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×3.93</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0275 ms/f</span></div>
+      <p class="reason">Genuinely different colour story and tail.</p>
+
+    </article>
+<article class="fx" id="dropHit__vintage_burst">
+      <header><span class="number">012</span><div>
+        <p class="eyebrow">dropHit · vintage_burst · envelope · trigger · tier normal</p>
+        <h2>Vintage Burst</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Amber flash that lights the vintage heads and rings 600 ms.</p>
+      <p class="params"><code>color=[1.00,0.65,0.25,0.20,1.00,0.00] · intensity=1 · attackMs=25 · holdMs=120 · releaseMs=600 · blendMode=add</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/012_dropHit__vintage_burst.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/012_dropHit__vintage_burst.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 34.259 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">36.3% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×4.142</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0198 ms/f</span></div>
+      <p class="reason">The warm boom; pairs with the vintageWhite identity.</p>
+
+    </article>
+<article class="fx" id="colorWash__ocean_blue">
+      <header><span class="number">013</span><div>
+        <p class="eyebrow">colorWash · ocean_blue · color · toggle · tier normal</p>
+        <h2>Ocean Blue</h2>
+      </div><span class="verdict kill">KILL</span></header>
+      <p class="identity">70 % lerp of the whole rig toward deep blue.</p>
+      <p class="params"><code>color=[0.05,0.20,1.00,0.00,0.00,0.15] · amount=0.7 · mode=tint</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/013_colorWash__ocean_blue.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/013_colorWash__ocean_blue.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 58.533 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×1.815</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0.975s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0254 ms/f</span></div>
+      <p class="reason">Frozen paint in a palette-driven system; superseded by the palette-fed wash (docs/74 E1). Not a visual dupe — the kill is architectural.</p>
+
+    </article>
+<article class="fx" id="colorWash__iceberg_cyan">
+      <header><span class="number">014</span><div>
+        <p class="eyebrow">colorWash · iceberg_cyan · color · toggle · tier normal</p>
+        <h2>Iceberg Cyan</h2>
+      </div><span class="verdict kill">KILL</span></header>
+      <p class="identity">75 % lerp toward pale cyan.</p>
+      <p class="params"><code>color=[0.15,0.85,1.00,0.00,0.00,0.10] · amount=0.75 · mode=tint</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/014_colorWash__iceberg_cyan.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/014_colorWash__iceberg_cyan.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 83.401 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.63</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 1s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0192 ms/f</span></div>
+      <p class="reason">Same story as ocean_blue; superseded by E1.</p>
+
+    </article>
+<article class="fx" id="colorWash__emergency_red">
+      <header><span class="number">015</span><div>
+        <p class="eyebrow">colorWash · emergency_red · color · toggle · tier normal</p>
+        <h2>Emergency Red</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">90 % takeover toward red — the alarm look.</p>
+      <p class="params"><code>color=[1.00,0.00,0.00,0.00,0.20,0.00] · amount=0.9 · mode=replace</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/015_colorWash__emergency_red.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/015_colorWash__emergency_red.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 89.354 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×1.749</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 1s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.026 ms/f</span></div>
+      <p class="reason">Identity fixed by meaning, not taste; a show cue.</p>
+
+    </article>
+<article class="fx" id="colorWash__vintage_amber">
+      <header><span class="number">016</span><div>
+        <p class="eyebrow">colorWash · vintage_amber · color · toggle · tier normal</p>
+        <h2>Vintage Amber</h2>
+      </div><span class="verdict opt">OPT</span></header>
+      <p class="identity">65 % tint toward amber with a W+A lift — the 1912 grade.</p>
+      <p class="params"><code>color=[1.00,0.45,0.05,0.10,1.00,0.00] · amount=0.65 · mode=tint</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/016_colorWash__vintage_amber.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/016_colorWash__vintage_amber.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 94.503 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.988</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 1s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0197 ms/f</span></div>
+      <p class="reason">Keep the look, rebuild as a true luma-preserving grade (docs/74 E4); today it brightens as it tints.</p>
+
+    </article>
+<article class="fx" id="colorWash__purple">
+      <header><span class="number">017</span><div>
+        <p class="eyebrow">colorWash · purple · color · toggle · tier normal</p>
+        <h2>Purple</h2>
+      </div><span class="verdict kill">KILL</span></header>
+      <p class="identity">75 % tint toward violet.</p>
+      <p class="params"><code>color=[0.55,0.00,1.00,0.00,0.00,0.25] · amount=0.75 · mode=tint</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/017_colorWash__purple.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/017_colorWash__purple.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 69.076 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.321</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0.975s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0211 ms/f</span></div>
+      <p class="reason">&#039;A colour I like&#039; is what the wheel + E1 are for.</p>
+
+    </article>
+<article class="fx" id="invert__default">
+      <header><span class="number">018</span><div>
+        <p class="eyebrow">invert · default · color · toggle · tier normal</p>
+        <h2>Invert</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">1−v on the RGB of the whole frame; W/A/U protected.</p>
+      <p class="params"><code>(no params)</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/018_invert__default.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/018_invert__default.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 130.091 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×3.512</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0192 ms/f</span></div>
+      <p class="reason">Cheap, striking, safety-clean chroma op.</p>
+
+    </article>
+<article class="fx" id="feedbackTrails__soft_afterimage">
+      <header><span class="number">019</span><div>
+        <p class="eyebrow">feedbackTrails · soft_afterimage · feedback · toggle · tier normal</p>
+        <h2>Soft Afterimage</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Short additive comet tails (decay .88).</p>
+      <p class="params"><code>decay=0.88 · injection=0.45 · mix=0.45 · blendMode=add · colorBleed=0.02 · resetOnEnable=true</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/019_feedbackTrails__soft_afterimage.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/019_feedbackTrails__soft_afterimage.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 54.218 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">95.2% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.144</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0.55s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0312 ms/f</span></div>
+      <p class="reason">The everyday trails.</p>
+
+    </article>
+<article class="fx" id="feedbackTrails__ghost_ship">
+      <header><span class="number">020</span><div>
+        <p class="eyebrow">feedbackTrails · ghost_ship · feedback · toggle · tier normal</p>
+        <h2>Ghost Ship</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Replace-blend memory with heavy colour bleed — the ship dissolves into its own after-image.</p>
+      <p class="params"><code>decay=0.94 · injection=0.25 · mix=0.6 · blendMode=replace · colorBleed=0.12 · resetOnEnable=true</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/020_feedbackTrails__ghost_ship.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/020_feedbackTrails__ghost_ship.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 66.703 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">98.2% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.509</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0.95s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0345 ms/f</span></div>
+      <p class="reason">Distinct blend mode, distinct look.</p>
+
+    </article>
+<article class="fx" id="feedbackTrails__long_afterimage">
+      <header><span class="number">021</span><div>
+        <p class="eyebrow">feedbackTrails · long_afterimage · feedback · toggle · tier normal</p>
+        <h2>Long Afterimage</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same additive tails, longer (decay .96).</p>
+      <p class="params"><code>decay=0.96 · injection=0.35 · mix=0.45 · blendMode=add · colorBleed=0.02 · resetOnEnable=true</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/021_feedbackTrails__long_afterimage.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/021_feedbackTrails__long_afterimage.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 62.439 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">98.2% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.449</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0.925s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0245 ms/f</span></div>
+      <p class="reason">Identical mechanism and blend; length becomes the mode wheel (short/long).</p>
+
+    </article>
+<article class="fx" id="feedbackTrails__cosmic_trails">
+      <header><span class="number">022</span><div>
+        <p class="eyebrow">feedbackTrails · cosmic_trails · feedback · toggle · tier normal</p>
+        <h2>Cosmic Trails</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Max-blend trails with bleed — light accumulates without darkening.</p>
+      <p class="params"><code>decay=0.93 · injection=0.4 · mix=0.55 · blendMode=max · colorBleed=0.08 · resetOnEnable=true</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/022_feedbackTrails__cosmic_trails.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/022_feedbackTrails__cosmic_trails.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 50.885 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">97.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.006</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0.825s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0338 ms/f</span></div>
+      <p class="reason">Overlap matrix separates it from ghost_ship (RMS 24.6, well clear of the near-dupe band).</p>
+
+    </article>
+<article class="fx" id="beatPump__soft">
+      <header><span class="number">023</span><div>
+        <p class="eyebrow">beatPump · soft · gate · toggle · tier normal</p>
+        <h2>Soft Pump</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Whole-rig luminance duck on the beat, 35 %.</p>
+      <p class="params"><code>depth=0.35 · rate=1 · curve=2</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/023_beatPump__soft.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/023_beatPump__soft.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 13.458 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">89.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0211 ms/f</span></div>
+      <p class="reason">Becomes THE Beat Pump; depth is already the jog.</p>
+
+    </article>
+<article class="fx" id="beatPump__deep">
+      <header><span class="number">024</span><div>
+        <p class="eyebrow">beatPump · deep · gate · toggle · tier normal</p>
+        <h2>Deep Pump</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same duck at 60 %.</p>
+      <p class="params"><code>depth=0.6 · rate=1 · curve=2</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/024_beatPump__deep.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/024_beatPump__deep.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 23.064 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">89.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0201 ms/f</span></div>
+      <p class="reason">A preset that only moves the jog&#039;s default is not a second effect.</p>
+
+    </article>
+<article class="fx" id="beatPump__halftime">
+      <header><span class="number">025</span><div>
+        <p class="eyebrow">beatPump · halftime · gate · toggle · tier normal</p>
+        <h2>Half-Time</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same duck at half tempo.</p>
+      <p class="params"><code>depth=0.5 · rate=0.5 · curve=2</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/025_beatPump__halftime.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/025_beatPump__halftime.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 25.658 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">89.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.028 ms/f</span></div>
+      <p class="reason">rate (0.5/1/2) becomes the mode wheel.</p>
+
+    </article>
+<article class="fx" id="movementTrace__every_other_repeat">
+      <header><span class="number">026</span><div>
+        <p class="eyebrow">movementTrace · every_other_repeat · movement · toggle · tier normal</p>
+        <h2>Every Other - Repeat</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Two palette colours alternate pixel-by-pixel and walk forward, both stepping through the palette.</p>
+      <p class="params"><code>mode=every_other · travel=repeat · blank=true · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/026_movementTrace__every_other_repeat.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/026_movementTrace__every_other_repeat.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 66.991 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">99.7% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.155</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0397 ms/f</span></div>
+      <p class="reason">2 COLOUR walk — core identity.</p>
+
+    </article>
+<article class="fx" id="movementTrace__every_other_reverse">
+      <header><span class="number">027</span><div>
+        <p class="eyebrow">movementTrace · every_other_reverse · movement · toggle · tier normal</p>
+        <h2>Every Other - Reverse</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same alternating pair, ping-pong travel.</p>
+      <p class="params"><code>mode=every_other · travel=reverse · blank=true · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/027_movementTrace__every_other_reverse.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/027_movementTrace__every_other_reverse.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 66.991 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">99.7% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.155</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0312 ms/f</span></div>
+      <p class="reason">Direction is a mode, not a tile (docs/74 §6.2).</p>
+
+    </article>
+<article class="fx" id="movementTrace__every_other_two_tone">
+      <header><span class="number">028</span><div>
+        <p class="eyebrow">movementTrace · every_other_two_tone · movement · toggle · tier normal</p>
+        <h2>Every Other - Two Tone</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Two colours, no dark gaps — the docs/71 two-tone look in motion.</p>
+      <p class="params"><code>mode=every_other · travel=repeat · blank=false · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/028_movementTrace__every_other_two_tone.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/028_movementTrace__every_other_two_tone.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 91.392 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.289</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0375 ms/f</span></div>
+      <p class="reason">Denser, calmer read at 50 ft; earns its tile as TWO TONE.</p>
+
+    </article>
+<article class="fx" id="movementTrace__one_per_color_repeat">
+      <header><span class="number">029</span><div>
+        <p class="eyebrow">movementTrace · one_per_color_repeat · movement · toggle · tier normal</p>
+        <h2>One Per Colour - Repeat</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">All five palette colours laid as a ladder along every group, crawling.</p>
+      <p class="params"><code>mode=one_per_color · travel=repeat · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/029_movementTrace__one_per_color_repeat.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/029_movementTrace__one_per_color_repeat.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 92.123 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.247</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0375 ms/f</span></div>
+      <p class="reason">5 COLOUR walk — the flagship.</p>
+
+    </article>
+<article class="fx" id="movementTrace__one_per_color_reverse">
+      <header><span class="number">030</span><div>
+        <p class="eyebrow">movementTrace · one_per_color_reverse · movement · toggle · tier normal</p>
+        <h2>One Per Colour - Reverse</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same ladder, ping-pong.</p>
+      <p class="params"><code>mode=one_per_color · travel=reverse · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/030_movementTrace__one_per_color_reverse.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/030_movementTrace__one_per_color_reverse.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 92.123 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.247</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0343 ms/f</span></div>
+      <p class="reason">Direction mode.</p>
+
+    </article>
+<article class="fx" id="movementTrace__pulse_slow_fade">
+      <header><span class="number">031</span><div>
+        <p class="eyebrow">movementTrace · pulse_slow_fade · movement · toggle · tier normal</p>
+        <h2>Pulse - Burst then Long Fade</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Whole-palette burst, then a 5 s fall to almost-out — the ship breathes its colours.</p>
+      <p class="params"><code>mode=pulse · travel=repeat · amount=1 · fadeSpan=0 · sync=free · pixelsPerSecond=0 · burstMs=200 · decayMs=5000 · floor=0.04</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/031_movementTrace__pulse_slow_fade.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/031_movementTrace__pulse_slow_fade.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 60.746 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.245</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0374 ms/f</span></div>
+      <p class="reason">Unique envelope; tile 1 of the colour family.</p>
+
+    </article>
+<article class="fx" id="movementTrace__whole_group_repeat">
+      <header><span class="number">032</span><div>
+        <p class="eyebrow">movementTrace · whole_group_repeat · movement · toggle · tier normal</p>
+        <h2>One Colour At A Time</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Each group holds ONE colour; colours march group-by-group across the ship.</p>
+      <p class="params"><code>mode=whole_group · travel=repeat · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/032_movementTrace__whole_group_repeat.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/032_movementTrace__whole_group_repeat.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 92.218 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.31</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0342 ms/f</span></div>
+      <p class="reason">The boldest of the family; only mode that reads on 1–2-pixel groups.</p>
+
+    </article>
+<article class="fx" id="movementTrace__whole_group_reverse">
+      <header><span class="number">033</span><div>
+        <p class="eyebrow">movementTrace · whole_group_reverse · movement · toggle · tier normal</p>
+        <h2>One Colour At A Time - Reverse</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same march, ping-pong.</p>
+      <p class="params"><code>mode=whole_group · travel=reverse · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/033_movementTrace__whole_group_reverse.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/033_movementTrace__whole_group_reverse.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 92.218 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.31</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0376 ms/f</span></div>
+      <p class="reason">Direction mode.</p>
+
+    </article>
+<article class="fx" id="movementTrace__one_per_color_double">
+      <header><span class="number">034</span><div>
+        <p class="eyebrow">movementTrace · one_per_color_double · movement · toggle · tier normal</p>
+        <h2>One Per Colour - Double Time</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same ladder at 2 px/beat.</p>
+      <p class="params"><code>mode=one_per_color · travel=repeat · amount=1 · fadeSpan=1 · sync=beat · pixelsPerBeat=2</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/034_movementTrace__one_per_color_double.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/034_movementTrace__one_per_color_double.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 92.053 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.247</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0371 ms/f</span></div>
+      <p class="reason">Speed is a mode stop (×1/×2), not an identity.</p>
+
+    </article>
+<article class="fx" id="waterlineSweep__rising_tide">
+      <header><span class="number">035</span><div>
+        <p class="eyebrow">waterlineSweep · rising_tide · spatial · toggle · tier normal</p>
+        <h2>Rising Tide</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Soft blue band climbing the hull, four seconds per pass.</p>
+      <p class="params"><code>axis=y · width=0.25 · amount=0.7 · mode=add · color=[0.15,0.50,1.00,0.00,0.00,0.00] · speedHz=0.25 · sync=free</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/035_waterlineSweep__rising_tide.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/035_waterlineSweep__rising_tide.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 22.256 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">41.6% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.441</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0311 ms/f</span></div>
+      <p class="reason">The ship&#039;s identity move — the tide.</p>
+
+    </article>
+<article class="fx" id="waterlineSweep__beat_wipe">
+      <header><span class="number">036</span><div>
+        <p class="eyebrow">waterlineSweep · beat_wipe · spatial · toggle · tier normal</p>
+        <h2>Beat Wipe</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">The same soft band, marginally narrower, synced per beat.</p>
+      <p class="params"><code>axis=y · width=0.2 · amount=0.8 · mode=add · color=[0.20,0.60,1.00,0.00,0.00,0.00] · speedHz=0.5 · sync=beat</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/036_waterlineSweep__beat_wipe.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/036_waterlineSweep__beat_wipe.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 24.479 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">35.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.498</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0218 ms/f</span></div>
+      <p class="reason">Differs by width .05 and the sync flag; its own speedHz is dead code when synced. The HARD wipe the name promises is docs/74 E15.</p>
+
+    </article>
+<article class="fx" id="waterlineSweep__shadow_pass">
+      <header><span class="number">037</span><div>
+        <p class="eyebrow">waterlineSweep · shadow_pass · spatial · toggle · tier normal</p>
+        <h2>Shadow Pass</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">A moving band of DARKNESS drifting across the ship.</p>
+      <p class="params"><code>axis=x · width=0.3 · amount=0.6 · mode=darken · color=[0.00,0.00,0.00,0.00,0.00,0.00] · speedHz=0.2 · sync=free</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/037_waterlineSweep__shadow_pass.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/037_waterlineSweep__shadow_pass.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 9.509 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">44.6% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.03 ms/f</span></div>
+      <p class="reason">The only darken-mode spatial gesture in the library.</p>
+
+    </article>
+<article class="fx" id="kickPunch__punch">
+      <header><span class="number">038</span><div>
+        <p class="eyebrow">kickPunch · punch · envelope · trigger · tier normal</p>
+        <h2>Punch</h2>
+      </div><span class="flag audio">AUDIO-DRIVEN</span><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Auto-fires white drop-hits off the live kick signal (threshold + rate limit).</p>
+      <p class="params"><code>threshold=0.6 · minGapMs=120 · source=auto · intensityFloor=0.6 · intensityCeil=1 · color=[1.00,1.00,1.00,1.00,0.20,0.00] · attackMs=20 · holdMs=60 · releaseMs=200 · blendMode=add</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/038_kickPunch__punch.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/038_kickPunch__punch.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 15.971 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">13.8% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×4.444</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0197 ms/f</span></div>
+      <p class="reason">A different instrument from dropHit — the music plays the drum. Inert without audio; surfaces must say so (docs/74 F5).</p>
+      <p class="note">Rendered as the MANUAL trigger (three fires). The toggle auto-router is kick-driven and inert with zero audio — not faked here.</p>
+    </article>
+<article class="fx" id="kickPunch__ice_punch">
+      <header><span class="number">039</span><div>
+        <p class="eyebrow">kickPunch · ice_punch · envelope · trigger · tier normal</p>
+        <h2>Ice Punch</h2>
+      </div><span class="flag audio">AUDIO-DRIVEN</span><span class="verdict opt">OPT</span></header>
+      <p class="identity">The same router in icy cyan.</p>
+      <p class="params"><code>threshold=0.65 · minGapMs=140 · source=auto · intensityFloor=0.5 · intensityCeil=1 · color=[0.30,0.70,1.00,0.50,0.00,0.20] · attackMs=20 · holdMs=80 · releaseMs=300 · blendMode=add</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/039_kickPunch__ice_punch.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/039_kickPunch__ice_punch.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 15.309 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">18.8% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×4.365</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0195 ms/f</span></div>
+      <p class="reason">Colour should follow palette B instead of a frozen cyan (docs/74 D9).</p>
+      <p class="note">Rendered as the MANUAL trigger (three fires). The toggle auto-router is kick-driven and inert with zero audio — not faked here.</p>
+    </article>
+<article class="fx" id="freeze__hold">
+      <header><span class="number">040</span><div>
+        <p class="eyebrow">freeze · hold · time · toggle · tier normal</p>
+        <h2>Hold</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Captures the frame and holds it until released.</p>
+      <p class="params"><code>holdFadeMs=0</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/040_freeze__hold.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/040_freeze__hold.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 30.583 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">94.3% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0233 ms/f</span></div>
+      <p class="reason">The DJ&#039;s stop-time.</p>
+
+    </article>
+<article class="fx" id="freeze__fade_2s">
+      <header><span class="number">041</span><div>
+        <p class="eyebrow">freeze · fade_2s · time · toggle · tier normal</p>
+        <h2>Fade 2s</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Holds, then lets the live show bleed back over two seconds.</p>
+      <p class="params"><code>holdFadeMs=2000</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/041_freeze__fade_2s.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/041_freeze__fade_2s.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 47.035 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">91.1% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0248 ms/f</span></div>
+      <p class="reason">Distinct, musical exit.</p>
+
+    </article>
+<article class="fx" id="freeze__stutter">
+      <header><span class="number">042</span><div>
+        <p class="eyebrow">freeze · stutter · time · toggle · tier normal</p>
+        <h2>Stutter</h2>
+      </div><span class="verdict kill">KILL</span></header>
+      <p class="identity">Byte-identical params to hold; there is no stutter code anywhere in the engine.</p>
+      <p class="params"><code>holdFadeMs=0</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/042_freeze__stutter.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/042_freeze__stutter.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 30.583 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">94.3% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0247 ms/f</span></div>
+      <p class="reason">A duplicate wearing a lie for a name (global_effect_library.js:521). The real stutter ships in docs/74 E14.</p>
+
+    </article>
+<article class="fx" id="crush__hard_2">
+      <header><span class="number">043</span><div>
+        <p class="eyebrow">crush · hard_2 · color · toggle · tier normal</p>
+        <h2>2-level</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">RGB posterize to 2 levels — woodcut poster look.</p>
+      <p class="params"><code>levels=2 · amount=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/043_crush__hard_2.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/043_crush__hard_2.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 43.962 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">89.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0233 ms/f</span></div>
+      <p class="reason">Becomes THE Palette Crush entry.</p>
+
+    </article>
+<article class="fx" id="crush__bold_4">
+      <header><span class="number">044</span><div>
+        <p class="eyebrow">crush · bold_4 · color · toggle · tier normal</p>
+        <h2>4-level</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">Posterize to 4 levels.</p>
+      <p class="params"><code>levels=4 · amount=1</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/044_crush__bold_4.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/044_crush__bold_4.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 15.265 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">89.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.029 ms/f</span></div>
+      <p class="reason">levels becomes the mode wheel (2/4/6); amount is already the jog.</p>
+
+    </article>
+<article class="fx" id="crush__soft_6">
+      <header><span class="number">045</span><div>
+        <p class="eyebrow">crush · soft_6 · color · toggle · tier normal</p>
+        <h2>6-level soft</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">Posterize to 6 levels at 60 %.</p>
+      <p class="params"><code>levels=6 · amount=0.6</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/045_crush__soft_6.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/045_crush__soft_6.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 4.655 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">89.5% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0255 ms/f</span></div>
+      <p class="reason">Mode-wheel position.</p>
+
+    </article>
+<article class="fx" id="breath__calm">
+      <header><span class="number">046</span><div>
+        <p class="eyebrow">breath · calm · ambient · toggle · tier normal</p>
+        <h2>Calm 8s</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">8-second whole-rig swell, ±35 %.</p>
+      <p class="params"><code>periodMs=8000 · depth=0.35 · warmth=0.2</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/046_breath__calm.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/046_breath__calm.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 17.152 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">99.0% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.469</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.021 ms/f</span></div>
+      <p class="reason">The ambient idle-breathing gesture; tempo-locks to 4 bars.</p>
+
+    </article>
+<article class="fx" id="breath__deep">
+      <header><span class="number">047</span><div>
+        <p class="eyebrow">breath · deep · ambient · toggle · tier normal</p>
+        <h2>Deep 14s</h2>
+      </div><span class="verdict fold">FOLD</span></header>
+      <p class="identity">14-second swell, ±50 %.</p>
+      <p class="params"><code>periodMs=14000 · depth=0.5 · warmth=0.3</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/047_breath__deep.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/047_breath__deep.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 27.465 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×1.678</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0183 ms/f</span></div>
+      <p class="reason">Depth is the jog; period folds into the mode wheel.</p>
+
+    </article>
+<article class="fx" id="breath__sunrise">
+      <header><span class="number">048</span><div>
+        <p class="eyebrow">breath · sunrise · ambient · toggle · tier normal</p>
+        <h2>Sunrise</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">20-second swell that WARMS (W/A lift) as it rises.</p>
+      <p class="params"><code>periodMs=20000 · depth=0.4 · warmth=0.5</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/048_breath__sunrise.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/048_breath__sunrise.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 30.313 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">100.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.033</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0182 ms/f</span></div>
+      <p class="reason">The warmth curve is a real second identity, not a knob position.</p>
+
+    </article>
+<article class="fx" id="sparkle__fizz">
+      <header><span class="number">049</span><div>
+        <p class="eyebrow">sparkle · fizz · overlay · toggle · tier normal</p>
+        <h2>Fizz</h2>
+      </div><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Sparse white glints (1 % of pixels, 400 ms decay) on the W channel — frost.</p>
+      <p class="params"><code>density=0.01 · decayMs=400 · intensity=1 · audioDensity=false</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/049_sparkle__fizz.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/049_sparkle__fizz.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 28.832 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">45.7% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1.552</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0254 ms/f</span><span class="lane">W/A/U ONLY</span></div>
+      <p class="reason">Signature overlay; cheap.</p>
+
+    </article>
+<article class="fx" id="sparkle__blizzard">
+      <header><span class="number">050</span><div>
+        <p class="eyebrow">sparkle · blizzard · overlay · toggle · tier normal</p>
+        <h2>Blizzard</h2>
+      </div><span class="verdict opt">OPT</span></header>
+      <p class="identity">15 % of the rig glinting at 80 ms — a white-noise blizzard.</p>
+      <p class="params"><code>density=0.15 · decayMs=80 · intensity=1 · audioDensity=false</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/050_sparkle__blizzard.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/050_sparkle__blizzard.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 52.801 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">88.0% px</span><span class="warn" title="peak frame brightness vs base peak (flash hazard)">peak ×2.394</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0337 ms/f</span><span class="lane">W/A/U ONLY</span></div>
+      <p class="reason">Reads as noise and spikes W power (gallery: peak ×2.39, 88 % of pixels); retune density toward ~0.06 (docs/74 D8).</p>
+
+    </article>
+<article class="fx" id="sparkle__hihat">
+      <header><span class="number">051</span><div>
+        <p class="eyebrow">sparkle · hihat · overlay · toggle · tier normal</p>
+        <h2>Hi-Hat</h2>
+      </div><span class="flag audio">AUDIO-DRIVEN</span><span class="verdict keep">KEEP</span></header>
+      <p class="identity">Glint density rides the live hi-hat band; zero glints without audio.</p>
+      <p class="params"><code>density=0 · decayMs=120 · intensity=1 · audioDensity=true</code></p>
+
+      <div class="clip-player" data-on="2" data-off="8">
+        <video src="videos/051_sparkle__hihat.mp4" muted playsinline preload="metadata" autoplay loop></video>
+        <div class="transport">
+          <button type="button" data-action="play">Pause</button>
+          <button type="button" data-seek="0">Base</button>
+          <button type="button" data-seek="2">Effect ON</button>
+          <button type="button" data-seek="8">OFF · tail</button>
+          <span class="stage">BASE</span>
+          <input data-action="seek" type="range" min="0" max="12" step="0.05" value="0" aria-label="Seek">
+          <a href="gifs/051_sparkle__hihat.gif" download>Download GIF</a>
+        </div>
+      </div>
+      <div class="metrics"><span title="mean per-frame RMS byte delta vs base, ON window">Δ 0 RMS</span><span title="fraction of the 964 pixels differing from base, ON window">0.0% px</span><span class="" title="peak frame brightness vs base peak (flash hazard)">peak ×1</span><span title="seconds after OFF until the RMS delta falls below 2 bytes">tail 0s</span><span class="" title="mean ms per frame for the whole effect chain on 964 px">0.0197 ms/f</span></div>
+      <p class="reason">The only audio-textured overlay; label the audio dependency on every surface (it is correctly dead in silence).</p>
+      <p class="note">density 0 + audioDensity true: every glint comes from live micHigh. With no audio there is no manual equivalent, so this renders inert by design.</p>
+    </article>
+<h2 style="margin-top:44px">Preset overlap matrix</h2>
+<p style="color:var(--muted);max-width:1040px">Mean per-frame RMS byte distance between two presets of the SAME effect over the identical ON-window frames. Cells under 8 bytes are highlighted: those two presets render close to the same thing.</p>
+<section class="overlap"><h3>strobe</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>pulse_2hz</th><th>sync_4hz</th><th>punch_5hz</th><th>hard_10hz</th><th>max_20hz</th></tr></thead><tbody><tr><th>pulse_2hz</th><td class="self">—</td><td class="">27.8</td><td class="">27.8</td><td class="">22.3</td><td class="">27.9</td></tr><tr><th>sync_4hz</th><td class="">27.8</td><td class="self">—</td><td class="">27.9</td><td class="">27.8</td><td class="">22.3</td></tr><tr><th>punch_5hz</th><td class="">27.8</td><td class="">27.9</td><td class="self">—</td><td class="">27.8</td><td class="">27.8</td></tr><tr><th>hard_10hz</th><td class="">22.3</td><td class="">27.8</td><td class="">27.8</td><td class="self">—</td><td class="">27.8</td></tr><tr><th>max_20hz</th><td class="">27.9</td><td class="">22.3</td><td class="">27.8</td><td class="">27.8</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>dropHit</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>white_drop</th><th>iceberg_flash</th><th>vintage_burst</th></tr></thead><tbody><tr><th>white_drop</th><td class="self">—</td><td class="">16.9</td><td class="">28.0</td></tr><tr><th>iceberg_flash</th><td class="">16.9</td><td class="self">—</td><td class="">28.8</td></tr><tr><th>vintage_burst</th><td class="">28.0</td><td class="">28.8</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>colorWash</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>ocean_blue</th><th>iceberg_cyan</th><th>emergency_red</th><th>vintage_amber</th><th>purple</th></tr></thead><tbody><tr><th>ocean_blue</th><td class="self">—</td><td class="">51.9</td><td class="">120.4</td><td class="">117.8</td><td class="">42.1</td></tr><tr><th>iceberg_cyan</th><td class="">51.9</td><td class="self">—</td><td class="">135.0</td><td class="">120.0</td><td class="">74.3</td></tr><tr><th>emergency_red</th><td class="">120.4</td><td class="">135.0</td><td class="self">—</td><td class="">65.0</td><td class="">99.7</td></tr><tr><th>vintage_amber</th><td class="">117.8</td><td class="">120.0</td><td class="">65.0</td><td class="self">—</td><td class="">108.9</td></tr><tr><th>purple</th><td class="">42.1</td><td class="">74.3</td><td class="">99.7</td><td class="">108.9</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>feedbackTrails</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>soft_afterimage</th><th>ghost_ship</th><th>long_afterimage</th><th>cosmic_trails</th></tr></thead><tbody><tr><th>soft_afterimage</th><td class="self">—</td><td class="">41.0</td><td class="">17.3</td><td class="">46.6</td></tr><tr><th>ghost_ship</th><td class="">41.0</td><td class="self">—</td><td class="">28.2</td><td class="">24.6</td></tr><tr><th>long_afterimage</th><td class="">17.3</td><td class="">28.2</td><td class="self">—</td><td class="">39.2</td></tr><tr><th>cosmic_trails</th><td class="">46.6</td><td class="">24.6</td><td class="">39.2</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>beatPump</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>soft</th><th>deep</th><th>halftime</th></tr></thead><tbody><tr><th>soft</th><td class="self">—</td><td class="">9.9</td><td class="">11.9</td></tr><tr><th>deep</th><td class="">9.9</td><td class="self">—</td><td class="near">6.0</td></tr><tr><th>halftime</th><td class="">11.9</td><td class="near">6.0</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>movementTrace</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>every_other_repeat</th><th>every_other_reverse</th><th>every_other_two_tone</th><th>one_per_color_repeat</th><th>one_per_color_reverse</th><th>pulse_slow_fade</th><th>whole_group_repeat</th><th>whole_group_reverse</th><th>one_per_color_double</th></tr></thead><tbody><tr><th>every_other_repeat</th><td class="self">—</td><td class="near">0.0</td><td class="">70.0</td><td class="">93.3</td><td class="">93.3</td><td class="">70.7</td><td class="">70.0</td><td class="">70.0</td><td class="">93.5</td></tr><tr><th>every_other_reverse</th><td class="near">0.0</td><td class="self">—</td><td class="">70.0</td><td class="">93.3</td><td class="">93.3</td><td class="">70.7</td><td class="">70.0</td><td class="">70.0</td><td class="">93.5</td></tr><tr><th>every_other_two_tone</th><td class="">70.0</td><td class="">70.0</td><td class="self">—</td><td class="">85.6</td><td class="">85.6</td><td class="">96.8</td><td class="">50.9</td><td class="">50.9</td><td class="">85.8</td></tr><tr><th>one_per_color_repeat</th><td class="">93.3</td><td class="">93.3</td><td class="">85.6</td><td class="self">—</td><td class="near">0.0</td><td class="">94.1</td><td class="">86.5</td><td class="">86.5</td><td class="">81.2</td></tr><tr><th>one_per_color_reverse</th><td class="">93.3</td><td class="">93.3</td><td class="">85.6</td><td class="near">0.0</td><td class="self">—</td><td class="">94.1</td><td class="">86.5</td><td class="">86.5</td><td class="">81.2</td></tr><tr><th>pulse_slow_fade</th><td class="">70.7</td><td class="">70.7</td><td class="">96.8</td><td class="">94.1</td><td class="">94.1</td><td class="self">—</td><td class="">94.0</td><td class="">94.0</td><td class="">94.1</td></tr><tr><th>whole_group_repeat</th><td class="">70.0</td><td class="">70.0</td><td class="">50.9</td><td class="">86.5</td><td class="">86.5</td><td class="">94.0</td><td class="self">—</td><td class="near">0.0</td><td class="">86.7</td></tr><tr><th>whole_group_reverse</th><td class="">70.0</td><td class="">70.0</td><td class="">50.9</td><td class="">86.5</td><td class="">86.5</td><td class="">94.0</td><td class="near">0.0</td><td class="self">—</td><td class="">86.7</td></tr><tr><th>one_per_color_double</th><td class="">93.5</td><td class="">93.5</td><td class="">85.8</td><td class="">81.2</td><td class="">81.2</td><td class="">94.1</td><td class="">86.7</td><td class="">86.7</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>waterlineSweep</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>rising_tide</th><th>beat_wipe</th><th>shadow_pass</th></tr></thead><tbody><tr><th>rising_tide</th><td class="self">—</td><td class="">28.3</td><td class="">26.7</td></tr><tr><th>beat_wipe</th><td class="">28.3</td><td class="self">—</td><td class="">28.0</td></tr><tr><th>shadow_pass</th><td class="">26.7</td><td class="">28.0</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>kickPunch</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>punch</th><th>ice_punch</th></tr></thead><tbody><tr><th>punch</th><td class="self">—</td><td class="">9.0</td></tr><tr><th>ice_punch</th><td class="">9.0</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>freeze</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>hold</th><th>fade_2s</th><th>stutter</th></tr></thead><tbody><tr><th>hold</th><td class="self">—</td><td class="">46.3</td><td class="near">0.0</td></tr><tr><th>fade_2s</th><td class="">46.3</td><td class="self">—</td><td class="">46.3</td></tr><tr><th>stutter</th><td class="near">0.0</td><td class="">46.3</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>crush</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>hard_2</th><th>bold_4</th><th>soft_6</th></tr></thead><tbody><tr><th>hard_2</th><td class="self">—</td><td class="">42.1</td><td class="">43.2</td></tr><tr><th>bold_4</th><td class="">42.1</td><td class="self">—</td><td class="">15.9</td></tr><tr><th>soft_6</th><td class="">43.2</td><td class="">15.9</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>breath</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>calm</th><th>deep</th><th>sunrise</th></tr></thead><tbody><tr><th>calm</th><td class="self">—</td><td class="">22.0</td><td class="">19.1</td></tr><tr><th>deep</th><td class="">22.0</td><td class="self">—</td><td class="">15.8</td></tr><tr><th>sunrise</th><td class="">19.1</td><td class="">15.8</td><td class="self">—</td></tr></tbody></table></div></section>
+<section class="overlap"><h3>sparkle</h3>
+      <div class="tablewrap"><table><thead><tr><th></th><th>fizz</th><th>blizzard</th><th>hihat</th></tr></thead><tbody><tr><th>fizz</th><td class="self">—</td><td class="">50.2</td><td class="">28.8</td></tr><tr><th>blizzard</th><td class="">50.2</td><td class="self">—</td><td class="">52.7</td></tr><tr><th>hihat</th><td class="">28.8</td><td class="">52.7</td><td class="self">—</td></tr></tbody></table></div></section>
+<footer>
+<p><strong>W/A/U visualization.</strong> W/A/U lanes are composited into the rendered RGB for display only: rgb += w*[1,0.92,0.75] + a*[1,0.55,0.10] + u*[0.45,0,1], clamped to [0,1]. All manifest metrics are measured on the raw six-lane output BEFORE this mapping.</p>
+<p><strong>Metrics.</strong> <code>Δ RMS</code> mean per-frame six-lane RMS byte delta vs the base capture during the ON window · <code>% px</code> mean fraction of pixels differing from base during ON · <code>peak ×</code> peak frame brightness (post-visualization) over the base peak, the flash-hazard number · <code>tail</code> seconds after OFF until the RMS delta drops below 2 bytes · <code>ms/f</code> mean wall time for the whole effect chain on 964 pixels. <code>W/A/U ONLY</code> marks a preset whose RGB is untouched and whose white/amber/UV lanes carry the whole effect. <code>VISUALLY INERT</code> marks a preset that rendered indistinguishably from the base and is neither W/A/U-only nor audio-driven — a finding, not a pass.</p>
+<p>Generated offline: no ports bound, no live-engine writes, no network. Base capture via <code>tools/pattern_audio_harness.mjs --synth silence</code>.</p>
+</footer>
+</main>
+<script>
+for(const player of document.querySelectorAll('.clip-player')){
+  const video=player.querySelector('video');const play=player.querySelector('[data-action="play"]');const seek=player.querySelector('[data-action="seek"]');const stage=player.querySelector('.stage');const on=Number(player.dataset.on);const off=Number(player.dataset.off);
+  const refresh=()=>{const t=video.currentTime||0;seek.value=t;stage.textContent=t<on?'BASE':t<off?'EFFECT ON':'TAIL';play.textContent=video.paused?'Play':'Pause'};
+  play.addEventListener('click',()=>video.paused?video.play():video.pause());video.addEventListener('timeupdate',refresh);video.addEventListener('play',refresh);video.addEventListener('pause',refresh);seek.addEventListener('input',()=>{video.currentTime=Number(seek.value);refresh()});for(const button of player.querySelectorAll('[data-seek]'))button.addEventListener('click',()=>{video.currentTime=Number(button.dataset.seek);video.play()});video.play().catch(refresh);refresh();
+}
+</script></body></html>

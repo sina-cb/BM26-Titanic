@@ -10,7 +10,7 @@ ask what to read (`os/autonomy.md`).
    to your task; don't load them all.
 5. **Your role brief in `.agent/roles/`** — adopt the matching role's
    mindset and checklist (coordinator, developer, subsystem expert, …).
-6. **The laws your task touches** (`.agent/os/`):
+6. **The specs your task touches** (`.agent/os/`):
    - `git.md` — **always**, if you'll commit.
    - `security_privacy.md` — **always**, if you'll commit (public repo).
    - `python_style.md` / `nodejs_style.md` — if you'll write code.

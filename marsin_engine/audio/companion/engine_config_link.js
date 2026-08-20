@@ -50,8 +50,9 @@ export class EngineConfigLink {
    * @param {number} opts.port   engine API port (e.g. 6968)
    * @param {(config:object) => void} opts.onConfig  applied on seed + every broadcast
    * @param {(connected:boolean, info?:object) => void} [opts.onStatus]  link up/down
+   * @param {(error:Error) => void} [opts.onConfigError]  onConfig threw — see below
    */
-  constructor({ host, port, onConfig, onStatus }) {
+  constructor({ host, port, onConfig, onStatus, onConfigError }) {
     if (typeof host !== 'string' || !host) throw new Error('EngineConfigLink: host must be a non-empty string');
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error(`EngineConfigLink: port must be an integer in [1, 65535], got ${port}`);
@@ -61,6 +62,15 @@ export class EngineConfigLink {
     this.port = port;
     this.onConfig = onConfig;
     this.onStatus = typeof onStatus === 'function' ? onStatus : () => {};
+    // A THROWN onConfig means the Companion could not adopt the engine's
+    // tuning: from here on it is analyzing with something OTHER than what the
+    // operator set, which is precisely the silent divergence codex P0 forbids.
+    // A console.warn on a headless show box is not a report — the failure is
+    // handed to this callback so it can reach the UI. Absent (tests, embedded
+    // use) it still goes to stderr, but it is never swallowed.
+    this.onConfigError = typeof onConfigError === 'function'
+      ? onConfigError
+      : (error) => { console.error(`[companion engine-link] onConfig threw: ${error && error.message}`); };
     this.wsUrl = `ws://${host}:${port}/ws/control`;
     this.httpBase = `http://${host}:${port}`;
     this._ws = null;
@@ -125,7 +135,7 @@ export class EngineConfigLink {
       catch { return; }   // /ws/control carries many types; ignore non-JSON
       if (msg && msg.type === 'audioConfig' && msg.config && typeof msg.config === 'object') {
         try { this.onConfig(msg.config); }
-        catch (e) { console.warn(`[companion engine-link] onConfig threw: ${e && e.message}`); }
+        catch (e) { this._reportConfigError(e); }
       }
     });
 
@@ -144,14 +154,27 @@ export class EngineConfigLink {
     });
   }
 
+  /** Never let the reporter itself take the link down. */
+  _reportConfigError(error) {
+    try { this.onConfigError(error); }
+    catch (e) { console.error(`[companion engine-link] onConfigError threw: ${e && e.message}`); }
+  }
+
   async _seed() {
+    let config;
     try {
-      const config = await this.fetchConfig();
-      if (config) this.onConfig(config);
+      config = await this.fetchConfig();
     } catch (e) {
-      // Seed is best-effort; the WS `audioConfig` replay covers the gap.
+      // TRANSPORT failure only — best-effort; the WS `audioConfig` replay
+      // covers the gap and the link keeps retrying.
       console.warn(`[companion engine-link] seed GET /audio/config failed: ${e && e.message}`);
+      return;
     }
+    if (!config) return;
+    // An APPLY failure is a different animal from a transport failure: the
+    // engine answered, and we couldn't take what it said. Report it.
+    try { this.onConfig(config); }
+    catch (e) { this._reportConfigError(e); }
   }
 
   /**
@@ -183,6 +206,15 @@ export class EngineConfigLink {
    * failure (engine down, 400 validation, etc.) so the caller can fall
    * back to a local apply and surface the degraded state — never a silent
    * swallow that pretends the engine accepted the change.
+   *
+   * ░░ WHY THE REJECTION CARRIES `error.status` ░░
+   * "The engine refused this value" and "the request never reached the
+   * engine" demand OPPOSITE handling from a write queue: the first must
+   * revert (a byte-identical retry can only be refused again), the second
+   * must retry (the value is still correct, the wire was not). A message
+   * string cannot be classified reliably, so an ANSWERED request attaches
+   * the HTTP status to the Error and a TRANSPORT failure leaves it absent.
+   * Callers classify on `Number.isInteger(error.status)`, never on prose.
    */
   async patch(partial) {
     const ctrl = new AbortController();
@@ -196,7 +228,11 @@ export class EngineConfigLink {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(body && body.error ? body.error : `PATCH /audio/config → ${res.status}`);
+        const error = new Error(
+          body && body.error ? body.error : `PATCH /audio/config → ${res.status}`,
+        );
+        error.status = res.status;
+        throw error;
       }
       return body;
     } finally {

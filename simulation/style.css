@@ -37,7 +37,11 @@
   --error-container: rgba(251, 73, 52, 0.16);
   --error-container-border: rgba(251, 73, 52, 0.45);
   --tertiary: #b8bb26;
+  --warning: #ffb04d;
+  --warning-container: rgba(255, 176, 77, 0.16);
+  --warning-container-border: rgba(255, 176, 77, 0.45);
   --ghost-border: rgba(168, 153, 132, 0.25);
+  --border-strong: rgba(168, 153, 132, 0.85);
   --ambient-shadow: rgba(0, 0, 0, 0.55);
   --sidebar-background: rgba(40, 40, 40, 0.88);
   --sidebar-active-background: rgba(250, 189, 47, 0.12);
@@ -61,6 +65,15 @@
      budget) — deliberately NOT themed so warnings read identically in
      every palette. Critical states use the themed --error. */
   --caution: #ffb400;
+
+  /* LED controller gamma curves — the four channels of the "curve" control
+     (sliders + the inline-SVG plot). Fixed hues, deliberately NOT themed
+     (same rationale as --caution): R/G/B/W must read as R/G/B/W in every
+     palette, or the plot lies about which curve is which. */
+  --gamma-r: #ff5b5b;
+  --gamma-g: #5bd75b;
+  --gamma-b: #5b8bff;
+  --gamma-w: color-mix(in srgb, var(--text) 80%, transparent);
 }
 
 * {
@@ -267,6 +280,24 @@ canvas {
 
 #unpatched-warning.hidden {
   display: none;
+}
+
+/* Keep the pill OFF the docked mapping pane. Its bottom-left home lands on
+   the pane's unmapped tray, where it covered fixture names mid-pick (it is
+   pointer-events:none, so the chips were still clickable — just unreadable).
+   `--sim-pane-left` is published by split_layout.js on every layout pass, so
+   this tracks divider drags. The warning is never suppressed: it moves. */
+body.sim-map-docked #unpatched-warning {
+  left: calc(var(--sim-pane-left, 0px) + 14px);
+}
+
+/* Mapping pane maximized — there is no 3D pane to move to, so park the pill in
+   the pane's bottom-right, over the static hint line: nothing to read, nothing
+   to pick. */
+body.sim-map-full #unpatched-warning {
+  left: auto;
+  right: 14px;
+  bottom: 10px;
 }
 
 /* ─── SpotLight Count Warning (bottom-center HUD banner) ───
@@ -2474,6 +2505,47 @@ body.edit-mode-active #engine-params-panel {
   grid-column: 1 / -1;
 }
 
+/* ── Controllers section head + hide/show ─────────────────────────────────
+   The controllers list owns 3/4 of a docked pane, so on a real rig it buries
+   the unmapped tray + Save row below it. This header (a direct child of
+   .cm-body, OUTSIDE the scroll region) carries a ▾/▸ toggle that hides just
+   the list; the tray then takes the whole pane. Display only — no patch,
+   controller or address is touched, so it is safe mid-mapping. */
+.cm-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 2px 4px;
+}
+
+.cm-section-title {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  font-family: var(--font-headline);
+  color: color-mix(in srgb, var(--primary) 60%, transparent);
+  text-transform: uppercase;
+}
+
+.cm-body.cm-controllers-collapsed .cm-main {
+  display: none;
+}
+
+/* With the list hidden the tray sheds its compact chip cap and takes the
+   freed space (mirrors the .cm-user-sized rules further down). */
+.cm-body.cm-controllers-collapsed .cm-tray {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cm-body.cm-controllers-collapsed .cm-tray-chips {
+  flex: 1 1 auto;
+  max-height: none;
+  /* No floor: a floor here is what made the grid overflow the tray box. */
+  min-height: 0;
+}
+
 .cm-toggle {
   background: none;
   border: none;
@@ -2518,11 +2590,101 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--text) 2%, transparent);
 }
 
+/* CHAINED WITH NO DESTINATION IP (report 20260725_123, operator ruling
+   2026-08-03). Chaining is the patch, so an unbound card is styled exactly like
+   a bound one — nothing here says "not patched". The ONE remaining way to chain
+   fixtures and still ship them dark is having no address to unicast sACN to, and
+   that gets the red treatment the pane's other blocking states use. */
+.cm-controller.cm-controller-nodest {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+}
+
+.cm-nodest-banner {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 45%, transparent);
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin: 4px 0 6px;
+}
+
+.cm-nodest-banner-head {
+  color: var(--error);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.cm-nodest-banner-body {
+  color: color-mix(in srgb, var(--error) 70%, var(--text));
+  font-size: 8.5px;
+  line-height: 1.45;
+  margin: 3px 0 0;
+}
+
+/* "No Controller" placeholder card (operator addendum 2026-08-03): the
+   nothing-attached state, shown as a card so it can be seen and acted on.
+   Deliberately the quietest card in the pane — dashed ghost border, secondary
+   text, no warning colour. It is informational, not an alarm.
+   It borrows `.cm-controller`'s geometry but NOT its class: the agent_tools that
+   enumerate `.cm-controller` must keep reading only real controller cards. */
+.cm-none-card {
+  border: 1px dashed var(--ghost-border);
+  border-radius: 8px;
+  padding: 6px;
+  margin-bottom: 8px;
+}
+
+.cm-none-head {
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.cm-none-body {
+  color: var(--secondary);
+  font-size: 8.5px;
+  margin: 2px 0 5px;
+}
+
+/* The one quiet cue on an unbound-but-chained card: patched and routed, board
+   simply unchecked (operator addendum 2026-08-03 — "just make sure it's not too
+   noisy"). Muted secondary text, no warning colour: this is a note, not a
+   defect, and it must not compete with the real blocking states above. */
+.led-device-tag {
+  display: inline-block;
+  border: 1px solid var(--ghost-border);
+  border-radius: 6px;
+  font-size: 8.5px;
+  padding: 1px 6px;
+  color: var(--secondary);
+}
+
+.led-device-tag.led-device-unverified {
+  font-style: italic;
+}
+
+/* Controller card header — TWO rows (operator request). Row 1 is identity
+   (chevron + name + IP), row 2 is actions (type / transport / +port …
+   delete). One row starved the name box: .cm-name is the only flexible item
+   in it, so the fixed IP field and four text buttons took the width first and
+   the name collapsed to a few characters on a docked pane. */
 .cm-controller-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.cm-controller-head-row {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-bottom: 4px;
+}
+
+/* Pushes the delete button to the far right of the action row, so it is never
+   adjacent to the everyday +port click. */
+.cm-head-spacer {
+  flex: 1 1 auto;
 }
 
 .cm-input {
@@ -2541,8 +2703,12 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--error) 14%, var(--input-bg));
 }
 
+/* The name takes the whole identity row minus the chevron and the IP box, and
+   never shrinks below a readable floor — `.cm-input`'s `min-width: 0` used to
+   let it collapse to a handful of characters. */
 .cm-input.cm-name {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 120px;
   font-weight: 600;
 }
 
@@ -2583,6 +2749,35 @@ body.edit-mode-active #engine-params-panel {
 
 .cm-port-label.cm-effects {
   color: var(--tint);
+}
+
+/* A CROSSED port → physical-output mapping (P1 driving output 4). It must read
+   as "deliberate but unusual" at a glance, without expanding the card. */
+.cm-port-label.cm-port-label-crossed {
+  color: var(--warning, #e0a030);
+}
+
+/* The physical board output selector on an LED port row (report 20260725_70). */
+.cm-input.cm-led-output {
+  min-width: 46px;
+  max-width: 130px;
+}
+
+/* Card-level "what is every physical output doing" line. Rendered only when the
+   device has actually been read — never a guess. */
+.cm-led-board-outputs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 2px 4px 4px;
+}
+
+.cm-led-board-outputs-text {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: color-mix(in srgb, var(--primary) 72%, var(--text));
+  letter-spacing: 0.02em;
 }
 
 /* ── Universe map bar ───────────────────────────────────────────────
@@ -2792,6 +2987,20 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--error) 24%, transparent);
 }
 
+/* Camera-focus toggle (G5): full-width, tinted when ON (chip clicks fly the
+   camera). Mirrors the unpatched-toggle layout, ok-tinted when active. */
+.cm-main > .cm-camera-focus-toggle {
+  grid-column: 1 / -1;
+}
+.cm-btn.cm-camera-focus-toggle.cm-on {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  color: var(--ok);
+}
+.cm-btn.cm-camera-focus-toggle.cm-on:hover {
+  background: color-mix(in srgb, var(--ok) 24%, transparent);
+}
+
 /* ── TEST patch tools (whole-rig quick patch / wipe) ──────────────────── */
 .cm-main > .cm-test-tools {
   grid-column: 1 / -1;
@@ -2902,6 +3111,233 @@ body.edit-mode-active #engine-params-panel {
   margin: 2px 0;
 }
 
+/* ── LED controller gamma "curve" control (scene mirror + per-card push) ──
+   Presentation mirrors the controller's own Color Curves card: four sliders
+   with read-only 2-dp readouts, a Link-RGB toggle, preset chips and a live
+   y = x^γ plot. Report 20260725_65 (design 20260725_64). */
+.cm-led-gamma {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 3px 0 2px;
+}
+
+.cm-led-gamma-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cm-led-gamma-body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cm-led-gamma-ch {
+  font-size: 8.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  width: 8px;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+/* The curve plot. viewBox-scaled, so it shrinks with a narrow pane. */
+.cm-led-gamma-plot {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 132px;
+  line-height: 0;
+}
+
+.cm-led-gamma-plot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.cm-gamma-plot-bg {
+  fill: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  stroke: var(--ghost-border);
+  stroke-width: 1;
+}
+
+.cm-gamma-plot-grid {
+  stroke: color-mix(in srgb, var(--text) 12%, transparent);
+  stroke-width: 0.5;
+}
+
+/* γ = 1.0 — the "no correction" reference the curves are read against. */
+.cm-gamma-plot-ident {
+  fill: none;
+  stroke: color-mix(in srgb, var(--text) 32%, transparent);
+  stroke-width: 0.8;
+  stroke-dasharray: 3 2;
+}
+
+.cm-gamma-plot-curve {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The last curve VERIFIED on the hardware, drawn only while the mirror has
+   drifted from it — the drift chip's warning, made visible. */
+.cm-gamma-plot-ghost {
+  opacity: 0.35;
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.cm-gamma-plot-r { stroke: var(--gamma-r); }
+.cm-gamma-plot-g { stroke: var(--gamma-g); }
+.cm-gamma-plot-b { stroke: var(--gamma-b); }
+.cm-gamma-plot-w { stroke: var(--gamma-w); }
+
+.cm-led-gamma-sliders {
+  flex: 1 1 150px;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cm-led-gamma-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cm-led-gamma-slider {
+  flex: 1 1 auto;
+  min-width: 56px;
+  height: 12px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.cm-led-gamma-row-r .cm-led-gamma-slider { accent-color: var(--gamma-r); }
+.cm-led-gamma-row-g .cm-led-gamma-slider { accent-color: var(--gamma-g); }
+.cm-led-gamma-row-b .cm-led-gamma-slider { accent-color: var(--gamma-b); }
+.cm-led-gamma-row-w .cm-led-gamma-slider { accent-color: var(--gamma-w); }
+
+.cm-led-gamma-row-r .cm-led-gamma-ch { color: var(--gamma-r); }
+.cm-led-gamma-row-g .cm-led-gamma-ch { color: var(--gamma-g); }
+.cm-led-gamma-row-b .cm-led-gamma-ch { color: var(--gamma-b); }
+.cm-led-gamma-row-w .cm-led-gamma-ch { color: var(--gamma-w); }
+
+/* Read-only readout — the slider is the only way to change the value. */
+.cm-led-gamma-val {
+  width: 2.4rem;
+  text-align: right;
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+.cm-btn.cm-led-gamma-preset {
+  font-size: 8px;
+  padding: 1px 5px;
+}
+
+.cm-btn.cm-led-gamma-preset.cm-on {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  color: var(--primary);
+}
+
+.cm-led-gamma-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 8.5px;
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-led-gamma-link input[type="checkbox"] {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.cm-led-gamma-caption {
+  font-size: 8px;
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.cm-btn.cm-led-gamma-push {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+
+.cm-btn.cm-led-gamma-push:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.cm-btn.cm-led-gamma-push:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cm-led-gamma-prov {
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+.cm-led-gamma-prov.cm-led-gamma-drift {
+  color: var(--warning, #e0a030);
+  font-weight: 700;
+}
+
+.cm-led-gamma-error {
+  flex-basis: 100%;
+  font-size: 8.5px;
+  color: var(--error);
+  font-weight: 700;
+}
+
+.cm-btn.cm-push-all-gamma {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+
+.cm-btn.cm-push-all-gamma:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.cm-btn.cm-push-all-gamma:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Fleet-push result rows (one per controller — ok / failed / unreachable). */
+.led-gamma-row-state {
+  display: inline-block;
+  min-width: 84px;
+  font-weight: 700;
+}
+
+.led-gamma-row-ok { color: var(--ok); }
+.led-gamma-row-failed { color: var(--error); }
+.led-gamma-row-unreachable { color: var(--warning, #e0a030); }
+.led-gamma-row-skipped { color: color-mix(in srgb, var(--text) 45%, transparent); }
+
+.led-gamma-row-detail {
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+}
+
 /* Derived (read-only) base universe on the LED config sub-panel. */
 .cm-led-base {
   font-variant-numeric: tabular-nums;
@@ -2909,13 +3345,26 @@ body.edit-mode-active #engine-params-panel {
   padding: 0 2px;
 }
 
+/* ── Unmapped tray ───────────────────────────────────────────────────────
+   Shrinkable AND clipped. Report 20260725_85: the tray was `flex: 0 0 auto`
+   here but `flex: 1 1 auto; min-height: 0` under .cm-user-sized /
+   .cm-controllers-collapsed, with `overflow` left visible and a hard
+   `min-height: 40px` on the chip grid inside it. Once the MarsinLED cards
+   grew (the gamma block), .cm-body ran NEGATIVE free space, the tray box was
+   shrunk below its own content, and the chip grid painted straight through
+   the tray border onto the Save row underneath — so the Save button drew on
+   top of the "TE Sign" chips. Clipping the tray (and letting .cm-tray-chips
+   scroll instead of flooring at 40px) makes that impossible at any pane
+   height, pane width, card count or collapse state. */
 .cm-tray {
   border: 1px solid var(--ghost-border);
   border-radius: 8px;
   padding: 6px;
   margin-top: 4px;
   background: color-mix(in srgb, var(--text) 1.5%, transparent);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -2940,7 +3389,8 @@ body.edit-mode-active #engine-params-panel {
 #controller-map-panel.cm-user-sized .cm-tray-chips {
   flex: 1 1 auto;
   max-height: none;
-  min-height: 40px;
+  /* No floor: a floor here is what made the grid overflow the tray box. */
+  min-height: 0;
 }
 
 .cm-tray.cm-tray-picking {
@@ -2948,15 +3398,20 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--primary) 5%, transparent);
 }
 
+/* Title + filter box on one line, wrapping to two when the pane is narrow
+   (the filter drops under the title rather than squeezing it to nothing). */
 .cm-tray-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  row-gap: 4px;
+  margin-bottom: 5px;
 }
 
 .cm-tray-title {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 96px;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -2965,12 +3420,30 @@ body.edit-mode-active #engine-params-panel {
   text-transform: uppercase;
 }
 
+/* Filter box: fixed width, never the item that flexes, so it stays put on
+   the head row instead of drifting as the unmapped count text changes.
+   (Was an inline `style.width` on the input — a stylesheet rule so the
+   docked pane can widen it, below.) */
+.cm-input.cm-tray-filter {
+  flex: 0 0 auto;
+  width: 90px;
+}
+
+/* The chip grid is the tray's ONLY elastic part: it scrolls, and it never
+   carries a min-height floor that could push content past the tray's box
+   (that floor is exactly what let the chips paint over the Save row).
+   Row gap > column gap so wrapped rows read as rows, not as a blob. */
 .cm-tray-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
+  align-content: flex-start;
+  column-gap: 4px;
+  row-gap: 5px;
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: 130px;
   overflow-y: auto;
+  padding-right: 2px;
 }
 
 .cm-tray-chip {
@@ -2979,7 +3452,8 @@ body.edit-mode-active #engine-params-panel {
   border-radius: 8px;
   color: var(--secondary);
   font-size: 9px;
-  padding: 1px 6px;
+  line-height: 1.5;
+  padding: 1px 7px;
   cursor: pointer;
   user-select: none;
 }
@@ -2998,11 +3472,43 @@ body.edit-mode-active #engine-params-panel {
   padding: 6px;
 }
 
+/* ── Anchored save row ───────────────────────────────────────────────────
+   The Save button's own home: the last NON-SHRINKABLE strip of .cm-body.
+   It used to be a bare `.vm-btn.vm-save` dropped straight into the flex
+   column between the tray and the hint, with nothing reserving its space —
+   so a squeezed tray simply overflowed into it (report 20260725_85).
+   `flex: 0 0 auto` means the tray and the hint give up space first and the
+   row is always on screen; the separator makes it read as a toolbar rather
+   than one more control in the list. */
+.cm-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--ghost-border);
+}
+
+.cm-footer .vm-btn.vm-save {
+  flex: 1 1 auto;
+  margin-top: 0;
+}
+
+/* Help text: its own breathing room under the save row, and — in the tiny
+   floating fallback panel, which can be 180px tall in TOTAL — the first thing
+   to yield (clipped, never overlapping). The docked pane overrides this to
+   `flex: 0 0 auto` further down: it always has the room, and letting the hint
+   shrink there made the Save row hop 34px between collapse states while
+   truncating the help text mid-sentence. */
 .cm-hint {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
   font-size: 8.5px;
   color: var(--secondary);
-  line-height: 1.4;
-  margin-top: 6px;
+  line-height: 1.45;
+  margin-top: 7px;
 }
 
 #cm-toast {
@@ -3156,6 +3662,110 @@ body.edit-mode-active #engine-params-panel {
   border-color: color-mix(in srgb, var(--text) 20%, transparent);
 }
 
+/* ── Binding GRADE badge (provisional vs verified) ─────────────────────────
+   A provisional card patches the whole chain on the operator's word alone, so
+   the badge is deliberately loud and always the first thing in the device
+   section — never a hidden flag (operator ruling 2026-07-31). */
+.led-binding-badge {
+  flex: 1 1 100%;
+  display: inline-block;
+  align-self: flex-start;
+  border-radius: 8px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+}
+
+.cm-binding-provisional {
+  color: var(--warning, #e0a030);
+  background: color-mix(in srgb, var(--warning, #e0a030) 16%, transparent);
+  border-color: color-mix(in srgb, var(--warning, #e0a030) 55%, transparent);
+  border-style: dashed;
+}
+
+.cm-binding-verified {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.led-device-provisional {
+  color: var(--warning, #e0a030);
+}
+
+/* ── Reachability dot (ONLINE / OFFLINE / UNKNOWN / CHECKING) ───────────────
+   `unknown` is muted, NOT red: it means "we did not ask", which is a different
+   statement from "we asked and nothing came back". */
+.cm-status-dot {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: help;
+  user-select: none;
+}
+
+.cm-status-online { color: var(--ok); }
+.cm-status-offline { color: var(--error); }
+.cm-status-unknown { color: color-mix(in srgb, var(--text) 35%, transparent); }
+.cm-status-checking { color: var(--secondary); }
+
+.cm-status-auto-on {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+/* ── Provisional reconcile dialog ───────────────────────────────────────── */
+.led-reconcile-card {
+  min-width: 480px;
+  max-width: 680px;
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.led-reconcile-lead {
+  font-size: 10px;
+  color: var(--secondary);
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+
+.led-reconcile-row {
+  border-left: 3px solid color-mix(in srgb, var(--warning, #e0a030) 70%, transparent);
+  padding: 5px 0 5px 8px;
+  margin-bottom: 8px;
+}
+
+.led-reconcile-blocker {
+  border-left-color: var(--error);
+}
+
+.led-reconcile-code {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--warning, #e0a030);
+  letter-spacing: 0.04em;
+}
+
+.led-reconcile-blocker .led-reconcile-code {
+  color: var(--error);
+}
+
+.led-reconcile-msg {
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 2px 0;
+}
+
+.led-reconcile-diff {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--secondary);
+}
+
 /* Discovery modal. */
 .led-disc-card,
 .led-push-card {
@@ -3267,6 +3877,21 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .led-push-unhonorable-line {
+  font-size: 9.5px;
+  line-height: 1.4;
+  padding: 1px 0;
+}
+
+/* The ONE asymmetric write the push may make: switching an output ON. Styled as
+   a warning block so it is never mistaken for the routine mapping list — and
+   there is deliberately no "will DISABLE" counterpart, because there is no such
+   write (report 20260725_70 §2.3). */
+.led-push-enables-head {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.led-push-enables-line {
   font-size: 9.5px;
   line-height: 1.4;
   padding: 1px 0;
@@ -3434,3 +4059,241 @@ body.edit-mode-active #engine-params-panel {
 .pm-status-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pm-status-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .pm-zoom { opacity: 0.85; min-width: 34px; text-align: right; }
+
+/* Multiview pane grid mount — fills the canvas host (the S3 shell is inset:0). */
+.pm-multiview-host { position: absolute; inset: 0; }
+
+/* Views manager overlay (add / remove / rename / duplicate). */
+.pm-manager-scrim {
+  position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 6, 12, 0.6);
+}
+.pm-manager {
+  width: min(560px, 82%); max-height: 74%; display: flex; flex-direction: column;
+  background: var(--surface-container-high, #131722); color: var(--on-surface, #cdd6e6);
+  border: 1px solid var(--ghost-border); border-radius: 10px; overflow: hidden;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.5);
+}
+.pm-manager-head {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-bottom: 1px solid var(--ghost-border);
+}
+.pm-manager-title { font-weight: 700; font-size: 0.8rem; letter-spacing: 0.04em; }
+.pm-manager-list { overflow-y: auto; padding: 6px 10px; display: flex; flex-direction: column; gap: 5px; }
+.pm-manager-row { display: flex; align-items: center; gap: 8px; }
+.pm-manager-name {
+  flex: 1 1 auto; min-width: 0; background: var(--surface-container-low, #0f131b);
+  color: var(--on-surface); border: 1px solid var(--ghost-border); border-radius: 5px; padding: 3px 7px; font-size: 0.72rem;
+}
+.pm-manager-id { flex: 0 0 auto; font-family: var(--font-mono, monospace); font-size: 0.58rem; opacity: 0.6; }
+.pm-del:hover { color: #ff8a80; border-color: color-mix(in srgb, #ff8a80 50%, transparent); }
+.pm-manager-hint { padding: 8px 12px; font-size: 0.58rem; opacity: 0.7; border-top: 1px solid var(--ghost-border); line-height: 1.5; }
+/* ── Per-view adjustment inspector (report 20260725_54) ───────────────────
+   The operator reshaping a shipped default himself: framing, panel rotation,
+   gap compression, LED pitch, per-view glyph sizes. Chrome stays neutral —
+   the ONE accent (--primary amber) marks the open row, matching the pixel-map
+   renderer's stance (exactly one accent, used only for affordances). */
+.pm-adj {
+  margin: 2px 0 6px 0; padding: 7px 9px; border: 1px solid var(--ghost-border);
+  border-radius: 6px; background: var(--surface-container-low, #0f131b);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.pm-adj-toggle { flex: 0 0 auto; }
+.pm-adj-toggle.active { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 50%, transparent); }
+.pm-adj-row { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.pm-adj-label { flex: 0 0 34%; font-size: 0.62rem; opacity: 0.85; }
+.pm-adj-ctl { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pm-adj-inline { display: inline-flex; align-items: center; gap: 5px; }
+.pm-adj-num {
+  width: 62px; background: var(--surface, #0b0d12); color: var(--on-surface);
+  border: 1px solid var(--ghost-border); border-radius: 4px; padding: 2px 5px; font-size: 0.66rem;
+  font-family: var(--font-mono, monospace);
+}
+.pm-adj-panel {
+  border-top: 1px dashed var(--ghost-border); padding-top: 5px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.pm-adj-panel-head { display: flex; align-items: baseline; gap: 7px; font-size: 0.62rem; }
+.pm-adj-panel-head code { font-family: var(--font-mono, monospace); color: var(--primary); }
+.pm-adj-dim { font-size: 0.58rem; opacity: 0.6; }
+.pm-adj-foot {
+  display: flex; align-items: center; gap: 8px; padding-top: 6px;
+  border-top: 1px solid var(--ghost-border);
+}
+.pm-manager-toast {
+  position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 40;
+  background: rgba(120, 20, 24, 0.95); color: #ffd9d0; font-size: 0.72rem;
+  padding: 7px 14px; border-radius: 6px; opacity: 0; transition: opacity 0.25s; pointer-events: none; max-width: 70%;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Split-screen mapping layout (split_layout.js)
+   3D sim pane (canvas) | draggable divider | docked Controller-Mapping pane.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Draggable seam between the sim pane and the map pane. */
+#sim-split-divider {
+  position: fixed;
+  width: 8px;
+  z-index: 99;
+  cursor: ew-resize;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--primary) 18%, transparent),
+    transparent
+  );
+  transition: background 0.15s ease;
+}
+#sim-split-divider::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+#sim-split-divider:hover,
+#sim-split-divider:active {
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--primary) 45%, transparent),
+    transparent
+  );
+}
+
+/* Edge tab that restores the map pane when the sim view is maximized. The map
+   pane docks on the LEFT, so the restore tab lives on the LEFT edge. */
+#sim-split-restore-tab {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 6px;
+  background: var(--panel-header-bg);
+  border: 1px solid var(--ghost-border);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  box-shadow: 4px 0 24px var(--ambient-shadow);
+  cursor: pointer;
+  color: var(--primary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+#sim-split-restore-tab:hover {
+  background: var(--control-bg-hover);
+  box-shadow: 4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+/* Docked map pane: fills its column, square inner corners, no float chrome. */
+#controller-map-panel.cm-split-docked {
+  border-radius: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  resize: none !important;
+  /* Map pane docks LEFT — cast the depth shadow to the RIGHT, over the sim. */
+  box-shadow: 8px 0 40px var(--ambient-shadow);
+  transition: transform 0.22s ease, opacity 0.18s ease;
+}
+/* No header drag while docked, and the collapse button is redundant with the
+   maximize controls. */
+#controller-map-panel.cm-split-docked #cm-drag-handle {
+  cursor: default;
+}
+#controller-map-panel.cm-split-docked #cm-collapse-btn {
+  display: none;
+}
+.cm-split-btn.cm-split-active {
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+  color: var(--primary);
+}
+
+/* ── Density (G4): the docked pane has real width, so raise the tiny
+   floating-era font sizes to something readable. Scoped to the docked
+   state; the compact floating fallback keeps its original sizing. ── */
+#controller-map-panel.cm-split-docked .cm-body { font-size: 12.5px; }
+#controller-map-panel.cm-split-docked .cm-header-status { font-size: 11px; }
+#controller-map-panel.cm-split-docked .cm-summary { font-size: 11px; }
+#controller-map-panel.cm-split-docked .cm-banner { font-size: 11.5px; }
+#controller-map-panel.cm-split-docked .cm-toggle { font-size: 11px; }
+#controller-map-panel.cm-split-docked .cm-input { font-size: 12px; }
+#controller-map-panel.cm-split-docked .cm-input.cm-ip,
+#controller-map-panel.cm-split-docked .cm-input.cm-num { font-size: 11px; }
+#controller-map-panel.cm-split-docked .cm-input.cm-ip { width: 108px; }
+#controller-map-panel.cm-split-docked .cm-input.cm-num { width: 52px; }
+#controller-map-panel.cm-split-docked .cm-port-label { font-size: 11.5px; }
+#controller-map-panel.cm-split-docked .cm-occ-count { font-size: 10.5px; }
+#controller-map-panel.cm-split-docked .cm-chip { font-size: 11px; padding: 2px 7px; }
+#controller-map-panel.cm-split-docked .cm-chip .cm-chip-addr { font-size: 10px; }
+#controller-map-panel.cm-split-docked .cm-btn { font-size: 11px; padding: 3px 8px; }
+/* Unmapped tray + save row at pane width: the chips are what the operator
+   reads while picking, so they get the same density bump as the chain chips,
+   and the filter box the extra width the pane can afford. */
+/* The docked pane is always full screen height, so the tray can afford a hard
+   floor: shrinking stops here and .cm-main (which scrolls) gives the space up
+   instead. This is what stops tall MarsinLED cards from squeezing the tray to
+   nothing — the original complaint behind report 20260725_85. The floating
+   fallback stays floor-free (it can be 180px tall in total). */
+#controller-map-panel.cm-split-docked .cm-tray { min-height: 96px; }
+#controller-map-panel.cm-split-docked .cm-tray-title { font-size: 11px; }
+#controller-map-panel.cm-split-docked .cm-tray-chip { font-size: 11px; padding: 2px 8px; }
+#controller-map-panel.cm-split-docked .cm-input.cm-tray-filter { width: 150px; }
+/* Docked: the hint keeps its full height, so .cm-main (scrolls) and .cm-tray
+   (down to its 96px floor) are the only things that give — which also pins the
+   Save row to one constant y in both collapse states. */
+#controller-map-panel.cm-split-docked .cm-hint { font-size: 10.5px; flex: 0 0 auto; }
+#controller-map-panel.cm-split-docked .cm-footer .vm-btn.vm-save {
+  font-size: 12px;
+  padding: 6px;
+}
+
+/* ── SHARED ADDRESS banner (operator order 2026-07-31, report 20260725_102) ──
+   Two controllers may send to the same (universe, channel). It is a WARNING,
+   not an error, and it must be VISIBLE on the controller card for as long as it
+   exists — the operator maps for an hour and a toast lasts 8 seconds.
+
+   Deliberately distinct from BOTH neighbours it sits between: amber-with-a-left-
+   rule (not the plain amber `.led-push-warn` fill, so it reads as a standing
+   state rather than a one-off dialog note), and never red — red is reserved for
+   the blocking `-error` grade below, which is an overlap the higher-IP rule
+   cannot rank and which still refuses the push. */
+.led-shared-address {
+  border-radius: 6px;
+  font-size: 9.5px;
+  line-height: 1.45;
+  padding: 5px 8px;
+  margin: 6px 0;
+}
+
+.led-shared-address-warn {
+  color: var(--warning, #e0a030);
+  background: color-mix(in srgb, var(--warning, #e0a030) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #e0a030) 34%, transparent);
+  border-left: 3px solid var(--warning, #e0a030);
+}
+
+.led-shared-address-error {
+  color: var(--danger, #e05050);
+  background: color-mix(in srgb, var(--danger, #e05050) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #e05050) 44%, transparent);
+  border-left: 3px solid var(--danger, #e05050);
+}
+
+.led-shared-address-head {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.led-shared-address-line {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 0 1px 8px;
+  opacity: 0.92;
+}

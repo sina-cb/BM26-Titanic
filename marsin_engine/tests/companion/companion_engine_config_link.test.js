@@ -50,6 +50,15 @@ function makeFakeEngine(initialConfig) {
         }
         // Merge + echo back + broadcast (single source of truth contract).
         if (partial.bands) config.bands = { ...config.bands, ...partial.bands };
+        if (partial.derivedSignals) {
+          config.derivedSignals = { ...(config.derivedSignals || {}) };
+          for (const [group, values] of Object.entries(partial.derivedSignals)) {
+            config.derivedSignals[group] = {
+              ...(config.derivedSignals[group] || {}),
+              ...values,
+            };
+          }
+        }
         if (partial.capture) config.capture = { ...config.capture, ...partial.capture };
         if (partial.enabled !== undefined) config.enabled = partial.enabled;
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -166,6 +175,33 @@ test('patch() issues PATCH /audio/config and resolves with the engine config; ec
   assert.deepEqual(fake.patches.at(-1), { bands: { inputGain: 2.5 } }, 'engine saw the exact PATCH body');
   // The engine broadcasts the echo → onConfig applies it (single source of truth).
   await waitFor(() => applied.some(c => c.bands.inputGain === 2.5));
+
+  link.stop();
+  await fake.close();
+});
+
+test('patch() carries a derivedSignals group unchanged and the engine echo applies it', async () => {
+  const fake = makeFakeEngine({
+    ...BASE_CONFIG,
+    derivedSignals: { trackChange: { silenceConfirmMs: 450, gapMinMs: 600 } },
+  });
+  const port = await fake.listen();
+  const applied = [];
+  const link = new EngineConfigLink({
+    host: '127.0.0.1', port,
+    onConfig: (config) => applied.push(config),
+  });
+  link.start();
+  await waitFor(() => link.connected);
+
+  const partial = { derivedSignals: { trackChange: { silenceConfirmMs: 700 } } };
+  const result = await link.patch(partial);
+  assert.equal(result.derivedSignals.trackChange.silenceConfirmMs, 700);
+  assert.equal(result.derivedSignals.trackChange.gapMinMs, 600);
+  assert.deepEqual(fake.patches.at(-1), partial);
+  await waitFor(() => applied.some(
+    (config) => config.derivedSignals?.trackChange?.silenceConfirmMs === 700,
+  ));
 
   link.stop();
   await fake.close();

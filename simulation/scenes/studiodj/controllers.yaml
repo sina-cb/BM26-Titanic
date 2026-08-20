@@ -12,17 +12,21 @@ controllers:
         startAddress: 1
         chain:
           - Left
+        output: 1
       - port: 2
         universe: 3
         startAddress: 1
         chain:
           - Right
+        output: 2
       - port: 3
         universe: 4
         chain: []
+        output: 3
       - port: 4
         universe: 5
         chain: []
+        output: 4
     led:
       baseUniverse: 0
       startAddr: 1

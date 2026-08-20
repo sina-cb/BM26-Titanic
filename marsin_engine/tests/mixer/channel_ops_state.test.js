@@ -17,7 +17,9 @@ function makeFakeWasmHost() {
   };
 }
 function makeMixer(maxChannels = 6) {
-  return new PatternMixer({ wasmHost: makeFakeWasmHost(), pixelCount: 2, maxChannels });
+  const mixer = new PatternMixer({ wasmHost: makeFakeWasmHost(), pixelCount: 2, maxChannels });
+  mixer.blendHandles.trans_crossfade = { id: 'trans_crossfade' };
+  return mixer;
 }
 function addCh(m, id, extra = {}) {
   return m.addMixerChannel({ id, name: id, pattern: 'p', handle: {}, enabled: true, fader: 1, ...extra });

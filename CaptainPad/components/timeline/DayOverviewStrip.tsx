@@ -17,7 +17,7 @@ import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-nati
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { OverviewDay, OverviewCue } from '@/utils/timelineApi';
-import { hhmmToMinutes, hhmmTo12h, dayFraction, kindColor, KIND_LABEL } from './timelineTemplate';
+import { hhmmToMinutes, hhmmTo12h, dayFraction, kindColor, KIND_LABEL, KIND_COLORS } from './timelineTemplate';
 
 export const COLUMN_HEIGHT = 240;
 const CARD_WIDTH = 150;
@@ -143,8 +143,17 @@ function SunColumn({
   );
 }
 
+// THEME BADGE (_94 §2.2): the day's headline PROGRAM cue, derived entirely
+// client-side. A `days:[6]` cue only appears on day 6 in the overview
+// (timeline_service buildOverview + festival.js), so the badge needs no new
+// wire data — it IS that day's program cue label. Null when the day has none.
+function themeBadgeFor(day: OverviewDay): string | null {
+  const program = day.cues.find((c) => c.kind === 'program' && !!c.label);
+  return program?.label ?? null;
+}
+
 export function DayCard({
-  day, isToday, isSelected, nowMinutes, onPress, onEdit, C, styles,
+  day, isToday, isSelected, nowMinutes, onPress, onOpen, C, styles,
 }: {
   day: OverviewDay;
   isToday: boolean;
@@ -152,10 +161,14 @@ export function DayCard({
   isSelected: boolean;
   /** Minutes-of-day for the NOW playhead — non-null only on today's card. */
   nowMinutes: number | null;
-  /** Single tap: select / view this day. */
+  /** Single tap: ZOOM IN to this day (the FESTIVAL → DAY rung). */
   onPress: () => void;
-  /** Explicit EDIT affordance: open the day editor. */
-  onEdit: () => void;
+  /**
+   * The same zoom-in, from the card's explicit button. Kept as a labelled
+   * affordance so "tap a card to open the day" is discoverable on a card whose
+   * body is otherwise a dense agenda — one navigation model, two hit targets.
+   */
+  onOpen: () => void;
   C: Palette;
   styles: Styles;
 }) {
@@ -176,7 +189,7 @@ export function DayCard({
       onPress={onPress}
       activeOpacity={0.85}
       accessibilityRole="button"
-      accessibilityLabel={`Select ${day.weekday} ${day.date}`}
+      accessibilityLabel={`Open ${day.weekday} ${day.date}`}
       style={[
         styles.card,
         { borderColor, borderWidth: isSelected ? 2.5 : 1.5 },
@@ -195,6 +208,20 @@ export function DayCard({
           <Text style={[styles.todayBadgeText, { color: C.error }]}>● TODAY</Text>
         </View>
       ) : null}
+
+      {/* THEME BADGE — this day's program cue, so a themed night (burn, temple)
+          is legible from the week view without opening it. */}
+      {(() => {
+        const theme = themeBadgeFor(day);
+        if (!theme) return null;
+        return (
+          <View style={[styles.timelessChip, { borderColor: KIND_COLORS.program }]}>
+            <Text style={[styles.timelessChipText, { color: KIND_COLORS.program }]} numberOfLines={1}>
+              {theme.toUpperCase()}
+            </Text>
+          </View>
+        );
+      })()}
 
       <SunColumn day={day} nowMinutes={nowMinutes} C={C} styles={styles} />
 
@@ -217,23 +244,23 @@ export function DayCard({
         ) : null}
       </View>
 
-      {/* Explicit EDIT DAY affordance — single tap selects/views, this opens
-          the day editor so selection no longer collides with editing. */}
+      {/* The zoom-in affordance, spelled out. Same destination as tapping the
+          card — FESTIVAL → DAY (_94 §1). */}
       <TouchableOpacity
-        onPress={onEdit}
+        onPress={onOpen}
         accessibilityRole="button"
-        accessibilityLabel={`Edit ${day.weekday} ${day.date}`}
+        accessibilityLabel={`Open ${day.weekday} ${day.date}`}
         style={styles.editBtn}
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
-        <Text style={styles.editBtnText}>EDIT DAY</Text>
+        <Text style={styles.editBtnText}>OPEN DAY ▸</Text>
       </TouchableOpacity>
     </TouchableOpacity>
   );
 }
 
 export function DayOverviewStrip({
-  days, todayIndex, selectedIndex, nowMinutes, onSelectDay, onEditDay,
+  days, todayIndex, selectedIndex, nowMinutes, onOpenDay,
 }: {
   days: OverviewDay[];
   todayIndex: number | null;
@@ -241,8 +268,8 @@ export function DayOverviewStrip({
   selectedIndex: number | null;
   /** Live minutes-of-day in the plan tz for the NOW playhead (null when off-festival). */
   nowMinutes: number | null;
-  onSelectDay: (index: number) => void;
-  onEditDay: (index: number) => void;
+  /** Zoom in: FESTIVAL → DAY. Both the card body and its button call this. */
+  onOpenDay: (index: number) => void;
 }) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
@@ -264,8 +291,8 @@ export function DayOverviewStrip({
           isToday={todayIndex === day.index}
           isSelected={selectedIndex === day.index}
           nowMinutes={todayIndex === day.index ? nowMinutes : null}
-          onPress={() => onSelectDay(day.index)}
-          onEdit={() => onEditDay(day.index)}
+          onPress={() => onOpenDay(day.index)}
+          onOpen={() => onOpenDay(day.index)}
           C={C}
           styles={styles}
         />

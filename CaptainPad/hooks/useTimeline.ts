@@ -21,6 +21,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { engineEvents } from '@/utils/engineEvents';
+import { getPerformanceModeState } from '@/hooks/usePerformanceMode';
+import { runGatedTakeover } from '@/utils/takeover_passcode';
 import {
   fetchTimelineState,
   activateTimelinePlan,
@@ -32,7 +34,9 @@ import {
   fireTimelineCue,
   postTimelineTakeover,
   postTimelineActivity,
+  postTimelineTravel,
   TimelineState,
+  TimelineTravelSpec,
 } from '@/utils/timelineApi';
 
 export interface TimelineHookState {
@@ -53,13 +57,46 @@ export interface TimelineActions {
   /** Dismiss the pending-program lease; stay manual (docs/38 §16.5 lease-dismiss). */
   dismissProgram: () => Promise<boolean>;
   fireCue: (id: string) => Promise<boolean>;
-  /** Take the rig over from a running plan; arms the operator lease. */
-  takeover: () => Promise<boolean>;
+  /**
+   * Take the rig over from a running plan; arms the operator lease.
+   *
+   * THREE outcomes, not two (operator ruling 2026-08-14): while performance
+   * mode is live the operator is asked for a passcode first, and DISMISSING
+   * that prompt is not a failure — no request is even made. Callers must not
+   * alert on `'cancelled'`.
+   */
+  takeover: () => Promise<TakeoverOutcome>;
   /** Refresh the takeover lease (no-op when none held). Throttle the caller. */
   activity: () => Promise<boolean>;
+  /**
+   * EVENT ZOOM · PERFORM (_95 §3.3): a SCOPED takeover of the LIVE event —
+   * the plan holds, and a program that comes due is deferred until exit.
+   * Carries the engine's error verbatim on failure; `'cancelled'` means the
+   * operator dismissed the performance-mode passcode prompt.
+   */
+  performTakeover: (cueId: string) => Promise<PerformTakeoverResult>;
+  /**
+   * EVENT ZOOM · TIME TRAVEL (_95 §3.4): enter (or retarget) a travel zoom.
+   * Returns the engine's error verbatim on failure (null on success).
+   */
+  travel: (spec: TimelineTravelSpec) => Promise<string | null>;
 }
 
 export type UseTimelineResult = TimelineHookState & TimelineActions;
+
+/**
+ * `'ok'`        the engine armed the operator lease.
+ * `'cancelled'` the operator dismissed the performance-mode passcode prompt —
+ *               NOTHING was requested and the plan keeps running. Never alert.
+ * `'failed'`    the engine refused; the reason is on the hook's error channel.
+ */
+export type TakeoverOutcome = 'ok' | 'cancelled' | 'failed';
+
+export interface PerformTakeoverResult {
+  outcome: TakeoverOutcome;
+  /** The engine's message, verbatim, when `outcome === 'failed'`. */
+  error: string | null;
+}
 
 const EMPTY: TimelineHookState = { state: null, connected: false, error: null };
 
@@ -121,10 +158,14 @@ function _ensureInitialized() {
 // ── Action functions (REST; re-seed on success so the UI converges even if
 // the WS broadcast is delayed) ──────────────────────────────────────────
 
-async function _reseedAfterAction() {
+async function _reseedAfterAction({ preserveError = false } = {}) {
   const r = await fetchTimelineState();
   if (r.ok && r.data) {
-    _emit({ state: r.data, connected: _cached.connected, error: null });
+    _emit({
+      state: r.data,
+      connected: _cached.connected,
+      error: preserveError ? _cached.error : null,
+    });
   }
 }
 
@@ -142,7 +183,10 @@ async function _setAutopilot(enabled: boolean): Promise<boolean> {
   const r = await setTimelineAutopilot(enabled);
   if (!r.ok) {
     _emit({ ..._cached, error: r.error || 'Failed to toggle autopilot' });
-    await _reseedAfterAction();
+    // Reconcile the authoritative state, but keep the refusal visible. This is
+    // especially important for a Live Touch lease conflict: clearing the error
+    // during the follow-up GET made a rejected action look successful.
+    await _reseedAfterAction({ preserveError: true });
     return false;
   }
   await _reseedAfterAction();
@@ -150,11 +194,25 @@ async function _setAutopilot(enabled: boolean): Promise<boolean> {
 }
 
 async function _resume(): Promise<boolean> {
+  // Claim the exit BEFORE the request goes out. The engine clears the zoom and
+  // broadcasts the new `timelineState` on its own 1 s tick, which routinely
+  // beats our REST response back to the app — without this claim the ZoomBanner
+  // reads that broadcast as "the zoom ended and it wasn't me" and raises the
+  // engine-restart alarm at an operator who just asked to leave.
+  _zoomExitRequested = true;
   const r = await resumeTimeline();
   if (!r.ok) {
+    // The zoom is still live: drop the claim so the real "it ended without you"
+    // signal still works, and keep our entered-here claim so the tab-return
+    // gesture (and the banner's EXIT) can try again.
+    _zoomExitRequested = false;
     _emit({ ..._cached, error: r.error || 'Failed to resume' });
     return false;
   }
+  // The single exit for a plain takeover, PERFORM and TRAVEL alike — the engine
+  // clears the zoom with the lease. Drop our "we entered it" claim too, so a
+  // later tab return can't fire a second, pointless resume.
+  _zoomEnteredHere = false;
   await _reseedAfterAction();
   return true;
 }
@@ -199,16 +257,131 @@ async function _fireCue(id: string): Promise<boolean> {
   return true;
 }
 
-async function _takeover(): Promise<boolean> {
-  const r = await postTimelineTakeover();
-  if (!r.ok) {
-    _emit({ ..._cached, error: r.error || 'Failed to take over plan' });
-    return false;
+// ── PERFORMANCE-MODE TAKEOVER PASSCODE (operator ruling 2026-08-14) ───────
+//
+// "Take over in performance mode from the timeline needs to have either of the
+// passwords we have for Sina, Muisha, or Sailors" … "pass code is required
+// EVERY TIME."
+//
+// EVERY takeover affordance in this app funnels through the two functions
+// below, so gating them here is what makes the rule exhaustive: the
+// PlanLockBanner button on deck/mixer/touch-control, the mixer's
+// takeover-and-switch-output variant, the implicit takeover fired by touching a
+// manual control under a live plan (useOperatorTakeover), and the EVENT sheet's
+// scoped PERFORM.
+//
+// The gate reads the ENGINE-GLOBAL performance flag, not this device's
+// privilege: a privileged pad with a live 30-minute session is asked for the
+// passcode exactly like every other pad, because the engine ignores session
+// tokens on this route. The passcode is never stored — see the storage audit in
+// utils/takeover_passcode.ts.
+const TAKEOVER_PROMPT_TITLE = 'Operator passcode required';
+const TAKEOVER_PROMPT_DETAIL =
+  'The show is live and the timeline is driving the rig. Enter an authorized operator '
+  + 'passcode to take control. A fresh passcode is required for every takeover; handing '
+  + 'the rig back to the plan never needs one.';
+
+async function _takeover(): Promise<TakeoverOutcome> {
+  let gated;
+  try {
+    gated = await runGatedTakeover({
+      performanceActive: getPerformanceModeState().active,
+      title: TAKEOVER_PROMPT_TITLE,
+      detail: TAKEOVER_PROMPT_DETAIL,
+      send: (auth) => postTimelineTakeover(undefined, auth),
+    });
+  } catch (err: any) {
+    // No prompt host mounted, or the transport threw: fail LOUD, never take
+    // over unauthenticated and never pretend it worked.
+    _emit({ ..._cached, error: err?.message || 'Failed to take over plan' });
+    return 'failed';
+  }
+  if (gated.cancelled) return 'cancelled';
+  if (!gated.result.ok) {
+    _emit({ ..._cached, error: gated.result.error || 'Failed to take over plan' });
+    return 'failed';
   }
   // Re-seed so the indicator flips to the lease/countdown state immediately —
   // the engine also broadcasts `timelineState`, this just converges faster.
   await _reseedAfterAction();
-  return true;
+  return 'ok';
+}
+
+// ── EVENT ZOOM: "did THIS client enter the zoom?" ────────────────────────
+//
+// D1 (operator ruling): returning to the TIMELINE tab exits the zoom — but ONLY
+// from the client that entered it. There is ONE engine zoom session and both
+// pads render the same banner off the same broadcast; if a second pad's ordinary
+// tab-browsing fired resume(), it would yank pad A's live performance. So the
+// tab-return exit is gated on this module-level flag, and every OTHER client
+// exits through the banner's explicit EXIT button.
+//
+// Module-level (not React state) for the same reason the cache above is: the
+// timeline tab unmounts on every tab switch and this must survive that.
+let _zoomEnteredHere = false;
+
+// "WE asked for this exit." Set the instant a resume() is issued from ANY
+// surface (the banner's EXIT, the timeline-tab return) and read by the banner
+// to tell an operator-requested exit apart from one the engine imposed —
+// lease expiry, engine restart, autopilot OFF, a maker auto-save. Only the
+// latter deserves the "zoom ended" notice.
+let _zoomExitRequested = false;
+
+/** True when THIS client is the one that entered the live zoom. */
+export function zoomEnteredHere(): boolean {
+  return _zoomEnteredHere;
+}
+
+/** True when this client asked for the zoom to end (see `_zoomExitRequested`). */
+export function zoomExitRequested(): boolean {
+  return _zoomExitRequested;
+}
+
+/** Clear both zoom claims — called once the engine's `zoom` is observed null. */
+export function clearZoomClaims(): void {
+  _zoomEnteredHere = false;
+  _zoomExitRequested = false;
+}
+
+async function _performTakeover(cueId: string): Promise<PerformTakeoverResult> {
+  let gated;
+  try {
+    // Same gate as the plain takeover: a SCOPED perform is still seizing the
+    // rig from a running plan, which is exactly what the ruling covers.
+    gated = await runGatedTakeover({
+      performanceActive: getPerformanceModeState().active,
+      title: TAKEOVER_PROMPT_TITLE,
+      detail: TAKEOVER_PROMPT_DETAIL,
+      send: (auth) => postTimelineTakeover({ scope: 'perform', cueId }, auth),
+    });
+  } catch (err: any) {
+    const msg = err?.message || 'Failed to take the deck';
+    _emit({ ..._cached, error: msg });
+    return { outcome: 'failed', error: msg };
+  }
+  if (gated.cancelled) return { outcome: 'cancelled', error: null };
+  if (!gated.result.ok) {
+    const msg = gated.result.error || 'Failed to take the deck';
+    _emit({ ..._cached, error: msg });
+    return { outcome: 'failed', error: msg };
+  }
+  _zoomEnteredHere = true;
+  await _reseedAfterAction();
+  return { outcome: 'ok', error: null };
+}
+
+async function _travel(spec: TimelineTravelSpec): Promise<string | null> {
+  const r = await postTimelineTravel(spec);
+  if (!r.ok) {
+    // Codex P0: the engine's 400 is the message — "no prev event on 2026-09-04",
+    // "target … is outside the festival window". Never soften it, never clamp.
+    const msg = r.error || 'Failed to time travel';
+    _emit({ ..._cached, error: msg });
+    return msg;
+  }
+  _zoomEnteredHere = true;
+  await _reseedAfterAction();
+  return null;
 }
 
 async function _activity(): Promise<boolean> {
@@ -224,6 +397,11 @@ async function _activity(): Promise<boolean> {
   }
   return true;
 }
+
+// Non-hook entry points for the two gated takeovers. Same functions the hook
+// hands out — exported so imperative code (and vitest, which runs in plain
+// node with no React renderer) can exercise the passcode gate directly.
+export { _takeover as runTakeover, _performTakeover as runPerformTakeover };
 
 export function useTimeline(): UseTimelineResult {
   _ensureInitialized();
@@ -246,7 +424,33 @@ export function useTimeline(): UseTimelineResult {
     fireCue: _fireCue,
     takeover: _takeover,
     activity: _activity,
+    performTakeover: _performTakeover,
+    travel: _travel,
   };
+}
+
+// ── EVENT ZOOM presence pings (_94 §3.2 "presence, not touch") ───────────
+//
+// A performer may watch the rig hands-off for minutes. The plain takeover's
+// touch-driven pings (useOperatorTakeover below) would let the 120 s lease lapse
+// mid-performance, so while the ZOOM BANNER is mounted and a zoom is held we
+// ping /timeline/activity on a fixed interval instead.
+//
+// This is deliberately NOT a "never expire" hack: the pings stop the moment the
+// banner unmounts (app backgrounded on web = the page is gone, iPad dead, WiFi
+// gone), the lease expires, and the plan auto-resumes. The "never stuck"
+// invariant survives every failure mode.
+const ZOOM_PRESENCE_PING_MS = 30_000;
+
+export function useZoomPresence(active: boolean): void {
+  useEffect(() => {
+    if (!active) return;
+    // Ping immediately on entry so a lease armed just before a slow render
+    // still gets its first refresh promptly, then every 30 s.
+    void _activity();
+    const t = setInterval(() => { void _activity(); }, ZOOM_PRESENCE_PING_MS);
+    return () => clearInterval(t);
+  }, [active]);
 }
 
 // ── Operator-takeover interaction hook (DECK/MIXER) ──────────────────────

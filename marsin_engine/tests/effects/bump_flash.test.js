@@ -49,6 +49,11 @@ function makeMixer(overlayConfigs) {
   const wasmHost = makeFakeWasmHost();
   const mixer = new PatternMixer({ wasmHost, pixelCount: 2 });
   mixer.blendHandles['blend_screen'] = { fake: true };
+  // triggerMixerTransition now requires a compiled handle for its transition
+  // script and refuses (returns null) without one — no silent crossfade
+  // substitution. Nothing precompiles here (no `patternsDir`), so prime the
+  // default trans_crossfade too or the re-cue never runs.
+  mixer.blendHandles['trans_crossfade'] = { fake: true };
   mixer.wantVisThisFrame = false;
   mixer.viewFader = 1.0;
   mixer.targetViewFader = 1.0;

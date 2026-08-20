@@ -26,12 +26,23 @@ import {
   performanceSummonOutcome,
   pressAgainToGoLiveLabel,
   exitChoiceControllerHint,
+  KEEP_SAVE_OWNER_ONLY_CAPTION,
+  PASSCODE_REQUIRED_HINT,
+  REMEMBERED_OPERATOR_AUTH_HINT,
+  ESCALATE_SHEET_TITLE,
+  ESCALATE_SHEET_DETAIL,
+  editPrincipalMaySave,
+  editSessionChip,
+  normalizeEditPrincipal,
 } from './performance_mode_logic';
 
 describe('DEFAULT_PERFORMANCE_MODE', () => {
   it('defaults OFF + clean so the badge never flashes active before the engine answers', () => {
     expect(DEFAULT_PERFORMANCE_MODE).toEqual({
       active: false, enteredAt: null, dirtyCount: 0, dirtyEntries: [],
+      // docs/56: no edit session, and no reason to warn about one, until the
+      // engine has said whether this deployment even gates persistence.
+      editPrincipal: null, authRequired: false,
     });
   });
 });
@@ -43,20 +54,28 @@ describe('reconcilePerformanceMode', () => {
     const msg = { type: 'performanceMode', active: true, enteredAt: '2026-07-13T00:00:00Z' };
     expect(reconcilePerformanceMode(prev, msg)).toEqual({
       active: true, enteredAt: '2026-07-13T00:00:00Z', dirtyCount: 0, dirtyEntries: [],
+      editPrincipal: null, authRequired: false,
     });
   });
 
   it('adopts an inactive broadcast and forces enteredAt to null', () => {
-    const active = { active: true, enteredAt: '2026-07-13T00:00:00Z', dirtyCount: 0, dirtyEntries: [] };
+    const active = {
+      ...DEFAULT_PERFORMANCE_MODE,
+      active: true, enteredAt: '2026-07-13T00:00:00Z',
+    };
     const msg = { type: 'performanceMode', active: false, enteredAt: '2026-07-13T00:00:00Z' };
     expect(reconcilePerformanceMode(active, msg)).toEqual({
       active: false, enteredAt: null, dirtyCount: 0, dirtyEntries: [],
+      editPrincipal: null, authRequired: false,
     });
   });
 
   it('accepts a REST/POST body with no type field', () => {
     expect(reconcilePerformanceMode(prev, { active: true, enteredAt: 'x' }))
-      .toEqual({ active: true, enteredAt: 'x', dirtyCount: 0, dirtyEntries: [] });
+      .toEqual({
+        active: true, enteredAt: 'x', dirtyCount: 0, dirtyEntries: [],
+        editPrincipal: null, authRequired: false,
+      });
   });
 
   it('ignores a message of a different type', () => {
@@ -64,7 +83,7 @@ describe('reconcilePerformanceMode', () => {
   });
 
   it('keeps the previous state when active is a non-boolean (malformed)', () => {
-    const active = { active: true, enteredAt: 'x', dirtyCount: 0, dirtyEntries: [] };
+    const active = { ...DEFAULT_PERFORMANCE_MODE, active: true, enteredAt: 'x' };
     expect(reconcilePerformanceMode(active, { active: 'yes' as unknown })).toBe(active);
   });
 
@@ -76,7 +95,10 @@ describe('reconcilePerformanceMode', () => {
 
   it('normalizes a malformed enteredAt to null when active', () => {
     expect(reconcilePerformanceMode(prev, { active: true, enteredAt: 123 as unknown }))
-      .toEqual({ active: true, enteredAt: null, dirtyCount: 0, dirtyEntries: [] });
+      .toEqual({
+        active: true, enteredAt: null, dirtyCount: 0, dirtyEntries: [],
+        editPrincipal: null, authRequired: false,
+      });
   });
 
   it('adopts the dirty summary from a payload that carries it', () => {
@@ -93,11 +115,13 @@ describe('reconcilePerformanceMode', () => {
         { playlist: 'main', entryId: 'e1', label: 'Aurora' },
         { playlist: 'main', entryId: 'e2', label: null },
       ],
+      editPrincipal: null, authRequired: false,
     });
   });
 
   it('preserves the previous dirty summary when the echo omits dirty fields', () => {
     const seeded = {
+      ...DEFAULT_PERFORMANCE_MODE,
       active: true, enteredAt: 'z', dirtyCount: 3,
       dirtyEntries: [{ playlist: 'p', entryId: 'e', label: 'X' }],
     };
@@ -151,9 +175,9 @@ describe('label + copy helpers', () => {
   });
 
   it('names the exit actions distinctly', () => {
-    expect(exitActionLabel('keep')).toMatch(/keep/i);
-    expect(exitActionLabel('keep-save')).toMatch(/save/i);
-    expect(exitActionLabel('restore')).toMatch(/restore/i);
+    expect(exitActionLabel('keep')).toBe('SAVE CHANGES');
+    expect(exitActionLabel('keep-save')).toBe('SAVE CHANGES');
+    expect(exitActionLabel('restore')).toBe('DISCARD PERFORMANCE CHANGES');
     expect(exitActionHint('keep')).toMatch(/persist/i);
     expect(exitActionHint('keep-save')).toMatch(/save/i);
     expect(exitActionHint('restore')).toMatch(/discard/i);
@@ -167,24 +191,187 @@ describe('label + copy helpers', () => {
 });
 
 describe('performanceExitChoices (dirty-aware exit sheet)', () => {
-  it('CLEAN (dirtyCount 0) → the original two choices, keep first + restore last', () => {
+  it('CLEAN (dirtyCount 0) → two choices: discard first, save second', () => {
     const choices = performanceExitChoices(0);
-    expect(choices.map((c) => c.action)).toEqual(['keep', 'restore']);
-    expect(choices[0].label).toBe('KEEP LIVE STATE');
-    expect(choices[1].tone).toBe('restore');
-    // No 'keep-save' offered when nothing was tuned.
+    expect(choices.map((c) => c.action)).toEqual(['restore', 'keep']);
+    expect(choices[0].label).toBe('DISCARD PERFORMANCE CHANGES');
+    expect(choices[0].tone).toBe('restore');
+    expect(choices[1].label).toBe('SAVE CHANGES');
+    expect(choices[1].tone).toBe('save');
     expect(choices.some((c) => c.action === 'keep-save')).toBe(false);
   });
 
-  it('DIRTY (dirtyCount > 0) → save-ask: keep-save, keep-without-saving, restore', () => {
+  it('DIRTY (dirtyCount > 0) → two choices: discard + save (keep-save)', () => {
     const choices = performanceExitChoices(4);
-    expect(choices.map((c) => c.action)).toEqual(['keep-save', 'keep', 'restore']);
-    expect(choices[0].label).toBe('KEEP & SAVE TUNING');
-    // The two keeps must be unambiguous — 'keep' reads "WITHOUT SAVING" here.
-    expect(choices[1].label).toBe('KEEP WITHOUT SAVING');
-    expect(choices[1].label).not.toBe(choices[0].label);
-    expect(choices[2].action).toBe('restore');
-    expect(choices[2].tone).toBe('restore');
+    expect(choices.map((c) => c.action)).toEqual(['restore', 'keep-save']);
+    expect(choices[0].label).toBe('DISCARD PERFORMANCE CHANGES');
+    expect(choices[0].tone).toBe('restore');
+    expect(choices[1].label).toBe('SAVE CHANGES');
+    expect(choices[1].tone).toBe('save');
+    expect(choices[2]).toBeUndefined();
+  });
+
+  it('only SAVE CHANGES (keep-save) carries the owner-only caption when dirty (docs/56 D7)', () => {
+    const choices = performanceExitChoices(2);
+    const keepSave = choices.find((c) => c.action === 'keep-save');
+    expect(keepSave?.label).toBe('SAVE CHANGES');
+    expect(keepSave?.caption).toBe(KEEP_SAVE_OWNER_ONLY_CAPTION);
+    expect(KEEP_SAVE_OWNER_ONLY_CAPTION.toLowerCase()).toContain('captain');
+    for (const c of choices.filter((x) => x.action !== 'keep-save')) {
+      expect(c.caption).toBeUndefined();
+    }
+    expect(performanceExitChoices(0).every((c) => c.caption === undefined)).toBe(true);
+  });
+
+  it('the passcode field carries a standing explanation (report _236)', () => {
+    // The old sheet greyed BOTH exits until something was typed and said
+    // nothing about why — the operator tapped and nothing happened. The buttons
+    // are live again; this line is what tells them the field matters, and it
+    // must also state the consequence of WHO types it (docs/56 D4).
+    expect(PASSCODE_REQUIRED_HINT.length).toBeGreaterThan(40);
+    expect(PASSCODE_REQUIRED_HINT).toContain('passcode');
+    expect(PASSCODE_REQUIRED_HINT.toLowerCase()).toContain('saved');
+  });
+
+  it('remembered-auth hint tells the operator passcode entry is skipped', () => {
+    expect(REMEMBERED_OPERATOR_AUTH_HINT.toLowerCase()).toContain('remembered');
+    expect(REMEMBERED_OPERATOR_AUTH_HINT.toLowerCase()).toContain('no passcode');
+  });
+
+  it('keep-save stays TAPPABLE — the client cannot pre-know the principal', () => {
+    // The sheet must not grey it: knowing whether the typed code is the
+    // captain's would require verifying before submit. The engine's 400 is the
+    // answer, rendered in the sheet's error box.
+    const keepSave = performanceExitChoices(1).find((c) => c.action === 'keep-save');
+    expect(keepSave).toBeDefined();
+    expect(keepSave).not.toHaveProperty('disabled');
+  });
+});
+
+// ── EDIT SESSION (docs/56) ────────────────────────────────────────────────
+describe('reconcilePerformanceMode — editPrincipal / authRequired', () => {
+  const seed = DEFAULT_PERFORMANCE_MODE;
+
+  it('adopts a principal + authRequired from an engine frame', () => {
+    const next = reconcilePerformanceMode(seed, {
+      type: 'performanceMode', active: false, enteredAt: null,
+      editPrincipal: 'bringup', authRequired: true,
+    });
+    expect(next.editPrincipal).toBe('bringup');
+    expect(next.authRequired).toBe(true);
+  });
+
+  it('an explicit null principal ENDS the session (it is not "absent")', () => {
+    const sailor = reconcilePerformanceMode(seed, {
+      active: false, editPrincipal: 'bringup', authRequired: true,
+    });
+    const cleared = reconcilePerformanceMode(sailor, {
+      active: false, editPrincipal: null, authRequired: true,
+    });
+    expect(cleared.editPrincipal).toBeNull();
+    expect(cleared.authRequired).toBe(true);
+  });
+
+  it('an ABSENT principal field preserves the previous one (pre-_228 echoes)', () => {
+    const owner = reconcilePerformanceMode(seed, {
+      active: false, editPrincipal: 'owner', authRequired: true,
+    });
+    const echo = reconcilePerformanceMode(owner, { active: false, enteredAt: null });
+    expect(echo.editPrincipal).toBe('owner');
+    expect(echo.authRequired).toBe(true);
+  });
+
+  it('rejects an unknown principal string rather than rendering it', () => {
+    const next = reconcilePerformanceMode(seed, {
+      active: false, editPrincipal: 'admin', authRequired: true,
+    });
+    expect(next.editPrincipal).toBeNull();
+  });
+
+  it('performance mode ACTIVE pins the principal to null (no session while locked)', () => {
+    const owner = reconcilePerformanceMode(seed, {
+      active: false, editPrincipal: 'owner', authRequired: true,
+    });
+    const locked = reconcilePerformanceMode(owner, { active: true, enteredAt: 'z' });
+    expect(locked.editPrincipal).toBeNull();
+  });
+
+  it('normalizeEditPrincipal accepts exactly the three engine enum names', () => {
+    expect(normalizeEditPrincipal('owner')).toBe('owner');
+    expect(normalizeEditPrincipal('collaborator')).toBe('collaborator');
+    expect(normalizeEditPrincipal('bringup')).toBe('bringup');
+    for (const bad of ['sina', 'OWNER', '', null, undefined, 7, {}]) {
+      expect(normalizeEditPrincipal(bad)).toBeNull();
+    }
+  });
+});
+
+describe('editPrincipalMaySave', () => {
+  it('auth DISABLED → always true (the gate does not exist on a bench)', () => {
+    for (const p of ['owner', 'collaborator', 'bringup', null] as const) {
+      expect(editPrincipalMaySave(p, false)).toBe(true);
+    }
+  });
+
+  it('auth ENABLED → only the owner session persists', () => {
+    expect(editPrincipalMaySave('owner', true)).toBe(true);
+    expect(editPrincipalMaySave('collaborator', true)).toBe(false);
+    expect(editPrincipalMaySave('bringup', true)).toBe(false);
+    expect(editPrincipalMaySave(null, true)).toBe(false);
+  });
+});
+
+describe('editSessionChip (loud, not spammy)', () => {
+  it('renders NOTHING for the three silent cases', () => {
+    // Owner session — normal is silent.
+    expect(editSessionChip('owner', false, true)).toBeNull();
+    // Show lock on — the perf control already dominates; no session exists.
+    expect(editSessionChip(null, true, true)).toBeNull();
+    expect(editSessionChip('bringup', true, true)).toBeNull();
+    // Auth disabled — there is no gate to warn about.
+    expect(editSessionChip('bringup', false, false)).toBeNull();
+    expect(editSessionChip(null, false, false)).toBeNull();
+  });
+
+  it('names the session and always says LIVE, NOT SAVING', () => {
+    const sailor = editSessionChip('bringup', false, true);
+    expect(sailor?.label).toBe('SAILOR SESSION — LIVE, NOT SAVING');
+    const crew = editSessionChip('collaborator', false, true);
+    expect(crew?.label).toBe('CREW SESSION — LIVE, NOT SAVING');
+    const none = editSessionChip(null, false, true);
+    expect(none?.label).toBe('NO EDIT SESSION — NOT SAVING');
+    for (const chip of [sailor, crew, none]) {
+      // The chip must state BOTH halves of the truth: it still drives the rig,
+      // and it is not being written down.
+      expect(chip?.label).toContain('NOT SAVING');
+      expect(chip?.detail.toLowerCase()).toContain('captain');
+    }
+    expect(sailor?.detail).toContain('drive the rig');
+    expect(crew?.detail).toContain('drive the rig');
+  });
+
+  it('the chip is exactly the inverse of editPrincipalMaySave, with auth on', () => {
+    for (const p of ['owner', 'collaborator', 'bringup', null] as const) {
+      const maySave = editPrincipalMaySave(p, true);
+      expect(editSessionChip(p, false, true) === null).toBe(maySave);
+    }
+  });
+});
+
+describe('escalation sheet copy', () => {
+  it('states the D4 consequence: the CURRENT live tuning starts saving', () => {
+    expect(ESCALATE_SHEET_DETAIL).toContain('CURRENT live tuning');
+    expect(ESCALATE_SHEET_DETAIL.toLowerCase()).toContain('earlier in this session');
+    // …and that any OTHER passcode is a handover, not a no-op.
+    expect(ESCALATE_SHEET_DETAIL.toLowerCase()).toContain('hands the');
+    expect(ESCALATE_SHEET_TITLE.toLowerCase()).toContain('saving');
+  });
+
+  it('never hints that a passcode is remembered or stored', () => {
+    for (const copy of [ESCALATE_SHEET_TITLE, ESCALATE_SHEET_DETAIL]) {
+      expect(copy.toLowerCase()).not.toContain('remember');
+      expect(copy.toLowerCase()).not.toContain('stay signed in');
+    }
   });
 });
 
@@ -289,7 +476,7 @@ describe('controller-affordance copy (rendered ONLY when a binder is connected)'
   it('the exit hint says the button only closes and the choice is on the iPad', () => {
     const hint = exitChoiceControllerHint('SOLO');
     expect(hint).toMatch(/^SOLO closes this sheet/);
-    expect(hint).toMatch(/KEEP or RESTORE/);
+    expect(hint).toMatch(/DISCARD or SAVE CHANGES/);
     expect(hint).toMatch(/iPad/);
   });
 });

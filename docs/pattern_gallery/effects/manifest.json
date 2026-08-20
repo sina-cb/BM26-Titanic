@@ -1,0 +1,3070 @@
+{
+  "schemaVersion": 1,
+  "generator": "C:/Users/TITANI~1/tmp/fx_gallery/generate_effects_gallery.mjs",
+  "generatedFrom": "index-only",
+  "model": "titanic",
+  "pixelCount": 964,
+  "basePattern": "baby_tease/01_bullseye_tide",
+  "basePlaylistEntry": "e_baby_tease_bullseye_tide",
+  "baseDefaults": {
+    "sliderLocalSpeed": 0.42,
+    "sliderLevel": 0.85,
+    "sliderRingCount": 0.5
+  },
+  "totalSeconds": 12,
+  "internalFps": 40,
+  "outputFps": 20,
+  "timeline": {
+    "baseOnlyUntilSeconds": 2,
+    "onSeconds": 2,
+    "offSeconds": 8,
+    "triggerSeconds": [
+      2,
+      4.5,
+      7
+    ],
+    "endSeconds": 12
+  },
+  "signals": {
+    "bpm": 120,
+    "audioPresent": false,
+    "note": "synthetic steady clock; no audio is faked"
+  },
+  "wauVisualization": {
+    "w": [
+      1,
+      0.92,
+      0.75
+    ],
+    "a": [
+      1,
+      0.55,
+      0.1
+    ],
+    "u": [
+      0.45,
+      0,
+      1
+    ],
+    "note": "W/A/U lanes are composited into the rendered RGB for display only: rgb += w*[1,0.92,0.75] + a*[1,0.55,0.10] + u*[0.45,0,1], clamped to [0,1]. All manifest metrics are measured on the raw six-lane output BEFORE this mapping."
+  },
+  "thresholds": {
+    "visuallyInertRmsBytes": 1,
+    "tailSettledRmsBytes": 2,
+    "waOnlyRgbRmsBytes": 0.5,
+    "waOnlyWauRmsBytes": 1,
+    "nearDuplicateRmsBytes": 8
+  },
+  "verdictSource": "C:\\Users\\TITANI~1\\tmp\\fx_gallery\\verdicts.json",
+  "contactSheetDir": "C:\\Users\\TITANI~1\\tmp\\fx_gallery\\sheets",
+  "renderedCount": 50,
+  "visuallyInertCount": 0,
+  "overlapMatrix": {
+    "strobe": {
+      "pulse_2hz": {
+        "pulse_2hz": 0,
+        "sync_4hz": 27.805,
+        "punch_5hz": 27.845,
+        "hard_10hz": 22.259,
+        "max_20hz": 27.85
+      },
+      "sync_4hz": {
+        "pulse_2hz": 27.805,
+        "sync_4hz": 0,
+        "punch_5hz": 27.868,
+        "hard_10hz": 27.83,
+        "max_20hz": 22.262
+      },
+      "punch_5hz": {
+        "pulse_2hz": 27.845,
+        "sync_4hz": 27.868,
+        "punch_5hz": 0,
+        "hard_10hz": 27.818,
+        "max_20hz": 27.818
+      },
+      "hard_10hz": {
+        "pulse_2hz": 22.259,
+        "sync_4hz": 27.83,
+        "punch_5hz": 27.818,
+        "hard_10hz": 0,
+        "max_20hz": 27.829
+      },
+      "max_20hz": {
+        "pulse_2hz": 27.85,
+        "sync_4hz": 22.262,
+        "punch_5hz": 27.818,
+        "hard_10hz": 27.829,
+        "max_20hz": 0
+      }
+    },
+    "dropHit": {
+      "white_drop": {
+        "white_drop": 0,
+        "iceberg_flash": 16.904,
+        "vintage_burst": 27.991
+      },
+      "iceberg_flash": {
+        "white_drop": 16.904,
+        "iceberg_flash": 0,
+        "vintage_burst": 28.755
+      },
+      "vintage_burst": {
+        "white_drop": 27.991,
+        "iceberg_flash": 28.755,
+        "vintage_burst": 0
+      }
+    },
+    "colorWash": {
+      "ocean_blue": {
+        "ocean_blue": 0,
+        "iceberg_cyan": 51.913,
+        "emergency_red": 120.426,
+        "vintage_amber": 117.832,
+        "purple": 42.15
+      },
+      "iceberg_cyan": {
+        "ocean_blue": 51.913,
+        "iceberg_cyan": 0,
+        "emergency_red": 134.978,
+        "vintage_amber": 120.002,
+        "purple": 74.265
+      },
+      "emergency_red": {
+        "ocean_blue": 120.426,
+        "iceberg_cyan": 134.978,
+        "emergency_red": 0,
+        "vintage_amber": 64.995,
+        "purple": 99.704
+      },
+      "vintage_amber": {
+        "ocean_blue": 117.832,
+        "iceberg_cyan": 120.002,
+        "emergency_red": 64.995,
+        "vintage_amber": 0,
+        "purple": 108.931
+      },
+      "purple": {
+        "ocean_blue": 42.15,
+        "iceberg_cyan": 74.265,
+        "emergency_red": 99.704,
+        "vintage_amber": 108.931,
+        "purple": 0
+      }
+    },
+    "feedbackTrails": {
+      "soft_afterimage": {
+        "soft_afterimage": 0,
+        "ghost_ship": 41.02,
+        "long_afterimage": 17.302,
+        "cosmic_trails": 46.612
+      },
+      "ghost_ship": {
+        "soft_afterimage": 41.02,
+        "ghost_ship": 0,
+        "long_afterimage": 28.236,
+        "cosmic_trails": 24.568
+      },
+      "long_afterimage": {
+        "soft_afterimage": 17.302,
+        "ghost_ship": 28.236,
+        "long_afterimage": 0,
+        "cosmic_trails": 39.21
+      },
+      "cosmic_trails": {
+        "soft_afterimage": 46.612,
+        "ghost_ship": 24.568,
+        "long_afterimage": 39.21,
+        "cosmic_trails": 0
+      }
+    },
+    "beatPump": {
+      "soft": {
+        "soft": 0,
+        "deep": 9.946,
+        "halftime": 11.905
+      },
+      "deep": {
+        "soft": 9.946,
+        "deep": 0,
+        "halftime": 5.984
+      },
+      "halftime": {
+        "soft": 11.905,
+        "deep": 5.984,
+        "halftime": 0
+      }
+    },
+    "movementTrace": {
+      "every_other_repeat": {
+        "every_other_repeat": 0,
+        "every_other_reverse": 0,
+        "every_other_two_tone": 70.032,
+        "one_per_color_repeat": 93.304,
+        "one_per_color_reverse": 93.304,
+        "pulse_slow_fade": 70.713,
+        "whole_group_repeat": 69.95,
+        "whole_group_reverse": 69.95,
+        "one_per_color_double": 93.511
+      },
+      "every_other_reverse": {
+        "every_other_repeat": 0,
+        "every_other_reverse": 0,
+        "every_other_two_tone": 70.032,
+        "one_per_color_repeat": 93.304,
+        "one_per_color_reverse": 93.304,
+        "pulse_slow_fade": 70.713,
+        "whole_group_repeat": 69.95,
+        "whole_group_reverse": 69.95,
+        "one_per_color_double": 93.511
+      },
+      "every_other_two_tone": {
+        "every_other_repeat": 70.032,
+        "every_other_reverse": 70.032,
+        "every_other_two_tone": 0,
+        "one_per_color_repeat": 85.608,
+        "one_per_color_reverse": 85.608,
+        "pulse_slow_fade": 96.841,
+        "whole_group_repeat": 50.876,
+        "whole_group_reverse": 50.876,
+        "one_per_color_double": 85.799
+      },
+      "one_per_color_repeat": {
+        "every_other_repeat": 93.304,
+        "every_other_reverse": 93.304,
+        "every_other_two_tone": 85.608,
+        "one_per_color_repeat": 0,
+        "one_per_color_reverse": 0,
+        "pulse_slow_fade": 94.07,
+        "whole_group_repeat": 86.521,
+        "whole_group_reverse": 86.521,
+        "one_per_color_double": 81.193
+      },
+      "one_per_color_reverse": {
+        "every_other_repeat": 93.304,
+        "every_other_reverse": 93.304,
+        "every_other_two_tone": 85.608,
+        "one_per_color_repeat": 0,
+        "one_per_color_reverse": 0,
+        "pulse_slow_fade": 94.07,
+        "whole_group_repeat": 86.521,
+        "whole_group_reverse": 86.521,
+        "one_per_color_double": 81.193
+      },
+      "pulse_slow_fade": {
+        "every_other_repeat": 70.713,
+        "every_other_reverse": 70.713,
+        "every_other_two_tone": 96.841,
+        "one_per_color_repeat": 94.07,
+        "one_per_color_reverse": 94.07,
+        "pulse_slow_fade": 0,
+        "whole_group_repeat": 93.954,
+        "whole_group_reverse": 93.954,
+        "one_per_color_double": 94.073
+      },
+      "whole_group_repeat": {
+        "every_other_repeat": 69.95,
+        "every_other_reverse": 69.95,
+        "every_other_two_tone": 50.876,
+        "one_per_color_repeat": 86.521,
+        "one_per_color_reverse": 86.521,
+        "pulse_slow_fade": 93.954,
+        "whole_group_repeat": 0,
+        "whole_group_reverse": 0,
+        "one_per_color_double": 86.676
+      },
+      "whole_group_reverse": {
+        "every_other_repeat": 69.95,
+        "every_other_reverse": 69.95,
+        "every_other_two_tone": 50.876,
+        "one_per_color_repeat": 86.521,
+        "one_per_color_reverse": 86.521,
+        "pulse_slow_fade": 93.954,
+        "whole_group_repeat": 0,
+        "whole_group_reverse": 0,
+        "one_per_color_double": 86.676
+      },
+      "one_per_color_double": {
+        "every_other_repeat": 93.511,
+        "every_other_reverse": 93.511,
+        "every_other_two_tone": 85.799,
+        "one_per_color_repeat": 81.193,
+        "one_per_color_reverse": 81.193,
+        "pulse_slow_fade": 94.073,
+        "whole_group_repeat": 86.676,
+        "whole_group_reverse": 86.676,
+        "one_per_color_double": 0
+      }
+    },
+    "waterlineSweep": {
+      "rising_tide": {
+        "rising_tide": 0,
+        "beat_wipe": 28.316,
+        "shadow_pass": 26.735
+      },
+      "beat_wipe": {
+        "rising_tide": 28.316,
+        "beat_wipe": 0,
+        "shadow_pass": 28.008
+      },
+      "shadow_pass": {
+        "rising_tide": 26.735,
+        "beat_wipe": 28.008,
+        "shadow_pass": 0
+      }
+    },
+    "kickPunch": {
+      "punch": {
+        "punch": 0,
+        "ice_punch": 9.01
+      },
+      "ice_punch": {
+        "punch": 9.01,
+        "ice_punch": 0
+      }
+    },
+    "freeze": {
+      "hold": {
+        "hold": 0,
+        "fade_2s": 46.336,
+        "stutter": 0
+      },
+      "fade_2s": {
+        "hold": 46.336,
+        "fade_2s": 0,
+        "stutter": 46.336
+      },
+      "stutter": {
+        "hold": 0,
+        "fade_2s": 46.336,
+        "stutter": 0
+      }
+    },
+    "crush": {
+      "hard_2": {
+        "hard_2": 0,
+        "bold_4": 42.065,
+        "soft_6": 43.188
+      },
+      "bold_4": {
+        "hard_2": 42.065,
+        "bold_4": 0,
+        "soft_6": 15.937
+      },
+      "soft_6": {
+        "hard_2": 43.188,
+        "bold_4": 15.937,
+        "soft_6": 0
+      }
+    },
+    "breath": {
+      "calm": {
+        "calm": 0,
+        "deep": 21.994,
+        "sunrise": 19.051
+      },
+      "deep": {
+        "calm": 21.994,
+        "deep": 0,
+        "sunrise": 15.803
+      },
+      "sunrise": {
+        "calm": 19.051,
+        "deep": 15.803,
+        "sunrise": 0
+      }
+    },
+    "sparkle": {
+      "fizz": {
+        "fizz": 0,
+        "blizzard": 50.169,
+        "hihat": 28.792
+      },
+      "blizzard": {
+        "fizz": 50.169,
+        "blizzard": 0,
+        "hihat": 52.733
+      },
+      "hihat": {
+        "fizz": 28.792,
+        "blizzard": 52.733,
+        "hihat": 0
+      }
+    }
+  },
+  "items": [
+    {
+      "key": "vintageWhite|default",
+      "effectId": "vintageWhite",
+      "presetId": "default",
+      "label": "Vintage White",
+      "category": "legacy",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {},
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Slams every vintage filament head's W channel to full, with the fire-sync release ramp on exit — the ship's 1912 signature flash.",
+      "verdict": "KEEP",
+      "reason": "Unique hardware identity; fire-sync depends on it.",
+      "gif": "001_vintageWhite__default.gif",
+      "video": "001_vintageWhite__default.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/001_vintageWhite__default.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 32.852,
+        "rmsRgbOnBytes": 0,
+        "rmsWauOnBytes": 46.46,
+        "changedPixelFractionOn": 0.0996,
+        "peakBrightnessRatio": 1.323,
+        "maxFrameBrightnessRatio": 1.358,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0214,
+        "waOnly": true,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "blastWhite|default",
+      "effectId": "blastWhite",
+      "presetId": "default",
+      "label": "Blast White",
+      "category": "legacy",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {},
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Every channel of every pixel to full white — the photo-moment crowd-hit slam.",
+      "verdict": "KEEP",
+      "reason": "The rig's one honest full-white; release envelope already generalized.",
+      "gif": "002_blastWhite__default.gif",
+      "video": "002_blastWhite__default.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/002_blastWhite__default.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 192.241,
+        "rmsRgbOnBytes": 207.953,
+        "rmsWauOnBytes": 175.125,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 4.444,
+        "maxFrameBrightnessRatio": 4.768,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0245,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "uvBlast|default",
+      "effectId": "uvBlast",
+      "presetId": "default",
+      "label": "UV Blast",
+      "category": "legacy",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {},
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "U channel to full across the rig — blacklight bath.",
+      "verdict": "KEEP",
+      "reason": "Only UV gesture in the system.",
+      "gif": "003_uvBlast__default.gif",
+      "video": "003_uvBlast__default.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/003_uvBlast__default.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 67.059,
+        "rmsRgbOnBytes": 0,
+        "rmsWauOnBytes": 94.836,
+        "changedPixelFractionOn": 0.4149,
+        "peakBrightnessRatio": 1.684,
+        "maxFrameBrightnessRatio": 1.762,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0236,
+        "waOnly": true,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "fogger|default",
+      "effectId": "fogger",
+      "presetId": "default",
+      "label": "Fogger",
+      "category": "legacy",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {},
+      "paramsOverride": {},
+      "renderable": false,
+      "nonRenderableNote": "DMX relay (haze machine) — not pixel-renderable",
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "DMX relay to the haze machines; no pixel output.",
+      "verdict": "KEEP",
+      "reason": "Hardware relay, not a pixel effect.",
+      "gif": null,
+      "video": null,
+      "metrics": null
+    },
+    {
+      "key": "strobe|pulse_2hz",
+      "effectId": "strobe",
+      "presetId": "pulse_2hz",
+      "label": "2 Hz Pulse",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "hz": 2,
+        "duty": 0.5,
+        "intensity": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same gate at 2 Hz.",
+      "verdict": "FOLD",
+      "reason": "A mode-wheel position, not a library identity (docs/74 §4.2).",
+      "gif": "005_strobe__pulse_2hz.gif",
+      "video": "005_strobe__pulse_2hz.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/005_strobe__pulse_2hz.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 27.852,
+        "rmsRgbOnBytes": 39.389,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4476,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0265,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "strobe|sync_4hz",
+      "effectId": "strobe",
+      "presetId": "sync_4hz",
+      "label": "4 Hz Sync",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "hz": 4,
+        "duty": 0.5,
+        "intensity": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Frame-locked full-rig gate at 4 Hz — the canonical strobe.",
+      "verdict": "KEEP",
+      "reason": "Becomes THE Strobe entry; the Frequency mode wheel walks 2/4/5/10/20 Hz from here.",
+      "gif": "006_strobe__sync_4hz.gif",
+      "video": "006_strobe__sync_4hz.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/006_strobe__sync_4hz.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 27.822,
+        "rmsRgbOnBytes": 39.347,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4475,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0222,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "strobe|punch_5hz",
+      "effectId": "strobe",
+      "presetId": "punch_5hz",
+      "label": "5 Hz Punch",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "warning",
+      "params": {
+        "hz": 5,
+        "duty": 0.5,
+        "intensity": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same gate at 5 Hz.",
+      "verdict": "FOLD",
+      "reason": "Mode-wheel position (docs/74 §4.2).",
+      "gif": "007_strobe__punch_5hz.gif",
+      "video": "007_strobe__punch_5hz.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/007_strobe__punch_5hz.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 27.816,
+        "rmsRgbOnBytes": 39.338,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4474,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0215,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "strobe|hard_10hz",
+      "effectId": "strobe",
+      "presetId": "hard_10hz",
+      "label": "10 Hz Hard",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "warning",
+      "params": {
+        "hz": 10,
+        "duty": 0.5,
+        "intensity": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same gate at 10 Hz.",
+      "verdict": "FOLD",
+      "reason": "Mode-wheel position; WARNING tier travels with the mode value.",
+      "gif": "008_strobe__hard_10hz.gif",
+      "video": "008_strobe__hard_10hz.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/008_strobe__hard_10hz.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 27.824,
+        "rmsRgbOnBytes": 39.349,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4476,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0269,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "strobe|max_20hz",
+      "effectId": "strobe",
+      "presetId": "max_20hz",
+      "label": "20 Hz Max",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "warning",
+      "params": {
+        "hz": 20,
+        "duty": 0.5,
+        "intensity": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same gate at 20 Hz — a two-frame cycle at 40 fps.",
+      "verdict": "FOLD",
+      "reason": "Stays reachable as the wheel's expert stop, never a default tile (docs/74 D16).",
+      "gif": "009_strobe__max_20hz.gif",
+      "video": "009_strobe__max_20hz.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/009_strobe__max_20hz.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 27.819,
+        "rmsRgbOnBytes": 39.342,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4475,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.022,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "dropHit|white_drop",
+      "effectId": "dropHit",
+      "presetId": "white_drop",
+      "label": "White Flash",
+      "category": "envelope",
+      "behavior": "trigger",
+      "behaviorTypes": [
+        "trigger"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          1,
+          1,
+          1,
+          1,
+          0.2,
+          0
+        ],
+        "intensity": 1,
+        "attackMs": 25,
+        "holdMs": 75,
+        "releaseMs": 300,
+        "blendMode": "add"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "400 ms additive white+W pop — the hand-drummed boom primitive.",
+      "verdict": "KEEP",
+      "reason": "Distinct envelope and colour; the VSN1 drum voice.",
+      "gif": "010_dropHit__white_drop.gif",
+      "video": "010_dropHit__white_drop.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/010_dropHit__white_drop.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 22.705,
+        "rmsRgbOnBytes": 26.678,
+        "rmsWauOnBytes": 17.833,
+        "changedPixelFractionOn": 0.1875,
+        "peakBrightnessRatio": 4.444,
+        "maxFrameBrightnessRatio": 4.725,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0295,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "dropHit|iceberg_flash",
+      "effectId": "dropHit",
+      "presetId": "iceberg_flash",
+      "label": "Iceberg Flash",
+      "category": "envelope",
+      "behavior": "trigger",
+      "behaviorTypes": [
+        "trigger"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          0.3,
+          0.7,
+          1,
+          0.15,
+          0,
+          0.2
+        ],
+        "intensity": 1,
+        "attackMs": 20,
+        "holdMs": 90,
+        "releaseMs": 500,
+        "blendMode": "add"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Icy cyan pop with UV and a longer 500 ms ring-out.",
+      "verdict": "KEEP",
+      "reason": "Genuinely different colour story and tail.",
+      "gif": "011_dropHit__iceberg_flash.gif",
+      "video": "011_dropHit__iceberg_flash.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/011_dropHit__iceberg_flash.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 20.834,
+        "rmsRgbOnBytes": 28.759,
+        "rmsWauOnBytes": 6.393,
+        "changedPixelFractionOn": 0.3,
+        "peakBrightnessRatio": 3.93,
+        "maxFrameBrightnessRatio": 4.129,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0275,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "dropHit|vintage_burst",
+      "effectId": "dropHit",
+      "presetId": "vintage_burst",
+      "label": "Vintage Burst",
+      "category": "envelope",
+      "behavior": "trigger",
+      "behaviorTypes": [
+        "trigger"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          1,
+          0.65,
+          0.25,
+          0.2,
+          1,
+          0
+        ],
+        "intensity": 1,
+        "attackMs": 25,
+        "holdMs": 120,
+        "releaseMs": 600,
+        "blendMode": "add"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Amber flash that lights the vintage heads and rings 600 ms.",
+      "verdict": "KEEP",
+      "reason": "The warm boom; pairs with the vintageWhite identity.",
+      "gif": "012_dropHit__vintage_burst.gif",
+      "video": "012_dropHit__vintage_burst.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/012_dropHit__vintage_burst.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 34.259,
+        "rmsRgbOnBytes": 35.943,
+        "rmsWauOnBytes": 32.471,
+        "changedPixelFractionOn": 0.3625,
+        "peakBrightnessRatio": 4.142,
+        "maxFrameBrightnessRatio": 4.364,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0198,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "colorWash|ocean_blue",
+      "effectId": "colorWash",
+      "presetId": "ocean_blue",
+      "label": "Ocean Blue",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          0.05,
+          0.2,
+          1,
+          0,
+          0,
+          0.15
+        ],
+        "amount": 0.7,
+        "mode": "tint"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "70 % lerp of the whole rig toward deep blue.",
+      "verdict": "KILL",
+      "reason": "Frozen paint in a palette-driven system; superseded by the palette-fed wash (docs/74 E1). Not a visual dupe — the kill is architectural.",
+      "gif": "013_colorWash__ocean_blue.gif",
+      "video": "013_colorWash__ocean_blue.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/013_colorWash__ocean_blue.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 58.533,
+        "rmsRgbOnBytes": 81.297,
+        "rmsWauOnBytes": 15.588,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 1.815,
+        "maxFrameBrightnessRatio": 1.93,
+        "tailSecondsAfterOff": 0.975,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0254,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "colorWash|iceberg_cyan",
+      "effectId": "colorWash",
+      "presetId": "iceberg_cyan",
+      "label": "Iceberg Cyan",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          0.15,
+          0.85,
+          1,
+          0,
+          0,
+          0.1
+        ],
+        "amount": 0.75,
+        "mode": "tint"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "75 % lerp toward pale cyan.",
+      "verdict": "KILL",
+      "reason": "Same story as ocean_blue; superseded by E1.",
+      "gif": "014_colorWash__iceberg_cyan.gif",
+      "video": "014_colorWash__iceberg_cyan.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/014_colorWash__iceberg_cyan.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 83.401,
+        "rmsRgbOnBytes": 117.436,
+        "rmsWauOnBytes": 10.97,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.63,
+        "maxFrameBrightnessRatio": 2.806,
+        "tailSecondsAfterOff": 1,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0192,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "colorWash|emergency_red",
+      "effectId": "colorWash",
+      "presetId": "emergency_red",
+      "label": "Emergency Red",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          1,
+          0,
+          0,
+          0,
+          0.2,
+          0
+        ],
+        "amount": 0.9,
+        "mode": "replace"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "90 % takeover toward red — the alarm look.",
+      "verdict": "KEEP",
+      "reason": "Identity fixed by meaning, not taste; a show cue.",
+      "gif": "015_colorWash__emergency_red.gif",
+      "video": "015_colorWash__emergency_red.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/015_colorWash__emergency_red.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 89.354,
+        "rmsRgbOnBytes": 123.543,
+        "rmsWauOnBytes": 26.558,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 1.749,
+        "maxFrameBrightnessRatio": 1.843,
+        "tailSecondsAfterOff": 1,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.026,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "colorWash|vintage_amber",
+      "effectId": "colorWash",
+      "presetId": "vintage_amber",
+      "label": "Vintage Amber",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          1,
+          0.45,
+          0.05,
+          0.1,
+          1,
+          0
+        ],
+        "amount": 0.65,
+        "mode": "tint"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "65 % tint toward amber with a W+A lift — the 1912 grade.",
+      "verdict": "OPT",
+      "reason": "Keep the look, rebuild as a true luma-preserving grade (docs/74 E4); today it brightens as it tints.",
+      "gif": "016_colorWash__vintage_amber.gif",
+      "video": "016_colorWash__vintage_amber.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/016_colorWash__vintage_amber.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 94.503,
+        "rmsRgbOnBytes": 92.628,
+        "rmsWauOnBytes": 96.341,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.988,
+        "maxFrameBrightnessRatio": 3.186,
+        "tailSecondsAfterOff": 1,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0197,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "colorWash|purple",
+      "effectId": "colorWash",
+      "presetId": "purple",
+      "label": "Purple",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "color": [
+          0.55,
+          0,
+          1,
+          0,
+          0,
+          0.25
+        ],
+        "amount": 0.75,
+        "mode": "tint"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "75 % tint toward violet.",
+      "verdict": "KILL",
+      "reason": "'A colour I like' is what the wheel + E1 are for.",
+      "gif": "017_colorWash__purple.gif",
+      "video": "017_colorWash__purple.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/017_colorWash__purple.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 69.076,
+        "rmsRgbOnBytes": 93.675,
+        "rmsWauOnBytes": 27.713,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.321,
+        "maxFrameBrightnessRatio": 2.482,
+        "tailSecondsAfterOff": 0.975,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0211,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "invert|default",
+      "effectId": "invert",
+      "presetId": "default",
+      "label": "Invert",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {},
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "1−v on the RGB of the whole frame; W/A/U protected.",
+      "verdict": "KEEP",
+      "reason": "Cheap, striking, safety-clean chroma op.",
+      "gif": "018_invert__default.gif",
+      "video": "018_invert__default.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/018_invert__default.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 130.091,
+        "rmsRgbOnBytes": 183.977,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 3.512,
+        "maxFrameBrightnessRatio": 3.768,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0192,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "feedbackTrails|soft_afterimage",
+      "effectId": "feedbackTrails",
+      "presetId": "soft_afterimage",
+      "label": "Soft Afterimage",
+      "category": "feedback",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "decay": 0.88,
+        "injection": 0.45,
+        "mix": 0.45,
+        "blendMode": "add",
+        "colorBleed": 0.02,
+        "resetOnEnable": true
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Short additive comet tails (decay .88).",
+      "verdict": "KEEP",
+      "reason": "The everyday trails.",
+      "gif": "019_feedbackTrails__soft_afterimage.gif",
+      "video": "019_feedbackTrails__soft_afterimage.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/019_feedbackTrails__soft_afterimage.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 54.218,
+        "rmsRgbOnBytes": 76.676,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9519,
+        "peakBrightnessRatio": 2.144,
+        "maxFrameBrightnessRatio": 2.193,
+        "tailSecondsAfterOff": 0.55,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0312,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "feedbackTrails|ghost_ship",
+      "effectId": "feedbackTrails",
+      "presetId": "ghost_ship",
+      "label": "Ghost Ship",
+      "category": "feedback",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "decay": 0.94,
+        "injection": 0.25,
+        "mix": 0.6,
+        "blendMode": "replace",
+        "colorBleed": 0.12,
+        "resetOnEnable": true
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Replace-blend memory with heavy colour bleed — the ship dissolves into its own after-image.",
+      "verdict": "KEEP",
+      "reason": "Distinct blend mode, distinct look.",
+      "gif": "020_feedbackTrails__ghost_ship.gif",
+      "video": "020_feedbackTrails__ghost_ship.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/020_feedbackTrails__ghost_ship.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 66.703,
+        "rmsRgbOnBytes": 94.332,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9818,
+        "peakBrightnessRatio": 2.509,
+        "maxFrameBrightnessRatio": 2.611,
+        "tailSecondsAfterOff": 0.95,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0345,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "feedbackTrails|long_afterimage",
+      "effectId": "feedbackTrails",
+      "presetId": "long_afterimage",
+      "label": "Long Afterimage",
+      "category": "feedback",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "decay": 0.96,
+        "injection": 0.35,
+        "mix": 0.45,
+        "blendMode": "add",
+        "colorBleed": 0.02,
+        "resetOnEnable": true
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same additive tails, longer (decay .96).",
+      "verdict": "FOLD",
+      "reason": "Identical mechanism and blend; length becomes the mode wheel (short/long).",
+      "gif": "021_feedbackTrails__long_afterimage.gif",
+      "video": "021_feedbackTrails__long_afterimage.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/021_feedbackTrails__long_afterimage.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 62.439,
+        "rmsRgbOnBytes": 88.303,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9822,
+        "peakBrightnessRatio": 2.449,
+        "maxFrameBrightnessRatio": 2.539,
+        "tailSecondsAfterOff": 0.925,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0245,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "feedbackTrails|cosmic_trails",
+      "effectId": "feedbackTrails",
+      "presetId": "cosmic_trails",
+      "label": "Cosmic Trails",
+      "category": "feedback",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "decay": 0.93,
+        "injection": 0.4,
+        "mix": 0.55,
+        "blendMode": "max",
+        "colorBleed": 0.08,
+        "resetOnEnable": true
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Max-blend trails with bleed — light accumulates without darkening.",
+      "verdict": "KEEP",
+      "reason": "Overlap matrix separates it from ghost_ship (RMS 24.6, well clear of the near-dupe band).",
+      "gif": "022_feedbackTrails__cosmic_trails.gif",
+      "video": "022_feedbackTrails__cosmic_trails.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/022_feedbackTrails__cosmic_trails.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 50.885,
+        "rmsRgbOnBytes": 71.963,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9699,
+        "peakBrightnessRatio": 2.006,
+        "maxFrameBrightnessRatio": 2.092,
+        "tailSecondsAfterOff": 0.825,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0338,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "beatPump|soft",
+      "effectId": "beatPump",
+      "presetId": "soft",
+      "label": "Soft Pump",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "depth": 0.35,
+        "rate": 1,
+        "curve": 2
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Whole-rig luminance duck on the beat, 35 %.",
+      "verdict": "KEEP",
+      "reason": "Becomes THE Beat Pump; depth is already the jog.",
+      "gif": "023_beatPump__soft.gif",
+      "video": "023_beatPump__soft.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/023_beatPump__soft.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 13.458,
+        "rmsRgbOnBytes": 19.033,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.8949,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0211,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "beatPump|deep",
+      "effectId": "beatPump",
+      "presetId": "deep",
+      "label": "Deep Pump",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "depth": 0.6,
+        "rate": 1,
+        "curve": 2
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same duck at 60 %.",
+      "verdict": "FOLD",
+      "reason": "A preset that only moves the jog's default is not a second effect.",
+      "gif": "024_beatPump__deep.gif",
+      "video": "024_beatPump__deep.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/024_beatPump__deep.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 23.064,
+        "rmsRgbOnBytes": 32.618,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.8949,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0201,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "beatPump|halftime",
+      "effectId": "beatPump",
+      "presetId": "halftime",
+      "label": "Half-Time",
+      "category": "gate",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "depth": 0.5,
+        "rate": 0.5,
+        "curve": 2
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same duck at half tempo.",
+      "verdict": "FOLD",
+      "reason": "rate (0.5/1/2) becomes the mode wheel.",
+      "gif": "025_beatPump__halftime.gif",
+      "video": "025_beatPump__halftime.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/025_beatPump__halftime.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 25.658,
+        "rmsRgbOnBytes": 36.286,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.8949,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.028,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|every_other_repeat",
+      "effectId": "movementTrace",
+      "presetId": "every_other_repeat",
+      "label": "Every Other - Repeat",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "every_other",
+        "travel": "repeat",
+        "blank": true,
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Two palette colours alternate pixel-by-pixel and walk forward, both stepping through the palette.",
+      "verdict": "KEEP",
+      "reason": "2 COLOUR walk — core identity.",
+      "gif": "026_movementTrace__every_other_repeat.gif",
+      "video": "026_movementTrace__every_other_repeat.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/026_movementTrace__every_other_repeat.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 66.991,
+        "rmsRgbOnBytes": 94.74,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9973,
+        "peakBrightnessRatio": 1.155,
+        "maxFrameBrightnessRatio": 1.229,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0397,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|every_other_reverse",
+      "effectId": "movementTrace",
+      "presetId": "every_other_reverse",
+      "label": "Every Other - Reverse",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "every_other",
+        "travel": "reverse",
+        "blank": true,
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same alternating pair, ping-pong travel.",
+      "verdict": "FOLD",
+      "reason": "Direction is a mode, not a tile (docs/74 §6.2).",
+      "gif": "027_movementTrace__every_other_reverse.gif",
+      "video": "027_movementTrace__every_other_reverse.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/027_movementTrace__every_other_reverse.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 66.991,
+        "rmsRgbOnBytes": 94.74,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9973,
+        "peakBrightnessRatio": 1.155,
+        "maxFrameBrightnessRatio": 1.229,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0312,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|every_other_two_tone",
+      "effectId": "movementTrace",
+      "presetId": "every_other_two_tone",
+      "label": "Every Other - Two Tone",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "every_other",
+        "travel": "repeat",
+        "blank": false,
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Two colours, no dark gaps — the docs/71 two-tone look in motion.",
+      "verdict": "KEEP",
+      "reason": "Denser, calmer read at 50 ft; earns its tile as TWO TONE.",
+      "gif": "028_movementTrace__every_other_two_tone.gif",
+      "video": "028_movementTrace__every_other_two_tone.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/028_movementTrace__every_other_two_tone.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 91.392,
+        "rmsRgbOnBytes": 129.248,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.289,
+        "maxFrameBrightnessRatio": 2.44,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0375,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|one_per_color_repeat",
+      "effectId": "movementTrace",
+      "presetId": "one_per_color_repeat",
+      "label": "One Per Colour - Repeat",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "one_per_color",
+        "travel": "repeat",
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "All five palette colours laid as a ladder along every group, crawling.",
+      "verdict": "KEEP",
+      "reason": "5 COLOUR walk — the flagship.",
+      "gif": "029_movementTrace__one_per_color_repeat.gif",
+      "video": "029_movementTrace__one_per_color_repeat.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/029_movementTrace__one_per_color_repeat.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 92.123,
+        "rmsRgbOnBytes": 130.281,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.247,
+        "maxFrameBrightnessRatio": 2.408,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0375,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|one_per_color_reverse",
+      "effectId": "movementTrace",
+      "presetId": "one_per_color_reverse",
+      "label": "One Per Colour - Reverse",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "one_per_color",
+        "travel": "reverse",
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same ladder, ping-pong.",
+      "verdict": "FOLD",
+      "reason": "Direction mode.",
+      "gif": "030_movementTrace__one_per_color_reverse.gif",
+      "video": "030_movementTrace__one_per_color_reverse.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/030_movementTrace__one_per_color_reverse.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 92.123,
+        "rmsRgbOnBytes": 130.281,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.247,
+        "maxFrameBrightnessRatio": 2.408,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0343,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|pulse_slow_fade",
+      "effectId": "movementTrace",
+      "presetId": "pulse_slow_fade",
+      "label": "Pulse - Burst then Long Fade",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "pulse",
+        "travel": "repeat",
+        "amount": 1,
+        "fadeSpan": 0,
+        "sync": "free",
+        "pixelsPerSecond": 0,
+        "burstMs": 200,
+        "decayMs": 5000,
+        "floor": 0.04
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Whole-palette burst, then a 5 s fall to almost-out — the ship breathes its colours.",
+      "verdict": "KEEP",
+      "reason": "Unique envelope; tile 1 of the colour family.",
+      "gif": "031_movementTrace__pulse_slow_fade.gif",
+      "video": "031_movementTrace__pulse_slow_fade.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/031_movementTrace__pulse_slow_fade.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 60.746,
+        "rmsRgbOnBytes": 85.908,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.245,
+        "maxFrameBrightnessRatio": 2.273,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0374,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|whole_group_repeat",
+      "effectId": "movementTrace",
+      "presetId": "whole_group_repeat",
+      "label": "One Colour At A Time",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "whole_group",
+        "travel": "repeat",
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Each group holds ONE colour; colours march group-by-group across the ship.",
+      "verdict": "KEEP",
+      "reason": "The boldest of the family; only mode that reads on 1–2-pixel groups.",
+      "gif": "032_movementTrace__whole_group_repeat.gif",
+      "video": "032_movementTrace__whole_group_repeat.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/032_movementTrace__whole_group_repeat.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 92.218,
+        "rmsRgbOnBytes": 130.416,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.31,
+        "maxFrameBrightnessRatio": 2.459,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0342,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|whole_group_reverse",
+      "effectId": "movementTrace",
+      "presetId": "whole_group_reverse",
+      "label": "One Colour At A Time - Reverse",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "whole_group",
+        "travel": "reverse",
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 1
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same march, ping-pong.",
+      "verdict": "FOLD",
+      "reason": "Direction mode.",
+      "gif": "033_movementTrace__whole_group_reverse.gif",
+      "video": "033_movementTrace__whole_group_reverse.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/033_movementTrace__whole_group_reverse.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 92.218,
+        "rmsRgbOnBytes": 130.416,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.31,
+        "maxFrameBrightnessRatio": 2.459,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0376,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "movementTrace|one_per_color_double",
+      "effectId": "movementTrace",
+      "presetId": "one_per_color_double",
+      "label": "One Per Colour - Double Time",
+      "category": "movement",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "mode": "one_per_color",
+        "travel": "repeat",
+        "amount": 1,
+        "fadeSpan": 1,
+        "sync": "beat",
+        "pixelsPerBeat": 2
+      },
+      "paramsOverride": {
+        "colors": [
+          [
+            1,
+            0.1,
+            0.1,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0.6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            1,
+            0.3,
+            0,
+            0,
+            0
+          ],
+          [
+            0.1,
+            0.4,
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0.8,
+            0.1,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "switchMs": 500
+      },
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same ladder at 2 px/beat.",
+      "verdict": "FOLD",
+      "reason": "Speed is a mode stop (×1/×2), not an identity.",
+      "gif": "034_movementTrace__one_per_color_double.gif",
+      "video": "034_movementTrace__one_per_color_double.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/034_movementTrace__one_per_color_double.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 92.053,
+        "rmsRgbOnBytes": 130.183,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.247,
+        "maxFrameBrightnessRatio": 2.409,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0371,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "waterlineSweep|rising_tide",
+      "effectId": "waterlineSweep",
+      "presetId": "rising_tide",
+      "label": "Rising Tide",
+      "category": "spatial",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "axis": "y",
+        "width": 0.25,
+        "amount": 0.7,
+        "mode": "add",
+        "color": [
+          0.15,
+          0.5,
+          1,
+          0,
+          0,
+          0
+        ],
+        "speedHz": 0.25,
+        "sync": "free"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Soft blue band climbing the hull, four seconds per pass.",
+      "verdict": "KEEP",
+      "reason": "The ship's identity move — the tide.",
+      "gif": "035_waterlineSweep__rising_tide.gif",
+      "video": "035_waterlineSweep__rising_tide.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/035_waterlineSweep__rising_tide.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 22.256,
+        "rmsRgbOnBytes": 31.475,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4157,
+        "peakBrightnessRatio": 1.441,
+        "maxFrameBrightnessRatio": 1.508,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0311,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "waterlineSweep|beat_wipe",
+      "effectId": "waterlineSweep",
+      "presetId": "beat_wipe",
+      "label": "Beat Wipe",
+      "category": "spatial",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "axis": "y",
+        "width": 0.2,
+        "amount": 0.8,
+        "mode": "add",
+        "color": [
+          0.2,
+          0.6,
+          1,
+          0,
+          0,
+          0
+        ],
+        "speedHz": 0.5,
+        "sync": "beat"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "The same soft band, marginally narrower, synced per beat.",
+      "verdict": "FOLD",
+      "reason": "Differs by width .05 and the sync flag; its own speedHz is dead code when synced. The HARD wipe the name promises is docs/74 E15.",
+      "gif": "036_waterlineSweep__beat_wipe.gif",
+      "video": "036_waterlineSweep__beat_wipe.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/036_waterlineSweep__beat_wipe.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 24.479,
+        "rmsRgbOnBytes": 34.619,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.3554,
+        "peakBrightnessRatio": 1.498,
+        "maxFrameBrightnessRatio": 1.547,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0218,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "waterlineSweep|shadow_pass",
+      "effectId": "waterlineSweep",
+      "presetId": "shadow_pass",
+      "label": "Shadow Pass",
+      "category": "spatial",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "axis": "x",
+        "width": 0.3,
+        "amount": 0.6,
+        "mode": "darken",
+        "color": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "speedHz": 0.2,
+        "sync": "free"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "A moving band of DARKNESS drifting across the ship.",
+      "verdict": "KEEP",
+      "reason": "The only darken-mode spatial gesture in the library.",
+      "gif": "037_waterlineSweep__shadow_pass.gif",
+      "video": "037_waterlineSweep__shadow_pass.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/037_waterlineSweep__shadow_pass.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 9.509,
+        "rmsRgbOnBytes": 13.447,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.4459,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.03,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "kickPunch|punch",
+      "effectId": "kickPunch",
+      "presetId": "punch",
+      "label": "Punch",
+      "category": "envelope",
+      "behavior": "trigger",
+      "behaviorTypes": [
+        "trigger",
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "threshold": 0.6,
+        "minGapMs": 120,
+        "source": "auto",
+        "intensityFloor": 0.6,
+        "intensityCeil": 1,
+        "color": [
+          1,
+          1,
+          1,
+          1,
+          0.2,
+          0
+        ],
+        "attackMs": 20,
+        "holdMs": 60,
+        "releaseMs": 200,
+        "blendMode": "add"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": true,
+      "audioNote": "Rendered as the MANUAL trigger (three fires). The toggle auto-router is kick-driven and inert with zero audio — not faked here.",
+      "identity": "Auto-fires white drop-hits off the live kick signal (threshold + rate limit).",
+      "verdict": "KEEP",
+      "reason": "A different instrument from dropHit — the music plays the drum. Inert without audio; surfaces must say so (docs/74 F5).",
+      "gif": "038_kickPunch__punch.gif",
+      "video": "038_kickPunch__punch.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/038_kickPunch__punch.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 15.971,
+        "rmsRgbOnBytes": 18.744,
+        "rmsWauOnBytes": 12.578,
+        "changedPixelFractionOn": 0.1375,
+        "peakBrightnessRatio": 4.444,
+        "maxFrameBrightnessRatio": 4.701,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0197,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "kickPunch|ice_punch",
+      "effectId": "kickPunch",
+      "presetId": "ice_punch",
+      "label": "Ice Punch",
+      "category": "envelope",
+      "behavior": "trigger",
+      "behaviorTypes": [
+        "trigger",
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "threshold": 0.65,
+        "minGapMs": 140,
+        "source": "auto",
+        "intensityFloor": 0.5,
+        "intensityCeil": 1,
+        "color": [
+          0.3,
+          0.7,
+          1,
+          0.5,
+          0,
+          0.2
+        ],
+        "attackMs": 20,
+        "holdMs": 80,
+        "releaseMs": 300,
+        "blendMode": "add"
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": true,
+      "audioNote": "Rendered as the MANUAL trigger (three fires). The toggle auto-router is kick-driven and inert with zero audio — not faked here.",
+      "identity": "The same router in icy cyan.",
+      "verdict": "OPT",
+      "reason": "Colour should follow palette B instead of a frozen cyan (docs/74 D9).",
+      "gif": "039_kickPunch__ice_punch.gif",
+      "video": "039_kickPunch__ice_punch.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/039_kickPunch__ice_punch.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 15.309,
+        "rmsRgbOnBytes": 19.478,
+        "rmsWauOnBytes": 9.435,
+        "changedPixelFractionOn": 0.1875,
+        "peakBrightnessRatio": 4.365,
+        "maxFrameBrightnessRatio": 4.606,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0195,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "freeze|hold",
+      "effectId": "freeze",
+      "presetId": "hold",
+      "label": "Hold",
+      "category": "time",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle",
+        "hold"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "holdFadeMs": 0
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Captures the frame and holds it until released.",
+      "verdict": "KEEP",
+      "reason": "The DJ's stop-time.",
+      "gif": "040_freeze__hold.gif",
+      "video": "040_freeze__hold.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/040_freeze__hold.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 30.583,
+        "rmsRgbOnBytes": 43.25,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9428,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1.016,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0233,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "freeze|fade_2s",
+      "effectId": "freeze",
+      "presetId": "fade_2s",
+      "label": "Fade 2s",
+      "category": "time",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle",
+        "hold"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "holdFadeMs": 2000
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Holds, then lets the live show bleed back over two seconds.",
+      "verdict": "KEEP",
+      "reason": "Distinct, musical exit.",
+      "gif": "041_freeze__fade_2s.gif",
+      "video": "041_freeze__fade_2s.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/041_freeze__fade_2s.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 47.035,
+        "rmsRgbOnBytes": 66.518,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9113,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0248,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "freeze|stutter",
+      "effectId": "freeze",
+      "presetId": "stutter",
+      "label": "Stutter",
+      "category": "time",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle",
+        "hold"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "holdFadeMs": 0
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Byte-identical params to hold; there is no stutter code anywhere in the engine.",
+      "verdict": "KILL",
+      "reason": "A duplicate wearing a lie for a name (global_effect_library.js:521). The real stutter ships in docs/74 E14.",
+      "gif": "042_freeze__stutter.gif",
+      "video": "042_freeze__stutter.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/042_freeze__stutter.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 30.583,
+        "rmsRgbOnBytes": 43.25,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.9428,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1.016,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0247,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "crush|hard_2",
+      "effectId": "crush",
+      "presetId": "hard_2",
+      "label": "2-level",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "levels": 2,
+        "amount": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "RGB posterize to 2 levels — woodcut poster look.",
+      "verdict": "KEEP",
+      "reason": "Becomes THE Palette Crush entry.",
+      "gif": "043_crush__hard_2.gif",
+      "video": "043_crush__hard_2.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/043_crush__hard_2.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 43.962,
+        "rmsRgbOnBytes": 62.171,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.8949,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0233,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "crush|bold_4",
+      "effectId": "crush",
+      "presetId": "bold_4",
+      "label": "4-level",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "levels": 4,
+        "amount": 1
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Posterize to 4 levels.",
+      "verdict": "FOLD",
+      "reason": "levels becomes the mode wheel (2/4/6); amount is already the jog.",
+      "gif": "044_crush__bold_4.gif",
+      "video": "044_crush__bold_4.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/044_crush__bold_4.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 15.265,
+        "rmsRgbOnBytes": 21.588,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.8949,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1.017,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.029,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "crush|soft_6",
+      "effectId": "crush",
+      "presetId": "soft_6",
+      "label": "6-level soft",
+      "category": "color",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "levels": 6,
+        "amount": 0.6
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Posterize to 6 levels at 60 %.",
+      "verdict": "FOLD",
+      "reason": "Mode-wheel position.",
+      "gif": "045_crush__soft_6.gif",
+      "video": "045_crush__soft_6.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/045_crush__soft_6.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 4.655,
+        "rmsRgbOnBytes": 6.583,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0.8949,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1.014,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0255,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "breath|calm",
+      "effectId": "breath",
+      "presetId": "calm",
+      "label": "Calm 8s",
+      "category": "ambient",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "periodMs": 8000,
+        "depth": 0.35,
+        "warmth": 0.2
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "8-second whole-rig swell, ±35 %.",
+      "verdict": "KEEP",
+      "reason": "The ambient idle-breathing gesture; tempo-locks to 4 bars.",
+      "gif": "046_breath__calm.gif",
+      "video": "046_breath__calm.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/046_breath__calm.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 17.152,
+        "rmsRgbOnBytes": 16.712,
+        "rmsWauOnBytes": 11.566,
+        "changedPixelFractionOn": 0.9899,
+        "peakBrightnessRatio": 1.469,
+        "maxFrameBrightnessRatio": 1.501,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.021,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "breath|deep",
+      "effectId": "breath",
+      "presetId": "deep",
+      "label": "Deep 14s",
+      "category": "ambient",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "periodMs": 14000,
+        "depth": 0.5,
+        "warmth": 0.3
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "14-second swell, ±50 %.",
+      "verdict": "FOLD",
+      "reason": "Depth is the jog; period folds into the mode wheel.",
+      "gif": "047_breath__deep.gif",
+      "video": "047_breath__deep.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/047_breath__deep.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 27.465,
+        "rmsRgbOnBytes": 5.456,
+        "rmsWauOnBytes": 38.043,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 1.678,
+        "maxFrameBrightnessRatio": 1.78,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0183,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "breath|sunrise",
+      "effectId": "breath",
+      "presetId": "sunrise",
+      "label": "Sunrise",
+      "category": "ambient",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "periodMs": 20000,
+        "depth": 0.4,
+        "warmth": 0.5
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "20-second swell that WARMS (W/A lift) as it rises.",
+      "verdict": "KEEP",
+      "reason": "The warmth curve is a real second identity, not a knob position.",
+      "gif": "048_breath__sunrise.gif",
+      "video": "048_breath__sunrise.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/048_breath__sunrise.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 30.313,
+        "rmsRgbOnBytes": 15.804,
+        "rmsWauOnBytes": 36.683,
+        "changedPixelFractionOn": 1,
+        "peakBrightnessRatio": 2.033,
+        "maxFrameBrightnessRatio": 2.086,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0182,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "sparkle|fizz",
+      "effectId": "sparkle",
+      "presetId": "fizz",
+      "label": "Fizz",
+      "category": "overlay",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "density": 0.01,
+        "decayMs": 400,
+        "intensity": 1,
+        "audioDensity": false
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "Sparse white glints (1 % of pixels, 400 ms decay) on the W channel — frost.",
+      "verdict": "KEEP",
+      "reason": "Signature overlay; cheap.",
+      "gif": "049_sparkle__fizz.gif",
+      "video": "049_sparkle__fizz.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/049_sparkle__fizz.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 28.832,
+        "rmsRgbOnBytes": 0,
+        "rmsWauOnBytes": 40.775,
+        "changedPixelFractionOn": 0.4574,
+        "peakBrightnessRatio": 1.552,
+        "maxFrameBrightnessRatio": 1.589,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0254,
+        "waOnly": true,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "sparkle|blizzard",
+      "effectId": "sparkle",
+      "presetId": "blizzard",
+      "label": "Blizzard",
+      "category": "overlay",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "density": 0.15,
+        "decayMs": 80,
+        "intensity": 1,
+        "audioDensity": false
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": false,
+      "audioNote": null,
+      "identity": "15 % of the rig glinting at 80 ms — a white-noise blizzard.",
+      "verdict": "OPT",
+      "reason": "Reads as noise and spikes W power (gallery: peak ×2.39, 88 % of pixels); retune density toward ~0.06 (docs/74 D8).",
+      "gif": "050_sparkle__blizzard.gif",
+      "video": "050_sparkle__blizzard.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/050_sparkle__blizzard.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 52.801,
+        "rmsRgbOnBytes": 0,
+        "rmsWauOnBytes": 74.672,
+        "changedPixelFractionOn": 0.8801,
+        "peakBrightnessRatio": 2.394,
+        "maxFrameBrightnessRatio": 2.505,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0337,
+        "waOnly": true,
+        "visuallyInert": false
+      }
+    },
+    {
+      "key": "sparkle|hihat",
+      "effectId": "sparkle",
+      "presetId": "hihat",
+      "label": "Hi-Hat",
+      "category": "overlay",
+      "behavior": "toggle",
+      "behaviorTypes": [
+        "toggle"
+      ],
+      "safetyTier": "normal",
+      "params": {
+        "density": 0,
+        "decayMs": 120,
+        "intensity": 1,
+        "audioDensity": true
+      },
+      "paramsOverride": {},
+      "renderable": true,
+      "nonRenderableNote": null,
+      "audioOnly": true,
+      "audioNote": "density 0 + audioDensity true: every glint comes from live micHigh. With no audio there is no manual equivalent, so this renders inert by design.",
+      "identity": "Glint density rides the live hi-hat band; zero glints without audio.",
+      "verdict": "KEEP",
+      "reason": "The only audio-textured overlay; label the audio dependency on every surface (it is correctly dead in silence).",
+      "gif": "051_sparkle__hihat.gif",
+      "video": "051_sparkle__hihat.mp4",
+      "sheet": "C:/Users/TITANI~1/tmp/fx_gallery/sheets/051_sparkle__hihat.png",
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "metrics": {
+        "rmsDeltaOnBytes": 0,
+        "rmsRgbOnBytes": 0,
+        "rmsWauOnBytes": 0,
+        "changedPixelFractionOn": 0,
+        "peakBrightnessRatio": 1,
+        "maxFrameBrightnessRatio": 1,
+        "tailSecondsAfterOff": 0,
+        "tailUnresolved": false,
+        "chainMsPerFrame": 0.0197,
+        "waOnly": false,
+        "visuallyInert": false
+      }
+    }
+  ]
+}

@@ -209,12 +209,29 @@ test('solo with ONLY solo-safe channels leaves the mix unchanged', () => {
   assert.equal(after, before, 'soloing among all-safe channels does not darken anything');
 });
 
-test('master fade acts last and darkens even soloed/safe channels (different stage)', () => {
+test('master acts last and darkens even soloed/safe channels (now the ENGINE final stage)', () => {
   const m = makeMixer([{ id: 'ext', fader: 1.0, soloSafe: true }, { id: 'int', fader: 1.0 }]);
   m.setSolo('int');
   m.setMaster(0.5); // grand-master fade
-  // ext stays lit through solo (255), but master halves the FINAL output.
-  assert.equal(red0(m), 128, 'master fade applies after solo/group, dimming everything');
+
+  /* THIS TEST WAS UPDATED WHEN THE GRAND MASTER MOVED STAGE.
+     It used to assert red0(m) === 128, i.e. that renderAll6ch() hands back an
+     already-mastered composite. That is no longer true, ON PURPOSE: scaling
+     the composite meant the master governed ONLY the patterns, and everything
+     engine.js writes afterwards - the whole global effects chain, and
+     applyGroupFixedColors for a group set to OWN - escaped the fader. Measured
+     on the rig: master 0, and a painted group still went out at 175/116 across
+     24 fixtures. Operator ruling: the master IS the master when armed, no
+     exceptions. So it moved to the final pixel stage in engine.js, after the
+     effects and after the paint.
+
+     The INTENT of this test is unchanged and still checked below: the master
+     dims EVERYTHING, a solo-safe channel included. Only the stage moved. */
+  assert.equal(red0(m), 255, 'the composite is deliberately NOT pre-mastered any more');
+  assert.equal(m.master, 0.5, 'the mixer still owns the master value for the downstream stage');
+  // The same arithmetic engine.js now runs on the final pixels.
+  assert.equal(Math.round(red0(m) * m.master), 128,
+    'applying the master downstream dims even a solo-safe channel');
 });
 
 test('_effFader is pure: repeated renders allocate no new group-scale Map', () => {

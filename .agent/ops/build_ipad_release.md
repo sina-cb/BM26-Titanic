@@ -23,7 +23,7 @@ as a Windows user profile path into this document.
 | | **CaptainPad** | **PortWatch** |
 |---|---|---|
 | Purpose | VJ / engine control surface (WebSocket + REST to MarsinEngine) | Field-ops LoRa control surface + telemetry (BLE → captain Heltec → LoRa → Pi bridge → engine) |
-| App root in repo | `CaptainPad/` | `control_podium/PortWatch/` |
+| App root in repo | `CaptainPad/` | `LookingGlass/control_podium/PortWatch/` |
 | iOS bundle ID | `com.titanicrig.captainpad` | `com.titanicrig.portwatch` |
 | Xcode scheme | `CaptainPad` | `PortWatch` |
 | Workspace | `ios/CaptainPad.xcworkspace` | `ios/PortWatch.xcworkspace` |
@@ -39,7 +39,7 @@ as a Windows user profile path into this document.
 | Current known-good install target | iPad (10th gen) — `FoH iPad 1` | iPad (10th gen) — `FoH iPad 1` |
 
 **Run all Expo / npm / EAS commands from the app's own root directory** —
-`CaptainPad/` for CaptainPad, `control_podium/PortWatch/` for PortWatch.
+`CaptainPad/` for CaptainPad, `LookingGlass/control_podium/PortWatch/` for PortWatch.
 Mixing them is a common cause of "but this worked yesterday" weirdness.
 
 ---
@@ -652,20 +652,20 @@ PortWatch is the React Native / Expo field-ops surface. It does NOT talk to
 the engine directly — it pairs with a captain Heltec radio over BLE, signs
 every command with the camp's pre-shared AES-128 key, and relays frames
 through the Pi server bridge to MarsinEngine over LoRa. See
-`control_podium/PortWatch/README.md` and
+`LookingGlass/control_podium/PortWatch/README.md` and
 `.agent/ops/operating_raspberry_pi.md` for the full radio topology.
 
 ## 2.1 Project location
 
-Repository root: the directory that contains `.agent/` and `control_podium/`.
+Repository root: the directory that contains `.agent/` and `LookingGlass/control_podium/`.
 
 Expo app root:
 
 ```text
-control_podium/PortWatch/
+LookingGlass/control_podium/PortWatch/
 ```
 
-Run all Expo, npm, and EAS commands from `control_podium/PortWatch` unless
+Run all Expo, npm, and EAS commands from `LookingGlass/control_podium/PortWatch` unless
 this doc says otherwise. **Don't `cd CaptainPad/`** by muscle memory — that's
 a different app.
 
@@ -695,13 +695,13 @@ into the JS bundle at build time:
 | Generated file | Sourced from | Generator | Required for |
 |---|---|---|---|
 | `src/_generated/secret.generated.ts` | `marsin_engine/secret.yaml` | `scripts/sync-secret.mjs` | Signing every LoRa command frame with the camp AES-128 key |
-| `src/_generated/config.generated.ts` | `control_podium/PortWatch/.config.portwatch.yaml` | `scripts/sync-config.mjs` | Behaviour knobs the bundler can't read from YAML at runtime: BLE MTU + timeouts, lease renew cadence, patterns/exports paging budgets, status poll cadence, layout caps, feature flags |
+| `src/_generated/config.generated.ts` | `LookingGlass/control_podium/PortWatch/.config.portwatch.yaml` | `scripts/sync-config.mjs` | Behaviour knobs the bundler can't read from YAML at runtime: BLE MTU + timeouts, lease renew cadence, patterns/exports paging budgets, status poll cadence, layout caps, feature flags |
 
 Both files are `.gitignored` and MUST be regenerated before any local Mac
 build or EAS build. Run:
 
 ```bash
-cd control_podium/PortWatch
+cd LookingGlass/control_podium/PortWatch
 npm run sync-all     # = sync-secret && sync-config
 ```
 
@@ -730,7 +730,7 @@ PortWatch's `eas.json` profiles:
 Normal command (mirrors CaptainPad's `preview` path):
 
 ```bash
-cd control_podium/PortWatch
+cd LookingGlass/control_podium/PortWatch
 npm run sync-all
 eas init                          # first time on a new machine only
 npm run eas:device                # register the testing iPad/iPhone
@@ -753,7 +753,7 @@ Cold-start total on the test rig: ~25 min. Warm rebuild for JS-only changes:
 
 1. **Install JS deps + sync secret/config** (warm: ~10 s; cold: ~3 min)
    ```bash
-   cd control_podium/PortWatch
+   cd LookingGlass/control_podium/PortWatch
    npm install
    npm run sync-all      # MANDATORY — bakes AES key + bridge config
    ```
@@ -771,7 +771,7 @@ Cold-start total on the test rig: ~25 min. Warm rebuild for JS-only changes:
    ```bash
    npm run prebuild      # = expo prebuild --platform ios --clean
    ```
-   Regenerates `control_podium/PortWatch/ios/` from `app.json` + plugins
+   Regenerates `LookingGlass/control_podium/PortWatch/ios/` from `app.json` + plugins
    and runs `pod install`. `ios/` is `.gitignored` and intentionally
    regenerable. The `ble-plx`, `secure-store`, and `splash-screen` plugins
    write their native bits in here on every prebuild.
@@ -863,7 +863,7 @@ Cause: `npm run sync-all` was not run before the build, or
 Fix:
 
 ```bash
-cd control_podium/PortWatch
+cd LookingGlass/control_podium/PortWatch
 npm run sync-secret           # NOT --allow-missing — must fail loudly if secret is unset
 npm run prebuild              # regenerate native side, then xcodebuild + install again
 ```
@@ -906,7 +906,7 @@ endpoint — see `.agent/ops/operating_raspberry_pi.md` §6.
 Cause: server bridge on the Pi is down, or the Pi cannot reach the engine.
 
 Fix: from the dev laptop, `curl http://<PI_HOST>:7099/health` (PI_HOST in
-`control_podium/server_bridge/.ssh.secret`). If that fails, see
+`LookingGlass/control_podium/server_bridge/.ssh.secret`). If that fails, see
 `.agent/ops/operating_raspberry_pi.md` §10 troubleshooting.
 
 ## 2.7 PortWatch current known-good state
@@ -935,7 +935,7 @@ bundle-specific profile before the next install.
 EAS preview build status: unverified end-to-end as of 2026-05-27 — the EAS
 project ID in `app.json::expo.extra.eas.projectId` is still the placeholder
 `REPLACE_WITH_EAS_PROJECT_ID`. Run `eas init` from
-`control_podium/PortWatch/` to bind the project to your Expo account before
+`LookingGlass/control_podium/PortWatch/` to bind the project to your Expo account before
 the first `npm run eas:build:preview`.
 
 ---

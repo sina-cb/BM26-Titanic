@@ -1,5 +1,5 @@
 // Auto-generated Companion Special Effects model — do not edit manually
-// Updated: 2026-06-18T09:18:40.074Z
+// Updated: 2026-08-14T22:38:08.946Z
 
 export const specialEffects = [
 ];

@@ -25,7 +25,7 @@ function makeFakeParamCenter(initial = {}) {
     stemsBassRaw: 0, stemsDrumsRaw: 0, stemsVocalsRaw: 0,
     tempoBpm: 0,
     audioStructure: 0, audioBuildScore: 0, audioEnergyRatio: 0,
-    audioVocalsHot: 0, audioDropPulse: 0, audioSlowZone: 0,
+    audioDropPulse: 0, audioSlowZone: 0,
     ...initial,
   };
   const subscribers = [];
@@ -468,7 +468,7 @@ test('self-quiet suppresses dropFired after N drops in the window', () => {
 
 // ── Stems-stale degradation ─────────────────────────────────────────────
 
-test('stale stems → vocalsHot false, status offline, drop confidence lower', () => {
+test('stale stems report offline and lower drop confidence', () => {
   const broadcasts = [];
   // Short stems timeout so the stems we feed at t0 go stale before the
   // drop. The drop should still fire (gate allows !stemsFresh) but with
@@ -500,8 +500,6 @@ test('stale stems → vocalsHot false, status offline, drop confidence lower', (
     det.tick(now, tickMs / 1000); now += tickMs;
     if (det.getStatus().state === 'SUSTAIN') break;
   }
-  // vocalsHot must be false despite the (stale) loud vocals reading.
-  assert.equal(pc.store.audioVocalsHot, 0, 'vocalsHot must be false when stems are stale');
   const drops = broadcasts.filter(b => b.type === 'dropFired');
   if (drops.length > 0) {
     assert.equal(drops[0].stemsFresh, false, 'drop should record stems as not fresh');

@@ -1,5 +1,16 @@
 # 2026-07-09 — LED Integration Execution Plan (MarsinLED ↔ sim ↔ engine)
 
+> **STANDING CORRECTION (2026-08-05, operator ruling).** Steps below tell the
+> reader to add a `controllers:` entry to `marsin_engine/config.yaml`, to set
+> `alsoFlat: true`, and to unit-test in `marsin_engine/tests/output_dispatch.test.js`.
+> **That whole mechanism is REMOVED.** The engine has exactly one output path —
+> sACN to `sacn.destinations` — and the simulation's input bridge is the single
+> router to every controller, so an LED universe needs NO engine config at all.
+> `lib/output_dispatch.js`, `lib/artnet_output.js` and that test file no longer
+> exist, and a config that still declares `controllers:` makes the engine
+> **refuse to boot** by name (`marsin_engine/lib/output_config_guard.js`).
+> This plan is a dated historical record: do not follow those steps.
+
 **Branch:** `feat/led_integration` (this is the deliverable branch — work on it
 directly, no new branch unless the operator asks).
 **System reference (read first):** `docs/41_led_controller_onboarding.md` —

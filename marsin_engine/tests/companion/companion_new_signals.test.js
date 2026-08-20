@@ -14,13 +14,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { assertEngineLinkDown, isolatedCompanionEnv } from '../helpers/companion_isolation.mjs';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TRACKED_AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(path.join(__dirname, '..', '..'));
 const SERVER = path.join(__dirname, '..', '..', 'audio', 'companion', 'companion_server.js');
 const CSS = path.join(__dirname, '..', '..', 'audio', 'companion', 'ui', 'companion_app.css');
+const APP = path.join(__dirname, '..', '..', 'audio', 'companion', 'ui', 'companion_app.js');
 
 // The NEW derived keys the server must surface in the frame `derived` block and
 // the UI must render. Names match the `derived:` fields in companion_server.js.
@@ -42,10 +48,11 @@ const REQUIRED_VARS = [
 ];
 const EXPECTED_THEMES = ['light', 'dark', 'midnight', 'sunset', 'gruvbox'];
 
-function collectDerived(msg, sink) {
+function collectDerived(msg, sink, metricsSink = null) {
   const frames = msg.type === 'frames' ? msg.frames : (msg.type === 'frame' ? [msg] : []);
   for (const f of frames) {
     if (f.derived) sink.push(f.derived);
+    if (metricsSink && f.derivedMetrics) metricsSink.push(f.derivedMetrics);
   }
 }
 
@@ -61,25 +68,115 @@ async function waitForServer(port, timeoutMs = 8000) {
   throw new Error(`companion server did not come up on :${port}`);
 }
 
-test('the broadcast frame carries the NEW derived signal keys (live, test source)', async () => {
-  const port = 31930 + Math.floor(Math.random() * 25);
-  const proc = spawn('node', [SERVER, '--port', String(port)], {
-    cwd: path.join(__dirname, '..', '..'),
-    stdio: ['ignore', 'ignore', 'ignore'],
+async function getFreePort() {
+  const probe = net.createServer();
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', resolve);
   });
+  const { port } = probe.address();
+  await new Promise((resolve, reject) => probe.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+test('the broadcast frame carries the NEW derived signal keys (live, test source)', async () => {
+  const port = await getFreePort();
+  // Ephemeral OSC + engine targets too: hardcoding the documented bench ports
+  // made this a shared-resource test, which is what forced the whole companion
+  // suite to run at --test-concurrency=1.
+  const oscPort = await getFreePort();
+  const enginePort = await getFreePort();
+  // Hermeticity (report `_220`): without `MARSIN_STATE_DIR` this spawn read
+  // `states/test_bench/audio_state.yaml` — the OPERATOR'S live overlay — so the
+  // analyzer this test scores booted on whatever knob was last turned on the rig
+  // (measured: inputGain 8.83 not the tracked 1, fftSize 1024 not 2048, per-band
+  // gates 0.12/0.10/0.14 that the tracked config does not carry). Every
+  // assertion below is structural (key present, value finite), so the tracked
+  // config changes none of them — but a test that boots on the show's live
+  // tuning is not a regression gate, it is a snapshot of this afternoon.
+  const isolation = isolatedCompanionEnv('new_signals');
+  let stderr = '';
+  const proc = spawn('node', [
+    SERVER,
+    '--port',
+    String(port),
+    '--model',
+    'test_bench',
+    '--host',
+    '127.0.0.1',
+    '--source',
+    'test',
+    '--no-mic',
+    '--osc-port',
+    String(oscPort),
+    '--engine-port',
+    String(enginePort),
+  ], {
+    cwd: path.join(__dirname, '..', '..'),
+    env: isolation.env,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
   try {
     await waitForServer(port);
+    assert.equal(proc.exitCode, null, `spawned companion remains alive: ${stderr}`);
     const { WebSocket } = await import('ws');
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const helloPromise = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const message = JSON.parse(buf.toString());
+        if (message.type === 'hello') resolve(message);
+      });
+    });
     await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    const hello = await helloPromise;
+    assert.equal(hello.mode, 'test');
+    assert.equal(hello.micDisabled, true);
+    assert.ok(hello.derivedConfig?.trackChange, 'hello seeds derived config');
+    // The `_173` guarantee, asserted rather than assumed now that this suite
+    // takes the isolated env: a spawned companion that reached a real engine
+    // would PATCH `capture.device` into the operator's running show.
+    assertEngineLinkDown(hello, assert.ok);
+    // …and the analyzer under test is the TRACKED one. Every assertion below is
+    // structural, so without this lock a dropped `env: isolation.env` would go
+    // unnoticed and this suite would silently score the rig's live overlay
+    // again (measured pre-`_220` on this box: inputGain 8.83, noiseGate 0.06).
+    assert.equal(hello.inputGain, TRACKED_AUDIO_CONFIG.bands.inputGain,
+      'the spawned companion is running the operator\'s live input gain, not the tracked one');
+    assert.equal(hello.gates.noiseGate, TRACKED_AUDIO_CONFIG.bands.noiseGate,
+      'the spawned companion is running the operator\'s live noise gate, not the tracked one');
+    const micRejected = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const message = JSON.parse(buf.toString());
+        if (message.type === 'sourceStatus' && /disabled by --no-mic/.test(message.status?.error || '')) {
+          resolve(message);
+        }
+      });
+    });
+    ws.send(JSON.stringify({ type: 'setMode', mode: 'mic' }));
+    const rejected = await micRejected;
+    assert.equal(rejected.mode, 'test');
+    const invalidRejected = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const message = JSON.parse(buf.toString());
+        if (message.type === 'sourceStatus'
+          && /unsupported audio source mode/.test(message.status?.error || '')) {
+          resolve(message);
+        }
+      });
+    });
+    ws.send(JSON.stringify({ type: 'setMode', mode: 'not-a-source', device: 'test' }));
+    const invalid = await invalidRejected;
+    assert.equal(invalid.mode, 'test', 'an invalid source request must not change the running source');
     // Force TEST source so analysis runs headless (no mic device in CI).
     ws.send(JSON.stringify({ type: 'setMode', mode: 'test' }));
 
     const derivedSeen = [];
+    const metricsSeen = [];
     await new Promise((resolve) => {
       const to = setTimeout(resolve, 4000);
       ws.on('message', (buf) => {
-        collectDerived(JSON.parse(buf.toString()), derivedSeen);
+        collectDerived(JSON.parse(buf.toString()), derivedSeen, metricsSeen);
         // Stop early once a frame carries the full new key set.
         if (derivedSeen.some(d => NEW_FRAME_KEYS.every(k => k in d))) {
           clearTimeout(to);
@@ -90,6 +187,11 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     ws.close();
 
     assert.ok(derivedSeen.length > 0, 'received at least one derived frame');
+    assert.ok(metricsSeen.length > 0, 'received derived loudness metrics');
+    for (const metrics of metricsSeen) {
+      assert.ok(Number.isFinite(metrics.partyLoudness));
+      assert.ok(Number.isFinite(metrics.silenceLoudness));
+    }
     // EVERY derived frame must carry EVERY new key (the server publishes them on
     // every analysis frame, value 0 when idle — a present-but-zero scalar, never
     // an omitted key).
@@ -109,7 +211,16 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     }
   } finally {
     proc.kill('SIGKILL');
+    isolation.cleanup();
   }
+});
+
+test('test UI keeps the microphone disabled and digital file monitoring muted by default', () => {
+  const source = fs.readFileSync(APP, 'utf8');
+  assert.match(source, /micDisabled: false/);
+  assert.match(source, /m === 'mic' && S\.micDisabled/);
+  assert.match(source, /fileMonitor: false/);
+  assert.match(source, /monitorNode\.gain\.value = S\.fileMonitor \? 1 : 0/);
 });
 
 test('every theme (and :root) defines the vars the NEW BUILD/STRUCTURE/ONSETS UI uses', () => {

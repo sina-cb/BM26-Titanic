@@ -1,6 +1,6 @@
 # 07 — Control Podium (v2): Multi-Client LoRa Mesh with Pi Bridge
 
-> **Status:** Live design. Replaces the v1 point-to-point podium ↔ server doc.
+> **Status:** Live design (subsystem **archived under `LookingGlass/control_podium/`** as of 2026-08; paths below use the current repo layout). Replaces the v1 point-to-point podium ↔ server doc.
 > **Compared to v1:** v1 was strict point-to-point operator-podium ↔ server for cue triggering. v2 adds **many remote clients** (privileged + regular), keeps the low-latency operator path, and introduces a **Raspberry Pi bridge** that translates radio frames into MarsinEngine API calls and publishes engine status back over the air on a 5–10 s cadence.
 >
 > **Note on CaptainPad:** the radio is the **fallback transport**, not the only one. When Wi-Fi is available, CaptainPad uses its existing HTTP/WebSocket path to MarsinEngine and gets the full feature set. When Wi-Fi is unavailable (out on the playa), it falls back to BLE → client radio → LoRa → server radio → Pi → engine, with a deliberately reduced feature set (see §13). Large operations (live pattern editing, dimmer rack, per-fixture brightness) are disabled in radio mode.
@@ -19,7 +19,7 @@ What we need at Burning Man, in addition to that:
 2. **Two-way comms.** Clients need to query "what's the engine doing right now?" and the server should be able to push status updates.
 3. **Privilege tiers.** Some IDs can change patterns / scenes / params (privileged). Others can only read state (regular).
 4. **Server-side translation into the MarsinEngine.** The radio doesn't talk HTTP; we need a translator (the Raspberry Pi) between the server radio and the engine.
-5. **The dev path supports both with-and-without hardware.** Two physical Heltec V4 boards (server `0x01` and a captain handheld `0x0A`) are now on the bench, paired by USB MAC via `firmware/deploy.py` (see `control_podium/.config.nodes.yaml` and §10). The simulated radio bus (`sim_bus.py` + `RadioPortSim`) remains the daily inner loop; **HIL is now part of every commit's verification path.** Anything that lands here must boot on both real boards and pass the sim-bus mesh demo.
+5. **The dev path supports both with-and-without hardware.** Two physical Heltec V4 boards (server `0x01` and a captain handheld `0x0A`) are now on the bench, paired by USB MAC via `firmware/deploy.py` (see `LookingGlass/control_podium/.config.nodes.yaml` and §10). The simulated radio bus (`sim_bus.py` + `RadioPortSim`) remains the daily inner loop; **HIL is now part of every commit's verification path.** Anything that lands here must boot on both real boards and pass the sim-bus mesh demo.
 6. **The on-air channel must be cryptographically protected.** Anyone with a $30 Heltec on the same frequency can otherwise sniff or inject. We add a pre-shared symmetric key and AEAD per frame (see §3.6) so receivers ignore anything that doesn't authenticate. Confidentiality + integrity + replay defense, all with one shared secret deployed out-of-band as `marsin_engine/secret.yaml` (the single source of truth — same file consumed by every component of the TITANIC stack).
 
 This document is the design + the bring-up plan.
@@ -417,7 +417,7 @@ The Titanic protocol design accommodates multi-hop mesh relays for extended rang
 
 ### 4.1 Node IDs
 
-A node ID is a single byte. Assignment is **static**, kept in `control_podium/.config.nodes.yaml` (committed). Example:
+A node ID is a single byte. Assignment is **static**, kept in `LookingGlass/control_podium/.config.nodes.yaml` (committed). Example:
 
 ```yaml
 # Reserved
@@ -634,7 +634,7 @@ USB ────────────►│ radio_bridge.py          │─�
 ### 7.2 Implementation Sketch
 
 ```python
-# control_podium/comms/bridge.py
+# LookingGlass/control_podium/comms/bridge.py
 class Bridge:
     def __init__(self, radio_port, engine_url, acl_path):
         self.radio = radio_port               # RadioPort instance
@@ -727,7 +727,7 @@ engine:
 
 ## 8. Companion Apps (Replaces iPad Prototype for Now)
 
-For v2 development we **do not** touch CaptainPad. We extend the `control_podium/companions/` pattern instead. Once the protocol is stable, the same logic ports into `CaptainPad/utils/api.ts` plus a BLE bridge module.
+For v2 development we **do not** touch CaptainPad. We extend the `LookingGlass/control_podium/companions/` pattern instead. Once the protocol is stable, the same logic ports into `CaptainPad/utils/api.ts` plus a BLE bridge module.
 
 ### 8.1 The Two Apps That Run In Production
 
@@ -849,7 +849,7 @@ The `RadioPortSerial` adapter:
 ### 9.4 Where the Sim Lives in the Repo
 
 ```
-control_podium/
+LookingGlass/control_podium/
 ├── comms/
 │   ├── __init__.py
 │   ├── frame.py              # Frame v2 dataclass, encode/decode, types, flags
@@ -1206,22 +1206,22 @@ We are explicitly **not** doing step 4 preemptively — it costs ~15 dB of link 
 
 | #  | Milestone                                                                 | State        | Lives in                                                            |
 |----|---------------------------------------------------------------------------|--------------|---------------------------------------------------------------------|
-| 1  | Frame v2 format + parser + tests                                          | ✅ done     | `control_podium/comms/frame.py`                                     |
-| 2  | Sim radio bus + RadioPortSim                                              | ✅ done     | `control_podium/comms/sim_bus.py`, `radio_port_sim.py`              |
-| 3  | Bridge + engine client + ACL + adaptive pub cadence                       | ✅ done     | `control_podium/comms/bridge.py`, `acl.py`, `engine_client.py`      |
-| 4  | Two-app companions (bridge + interactive captain/crew client)             | ✅ done     | `control_podium/companions/{bridge,client}_companion.py`            |
-| 5  | Firmware: battery readout, minimal-screen, NODE_ID, low-batt shutdown     | ✅ done     | `control_podium/firmware/src/titanic_common.h`                      |
-| 6  | E2E test suite: bus + bridge + fake engine + 2 clients                    | ✅ done     | `control_podium/tests/test_comms_e2e_sim.py`                        |
-| 7  | RadioPortSerial: USB-CDC adapter for production                           | ✅ done     | `control_podium/comms/radio_port_serial.py`                         |
+| 1  | Frame v2 format + parser + tests                                          | ✅ done     | `LookingGlass/control_podium/comms/frame.py`                                     |
+| 2  | Sim radio bus + RadioPortSim                                              | ✅ done     | `LookingGlass/control_podium/comms/sim_bus.py`, `radio_port_sim.py`              |
+| 3  | Bridge + engine client + ACL + adaptive pub cadence                       | ✅ done     | `LookingGlass/control_podium/comms/bridge.py`, `acl.py`, `engine_client.py`      |
+| 4  | Two-app companions (bridge + interactive captain/crew client)             | ✅ done     | `LookingGlass/control_podium/companions/{bridge,client}_companion.py`            |
+| 5  | Firmware: battery readout, minimal-screen, NODE_ID, low-batt shutdown     | ✅ done     | `LookingGlass/control_podium/firmware/src/titanic_common.h`                      |
+| 6  | E2E test suite: bus + bridge + fake engine + 2 clients                    | ✅ done     | `LookingGlass/control_podium/tests/test_comms_e2e_sim.py`                        |
+| 7  | RadioPortSerial: USB-CDC adapter for production                           | ✅ done     | `LookingGlass/control_podium/comms/radio_port_serial.py`                         |
 | 8  | YAML-driven command allowlist (no cooldowns — pacing is a UI concern)     | ✅ done     | `comms/registry.py`, `.config.commands.yaml`                        |
-| 9  | MAC-locked role-aware firmware deploy (`deploy.py`)                       | ✅ done     | `control_podium/firmware/deploy.py`, `.config.nodes.yaml`           |
+| 9  | MAC-locked role-aware firmware deploy (`deploy.py`)                       | ✅ done     | `LookingGlass/control_podium/firmware/deploy.py`, `.config.nodes.yaml`           |
 | 10 | Multi-client mesh demo (sim radio bus, captain + crew, CPC verified)      | ✅ done     | `companions/mesh_demo.py`                                           |
 | 11 | **Secured channel: AES-128-GCM v2 frames + `marsin_engine/secret.yaml`**  | ✅ done     | `comms/secure.py`, `comms/replay.py`; HIL-verified                  |
 | 12 | HIL secured-channel demo — bridge ↔ LAN engine ↔ real radios              | ✅ done     | `companions/hil_secured_demo.py`                                    |
 | 13 | Firmware: non-blocking IRQ-poll RX + non-blocking LED scheduler           | ✅ done     | `firmware/src/{podium_tx,server_rx}/main.cpp`, `titanic_common.h`   |
 | 14 | Captain↔bridge HIL integration test (full company flow against engine)    | ✅ done     | `companions/hil_companion_demo.py`                                  |
-| 15 | Pi deployment story (systemd unit, USB rules, config layout)              | ⏳ pending  | `control_podium/comms/deploy/`                                      |
-| 16 | BLE GATT service extension on the firmware (frame TX / RX stream chars)   | ⏳ pending  | `control_podium/firmware/src/titanic_ble.h`                         |
+| 15 | Pi deployment story (systemd unit, USB rules, config layout)              | ⏳ pending  | `LookingGlass/control_podium/comms/deploy/`                                      |
+| 16 | BLE GATT service extension on the firmware (frame TX / RX stream chars)   | ⏳ pending  | `LookingGlass/control_podium/firmware/src/titanic_ble.h`                         |
 | 17 | **CaptainPad dual-transport integration** (per §13)                       | 🛑 deferred | `CaptainPad/utils/transport.ts` (new), component capability gating  |
 | 18 | Battery investigation against real hardware (per §14)                     | 🛑 deferred | bench notes                                                          |
 | 19 | Per-node keys (lift from camp-wide PSK to per-node)                       | 🛑 deferred | post-burn (see §15 Q2)                                               |
@@ -1239,11 +1239,11 @@ We are explicitly **not** doing step 4 preemptively — it costs ~15 dB of link 
 
 When picking this up:
 
-1. **Read this doc first**, then `control_podium/README.md` and `control_podium/companions/README.md` for the operator's-eye view. They cover different things; all three are necessary.
+1. **Read this doc first**, then `LookingGlass/control_podium/README.md` and `LookingGlass/control_podium/companions/README.md` for the operator's-eye view. They cover different things; all three are necessary.
 2. **Make sure the secret is present.** `marsin_engine/secret.yaml` must exist on every machine that runs an engine, bridge, or captain companion. If it doesn't, copy `marsin_engine/secret.yaml.example` to `marsin_engine/secret.yaml`, edit it, and propagate the SAME content everywhere. Companions refuse to start without it.
 3. **Verify the baseline.** Before any change, run:
    ```bash
-   cd control_podium
+   cd LookingGlass/control_podium
    PYTHONPATH=. ../.venv-dev/bin/python -m companions.mesh_demo -q
    ```
    It must print `ALL CHECKS PASSED — mesh is HIL-ready` and exit 0. If it doesn't, fix that first. When real Heltecs are available, also run `companions.hil_companion_demo` against a live engine.

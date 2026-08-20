@@ -179,8 +179,22 @@ export function arbitrate({ now, plan, state, fires, dayTimes, leaseSec }) {
       }
       // else: SUPPRESSED (dropped) — visible as "wouldFire" upstream if desired.
     } else {
-      // ambient / other: applies whenever we are not in manual control.
-      if (controller !== 'manual') {
+      // ambient / other: applies while AUTOPILOT owns control.
+      //
+      // FIX 3 (report `_98`): this used to be `controller !== 'manual'`, which
+      // let an ambient cue swap the DECK CONTENT out from under a LIVE program
+      // while the program kept the CONTROLLER (and therefore kept suppressing
+      // mood swaps) for the rest of its hold. Precedence and look disagreed:
+      // the header's model above says a program "owns priority for its hold
+      // window", but the lights showed the ambient cue. Measured on the shipped
+      // plan (report `_93` §5.3): the burn-night program was replaced 30 minutes
+      // into its own 120-minute hold by the party_night phase cue.
+      //
+      // An ambient cue is the AUTOPILOT layer's own background swap, so it now
+      // obeys exactly the same gate the mood layer does: it lands only while the
+      // controller is 'autopilot'. Under a program (or a takeover) it is
+      // SUPPRESSED and surfaced upstream as a wouldFire, never silently applied.
+      if (controller === 'autopilot' && !programStartedThisTick) {
         actions.push({ cueId: cue.id, action: cue.action });
       }
     }

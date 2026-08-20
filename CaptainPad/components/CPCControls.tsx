@@ -1,8 +1,15 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, useWindowDimensions, Modal, ScrollView, Pressable } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
-import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
+import {
+  fetchColorPairs,
+  fetchColorPaletteVisibility,
+  getCachedColorPalettes,
+  updateParamCenter,
+  warmColorPalettesCache,
+} from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useSharedParamValues, useLiveParamValues, useLiveParams, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import {
@@ -13,7 +20,10 @@ import {
 } from '@/hooks/use_tempo_tap';
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
+import { buildColorPresetLibrary } from '@/components/color_preset_library';
+import { normalizeColorPairs } from '@/components/deck/colors_window_logic';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { opError } from '@/utils/op_dialog';
 import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
@@ -44,12 +54,25 @@ interface CPCControlsProps {
   // audio-plot selection so Deck and Mixer remember different picks.
   screen?: 'deck' | 'mixer';
   // Soft PLAN lock gate (planLocked && !leaseHeld). When true every MUTATING
-  // control in the GLOBALS row (SPEED/SIZE, SYNC, COLORS, QUEUE, TAP, the BPM
+  // control in the GLOBALS row (SPEED, SYNC, COLORS, QUEUE, TAP, the BPM
   // source selector) is disabled — dimmed, handlers blocked — until the
   // operator takes over. Read-only surfaces stay live: the collapse chevrons
   // (client-side view state), the AUDIO meters + plot picker (display-only
   // local selection), and the OSC status pill (a read-only details sheet).
   disabled?: boolean;
+  // DECK + MIXER (docs/63 §3.1). The Deck's full DeckWorkspaceBar ("the view
+  // optimizer") and the Mixer's AUDIO-only bar chip both render here, between
+  // row 1 (GLOBALS) and row 2 (AUDIO SIGNALS) — "under the globals".
+  // Undefined renders NOTHING (no wrapper element, no extra gap).
+  optimizerSlot?: React.ReactNode;
+  // DECK + MIXER (docs/63 §3.1). When true, row 2 (the AUDIO SIGNALS meters +
+  // the plot-picker button) and its <AudioPlotPicker> modal are not
+  // rendered. The `useAudioPlotSelection` hook and the live audio-signals
+  // subscription stay unconditional — only the JSX is gated — so the
+  // AsyncStorage-backed plot selection is untouched and simply doesn't mount
+  // while hidden. Both tabs gate this on the shared deck workspace
+  // `audioBar` surface via `useDeckWorkspace().isBarShown('audioBar')`.
+  hideAudioRow?: boolean;
 }
 
 /**
@@ -80,13 +103,16 @@ function useAudioPlotSelection(screen: 'deck' | 'mixer') {
   return [selected, update] as const;
 }
 
-export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPCControlsProps = {}) => {
+export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optimizerSlot, hideAudioRow = false }: CPCControlsProps = {}) => {
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const defaultParams = useMemo(() => ({
     speed: 0.5,
-    size: 0.5,
+    // NOTE: no `size` here. The global SIZE fader was removed from this bar
+    // on 2026-07-27 (operator request — it was never used live and its ~98pt
+    // crushed the portrait row). The engine `size` CPC param still exists and
+    // is still drivable from MIDI / scripts; only the touch UI is gone.
     rotate: 0,
     colorPalette1: { h: 0, s: 1, v: 1 },
     colorPalette2: { h: 0.5, s: 1, v: 1 },
@@ -163,19 +189,45 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
   // sending. The armed pair is a FROZEN snapshot: editing the main
   // colour never changes it. Cue is local + ephemeral to this pad — only
   // firing writes the shared params.
-  const [palettes, setPalettes] = useState<ColorPalettePreset[]>(() => getCachedColorPalettes());
+  const [palettes, setPalettes] = useState<ColorPalettePreset[]>(() => (
+    buildColorPresetLibrary(getCachedColorPalettes(), [], [])
+  ));
   const [queued, setQueued] = useState<ColorPalettePreset | null>(null);
   const [queuePickerOpen, setQueuePickerOpen] = useState(false);
+  const refreshQueuePalettes = useCallback(async (loud = true) => {
+    await warmColorPalettesCache({ force: getCachedColorPalettes().length === 0 });
+    const [savedResult, visibilityResult] = await Promise.all([
+      fetchColorPairs(),
+      fetchColorPaletteVisibility(),
+    ]);
+    if (!savedResult.ok || !visibilityResult.ok) {
+      const reason = savedResult.ok ? visibilityResult.error : savedResult.error;
+      // App boot can briefly precede the engine. Keep that background warmup
+      // quiet; opening the chooser is the operator action that must fail loud.
+      if (loud) opError('Colour presets unavailable', reason || 'engine unreachable');
+      return;
+    }
+    try {
+      setPalettes(buildColorPresetLibrary(
+        getCachedColorPalettes(),
+        normalizeColorPairs(savedResult.data),
+        visibilityResult.data?.hiddenPaletteIds ?? [],
+      ));
+    } catch (error: any) {
+      opError('Colour presets unavailable', error?.message || String(error));
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const next = await warmColorPalettesCache({ force: palettes.length === 0 });
-      if (!cancelled && Array.isArray(next) && next.length > 0) setPalettes(next);
+      if (!cancelled) await refreshQueuePalettes(false);
     })();
     return () => { cancelled = true; };
-    // Load once on mount; the picker modal handles config.yaml live edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshQueuePalettes]);
+  useEffect(() => {
+    if (queuePickerOpen) void refreshQueuePalettes(true);
+  }, [queuePickerOpen, refreshQueuePalettes]);
   // Tap the slot: armed → send live then clear the cue (back to empty);
   // empty → open the chooser.
   const onSlotTap = useCallback(() => {
@@ -222,12 +274,16 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
   };
 
   // QA round8 #2: the GLOBALS row left a ~40% dead gutter to the right of
-  // the OSC tile in landscape because the SPEED/SIZE faders were capped at
-  // 140 and couldn't grow into the slack. Portrait stays capped (the row is
-  // already tight there); landscape uncaps so the two faders flex-grow to
-  // absorb the gutter — "big but compact". The inter-tile gap also tightens
-  // (20→12) so the cluster reads as intentionally dense rather than sparse.
-  const faderMaxWidth = isPortrait ? 90 : undefined;
+  // the OSC tile in landscape because the SPEED fader was capped at
+  // 140 and couldn't grow into the slack. Landscape uncaps so the fader
+  // flex-grows to absorb the gutter — "big but compact". The inter-tile gap
+  // also tightens (20→12) so the cluster reads as intentionally dense.
+  //
+  // Portrait used to cap the fader at 90 because every tile fought for room on
+  // one nowrap line (~700pt of fixed tiles on a 768pt iPad — crushed faders +
+  // right-edge clipping, the "broken mixer GLOBALS" the operator reported).
+  // Portrait now lays the tiles out in TWO rows (below), so the SPEED fader is
+  // uncapped there too and only carries a sane minimum width.
   const globalsRowGap = isPortrait ? 8 : 12;
   // Shared label column for row-1 and row-2 so REACT lines up under
   // SPEED. labelGap is the same number for both rows; widening one
@@ -269,6 +325,103 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
   // off is a perfectly valid driver for SPEED.
   const bpmSyncStale  = bpmSyncOn && bpm <= 0;
 
+  // ── GLOBALS-row tiles ────────────────────────────────────────
+  // Built once as nodes so the PORTRAIT two-row layout and the LANDSCAPE
+  // single-row layout stack the exact SAME controls with zero duplicated JSX
+  // — a tile can never drift between orientations.
+  const speedCluster = (
+    <View style={{
+      flex: 1,
+      // Portrait: uncapped but never squeezed below a usable fader width.
+      // Landscape: uncapped so it grows into the row's slack (QA round8 #2).
+      minWidth: isPortrait ? 120 : undefined,
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+    }}>
+      <View style={{ flex: 1 }}>
+        {/* The GLOBALS-row SPEED fader is the CANONICAL speed UI, so
+            it wears the physical-knob badge directly: MFT knob 1
+            (row-0 global, knob_page.ts) drives this exact value on
+            BOTH tabs. Sync state already surfaces here — green fill +
+            BPM badge while bpmSpeedSync owns speed (the knob's push
+            toggles the same flag SpeedSyncToggle does). */}
+        <MiniFader
+          label="SPEED"
+          value={speedDisplay}
+          fillColor={speedFill}
+          badge={speedBadge}
+          leading={<KnobPill knobNumber={globalKnobNumber('speed')} />}
+          disabled={disabled}
+          onChange={(v) => update('speed', v)}
+        />
+      </View>
+      {/* SPEED ← BPM sync toggle, on the MAIN UI (operator request
+          feat/optimize_channels). Toggles the engine `bpmSpeedSync`
+          param so the engine maps the ARBITRATED tempo (OSC OR TAP)
+          onto SPEED. Source-agnostic — see bpm_speed_sync.js. When ON
+          with no tempo available it tints amber (a warning) but stays
+          toggleable so the operator can arm sync before audio starts. */}
+      <SpeedSyncToggle
+        on={bpmSyncOn}
+        starving={bpmSyncOn && bpm <= 0}
+        disabled={disabled}
+        onToggle={() => update('bpmSpeedSync', bpmSyncOn ? 0 : 1)}
+      />
+    </View>
+  );
+
+  // Single COLORS button. Tapping opens the tabbed picker (Presets · Manual)
+  // — see ColorPickerModal. We render both hues as a split-circle swatch so
+  // the operator can see the current pair at a glance without opening it.
+  const colorsTile = (
+    <ColorPairButton
+      h1={params.colorPalette1?.h ?? 0}
+      h2={params.colorPalette2?.h ?? 0.5}
+      isPortrait={isPortrait}
+      disabled={disabled}
+      onPress={() => setColorPickerOpen(true)}
+    />
+  );
+
+  // Twin QUEUE tile — looks like COLORS, but cues. Empty: tap opens the
+  // chooser; armed: tap sends live; ✕ clears. See onSlotTap / QueuedColorSlot.
+  const queueTile = (
+    <QueuedColorSlot
+      queued={queued}
+      onPress={onSlotTap}
+      onClear={() => setQueued(null)}
+      isPortrait={isPortrait}
+      disabled={disabled}
+    />
+  );
+
+  // Dedicated, full-size TAP button — the ACTUAL tap target (operator request
+  // feat/optimize_channels): tapping lives here, NOT on the tiny BPM source
+  // selector. It's in the GLOBALS bar so it renders on BOTH deck + mixer, and
+  // useTempoTap().tap() feeds a MODULE-GLOBAL tap series — so taps are global
+  // and synced across tabs and respected app-wide.
+  const tapTile = (
+    <GlobalTapTile isPortrait={isPortrait} sourcePref={tempo.sourcePref} disabled={disabled} onTap={onTap} />
+  );
+
+  // BPM tile — the APPLIED tempo readout + a STICKY SOURCE SELECTOR (OSC vs
+  // TAP). The selector only CHOOSES the source, it does not tap: OSC follows
+  // the live OSC feed; TAP holds the current tempo (then refine it with the big
+  // TAP button). The selection is sticky and shared across deck + mixer — it
+  // never bounces OSC↔TAP.
+  const bpmTile = (
+    <BpmTile
+      bpm={bpm}
+      isPortrait={isPortrait}
+      source={tempo.source}
+      sourcePref={tempo.sourcePref}
+      disabled={disabled}
+      onSelectOsc={() => onSetSource('osc')}
+      onSelectTap={() => onSetSource('tap')}
+    />
+  );
+
+  const oscTile = <OscStatusPill compact={isPortrait} />;
+
   return (
     <View style={{ backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 6 : 8, borderBottomWidth: 1, borderBottomColor: C.ghostBorder, gap: isPortrait ? 6 : 6 }}>
 
@@ -288,7 +441,7 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
       ) : null}
 
       {/* ── Row 1: pattern globals + colour swatches + BPM + OSC pill ─ */}
-      {/* Order: SPEED · SIZE · C1 · C2 · BPM · OSC. `count` and `dir`
+      {/* Order: SPEED · COLORS · QUEUE · TAP · BPM · OSC. `count` and `dir`
           were demoted to pattern-local in May 2026 — they were too
           per-pattern to act as globals. The OSC pill is intentionally
           LAST so the eye finishes the row on health status rather than
@@ -319,98 +472,50 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
             speed={speedDisplay}
             speedBadge={speedBadge}
             speedFill={speedFill}
-            size={params.size ?? 0.5}
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
             bpm={bpm}
             disabled={disabled}
             onEditColors={() => setColorPickerOpen(true)}
           />
+        ) : isPortrait ? (
+          /* PORTRAIT — TWO ROWS (operator request 2026-07-27). One nowrap line
+             could not hold SPEED+SYNC · COLORS · QUEUE · TAP · BPM · OSC (plus
+             GROUPS on the mixer) on a 768–810pt iPad: the fixed tiles ate the
+             budget, the flex fader collapsed to a sliver, and the trailing tiles
+             clipped off the right edge — the "GLOBALS is broken in vertical"
+             report. Split by function instead of letting the row overflow:
+               row A = the CONTROLS the operator drives (speed + colour),
+               row B = TEMPO + status readouts.
+             The mixer's GROUPS accessory joins the END of row A in portrait
+             (instead of hanging outside the body) so it stays reachable without
+             stealing width from the fader. Landscape is untouched below. */
+          <View style={{ flex: 1, gap: 6, paddingRight: 4 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap }}>
+              {speedCluster}
+              {colorsTile}
+              {queueTile}
+              {trailing ? <View style={{ justifyContent: 'center' }}>{trailing}</View> : null}
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap }}>
+              {tapTile}
+              {bpmTile}
+              {oscTile}
+              {/* Left-align row B under row A's controls; the slack sits at the
+                  right rather than stretching the tempo tiles. */}
+              <View style={{ flex: 1 }} />
+            </View>
+          </View>
         ) : (
-          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
-            <View style={{ flex: 1, maxWidth: faderMaxWidth, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={{ flex: 1 }}>
-                {/* The GLOBALS-row SPEED fader is the CANONICAL speed UI, so
-                    it wears the physical-knob badge directly: MFT knob 1
-                    (row-0 global, knob_page.ts) drives this exact value on
-                    BOTH tabs. Sync state already surfaces here — green fill +
-                    BPM badge while bpmSpeedSync owns speed (the knob's push
-                    toggles the same flag SpeedSyncToggle does). */}
-                <MiniFader
-                  label="SPEED"
-                  value={speedDisplay}
-                  fillColor={speedFill}
-                  badge={speedBadge}
-                  leading={<KnobPill knobNumber={globalKnobNumber('speed')} />}
-                  disabled={disabled}
-                  onChange={(v) => update('speed', v)}
-                />
-              </View>
-              {/* SPEED ← BPM sync toggle, on the MAIN UI (operator request
-                  feat/optimize_channels). Toggles the engine `bpmSpeedSync`
-                  param so the engine maps the ARBITRATED tempo (OSC OR TAP)
-                  onto SPEED. Source-agnostic — see bpm_speed_sync.js. When ON
-                  with no tempo available it tints amber (a warning) but stays
-                  toggleable so the operator can arm sync before audio starts. */}
-              <SpeedSyncToggle
-                on={bpmSyncOn}
-                starving={bpmSyncOn && bpm <= 0}
-                disabled={disabled}
-                onToggle={() => update('bpmSpeedSync', bpmSyncOn ? 0 : 1)}
-              />
-            </View>
-
-            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-              <MiniFader label="SIZE" value={params.size ?? 0.5} disabled={disabled} onChange={(v) => update('size', v)} />
-            </View>
-
-            {/* Single COLORS button. Tapping opens the tabbed picker
-                (Presets · Manual) — see ColorPickerModal. We render both
-                hues as a split-circle swatch so the operator can see the
-                current pair at a glance without opening the modal. */}
-            <ColorPairButton
-              h1={params.colorPalette1?.h ?? 0}
-              h2={params.colorPalette2?.h ?? 0.5}
-              isPortrait={isPortrait}
-              disabled={disabled}
-              onPress={() => setColorPickerOpen(true)}
-            />
-
-            {/* Twin QUEUE tile — looks like COLORS, but cues. Empty: tap
-                opens the chooser; armed: tap sends live; ✕ clears. See
-                onSlotTap / QueuedColorSlot. */}
-            <QueuedColorSlot
-              queued={queued}
-              onPress={onSlotTap}
-              onClear={() => setQueued(null)}
-              isPortrait={isPortrait}
-              disabled={disabled}
-            />
-
-            {/* Dedicated, full-size TAP button — the ACTUAL tap target
-                (operator request feat/optimize_channels): tapping lives here,
-                NOT on the tiny BPM source selector. It's in the GLOBALS bar so
-                it renders on BOTH deck + mixer, and useTempoTap().tap() feeds a
-                MODULE-GLOBAL tap series — so taps are global and synced across
-                tabs and respected app-wide. */}
-            <GlobalTapTile isPortrait={isPortrait} sourcePref={tempo.sourcePref} disabled={disabled} onTap={onTap} />
-
-            {/* BPM tile — the APPLIED tempo readout + a STICKY SOURCE SELECTOR
-                (OSC vs TAP). The selector only CHOOSES the source, it does not
-                tap: OSC follows the live OSC feed; TAP holds the current tempo
-                (then refine it with the big TAP button). The selection is sticky
-                and shared across deck + mixer — it never bounces OSC↔TAP. */}
-            <BpmTile
-              bpm={bpm}
-              isPortrait={isPortrait}
-              source={tempo.source}
-              sourcePref={tempo.sourcePref}
-              disabled={disabled}
-              onSelectOsc={() => onSetSource('osc')}
-              onSelectTap={() => onSetSource('tap')}
-            />
-
-            <OscStatusPill compact={isPortrait} />
+          /* LANDSCAPE — unchanged single row. The OSC pill is intentionally
+             LAST so the eye finishes the row on health status. */
+          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap, paddingRight: 12, flex: 1 }}>
+            {speedCluster}
+            {colorsTile}
+            {queueTile}
+            {tapTile}
+            {bpmTile}
+            {oscTile}
           </View>
         )}
 
@@ -418,13 +523,21 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
             the far right of the GLOBALS row so it reclaims the slack the deck
             leaves empty; the deck passes no `trailing`, so its row is
             unchanged. Rendered outside the collapsible body so it stays
-            reachable whether or not GLOBALS is collapsed. */}
-        {trailing ? (
+            reachable whether or not GLOBALS is collapsed — EXCEPT in expanded
+            portrait, where it already sits at the end of row A (rendering it
+            here too would duplicate the button). */}
+        {trailing && (!isPortrait || globalsCollapsed) ? (
           <View style={{ marginLeft: globalsRowGap, justifyContent: 'center' }}>
             {trailing}
           </View>
         ) : null}
       </View>
+
+      {/* ── Workspace optimizer slot (docs/63 §3.1) — DeckWorkspaceBar on
+          the deck tab; on the mixer tab, the same bar recipe limited to the
+          AUDIO chip via `barsOnly`. Undefined renders NOTHING — not an empty
+          View — so the outer View's `gap` never adds phantom space. */}
+      {optimizerSlot}
 
       {/* ── Row 2: audio — dynamic live-only signal meters ──────────────
           The columns are rendered from whatever audio CPC keys the
@@ -434,41 +547,53 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
           tune signals in the Companion / Audio tab, not here. The meters
           are intentionally NOT touch-responsive (they show the effective
           post-chain value already being driven into the CPC).
+
+          DECK-ONLY hideAudioRow (docs/63 §3.1): when true, this row and its
+          <AudioPlotPicker> modal below are both skipped — gated on the SAME
+          condition so they can never drift apart and leave the modal
+          mounted over a hidden row. Deck and Mixer both drive this from the
+          shared deck workspace `audioBar` surface. The `useAudioPlotSelection`
+          hook above and the `useAudioSignals` subscription stay unconditional;
+          only this JSX is gated.
        */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 4 : 6 }}>
-        {/* Same labelWidth + labelGap as row 1 so AUDIO lines up directly under
-            SPEED — no white-space gap. STATIC label now (party 2026-07-11): the
-            row is always the minimal strip, so the old collapse chevron/toggle
-            is gone. */}
-        <View
-          style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
-        >
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO SIGNALS'}</Text>
+      {!hideAudioRow ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 4 : 6 }}>
+          {/* Same labelWidth + labelGap as row 1 so AUDIO lines up directly under
+              SPEED — no white-space gap. STATIC label now (party 2026-07-11): the
+              row is always the minimal strip, so the old collapse chevron/toggle
+              is gone. */}
+          <View
+            style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO SIGNALS'}</Text>
+          </View>
+
+          <DynamicAudioRow
+            signals={audioSignals}
+            isPortrait={isPortrait}
+            selectedKeys={audioSelected}
+          />
+
+          {/* Edit which plots show — opens the picker. Right-aligned, compact. */}
+          <TouchableOpacity
+            onPress={() => setAudioPickerOpen(true)}
+            accessibilityLabel="Choose which audio signals to show"
+            style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'center' }}
+          >
+            <IconSymbol name="slider.horizontal.3" size={14} color={C.secondary} />
+          </TouchableOpacity>
         </View>
+      ) : null}
 
-        <DynamicAudioRow
+      {!hideAudioRow ? (
+        <AudioPlotPicker
+          visible={audioPickerOpen}
           signals={audioSignals}
-          isPortrait={isPortrait}
-          selectedKeys={audioSelected}
+          selected={audioSelected}
+          onChange={setAudioSelected}
+          onClose={() => setAudioPickerOpen(false)}
         />
-
-        {/* Edit which plots show — opens the picker. Right-aligned, compact. */}
-        <TouchableOpacity
-          onPress={() => setAudioPickerOpen(true)}
-          accessibilityLabel="Choose which audio signals to show"
-          style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'center' }}
-        >
-          <IconSymbol name="slider.horizontal.3" size={14} color={C.secondary} />
-        </TouchableOpacity>
-      </View>
-
-      <AudioPlotPicker
-        visible={audioPickerOpen}
-        signals={audioSignals}
-        selected={audioSelected}
-        onChange={setAudioSelected}
-        onClose={() => setAudioPickerOpen(false)}
-      />
+      ) : null}
 
       {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
       <ColorPickerModal
@@ -500,13 +625,13 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
  */
 /**
  * Single COLORS button. Wide pill (~96px) sized so it sits comfortably
- * next to the SPEED/SIZE MiniFaders and gives the operator a fat
+ * next to the SPEED MiniFader and gives the operator a fat
  * tap-target on the iPad. Shows both global hues as a split-circle
  * preview + a "COLORS" caption; opens the tabbed picker on tap.
  */
 // Compact-tile shape shared by COLORS / BPM / OSC. Operator review
 // 2026-05-28 — these three should read as one cluster (visual signal +
-// status cluster) distinct from the SPEED/SIZE sliders.
+// status cluster) distinct from the SPEED slider.
 const GLOBALS_TILE_WIDTH_PORTRAIT  = 60;
 const GLOBALS_TILE_WIDTH_LANDSCAPE = 86;
 // party 2026-07-11: dropped 48→40 to compact the GLOBALS row into a dense
@@ -760,7 +885,9 @@ function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
     onChange(next.length > 0 ? next : []);   // empty array persists as "none shown"
   };
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#0009', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
         <Pressable onPress={() => { /* swallow inner taps */ }} style={{ width: '90%', maxWidth: 560, maxHeight: '82%', backgroundColor: C.surfaceContainerLow, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -1102,16 +1229,16 @@ function BpmTile({ bpm, isPortrait, source, sourcePref, disabled, onSelectOsc, o
 // One-line read-only snapshots for the GLOBAL PARAMS and AUDIO
 // REACTIVITY rows. The label cell's chevron toggles between these
 // summaries and the full editor rows above. Operator-perceptible
-// data only — SPEED %, SIZE %, the dual-hue swatch, BPM readout for
+// data only — SPEED %, the dual-hue swatch, BPM readout for
 // globals; four micro-meters (BASS / DRUMS / VOX / KICK) for audio
 // (the master REACT readout was retired with audioReactivity on
 // 2026-05-26). Sized so the row fits in ~24px regardless of orientation.
 
 function CollapsedGlobalsSummary({
-  speed, speedBadge, speedFill, size, h1, h2, bpm, disabled, onEditColors,
+  speed, speedBadge, speedFill, h1, h2, bpm, disabled, onEditColors,
 }: {
   speed: number; speedBadge?: string; speedFill?: string;
-  size: number; h1: number; h2: number; bpm: number;
+  h1: number; h2: number; bpm: number;
   disabled?: boolean;
   onEditColors: () => void;
 }) {
@@ -1119,7 +1246,6 @@ function CollapsedGlobalsSummary({
   return (
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
       <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} unit="%" accent={speedFill} badge={speedBadge} />
-      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} unit="%" />
       {/* Soft PLAN lock — the COLORS shortcut opens the (mutating) colour
           picker, so it's gated with the expanded-row controls. The readouts
           above stay full-brightness (display-only). */}
@@ -1160,4 +1286,3 @@ function CollapsedReadout({ label, value, unit, accent, badge }: { label: string
     </View>
   );
 }
-

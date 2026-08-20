@@ -15,9 +15,10 @@
 // reachable in both orientations (QA round 8 fix #2).
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TouchableOpacity } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
-import { Palette } from '@/constants/theme';
+import { Palette, Radius, Type } from '@/constants/theme';
 import { fadeMaster } from '@/utils/masterApi';
 import { updateMixerMaster } from '@/utils/api';
 
@@ -71,6 +72,11 @@ function useSelectedFadeSeconds(): number {
 interface Props {
   /** Compact (portrait) layout when true — pills collapse to a cycler. */
   isPortrait: boolean;
+  /** Force the compact cycler even in landscape. The mixer header sets this so
+   *  its title bar fits ONE row on an iPad (operator request 2026-07-27): the
+   *  5-pill row costs ~140pt more than the cycler, and every duration is still
+   *  reachable by tapping through it — a merge, not a removal. */
+  compact?: boolean;
   /** Soft PLAN lock gate (planLocked && !leaseHeld). When true the whole FADE
    *  cluster (duration pills / cycler, TO BLACK, UP) is disabled — dimmed,
    *  handlers blocked — until the operator takes over. Default false so the
@@ -78,7 +84,9 @@ interface Props {
   disabled?: boolean;
 }
 
-export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
+export function MasterFadeGroup({ isPortrait, compact = false, disabled = false }: Props) {
+  // One flag downstream: portrait implies compact, landscape can opt in.
+  const useCycler = isPortrait || compact;
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   // Selected fade duration (seconds) — SHARED across both MasterFadeGroup
@@ -101,7 +109,7 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
       // dropped.
       const where = target <= 0 ? 'To Black' : 'Up';
       console.error(`Master ${where} failed:`, res.error);
-      Alert.alert('Master fade failed', res.error || 'The engine rejected the request.');
+      opError('Master fade failed', res.error || 'The engine rejected the request.');
     }
   };
 
@@ -111,8 +119,8 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
 
   return (
     <View style={[styles.fadeGroup, disabled && { opacity: 0.45 }]}>
-      <Text style={styles.labelCaps}>FADE</Text>
-      {!isPortrait ? (
+      <Text numberOfLines={1} style={styles.labelCaps}>FADE</Text>
+      {!useCycler ? (
         <View style={styles.fadePills}>
           {FADE_SECONDS.map((s) => {
             const selected = s === fadeSeconds;
@@ -127,7 +135,7 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
                 accessibilityState={{ selected, disabled }}
                 accessibilityLabel={`Fade duration ${s} seconds`}
               >
-                <Text style={[styles.fadePillText, selected && styles.fadePillTextSelected]}>
+                <Text numberOfLines={1} style={[styles.fadePillText, selected && styles.fadePillTextSelected]}>
                   {`${s}s`}
                 </Text>
               </TouchableOpacity>
@@ -153,10 +161,10 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
           accessibilityLabel={`Fade duration ${fadeSeconds} seconds`}
           accessibilityHint={`Tap to cycle through ${FADE_SECONDS.map((s) => `${s}s`).join(', ')}`}
         >
-          <Text style={[styles.fadePillText, styles.fadePillTextSelected]}>
+          <Text numberOfLines={1} style={[styles.fadePillText, styles.fadePillTextSelected]}>
             {`${fadeSeconds}s`}
           </Text>
-          <Text style={[styles.fadePillText, styles.fadePillTextSelected, styles.fadeCyclerCaret]}>
+          <Text numberOfLines={1} style={[styles.fadePillText, styles.fadePillTextSelected, styles.fadeCyclerCaret]}>
             ▾
           </Text>
         </TouchableOpacity>
@@ -170,7 +178,7 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
         accessibilityState={{ disabled }}
         accessibilityLabel={`Fade master to black ${overPhrase}`}
       >
-        <Text style={styles.fadeActionText}>TO BLACK</Text>
+        <Text numberOfLines={1} style={styles.fadeActionText}>TO BLACK</Text>
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => runFade(1)}
@@ -181,7 +189,7 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
         accessibilityState={{ disabled }}
         accessibilityLabel={`Fade master up ${overPhrase}`}
       >
-        <Text style={styles.fadeActionText}>UP</Text>
+        <Text numberOfLines={1} style={styles.fadeActionText}>UP</Text>
       </TouchableOpacity>
     </View>
   );
@@ -189,12 +197,11 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
 
 function makeStyles(C: Palette) {
   return {
+    // Shared caps recipe (docs/54 §1.1) — same pixels, one declaration.
     labelCaps: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
-      letterSpacing: 1.2,
+      ...Type.labelCaps,
+      textTransform: Type.labelCaps.textTransform as 'uppercase',
       color: C.secondary,
-      textTransform: 'uppercase' as const,
     },
     fadeGroup: {
       flexDirection: 'row' as const,
@@ -212,7 +219,7 @@ function makeStyles(C: Palette) {
       minWidth: 30,
       height: 28,
       paddingHorizontal: 6,
-      borderRadius: 6,
+      borderRadius: Radius.control,
       borderWidth: 1,
       borderColor: C.ghostBorder,
       backgroundColor: C.surfaceContainerHigh,
@@ -247,7 +254,7 @@ function makeStyles(C: Palette) {
     fadeAction: {
       height: 28,
       paddingHorizontal: 10,
-      borderRadius: 6,
+      borderRadius: Radius.control,
       borderWidth: 1,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,

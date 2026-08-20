@@ -235,5 +235,9 @@ export function render3D(index, x, y, z) {
     ww = crestPop * CREST_W_POP * (CREST_FLOOR + (1.0 - CREST_FLOOR) * env) * (1.0 - 0.6 * tcol);
   }
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(ww), 0.0, 0.0);
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(ww), clamp01(ww), 0.0);
 }

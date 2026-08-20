@@ -20,7 +20,7 @@
 // while `tempoSource === 'manual'` (an active override exists to drop).
 
 import { useEffect, useState } from 'react';
-import { Alert } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { postTapTempo, postTempoSync, postTempoSource } from '@/utils/channelExtrasApi';
 
@@ -147,7 +147,7 @@ export function useTempoTap(): TempoTap {
     const res = await postTapTempo(bpm);
     if (!res.ok) {
       console.error('Tap tempo failed:', res.error);
-      Alert.alert('Tap tempo failed', res.error || 'The engine rejected the tempo.');
+      opError('Tap tempo failed', res.error || 'The engine rejected the tempo.');
     }
   };
 
@@ -187,7 +187,7 @@ export function useTempoTap(): TempoTap {
     const res = await postTempoSync();
     if (!res.ok) {
       console.error('Tempo sync failed:', res.error);
-      Alert.alert('Tempo sync failed', res.error || 'The engine could not hand tempo back to OSC.');
+      opError('Tempo sync failed', res.error || 'The engine could not hand tempo back to OSC.');
     }
   };
 
@@ -195,7 +195,7 @@ export function useTempoTap(): TempoTap {
     const res = await postTempoSource(pref);
     if (!res.ok) {
       console.error('Tempo source select failed:', res.error);
-      Alert.alert('Tempo source failed', res.error || 'The engine rejected the source change.');
+      opError('Tempo source failed', res.error || 'The engine rejected the source change.');
     }
   };
 

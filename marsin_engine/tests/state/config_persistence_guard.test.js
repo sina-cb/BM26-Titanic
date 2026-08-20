@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const realConfig = path.join(here, '..', '..', 'config.yaml');
@@ -17,6 +18,14 @@ test('guard sets MARSIN_CONFIG_FILE to a scratch path, not config.yaml', () => {
     path.resolve(realConfig),
     'the scratch path must differ from the tracked config.yaml',
   );
+});
+
+test('guard disables production OSC and fire-sync listeners in the scratch config', () => {
+  const scratchConfig = yaml.load(fs.readFileSync(process.env.MARSIN_CONFIG_FILE, 'utf8'));
+  assert.equal(scratchConfig.osc?.enabled, false,
+    'real-engine tests must not bind the production OSC listener');
+  assert.equal(scratchConfig.fire_sync?.enabled, false,
+    'real-engine tests must not bind the Stoker fire-sync listener');
 });
 
 test('ColorAutopilot with the production (undefined) path writes to the scratch copy, not config.yaml', async () => {

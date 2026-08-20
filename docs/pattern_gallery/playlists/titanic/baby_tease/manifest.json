@@ -1,0 +1,791 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "baby_tease",
+  "seconds": 20,
+  "fps": 8,
+  "globalSpeed": 0.4,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/baby_tease.yaml",
+  "playlistDigest": "a2f160f46d5a320d72861c3153bf4e057250a693375a7a89997bfc8f7a73a8ca",
+  "goalsDigest": "c4d673d92f6267bcb8c6c338e4ec7c470e0a6978116c502fc90e5244aba3631f",
+  "modelRegionIntentDigest": null,
+  "items": [
+    {
+      "index": 0,
+      "pattern": "baby_tease/01_bullseye_tide",
+      "title": "Baby Tease - Bullseye Tide",
+      "goal": "A pink-and-blue bullseye ripples outward from the heart of the ship.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRingCount",
+          "label": "Ring Count",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.85,
+        "sliderRingCount": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.85,
+        "sliderRingCount": 0.5
+      },
+      "gif": "001_baby_tease__01_bullseye_tide.gif",
+      "video": "001_baby_tease__01_bullseye_tide.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "2ad70448a0a25e199b0562b34918f748a773ecc7ec23ee827e9fd02aa8167bcb"
+    },
+    {
+      "index": 1,
+      "pattern": "baby_tease/02_cellular_organism",
+      "title": "Baby Tease - Cellular Organism",
+      "goal": "A dozen soft pink and blue pebbles tile the whole ship and slowly trade places.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderCellPush",
+          "label": "Cell Push",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Cell Push character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.86,
+        "sliderCellPush": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.86,
+        "sliderCellPush": 0.58
+      },
+      "gif": "002_baby_tease__02_cellular_organism.gif",
+      "video": "002_baby_tease__02_cellular_organism.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "48cbab1e15d382bd7c957620df2512b69ae7491f482a10231c5b05e23113b4c9"
+    },
+    {
+      "index": 2,
+      "pattern": "baby_tease/03_star_exchange",
+      "title": "Baby Tease - Star Exchange",
+      "goal": "Pink stars glitter inside blue country and blue stars inside pink country.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarDensity",
+          "label": "Star Density",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderStarDensity": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderStarDensity": 0.5
+      },
+      "gif": "003_baby_tease__03_star_exchange.gif",
+      "video": "003_baby_tease__03_star_exchange.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "3ea34d96743a824876680761818d62bf3836c48bd042cb3c3c9f103b48c46f17"
+    },
+    {
+      "index": 3,
+      "pattern": "baby_tease/04_rotating_yin_yang",
+      "title": "Baby Tease - Rotating Yin-Yang",
+      "goal": "Two interlocking hooks - each carrying the other colour's eye - rock and breathe around the ship's heart.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.82,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderCurlDepth",
+          "label": "Curl Depth",
+          "value": 0.62,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderTurnReach",
+          "label": "Turn Reach",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Turn Reach character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.82,
+        "sliderCurlDepth": 0.62,
+        "sliderTurnReach": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.82,
+        "sliderCurlDepth": 0.62,
+        "sliderTurnReach": 0.48
+      },
+      "gif": "004_baby_tease__04_rotating_yin_yang.gif",
+      "video": "004_baby_tease__04_rotating_yin_yang.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "287f6ff9518e8cacef4fc35289b3495290f545e9e49035b01a9403e12698ce2d"
+    },
+    {
+      "index": 4,
+      "pattern": "baby_tease/05_ink_drops",
+      "title": "Baby Tease - Ink Drops",
+      "goal": "Pink and blue ink drops keep blooming through each other.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.43,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderDropReach",
+          "label": "Drop Reach",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Drop Reach character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.43,
+        "sliderLevel": 0.86,
+        "sliderDropReach": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.43,
+        "sliderLevel": 0.86,
+        "sliderDropReach": 0.5
+      },
+      "gif": "005_baby_tease__05_ink_drops.gif",
+      "video": "005_baby_tease__05_ink_drops.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a0a24fe36da3b362392b130244ebef2ec6ae5d92cf21c2cdfe8285113af89167"
+    },
+    {
+      "index": 5,
+      "pattern": "baby_tease/06_argyle_weave",
+      "title": "Baby Tease - Argyle Weave",
+      "goal": "Pink and blue diamonds slide across each other like woven ribbons.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWeaveScale",
+          "label": "Weave Scale",
+          "value": 0.55,
+          "valueSource": "playlist saved value",
+          "description": "Weave Scale character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderLevel": 0.86,
+        "sliderWeaveScale": 0.55
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderLevel": 0.86,
+        "sliderWeaveScale": 0.55
+      },
+      "gif": "006_baby_tease__06_argyle_weave.gif",
+      "video": "006_baby_tease__06_argyle_weave.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "6c645e0307b27c27952ab6998e4649f1758b2f78d61f0e34c48e15229794ec34"
+    },
+    {
+      "index": 6,
+      "pattern": "baby_tease/07_braided_rivers",
+      "title": "Baby Tease - Braided Rivers",
+      "goal": "Pink and blue rivers run the length of the hull and braid around each other.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.47,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.84,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBraidWidth",
+          "label": "Braid Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCurrentBend",
+          "label": "Current Bend",
+          "value": 0.66,
+          "valueSource": "playlist saved value",
+          "description": "Current Bend character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.47,
+        "sliderLevel": 0.84,
+        "sliderBraidWidth": 0.54,
+        "sliderCurrentBend": 0.66
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.47,
+        "sliderLevel": 0.84,
+        "sliderBraidWidth": 0.54,
+        "sliderCurrentBend": 0.66
+      },
+      "gif": "007_baby_tease__07_braided_rivers.gif",
+      "video": "007_baby_tease__07_braided_rivers.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "62dc2dbbdb1f07a6ca203472f5fc13b95c03fc11655dcce6390d14e39fcc49d3"
+    },
+    {
+      "index": 7,
+      "pattern": "baby_tease/08_checker_tide",
+      "title": "Baby Tease - Checker Tide",
+      "goal": "A giant pink/blue checkerboard whose tiles invert in a slow diagonal wave.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTileGrain",
+          "label": "Tile Grain",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Tile Grain character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderLevel": 0.86,
+        "sliderTileGrain": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderLevel": 0.86,
+        "sliderTileGrain": 0.5
+      },
+      "gif": "008_baby_tease__08_checker_tide.gif",
+      "video": "008_baby_tease__08_checker_tide.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "566c1fc1159814859003cfed36774dc0be1a322f710e34676eedd07df1b863c3"
+    },
+    {
+      "index": 8,
+      "pattern": "baby_tease/09_candy_helix",
+      "title": "Baby Tease - Candy Helix",
+      "goal": "A pink-and-blue candy-cane helix twists along the hull.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTwistBreath",
+          "label": "Twist Breath",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderDirection": 1,
+        "sliderLevel": 0.86,
+        "sliderTwistBreath": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderDirection": 1,
+        "sliderLevel": 0.86,
+        "sliderTwistBreath": 0.5
+      },
+      "gif": "009_baby_tease__09_candy_helix.gif",
+      "video": "009_baby_tease__09_candy_helix.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "510a77898bed790c5ea582d5b6e98ebcb9d65d7e663504eff07338a5efe46b82"
+    },
+    {
+      "index": 9,
+      "pattern": "baby_tease/10_rail_exchange",
+      "title": "Baby Tease - Rail Exchange",
+      "goal": "Stacked pink and blue rails stream in opposite directions and periodically trade lanes.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStreamDensity",
+          "label": "Stream Density",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderDirection": 1,
+        "sliderLevel": 0.86,
+        "sliderStreamDensity": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderDirection": 1,
+        "sliderLevel": 0.86,
+        "sliderStreamDensity": 0.5
+      },
+      "gif": "010_baby_tease__10_rail_exchange.gif",
+      "video": "010_baby_tease__10_rail_exchange.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4e70fdee10cddbc54a48a17f0208d04eceef652d3dc4b9e50e9ebb55d110c8ca"
+    },
+    {
+      "index": 10,
+      "pattern": "baby_tease/11_carousel_sectors",
+      "title": "Baby Tease - Carousel Sectors",
+      "goal": "A six-blade pinwheel of alternating pink and blue spins over the whole ship.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBladeScallop",
+          "label": "Blade Scallop",
+          "value": 0.55,
+          "valueSource": "playlist saved value",
+          "description": "Blade Scallop character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderDirection": 1,
+        "sliderLevel": 0.86,
+        "sliderBladeScallop": 0.55
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.45,
+        "sliderDirection": 1,
+        "sliderLevel": 0.86,
+        "sliderBladeScallop": 0.55
+      },
+      "gif": "011_baby_tease__11_carousel_sectors.gif",
+      "video": "011_baby_tease__11_carousel_sectors.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e1c0f1524287a9f139244a532e0d9489e7ccb5a12bcba9533f98e20a0807795d"
+    },
+    {
+      "index": 11,
+      "pattern": "baby_tease/12_counter_comets",
+      "title": "Baby Tease - Counter Comets",
+      "goal": "Pink and blue comets circle the ship in opposite directions over a dim woven lattice.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.44,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderCometSize",
+          "label": "Comet Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Comet Size character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderDirection": 1,
+        "sliderLevel": 0.87,
+        "sliderCometSize": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderDirection": 1,
+        "sliderLevel": 0.87,
+        "sliderCometSize": 0.5
+      },
+      "gif": "012_baby_tease__12_counter_comets.gif",
+      "video": "012_baby_tease__12_counter_comets.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "941b15d2453f47aaf92a2d46f78f881e905357535f596a450cf0d57f9c5005e0"
+    },
+    {
+      "index": 12,
+      "pattern": "baby_tease/13_position_swap",
+      "title": "Baby Tease - Position Swap",
+      "goal": "Two solid colour masses slide the length of the ship and zip through each other to swap ends.",
+      "intent": null,
+      "modelRegionIntent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.44,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderFingerCount",
+          "label": "Finger Count",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderLevel": 0.87,
+        "sliderFingerCount": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.44,
+        "sliderLevel": 0.87,
+        "sliderFingerCount": 0.5
+      },
+      "gif": "013_baby_tease__13_position_swap.gif",
+      "video": "013_baby_tease__13_position_swap.mp4",
+      "coverageGif": null,
+      "coverageVideo": null,
+      "parameterSweepVideo": null,
+      "parameterSweepSegments": [],
+      "parameterSweepSeconds": null,
+      "seconds": 20,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c486c21b982bcb79549e8eab5b773c3006f45bf848ef006d8429bbf8e8c2f779"
+    }
+  ]
+}

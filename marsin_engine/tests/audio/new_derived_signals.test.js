@@ -24,12 +24,19 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
+import {
+  buildBpmTrackerOptions,
+  buildDerivedSignalsOptions,
+} from '../../audio/config/audio_analysis_config.js';
 import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { ParamCenter } from '../../lib/param_center.js';
 import { DerivedSignals } from '../../audio/signals/derived_signals.js';
 import { fillFrame } from '../../audio/synth/test_synths.js';
+import { loadTrackedAudioAnalysisConfig } from '../helpers/tracked_audio_config.mjs';
 
 import { BuildAnticipation } from '../../audio/signals/build_anticipation.js';
 import { TrackChange } from '../../audio/signals/track_change.js';
@@ -38,6 +45,16 @@ import { PhraseTracker } from '../../audio/signals/phrase_tracker.js';
 import { DropCountdown } from '../../audio/signals/drop_countdown.js';
 
 const SR = 44100, FFT = 1024, HOP = 512, HOP_MS = (HOP / SR) * 1000;
+
+const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+// DerivedSignals requires the SHIPPED tracker options — this test must exercise
+// the production config, not the module DEFAULTS. TRACKED config.yaml only: the
+// scene state overlays live-patched `derivedSignals` groups and `bpmTracker`,
+// which would rescore every signal threshold below.
+// See tests/helpers/tracked_audio_config.mjs.
+const AUDIO_CONFIG = loadTrackedAudioAnalysisConfig(ENGINE_DIR);
+const BPM_TRACKER = buildBpmTrackerOptions(AUDIO_CONFIG);
+const DERIVED_CONFIG = buildDerivedSignalsOptions(AUDIO_CONFIG);
 
 // ── Full-chain driver: synth segments → analyzer → detector → DerivedSignals ──
 // Mirrors engine.js onAnalysis ordering exactly (analyzer writes raw mirrors,
@@ -56,7 +73,11 @@ function driveChain(segments, { detectorEnabled = true, injectDropAtMs = null } 
     paramCenter: pc, broadcast: () => {},
     getConfig: () => (detectorEnabled ? { enabled: true } : { enabled: false }),
   });
-  const ds = new DerivedSignals({ paramCenter: pc });
+  const ds = new DerivedSignals({
+    paramCenter: pc,
+    bpmTracker: BPM_TRACKER,
+    derivedSignals: DERIVED_CONFIG,
+  });
   const series = {
     tMs: [], riserScore: [], buildEta: [], riserConf: [],
     silence: [], trackChange: [], climax: [],

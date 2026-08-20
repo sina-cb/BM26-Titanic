@@ -18,7 +18,7 @@ python deploy\deploy.py deploy --machine titanic-int --restart-only     # bounce
 python deploy\deploy.py deploy --machine titanic-int --scene <scene>    # full deploy + set boot scene
 python deploy\deploy.py stop   --machine titanic-int                    # park it (lights OFF until start/reboot/deploy)
 python deploy\deploy.py start  --machine titanic-int                    # bring it back + verify (add --no-verify to skip the poll)
-python deploy\deploy.py fetch  --machine titanic-int --state            # collect server-side work + state snapshot
+python deploy\deploy.py fetch  --machine titanic-int --state            # collect scratch work + prod state snapshot
 ```
 
 Details in ["Deploying from the laptop"](#deploying-from-the-laptop-deploypy)
@@ -239,13 +239,11 @@ and simply runs the tracked config (the operator-blessed default). See
 [`deploy\overlays\README.md`](overlays/README.md) for the fragment format and
 deep-merge semantics.
 
-**Browser at boot (`open_browser`).** Add `-OpenBrowser` (toggle off with
-`-NoOpenBrowser`, or edit `open_browser` in `machines.yaml`) to have the
-supervisor auto-open the sim (`localhost:6969`) and audio companion
-(`localhost:6966`) pages in the default browser at boot. They open on the
-**titanic console desktop only** -- the session the supervisor runs in -- not
-in any other logged-in user's session (a fast-user-switching nuance). Default
-is off: servers stay headless.
+**No browser at boot.** The supervisor always invokes the launcher with
+`--no-launch` and has no separate browser-opening job. Deploy/restart therefore
+cannot accumulate tabs. Operators open the three reconciled desktop shortcuts
+when they want a UI; `open_browser`, `-OpenBrowser`, and `-NoOpenBrowser` are
+retired.
 
 At boot the chain is: autologon -> `BM26TitanicStack` task ->
 `deploy\boot_server.ps1` -> `node launcher.js <profile> --scene <scene>
@@ -336,7 +334,19 @@ machine's `host` value from the manifest.
 5. **Install the public key on each server**: hand `id_ed25519_titanic.pub`
    to the server's config pass (`setup\install_ssh_key.ps1`, or
    `server_setup.ps1 -SshPublicKey <path>`).
-6. **Store the SMB credential** (per server, once - this is the one people
+6. **Keep `$BM26_SECRETS` available on the deploy laptop**: the private setup
+   in step 2 exports this path. Every real prod deploy validates that local
+   YAML without printing its path or values, copies it over encrypted SCP,
+   and converges an ACL-protected stable file **outside the deployed repo**.
+   The registered show account receives read/replace access, SYSTEM and
+   Administrators receive full control, and the deploy persists only the path
+   in Machine-scope `BM26_SECRETS` and removes any stale User-scope override,
+   so the scheduled task resolves the exact protected source after a reboot.
+   Provisioning and a redacted read check finish **before the stack is
+   stopped**. `--dry-run` is strictly non-mutating: it validates the laptop
+   source, probes current remote readiness, and states what the real deploy
+   would refresh without copying or changing ACL/environment state.
+7. **Store the SMB credential** (per server, once - this is the one people
    forget):
    ```powershell
    cmdkey /add:<server> /user:<SERVER-HOSTNAME>\titanic /pass
@@ -347,10 +357,10 @@ machine's `host` value from the manifest.
    with "not reachable over SMB", this credential is missing or stale -
    the error message prints the exact `cmdkey` line to run, and
    `cmdkey /delete:<server>` first replaces a bad one.
-7. **Prove it end-to-end** (safe, read-only / non-prod):
+8. **Prove it end-to-end** (safe, read-only / non-prod):
    ```powershell
    ssh <server> hostname                                      # key auth, no password prompt
-   python deploy\deploy.py fetch  --machine <name>            # SSH-only
+   python deploy\deploy.py fetch  --machine <name>            # scratch Git only; SSH-only
    python deploy\deploy.py deploy --machine <name> --dry-run  # exercises SMB, changes nothing
    ```
 
@@ -366,18 +376,25 @@ python deploy\deploy.py start --machine titanic-int                   # bring it
 ```
 
 Eight loud phases: preflight (manifest, SSH identity, **node version must
-match the laptop**, SMB, robocopy `/L` preview of every path that would
+match the laptop**, validated local secrets plus secure provisioning and a
+redacted persistent/readable remote `BM26_SECRETS` check, SMB, robocopy `/L`
+preview of every path that would
 change) -> stop stack (`schtasks /End` + `launcher.js stop`) -> robocopy
-`/MIR` (excludes `marsin_engine\states\**`, `simulation\.scene_backups\`,
-`.agent_renders\`, `deploy_info.yaml`, `machines.yaml`; **includes
-`node_modules`** - offline playa rule) -> optional `--scene` written into the
+`/MIR` (excludes `.git\`, `marsin_engine\states\**`,
+`simulation\.scene_backups\`, `.agent_renders\`, `deploy_info.yaml`,
+`machines.yaml`; **includes `node_modules`** - offline playa rule) -> optional
+`--scene` written into the
 *private* `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`)
 then that private manifest shipped to `<dest>\deploy\machines.yaml` on the
 server -> overlay override fragments deep-merged over the dest (missing/empty
-overlay dir = OK; the tracked config is the operator-blessed default) ->
+overlay dir = OK; the tracked config is the operator-blessed default) -> three
+verified desktop URL shortcuts reconciled for the registered show account
+(`Titanic Simulation`, `Audio Companion`, `CaptainPad Web`) from the exact
+deployed scene, launcher lighting profile, and effective port config ->
 `deploy_info.yaml` stamp (git
 head/branch/dirty count/source host) -> `schtasks /Run` (the stack must run
-in titanic's logged-on session, never inside the SSH session) -> verify from
+in titanic's logged-on session, never inside the SSH session; the deployed boot
+script's exact `--no-launch` invocation is verified first) -> verify from
 the laptop (engine `/status` `activeModel` == expected scene, sim `:6969`
 up, supervisor **not crash-looping**). The supervisor check is a **stability
 check, not an absolute zero**: `restart_count` is monotonic per supervisor
@@ -390,10 +407,13 @@ up on the right scene is healthy.
 A deploy **overwrites/deletes server-side edits to synced paths by design**
 (laptop is the single source of truth) - the `/L` preview names every such
 path before bytes move. Durable server-side work must round-trip via
-`fetch` + laptop curation instead. That includes the prod tree's `.git`: it
-is **disposable — mirrored from the laptop on every deploy**, so never commit
-durable work in the prod tree; server-side commits belong in the **scratch**
-tree (`fetch` collects them).
+`fetch` + laptop curation instead. Production `.git` is deliberately excluded
+from both sides of Robocopy: it is unnecessary to the boot chain and Windows
+Git objects can retain per-file ACLs that make even a list-only preview fail.
+An old `.git` directory may remain on a previously cloned production tree, but
+it is stale, ignored, and not a supported workspace. Make every durable
+server-side commit in the **scratch** tree; `fetch` collects scratch only.
+Do not repair this with Robocopy `/ZB` or broad ACL grants.
 
 ### Deploy to scratch - safe code hand-off
 
@@ -411,11 +431,11 @@ tree aborts with the file list unless `--force`. Ends with sha256 spot-checks.
 ### Fetch - collect on-server work (never merges)
 
 ```powershell
-python deploy\deploy.py fetch --machine titanic-int                 # both trees' branches
-python deploy\deploy.py fetch --machine titanic-int --source prod --state
+python deploy\deploy.py fetch --machine titanic-int                 # scratch branches
+python deploy\deploy.py fetch --machine titanic-int --state         # scratch + prod runtime state
 ```
 
-Each tree's branches arrive as `refs/remotes/titanic-int-<prod|scratch>/*`
+Scratch branches arrive as `refs/remotes/titanic-int-scratch/*`
 via a git bundle (created server-side at `C:\titanic\fetch_*.bundle`,
 copied with scp - git-over-SSH direct is broken by cmd.exe quoting on
 Windows OpenSSH, so bundles are the *primary* path, not a fallback).
@@ -424,6 +444,10 @@ cherry-picked on the laptop, runtime state dropped). `--state` snapshots
 `marsin_engine\states\**` + `boot_status.yaml` into
 `~\tmp\bm26_state_snapshots\<machine>\<timestamp>\` for inspection - state
 is read, never committed.
+
+Old commands using `--source prod` or `--source both` fail loudly with the
+migration instruction. This is intentional: production Git metadata is no
+longer deployed and cannot truthfully be fetched.
 
 ## Running a single step
 

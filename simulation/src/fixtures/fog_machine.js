@@ -60,7 +60,9 @@ export class FogMachine {
     this.scene.add(this.hitbox);
     
     this.fixtureDef = { fixtureType: config.type || config.fixtureType || 'TEFogMachine' };
-    this._fogSourceId = `fog_ui_${index}`; // Unique per-fixture DMX source
+    // Retained only so an older cached bundle's `removeSource(this._fogSourceId)`
+    // is harmless; nothing submits under this id any more (report 20260805_171).
+    this._fogSourceId = `fog_ui_${index}`;
     
     this.syncFromConfig();
 
@@ -101,34 +103,18 @@ export class FogMachine {
   }
   
   update() {
-    // When UI fog override is active, push max DMX values into the router
-    // so the real fixture fires (both fan + haze for Chauvet 4D)
-    if (this._uiFogOverride && window.dmxRouter) {
-      const u = this.config.dmxUniverse;
-      const addr = this.config.dmxAddress;
-      if (u && u > 0 && addr && addr > 0) {
-        const fType = this.config.type || this.config.fixtureType;
-        if (fType === 'ChauvetHaze4D') {
-          // Ch1: Fan=255, Ch2: Haze=255
-          window.dmxRouter.submitFrame(this._fogSourceId, 250, u, new Uint8Array([255, 255]), addr);
-        } else {
-          // TEFogMachine: Ch1: Fog=255
-          window.dmxRouter.submitFrame(this._fogSourceId, 250, u, new Uint8Array([255]), addr);
-        }
-      }
-    } else if (this._uiFogOverridePrev && !this._uiFogOverride) {
-      // Just released — flush zero frame into router to clear stale 255 values
+    // `_uiFogOverride` is now a PREVIEW flag only (report 20260805_171).
+    //
+    // It used to push 255s into `window.dmxRouter` so that the browser's own
+    // sACN output would fire the real machine. The browser is not the router
+    // any more: the "Hold to Fog" button POSTs the ENGINE (`/fog`), and the fog
+    // channels are written by `GlobalEffectsController.applyDmx()` on the normal
+    // engine → bridge → controller route. What stays here is the 3D preview, so
+    // the button still feels instant while the wire is driven by the one writer
+    // that owns it.
+    if (this._uiFogOverridePrev && !this._uiFogOverride) {
       this.fogLevel = 0;
       this.lastDmxUpdate = null;
-      if (window.dmxRouter) {
-        const u = this.config.dmxUniverse;
-        const addr = this.config.dmxAddress;
-        if (u && u > 0 && addr && addr > 0) {
-          const fType = this.config.type || this.config.fixtureType;
-          const zeros = fType === 'ChauvetHaze4D' ? new Uint8Array([0, 0]) : new Uint8Array([0]);
-          window.dmxRouter.submitFrame(this._fogSourceId, 250, u, zeros, addr);
-        }
-      }
     }
     this._uiFogOverridePrev = this._uiFogOverride;
 

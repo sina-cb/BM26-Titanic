@@ -123,12 +123,19 @@ export function buildMaskRegistry({ pixels, pixelCount, groupBits = {}, viewMask
       registry._add(vm.name, 'pixelSet', members, bit);
     } else if (bit !== 0) {
       // Bit-only preset: membership is implicit — whichever pixels carry
-      // the bit in their resolved viewMask. Keeps back-compat with models
-      // / tests that declare named masks by bit alone (the in-VM cache
-      // entry), so the host-side members path matches the old bit test.
+      // the bit in the preset's OWN word. Word 0 and word 1 are independent
+      // bit spaces (Tier-C), so a word-1 bit read out of `vMask` would match
+      // whatever word-0 group/preset shares the value instead of the
+      // preset's real members. Unreachable from a sidecar load (the engine
+      // requires groups OR pixelIndices there), kept for back-compat with
+      // models / tests that declare named masks by bit alone.
+      const hiWord = vm.word === 1;
       for (let i = 0; i < count; i++) {
-        const vMask = pixels[i] ? (pixels[i].vMask ?? pixels[i].viewMask ?? 0) : 0;
-        if ((vMask & bit) !== 0) members[i] = 1;
+        const px = pixels[i];
+        const word = !px ? 0 : (hiWord
+          ? (px.vMaskHi ?? 0)
+          : (px.vMask ?? px.viewMask ?? 0));
+        if ((word & bit) !== 0) members[i] = 1;
       }
       registry._add(vm.name, 'composite', members, bit);
     }

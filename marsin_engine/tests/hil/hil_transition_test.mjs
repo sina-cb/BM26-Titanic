@@ -41,7 +41,7 @@ import WebSocket from 'ws';
 import { assertDisposableEngine } from './hil_guard.mjs';
 
 const ENGINE_BASE = 'http://127.0.0.1:6968';
-const WS_URL = 'ws://127.0.0.1:6968';
+const WS_URL = 'ws://127.0.0.1:6968/ws/viz';
 const SETTLE_MS = 200;   // ms to wait after a fader change before sampling
 
 let testErrors = 0;

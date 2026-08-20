@@ -77,6 +77,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   // event it parallels. Replayed on /ws/control connect.
   colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
+  // Canonical Deck / Mixer / Live Touch setting and its shared blend
+  // transaction. Low-volume operator state, replayed on control connect.
+  layerSettings:               TOPICS.CONTROL,
+  touchControlBrightness:      TOPICS.CONTROL,
+  dimmerState:                 TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
   // Engine-wide settings (auto-save toggle). Broadcast on every POST /settings
   // + replayed on /ws/control connect so every CaptainPad config screen
@@ -93,6 +98,18 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
+  // The touch panel's ARM ENVELOPE (POST /arm-fade). The panel fades the ship
+  // out, takes the rig over invisibly, and fades back in on the finished look.
+  // Every other surface needs to know the house level is under a ramp, or it
+  // reports a lit rig while the ship is black. Operator-driven, one message per
+  // fade leg -> /ws/control, beside the other whole-rig controls.
+  armFade:                     TOPICS.CONTROL,
+  // The engine reverted the rig to the automatic show by itself — because the
+  // panel holding it stopped answering, or because the previous run ended
+  // uncleanly. Every surface needs to know the desk changed hands without
+  // anyone touching it, or CaptainPad shows a state nobody chose.
+  armRevert:                   TOPICS.CONTROL,
+  liveTouchForceDisarm:        TOPICS.CONTROL,
   // effects_v2 (project effects_v2_midi_layout): the engine-owned page VIEW
   // (0..3) over the 32 GEM slots. Broadcast on every PATCH /global-effects/page
   // so CaptainPad's page switcher + the VSN1 side buttons mirror the SAME page
@@ -121,6 +138,13 @@ const TOPIC_BY_TYPE = Object.freeze({
   // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's
   // FIXED COLORS chips. Low volume, operator-driven.
   groupFixedColors:            TOPICS.CONTROL,
+  // Per-group EFFECT SCOPE: which groups the effect chain is allowed to touch
+  // (null = the whole rig). Operator-driven, one small payload per change, and
+  // it belongs next to groupFixedColors it sits beside on the same surface.
+  effectGroups:                TOPICS.CONTROL,
+  // PARKED (locked) groups: which groups hold their setting and are skipped by
+  // the grand master. Operator-driven, tiny payload, same home as the rest.
+  parkedGroups:                TOPICS.CONTROL,
   // docs/31: engine-owned scheduler. Broadcasts on every create / patch
   // / delete / fire / stop / error. Small payload, low frequency
   // (operator-driven CRUD + at most one tick at SCHEDULER_TICK_MS=250 ms
@@ -132,6 +156,17 @@ const TOPIC_BY_TYPE = Object.freeze({
   // change (mode/autopilot/program/cue fire). Low volume, operator-facing
   // — rides /ws/control next to scheduledTasks, replayed on connect.
   timelineState:               TOPICS.CONTROL,
+  // docs/52: the SPECIAL EVENTS runner (staged one-button shows; Baby Reveal is
+  // show #1). One small payload per transition plus a 1 Hz frame while a stage
+  // countdown is live — the same cadence and the same audience as timelineState,
+  // so it rides /ws/control beside it and is replayed on connect.
+  specialEvents:               TOPICS.CONTROL,
+  // PARTY OVERRIDE (report 20260725_19): the operator's engine-owned party
+  // policy — { enabled, playlist }. Broadcast on every PUT /party-config +
+  // replayed on /ws/control connect so CaptainPad and the Audio Companion's
+  // PARTY tab mirror the SAME armed/disabled state live. Operator-driven, low
+  // volume → /ws/control next to timelineState, the state it gates.
+  partyConfig:                 TOPICS.CONTROL,
   playlistLibrary:             TOPICS.CONTROL,
   playlistSaved:               TOPICS.CONTROL,
   playlistDeleted:             TOPICS.CONTROL,
@@ -143,6 +178,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // deck/mixer state it confirms. Never emitted while auto-save is OFF (nothing
   // hits disk, so there is nothing to confirm).
   deckParamsSaved:             TOPICS.CONTROL,
+  // Mixer LOCAL-PARAM persistence result. These are channel-scoped and only
+  // emitted after a strict mixer_state write was attempted. Performance mode,
+  // auto-save OFF, and non-owner edit sessions emit neither event because no
+  // persistence was attempted.
+  channelParamsSaved:          TOPICS.CONTROL,
+  channelParamsSaveFailed:     TOPICS.CONTROL,
   // F-A: named mixer snapshots / look recall. Broadcast on save / delete /
   // recall so every CaptainPad mirrors the snapshot library + a recalled
   // look. Operator-driven, low volume → /ws/control next to mixer/deck.
@@ -152,6 +193,13 @@ const TOPIC_BY_TYPE = Object.freeze({
   // recalled channel's params. Operator-driven, low volume → /ws/control next
   // to the snapshot library it semantically relates to.
   paramPresets:                TOPICS.CONTROL,
+  // docs/70 W4: the per-scene Live Touch preset PLAYLIST (one ordered
+  // store, `states/<scene>/live_touch_presets.yaml`). Broadcast on every
+  // create/rename/delete/reorder + replayed on /ws/control connect so a
+  // freshly connected pad renders the current playlist immediately.
+  // Operator-driven, low volume → /ws/control next to the snapshot/param-
+  // preset libraries it semantically relates to.
+  liveTouchPresets:             TOPICS.CONTROL,
   // round-2 #10: mixer UNDO ring depth/top. Broadcast on every push (a
   // destructive action snapshotted) + every undo so CaptainPad's global UNDO
   // button mirrors enable/label live. Operator-driven, low volume → /ws/control
@@ -169,6 +217,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   bumpRejected:                TOPICS.CONTROL,
   audioStatus:                 TOPICS.CONTROL,
   oscStats:                    TOPICS.CONTROL,
+  // BM26-Stoker fire → lights sync (lib/fire_sync_listener.js). Low volume by
+  // construction: emitted only when the effect state actually changes, which the
+  // listener's min-ON coalescing caps at a few per second even under a strobing
+  // poofer effect. Operator-facing health ("is fire sync alive?"), so
+  // /ws/control next to oscStats.
+  fireSyncStats:               TOPICS.CONTROL,
   stats:                       TOPICS.CONTROL,
   // docs/30: sparse drop-detected event from the audio structure
   // detector. ~once per 60 s of music, UI-relevant (scene-swap / macro

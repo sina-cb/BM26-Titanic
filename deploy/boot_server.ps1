@@ -80,10 +80,7 @@ if (-not (Test-Path -LiteralPath $LogDir)) {
 # with the new one created below, at most KeepLogs remain.
 # NOTE (accepted trade-off): rotation runs once here per supervisor lifetime and
 # there is exactly ONE log file per lifetime (this process holds it for the whole
-# run). The poll-and-open browser job (a child process) also appends to that same
-# file via Add-Content; interleaved writes from the two are accepted - the log is
-# a human-read diagnostic, not a parsed record, so occasional line interleaving is
-# fine and not worth per-write locking.
+# run). The log is a human-read diagnostic rather than a parsed record.
 $existing = @(Get-ChildItem -LiteralPath $LogDir -Filter 'boot_server_*.log' -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending)
 if ($existing.Count -ge $KeepLogs) {
@@ -222,15 +219,6 @@ try {
         $pattern = [string]$entry['pattern']
     }
 
-    # Optional per-machine desktop auto-open (docs/43). Absent -> false: servers
-    # stay headless by default. Only the titanic console session is targeted -
-    # the browser opens on whatever desktop this supervisor runs in.
-    $openBrowser = $false
-    if ($entry.Contains('open_browser')) {
-        $obVal = [string]$entry['open_browser']
-        if ($obVal -match '^(?i:true|1|yes|on)$') { $openBrowser = $true }
-    }
-
     # Resolve node + the launcher. node MUST be machine-visible for the
     # `titanic` account - a per-user install for another user is invisible here
     # (this is the interior1 failure). Make the diagnosis loud: name what was
@@ -277,25 +265,9 @@ Write-Log '------------------------------------------------------------------'
 Write-Log ("resolved: host '$hostName' -> scene '$scene', profile '$profile'")
 if ($pattern) { Write-Log ("boot pattern: $pattern") }
 Write-Log ("launcher: node " + ($launchArgs -join ' '))
+Write-Log 'browser policy: --no-launch (desktop shortcuts are operator-triggered only)'
 Write-Log ("node exe: $nodeExe")
 Write-Log '------------------------------------------------------------------'
-
-# --- Desktop auto-open URLs (only used when open_browser is true) ----------
-# Standard port stack (docs/43: every server runs the ONE 6966-6972 stack) -
-# sim HTTP is 6969, audio companion is 6966. The sim OPEN url is the exact
-# string launcher.js builds for the 'prod' profile (edit profile, 0 spotlights,
-# sacn_in), with this machine's scene substituted; the sim PROBE url is the
-# query-less path launcher.js itself waits on for readiness.
-$simProbeUrl = 'http://localhost:6969/simulation/'
-$simOpenUrl = "http://localhost:6969/simulation/?scene=$scene&lighting_mode=sacn_in&profile=edit&spotlights=0"
-$audioUrl = 'http://localhost:6966'
-if ($openBrowser) {
-    Write-Log 'open_browser: TRUE - will auto-open sim + audio on the console after the first launch.'
-    Write-Log ("  sim:   $simOpenUrl")
-    Write-Log ("  audio: $audioUrl")
-} else {
-    Write-Log 'open_browser: false - staying headless (no browser opened).'
-}
 
 Set-Location -LiteralPath $RepoRoot
 
@@ -305,45 +277,6 @@ Set-Location -LiteralPath $RepoRoot
 $ErrorActionPreference = 'Continue'
 $restartCount = 0
 $lastExit = $null
-$browserOpened = $false   # open the desktop UIs ONCE per supervisor lifetime, not on every relaunch
-
-# Poll-and-open runs as a background job because the launcher call below BLOCKS
-# this thread for the whole run - the job polls the sim + audio pages
-# concurrently and Start-Processes each URL (default browser, titanic console)
-# once it answers. It logs into the same dated log via Add-Content, and if a
-# page never comes up it just WARNs and exits: it can never block or break the
-# supervision loop. This scriptblock lives in a child process (no access to the
-# parent's functions), so everything it needs is passed in.
-$browserJob = {
-    param([string]$SimProbeUrl, [string]$SimOpenUrl, [string]$AudioUrl, [string]$LogFile, [int]$TimeoutSec)
-    function JobLog { param([string]$Text)
-        Add-Content -LiteralPath $LogFile -Value ('[' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '] [browser] ' + $Text) -Encoding ascii
-    }
-    $targets = @(
-        @{ Name = 'sim';   Probe = $SimProbeUrl; Open = $SimOpenUrl },
-        @{ Name = 'audio'; Probe = $AudioUrl;    Open = $AudioUrl }
-    )
-    JobLog ("poll-and-open started (timeout ${TimeoutSec}s per page).")
-    foreach ($t in $targets) {
-        $deadline = (Get-Date).AddSeconds($TimeoutSec)
-        $opened = $false
-        while ((Get-Date) -lt $deadline) {
-            try {
-                $null = Invoke-WebRequest -UseBasicParsing -Uri $t.Probe -TimeoutSec 5
-                Start-Process $t.Open
-                JobLog ('opened ' + $t.Name + ' -> ' + $t.Open)
-                $opened = $true
-                break
-            } catch {
-                Start-Sleep -Seconds 3
-            }
-        }
-        if (-not $opened) {
-            JobLog ('WARN: ' + $t.Name + ' (' + $t.Probe + ') did not come up within ' + $TimeoutSec + 's - not opened; carrying on.')
-        }
-    }
-    JobLog 'poll-and-open finished.'
-}
 
 while ($true) {
     $startIso = Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'
@@ -351,19 +284,6 @@ while ($true) {
     Write-Log '------------------------------------------------------------------'
     Write-Log ("STARTING launcher (run #" + [string]($restartCount + 1) + "): node " + ($launchArgs -join ' '))
     Write-Log '------------------------------------------------------------------'
-
-    # First launch only: kick off the desktop auto-open (guarded so relaunches
-    # never re-open tabs). Failure to start the job is logged, never fatal.
-    if ($openBrowser -and -not $browserOpened) {
-        try {
-            Start-Job -Name 'BM26BrowserOpen' -ScriptBlock $browserJob `
-                -ArgumentList $simProbeUrl, $simOpenUrl, $audioUrl, $logFile, 180 | Out-Null
-            Write-Log 'open_browser: started poll-and-open background job (sim :6969 + audio :6966).'
-        } catch {
-            Write-Log ('open_browser: WARN - could not start poll-and-open job: ' + $_.Exception.Message + ' - continuing headless.')
-        }
-        $browserOpened = $true
-    }
 
     & $nodeExe @launchArgs 2>&1 | ForEach-Object { Write-Log ([string]$_) }
     $lastExit = $LASTEXITCODE

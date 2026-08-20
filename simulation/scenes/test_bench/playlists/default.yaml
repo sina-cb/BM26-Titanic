@@ -5,50 +5,31 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.33
-      sliderNoiseScale: 0.15
-    modulations:
-      - id: mod_sliderLocalSpeed_micMid
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micMid
-        target:
-          scope: pattern
-          parameter: sliderLocalSpeed
-        mode: offset
-        polarity: bipolar
-        range:
-          - -0.6
-          - 0.6
-        curve: easeOut
-      - id: mod_sliderKick_micDomEnergy1
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomEnergy1
-        target:
-          scope: pattern
-          parameter: sliderKick
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: linear
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
     midiMappings: []
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderLocalSpeed: 0.68
-      sliderBeamWidth: 0.18
+      sliderLocalSpeed: 0.76
+      sliderDirection: 0.67
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderTrail: 0.5
+      sliderEyeWidth: 0.5
       sliderBackgroundGlow: 0.54
-      sliderDirection: 0.53
-      sliderAudioBrightness: 0
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.3
+      sliderBlinderBite: 0.5
     modulations:
       - id: mod_sliderDirection_micLow
         type: continuous
@@ -86,10 +67,13 @@ entries:
     pattern: 02_phase_cathedral
     label: null
     defaults:
-      sliderLocalSpeed: 0.84
-      sliderCount: 0.76
-      sliderSharpness: 0.26
-      sliderDirection: 0.6
+      sliderLocalSpeed: 0.17
+      sliderDirection: 0.16
+      sliderLevel: 0.73
+      sliderKick: 0.08
+      sliderRadius: 0.92
+      sliderSharpness: 0.83
+      sliderCount: 0.59
     modulations: []
     midiMappings: []
     notes: null
@@ -155,10 +139,11 @@ entries:
     pattern: 07_shimmer
     label: null
     defaults:
-      sliderLocalSpeed: 0.96
-      sliderShimmerSpeedTrim: 0.74
-      sliderDensity: 0.5
-      sliderBreathing: 0.78
+      sliderLocalSpeed: 0.26
+      sliderLevel: 0.68
+      sliderDetail: 0.9
+      sliderKick: 0.86
+      sliderJewelryWhite: 0.82
     modulations: []
     midiMappings: []
     notes: null
@@ -166,10 +151,11 @@ entries:
     pattern: 08_ocean_liner
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderContrast: 0.5
-      sliderWindowCount: 0.5
-      sliderWindowFocus: 0.5
+      sliderLocalSpeed: 0.46
+      sliderLevel: 0.87
+      sliderKick: 0.12
+      sliderDetail: 0.89
+      sliderPortholeWhite: 0.87
     modulations: []
     midiMappings: []
     notes: null
@@ -197,10 +183,15 @@ entries:
     pattern: 11_bioluminescence
     label: null
     defaults:
-      sliderLocalSpeed: 0.77
-      sliderDensity: 0.24
-      sliderUvGlow: 0.32
-      sliderPartyMode: 0.28
+      sliderLocalSpeed: 0.27
+      sliderLevel: 0.71
+      sliderKick: 0.17
+      sliderRadius: 0.23
+      sliderDetail: 0.64
+      sliderDensity: 0.39
+      sliderUvGlow: 0.89
+      sliderWhiteLevel: 0.89
+      sliderWhiteSpeed: 0.48
     modulations: []
     midiMappings: []
     notes: null
@@ -208,9 +199,16 @@ entries:
     pattern: 12_breathing
     label: null
     defaults:
-      sliderLocalSpeed: 0.35
-      sliderRipple: 0
-      sliderSharpness: 0.5
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.87
+      sliderKick: 0.13
+      sliderBreathDepth: 0.69
+      sliderBreathShape: 0.23
+      sliderBloom: 0.94
+      sliderRibbing: 0.19
+      sliderSparkle: 0.37
+      sliderWhiteGlow: 0.69
+      sliderFieldDetail: 0.91
     modulations: []
     midiMappings: []
     notes: null
@@ -218,9 +216,16 @@ entries:
     pattern: 13_sparkle
     label: null
     defaults:
-      sliderLocalSpeed: 0.31
-      sliderSparkleSpeedTrim: 0.5
-      sliderSparkleDensity: 0.5
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
+      sliderBrilliance: 0.59
+      sliderTwinkleFocus: 0.88
+      sliderAfterglow: 0.13
+      sliderStarChorus: 0.63
+      sliderBurst: 0.15
+      sliderJewelryWhite: 0.81
+      sliderUvStars: 0.78
     modulations: []
     midiMappings: []
     notes: null
@@ -228,10 +233,14 @@ entries:
     pattern: 14_lunar_current
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderDensity: 0.5
-      sliderWhiteLift: 0.5
-      sliderUvLift: 1
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
     modulations: []
     midiMappings: []
     notes: null
@@ -249,10 +258,13 @@ entries:
     pattern: 16_ghost_tide_uv
     label: null
     defaults:
-      sliderLocalSpeed: 0.27
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
       sliderTideWidth: 0.5
-      sliderWhiteLevel: 0.85
-      sliderUvLevel: 1
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
     modulations: []
     midiMappings: []
     notes: null
@@ -270,7 +282,11 @@ entries:
     pattern: 18_deep_space_lattice
     label: null
     defaults:
-      sliderLocalSpeed: 0.66
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0.18
+      sliderRadius: 0.5
+      sliderDetail: 0.5
       sliderLatticeScale: 0.5
       sliderLineSoftness: 0.5
     modulations: []
@@ -280,12 +296,17 @@ entries:
     pattern: 19_swaying_lattice_ballet
     label: null
     defaults:
-      sliderLocalSpeed: 0.51
-      sliderFlockReach: 0.56
-      sliderFlockFocus: 0.41
-      sliderFilamentDensity: 0.68
-      sliderContrast: 0.32
-      sliderAfterglow: 0.22
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderCounterPhase: 0.5
+      sliderFloorLevel: 0.45
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0
+      sliderWhiteSpread: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -293,10 +314,13 @@ entries:
     pattern: 20_parametric_sway_field
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderReach: 0.5
-      sliderFocus: 0.5
-      sliderTrailBlend: 0.55
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.39
+      sliderKick: 0.29
+      sliderRadius: 0.85
+      sliderDetail: 0.24
+      sliderFocus: 0.67
+      sliderTrailBlend: 0.11
     modulations: []
     midiMappings: []
     notes: null
@@ -304,11 +328,13 @@ entries:
     pattern: 21_pelagic_manta_rays
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderRaySpan: 0.5
-      sliderDepthFocus: 0.5
-      sliderWhiteFoam: 0.55
-      sliderUvUndertow: 1
+      sliderLocalSpeed: 0.91
+      sliderLevel: 0.79
+      sliderKick: 0.17
+      sliderRadius: 0.3
+      sliderDetail: 0.71
+      sliderWhiteFoam: 0.11
+      sliderUvUndertow: 0.71
     modulations: []
     midiMappings: []
     notes: null
@@ -316,12 +342,14 @@ entries:
     pattern: 22_abyssal_sway_garden
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderFlockReach: 0.5
-      sliderFlockFocus: 0.5
-      sliderFilamentDensity: 0.5
-      sliderContrast: 0.5
-      sliderAfterglow: 0.18
+      sliderLocalSpeed: 0.24
+      sliderLevel: 0.22
+      sliderKick: 0
+      sliderRadius: 1
+      sliderDetail: 0.86
+      sliderFrondDensity: 0.68
+      sliderTipGlow: 0.34
+      sliderBaseDarkness: 0.68
     modulations: []
     midiMappings: []
     notes: null
@@ -574,69 +602,26 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.3
-      sliderShimmer: 0
-      sliderRipple: 0.35
-      sliderDepth: 0.3
-      sliderBase: 0
-    modulations:
-      - id: mod_sliderRipple_micLow
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderRipple
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: linear
-      - id: mod_sliderDepth_micLow
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderDepth
-        mode: offset
-        polarity: unipolar
-        range:
-          - -0.2
-          - 0.4
-        curve: linear
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations: []
     midiMappings: []
     notes: null
   - id: e_1781818512417_4971
     pattern: 33_aurora_breath
     label: null
     defaults:
-      sliderLocalSpeed: 0.8
-      sliderSwell: 0.21
-      sliderShimmer: 0.81
-      sliderRibbons: 0.21
-      sliderSoft: 0.27
-      sliderBase: 0.11
-    modulations:
-      - id: mod_sliderBase_micKick
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderBase
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.1
-        curve: easeIn
+      sliderLocalSpeed: 0.66
+      sliderLevel: 0.17
+      sliderShimmer: 0.76
+      sliderBreathRate: 0.21
+      sliderBreathDepth: 0.41
+      sliderRibbons: 0.14
+      sliderSoft: 0.58
+      sliderBase: 0.06
+    modulations: []
     midiMappings: []
     notes: null
   - id: e_1781818516232_636
@@ -670,42 +655,14 @@ entries:
     pattern: 35_sparkle_rain
     label: null
     defaults:
-      sliderLocalSpeed: 0.35
-      sliderDensity: 0.62
-      sliderFall: 0.19
-      sliderIntensity: 0.27
-      sliderBase: 0
-    modulations:
-      - id: mod_sliderFall_micDomFreq1
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomFreq1
-        target:
-          scope: pattern
-          parameter: sliderFall
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0.2
-          - 0.5
-        curve: easeIn
-      - id: mod_sliderBase_micLow
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderBase
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: linear
+      sliderLocalSpeed: 0.65
+      sliderLevel: 0.76
+      sliderDensity: 0.5
+      sliderKick: 0.19
+      sliderFall: 0.81
+      sliderIntensity: 0.87
+      sliderBase: 0.13
+    modulations: []
     midiMappings: []
     notes: null
   - id: e_1781818523376_7175
@@ -778,7 +735,12 @@ entries:
   - id: e_default_41_reaction_diffusion
     pattern: 41_reaction_diffusion
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderLevel: 0.45
+      sliderFeed: 0.5
+      sliderSeed: 0.05
+      sliderBase: 0.15
     modulations: []
     midiMappings: []
     notes: null
@@ -792,28 +754,51 @@ entries:
   - id: e_default_43_golden_hour_pulse
     pattern: 43_golden_hour_pulse
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderSwell: 0.13
+      sliderBlinder: 1
+      sliderShimmer: 0.5
+      sliderNoiseScale: 0.75
     modulations: []
     midiMappings: []
     notes: null
   - id: e_default_44_biolume_swell
     pattern: 44_biolume_swell
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderSwell: 0.45
+      sliderSparkle: 0.75
+      sliderKick: 0.01
+      sliderUvGlow: 0.81
+      sliderBase: 0.16
     modulations: []
     midiMappings: []
     notes: null
   - id: e_default_45_manta_drift
     pattern: 45_manta_drift
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderSwell: 0.75
+      sliderFoam: 0.12
+      sliderSpan: 0.76
+      sliderDepth: 0.6
     modulations: []
     midiMappings: []
     notes: null
   - id: e_default_46_abyssal_fronds
     pattern: 46_abyssal_fronds
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.25
+      sliderLevel: 0.82
+      sliderGlints: 0.88
+      sliderBreathRate: 0.32
+      sliderBreathDepth: 0.92
+      sliderFrondDensity: 0.85
+      sliderBaseGlow: 0.86
     modulations: []
     midiMappings: []
     notes: null
@@ -876,14 +861,24 @@ entries:
   - id: e_default_57_ink_diffuse
     pattern: 57_ink_diffuse
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
     modulations: []
     midiMappings: []
     notes: null
   - id: e_default_58_lighthouse_solo
     pattern: 58_lighthouse_solo
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
     modulations: []
     midiMappings: []
     notes: null

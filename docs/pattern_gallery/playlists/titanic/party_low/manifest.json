@@ -1,0 +1,1910 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "party_low",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/party_low.yaml",
+  "playlistDigest": "24aee376f6436368d156ba2024a19496785e9e4c2619c247c4379ca8cc3dd694",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "05_orbital_attractor_field",
+      "title": "Orbital Attractor Field",
+      "goal": "A saved Orbital Attractor Field look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall brightness (PRIMARY)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "overall brightness (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "vintage W blinder pop (sec 2)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage W blinder pop (sec 2)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "how far attractors travel",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "how far attractors travel"
+          }
+        },
+        {
+          "name": "sliderFalloff",
+          "label": "Falloff",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Falloff character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderFocus",
+          "label": "Focus",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderColorVariation",
+          "label": "Color Variation",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "colour shimmer / warm-arc spread (secondary)",
+          "audio": {
+            "slider": "sliderColorVariation",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "colour shimmer / warm-arc spread (secondary)"
+          }
+        },
+        {
+          "name": "sliderBlackoutTexture",
+          "label": "Blackout Texture",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Blackout Texture character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "overall white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 1,
+        "sliderLevel": 0.5,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderFalloff": 0.5,
+        "sliderFocus": 0.5,
+        "sliderColorVariation": 0.5,
+        "sliderBlackoutTexture": 0,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.3,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "001_05_orbital_attractor_field.gif",
+      "video": "001_05_orbital_attractor_field.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "fbff4a3e1dab862226f1bc5e1fb4318d9a74205839e5652f4e0ff480af822633"
+    },
+    {
+      "index": 1,
+      "pattern": "06_neon_elevator",
+      "title": "Neon Elevator",
+      "goal": "A saved Neon Elevator look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Par-row arrival colour ding (kick pop)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "Par-row arrival colour ding (kick pop)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "car glow height / travel reach (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "car glow height / travel reach (build)"
+          }
+        },
+        {
+          "name": "sliderSteps",
+          "label": "Steps",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "Steps character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "always-on warm white keep (bass)",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "always-on warm white keep (bass)"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "vintage-head arrival BLINDER bite (kick pop)",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head arrival BLINDER bite (kick pop)"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderSteps": 0.2
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderSteps": 0.2,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0.5,
+        "sliderBlinderBite": 0.5
+      },
+      "gif": "002_06_neon_elevator.gif",
+      "video": "002_06_neon_elevator.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "c621eac861a3e5f461edeca924580d8c18adacf1ee78140cec5665e5a795e540"
+    },
+    {
+      "index": 2,
+      "pattern": "10_chasers",
+      "title": "Chasers",
+      "goal": "A saved Chasers look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "head flare pop (kick)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "head flare pop (kick)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "tail length / head size (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "tail length / head size (build)"
+          }
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "number of chasers flying (highs)",
+          "audio": {
+            "slider": "sliderCount",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "number of chasers flying (highs)"
+          }
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 0.5,
+        "sliderKick": 0.5,
+        "sliderRadius": 0.5,
+        "sliderCount": 0.5
+      },
+      "gif": "003_10_chasers.gif",
+      "video": "003_10_chasers.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "ac94ecb293e850b49255f987354fe04aef4ef5fcf16d171279830a669746008f"
+    },
+    {
+      "index": 3,
+      "pattern": "15_silk_prism_ribbons",
+      "title": "Silk Prism Ribbons",
+      "goal": "A saved Silk Prism Ribbons look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "ribbon-crest brightness pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "ribbon-crest brightness pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "ribbon width / spread (movement)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "ribbon width / spread (movement)"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "satin sheen / fine detail (highs)",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "satin sheen / fine detail (highs)"
+          }
+        },
+        {
+          "name": "sliderRibbonCount",
+          "label": "Ribbon Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderSoftness",
+          "label": "Softness",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Softness character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 1,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderShimmer": 0.5,
+        "sliderRibbonCount": 0.5,
+        "sliderSoftness": 0.4
+      },
+      "gif": "004_15_silk_prism_ribbons.gif",
+      "video": "004_15_silk_prism_ribbons.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "a1f83ebe38af332da6a8d5c0015dd8a6dfea34e00ee02d9da7c94bc04f2b77b9"
+    },
+    {
+      "index": 4,
+      "pattern": "17_rolling_color_dunes",
+      "title": "Rolling Color Dunes",
+      "goal": "A saved Rolling Color Dunes look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "PRIMARY overall brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY overall brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "surf crest + Vintage blinder pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "surf crest + Vintage blinder pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "dune fold depth / sand shift",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "dune fold depth / sand shift"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "dune contrast / surf sharpness (highs)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "dune contrast / surf sharpness (highs)"
+          }
+        },
+        {
+          "name": "sliderDuneScale",
+          "label": "Dune Scale",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Dune Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderStageSurf",
+          "label": "Stage Surf",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Stage Surf character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderAmberWarmth",
+          "label": "Amber Warmth",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Amber Warmth character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "overall white keep",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "overall white keep"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "vintage-head blinder pop",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "vintage-head blinder pop"
+          }
+        },
+        {
+          "name": "sliderBlinderBite",
+          "label": "Blinder Bite",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Blinder Bite character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.5,
+        "sliderLevel": 1,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderDuneScale": 0.5,
+        "sliderStageSurf": 0.5,
+        "sliderAmberWarmth": 0.55,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderBlinderBite": 0.6
+      },
+      "gif": "005_17_rolling_color_dunes.gif",
+      "video": "005_17_rolling_color_dunes.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e210a3fdcb035a9ee41833a8aa8eb851ae194a4387d5e39bc0a91f81f40631b5"
+    },
+    {
+      "index": 5,
+      "pattern": "23_prismatic_strange_attractors",
+      "title": "Prismatic Strange Attractors",
+      "goal": "A saved Prismatic Strange Attractors look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.4,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "core / brightness pop (beat)",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "core / brightness pop (beat)"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.39,
+          "valueSource": "code default",
+          "description": "orbit reach / travel (build)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "orbit reach / travel (build)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "filament density / sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "filament density / sparkle"
+          }
+        },
+        {
+          "name": "sliderChaos",
+          "label": "Chaos",
+          "value": 6,
+          "valueSource": "code default",
+          "description": "Chaos character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 4.5,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteCore",
+          "label": "White Core",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvGhost",
+          "label": "Uv Ghost",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        },
+        {
+          "name": "sliderColorSpread",
+          "label": "Color Spread",
+          "value": 0.95,
+          "valueSource": "code default",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.6,
+        "sliderLevel": 0.7,
+        "sliderKick": 0,
+        "sliderRadius": 0.39,
+        "sliderDetail": 0.5,
+        "sliderChaos": 6,
+        "sliderContrast": 4.5,
+        "sliderWhiteCore": 0.5,
+        "sliderUvGhost": 0.4,
+        "sliderColorSpread": 0.95
+      },
+      "gif": "006_23_prismatic_strange_attractors.gif",
+      "video": "006_23_prismatic_strange_attractors.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b5e1970e7cd2758ddd247af453982e3f992762f55881fcb9916c073ef595d00c"
+    },
+    {
+      "index": 6,
+      "pattern": "24_chromatic_murmuration",
+      "title": "Chromatic Murmuration",
+      "goal": "A saved Chromatic Murmuration look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness budget"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "additive core pop on the beat",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "additive core pop on the beat"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.34,
+          "valueSource": "code default",
+          "description": "flock reach / travel (build = wider sweep)",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.2,
+            "max": 1,
+            "curve": "linear",
+            "note": "flock reach / travel (build = wider sweep)"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "filament density (sparkle/detail)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 1,
+            "curve": "linear",
+            "note": "filament density (sparkle/detail)"
+          }
+        },
+        {
+          "name": "sliderFlockFocus",
+          "label": "Flock Focus",
+          "value": 3,
+          "valueSource": "code default",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 3,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderAfterglow",
+          "label": "Afterglow",
+          "value": 0.135,
+          "valueSource": "code default",
+          "description": "Afterglow character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0.06,
+        "sliderLevel": 0.5,
+        "sliderKick": 0,
+        "sliderRadius": 0.34,
+        "sliderDetail": 0.5,
+        "sliderFlockFocus": 3,
+        "sliderContrast": 3,
+        "sliderAfterglow": 0.135
+      },
+      "gif": "007_24_chromatic_murmuration.gif",
+      "video": "007_24_chromatic_murmuration.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "16ff2cfc223734ebe4aeb6d4f70724947e857f23c3147ab8da14b7b25967517c"
+    },
+    {
+      "index": 7,
+      "pattern": "26_dom_dancers_chevron",
+      "title": "Dom Dancers Chevron",
+      "goal": "A saved Dom Dancers Chevron look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderBaseGlow",
+          "label": "Base Glow",
+          "value": 0.15,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        },
+        {
+          "name": "sliderDancerSize",
+          "label": "Dancer Size",
+          "value": 0.34,
+          "valueSource": "code default",
+          "description": "Dancer Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDancerGlow",
+          "label": "Dancer Glow",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "PRIMARY whole-rig brightness (both halos)",
+          "audio": {
+            "slider": "sliderDancerGlow",
+            "signal": "micLow",
+            "min": 0.35,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY whole-rig brightness (both halos)"
+          }
+        },
+        {
+          "name": "sliderChevronSpeedup",
+          "label": "Chevron Speedup",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "spiral spin speed (build = faster filigree)",
+          "audio": {
+            "slider": "sliderChevronSpeedup",
+            "signal": "micFlux",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "spiral spin speed (build = faster filigree)"
+          }
+        },
+        {
+          "name": "sliderBall1X",
+          "label": "Ball1 X",
+          "value": 0.34,
+          "valueSource": "code default",
+          "description": "Ball1 X character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBall1Energy",
+          "label": "Ball1 Energy",
+          "value": 0.333333,
+          "valueSource": "playlist saved value",
+          "description": "geometry: dancer-1 size + core pop",
+          "audio": {
+            "slider": "sliderBall1Energy",
+            "signal": "micMid",
+            "min": 0.25,
+            "max": 1,
+            "curve": "linear",
+            "note": "geometry: dancer-1 size + core pop"
+          }
+        },
+        {
+          "name": "sliderBall2X",
+          "label": "Ball2 X",
+          "value": 0.66,
+          "valueSource": "code default",
+          "description": "Ball2 X character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBall2Energy",
+          "label": "Ball2 Energy",
+          "value": 0.333333,
+          "valueSource": "playlist saved value",
+          "description": "detail: dancer-2 size + core pop",
+          "audio": {
+            "slider": "sliderBall2Energy",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 1,
+            "curve": "linear",
+            "note": "detail: dancer-2 size + core pop"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderBall1Energy": 0.333333,
+        "sliderBall2Energy": 0.333333
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderBaseGlow": 0.15,
+        "sliderDancerSize": 0.34,
+        "sliderDancerGlow": 0.7,
+        "sliderChevronSpeedup": 0.4,
+        "sliderBall1X": 0.34,
+        "sliderBall1Energy": 0.333333,
+        "sliderBall2X": 0.66,
+        "sliderBall2Energy": 0.333333
+      },
+      "gif": "008_26_dom_dancers_chevron.gif",
+      "video": "008_26_dom_dancers_chevron.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d48023d982e438cb1254f9dc4c5cdadb4692dbd1a2ef5a0caf2923a7b6795892"
+    },
+    {
+      "index": 8,
+      "pattern": "27_swipe",
+      "title": "Swipe",
+      "goal": "A saved Swipe look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Direction character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSwipePos",
+          "label": "Swipe Pos",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Swipe Pos character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBlur",
+          "label": "Blur",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Blur character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderTrail",
+          "label": "Trail",
+          "value": 0.3,
+          "valueSource": "code default",
+          "description": "Trail character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderShift",
+          "label": "Shift",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Shift character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDirection": 0,
+        "sliderSwipePos": 0,
+        "sliderBlur": 0,
+        "sliderTrail": 0.3,
+        "sliderShift": 0
+      },
+      "gif": "009_27_swipe.gif",
+      "video": "009_27_swipe.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "102c9e1029c80ed0f2ef5353cbb078a8dcbd92a9f3300c21ea93f7811487aa27"
+    },
+    {
+      "index": 9,
+      "pattern": "34_moire_interference",
+      "title": "Moire Interference",
+      "goal": "A saved Moire Interference look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderRatio",
+          "label": "Ratio",
+          "value": 0.19,
+          "valueSource": "code default",
+          "description": "geometry: mids detune the moiré beat (brightness-neutral)",
+          "audio": {
+            "slider": "sliderRatio",
+            "signal": "micMid",
+            "min": 0.2,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "geometry: mids detune the moiré beat (brightness-neutral)"
+          }
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.65,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: bass pumps the wash budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass pumps the wash budget"
+          }
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 3.9,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderPulse",
+          "label": "Pulse",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick: brief sharpen + brighten flash",
+          "audio": {
+            "slider": "sliderPulse",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "kick: brief sharpen + brighten flash"
+          }
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderRatio": 0.19,
+        "sliderLevel": 0.65,
+        "sliderContrast": 3.9,
+        "sliderPulse": 0
+      },
+      "gif": "010_34_moire_interference.gif",
+      "video": "010_34_moire_interference.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "0e9b0fb6616bc055783a277e38312e21491146525b9899c36f05144f74e7077d"
+    },
+    {
+      "index": 10,
+      "pattern": "37_chevron_chase",
+      "title": "Chevron Chase",
+      "goal": "A saved Chevron Chase look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderStep",
+          "label": "Step",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick: rising edge SNAPS the chevron field one step forward",
+          "audio": {
+            "slider": "sliderStep",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick: rising edge SNAPS the chevron field one step forward"
+          }
+        },
+        {
+          "name": "sliderBright",
+          "label": "Bright",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: level -> chevron core + floor brightness",
+          "audio": {
+            "slider": "sliderBright",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: level -> chevron core + floor brightness"
+          }
+        },
+        {
+          "name": "sliderWidth",
+          "label": "Width",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderCount",
+          "label": "Count",
+          "value": 0.62,
+          "valueSource": "code default",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderStep": 0,
+        "sliderBright": 0.6,
+        "sliderWidth": 0.4,
+        "sliderCount": 0.62
+      },
+      "gif": "011_37_chevron_chase.gif",
+      "video": "011_37_chevron_chase.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "2f7737f3157c14cb92e823537a5210a4916ff0c2b334153793bc50f175939ad6"
+    },
+    {
+      "index": 11,
+      "pattern": "38_prism_helix",
+      "title": "Prism Helix",
+      "goal": "A saved Prism Helix look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: bass drives whole-strand master gain",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass drives whole-strand master gain"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.25,
+          "valueSource": "code default",
+          "description": "highs: fine fast prism sparkle / detail texture",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0.1,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "highs: fine fast prism sparkle / detail texture"
+          }
+        },
+        {
+          "name": "sliderTwist",
+          "label": "Twist",
+          "value": 4,
+          "valueSource": "code default",
+          "description": "Twist character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderContrast",
+          "label": "Contrast",
+          "value": 2.2,
+          "valueSource": "code default",
+          "description": "Contrast character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderArms",
+          "label": "Arms",
+          "value": 3,
+          "valueSource": "code default",
+          "description": "Arms character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLevel": 0.6,
+        "sliderShimmer": 0.25,
+        "sliderTwist": 4,
+        "sliderContrast": 2.2,
+        "sliderArms": 3
+      },
+      "gif": "012_38_prism_helix.gif",
+      "video": "012_38_prism_helix.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4aa21f38b1be8c5ab075a4e42fd95a1b0f4c569d429988011cd1bc840c7b15ee"
+    },
+    {
+      "index": 12,
+      "pattern": "39_tide_riser",
+      "title": "Tide Riser",
+      "goal": "A saved Tide Riser look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderRise",
+          "label": "Rise",
+          "value": 0.25,
+          "valueSource": "code default",
+          "description": "PRIMARY build/riser: flux climbs the tide height + body brightness",
+          "audio": {
+            "slider": "sliderRise",
+            "signal": "micFlux",
+            "min": 0.2,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "PRIMARY build/riser: flux climbs the tide height + body brightness"
+          }
+        },
+        {
+          "name": "sliderSpray",
+          "label": "Spray",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick: flings the warm crest spray up above the waterline",
+          "audio": {
+            "slider": "sliderSpray",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick: flings the warm crest spray up above the waterline"
+          }
+        },
+        {
+          "name": "sliderFoam",
+          "label": "Foam",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Fine highlight texture.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderRise": 0.25,
+        "sliderSpray": 0,
+        "sliderFoam": 0.5,
+        "sliderBase": 0.06
+      },
+      "gif": "013_39_tide_riser.gif",
+      "video": "013_39_tide_riser.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f5f54bef17c76724a6aca1bbcf4636b0d0bc254480d458d48e2c0cea7888e165"
+    },
+    {
+      "index": 13,
+      "pattern": "40_lissajous_weave",
+      "title": "Lissajous Weave",
+      "goal": "A saved Lissajous Weave look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness: bass drives curve amplitude + overall brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness: bass drives curve amplitude + overall brightness"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "highs: sparkle glints riding the filament (detail)",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.1,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "highs: sparkle glints riding the filament (detail)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "kick: discrete phase-jump of the weave on the beat",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "kick: discrete phase-jump of the weave on the beat"
+          }
+        },
+        {
+          "name": "sliderSpread",
+          "label": "Spread",
+          "value": 0.6,
+          "valueSource": "code default",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBase",
+          "label": "Base",
+          "value": 0.1,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLevel": 0.5,
+        "sliderDetail": 0.4,
+        "sliderKick": 0,
+        "sliderSpread": 0.6,
+        "sliderBase": 0.1
+      },
+      "gif": "014_40_lissajous_weave.gif",
+      "video": "014_40_lissajous_weave.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "7149ad83c0749e3e2f5716d2944d8dc7226ac4d3f75179c4bc1806b369a27fa7"
+    },
+    {
+      "index": 14,
+      "pattern": "42_phyllotaxis_spiral",
+      "title": "Phyllotaxis Spiral",
+      "goal": "A saved Phyllotaxis Spiral look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloom",
+          "label": "Bloom",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness + bloom radius",
+          "audio": {
+            "slider": "sliderBloom",
+            "signal": "micLow",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "PRIMARY brightness + bloom radius"
+          }
+        },
+        {
+          "name": "sliderTwinkle",
+          "label": "Twinkle",
+          "value": 0.35,
+          "valueSource": "code default",
+          "description": "2nd dim: per-seed sparkle/detail",
+          "audio": {
+            "slider": "sliderTwinkle",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.85,
+            "curve": "pow2",
+            "note": "2nd dim: per-seed sparkle/detail"
+          }
+        },
+        {
+          "name": "sliderCoreSize",
+          "label": "Core Size",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Core Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloorLvl",
+          "label": "Floor Lvl",
+          "value": 0.1,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderBloom": 0.5,
+        "sliderTwinkle": 0.35,
+        "sliderCoreSize": 0.45,
+        "sliderFloorLvl": 0.1
+      },
+      "gif": "015_42_phyllotaxis_spiral.gif",
+      "video": "015_42_phyllotaxis_spiral.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1a4947b2bc1f69ea28f448a70a0bc24002aec4a00dc46ad67be004ccd804b3db"
+    },
+    {
+      "index": 15,
+      "pattern": "47_quasicrystal_dunes",
+      "title": "Quasicrystal Dunes",
+      "goal": "A saved Quasicrystal Dunes look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderDuneHeight",
+          "label": "Dune Height",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness/dune height",
+          "audio": {
+            "slider": "sliderDuneHeight",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "PRIMARY brightness/dune height"
+          }
+        },
+        {
+          "name": "sliderSurf",
+          "label": "Surf",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "2nd dim: crest sharpness/surf shimmer",
+          "audio": {
+            "slider": "sliderSurf",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.85,
+            "curve": "pow2",
+            "note": "2nd dim: crest sharpness/surf shimmer"
+          }
+        },
+        {
+          "name": "sliderDuneScale",
+          "label": "Dune Scale",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Dune Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloor",
+          "label": "Floor",
+          "value": 0.1,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderDuneHeight": 0.5,
+        "sliderSurf": 0.5,
+        "sliderDuneScale": 0.5,
+        "sliderFloor": 0.1
+      },
+      "gif": "016_47_quasicrystal_dunes.gif",
+      "video": "016_47_quasicrystal_dunes.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "9e62d2db3a9917469466ec6ca852f2f28f0533a1f797366861713b6521b72d3e"
+    },
+    {
+      "index": 16,
+      "pattern": "52_silk_ribbons",
+      "title": "Silk Ribbons",
+      "goal": "A saved Silk Ribbons look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderAudioLevel",
+          "label": "Audio Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness — ribbon width + core brightness + overall track the low band",
+          "audio": {
+            "slider": "sliderAudioLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness — ribbon width + core brightness + overall track the low band"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "sparkle/detail — high-freq glint riding the bright ribbon crests",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "sparkle/detail — high-freq glint riding the bright ribbon crests"
+          }
+        },
+        {
+          "name": "sliderRibbons",
+          "label": "Ribbons",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Ribbons character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSoftness",
+          "label": "Softness",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Softness character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderAudioLevel": 0.5,
+        "sliderShimmer": 0.5,
+        "sliderRibbons": 0.5,
+        "sliderSoftness": 0.5
+      },
+      "gif": "017_52_silk_ribbons.gif",
+      "video": "017_52_silk_ribbons.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "120a382c91c18ada03c3e748ebbf774e0ebed33db55913911a383391daa125cc"
+    },
+    {
+      "index": 17,
+      "pattern": "53_neon_elevator_hd",
+      "title": "Neon Elevator Hd",
+      "goal": "A saved Neon Elevator Hd look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness + scroll speed",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness + scroll speed"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "discrete floor STEP + vintage W blinder",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "discrete floor STEP + vintage W blinder"
+          }
+        },
+        {
+          "name": "sliderSharp",
+          "label": "Sharp",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "GEOMETRY: mids thin/crisp the floor bands",
+          "audio": {
+            "slider": "sliderSharp",
+            "signal": "micMid",
+            "min": 0.3,
+            "max": 0.85,
+            "curve": "linear",
+            "note": "GEOMETRY: mids thin/crisp the floor bands"
+          }
+        },
+        {
+          "name": "sliderFloorCount",
+          "label": "Floor Count",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderLevel": 0.55,
+        "sliderKick": 0,
+        "sliderSharp": 0.5,
+        "sliderFloorCount": 0.5
+      },
+      "gif": "018_53_neon_elevator_hd.gif",
+      "video": "018_53_neon_elevator_hd.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8f1e53d1c6991830a72a69eaf509b45b9659ec1926a9b5cec54e2053ffd84ddb"
+    }
+  ]
+}

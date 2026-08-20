@@ -139,6 +139,27 @@ export const MIC_TIERS = {
     bleedBpm: 124,
     bleedKickHz: 55,
   },
+  adversarial: {
+    snrDb: 5,
+    roomNoise: 0.040,
+    selfNoise: 0.006,
+    humLevel: 0.008,
+    humHz: 60,
+    drive: 3.5,
+    hpHz: 25,
+    lpHz: 10000,
+    inputGain: 1.8,
+    hardClip: 0.65,
+    roomEchoMs: 85,
+    roomEchoGain: 0.28,
+    windLevel: 0.18,
+    windGustHz: 0.25,
+    windLpHz: 100,
+    bleedLevel: 0.08,
+    bleedBpm: 124,
+    bleedKickHz: 55,
+    speechLevel: 0.08,
+  },
 };
 
 /** RMS of a float array. */
@@ -227,6 +248,28 @@ function makeBleedBed(n, sampleRate, rnd, { bleedLevel, bleedBpm, bleedKickHz })
   return bed;
 }
 
+function makeSpeechBed(n, sampleRate, rnd, { speechLevel = 0 }) {
+  const bed = new Float64Array(n);
+  if (!(speechLevel > 0)) return bed;
+  let nextStart = Math.floor((0.5 + rnd()) * sampleRate);
+  while (nextStart < n) {
+    const duration = Math.floor((0.7 + 1.1 * rnd()) * sampleRate);
+    const f0 = 105 + 95 * rnd();
+    for (let i = 0; i < duration && nextStart + i < n; i++) {
+      const phase = i / sampleRate;
+      const syllable = 0.35 + 0.65 * Math.max(0, Math.sin(2 * Math.PI * (3.2 + rnd() * 0.01) * phase));
+      const edge = Math.sin(Math.PI * i / duration) ** 2;
+      bed[nextStart + i] += speechLevel * edge * syllable * (
+        0.65 * Math.sin(2 * Math.PI * f0 * phase) +
+        0.25 * Math.sin(2 * Math.PI * f0 * 2 * phase) +
+        0.10 * Math.sin(2 * Math.PI * f0 * 3 * phase)
+      );
+    }
+    nextStart += Math.floor((2.0 + 3.0 * rnd()) * sampleRate);
+  }
+  return bed;
+}
+
 /** One-pole high-pass (DC/low cut). corner in Hz; sampleRate in Hz. */
 function onePoleHighPass(buf, cornerHz, sampleRate) {
   if (cornerHz <= 0) return;
@@ -283,17 +326,36 @@ export function applyMicModel(samples, sampleRate, opts = {}) {
     throw new RangeError(`applyMicModel: unknown tier '${tierName}' (have: ${Object.keys(MIC_TIERS).join(', ')})`);
   }
   const spec = { ...base, ...(opts.overrides || {}) };
+  for (const key of ['roomNoise', 'selfNoise', 'humLevel', 'humHz', 'drive', 'hpHz', 'lpHz']) {
+    if (!Number.isFinite(spec[key]) || spec[key] < 0) {
+      throw new RangeError(`applyMicModel: ${key} must be finite and >= 0`);
+    }
+  }
   const seed = Number.isInteger(opts.seed) ? opts.seed : 0xC0FFEE;
   const rnd = mulberry32(seed);
 
   const n = samples.length;
   // → float
   const sig = new Float64Array(n);
-  for (let i = 0; i < n; i++) sig[i] = samples[i] / I16_MAX;
+  const inputGain = spec.inputGain ?? 1;
+  if (!Number.isFinite(inputGain) || inputGain <= 0) {
+    throw new RangeError('applyMicModel: inputGain must be finite and > 0');
+  }
+  for (let i = 0; i < n; i++) sig[i] = samples[i] / I16_MAX * inputGain;
 
   // 1) band-limit (speaker + air + distance + capsule).
   onePoleHighPass(sig, spec.hpHz, sampleRate);
   onePoleLowPass(sig, spec.lpHz, sampleRate);
+
+  const echoMs = spec.roomEchoMs ?? 0;
+  const echoGain = spec.roomEchoGain ?? 0;
+  if (!Number.isFinite(echoMs) || echoMs < 0 || !Number.isFinite(echoGain) || echoGain < 0 || echoGain >= 1) {
+    throw new RangeError('applyMicModel: room echo must have ms >= 0 and gain in [0,1)');
+  }
+  const echoSamples = Math.round(echoMs * sampleRate / 1000);
+  if (echoSamples > 0 && echoGain > 0) {
+    for (let i = echoSamples; i < n; i++) sig[i] += echoGain * sig[i - echoSamples];
+  }
 
   // 2) capsule soft saturation. tanh(drive·x)/tanh(drive) keeps unity
   //    peak while compressing loud passages; drive=1 ≈ linear.
@@ -335,6 +397,11 @@ export function applyMicModel(samples, sampleRate, opts = {}) {
   //     able to swamp the low band regardless of how loud our music is).
   const wind  = makeWindBed(n, sampleRate, rnd, spec);
   const bleed = makeBleedBed(n, sampleRate, rnd, spec);
+  const speech = makeSpeechBed(n, sampleRate, rnd, spec);
+  const hardClip = spec.hardClip ?? 1;
+  if (!Number.isFinite(hardClip) || hardClip <= 0 || hardClip > 1) {
+    throw new RangeError('applyMicModel: hardClip must be in (0,1]');
+  }
 
   // 4) mix + re-quantize (hard clamp at full scale — a real ADC clips).
   const out = new Int16Array(n);
@@ -343,7 +410,7 @@ export function applyMicModel(samples, sampleRate, opts = {}) {
   for (let i = 0; i < n; i++) {
     const s = sig[i] * sigGain;
     sumSigSq += s * s;
-    const mix = s + noise[i] + wind[i] + bleed[i];
+    const mix = Math.max(-hardClip, Math.min(hardClip, s + noise[i] + wind[i] + bleed[i] + speech[i]));
     sumMixSq += mix * mix;
     let q = Math.round(mix * I16_MAX);
     if (q > I16_MAX) q = I16_MAX; else if (q < -I16_MAX) q = -I16_MAX;

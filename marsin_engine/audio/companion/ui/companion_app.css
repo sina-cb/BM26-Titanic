@@ -32,28 +32,42 @@
  * against #1a1205 FAILS AA — there white (#ffffff) is the only AA-passing pair.
  * No fallback default: every theme (and :root) defines it so a missing token is a
  * visible breakage, not a silent wrong color (codex P0). */
+/* --warn: the "degraded but running" foreground (engine link offline, a filter
+ * temporarily disabled). It must read as a WARNING — never as muted body text —
+ * so an offline link cannot be mistaken for a normal readout. Per-theme because
+ * the same amber that pops on the dark themes fails AA on the light one.
+ * --note-letter-l: HSL lightness used when a live note LETTER is tinted by its
+ * hue. Full-sat/full-value (l=50%) is for the colour CHIPS only; the letter has
+ * to stay readable text, so each theme states the lightness that clears AA
+ * against its panel (dark themes lighten the hue, the light theme darkens it).
+ * Like --on-accent these are declared by EVERY theme (and :root) — a missing
+ * token must be a visible breakage, not a silent wrong colour (codex P0). */
 [data-theme="dark"]{
   --bg:#0f1216; --panel:#171b22; --panel2:#11141a; --raised:#1e242d;
   --border:#272d37; --text:#e8edf3; --muted:#8a95a4; --accent:#f0a23b;
   --ok:#34d3b5; --err:#ff5d6c; --on-accent:#1a1205;
+  --warn:#f5b642; --note-letter-l:72%;
 }
 /* LIGHT — CaptainPad "Luminance Command" daytime palette. */
 [data-theme="light"]{
   --bg:#f8f9fa; --panel:#f3f4f5; --panel2:#ffffff; --raised:#e7e8e9;
   --border:#bac9cc; --text:#191c1d; --muted:#466270; --accent:#006875;
   --ok:#1b9e77; --err:#ba1a1a; --on-accent:#ffffff;
+  --warn:#8a5a00; --note-letter-l:24%;
 }
 /* MIDNIGHT — deep blue-black, cool blue accent. */
 [data-theme="midnight"]{
   --bg:#06080c; --panel:#0d1320; --panel2:#04060a; --raised:#152030;
   --border:#27313f; --text:#d4dde8; --muted:#7a8a9e; --accent:#5cc0ff;
   --ok:#3ad4a6; --err:#ff7a82; --on-accent:#1a1205;
+  --warn:#ffb454; --note-letter-l:71%;
 }
 /* SUNSET — warm amber low-light. */
 [data-theme="sunset"]{
   --bg:#1a0f0a; --panel:#251812; --panel2:#100905; --raised:#2e2017;
   --border:#3e2e1a; --text:#f4e8d8; --muted:#b89478; --accent:#ffb84a;
   --ok:#9acb87; --err:#ff8a6a; --on-accent:#1a1205;
+  --warn:#ffc46b; --note-letter-l:72%;
 }
 /* GRUVBOX — retro warm, mustard-yellow accent. The DEFAULT theme: :root holds
    it so the very first paint (before the JS theme picker runs) is gruvbox, with
@@ -63,6 +77,7 @@
   --bg:#282828; --panel:#32302f; --panel2:#1d2021; --raised:#3c3836;
   --border:#504945; --text:#ebdbb2; --muted:#a89984; --accent:#fabd2f;
   --ok:#b8bb26; --err:#fb4934; --on-accent:#1a1205;
+  --warn:#fe8019; --note-letter-l:78%;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -163,6 +178,11 @@ body{background:var(--bg);color:var(--text);
 .title{font-weight:700;letter-spacing:2px}
 .sub{color:var(--muted);font-size:11px}
 .top-right{display:flex;align-items:center;gap:12px}
+@media (max-width:1320px){.brand>.sub{display:none}}
+@media (max-width:780px){
+  .topbar{align-items:flex-start;flex-wrap:wrap}
+  .top-right{width:100%;overflow-x:auto;padding-bottom:2px}
+}
 .flash{font-size:11px;min-width:60px;text-align:right}
 .status{padding:3px 10px;border-radius:6px;border:1px solid var(--border);color:var(--muted)}
 .status.ok{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb, var(--ok) 8%, transparent)}
@@ -339,11 +359,31 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .view-sig-card.on{opacity:1;box-shadow:0 0 0 1px var(--src-accent,#9aa) inset}
 
 /* ── top-bar nav (DESIGN / OSC OUT) + theme picker ──────────────────────────── */
-.nav-seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+/* flex:0 0 auto is LOAD-BEARING: .top-right is a flex row, so without it the
+   nav segment shrinks to nothing on a narrow viewport (a 4th tab pushed it
+   past the wrap point and every page tab became unreachable at ≤430px). Held
+   at its intrinsic width, the .top-right `overflow-x:auto` below 780px scrolls
+   the bar instead of collapsing it. */
+.nav-seg{display:flex;flex:0 0 auto;border:1px solid var(--border);border-radius:7px;overflow:hidden}
 .nav-btn{background:var(--panel2);color:var(--muted);border:none;border-right:1px solid var(--border);
-  padding:5px 13px;font:inherit;font-weight:700;letter-spacing:1px;font-size:10.5px;cursor:pointer}
+  padding:5px 13px;font:inherit;font-weight:700;letter-spacing:1px;font-size:10.5px;cursor:pointer;
+  white-space:nowrap}
 .nav-btn:last-child{border-right:none}
 .nav-btn.active{background:var(--accent);color:var(--bg)}
+/* Every keyboard-reachable control on the tune pages shows the SAME ring — the
+   wheel keys, the hue slider/number, the slew toggle and both <summary>
+   disclosures were reachable by Tab but invisible while focused. */
+.nav-btn:focus-visible,.primary:focus-visible,.derived-link:focus-visible,
+.derived-advanced summary:focus-visible,
+.derived-event-group summary:focus-visible,.derived-field input:focus-visible,
+.band-slider:focus-visible,.mic-range:focus-visible,.orc-slider:focus-visible,
+.orc-num:focus-visible,.note-color-key:focus-visible,
+#note-color-hue:focus-visible,#note-color-hue-num:focus-visible,
+#bpm-slew-on:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;
+  margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;
+  white-space:nowrap!important;border:0!important}
 .theme-pick{display:flex;align-items:center;gap:6px}
 .theme-lab{color:var(--muted);letter-spacing:1px;font-size:10px}
 .theme-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:6px;
@@ -428,7 +468,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .osc-list-hint b{color:var(--text)}
 /* Per-signal SEND filter temporarily off — flag it above the table. */
 .osc-list-hint.osc-filter-off::after{content:'  ⚠ SEND filter temporarily disabled — all signals send.';
-  color:var(--warn,#e0a030);font-weight:700}
+  color:var(--warn);font-weight:700}
 /* SEND toggle (per-signal "send over OSC" checkbox). */
 .osc-on-col{width:34px;text-align:center}
 .osc-table td.osc-on{text-align:center}
@@ -455,7 +495,10 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .mic-link{font-size:11px;color:var(--muted)}
 .mic-link-state{font-weight:700}
 .mic-link-state.ok{color:var(--ok)}
-.mic-link-state.warn{color:var(--muted)}
+/* "local only (engine offline)" is a DEGRADED state — it must not render in the
+   muted body colour (it was the least prominent text on the page). Warning
+   amber, so offline reads differently from mirrored at a glance. */
+.mic-link-state.warn{color:var(--warn)}
 
 /* AUTO hero cards */
 .mic-auto{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -475,6 +518,15 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .mac-result{display:flex;align-items:center;gap:14px;margin-top:6px;padding-top:10px;border-top:1px dashed var(--border);flex-wrap:wrap}
 .mac-rec{font-size:12px;color:var(--text)}
 .mac-rec b{color:var(--accent);font-family:ui-monospace,Menlo,Consolas,monospace}
+/* Apply feedback (operator request 2026-08-03): ONE transient line with the
+   server's read-back, plus a small always-present readout of the gates in
+   force. Deliberately quiet — no banner, no toast, no layout jump (the
+   transient line keeps its row height while empty). */
+.mac-applied{font-size:11.5px;font-weight:700;min-height:15px;line-height:15px;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+.mac-applied.ok{color:var(--ok)}
+.mac-applied.err{color:var(--err)}
+.mac-current{font-size:11px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
 
 /* Per-band meters */
 .mic-bands{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;display:flex;flex-direction:column;gap:12px}
@@ -532,6 +584,145 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .orc-preset:hover{border-color:var(--accent);color:var(--accent)}
 .orc-preset.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .orc-hint{color:var(--muted);font-size:10.5px;flex:1 1 100%}
+/* BPM SLEW on/off — same control strip, one extra toggle before the rate. */
+.orc-slew-on{display:flex;align-items:center;gap:5px;color:var(--muted);
+  font-size:11px;font-weight:700;cursor:pointer;user-select:none}
+/* accent-color, like every other checkbox in the app — the browser default blue
+   was the only non-themed control on the page. */
+.orc-slew-on input[type="checkbox"]{accent-color:var(--accent);cursor:pointer}
+
+/* ── DERIVED TUNE page ──────────────────────────────────────────────────────
+   Detector policy is visually separate from MIC TUNE calibration. All colours
+   come from theme tokens so the page works in every Companion theme. */
+.derived-page{flex:1;min-height:0;overflow:auto;padding:16px 20px 28px;display:flex;
+  flex-direction:column;gap:16px}
+.derived-page>*{flex-shrink:0}
+.derived-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.derived-page-title{font-weight:800;letter-spacing:1.4px;font-size:15px;color:var(--text);
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.derived-page-sub{font-weight:500;letter-spacing:.3px;font-size:11.5px;color:var(--muted)}
+.derived-explainer{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);
+  border-radius:9px;padding:10px 13px;color:var(--muted);font-size:11.5px;line-height:1.55}
+.derived-explainer strong{color:var(--text)}
+.derived-primary-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+.derived-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;
+  display:flex;flex-direction:column;gap:12px;scroll-margin-top:12px}
+.derived-card:focus{outline:2px solid var(--accent);outline-offset:2px}
+.derived-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.derived-card-head h2{display:inline;margin:0 0 0 8px;color:var(--text);font-size:13px;letter-spacing:.5px}
+.signal-kind{display:inline-block;border:1px solid var(--border);border-radius:5px;padding:2px 6px;
+  color:var(--muted);font-size:8.5px;font-weight:800;letter-spacing:1px;vertical-align:2px}
+.signal-kind.state{color:var(--accent);border-color:var(--accent)}
+.signal-kind.continuous{color:var(--ok);border-color:var(--ok)}
+.signal-kind.event{color:var(--err);border-color:var(--err)}
+.derived-copy{margin:0;color:var(--muted);font-size:11.5px;line-height:1.55;max-width:80ch}
+.derived-copy b,.derived-copy code{color:var(--text)}
+.derived-state-pill{padding:5px 10px;border-radius:7px;background:var(--raised);color:var(--muted);
+  font-weight:800;font-size:10px;letter-spacing:1px;white-space:nowrap}
+.derived-state-pill.on{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.derived-meter-block{display:flex;flex-direction:column;gap:5px}
+.derived-meter-label,.derived-meter-legend{display:flex;justify-content:space-between;gap:10px;color:var(--muted);
+  font-size:9.5px;letter-spacing:.3px}
+.derived-meter-label output,.derived-meter-legend b{color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace}
+.derived-meter{position:relative;height:18px;background:var(--panel2);border:1px solid var(--border);
+  border-radius:5px;overflow:hidden}
+.derived-meter>i{position:absolute;inset:0 auto 0 0;width:0;background:var(--accent);opacity:.55;
+  transition:width .05s linear}
+.derived-marker{position:absolute;top:-2px;bottom:-2px;width:2px;z-index:1}
+.derived-marker.off{background:var(--err);box-shadow:0 0 4px var(--err)}
+.derived-marker.on{background:var(--ok);box-shadow:0 0 4px var(--ok)}
+.derived-controls{display:grid;grid-template-columns:repeat(2,minmax(150px,1fr));gap:10px 14px}
+.derived-field{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:10.5px}
+.derived-field input[type="number"]{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--border);
+  border-radius:6px;color:var(--text);font:inherit;font-variant-numeric:tabular-nums;padding:6px 8px}
+.derived-field input:disabled{opacity:.45;cursor:not-allowed}
+.derived-input-unit{display:flex;align-items:center;gap:6px}
+.derived-input-unit em{color:var(--muted);font-size:10px;font-style:normal;min-width:26px}
+.derived-input-unit.boolean{min-height:29px;align-items:center}
+.derived-input-unit.boolean input{width:17px;height:17px;accent-color:var(--accent)}
+.derived-field-help{grid-column:1/-1;margin:0;color:var(--muted);font-size:9.5px;line-height:1.4}
+.derived-advanced,.derived-event-group{border-top:1px dashed var(--border);padding-top:9px}
+.derived-advanced summary,.derived-event-group summary{color:var(--accent);cursor:pointer;font-size:10.5px;
+  font-weight:700;letter-spacing:.4px}
+.derived-advanced[open] summary,.derived-event-group[open] summary{margin-bottom:10px}
+.derived-event-help{margin:0 0 10px;color:var(--muted);font-size:10.5px;line-height:1.45}
+.derived-event-groups{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:10px 18px}
+.derived-event-group{min-width:0}
+.derived-event-group .derived-controls{grid-template-columns:repeat(2,minmax(120px,1fr))}
+.note-colors-card{overflow:hidden}
+.note-color-locks{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.note-color-locks span{border:1px solid var(--ok);color:var(--ok);border-radius:5px;padding:3px 6px;
+  font-size:8.5px;font-weight:800;letter-spacing:.7px}
+.note-color-layout{display:grid;grid-template-columns:minmax(300px,390px) minmax(220px,1fr);gap:24px;
+  align-items:center}
+.note-color-wheel{--note-wheel-gradient:conic-gradient(#ff0,#0f0,#0ff,#00f,#f0f,#f00,#ff0);
+  position:relative;width:310px;height:310px;margin:4px auto;border-radius:50%;
+  background:var(--note-wheel-gradient);box-shadow:0 0 0 1px var(--border),0 0 28px rgba(0,0,0,.28)}
+.note-color-wheel::after{content:"";position:absolute;inset:66px;border-radius:50%;background:var(--panel);
+  border:2px solid var(--border);box-shadow:inset 0 0 24px rgba(0,0,0,.3)}
+/* The label colour + text-shadow below are only the pre-config baseline (the
+   keys are transparent until the server's hues arrive). Once a key carries its
+   swatch colour, companion_app.js sets BOTH per key from that swatch's
+   luminance — a fixed near-black label failed AA on the dark hues (B, E). */
+.note-color-key{position:absolute;left:50%;top:50%;z-index:2;width:61px;height:39px;padding:0;
+  border:2px solid rgba(255,255,255,.75);border-radius:8px;color:#080808;font:800 12px ui-monospace,Menlo,Consolas,monospace;
+  text-shadow:0 1px rgba(255,255,255,.45);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.38)}
+.note-color-key:hover{filter:brightness(1.12);z-index:4}
+.note-color-key.selected{outline:3px solid #fff;outline-offset:3px;box-shadow:0 0 18px #fff}
+/* AFTER .selected on purpose: the selected key already wears a white ring, so a
+   keyboard-focused key must still read as focused (accent ring). z-index lifts
+   it above the neighbours it overlaps so the ring is never clipped. */
+.note-color-key:focus-visible{outline:2px solid var(--accent);outline-offset:3px;z-index:5}
+.note-color-center{position:absolute;z-index:3;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:104px;text-align:center;color:var(--text);display:grid;justify-items:center;gap:5px}
+.note-color-center>span{font-size:26px;font-weight:900;line-height:1}
+.note-color-center>i,.note-color-selected i{display:block;width:34px;height:34px;border-radius:50%;
+  border:2px solid #fff;box-shadow:0 0 14px currentColor}
+.note-color-center small{font-size:8px;letter-spacing:.7px;color:var(--muted);text-transform:uppercase}
+.note-color-editor{display:flex;flex-direction:column;gap:12px;padding:18px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:10px}
+.note-color-selected{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:10px;letter-spacing:.7px}
+.note-color-selected b{font-size:18px;color:var(--text);margin-right:auto}
+.note-color-selected button{border:1px solid var(--err);border-radius:6px;background:transparent;color:var(--err);
+  padding:6px 10px;font:800 10px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.8px;cursor:pointer}
+.note-color-selected button:hover{background:var(--err);color:var(--panel)}
+.note-color-selected button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* ARMED = the first tap of the two-step reset. Solid red so "CONFIRM RESET" is
+   unmistakably a second, destructive press and not the resting button. */
+.note-color-selected button.armed{background:var(--err);color:var(--panel);border-color:var(--err)}
+.note-color-editor>label{color:var(--muted);font-size:10.5px;font-weight:700}
+.note-color-editor input[type="range"]{width:100%;height:16px;accent-color:var(--accent);
+  background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00);border-radius:8px}
+.note-color-number{display:flex;align-items:center;gap:7px}
+.note-color-number input{width:100px;background:var(--panel);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font:700 13px ui-monospace,Menlo,Consolas,monospace;padding:7px 9px}
+.note-color-number span{color:var(--muted)}
+.note-color-editor p{margin:0;color:var(--muted);font-size:10.5px;line-height:1.5}
+/* TEMPO OUTPUT readout: PUBLISHED (the slewed value every consumer sees) next
+   to RAW (the tracker's own estimate) so the operator can watch the slew walk
+   and tell "the detector is wrong" apart from "the slew hasn't caught up". */
+.tempo-readout{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
+  font-variant-numeric:tabular-nums}
+.tempo-readout-lab{color:var(--muted);letter-spacing:1px;font-size:9.5px}
+.tempo-readout b{color:var(--accent);font-size:18px;font-weight:800;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+.tempo-readout-sep{color:var(--border)}
+.tempo-readout-unit{color:var(--muted);font-size:10.5px}
+.derived-bpm-slew{margin:0;border-radius:8px}
+.derived-bpm-slew .orc-slider:disabled,
+.derived-bpm-slew .orc-num:disabled{opacity:.35;cursor:not-allowed}
+.derived-link{align-self:flex-start;background:transparent;border:0;color:var(--accent);font:inherit;
+  font-size:11px;font-weight:700;cursor:pointer;padding:0}
+.derived-link:hover{text-decoration:underline}
+@media (max-width:920px){
+  .derived-primary-grid,.derived-event-groups,.note-color-layout{grid-template-columns:1fr}
+}
+@media (max-width:620px){
+  .derived-page{padding:12px}
+  .derived-controls,.derived-event-group .derived-controls{grid-template-columns:1fr}
+  .derived-meter-legend{align-items:flex-start;flex-direction:column;gap:2px}
+  .note-color-wheel{transform:scale(.86);margin:-18px auto}
+}
 
 /* MIC TUNE workflow strip (report 20260621_7) — the on-playa tuning order. */
 .mic-flow{display:flex;flex-wrap:wrap;gap:10px}
@@ -561,3 +752,130 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .mp-del:disabled{opacity:.4;cursor:not-allowed}
 .mp-add{display:flex;gap:8px;flex-wrap:wrap}
 .mp-add .file-input{flex:1;min-width:200px;width:auto}
+
+/* ── PARTY page (report 20260725_19) ──────────────────────────────────────────
+   The tuning surface for the hard party gate. Same visual language as MIC TUNE:
+   panel cards, meter bars with threshold lines, accent = "passing". */
+.party-page{flex:1;min-height:0;overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.party-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.party-title{font-weight:800;letter-spacing:1.4px;font-size:15px;color:var(--text);display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.party-sub{font-weight:500;letter-spacing:.3px;font-size:11.5px;color:var(--muted)}
+.party-headpills{display:flex;align-items:center;gap:10px}
+.party-armpill,.party-gatepill{font-weight:800;letter-spacing:1.2px;font-size:11px;padding:5px 12px;
+  border-radius:7px;background:var(--raised);color:var(--muted);border:1px solid var(--border)}
+.party-armpill.on{color:var(--ok);border-color:var(--ok)}
+.party-armpill.off{color:var(--err);border-color:var(--err)}
+.party-gatepill.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+
+.party-fake-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  background:color-mix(in srgb, var(--err) 22%, transparent);border:2px solid var(--err);
+  border-radius:10px;padding:12px 16px}
+.pfb-txt{font-weight:700;font-size:12.5px;color:var(--text);line-height:1.5}
+
+.party-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+.party-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
+  display:flex;flex-direction:column;gap:11px}
+.pc-title{font-weight:700;letter-spacing:1px;font-size:11.5px;color:var(--text);display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.pc-sub{font-weight:500;letter-spacing:.2px;font-size:10.5px;color:var(--muted)}
+
+/* live meters */
+.pm-row{display:grid;grid-template-columns:82px 1fr 62px 210px;align-items:center;gap:10px}
+.pm-name{color:var(--muted);font-size:10.5px;letter-spacing:1px}
+.pm-meter{position:relative;height:16px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;overflow:hidden}
+.pm-meter.deb{height:10px}
+.pm-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--muted);transition:width .08s linear}
+.pm-fill.ok{background:var(--accent)}
+.pm-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--err);box-shadow:0 0 4px var(--err)}
+.pm-band{position:absolute;top:0;bottom:0;background:color-mix(in srgb, var(--ok) 22%, transparent);
+  border-left:1px solid var(--ok);border-right:1px solid var(--ok)}
+.pm-val{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text);text-align:right}
+.pm-thr{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--muted)}
+.pm-flags{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pm-flag{font-weight:700;font-size:10.5px;letter-spacing:.8px;padding:3px 9px;border-radius:6px;
+  background:var(--raised);color:var(--muted);border:1px solid var(--border)}
+.pm-flag.ok{color:var(--ok);border-color:var(--ok)}
+.pm-flag.off{color:var(--err);border-color:var(--err)}
+.pm-flag.muted{opacity:.45}
+.pm-conf{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--muted)}
+.pm-terms{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px dashed var(--border)}
+.pm-term{font-weight:800;font-size:10.5px;letter-spacing:1px;padding:4px 10px;border-radius:6px;
+  background:var(--raised);color:var(--muted);border:1px solid var(--border)}
+.pm-term.ok{color:var(--ok);border-color:var(--ok)}
+.pm-term.off{color:var(--muted)}
+.pm-term.qual.ok{background:var(--ok);color:var(--bg)}
+.pm-arrow{color:var(--muted)}
+.pm-debounce{display:flex;flex-direction:column;gap:5px}
+.pm-deb-head{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+.pm-truth{font-size:11.5px;color:var(--err);font-weight:600;padding-top:6px;border-top:1px dashed var(--border)}
+
+/* threshold editors */
+.pe-grid{display:flex;flex-direction:column;gap:7px}
+.pe-row{display:grid;grid-template-columns:170px 92px 62px 1fr;align-items:center;gap:9px}
+.pe-lab{font-size:11.5px;color:var(--text);display:flex;flex-direction:column}
+.pe-key{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:9.5px;color:var(--muted)}
+.pe-num{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
+  padding:4px 7px;font:inherit;font-size:11.5px;text-align:right;width:100%}
+.pe-check{width:16px;height:16px;accent-color:var(--accent)}
+.pe-unit{font-size:10px;color:var(--muted)}
+.pe-hint{font-size:10.5px;color:var(--muted);line-height:1.4}
+.pe-actions{display:flex;align-items:center;gap:11px;flex-wrap:wrap;padding-top:9px;border-top:1px dashed var(--border)}
+.pe-actions .pfake-btn{white-space:nowrap}
+.pe-dirty{font-size:10.5px;color:var(--muted)}
+.pe-dirty.on{color:var(--accent);font-weight:700}
+.pe-note{font-size:10.5px;color:var(--muted);line-height:1.5}
+.pe-validation{display:flex;align-items:flex-start;gap:9px;padding-top:9px;border-top:1px dashed var(--border);cursor:pointer}
+.pe-validation input{margin-top:2px;width:15px;height:15px;accent-color:var(--err)}
+.pev-txt{font-size:11px;color:var(--muted);line-height:1.5}
+.pev-txt b{color:var(--err)}
+
+/* calibration */
+.pcal-len{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.pcal-lab{font-size:10.5px;letter-spacing:1px;color:var(--muted)}
+.pcal-num{width:70px;background:var(--raised);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;padding:4px 7px;font:inherit;font-size:11.5px;text-align:right}
+.pcal-unit{font-size:10.5px;color:var(--muted)}
+.pcal-hint{font-size:10.5px;color:var(--muted)}
+.pcal-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pcal-card{background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:11px 13px;
+  display:flex;flex-direction:column;gap:8px}
+.pcal-title{font-weight:800;font-size:12px;color:var(--text)}
+.pcal-res{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--muted)}
+.pcal-res.on{color:var(--text)}
+.pcal-res b{color:var(--accent)}
+.pcal-prog{display:flex;align-items:center;gap:11px}
+.pcal-prog .pm-meter{flex:1}
+.pcal-prog #pcal-prog-lab{font-size:11px;color:var(--err);font-weight:700;min-width:230px}
+.pcal-sugg{display:flex;align-items:center;gap:11px;flex-wrap:wrap;padding-top:9px;border-top:1px dashed var(--border)}
+.pcal-sugg-lab{font-size:10px;letter-spacing:1.2px;color:var(--muted);font-weight:700}
+.pcal-sugg-vals{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--text)}
+.pcal-sugg-vals b{color:var(--accent)}
+.pcal-sugg-none{font-size:11px;color:var(--muted)}
+
+/* session context */
+.psx-arm{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.psx-lab{font-size:10.5px;letter-spacing:1.2px;color:var(--muted);font-weight:700}
+.psx-armnote{font-size:10.5px;color:var(--muted)}
+.primary.danger{background:var(--err);color:var(--bg)}
+.psx-rows{display:flex;flex-direction:column;gap:4px}
+.psx-row{display:grid;grid-template-columns:180px 1fr;gap:9px;font-size:11.5px}
+.psx-k{color:var(--muted)}
+.psx-v{color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px}
+.psx-pills{display:flex;gap:8px;flex-wrap:wrap}
+.psx-pill{font-size:10.5px;font-weight:700;padding:4px 10px;border-radius:6px;background:var(--raised);
+  color:var(--muted);border:1px solid var(--border)}
+.psx-pill.warn{color:var(--err);border-color:var(--err)}
+.psx-note{font-size:10.5px;color:var(--muted);line-height:1.5}
+.psx-err{font-size:11px;color:var(--err);font-weight:600}
+.psx-fake{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px dashed var(--border)}
+.psx-fakebtns{display:flex;gap:8px;flex-wrap:wrap}
+.pfake-btn{background:var(--raised);border:1px solid var(--border);color:var(--muted);border-radius:6px;
+  padding:6px 13px;font:inherit;font-weight:700;font-size:11px;cursor:pointer;letter-spacing:.6px}
+.pfake-btn.active{color:var(--text);border-color:var(--accent)}
+.pfake-btn.forced{background:var(--err);color:var(--bg);border-color:var(--err)}
+
+@media (max-width:1180px){
+  .party-grid{grid-template-columns:1fr}
+  .pcal-cards{grid-template-columns:1fr}
+  .pm-row{grid-template-columns:76px 1fr 58px 1fr}
+}

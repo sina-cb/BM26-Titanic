@@ -3,6 +3,12 @@ import path from 'path';
 
 import { PatternChannel } from './pattern_channel.js';
 import { buildMaskRegistry } from './mask_registry.js';
+import {
+  DEFAULT_LAYER_TRANSITION_DURATION_MS,
+  LAYER_SETTING_IDS,
+  LayerSurfaceRouter,
+} from './layer_surface_router.js';
+import { isDeckTransitionMode } from './transition_modes.js';
 
 // ── View-selection masking ─────────────────────────────────────────────
 // See docs/27_[todo]_mixer_layer_view_selection.md §4.
@@ -266,6 +272,10 @@ export class PatternMixer {
     // become mixer channels) so internal callers don't break.
     this.deckChannel = null;
     this.mixerChannels = [];
+    // Live Touch is a real, independent render setting. It never borrows the
+    // Deck handle, so staging or performing a Live look cannot destroy the
+    // exact Deck pattern/local-control state the operator will return to.
+    this.liveTouchChannel = null;
     // ── Deck dynamic view overrides (deck overlays) ──────────────────────
     // Layered, view-scoped overlay decks composited OVER the main deck into
     // `deckBuffer` (NOT through `mixerChannels`). Each overlay IS a
@@ -410,6 +420,27 @@ export class PatternMixer {
     this.viewFaderRampPerSec = 1.0;
     this._lastViewFaderTickMs = null;
 
+    // Canonical three-setting router. The legacy viewFader fields remain as a
+    // compatibility surface for older Deck/Mixer callers and focused tests;
+    // once activateLayerSetting() is used, this router is authoritative.
+    this.layerRouter = new LayerSurfaceRouter({
+      initialSetting: LAYER_SETTING_IDS.MIXER,
+      defaultDurationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+      onChange: change => {
+        if (!this.onLayerSettingsChange) return;
+        try {
+          this.onLayerSettingsChange(change);
+        } catch (error) {
+          console.error('[Mixer] onLayerSettingsChange threw:', error.message);
+        }
+      },
+    });
+    this._canonicalLayerRouting = false;
+    this.onLayerSettingsChange = null;
+    this.layerSettingOutputProcessors = new Map();
+    this.liveTouchPhaseSpeedProvider = null;
+    this.liveTouchOutputProcessor = null;
+
     // Buffer for compositing output
     this.outputBuffer = new Uint8Array(this.pixelCount * 6);
     // Buffer for individual channel output
@@ -526,9 +557,8 @@ export class PatternMixer {
     //
     //   blendErrors: { <blendName>: { message, sinceFrame, count } }
     //
-    // A blend that falls through to the host-side linear-interpolation
-    // path (because its WASM handle is missing/failed to compile) records
-    // its error here ONCE and is logged loudly ONCE per mode (not per
+    // A blend whose WASM handle is missing/failed to compile records its
+    // error here ONCE and is logged loudly ONCE per mode (not per
     // frame — a 40 Hz log would bury the console). `getRenderHealth()`
     // surfaces this for the /status endpoint so an operator (or a smoke
     // check) sees `renderHealth.ok === false` immediately instead of a
@@ -537,7 +567,61 @@ export class PatternMixer {
     this.renderHealth = {
       blendErrors: {},        // blendName -> { message, sinceFrame, count }
       loggedBlendErrors: {},  // blendName -> true once we've logged it
+      // ── R4 "NEVER FULLY BLACK" runtime enforcer (redteam _112 I1/I2) ────
+      // The vendored WASM VM absorbs a hostile pattern into a black or solid
+      // -red composite SILENTLY: a NaN in ANY arg to rgbwau()/hsv() blacks
+      // the whole pixel and is absorbing in persistent state (I1); a
+      // beforeRender that overruns the ~5000-instruction budget truncates
+      // mid-execution with NO return channel (the marsin_begin_frame ABI is
+      // bound void and the compiled WASM genuinely returns nothing — verified
+      // empirically, and there is no C source in-repo to re-vendor), so the
+      // mandatory palette resolve never runs and the ship renders black from a
+      // pattern that COMPILED CLEAN (I2). Neither had ANY runtime signal.
+      //
+      // Because the NaN is already cast to 0 inside the WASM before JS ever
+      // sees a byte, per-channel NaN sanitising is unreachable at this layer —
+      // the enforceable, mission-aligned invariant is on the CONSEQUENCE: the
+      // composite that feeds sACN must never be fully black while the mix is
+      // configured to emit light. This structure tracks that:
+      //
+      //   darkness: {
+      //     black,        // this frame fully black while light was expected
+      //     blackStreak,  // consecutive such frames
+      //     tripped,      // streak >= NEVER_BLACK_TRIP_FRAMES (LOUD)
+      //     floorActive,  // last-resort non-black floor applied this frame
+      //     solidRed,     // this frame is uniformly (255,0,0) — VM over-budget
+      //     pattern,      // active deck pattern name at the trip
+      //     sinceFrame,   // frame the current dark streak began
+      //     message,      // human-readable trip reason
+      //   }
+      //
+      // getRenderHealth().ok folds this in, so /status.renderHealth.ok already
+      // goes false the moment the ship goes dark-while-lit — no engine wiring
+      // required. Logged LOUDLY once per trip, never per frame.
+      darkness: {
+        black: false,
+        blackStreak: 0,
+        tripped: false,
+        floorActive: false,
+        solidRed: false,
+        pattern: null,
+        sinceFrame: null,
+        message: null,
+      },
+      loggedDarkness: false,   // true once we've logged the current never-black trip
+      loggedSolidRed: false,   // true once we've logged the current solid-red run
     };
+    // Tunables for the never-black enforcer. TRIP is deliberately a short
+    // streak (0.2 s @ 40 fps): a legitimate hard cut / crossfade passes THROUGH
+    // colour, never an all-zero frame, and an operator blackout (master 0 or
+    // all faders down) is gated out by _isExpectingLight(), so the ONLY way to
+    // accumulate an all-zero-while-lit streak is the bug. Short enough to
+    // protect the mission, long enough to ignore a 1-frame transient. The floor
+    // engages at the same point so the ship is never dark for more than the trip
+    // window. The floor value is a dim uniform RGB glow (clearly degraded, but
+    // VISIBLE-at-night per the P0 mission).
+    this.NEVER_BLACK_TRIP_FRAMES = 8;
+    this.NEVER_BLACK_FLOOR_VALUE = 10;
     this._frameCounter = 0;
 
     // Group-transition machinery — when a triggerMixerTransition arrives
@@ -556,7 +640,7 @@ export class PatternMixer {
     this.onTransitionProgress = null; // Callback: (groupId) => void — every frame an active transition is in flight
     this.onTransitionComplete = null; // Callback: (groupId) => void — fired once when the LAST channel in the group lands
 
-    // ── Deck pattern-swap state (ping-pong handle warm-keeper) ──────────
+    // ── Deck pattern-swap state (deterministic double buffer) ───────────
     // The deck renders one pattern at a time, but to get a SMOOTH switch
     // from pattern A to pattern B we need both running simultaneously
     // for the duration of the transition. The operator's mental model
@@ -572,34 +656,41 @@ export class PatternMixer {
     // Implementation: `deckChannel` is the PERSISTENT ACTIVE deck channel
     // (the IDENTITY container — id, localControls, playlist, viewSelection
     // all live here forever). `_inactiveDeckChannel` is a hidden sibling
-    // PatternChannel whose sole job is to keep a SECOND WASM handle warm —
+    // PatternChannel whose sole job is to hold a SECOND WASM handle —
     // it lives OUTSIDE this.channels / mixerChannels so it doesn't show
-    // up in /mixer or count toward maxChannels. Each frame, the inactive
-    // sibling is ticked (beginFrame) so its pattern stays time-synced
-    // with the active. During a swap it composites ON TOP of deckBuffer
+    // up in /mixer or count toward maxChannels. A parked precompile is NOT
+    // ticked: every incoming pattern starts from phase zero regardless of
+    // how long it waited. During a swap it composites ON TOP of deckBuffer
     // via its `fader` (driven by `_swapTransition`) and its `mode`
-    // (a trans_* blend script, or steady blend_screen for a crossfade).
+    // (the selected trans_* blend script, including trans_crossfade).
     //
-    // On swap completion we SWAP HANDLES (not pointers) — `deckChannel`
+    // On swap completion we SWAP HANDLES AND PHASE CLOCKS (not pointers) — `deckChannel`
     // keeps its id and all its operator-visible state intact; only its
     // `.handle` and `.pattern` get rebound to the newly-active pattern.
-    // The OLD active handle moves into the inactive slot for warmth, so
-    // a ping-pong back to the previous pattern is a zero-compile reuse.
-    // The previous design (`_swapChannel`) allocated a fresh PatternChannel
-    // + compiled a fresh WASM handle + destroyed both on EVERY swap,
-    // making A→B→A→B fade latency dominated by recompile time.
+    // The OLD active handle moves into the inactive slot only as an owned
+    // standby; it is marked non-fresh and cannot be reused as an incoming
+    // zero-phase pattern. Sequential autopilot retains the compile-latency
+    // optimization by explicitly parking a newly-compiled fresh handle.
     //
     // Handle reuse contract: callers (api_server.loadPlaylistEntryWith
     // Transition) MUST check `getInactiveDeckPattern()` BEFORE
     // compiling — if the inactive slot already holds the requested
-    // pattern name (typical for ping-pong), they pass `newHandle: null`
-    // to triggerDeckPatternSwap and the existing warm handle is reused.
+    // pattern name AND `isInactiveDeckHandleFresh()` is true, they pass
+    // `newHandle: null` and the deterministic parked handle is reused.
     // If the inactive slot is empty or holds a different pattern, the
     // caller compiles a fresh handle, the old inactive handle (if any)
     // gets destroyed, and the new handle takes over the inactive slot.
     this._inactiveDeckChannel = null;
     this._swapTransition = null;
     this.onDeckSwapComplete = null; // Callback: ({ pattern, transitionId }) => void
+    this.onDeckSwapCancelled = null; // Callback: ({ transitionId }) => void
+
+    // Live Touch base swaps use their own retained sibling. This is deliberately
+    // separate from the Deck sibling: Live owns a private ParamCenter and its
+    // complete effects/spatial stage runs after this base-only blend.
+    this._inactiveLiveTouchChannel = null;
+    this._liveTouchSwapTransition = null;
+    this.onLiveTouchPatternSwapChange = null;
   }
 
   // ── patternsDir: setting it triggers a one-time blend precompile ─────
@@ -621,18 +712,190 @@ export class PatternMixer {
   }
 
   // Snapshot of render-health for /status. `ok` is false whenever any
-  // blend is degraded (running on the host-side linear-interp fallback
-  // instead of its real WASM blend script). Returns a plain serializable
+  // blend is unavailable (the render path throws instead of substituting
+  // another compositor). Returns a plain serializable
   // object — safe to JSON.stringify into the status payload.
   getRenderHealth() {
     const blendErrors = Object.entries(this.renderHealth.blendErrors).map(
       ([name, info]) => ({ blend: name, ...info }),
     );
+    const d = this.renderHealth.darkness;
+    // `ok` is false whenever ANY blend is degraded OR the never-black enforcer
+    // has tripped OR the frame is solid-red (VM over-budget). All three are
+    // "the rig is showing something wrong right now" and must fail a smoke
+    // check identically — /status.renderHealth.ok is the single green light.
+    const ok = blendErrors.length === 0 && !d.tripped && !d.solidRed;
     return {
-      ok: blendErrors.length === 0,
+      ok,
       frame: this._frameCounter,
       blendErrors,
+      darkness: {
+        black: d.black,
+        blackStreak: d.blackStreak,
+        tripped: d.tripped,
+        floorActive: d.floorActive,
+        solidRed: d.solidRed,
+        pattern: d.pattern,
+        sinceFrame: d.sinceFrame,
+        message: d.message,
+      },
     };
+  }
+
+  // Dedicated never-black snapshot (redteam _112 I1/I2 handoff for W1-1). Same
+  // `darkness` object getRenderHealth() folds into `ok`, exposed standalone so a
+  // caller that wants ONLY the never-black verdict (e.g. a top-level
+  // /timeline/state field, or the launcher watchdog) doesn't have to reach
+  // through blendErrors. `lit` is the inverse convenience flag.
+  getNeverBlackHealth() {
+    const d = this.renderHealth.darkness;
+    return {
+      lit: !d.tripped,
+      black: d.black,
+      blackStreak: d.blackStreak,
+      tripped: d.tripped,
+      floorActive: d.floorActive,
+      solidRed: d.solidRed,
+      pattern: d.pattern,
+      sinceFrame: d.sinceFrame,
+      message: d.message,
+    };
+  }
+
+  // Is the mix CONFIGURED to emit light this frame? True when the grand master
+  // is up AND at least one contributor (deck or a mixer overlay) is enabled with
+  // an effective fader above zero, accounting for the deck↔mixer view crossfade.
+  // Used to gate the never-black enforcer so a LEGITIMATE operator blackout
+  // (master 0 / all faders down / everything muted) is never flagged as a fault
+  // — only "should be lit but is fully black" trips.
+  _isExpectingLight(soloActive) {
+    if (!(this.master > 0)) return false;
+    if (this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.DECK) &&
+        this.deckChannel && this.deckChannel.enabled) {
+      const fMax = (typeof this.deckChannel.faderMax === 'number' && Number.isFinite(this.deckChannel.faderMax))
+        ? this.deckChannel.faderMax : 1.0;
+      const f = Math.min(this.deckChannel.fader, fMax);
+      if (f > 0) return true;
+    }
+    if (this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.MIXER)) {
+      const solo = soloActive === undefined ? this.soloedChannelIds.size > 0 : soloActive;
+      for (let i = 0; i < this.mixerChannels.length; i++) {
+        if (this._effFader(this.mixerChannels[i], solo) > 0) return true;
+      }
+    }
+    if (this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.LIVE_TOUCH) &&
+        this.liveTouchChannel && this.liveTouchChannel.enabled) {
+      const fMax = (typeof this.liveTouchChannel.faderMax === 'number' &&
+        Number.isFinite(this.liveTouchChannel.faderMax))
+        ? this.liveTouchChannel.faderMax
+        : 1.0;
+      return Math.min(this.liveTouchChannel.fader, fMax) > 0;
+    }
+    return false;
+  }
+
+  // True when every byte of a 6ch RGBWAU buffer is 0 (the whole rig dark).
+  _isBufferBlack(buf) {
+    for (let i = 0; i < buf.length; i++) if (buf[i] !== 0) return false;
+    return true;
+  }
+
+  // True when every pixel is exactly (255,0,0,0,0,0) — the vendored VM's
+  // signature for a render3D that overran the per-pixel instruction budget
+  // (redteam _112 F9). Cheap: bail on the first pixel that doesn't match.
+  _isBufferSolidRed(buf) {
+    const n = this.pixelCount;
+    if (n === 0) return false;
+    for (let p = 0; p < n; p++) {
+      const k = p * 6;
+      if (buf[k] !== 255 || buf[k + 1] !== 0 || buf[k + 2] !== 0
+          || buf[k + 3] !== 0 || buf[k + 4] !== 0 || buf[k + 5] !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // The enforcer proper — runs once per composited frame from renderAll6ch().
+  // Records darkness state, logs LOUDLY once per trip, and applies a dim
+  // last-resort floor so a persistently-black-while-lit frame is never shipped
+  // fully dark. NO fallback silence: the floor only ever engages AFTER the loud
+  // trip flag is set, so a floored frame is always accompanied by a health
+  // error naming the offending deck pattern.
+  _enforceNeverBlack() {
+    const d = this.renderHealth.darkness;
+    const expectLight = this._isExpectingLight();
+    const solidRed = this._isBufferSolidRed(this.outputBuffer);
+    const black = expectLight && !solidRed && this._isBufferBlack(this.outputBuffer);
+
+    d.solidRed = solidRed;
+    d.black = black;
+    d.floorActive = false;
+
+    if (black) {
+      if (d.blackStreak === 0) d.sinceFrame = this._frameCounter;
+      d.blackStreak += 1;
+    } else {
+      // A non-black (or not-expected-light) frame clears the streak and any
+      // active trip — the ship recovered, so /status goes green again.
+      if (d.tripped) {
+        console.error(
+          `[Mixer] RENDER-HEALTH RECOVERED: composite no longer fully black ` +
+          `(was dark for ${d.blackStreak} frames since frame ${d.sinceFrame}).`,
+        );
+      }
+      d.blackStreak = 0;
+      d.tripped = false;
+      d.sinceFrame = null;
+      d.pattern = null;
+      d.message = null;
+      this.renderHealth.loggedDarkness = false;
+    }
+
+    if (d.blackStreak >= this.NEVER_BLACK_TRIP_FRAMES) {
+      d.tripped = true;
+      d.pattern = this.deckChannel ? this.deckChannel.pattern : null;
+      d.message =
+        `Composite fully BLACK for ${d.blackStreak} consecutive frames while ` +
+        `the mix is lit (deck pattern '${d.pattern || '(none)'}'). A NaN in a ` +
+        `colour builtin or a beforeRender budget overrun is the usual cause. ` +
+        `Applying a dim last-resort floor (${this.NEVER_BLACK_FLOOR_VALUE}/255).`;
+      if (!this.renderHealth.loggedDarkness) {
+        this.renderHealth.loggedDarkness = true;
+        console.error(
+          `[Mixer] RENDER-HEALTH NEVER-BLACK TRIPPED: ${d.message} ` +
+          `Visible on /status as renderHealth.ok=false. This log fires ONCE ` +
+          `per trip, not per frame.`,
+        );
+      }
+      // Last-resort non-black floor — the P0 mission is visibility at night, so
+      // a persistently-black exterior gets a dim uniform glow rather than being
+      // shipped dark. RGB only (W/A/UV left at 0); loud flag already set.
+      const fv = this.NEVER_BLACK_FLOOR_VALUE;
+      const out = this.outputBuffer;
+      for (let p = 0; p < this.pixelCount; p++) {
+        const k = p * 6;
+        out[k] = fv; out[k + 1] = fv; out[k + 2] = fv;
+      }
+      d.floorActive = true;
+    }
+
+    // Solid-red is tracked with its OWN once-per-run log flag (independent of
+    // the never-black trip): the rig is SHOWING solid red, the VM's silent
+    // over-budget signature. ok=false already reflects it.
+    if (solidRed) {
+      if (!this.renderHealth.loggedSolidRed) {
+        this.renderHealth.loggedSolidRed = true;
+        console.error(
+          `[Mixer] RENDER-HEALTH SOLID-RED: every pixel is (255,0,0) — the deck ` +
+          `pattern '${this.deckChannel ? this.deckChannel.pattern : '(none)'}' is ` +
+          `over the per-pixel instruction budget. Visible on /status as ` +
+          `renderHealth.ok=false. This log fires ONCE per run, not per frame.`,
+        );
+      }
+    } else {
+      this.renderHealth.loggedSolidRed = false;
+    }
   }
 
   // Scan the blend + transition pattern directories once and compile every
@@ -693,7 +956,7 @@ export class PatternMixer {
       this.renderHealth.loggedBlendErrors[blendName] = true;
       console.error(
         `[Mixer] RENDER-HEALTH DEGRADED: ${message}. ` +
-        `Compositing this mode via host-side linear interpolation ` +
+        `Rendering this mode is blocked; no fallback was substituted ` +
         `(visible on /status as renderHealth.ok=false). This log fires ` +
         `ONCE per mode, not per frame.`,
       );
@@ -758,6 +1021,248 @@ export class PatternMixer {
   /** Returns the LIVE mixer overlay array. Do not mutate; use add/remove APIs. */
   getMixerChannels() {
     return this.mixerChannels;
+  }
+
+  /** Return the staged/performing Live Touch channel, or null. */
+  getLiveTouchChannel() {
+    return this.liveTouchChannel;
+  }
+
+  /**
+   * Install an independent Live Touch channel. Replacing it is explicit: the
+   * caller owns the old WASM handle and must destroy/unregister it first.
+   */
+  setLiveTouchChannel(channelConfig) {
+    const channel = new PatternChannel(channelConfig);
+    this.liveTouchChannel = channel;
+    this.recompileChannelMask(channel);
+    return channel;
+  }
+
+  removeLiveTouchChannel() {
+    this.cancelLiveTouchPatternSwap();
+    const channel = this.liveTouchChannel;
+    this.liveTouchChannel = null;
+    return channel;
+  }
+
+  /**
+   * Register the setting-local creative/intensity stage for Live Touch.
+   * It runs on liveTouchBuffer before the shared surface crossfade. Shared
+   * rack/blackout authority remains downstream in engine.js.
+   */
+  setLiveTouchOutputProcessor(processor) {
+    if (processor !== null && typeof processor !== 'function') {
+      throw new TypeError('Live Touch output processor must be a function or null');
+    }
+    this.liveTouchOutputProcessor = processor;
+  }
+
+  /**
+   * Register a setting-local full-look processor. Each processor runs after
+   * that setting's pattern stack is composed and before the canonical pair
+   * blend. A transition can therefore blend two complete, isolated looks.
+   */
+  setLayerSettingOutputProcessor(setting, processor) {
+    if (!Object.values(LAYER_SETTING_IDS).includes(setting)) {
+      throw new RangeError(`Unknown layer setting '${setting}'`);
+    }
+    if (processor !== null && typeof processor !== 'function') {
+      throw new TypeError('Layer setting output processor must be a function or null');
+    }
+    if (processor === null) this.layerSettingOutputProcessors.delete(setting);
+    else this.layerSettingOutputProcessors.set(setting, processor);
+  }
+
+  _processLayerSettingOutput(setting, buffer) {
+    const processor = this.layerSettingOutputProcessors.get(setting);
+    if (processor) processor(buffer, setting);
+  }
+
+  setLiveTouchPhaseSpeedProvider(provider) {
+    if (provider !== null && typeof provider !== 'function') {
+      throw new TypeError('Live Touch phase speed provider must be a function or null');
+    }
+    this.liveTouchPhaseSpeedProvider = provider;
+  }
+
+  activateLayerSetting(target, options = {}) {
+    // Capture the physical legacy Deck/Mixer side before canonical routing
+    // takes ownership. This matters on a restored Deck boot: the router's
+    // constructor default is Mixer, but the persisted legacy fader can already
+    // be at Deck when the first canonical activation arrives.
+    if (!this._canonicalLayerRouting) this._syncLayerRouterFromLegacyView();
+    this._canonicalLayerRouting = true;
+    const result = this.layerRouter.activate(target, options);
+    this._syncLegacyViewFaderFromLayerRouter();
+    return result;
+  }
+
+  forceLayerSetting(target, reason = 'forced') {
+    this._canonicalLayerRouting = true;
+    const state = this.layerRouter.forceActive(target, reason);
+    this._syncLegacyViewFaderFromLayerRouter();
+    return state;
+  }
+
+  getLayerSettingsState() {
+    if (!this._canonicalLayerRouting) this._syncLayerRouterFromLegacyView();
+    return this.layerRouter.getState();
+  }
+
+  getLayerRenderParticipants() {
+    if (!this._canonicalLayerRouting) return this._legacyLayerParticipants();
+    return this.layerRouter.participants();
+  }
+
+  /**
+   * Validate that Mixer has a configured contributor before routing the live
+   * output to it. This deliberately inspects configuration, not rendered
+   * luminance: a pattern authored to be black is still a valid operator look.
+   * Group, solo, follow, mask and fader gates are included because each can
+   * make an apparently enabled channel contribute no pixels.
+   */
+  getMixerReadiness() {
+    const soloActive = this.soloedChannelIds.size > 0;
+    const groups = new Map(this.mixGroups.map(group => [group.id, group]));
+    const channels = new Map(this.mixerChannels.map(channel => [channel.id, channel]));
+    const resolving = new Set();
+    const memo = new Map();
+
+    const maskHasPixels = channel => {
+      const mask = channel.compiledPixelMask;
+      if (!mask) return true;
+      for (let i = 0; i < mask.length; i++) {
+        if (mask[i] === 1) return true;
+      }
+      return false;
+    };
+
+    const configuredLevel = channel => {
+      if (memo.has(channel.id)) return memo.get(channel.id);
+      if (resolving.has(channel.id)) return 0;
+      resolving.add(channel.id);
+
+      let level = 0;
+      if (channel.enabled && channel.handle && maskHasPixels(channel)) {
+        const faderMax = typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax)
+          ? channel.faderMax
+          : 1;
+        if (this._bumpedChannelIds.has(channel.id)) {
+          level = Math.max(0, Math.min(1, faderMax));
+        } else {
+          let input = channel.fader;
+          if (channel.followLeaderId) {
+            const leader = channels.get(channel.followLeaderId)
+              || (this.deckChannel && this.deckChannel.id === channel.followLeaderId
+                ? this.deckChannel
+                : null);
+            const followScale = typeof channel.followScale === 'number'
+              && Number.isFinite(channel.followScale)
+              ? channel.followScale
+              : 1;
+            if (leader === this.deckChannel) {
+              const leaderMax = typeof leader.faderMax === 'number'
+                && Number.isFinite(leader.faderMax)
+                ? leader.faderMax
+                : 1;
+              input = leader.enabled ? Math.max(0, Math.min(leader.fader, leaderMax)) : 0;
+            } else {
+              input = leader ? configuredLevel(leader) : 0;
+            }
+            input *= followScale;
+          }
+          level = Math.max(0, Math.min(input, faderMax));
+          if (channel.mixGroupId) {
+            const group = groups.get(channel.mixGroupId);
+            if (group) level *= group.muted ? 0 : Math.max(0, group.fader);
+          }
+          if (soloActive && !channel.soloSafe && !channel.faderLocked
+              && !this.soloedChannelIds.has(channel.id)) {
+            level = 0;
+          }
+        }
+      }
+
+      resolving.delete(channel.id);
+      memo.set(channel.id, level);
+      return level;
+    };
+
+    const contributors = this.mixerChannels
+      .filter(channel => configuredLevel(channel) > 0.001)
+      .map(channel => channel.id);
+    if (contributors.length > 0) {
+      return { ready: true, contributors, channelCount: this.mixerChannels.length };
+    }
+    return {
+      ready: false,
+      contributors: [],
+      channelCount: this.mixerChannels.length,
+      reason: this.mixerChannels.length === 0
+        ? 'Mixer has no channels'
+        : 'Mixer has no compiled, enabled channel with a non-zero effective fader '
+          + 'and selected pixels',
+    };
+  }
+
+  isLayerSettingRenderParticipant(setting) {
+    if (this._canonicalLayerRouting) return this.layerRouter.isParticipant(setting);
+    if (setting === LAYER_SETTING_IDS.LIVE_TOUCH) return false;
+    if (setting === LAYER_SETTING_IDS.DECK) {
+      return this.viewFader < 0.999 || this.targetViewFader < 0.999;
+    }
+    if (setting === LAYER_SETTING_IDS.MIXER) {
+      return this.viewFader > 0.001 || this.targetViewFader > 0.001;
+    }
+    throw new RangeError(`Unknown layer setting '${setting}'`);
+  }
+
+  _legacyLayerParticipants() {
+    const deckWeight = 1 - this.viewFader;
+    const mixerWeight = this.viewFader;
+    if (deckWeight > 0.001 && mixerWeight > 0.001) {
+      return [LAYER_SETTING_IDS.DECK, LAYER_SETTING_IDS.MIXER];
+    }
+    if (this.viewFader <= 0.001 && this.targetViewFader <= 0.001) {
+      return [LAYER_SETTING_IDS.DECK];
+    }
+    if (this.viewFader >= 0.999 && this.targetViewFader >= 0.999) {
+      return [LAYER_SETTING_IDS.MIXER];
+    }
+    return [LAYER_SETTING_IDS.DECK, LAYER_SETTING_IDS.MIXER];
+  }
+
+  _syncLayerRouterFromLegacyView() {
+    if (this.viewFader <= 0.001 && this.targetViewFader <= 0.001) {
+      if (this.layerRouter.active !== LAYER_SETTING_IDS.DECK || this.layerRouter.transition) {
+        this.layerRouter.forceActive(LAYER_SETTING_IDS.DECK, 'legacy_view_fader');
+      }
+    } else if (this.viewFader >= 0.999 && this.targetViewFader >= 0.999) {
+      if (this.layerRouter.active !== LAYER_SETTING_IDS.MIXER || this.layerRouter.transition) {
+        this.layerRouter.forceActive(LAYER_SETTING_IDS.MIXER, 'legacy_view_fader');
+      }
+    }
+  }
+
+  _syncLegacyViewFaderFromLayerRouter() {
+    const blend = this.layerRouter.blend();
+    const amount = blend.amount;
+    if (blend.from === LAYER_SETTING_IDS.DECK && blend.to === LAYER_SETTING_IDS.MIXER) {
+      this.viewFader = amount;
+      this.targetViewFader = 1;
+    } else if (blend.from === LAYER_SETTING_IDS.MIXER && blend.to === LAYER_SETTING_IDS.DECK) {
+      this.viewFader = 1 - amount;
+      this.targetViewFader = 0;
+    } else if (blend.from === blend.to) {
+      if (blend.to === LAYER_SETTING_IDS.DECK) {
+        this.viewFader = 0;
+        this.targetViewFader = 0;
+      } else if (blend.to === LAYER_SETTING_IDS.MIXER) {
+        this.viewFader = 1;
+        this.targetViewFader = 1;
+      }
+    }
   }
 
   /** Get a mixer overlay by id. Rejects the deck channel id explicitly. */
@@ -835,7 +1340,12 @@ export class PatternMixer {
       groupBits: this.groupBits,
       viewMasks: Array.isArray(viewMasks) ? viewMasks : [],
     });
-    for (const channel of [this.deckChannel, ...this.mixerChannels, ...this.deckOverlays]) {
+    for (const channel of [
+      this.deckChannel,
+      ...this.mixerChannels,
+      ...this.deckOverlays,
+      this.liveTouchChannel,
+    ]) {
       if (!channel) continue;
       try {
         this.recompileChannelMask(channel);
@@ -1190,13 +1700,16 @@ export class PatternMixer {
    *     the rig).
    *   - Un-MUTE every group (muted=false) WITHOUT deleting groups or resetting
    *     their faders — a muted group would otherwise gate its members dark.
-   *   - Restore the view crossfade target to the mixer side (targetViewFader
-   *     = 1.0) so the composed overlay output is what's shown.
+   *   - Transition to the Mixer layer setting through the same router used by
+   *     every operator surface transition.
    */
   panicToSafeDefault() {
     // Master: cancel any fade + go to FULL immediately (no animation).
     this.setMaster(1.0);
-    this.targetViewFader = 1.0;
+    this.activateLayerSetting(LAYER_SETTING_IDS.MIXER, {
+      durationMs: 1000,
+      reason: 'panic_safe_default',
+    });
 
     // Deck: cancel an in-flight swap WITHOUT committing to its target.
     this.cancelDeckPatternSwap();
@@ -1633,6 +2146,9 @@ export class PatternMixer {
   getChannelAnyRole(channelId) {
     const direct = this.getChannel(channelId);
     if (direct) return direct;
+    if (this.liveTouchChannel && this.liveTouchChannel.id === channelId) {
+      return this.liveTouchChannel;
+    }
     return this.deckOverlays.find(o => o.id === channelId);
   }
 
@@ -1655,6 +2171,7 @@ export class PatternMixer {
     if (this.deckChannel) out.push(this.deckChannel);
     for (const c of this.mixerChannels) out.push(c);
     for (const o of this.deckOverlays) out.push(o);
+    if (this.liveTouchChannel) out.push(this.liveTouchChannel);
     return out;
   }
 
@@ -2017,10 +2534,9 @@ export class PatternMixer {
    * Honors `transitionMode` — the user-selected `trans_*` blend script
    * that drives the visual effect:
    *
-   *   - 'trans_crossfade' (default): no blend swap. Faders ramp smoothly
-   *     and the existing `blend_screen` (or whatever) modes do the
-   *     compositing. Cheapest, no script overhead, perceptually identical
-   *     to a real crossfade for two-overlay setups.
+   *   - 'trans_crossfade' (default): the target is composited with the real
+   *     endpoint-exact crossfade script, never its steady screen/add/over
+   *     blend masquerading as a crossfade.
    *
    *   - 'trans_flash' / 'trans_dissolve' / 'trans_iris' / 'trans_wipe_*':
    *     the target channel's `mode` is temporarily swapped to the
@@ -2064,20 +2580,19 @@ export class PatternMixer {
     if (overlays.length === 0) return null;
     if (!overlays.find(c => c.id === targetChannelId)) return null;
 
-    // Validate transitionMode: must be a string starting with 'trans_'.
-    // Fall back to crossfade if we can't even load the blend script —
-    // better to do a clean crossfade than throw on the operator's tap.
-    let resolvedTransMode = (typeof transitionMode === 'string' && transitionMode.startsWith('trans_'))
-      ? transitionMode
-      : 'trans_crossfade';
-    if (resolvedTransMode !== 'trans_crossfade') {
-      const handle = this.getBlendHandle(resolvedTransMode);
-      if (!handle) {
-        console.warn(`[Mixer] transitionMode '${resolvedTransMode}' could not be compiled; falling back to trans_crossfade.`);
-        resolvedTransMode = 'trans_crossfade';
-      }
+    // Validate against the canonical executable catalog. A trans_* typo is
+    // rejected explicitly and never substituted with a crossfade.
+    if (!isDeckTransitionMode(transitionMode)) {
+      console.error(`[Mixer] Invalid transitionMode '${transitionMode}'`);
+      return null;
     }
-    const useScriptedTransition = resolvedTransMode !== 'trans_crossfade';
+    const resolvedTransMode = transitionMode;
+    const handle = this.getBlendHandle(resolvedTransMode);
+    if (!handle) {
+      console.error(`[Mixer] transitionMode '${resolvedTransMode}' is missing or failed to compile`);
+      return null;
+    }
+    const useScriptedTransition = true;
 
     // Before scheduling: restore any in-flight saved modes from a
     // previous (still-running) scripted transition. Without this, a
@@ -2136,12 +2651,10 @@ export class PatternMixer {
         // smoothstep ramp will drive it to 1 by transition end.
         c._savedMode = c.mode;
         c.mode = resolvedTransMode;
-        // Force above the renderAll6ch skip threshold (0.001) so the
-        // blend script runs on EVERY frame of the transition, including
-        // the very first tick. Without this nudge the target's blend
-        // would be skipped during the initial ~25 ms while smoothstep
-        // is still below 0.001, producing a tiny "pop" at start.
-        c.fader = 0.002;
+        // Keep progress zero exact. Skipping a target at fader zero is the
+        // precise trans_* p=0 result and avoids a manufactured first-frame
+        // endpoint offset.
+        c.fader = 0;
         this.fadeChannel(c.id, 1.0, durationMs, {
           groupId: id,
           curve,
@@ -2167,19 +2680,18 @@ export class PatternMixer {
    * path. This is the "precompile-next-entry" optimization for hot-swap
    * playlist playback (feat/timeline_support).
    *
-   * Contract (kept deliberately conservative so it can't corrupt the
-   * ping-pong machinery):
+   * Contract (kept deliberately conservative so it can't corrupt phase):
    *   - Refuses while a swap is in flight (the inactive slot is the live
    *     fade target then — overwriting it would glitch the transition).
    *     Returns false; the caller can retry after completion.
    *   - No-op (returns true) if the slot already holds `patternName` —
-   *     the handle is already warm (this is also the ping-pong case).
+   *     the fresh handle is already parked.
    *   - Otherwise installs `handle` into the inactive slot at fader 0
    *     (parked, invisible) and destroys whatever stale handle was there.
    *     Ownership of `handle` transfers to the mixer.
    *
-   * The slot is ticked every frame by renderAll6ch() regardless of fader,
-   * so the warmed pattern stays time-synced and ready.
+   * The parked slot updates only its global-time baseline. It does not enter
+   * WASM until selected, so precompile lead time cannot alter visual phase.
    *
    * @param {string} patternName
    * @param {Object} handle  Compiled WASM handle (ownership transfers).
@@ -2194,7 +2706,8 @@ export class PatternMixer {
       try { this.wasmHost.destroy(handle); } catch (_) {}
       return false;
     }
-    if (this._inactiveDeckChannel && this._inactiveDeckChannel.pattern === patternName) {
+    if (this._inactiveDeckChannel && this._inactiveDeckChannel.pattern === patternName &&
+        this._inactiveDeckChannel._deckHandleFresh) {
       // Already warm — the caller's freshly compiled handle is redundant.
       // Destroy it so we don't leak a duplicate VM.
       try { this.wasmHost.destroy(handle); } catch (_) {}
@@ -2210,6 +2723,9 @@ export class PatternMixer {
       this._inactiveDeckChannel.mode = mode;
       this._inactiveDeckChannel.fader = 0;
       this._inactiveDeckChannel.enabled = true;
+      this._inactiveDeckChannel._phaseSeconds = 0;
+      this._inactiveDeckChannel._lastPhaseElapsed = null;
+      this._inactiveDeckChannel._deckHandleFresh = true;
     } else {
       this._inactiveDeckChannel = new PatternChannel({
         id: '__deck_inactive__',
@@ -2221,6 +2737,7 @@ export class PatternMixer {
       });
       this._inactiveDeckChannel._hidden = true;
       this._inactiveDeckChannel.fader = 0;
+      this._inactiveDeckChannel._deckHandleFresh = true;
     }
     return true;
   }
@@ -2249,8 +2766,12 @@ export class PatternMixer {
     return this._inactiveDeckChannel;
   }
 
+  isInactiveDeckHandleFresh() {
+    return !!(this._inactiveDeckChannel && this._inactiveDeckChannel._deckHandleFresh);
+  }
+
   /**
-   * Soft-swap the deck active channel's pattern using a ping-pong
+   * Soft-swap the deck active channel's pattern using a deterministic
    * inactive sibling.
    *
    * Concept (see also `_inactiveDeckChannel` docstring in the constructor):
@@ -2269,9 +2790,8 @@ export class PatternMixer {
    *   3. On completion, the WASM HANDLES SWAP. `deckChannel` keeps its
    *      id / playlist / localControls / viewSelection intact — only
    *      its `.handle` and `.pattern` get rebound to the newly-active
-   *      pattern. The OLD active handle moves into the inactive slot
-   *      for warmth — a ping-pong back to the previous pattern is a
-   *      zero-compile reuse. From the operator's POV the deck now
+   *      pattern. The OLD active handle and phase move into the inactive
+   *      slot as non-fresh owned state. From the operator's POV the deck now
    *      "is" the new pattern, with no visible glitch.
    *
    * Why we don't reuse `triggerMixerTransition`:
@@ -2283,8 +2803,7 @@ export class PatternMixer {
    *
    * Caller contract:
    *   - When `newHandle` is non-null, ownership transfers to the mixer.
-   *     Whether the swap succeeds, falls back, or is replaced by
-   *     another swap mid-flight, the mixer is responsible for
+   *     Whether the swap succeeds or fails, the mixer is responsible for
    *     destroying it (avoids the caller having to track a
    *     half-installed handle).
    *   - When `newHandle` is null, the caller is asserting that the
@@ -2303,19 +2822,17 @@ export class PatternMixer {
    * @param {string} opts.patternName      Pattern name (for channel.pattern)
    * @param {number} [opts.durationMs=1000]
    * @param {string} [opts.transitionMode='trans_crossfade']
-   * @param {string} [opts.steadyMode='blend_screen'] Blend mode used during a
-   *   crossfade transition (when transitionMode === 'trans_crossfade'). Has
-   *   no effect for scripted transitions because the script IS the blend.
    * @param {Function} [opts.onComplete]   Called once the swap completes
-   * @returns {string|null}  Transition id, or null if swap was rejected.
+   * @param {Function} [opts.onCancel]     Called once if the swap is cancelled
+   * @returns {string} Transition id. Invalid state throws.
    */
   triggerDeckPatternSwap({
     newHandle = null,
     patternName,
     durationMs = 1000,
     transitionMode = 'trans_crossfade',
-    steadyMode = 'blend_screen',
     onComplete = null,
+    onCancel = null,
   } = {}) {
     if (!this.deckChannel) {
       // No active deck to swap onto — refuse and destroy the incoming
@@ -2323,7 +2840,35 @@ export class PatternMixer {
       if (newHandle) {
         try { this.wasmHost.destroy(newHandle); } catch (_) {}
       }
-      return null;
+      throw new Error('cannot start Deck transition without an active Deck channel');
+    }
+
+    if (this._swapTransition) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      const error = new Error('swap-already-in-flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    const resolvedDurationMs = Number(durationMs);
+    if (!Number.isFinite(resolvedDurationMs) || resolvedDurationMs <= 0) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      throw new Error(`Deck transition durationMs must be a positive finite number, got '${durationMs}'`);
+    }
+    if (!isDeckTransitionMode(transitionMode)) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      throw new Error(`invalid Deck transition mode '${transitionMode}'`);
+    }
+    if (!this.getBlendHandle(transitionMode)) {
+      if (newHandle) {
+        try { this.wasmHost.destroy(newHandle); } catch (_) {}
+      }
+      throw new Error(`Deck transition '${transitionMode}' is missing or failed to compile`);
     }
 
     // Reuse-vs-replace path on the inactive slot:
@@ -2333,10 +2878,9 @@ export class PatternMixer {
     //   newHandle set   → take ownership. If inactive already exists,
     //                     destroy its handle and re-bind to newHandle.
     if (!newHandle) {
-      if (!this._inactiveDeckChannel || this._inactiveDeckChannel.pattern !== patternName) {
-        console.warn(`[Mixer] triggerDeckPatternSwap(newHandle:null) requested for '${patternName}' ` +
-          `but inactive deck slot holds '${this._inactiveDeckChannel?.pattern ?? 'nothing'}'. Refusing.`);
-        return null;
+      if (!this._inactiveDeckChannel || this._inactiveDeckChannel.pattern !== patternName ||
+          !this._inactiveDeckChannel._deckHandleFresh) {
+        throw new Error(`Deck transition reuse requested for '${patternName}', but no fresh precompiled handle is parked`);
       }
       // Reuse path: nothing to install. _inactiveDeckChannel already
       // has the right handle + pattern. Just reset its render state.
@@ -2348,25 +2892,10 @@ export class PatternMixer {
     // over the inactive slot. We deliberately keep the inactive channel
     // object alive; its handle will be replaced below if newHandle is
     // non-null.
-    if (this._swapTransition) {
-      this._swapTransition = null;
-    }
-
     // Resolve transition mode. Fall back to plain crossfade if the
     // requested blend script can't compile — a clean fade beats an
     // operator-tap error every time.
-    let resolved = (typeof transitionMode === 'string' && transitionMode.startsWith('trans_'))
-      ? transitionMode
-      : 'trans_crossfade';
-    if (resolved !== 'trans_crossfade') {
-      const h = this.getBlendHandle(resolved);
-      if (!h) {
-        console.warn(`[Mixer] deck-swap transitionMode '${resolved}' could not be compiled; falling back to trans_crossfade.`);
-        resolved = 'trans_crossfade';
-      }
-    }
-    const useScripted = resolved !== 'trans_crossfade';
-    const inactiveMode = useScripted ? resolved : steadyMode;
+    const inactiveMode = transitionMode;
 
     if (newHandle) {
       // Replace path. Re-bind inactive to the freshly compiled handle.
@@ -2380,6 +2909,9 @@ export class PatternMixer {
         }
         this._inactiveDeckChannel.handle = newHandle;
         this._inactiveDeckChannel.pattern = patternName;
+        this._inactiveDeckChannel._phaseSeconds = 0;
+        this._inactiveDeckChannel._lastPhaseElapsed = null;
+        this._inactiveDeckChannel._deckHandleFresh = true;
       } else {
         // First-ever swap: allocate the inactive sibling. Persistent
         // for the engine's lifetime — subsequent swaps just rebind
@@ -2393,6 +2925,7 @@ export class PatternMixer {
           enabled: true,
         });
         this._inactiveDeckChannel._hidden = true;
+        this._inactiveDeckChannel._deckHandleFresh = true;
       }
     }
 
@@ -2401,7 +2934,7 @@ export class PatternMixer {
     // threshold; otherwise the first ~25 ms would skip compositing
     // and produce a visible "pop").
     this._inactiveDeckChannel.mode = inactiveMode;
-    this._inactiveDeckChannel.fader = 0.002;
+    this._inactiveDeckChannel.fader = 0;
     this._inactiveDeckChannel.enabled = true;
     // Defensive: ensure pattern name is in sync (reuse path passes
     // newHandle=null but the caller still tells us the patternName).
@@ -2413,8 +2946,9 @@ export class PatternMixer {
       startFader: 0,
       targetFader: 1.0,
       startTime: performance.now(),
-      durationMs: Math.max(1, Number(durationMs) || 1),
+      durationMs: resolvedDurationMs,
       onComplete,
+      onCancel,
     };
     return id;
   }
@@ -2428,11 +2962,30 @@ export class PatternMixer {
    */
   cancelDeckPatternSwap() {
     if (!this._swapTransition) return false;
+    const cancelled = this._swapTransition;
     this._swapTransition = null;
     if (this._inactiveDeckChannel) {
       // Reset render state so a stale fader doesn't leak into the next
       // render frame.
       this._inactiveDeckChannel.fader = 0;
+    }
+    if (cancelled.onCancel) {
+      try {
+        cancelled.onCancel({ transitionId: cancelled.id });
+      } catch (e) {
+        console.warn('[Mixer] deck-swap onCancel threw:', e.message);
+      }
+    }
+    // Tell listeners the swap is over. The swap's own onComplete is
+    // deliberately NOT run (that would commit the cancelled target) —
+    // but clients that dimmed/disabled their UI on deckSwapStarted must
+    // be released, or they wedge until a remount.
+    if (this.onDeckSwapCancelled) {
+      try {
+        this.onDeckSwapCancelled({ transitionId: cancelled.id });
+      } catch (e) {
+        console.warn('[Mixer] onDeckSwapCancelled threw:', e.message);
+      }
     }
     return true;
   }
@@ -2481,21 +3034,17 @@ export class PatternMixer {
    * Handle-swap semantics: on completion, the WASM handles inside
    * `deckChannel` and `_inactiveDeckChannel` SWAP. The persistent deck
    * identity (`deckChannel.id`, `.localControls`, `.playlist`, etc.) is
-   * preserved — only `.handle` and `.pattern` change. The OLD active
-   * handle moves into the inactive slot, where it stays warm (advanced
-   * each frame via beginFrame() with fader=0) so a ping-pong back to
-   * the previous pattern can reuse it without paying the WASM compile
-   * cost. The old `_swapChannel` design freed the previous handle on
-   * every swap; this design keeps it alive in the inactive slot until
-   * the NEXT swap brings a different pattern.
+   * preserved — `.handle`, `.pattern`, and their phase-clock fields move
+   * together. The OLD active state moves into the inactive slot as non-fresh
+   * owned state and is replaced by the next fresh compile.
    *
    * Why not swap whole channel POINTERS (operator's literal phrasing)?
    * `deckChannel` is the IDENTITY container — id, playlist state,
    * localControls, viewSelection. Swapping the pointer would change
    * the deck's id under the API layer's feet and orphan
    * localControls/playlist on the demoted sibling. The handle swap
-   * gives the operator the same end-result (warm second pattern, no
-   * recompile on ping-pong) while preserving identity.
+   * preserves the operator-visible identity while preventing a one-frame
+   * phase jump at promotion.
    */
   updateDeckSwapTransition(now = performance.now()) {
     if (!this._swapTransition || !this._inactiveDeckChannel) return;
@@ -2526,14 +3075,23 @@ export class PatternMixer {
       const newActivePattern = inactiveCh.pattern;
       const oldActiveHandle = base.handle;
       const oldActivePattern = base.pattern;
+      const newActivePhaseSeconds = inactiveCh._phaseSeconds;
+      const newActiveLastPhaseElapsed = inactiveCh._lastPhaseElapsed;
+      const oldActivePhaseSeconds = base._phaseSeconds;
+      const oldActiveLastPhaseElapsed = base._lastPhaseElapsed;
 
       // Promote on the base channel object.
       base.handle = newActiveHandle;
       base.pattern = newActivePattern;
+      base._phaseSeconds = newActivePhaseSeconds;
+      base._lastPhaseElapsed = newActiveLastPhaseElapsed;
       // Demote into the warm inactive slot. Fader resets to 0 so we
       // don't paint into deckBuffer outside of an active transition.
       inactiveCh.handle = oldActiveHandle;
       inactiveCh.pattern = oldActivePattern;
+      inactiveCh._phaseSeconds = oldActivePhaseSeconds;
+      inactiveCh._lastPhaseElapsed = oldActiveLastPhaseElapsed;
+      inactiveCh._deckHandleFresh = false;
       inactiveCh.fader = 0;
 
       // Clear in-flight bookkeeping BEFORE the onComplete callback so
@@ -2554,6 +3112,163 @@ export class PatternMixer {
           console.warn('[Mixer] onDeckSwapComplete threw:', e.message);
         }
       }
+    }
+  }
+
+  /**
+   * Prepare pattern B without changing the authoritative Live Touch base A.
+   * The caller may seed code/playlist/CPC defaults on the returned channel,
+   * then start the exact retained transition with startLiveTouchPatternSwap().
+   */
+  prepareLiveTouchPatternSwap({ newHandle, patternName } = {}) {
+    if (!this.liveTouchChannel || !this.liveTouchChannel.handle) {
+      if (newHandle) this.wasmHost.destroy(newHandle);
+      throw new Error('cannot prepare Live Touch transition without an active base pattern');
+    }
+    if (this._liveTouchSwapTransition || this._inactiveLiveTouchChannel) {
+      if (newHandle) this.wasmHost.destroy(newHandle);
+      const error = new Error('live-touch-swap-already-in-flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    if (!newHandle) {
+      throw new Error('Live Touch transition requires a compiled incoming handle');
+    }
+    if (typeof patternName !== 'string' || patternName.length === 0) {
+      this.wasmHost.destroy(newHandle);
+      throw new Error('Live Touch transition patternName must be a non-empty string');
+    }
+    if (!this.getBlendHandle('trans_crossfade')) {
+      this.wasmHost.destroy(newHandle);
+      throw new Error("Live Touch transition 'trans_crossfade' is missing or failed to compile");
+    }
+
+    this._inactiveLiveTouchChannel = new PatternChannel({
+      id: '__live_touch_swap__',
+      name: 'Live Touch Incoming',
+      pattern: patternName,
+      handle: newHandle,
+      mode: 'trans_crossfade',
+      fader: 0,
+      enabled: true,
+      viewSelection: this.liveTouchChannel.viewSelection,
+    });
+    this.recompileChannelMask(this._inactiveLiveTouchChannel);
+    return this._inactiveLiveTouchChannel;
+  }
+
+  /** Start the one authored Live Touch base transition: trans_crossfade / 500ms. */
+  startLiveTouchPatternSwap({ onComplete = null, onCancel = null } = {}) {
+    if (this._liveTouchSwapTransition) {
+      const error = new Error('live-touch-swap-already-in-flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    if (!this._inactiveLiveTouchChannel || !this._inactiveLiveTouchChannel.handle) {
+      throw new Error('Live Touch transition has no prepared incoming pattern');
+    }
+    const id = `live_touch_${++this.transitionGroupCounter}_${Date.now()}`;
+    this._liveTouchSwapTransition = {
+      id,
+      startTime: performance.now(),
+      durationMs: 500,
+      onComplete,
+      onCancel,
+    };
+    this._emitLiveTouchPatternSwap('started');
+    return id;
+  }
+
+  getInactiveLiveTouchChannel() {
+    return this._inactiveLiveTouchChannel;
+  }
+
+  isLiveTouchPatternSwapInFlight() {
+    return !!(this._liveTouchSwapTransition && this._inactiveLiveTouchChannel);
+  }
+
+  getLiveTouchPatternTransitionState() {
+    if (!this.isLiveTouchPatternSwapInFlight()) return null;
+    const transition = this._liveTouchSwapTransition;
+    return {
+      id: transition.id,
+      fromPattern: this.liveTouchChannel ? this.liveTouchChannel.pattern : null,
+      toPattern: this._inactiveLiveTouchChannel.pattern,
+      progress: this._inactiveLiveTouchChannel.fader,
+      durationMs: transition.durationMs,
+      mode: 'trans_crossfade',
+    };
+  }
+
+  cancelLiveTouchPatternSwap() {
+    const transition = this._liveTouchSwapTransition;
+    const incoming = this._inactiveLiveTouchChannel;
+    if (!transition && !incoming) return false;
+    this._liveTouchSwapTransition = null;
+    this._inactiveLiveTouchChannel = null;
+    if (incoming && incoming.handle) this.wasmHost.destroy(incoming.handle);
+    if (transition && transition.onCancel) {
+      try {
+        transition.onCancel({ transitionId: transition.id });
+      } catch (error) {
+        console.warn(`[Mixer] Live Touch swap onCancel threw: ${error.message}`);
+      }
+    }
+    this._emitLiveTouchPatternSwap('cancelled', {
+      transitionId: transition ? transition.id : null,
+    });
+    return true;
+  }
+
+  updateLiveTouchPatternSwap(now = performance.now()) {
+    if (!this.isLiveTouchPatternSwapInFlight()) return false;
+    const transition = this._liveTouchSwapTransition;
+    const incoming = this._inactiveLiveTouchChannel;
+    const linear = Math.max(0, Math.min(1, (now - transition.startTime) / transition.durationMs));
+    incoming.fader = linear * linear * (3 - 2 * linear);
+    if (linear < 1) {
+      this._emitLiveTouchPatternSwap('progress');
+      return true;
+    }
+
+    incoming.fader = 1;
+    const active = this.liveTouchChannel;
+    const outgoingHandle = active.handle;
+    active.handle = incoming.handle;
+    active.pattern = incoming.pattern;
+    active.localControls = incoming.localControls;
+    active._phaseSeconds = incoming._phaseSeconds;
+    active._lastPhaseElapsed = incoming._lastPhaseElapsed;
+    active.compiledPixelMask = incoming.compiledPixelMask;
+    this._liveTouchSwapTransition = null;
+    this._inactiveLiveTouchChannel = null;
+    this.wasmHost.destroy(outgoingHandle);
+
+    if (transition.onComplete) {
+      try {
+        transition.onComplete({ pattern: active.pattern, transitionId: transition.id });
+      } catch (error) {
+        console.warn(`[Mixer] Live Touch swap onComplete threw: ${error.message}`);
+      }
+    }
+    this._emitLiveTouchPatternSwap('completed', {
+      pattern: active.pattern,
+      transitionId: transition.id,
+    });
+    return true;
+  }
+
+  _emitLiveTouchPatternSwap(event, detail = null) {
+    if (!this.onLiveTouchPatternSwapChange) return;
+    try {
+      this.onLiveTouchPatternSwapChange({
+        event,
+        detail,
+        transition: this.getLiveTouchPatternTransitionState(),
+        pattern: this.liveTouchChannel ? this.liveTouchChannel.pattern : null,
+      });
+    } catch (error) {
+      console.warn(`[Mixer] Live Touch swap observer threw: ${error.message}`);
     }
   }
 
@@ -2645,7 +3360,17 @@ export class PatternMixer {
   }
 
   beginFrame(elapsedSeconds) {
+    if (this._canonicalLayerRouting) {
+      this.layerRouter.tick();
+      this._syncLegacyViewFaderFromLayerRouter();
+    }
+    const renderDeck = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.DECK);
+    const renderMixer = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.MIXER);
+    const renderLiveTouch = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.LIVE_TOUCH);
     const now = performance.now();
+    // Administrative transitions keep settling on wall clock even while their
+    // setting is hidden. This preserves the pre-router behavior (a requested
+    // fade/morph still completes) without entering any inactive pattern WASM.
     this.updateTransitions(now);
     // Snapshot morph (round-2 #1): the group-fader ramps tick alongside the
     // per-channel transitions (above) and the grand-master fade (in
@@ -2658,17 +3383,23 @@ export class PatternMixer {
     // Deck-swap shadow runs on the same clock so its fader animation
     // visibly matches the existing overlay-fade animations.
     this.updateDeckSwapTransition(now);
-    // Tick both deck and mixer overlays — muted patterns still need to
-    // advance their internal time so vis previews stay live. Each channel
-    // accumulates its OWN phase from the shared `elapsedSeconds` delta,
-    // scaled by its effectiveSpeed (own speed × tempo-mult if it follows
-    // tempo). _effectiveSpeed is O(1) / allocation-free.
-    if (this.deckChannel) {
+    this.updateLiveTouchPatternSwap(now);
+    // Tick only participating settings. Inactive clocks are suspended: update
+    // their phase baseline without entering WASM so they resume without a
+    // catch-up jump. Muted channels inside an active setting still advance so
+    // that setting's vis previews remain live.
+    if (renderDeck && this.deckChannel) {
       this.deckChannel.beginFrame(
         this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(this.deckChannel));
+    } else if (this.deckChannel) {
+      this.deckChannel._lastPhaseElapsed = elapsedSeconds;
     }
     for (const channel of this.mixerChannels) {
-      channel.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(channel));
+      if (renderMixer) {
+        channel.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(channel));
+      } else {
+        channel._lastPhaseElapsed = elapsedSeconds;
+      }
     }
     // Deck overlays (deck dynamic view overrides) tick on the SAME shared
     // global clock + params as every other channel — they call beginFrame
@@ -2677,19 +3408,55 @@ export class PatternMixer {
     // overlays (operator refinement #2: shared globals). forceRender=true so a
     // muted overlay still advances its phase (vis + ping-pong smoothness).
     for (const overlay of this.deckOverlays) {
-      overlay.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(overlay));
+      if (renderDeck) {
+        overlay.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(overlay));
+      } else {
+        overlay._lastPhaseElapsed = elapsedSeconds;
+      }
     }
-    // Tick the inactive deck sibling too so its pattern stays warm —
-    // its time advances alongside the active channel even when its
-    // fader is 0. This is what makes ping-pong "smoothness" work: the
-    // moment we promote it, its pattern is already on the same time
-    // base as the active. Without this, the new pattern would freeze
-    // at its first frame whenever it wasn't being faded in. It MUST share
-    // the active DECK's effectiveSpeed (not its own) so the ping-pong
-    // time-sync contract holds — a swap must not jump-cut the clock rate.
-    if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle) {
+    // Tick the inactive Deck sibling only while it is the live transition
+    // target. A parked precompile updates its baseline below without entering
+    // WASM, so its phase remains zero until selection. During the fade it uses
+    // the active Deck's effective speed, and its phase state is promoted with
+    // its handle at completion.
+    if (renderDeck && this.isDeckSwapInFlight()) {
       const deckSpeed = this.deckChannel ? this._effectiveSpeed(this.deckChannel) : 1;
       this._inactiveDeckChannel.beginFrame(this.wasmHost, elapsedSeconds, true, deckSpeed);
+    } else if (this._inactiveDeckChannel) {
+      this._inactiveDeckChannel._lastPhaseElapsed = elapsedSeconds;
+    }
+    if (renderLiveTouch && this.liveTouchChannel) {
+      const localSpeed = this.liveTouchPhaseSpeedProvider
+        ? this.liveTouchPhaseSpeedProvider(this.liveTouchChannel)
+        : 1;
+      if (typeof localSpeed !== 'number' || !Number.isFinite(localSpeed) || localSpeed <= 0) {
+        throw new Error(`Live Touch phase speed provider returned invalid speed '${localSpeed}'`);
+      }
+      this.liveTouchChannel.beginFrame(
+        this.wasmHost,
+        elapsedSeconds,
+        true,
+        this._effectiveSpeed(this.liveTouchChannel) * localSpeed,
+      );
+    } else if (this.liveTouchChannel) {
+      this.liveTouchChannel._lastPhaseElapsed = elapsedSeconds;
+    }
+    if (renderLiveTouch && this.isLiveTouchPatternSwapInFlight()) {
+      const incoming = this._inactiveLiveTouchChannel;
+      const localSpeed = this.liveTouchPhaseSpeedProvider
+        ? this.liveTouchPhaseSpeedProvider(incoming)
+        : 1;
+      if (typeof localSpeed !== 'number' || !Number.isFinite(localSpeed) || localSpeed <= 0) {
+        throw new Error(`Live Touch incoming phase speed is invalid: '${localSpeed}'`);
+      }
+      incoming.beginFrame(
+        this.wasmHost,
+        elapsedSeconds,
+        true,
+        this._effectiveSpeed(incoming) * localSpeed,
+      );
+    } else if (this._inactiveLiveTouchChannel) {
+      this._inactiveLiveTouchChannel._lastPhaseElapsed = elapsedSeconds;
     }
   }
 
@@ -2699,15 +3466,24 @@ export class PatternMixer {
     }
   }
 
+  _bufferForLayerSetting(setting) {
+    if (setting === LAYER_SETTING_IDS.DECK) return this.deckBuffer;
+    if (setting === LAYER_SETTING_IDS.MIXER) return this.mixerBuffer;
+    if (setting === LAYER_SETTING_IDS.LIVE_TOUCH) return this.liveTouchBuffer;
+    throw new RangeError(`No render buffer for unknown layer setting '${setting}'`);
+  }
+
   renderAll6ch() {
     this._frameCounter++;
     if (!this.deckBuffer) {
       this.deckBuffer = new Uint8Array(this.pixelCount * 6);
       this.mixerBuffer = new Uint8Array(this.pixelCount * 6);
+      this.liveTouchBuffer = new Uint8Array(this.pixelCount * 6);
     }
 
     this.deckBuffer.fill(0);
     this.mixerBuffer.fill(0);
+    this.liveTouchBuffer.fill(0);
     this.outputBuffer.fill(0);
 
     // Per-channel vis data (RGBWAU, 6 bytes per pixel).
@@ -2748,7 +3524,7 @@ export class PatternMixer {
     // the perceived duration stays at viewFaderRampPerSec regardless
     // of the engine's render fps. dt is clamped so a frame stall
     // (GC pause, sACN backpressure) doesn't fast-forward the fade.
-    {
+    if (!this._canonicalLayerRouting) {
       const nowMs = Date.now();
       const last = this._lastViewFaderTickMs;
       this._lastViewFaderTickMs = nowMs;
@@ -2762,6 +3538,10 @@ export class PatternMixer {
         }
       }
     }
+
+    const renderDeck = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.DECK);
+    const renderMixer = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.MIXER);
+    const renderLiveTouch = this.isLayerSettingRenderParticipant(LAYER_SETTING_IDS.LIVE_TOUCH);
 
     // WAVE 15 hot-path precompute (allocation-free): refresh the per-frame
     // group-scale cache (clear()+set() — no realloc) and the soloActive flag
@@ -2789,7 +3569,7 @@ export class PatternMixer {
     //    PFL (rendered at 100% downstream), so its meter uses only its OWN
     //    clamped fader + enabled gate (decks are never in groups / solos).
     if (wantVis) {
-      if (this.deckChannel) {
+      if (renderDeck && this.deckChannel) {
         this.channelBuffer.fill(0);
         this.deckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
         // Mirror the composite-loop hue shift so the vis meter/preview
@@ -2808,17 +3588,42 @@ export class PatternMixer {
         }
         this._visLevels[d.id] = this._bufferMeanLevel(this.channelBuffer) * deckEff;
       }
-      for (const channel of this.mixerChannels) {
-        this.channelBuffer.fill(0);
-        channel.renderInto(this.wasmHost, this.channelBuffer, true);
-        // Mirror the composite-loop hue shift so meter + vis match what
-        // actually blends into the mix (docs/39 §F-hue). Gated on non-zero.
-        if (channel.hue) {
-          applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
+      if (renderMixer) {
+        for (const channel of this.mixerChannels) {
+          this.channelBuffer.fill(0);
+          channel.renderInto(this.wasmHost, this.channelBuffer, true);
+          // Mirror the composite-loop hue shift so meter + vis match what
+          // actually blends into the mix (docs/39 §F-hue). Gated on non-zero.
+          if (channel.hue) {
+            applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
+          }
+          // View-selection blackout for the channel PREVIEW (docs/58 §5,
+          // docs/27 §4.2). Same call the deck PFL preview (:3431) and Live
+          // Touch (:3402) already make: a channel view-selected to `te_sign`
+          // must not broadcast its pattern across the whole ship, or the
+          // mixer's top-down pixel view answers "where does this layer land"
+          // wrongly for every view-selected channel. Affects the PREVIEW
+          // buffer only — the composite path below is untouched, and the
+          // 2026-06-29 "TRUE pattern at full brightness" ruling (which is
+          // about FADER independence) still holds.
+          if (channel.compiledPixelMask) {
+            applyPreviewMaskBlackout(this.channelBuffer, channel.compiledPixelMask, this.pixelCount);
+          }
+          this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
+          this._visLevels[channel.id] =
+            this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
         }
-        this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
-        this._visLevels[channel.id] =
-          this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
+      }
+      if (renderLiveTouch && this.liveTouchChannel) {
+        const live = this.liveTouchChannel;
+        this.channelBuffer.fill(0);
+        live.renderInto(this.wasmHost, this.channelBuffer, true);
+        if (live.hue) applyHueShift6chU8(this.channelBuffer, this.pixelCount, live.hue);
+        if (live.compiledPixelMask) {
+          applyPreviewMaskBlackout(this.channelBuffer, live.compiledPixelMask, this.pixelCount);
+        }
+        this._visData[live.id] = this._extractVisInto(live.id, this.channelBuffer);
+        this._visLevels[live.id] = this._bufferMeanLevel(this.channelBuffer);
       }
     }
 
@@ -2826,7 +3631,7 @@ export class PatternMixer {
     //
     // The deck channel renders as PFL (Pre-Fade Listen, always 100%).
     const deck = this.deckChannel;
-    if (deck) {
+    if (renderDeck && deck) {
       this.channelBuffer.fill(0);
       deck.renderInto(this.wasmHost, this.deckBuffer, true);
 
@@ -2866,6 +3671,7 @@ export class PatternMixer {
     //     operator refinement #2). Reuses the existing scratch buffers
     //     (channelBuffer / blendedScratch) — no new per-frame allocation.
     for (const overlay of this.deckOverlays) {
+      if (!renderDeck) break;
       // Overlay-effective fader: enabled gate × per-overlay faderMax clamp.
       // Deck overlays are NOT subject to the mixer's solo/group/follow gates
       // (those are mixer-stack concepts) — they layer over the deck directly.
@@ -2896,17 +3702,11 @@ export class PatternMixer {
           this.deckBuffer, this.channelBuffer, effFader
         );
       } else {
-        // DEGRADED PATH (Codex P0 visibility): no compiled blend handle for
-        // this mode. We do NOT crash the 40 Hz loop; composite a host-side
-        // linear interpolation and record the error loudly (once per mode).
         this._recordBlendError(
           overlay.mode || '(empty mode)',
           `No compiled blend handle for mode '${overlay.mode}' on deck overlay '${overlay.id}'`,
         );
-        blended = this.blendedScratch;
-        for (let i = 0; i < blended.length; i++) {
-          blended[i] = Math.round(this.deckBuffer[i] + (this.channelBuffer[i] - this.deckBuffer[i]) * effFader);
-        }
+        throw new Error(`No compiled blend handle for mode '${overlay.mode}' on deck overlay '${overlay.id}'`);
       }
 
       commitBlendedLayerWithMask(this.deckBuffer, blended, overlay.compiledPixelMask, this.pixelCount);
@@ -2924,46 +3724,23 @@ export class PatternMixer {
     // gate below prevents any render work. The mixer compositing loop
     // below does NOT see the inactive deck channel because it lives
     // outside `mixerChannels`.
-    if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle && this._inactiveDeckChannel.fader > 0.001) {
+    if (renderDeck && this._inactiveDeckChannel && this._inactiveDeckChannel.handle &&
+        this._inactiveDeckChannel.fader > 0.001) {
       this.channelBuffer.fill(0);
       this._inactiveDeckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
-      // Operator review May 2026 #15 — TRANSITION END FLICKER.
-      // For the default 'trans_crossfade' path (steadyMode='blend_screen')
-      // the OLD pattern (deckBuffer) was always rendered at full
-      // strength and the NEW pattern (channelBuffer) was screen-blended
-      // on top scaled by fader. As fader → 1 the visible output is
-      // `1 - (1-old)*(1-new)` — OLD still contributes at the last
-      // mid-transition frame. Then handle-swap fires on the next
-      // beginFrame() and the renderer cuts to `deckBuffer = new
-      // pattern alone`. That's the visible "pop" at the tail.
-      //
-      // Fix: in the LAST ~3% of the transition force a direct replace
-      // (deckBuffer := channelBuffer). The new pattern is already at
-      // full opacity, so this is visually identical to the screen-
-      // blended version EXCEPT without the old pattern's residual
-      // contribution. Post-swap renders are pixel-identical to this
-      // tail window — zero discontinuity.
-      const TAIL_REPLACE_THRESHOLD = 0.97;
-      if (this._inactiveDeckChannel.fader >= TAIL_REPLACE_THRESHOLD) {
-        this.deckBuffer.set(this.channelBuffer);
-      } else {
-        const blendHandle = this.getBlendHandle(this._inactiveDeckChannel.mode);
-        if (blendHandle) {
-          const result = this.wasmHost.renderBlend6ch(
-            blendHandle, this.pixelCount,
-            this.deckBuffer, this.channelBuffer, this._inactiveDeckChannel.fader
-          );
-          this.deckBuffer.set(result);
-        } else {
-          // Last-resort linear crossfade if the blend script can't load.
-          // Keeps the swap visible-but-ugly rather than invisible.
-          const f = this._inactiveDeckChannel.fader;
-          const iv = 1 - f;
-          for (let i = 0; i < this.deckBuffer.length; i++) {
-            this.deckBuffer[i] = Math.round(this.deckBuffer[i] * iv + this.channelBuffer[i] * f);
-          }
-        }
+      // The selected transition owns every in-flight frame. Endpoint bypasses
+      // in WasmHost make p=0/p=1 exact, and completion promotes B atomically;
+      // there is no universal tail cut and no hidden linear fallback.
+      const blendHandle = this.getBlendHandle(this._inactiveDeckChannel.mode);
+      if (!blendHandle) {
+        throw new Error(`Deck transition '${this._inactiveDeckChannel.mode}' lost its compiled blend handle`);
       }
+      const result = this.wasmHost.renderBlend6ch(
+        blendHandle, this.pixelCount,
+        this.deckBuffer, this.channelBuffer, this._inactiveDeckChannel.fader,
+        this.deckBuffer,
+      );
+      if (result !== this.deckBuffer) this.deckBuffer.set(result);
       // Expose the inactive channel's vis under a stable id so anyone
       // debugging can see what's coming next. Backward-compat alias
       // '__deck_swap__' kept for any consumer that pinned the old
@@ -3031,6 +3808,7 @@ export class PatternMixer {
     }
 
     for (const channel of renderOrder) {
+      if (!renderMixer) break;
       // Skip dark channels EXCEPT the scripted-transition target, whose
       // blend script must run on every frame (its progress arg is the
       // channel.fader, and at the very start of a fade the value can sit
@@ -3083,33 +3861,95 @@ export class PatternMixer {
           this.mixerBuffer, this.channelBuffer, effFader
         );
       } else {
-        // DEGRADED PATH (Codex P0 visibility): the channel's blend mode has
-        // no compiled WASM handle — either the script is missing/failed to
-        // compile, or it's a brand-new mode that boot precompile didn't
-        // know about. We do NOT crash the 40 Hz loop (that would freeze the
-        // whole rig), and we still composite SOMETHING sane (host-side
-        // linear interpolation) so the operator isn't staring at black.
-        // But this is recorded as a render-health error so /status shows
-        // renderHealth.ok=false and logged loudly ONCE per mode — it must
-        // never be a silently-wrong fade. A precompile failure for a known
-        // blend was already recorded at boot; this catches runtime modes
-        // (e.g. a channel set to a typo'd mode name via the API).
         this._recordBlendError(
           channel.mode || '(empty mode)',
           `No compiled blend handle for mode '${channel.mode}' on channel ` +
           `'${channel.id}'`,
         );
-        blended = this.blendedScratch;
-        for (let i = 0; i < blended.length; i++) {
-          blended[i] = Math.round(this.mixerBuffer[i] + (this.channelBuffer[i] - this.mixerBuffer[i]) * effFader);
-        }
+        throw new Error(`No compiled blend handle for mode '${channel.mode}' on channel '${channel.id}'`);
       }
 
       commitBlendedLayerWithMask(this.mixerBuffer, blended, channel.compiledPixelMask, this.pixelCount);
     }
 
-    // 3. Output: crossfade between deck and mixer based on viewFader
-    if (this.viewFader <= 0.001) {
+    // Compose the Deck/Mixer creative look before a transition involving Live
+    // Touch. Deck<->Mixer retains its established post-blend creative stage;
+    // Live pairs need complete setting-local looks so Live state can neither
+    // leak onto nor erase the outgoing setting.
+    if (renderLiveTouch && renderDeck) {
+      this._processLayerSettingOutput(LAYER_SETTING_IDS.DECK, this.deckBuffer);
+    }
+    if (renderLiveTouch && renderMixer) {
+      this._processLayerSettingOutput(LAYER_SETTING_IDS.MIXER, this.mixerBuffer);
+    }
+
+    // 4. Render Live Touch into its own setting-local buffer. Creative stages
+    // (including transient Live brightness) run here, before the shared blend;
+    // downstream rack/blackout authority therefore applies to the result once.
+    if (renderLiveTouch && this.liveTouchChannel) {
+      const live = this.liveTouchChannel;
+      live.renderInto(this.wasmHost, this.liveTouchBuffer, true);
+      if (live.hue) applyHueShift6chU8(this.liveTouchBuffer, this.pixelCount, live.hue);
+      if (live.compiledPixelMask) {
+        applyPreviewMaskBlackout(this.liveTouchBuffer, live.compiledPixelMask, this.pixelCount);
+      }
+      // Pattern A and prepared B are blended as the BASE look. The complete
+      // Live creative processor runs exactly once below, so spatial ink/effects
+      // remain one stable overlay instead of being duplicated or crossfaded.
+      if (this.isLiveTouchPatternSwapInFlight()
+          && this._inactiveLiveTouchChannel.fader > 0.001) {
+        const incoming = this._inactiveLiveTouchChannel;
+        this.channelBuffer.fill(0);
+        incoming.renderInto(this.wasmHost, this.channelBuffer, true);
+        if (incoming.hue) applyHueShift6chU8(this.channelBuffer, this.pixelCount, incoming.hue);
+        if (incoming.compiledPixelMask) {
+          applyPreviewMaskBlackout(this.channelBuffer, incoming.compiledPixelMask, this.pixelCount);
+        }
+        const blendHandle = this.getBlendHandle('trans_crossfade');
+        if (!blendHandle) {
+          throw new Error("Live Touch transition 'trans_crossfade' lost its compiled handle");
+        }
+        const result = this.wasmHost.renderBlend6ch(
+          blendHandle,
+          this.pixelCount,
+          this.liveTouchBuffer,
+          this.channelBuffer,
+          incoming.fader,
+          this.liveTouchBuffer,
+        );
+        if (result !== this.liveTouchBuffer) this.liveTouchBuffer.set(result);
+      }
+      if (this.liveTouchOutputProcessor) {
+        this.liveTouchOutputProcessor(this.liveTouchBuffer);
+      }
+      this._processLayerSettingOutput(LAYER_SETTING_IDS.LIVE_TOUCH, this.liveTouchBuffer);
+      if (wantVis) {
+        this._visData[live.id] = this._extractVisInto(live.id, this.liveTouchBuffer);
+        this._visLevels[live.id] = this._bufferMeanLevel(this.liveTouchBuffer);
+      }
+    }
+
+    // 5. Every canonical pair uses this exact same blend operation. Steady
+    // state copies one setting. During transition only outgoing + incoming
+    // were rendered above; a queued third setting cannot enter this frame.
+    if (this._canonicalLayerRouting) {
+      const blend = this.layerRouter.blend();
+      const fromBuffer = this._bufferForLayerSetting(blend.from);
+      const toBuffer = this._bufferForLayerSetting(blend.to);
+      if (blend.from === blend.to || blend.amount >= 0.999) {
+        this.outputBuffer.set(toBuffer);
+      } else if (blend.amount <= 0.001) {
+        this.outputBuffer.set(fromBuffer);
+      } else {
+        const amount = blend.amount;
+        const inverse = 1 - amount;
+        for (let i = 0; i < this.outputBuffer.length; i++) {
+          this.outputBuffer[i] = Math.round(
+            fromBuffer[i] * inverse + toBuffer[i] * amount,
+          );
+        }
+      }
+    } else if (this.viewFader <= 0.001) {
       this.outputBuffer.set(this.deckBuffer);
     } else if (this.viewFader >= 0.999) {
       this.outputBuffer.set(this.mixerBuffer);
@@ -3121,9 +3961,34 @@ export class PatternMixer {
       }
     }
 
-    if (this.master < 1.0) {
-      this.applyMaster(this.outputBuffer, this.master);
-    }
+    /* THE GRAND MASTER IS NO LONGER APPLIED HERE.
+       It used to scale this composite - which meant it only ever governed the
+       PATTERN composition. Everything engine.js adds afterwards (the whole
+       global effects chain, and applyGroupFixedColors for a group set to OWN)
+       was written on top of an already-mastered buffer and so ignored the
+       fader completely. MEASURED on the rig: master 0, and a group painted
+       [0.690, 0.4557, 0] still went out as 175/116 on 24 fixtures - "part of
+       the boat all yellow at full blast" with the master down.
+
+       Operator ruling: the Touch Control master IS the master when armed, no
+       exceptions. So it MOVED to the final pixel stage in engine.js, after the
+       effects and after the paint. It must not also be applied here or the
+       patterns would be scaled twice (master squared).
+
+       Note for _enforceNeverBlack below: it reads this buffer PRE-master now.
+       That is deliberate and safer - it is gated on _isExpectingLight(), which
+       already returns false when master is 0, and it no longer mistakes a
+       legitimately mastered-down rig for a fault. */
+
+    // ── R4 "NEVER FULLY BLACK" runtime enforcer (redteam _112 I1/I2) ──────
+    // The composite is finished (deck ⊕ overlays ⊕ mixer, crossfaded, master
+    // applied) — this is EXACTLY the buffer engine.js reads out to sACN, so it
+    // is the one true place to prove the mission-critical invariant "the ship
+    // is not dark while it is supposed to be lit". See the renderHealth.darkness
+    // note in the constructor for why enforcement lives on the consequence
+    // (fully-black output) rather than on the (unreachable, silently-absorbed)
+    // NaN / beforeRender-truncation root causes.
+    this._enforceNeverBlack();
 
     // Capture master vis (final output). Master is always cheap (the
     // outputBuffer already exists), but we still gate on wantVis so
@@ -3131,11 +3996,14 @@ export class PatternMixer {
     // single broadcast could ship a master that's one frame older than
     // the per-channel vis, which is mildly confusing for debugging).
     if (wantVis) {
-      this._visData['master'] = this._extractVisInto('master', this.outputBuffer);
-      // Master meter: the final composed output's mean brightness. Already
-      // reflects master gain + view crossfade (applied to outputBuffer
-      // above), so no extra fader scale here.
-      this._visLevels['master'] = this._bufferMeanLevel(this.outputBuffer);
+      /* The master gain is applied downstream now (see the note above), so the
+         preview and the meter have to fold it in themselves - otherwise the
+         deck/mixer master meter would sit at full with the fader on the floor,
+         which is exactly the kind of UI that lies about the rig. */
+      const vis = this._extractVisInto('master', this.outputBuffer);
+      if (this.master < 1.0) this.applyMaster(vis, this.master);
+      this._visData['master'] = vis;
+      this._visLevels['master'] = this._bufferMeanLevel(this.outputBuffer) * this.master;
     }
 
     // FOLLOW/LINK (round-2 #6): snapshot THIS frame's effective fader for every
@@ -3236,6 +4104,10 @@ export class PatternMixer {
 
   destroy() {
     if (this.deckChannel) this.deckChannel.destroy(this.wasmHost);
+    if (this.liveTouchChannel) this.liveTouchChannel.destroy(this.wasmHost);
+    if (this._inactiveLiveTouchChannel && this._inactiveLiveTouchChannel.handle) {
+      this.wasmHost.destroy(this._inactiveLiveTouchChannel.handle);
+    }
     for (const channel of this.mixerChannels) {
       channel.destroy(this.wasmHost);
     }
@@ -3252,6 +4124,8 @@ export class PatternMixer {
     }
     this._inactiveDeckChannel = null;
     this._swapTransition = null;
+    this._inactiveLiveTouchChannel = null;
+    this._liveTouchSwapTransition = null;
     // Destroy blend handles
     for (const [name, handle] of Object.entries(this.blendHandles)) {
       if (handle) this.wasmHost.destroy(handle);
@@ -3259,6 +4133,11 @@ export class PatternMixer {
     this.blendHandles = {};
     this.deckChannel = null;
     this.mixerChannels = [];
+    this.liveTouchChannel = null;
+    this.layerSettingOutputProcessors.clear();
+    this.liveTouchPhaseSpeedProvider = null;
+    this.liveTouchOutputProcessor = null;
+    this.onLiveTouchPatternSwapChange = null;
     // WAVE 15: drop group registry + transient solo on teardown so a
     // re-init doesn't inherit ghost groups / phantom solos.
     this.mixGroups = [];

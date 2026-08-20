@@ -1,0 +1,101 @@
+schemaVersion: 1
+name: wedding_procession
+entries:
+  - id: e_wedding_procession_0_61_white_breathe
+    pattern: 61_white_breathe
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: The room quiets. One slow, deep, whole-rig white breath.
+  - id: e_wedding_procession_1_122_breathing_horizon
+    pattern: 122_breathing_horizon
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderLevel: 0.48
+      sliderHorizonWidth: 0.7
+      sliderBreathDepth: 0.81
+      sliderAfterglow: 0.63
+      sliderSafetyFloor: 0.17
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: A luminous plane RISES through the ship — the build begins as geometry.
+  - id: e_wedding_procession_2_126_cathedral_rib_wave
+    pattern: 126_cathedral_rib_wave
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderLevel: 0.51
+      sliderRibCount: 0.67
+      sliderRibWidth: 0.74
+      sliderBow: 0.9
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Monumental rib planes open in sequence. The ship becomes a nave.
+  - id: e_wedding_procession_3_118_grand_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.72
+      sliderRingWidth: 0.26
+      sliderOrbitTilt: 0.83
+      sliderContrast: 0.89
+      sliderSafetyFloor: 0.05
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: Three enormous hoops wrap the vessel; reads from the far end of the aisle.
+  - id: e_wedding_procession_4_124_aurora_crown
+    pattern: 124_aurora_crown
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderLevel: 0.65
+      sliderCrownHeight: 0.81
+      sliderArcWidth: 0.92
+      sliderCurl: 0.73
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: The ship wears a crown. Broad diadem arcs over the upper hull.
+  - id: e_wedding_procession_5_39_tide_riser
+    pattern: 39_tide_riser
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: A rising water level with a bright crest — the literal build.
+  - id: e_wedding_procession_6_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.79
+      sliderSpiralWidth: 0.78
+      sliderTurns: 0.8
+      sliderWakeContrast: 0.85
+      sliderSafetyFloor: 0.14
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: A helical wake wraps the whole vessel as they reach the front.
+  - id: e_wedding_procession_7_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.17
+      sliderDirection: 0.16
+      sliderLevel: 0.73
+      sliderKick: 0.08
+      sliderRadius: 0.92
+      sliderSharpness: 0.83
+      sliderCount: 0.59
+    modulations: []
+    midiMappings: []
+    notes: 'Arrival: a huge interference field crushed to crisp bright cores.'

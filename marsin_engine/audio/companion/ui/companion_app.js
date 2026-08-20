@@ -23,6 +23,8 @@ const TRAIL = 360;
 
 const S = {
   ops: {}, frequencyOps: [], frequencyOnlyOps: [], rawSources: {}, signalTypes: [],
+  curatedOutputs: {},
+  missingCuratedOutputs: [],
   synths: [],          // [{ name, label, description }] — selectable test synths
 
   signals: [],         // [{ id, label, source, type, chain, output }]
@@ -30,18 +32,32 @@ const S = {
   viewTypes: {},       // { typeId: { label, accepts } } — viz type registry
   osc: { host: '127.0.0.1', port: 10000, rateHz: 60 },
   oscRateBuilt: false,
+  // Published-BPM slew (audio.bpmTracker.outputSlew*) — seeded from hello.
+  bpmSlew: { enabled: false, bpmPerSec: 16 },
+  bpmSlewBuilt: false,
   selected: 'input',
   trace: {},           // signalId -> {raw:Float32Array, post:Float32Array}
   head: 0,
   live: {},            // signalId -> {raw, post}
   connected: false,
   mode: 'test',
+  micDisabled: false,
+  fileMonitor: false,
   filePath: '',
   datasetsDir: '',
   browseDir: '',
   devices: [],
   device: '',
   inputGain: 1.0,
+  // Server-built one-liner of the input gain actually in force ("×2.50").
+  // Re-sent with every `inputGain` frame + on hello, so the MIC TUNE page can
+  // always show what the gain IS — including right after an app reload
+  // (report 20260725_131, same contract as `gatesSummary`).
+  gainSummary: '',
+  // Outcome of the last input-gain apply (server read-back, not a local echo).
+  // { ok, text, source, stale } — a SUCCESS line is transient, a FAILURE line
+  // stays until the next apply so it can't be missed.
+  gainApply: null,
   sourceSmoothHz: 12000,
   engineLinkConnected: false,   // SHARED-tuning sync to the engine is live
   cal: { phase: 'idle', result: null },
@@ -57,20 +73,53 @@ const S = {
     climax: null, phrasePhase: null, phraseBoundary: null, silence: null, trackChange: null,
     onsetLow: null, onsetMid: null, onsetHigh: null, chestHit: null,
   },
+  derivedConfig: null,  // authoritative audio.derivedSignals config from server
+  derivedMetrics: { partyLoudness: null, silenceLoudness: null },
+  noteColorSelected: 'c',
+  // Two-step RESET ALL on the note-colour wheel: armed by the first tap, fired
+  // by the second, disarmed by the lapse timer (or blur).
+  noteResetArmed: false,
+  noteResetTimer: null,
+  // TEMPO OUTPUT published/raw poll (only runs while DERIVED TUNE is open).
+  tempoPollTimer: null,
+  derivedBuilt: false,
   spFlash: 0, scFlash: 0,
   // Decaying flash levels for the NEW pulse keys (armed on the rising edge in the
   // frame drain, decayed each render so a one-hop pulse stays visible).
   countdownFlash: 0, boundaryFlash: 0, trackChangeFlash: 0,
   onsetLowFlash: 0, onsetMidFlash: 0, onsetHighFlash: 0, chestFlash: 0,
   genreNames: [],      // index-aligned GENRE name list (from the server)
-  page: 'design',      // 'design' | 'mic' | 'osc' — top-bar nav
+  page: 'design',      // 'design' | 'mic' | 'party' | 'derived' | 'osc'
+  // ── PARTY page (report 20260725_19) ────────────────────────────────────────
+  partyTunables: [],   // [{key,kind,label,unit,min,max,step,hint}] from the server
+  partyParams: null,   // live detector thresholds (server truth)
+  partyEdits: {},      // operator's un-applied editor values (key → value)
+  partyState: null,    // 10 Hz meter snapshot
+  partyOverride: 'auto',
+  partyValidation: false,
+  partyCaptures: { ambient: null, party: null },
+  partySuggestions: null,
+  partySession: null,  // last GET /party/session (engine timeline state)
+  partyConfig: null,   // last GET /party/config (engine party authority)
+  partySessionError: null,
+  partyBuilt: false,
   oscAcc: null,        // latest OSC OUT accounting snapshot { target, totalSent, outputs }
   // MIC TUNE page (report 20260621_5): noise gate state (global + per-band; null
   // per-band → uses the global gate), live band levels for the meters, and the
   // noise-floor auto-calibration phase/result.
   gates: { noiseGate: 0.04, lowGate: null, midGate: null, highGate: null },
+  // Server-built one-liner of the gates actually in force ("low … · mid … ·
+  // high … · global …"). Re-sent with every `gates` frame + on hello, so the
+  // MIC TUNE page can always show what the noise floor IS — including right
+  // after an app reload (operator request 2026-08-03).
+  gatesSummary: '',
   liveBands: { low: 0, mid: 0, high: 0 },
   noiseCal: { phase: 'idle', result: null },
+  // Outcome of the last noise-floor apply (server read-back, not a local echo).
+  // { ok, text, source, stale } — a SUCCESS line is transient (clears itself
+  // after APPLY_CONFIRM_MS, per the operator's "keep it quiet" directive); a
+  // FAILURE line stays until the next apply so it can't be missed.
+  noiseApply: null,
   micBuilt: false,
   // MIC TUNE calibration profiles (named venue/condition states) + the active one.
   profiles: [],
@@ -153,6 +202,15 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 let ws = null;
 const frameQueue = [];
 
+function applyDesignHealth(missing) {
+  S.missingCuratedOutputs = Array.isArray(missing) ? missing : [];
+  if (S.missingCuratedOutputs.length) {
+    setStatus(`design incomplete: ${S.missingCuratedOutputs.join(', ')}`, 'err');
+  } else if (S.connected) {
+    setStatus('live', 'ok');
+  }
+}
+
 // ── WS ─────────────────────────────────────────────────────────────────────
 function connect() {
   const url = `ws://${location.hostname || 'localhost'}:${location.port || 6973}/ws`;
@@ -165,25 +223,51 @@ function connect() {
     if (m.type === 'hello') {
       S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.frequencyOnlyOps = m.frequencyOnlyOps || []; S.rawSources = m.rawSources || {};
       S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
+      S.curatedOutputs = m.curatedOutputs || {};
+      applyDesignHealth(m.missingCuratedOutputs);
       S.views = m.views || []; S.viewTypes = m.viewTypes || {};
       S.synths = m.synths || [];
       S.genreNames = m.genreNames || [];
       S.source = m.source;
       if (m.mode) S.mode = m.mode;
+      S.micDisabled = m.micDisabled === true;
       if (m.device != null) S.device = m.device;
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
       if (m.gates) S.gates = { ...S.gates, ...m.gates };
+      if (m.gatesSummary) S.gatesSummary = m.gatesSummary;
+      // A FAILED last apply survives the reload (the operator still needs to
+      // know it didn't land); a successful one doesn't re-announce itself —
+      // the always-visible gate summary already states the truth.
+      S.noiseApply = (m.lastNoiseApply && !m.lastNoiseApply.ok)
+        ? { ...m.lastNoiseApply, stale: true } : null;
+      if (m.gainSummary) S.gainSummary = m.gainSummary;
+      // Same rule for the gain apply: a FAILED one survives the reload, a
+      // successful one doesn't re-announce itself (the always-visible readout
+      // under the gain card already states the truth).
+      S.gainApply = (m.lastGainApply && !m.lastGainApply.ok)
+        ? { ...m.lastGainApply, stale: true } : null;
+      if (m.derivedConfig) S.derivedConfig = m.derivedConfig;
+      if (m.bpmSlew) { S.bpmSlew = { ...m.bpmSlew }; S.bpmSlewBuilt = false; }
       if (Array.isArray(m.profiles)) { S.profiles = m.profiles; S.activeProfileId = m.activeProfileId || null; }
       if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
+      // PARTY page seed (report 20260725_19).
+      if (Array.isArray(m.partyTunables)) S.partyTunables = m.partyTunables;
+      if (m.partyParams) { S.partyParams = m.partyParams; S.partyEdits = { ...m.partyParams }; }
+      if (m.partyOverride) S.partyOverride = m.partyOverride;
+      S.partyValidation = !!m.partyValidationMode;
+      if (m.partyCaptures) S.partyCaptures = m.partyCaptures;
+      S.partySuggestions = m.partySuggestions || null;
       seedTraces();
       frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
       // Boot in mic mode → load the device list so the dropdown resolves the
       // configured device (hello.device) to its real label and shows it
       // selected, instead of stranding on "Default input".
-      if (S.mode === 'mic') send({ type: 'listDevices' });
+      if (S.mode === 'mic' && !S.micDisabled) send({ type: 'listDevices' });
+    } else if (m.type === 'designHealth') {
+      applyDesignHealth(m.missingCuratedOutputs);
     } else if (m.type === 'frame') {
       frameQueue.push(m);
     } else if (m.type === 'frames') {
@@ -195,6 +279,41 @@ function connect() {
     } else if (m.type === 'oscRate') {
       S.osc.rateHz = m.rateHz;
       if (S.page === 'osc') syncOscRateControl();
+    } else if (m.type === 'partyState') {
+      S.partyState = m;
+      if (S.page === 'party') renderPartyMeters();
+    } else if (m.type === 'partyParams') {
+      S.partyParams = m.params;
+      // Adopt server truth for any field the operator has NOT edited away from
+      // the previous server value — never stomp a half-typed edit.
+      for (const k of Object.keys(m.params)) {
+        if (S.partyEdits[k] === undefined) S.partyEdits[k] = m.params[k];
+      }
+      if (S.page === 'party') { renderPartyEditors(); renderPartyDirty(); }
+    } else if (m.type === 'partyOverride') {
+      S.partyOverride = m.mode;
+      if (S.page === 'party') renderPartyOverride();
+    } else if (m.type === 'partyCapStatus') {
+      if (S.page === 'party') renderPartyCalib();
+    } else if (m.type === 'partyCapResult') {
+      if (m.ok) {
+        S.partyCaptures[m.kind] = m.stats;
+        S.partySuggestions = m.suggestions || null;
+        flash(`${m.kind} capture done (${m.stats.n} samples)`);
+      } else {
+        flash(`capture failed: ${m.error}`, true);
+      }
+      if (S.page === 'party') renderPartyCalib();
+    } else if (m.type === 'partyPersisted') {
+      if (S.page === 'party') renderPartyDirty();
+    } else if (m.type === 'bpmSlew') {
+      S.bpmSlew = { enabled: !!m.enabled, bpmPerSec: m.bpmPerSec };
+      if (S.page === 'derived') syncBpmSlewControl();
+    } else if (m.type === 'derivedConfig') {
+      S.derivedConfig = m.config;
+      const status = $('derived-status');
+      if (status) status.textContent = 'Derived tuning updated.';
+      if (S.page === 'derived') refreshDerivedPage();
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
@@ -202,8 +321,10 @@ function connect() {
       frameQueue.length = 0;
       if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
     } else if (m.type === 'inputGain') {
-      S.inputGain = m.value; buildGainBar();
-      if (S.page === 'mic') refreshMicControls();
+      S.inputGain = m.value;
+      if (m.summary) S.gainSummary = m.summary;
+      buildGainBar();
+      if (S.page === 'mic') { refreshMicControls(); renderGainApplyState(); }
     } else if (m.type === 'smooth') {
       S.sourceSmoothHz = m.value; if (S.selected === 'input') renderChain();
     } else if (m.type === 'engineLink') {
@@ -212,6 +333,7 @@ function connect() {
       // When down, we degrade gracefully (analyzing on local tuning). Surface
       // errors / offline notes so a local-only divergence can't hide.
       S.engineLinkConnected = !!m.connected;
+      if (S.page === 'derived') refreshDerivedLink();
       if (m.error) flash('engine sync: ' + m.error, true);
       else if (m.note) flash(m.note, true);
     } else if (m.type === 'engineDevice') {
@@ -221,6 +343,8 @@ function connect() {
       buildSourceBar();
     } else if (m.type === 'flash') {
       flash(m.text, !!m.error);
+      const derivedStatus = $('derived-status');
+      if (derivedStatus && S.page === 'derived') derivedStatus.textContent = m.text;
     } else if (m.type === 'calStatus') {
       S.cal.phase = m.phase; if (m.phase === 'recording') S.cal.result = null; renderCal();
       if (S.page === 'mic') renderGainCal();
@@ -229,7 +353,25 @@ function connect() {
       if (S.page === 'mic') renderGainCal();
     } else if (m.type === 'gates') {
       S.gates = { noiseGate: m.noiseGate, lowGate: m.lowGate, midGate: m.midGate, highGate: m.highGate };
-      if (S.page === 'mic') refreshMicControls();
+      if (m.summary) S.gatesSummary = m.summary;
+      if (S.page === 'mic') { refreshMicControls(); renderNoiseFloorState(); }
+    } else if (m.type === 'noiseApplyResult') {
+      // The APPLY confirmation (server read-back of what the engine/analyzer
+      // now actually holds). Success auto-clears; failure stays put.
+      S.noiseApply = { ...m, stale: false };
+      clearTimeout(noiseApplyT);
+      if (m.ok) noiseApplyT = setTimeout(() => { S.noiseApply = null; renderNoiseFloorState(); }, APPLY_CONFIRM_MS);
+      renderNoiseFloorState();
+    } else if (m.type === 'gainApplyResult') {
+      // The gain APPLY confirmation (server read-back of what the engine/
+      // analyzer now actually holds). Success auto-clears; failure stays put.
+      S.gainApply = { ...m, stale: false };
+      clearTimeout(gainApplyT);
+      if (m.ok) gainApplyT = setTimeout(() => { S.gainApply = null; renderGainApplyState(); }, APPLY_CONFIRM_MS);
+      renderGainApplyState();
+      // The DESIGN page's compact gain bar has no line of its own — the same
+      // apply can be triggered from there, so surface the outcome as a flash.
+      if (S.page !== 'mic') flash(m.text, !m.ok);
     } else if (m.type === 'profiles') {
       S.profiles = m.profiles || []; S.activeProfileId = m.activeId || null;
       if (S.page === 'mic') renderProfiles();
@@ -302,17 +444,12 @@ function signalName(sig) {
 // ONLY for the read-only "→ address" hint under the name field. A curated name
 // keeps its canonical engine-bound address; any other name slug-derives. Keep
 // in sync with CURATED_OUTPUTS / slug there.
-const CURATED_OUTPUTS = {
-  micLow: '/marsin/mic/low', micMid: '/marsin/mic/mid', micHigh: '/marsin/mic/high',
-  micKick: '/marsin/mic/kick', micDomFreq1: '/marsin/dom/freq1', micDomFreq2: '/marsin/dom/freq2',
-  micDomEnergy1: '/marsin/dom/energy1', micDomEnergy2: '/marsin/dom/energy2',
-};
 function slugName(name) {
   return (typeof name === 'string' ? name : '')
     .trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 function oscAddressForName(name) {
-  if (CURATED_OUTPUTS[name]) return CURATED_OUTPUTS[name];
+  if (S.curatedOutputs[name]) return S.curatedOutputs[name];
   const s = slugName(name);
   return s ? `/marsin/audio/${s}` : '(invalid name)';
 }
@@ -741,7 +878,7 @@ function moveOp(i, d) {
 // ── file player (BROWSER-SOURCED file mode) ─────────────────────────────────
 const PCM_SR = 44100;
 const filePlayer = {
-  audio: null, ctx: null, node: null, srcNode: null, path: '', ready: false,
+  audio: null, ctx: null, node: null, srcNode: null, monitorNode: null, path: '', ready: false,
   _workletCode: `
     class PcmTap extends AudioWorkletProcessor {
       process(inputs, outputs) {
@@ -767,13 +904,29 @@ const filePlayer = {
     const a = new Audio();
     a.src = '/file?path=' + encodeURIComponent(path);
     a.preload = 'auto'; a.crossOrigin = 'anonymous';
-    this.audio = a;
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new Ctx({ sampleRate: PCM_SR });
-    this.ctx = ctx;
-    const srcNode = ctx.createMediaElementSource(a);
-    this.srcNode = srcNode;
+    // DO NOT publish `a` as this.audio yet. Until createMediaElementSource()
+    // has handed the element's output to the WebAudio graph, the element plays
+    // straight to the default output at FULL volume — and the monitor gain (the
+    // thing the MUTED button reports) lives in that graph. An AudioContext /
+    // graph failure here must therefore leave NO playable element behind, or
+    // the transport would happily blast the speakers while reading MUTED.
+    let ctx;
+    let srcNode;
     let tap;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      ctx = new Ctx({ sampleRate: PCM_SR });
+      this.ctx = ctx;
+      srcNode = ctx.createMediaElementSource(a);
+      this.srcNode = srcNode;
+    } catch (e) {
+      try { a.pause(); } catch { /* never played */ }
+      a.src = '';
+      this.stop();
+      flash('file replay: WebAudio graph failed (' + (e && e.message) + ') — nothing loaded, speakers untouched', true);
+      renderTransport();
+      return;
+    }
     try {
       const url = URL.createObjectURL(new Blob([this._workletCode], { type: 'text/javascript' }));
       await ctx.audioWorklet.addModule(url);
@@ -797,7 +950,15 @@ const filePlayer = {
     }
     this.node = tap;
     srcNode.connect(tap);
-    tap.connect(ctx.destination);
+    const monitorNode = ctx.createGain();
+    monitorNode.gain.value = S.fileMonitor ? 1 : 0;
+    this.monitorNode = monitorNode;
+    tap.connect(monitorNode);
+    monitorNode.connect(ctx.destination);
+    // The graph now owns the element's output and the monitor gain matches the
+    // MUTED/MONITOR button — only NOW is it safe to expose the element to the
+    // transport controls.
+    this.audio = a;
     this.ready = true;
     a.ontimeupdate = () => renderTransport();
     a.onplay = () => { ctx.resume(); renderTransport(); };
@@ -812,12 +973,23 @@ const filePlayer = {
   pause() { if (this.audio) this.audio.pause(); },
   toggle() { if (!this.audio) return; this.audio.paused ? this.play() : this.pause(); },
   seek(frac) { if (this.audio && this.audio.duration) this.audio.currentTime = frac * this.audio.duration; },
+  setMonitor(enabled) {
+    S.fileMonitor = enabled === true;
+    if (this.monitorNode) this.monitorNode.gain.value = S.fileMonitor ? 1 : 0;
+    renderTransport();
+  },
   stop() {
     if (this.audio) { try { this.audio.pause(); } catch { /* ignore */ } this.audio.src = ''; this.audio = null; }
     if (this.node) { try { this.node.disconnect(); } catch { /* ignore */ } this.node = null; }
     if (this.srcNode) { try { this.srcNode.disconnect(); } catch { /* ignore */ } this.srcNode = null; }
+    if (this.monitorNode) { try { this.monitorNode.disconnect(); } catch { /* ignore */ } this.monitorNode = null; }
     if (this.ctx) { try { this.ctx.close(); } catch { /* ignore */ } this.ctx = null; }
     this.ready = false; this.path = '';
+    // SPEAKER SAFETY: monitoring is a per-load, explicitly-armed state. The gain
+    // node that enforced it is gone, so leaving S.fileMonitor true would let the
+    // NEXT load() (or a source switch back to file) come up monitoring at full
+    // volume with no fresh operator toggle. Disarm it with the graph.
+    S.fileMonitor = false;
   },
 };
 function sendPcm(i16) {
@@ -839,12 +1011,16 @@ function renderTransport() {
     const seek = el('input', 'tp-seek'); seek.id = 'tp-seek'; seek.type = 'range'; seek.min = 0; seek.max = 1000; seek.step = 1; seek.value = 0;
     seek.oninput = () => filePlayer.seek(+seek.value / 1000);
     const time = el('span', 'tp-time'); time.id = 'tp-time';
-    box.appendChild(playBtn); box.appendChild(seek); box.appendChild(time);
+    const monitor = el('button', 'tp-btn', 'MUTED'); monitor.id = 'tp-monitor';
+    monitor.title = 'File monitoring is muted by default; analysis still receives PCM.';
+    monitor.onclick = () => filePlayer.setMonitor(!S.fileMonitor);
+    box.appendChild(playBtn); box.appendChild(seek); box.appendChild(time); box.appendChild(monitor);
     box.dataset.built = '1';
   }
   $('tp-play').textContent = a.paused ? '▶' : '⏸';
   const seek = $('tp-seek'); if (document.activeElement !== seek) seek.value = Math.round(frac * 1000);
   $('tp-time').textContent = fmtTime(cur) + ' / ' + fmtTime(dur);
+  $('tp-monitor').textContent = S.fileMonitor ? 'MONITOR ON' : 'MUTED';
 }
 
 // ── source selector (Test / Mic / File) ─────────────────────────────────────
@@ -865,7 +1041,15 @@ function buildSourceBar() {
   const seg = el('div', 'seg');
   for (const [m, label] of [['test', 'Test'], ['mic', 'Mic / Line'], ['file', 'File']]) {
     const b = el('button', 'seg-btn' + (S.mode === m ? ' active' : ''), label);
+    if (m === 'mic' && S.micDisabled) {
+      b.disabled = true;
+      b.title = 'Physical microphone disabled by the server --no-mic safety interlock.';
+    }
     b.onclick = () => {
+      if (m === 'mic' && S.micDisabled) {
+        flash('physical microphone disabled by test safety interlock', true);
+        return;
+      }
       if (m === 'file') {
         S.mode = 'file'; buildSourceBar();
         openBrowse(S.browseDir || S.datasetsDir);
@@ -910,12 +1094,34 @@ function buildSourceBar() {
   if (S.device && !matched) {
     const o = el('option', null, S.device); o.value = S.device; o.selected = true; sel.appendChild(o);
   }
-  sel.onchange = () => { S.device = sel.value; send({ type: 'setMode', mode: 'mic', device: sel.value || null }); flash('input: ' + (sel.selectedOptions[0]?.textContent || 'default')); };
-  const refresh = el('button', 'file-go', '⟳'); refresh.title = 'refresh device list'; refresh.onclick = () => send({ type: 'listDevices' });
+  // MIC-LOCK defence in depth (the server is the authority — it refuses
+  // setMode('mic') and listDevices under --no-mic — but the client must not
+  // ASK either: an unconditional request here is what makes an "isolated" run
+  // look like it is still probing for capture hardware). Disabled controls AND
+  // guarded handlers, because a disabled control can still be re-enabled from
+  // devtools while the interlock state is what actually matters.
+  sel.disabled = S.micDisabled;
+  sel.title = S.micDisabled ? 'Physical microphone disabled by the server --no-mic safety interlock.' : '';
+  sel.onchange = () => {
+    if (S.micDisabled) { flash('physical microphone disabled by test safety interlock', true); buildSourceBar(); return; }
+    S.device = sel.value;
+    send({ type: 'setMode', mode: 'mic', device: sel.value || null });
+    flash('input: ' + (sel.selectedOptions[0]?.textContent || 'default'));
+  };
+  const refresh = el('button', 'file-go', '⟳');
+  refresh.disabled = S.micDisabled;
+  refresh.title = S.micDisabled ? 'Physical microphone disabled by the server --no-mic safety interlock.' : 'refresh device list';
+  refresh.onclick = () => {
+    if (S.micDisabled) { flash('physical microphone disabled by test safety interlock', true); return; }
+    send({ type: 'listDevices' });
+  };
   mwrap.appendChild(sel); mwrap.appendChild(refresh);
   box.appendChild(mwrap);
 
-  const tag = el('span', 'src-tag', S.mode === 'test' ? 'synthetic source' : S.mode === 'mic' ? `live input · ${S.devices.length} device${S.devices.length === 1 ? '' : 's'}` : 'file replay');
+  const sourceLabel = S.mode === 'test' ? 'synthetic source' :
+    S.mode === 'mic' ? `live input · ${S.devices.length} device${S.devices.length === 1 ? '' : 's'}` :
+      `file replay · ${S.fileMonitor ? 'monitor on' : 'silent monitor'}`;
+  const tag = el('span', 'src-tag', `${sourceLabel}${S.micDisabled ? ' · MIC LOCKED' : ''}`);
   box.appendChild(tag);
 }
 
@@ -964,9 +1170,11 @@ function renderCal() {
     const txt = el('span', null, `peak <b>${r.peak.toFixed(2)}</b> · ${r.verdict} · suggest <b>×${r.recommendedGain.toFixed(1)}</b> `);
     res.appendChild(txt);
     if (Math.abs(r.recommendedGain - r.currentGain) > 0.05) {
+      // VERIFIED apply, same as the MIC TUNE card's ✓ Apply gain: the flash
+      // comes from the server's READ-BACK (gainApplyResult), never from an
+      // optimistic echo of the number we just sent (report 20260725_131).
       const apply = el('button', 'cal-apply', 'Apply'); apply.onclick = () => {
-        S.inputGain = r.recommendedGain; send({ type: 'setInputGain', value: r.recommendedGain });
-        buildGainBar(); flash('gain → ×' + r.recommendedGain.toFixed(1));
+        send({ type: 'applyInputGain', value: r.recommendedGain });
       };
       res.appendChild(apply);
     }
@@ -1028,8 +1236,13 @@ function renderLive() {
     $('bpm-val').textContent = dv.bpm > 0 ? String(Math.round(dv.bpm)) : '—';
     const pp = $('party-pill'); pp.textContent = dv.party > 0.5 ? 'PARTY' : 'calm'; pp.className = 'party-pill' + (dv.party > 0.5 ? ' on' : '');
     const nn = $('note-val'); const pc = Math.round(dv.note);
-    const noteColor = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;
-    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = noteColor;
+    // audioNoteHue is hue-only. Preview it at full HSV saturation/value so the
+    // operator sees the bright wheel colour without changing signal semantics —
+    // but ONLY on the colour CHIP. The note LETTER is text: at l=50% the dark
+    // hues (B, E) fell to ~1.6:1 on the panel and the letter was unreadable, so
+    // it is tinted by the same hue at the theme's readable lightness.
+    const noteColor = hueCss(dv.hue);
+    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = noteLetterCss(dv.hue);
     // NOTE color SWATCH — the live audioNoteHue rendered as a colour chip so the
     // operator can see the note→colour mapping the engine is driving.
     const sw = $('note-swatch'); if (sw) sw.style.background = noteColor;
@@ -1163,6 +1376,40 @@ function buildOscRateControl() {
   S.oscRateBuilt = true;
   syncOscRateControl();
 }
+// PUBLISHED-BPM SLEW control. The rate is how many BPM the value SENT to the
+// engine may move per second of audio; the detector is untouched. The server
+// rejects an out-of-range rate outright, so we never send one — the input is
+// bounded here and the server's echo is what finally sets the UI.
+function buildBpmSlewControl() {
+  if (S.bpmSlewBuilt) { syncBpmSlewControl(); return; }
+  const on = $('bpm-slew-on'), slider = $('bpm-slew-slider'), num = $('bpm-slew-num');
+  if (!on || !slider || !num) return;
+  const apply = (enabled, bpmPerSec) => {
+    const n = Math.round(+bpmPerSec);
+    if (!Number.isFinite(n) || n < 1 || n > 240) { syncBpmSlewControl(); return; }
+    S.bpmSlew = { enabled, bpmPerSec: n };
+    syncBpmSlewControl();
+    send({ type: 'setBpmSlew', enabled, bpmPerSec: n });
+  };
+  on.onchange = () => apply(on.checked, S.bpmSlew.bpmPerSec);
+  slider.oninput = () => apply(S.bpmSlew.enabled, slider.value);
+  num.onchange = () => apply(S.bpmSlew.enabled, num.value);
+  S.bpmSlewBuilt = true;
+  syncBpmSlewControl();
+}
+function syncBpmSlewControl() {
+  const on = $('bpm-slew-on'), slider = $('bpm-slew-slider'), num = $('bpm-slew-num');
+  if (!on || !slider || !num) return;
+  on.checked = !!S.bpmSlew.enabled;
+  // Slider and number carry the SAME value: both inputs now share max=240 (the
+  // server's accepted ceiling), so there is nothing to pin. The old Math.min(120)
+  // silently parked the slider at 120 while the number showed the real rate.
+  slider.value = S.bpmSlew.bpmPerSec;
+  num.value = S.bpmSlew.bpmPerSec;
+  slider.disabled = !S.bpmSlew.enabled;
+  num.disabled = !S.bpmSlew.enabled;
+}
+
 function syncOscRateControl() {
   const slider = $('osc-rate-slider'), num = $('osc-rate-num'), presets = $('osc-rate-presets');
   const r = S.osc.rateHz || 60;
@@ -1261,8 +1508,477 @@ function bindOscRowEvents(tbody) {
 
 // ── top-bar page nav (DESIGN / OSC OUT) ──────────────────────────────────────
 // ── MIC TUNE page (report 20260621_5) ───────────────────────────────────────
+// Derived-event controls are data-driven. The server owns defaults and strict
+// validation; this list owns only operator-facing labels, units and grouping.
+const DERIVED_EVENT_GROUPS = [
+  {
+    group: 'switch', title: 'Pattern + colour switch',
+    help: 'Large musical changes request a new pattern or palette. Dwell times prevent churn.',
+    fields: [
+      ['dropPulseFire', 'Drop fires above', '', 0.01],
+      ['patternMinDwellMs', 'Pattern minimum dwell', 'ms', 100],
+      ['dropMinDwellMs', 'Drop minimum dwell', 'ms', 100],
+      ['energyRegimeLo', 'Quiet regime below', '', 0.01],
+      ['energyRegimeHi', 'Loud regime above', '', 0.01],
+      ['regimeHoldMs', 'Confirm energy regime', 'ms', 100],
+      ['slowZoneLo', 'Leave slow zone below', '', 0.01],
+      ['slowZoneHi', 'Enter slow zone above', '', 0.01],
+      ['quantizeToBeat', 'Quantize switch to beat', 'boolean'],
+      ['quantizeMaxWaitMs', 'Maximum beat wait', 'ms', 10],
+      ['colorMinDwellMs', 'Colour minimum dwell', 'ms', 100],
+      ['noteChangeMinDwellMs', 'Note recolour spacing', 'ms', 100],
+      ['startupGuardMs', 'Startup guard', 'ms', 100],
+    ],
+  },
+  {
+    group: 'bandOnsets', title: 'Band onsets',
+    help: 'Turns sudden LOW, MID and HIGH energy rises into short chase pulses.',
+    fields: [
+      ['threshold', 'Rise over baseline', '×', 0.1],
+      ['absFloor', 'Absolute floor', '', 0.01],
+      ['refractoryMs', 'Minimum event spacing', 'ms', 10],
+      ['decayMs', 'Pulse decay', 'ms', 10],
+    ],
+  },
+  {
+    group: 'chestHit', title: 'Chest hit',
+    help: 'Finds a fresh sub-bass impact while rejecting a sustained 808 drone.',
+    fields: [
+      ['tLow', 'Re-arm below', '', 0.01],
+      ['tHigh', 'Fire above', '', 0.01],
+      ['absFloor', 'Sub-bass floor', '', 0.01],
+      ['refractoryMs', 'Minimum event spacing', 'ms', 10],
+      ['decayMs', 'Pulse decay', 'ms', 10],
+      ['droneTau', 'Drone smoothing', 's', 0.01],
+    ],
+  },
+  {
+    group: 'phrase', title: 'Phrase boundary',
+    help: 'Counts locked downbeats into a musical phrase and re-anchors on a drop.',
+    fields: [
+      ['phraseBars', 'Bars per phrase', 'bars', 1],
+      ['downbeatFire', 'Downbeat threshold', '', 0.01],
+      ['dropFire', 'Drop re-anchor threshold', '', 0.01],
+      ['dropReanchorMs', 'Drop re-anchor spacing', 'ms', 100],
+    ],
+  },
+  {
+    group: 'dropCountdown', title: 'Drop countdown',
+    help: 'Arms after a confident rising build, then pulses on beats near the expected drop.',
+    fields: [
+      ['peakScore', 'Build peak to arm', '', 0.01],
+      ['peakHoldMs', 'Hold peak to arm', 'ms', 100],
+      ['dropPeakExit', 'Disarm below', '', 0.01],
+      ['minConfArm', 'Minimum confidence', '', 0.01],
+      ['beatFire', 'Beat fires above', '', 0.01],
+      ['beatRearm', 'Beat re-arms below', '', 0.01],
+      ['refractoryMs', 'Pulse spacing', 'ms', 10],
+      ['pulseDecayMs', 'Pulse decay', 'ms', 10],
+      ['dropRefractoryMs', 'Post-drop quiet time', 'ms', 100],
+    ],
+  },
+];
+
+const NOTE_COLOR_KEYS = ['c', 'cSharp', 'd', 'dSharp', 'e', 'f', 'fSharp', 'g', 'gSharp', 'a', 'aSharp', 'b'];
+const NOTE_COLOR_LABELS = {
+  c: 'C', cSharp: 'C♯ / D♭', d: 'D', dSharp: 'D♯ / E♭', e: 'E', f: 'F',
+  fSharp: 'F♯ / G♭', g: 'G', gSharp: 'G♯ / A♭', a: 'A', aSharp: 'A♯ / B♭', b: 'B',
+};
+// Clockwise order copied from the supplied circle-of-fifths color wheel.
+const NOTE_COLOR_FIFTHS = ['c', 'g', 'd', 'a', 'e', 'b', 'fSharp', 'cSharp', 'gSharp', 'dSharp', 'aSharp', 'f'];
+
+function hueCss(normalized) {
+  const hue = Number.isFinite(normalized) ? normalized * 360 : 0;
+  return `hsl(${hue.toFixed(1)},100%,50%)`;
+}
+
+// TEXT tinted by a note hue (the live NOTE letter). Full saturation/value is
+// right for a colour CHIP and wrong for text — a pure blue letter is ~1.6:1 on
+// the dark panels. The lightness comes from the theme token --note-letter-l so
+// every theme states its own readable value (light theme darkens instead of
+// lightening); the hue itself is unchanged, so the letter still reads as the
+// note's colour.
+function noteLetterCss(normalized) {
+  const hue = Number.isFinite(normalized) ? normalized * 360 : 0;
+  return `hsl(${hue.toFixed(1)},85%,var(--note-letter-l))`;
+}
+
+// Relative luminance (WCAG) of a fully saturated hue at l=50% — the exact
+// colour a wheel key swatch is painted with.
+function hueLuminance(degrees) {
+  const h = ((degrees % 360) + 360) % 360 / 60;
+  const x = 1 - Math.abs((h % 2) - 1);
+  const rgb = h < 1 ? [1, x, 0] : h < 2 ? [x, 1, 0] : h < 3 ? [0, 1, x]
+    : h < 4 ? [0, x, 1] : h < 5 ? [x, 0, 1] : [1, 0, x];
+  const lin = rgb.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+
+// Label colour for a wheel key, chosen from ITS OWN swatch luminance: whichever
+// of near-black / near-white gives the higher contrast wins (a fixed near-black
+// label failed AA on the dark hues — B at 2.45:1, E at 3.17:1). The text-shadow
+// flips with it so the halo always lifts the glyph off the swatch.
+const KEY_LABEL_DARK = { color: '#080808', textShadow: '0 1px rgba(255,255,255,.45)' };
+const KEY_LABEL_LIGHT = { color: '#fbfbfb', textShadow: '0 1px rgba(0,0,0,.6)' };
+function keyLabelStyle(degrees) {
+  const lum = hueLuminance(degrees);
+  const contrastDark = (lum + 0.05) / (0.00304 + 0.05);      // #080808
+  const contrastLight = (0.97 + 0.05) / (lum + 0.05);        // #fbfbfb
+  return contrastDark >= contrastLight ? KEY_LABEL_DARK : KEY_LABEL_LIGHT;
+}
+
+function selectNoteColor(key) {
+  if (!NOTE_COLOR_KEYS.includes(key)) return;
+  S.noteColorSelected = key;
+  refreshNoteColorWheel();
+}
+
+function sendNoteColorHue(degrees) {
+  const hue = Number(degrees);
+  if (!Number.isFinite(hue) || hue < 0 || hue >= 360) {
+    refreshNoteColorWheel();
+    return;
+  }
+  send({
+    type: 'setDerivedConfig',
+    group: 'noteColors',
+    patch: { [S.noteColorSelected]: hue / 360 },
+  });
+}
+
+function buildNoteColorWheel() {
+  const wheel = $('note-color-wheel');
+  if (!wheel || wheel.querySelector('.note-color-key')) return;
+  NOTE_COLOR_FIFTHS.forEach((key, index) => {
+    const button = el('button', 'note-color-key');
+    button.type = 'button';
+    button.dataset.noteKey = key;
+    const angle = index * 30;
+    button.style.transform = `translate(-50%,-50%) rotate(${angle}deg) translateY(-122px) rotate(${-angle}deg)`;
+    button.setAttribute('aria-label', `Edit ${NOTE_COLOR_LABELS[key]} color`);
+    button.onclick = () => selectNoteColor(key);
+    button.textContent = NOTE_COLOR_LABELS[key].split(' ')[0];
+    wheel.appendChild(button);
+  });
+  const slider = $('note-color-hue');
+  const number = $('note-color-hue-num');
+  const preview = (value) => {
+    const degrees = Math.max(0, Math.min(359, Number(value) || 0));
+    slider.value = degrees;
+    number.value = Math.round(degrees);
+    $('note-color-selected-swatch').style.background = hueCss(degrees / 360);
+  };
+  slider.oninput = () => preview(slider.value);
+  slider.onchange = () => sendNoteColorHue(slider.value);
+  number.oninput = () => preview(number.value);
+  number.onchange = () => sendNoteColorHue(number.value);
+  // RESET ALL wipes 12 hand-tuned hues, so it takes TWO taps: the first arms
+  // the button (label + colour change), the second fires. The arm lapses after
+  // NOTE_RESET_ARM_MS so a stray tap can't leave a live destructive button on
+  // the podium. No native confirm() — the companion never uses browser dialogs.
+  $('note-color-reset-all').onclick = () => {
+    if (S.noteResetArmed) {
+      disarmNoteColorReset();
+      send({
+        type: 'resetDerivedConfig',
+        group: 'noteColors',
+      });
+      return;
+    }
+    armNoteColorReset();
+  };
+  $('note-color-reset-all').onblur = () => disarmNoteColorReset();
+
+  // SCRIABIN (docs/59 §2, W9). One tap loads the twelve published Scriabin
+  // hues into this wheel — the mapping Live Touch's own FOLLOW NOTE uses — so
+  // the rig and the touch panel can be made to agree about what colour a note
+  // is. It goes through the ORDINARY setDerivedConfig door as a single 12-field
+  // patch, so it is validated, persisted and broadcast exactly like a hand
+  // turn of the hue slider; there is no preset-shaped side channel that could
+  // write a hue the editor would refuse.
+  //
+  // Not two-tap-armed like RESET ALL: this one is reversible by tapping RESET
+  // ALL (or by a single undo of each hue), whereas RESET ALL is the thing that
+  // wipes twelve hand-tuned values.
+  $('note-color-scriabin').onclick = () => {
+    send({ type: 'setDerivedConfig', group: 'noteColors', patch: { ...NOTE_COLOR_SCRIABIN } });
+  };
+}
+
+/**
+ * Scriabin's clavier-à-lumières table, HUES ONLY, in this wheel's key order.
+ * Kept byte-identical to `audio/config/derived_signals_config.js`'s
+ * `NOTE_COLOR_SCRIABIN` — the UI is a static bundle with no import of the
+ * engine's config module, so the two are pinned by
+ * `tests/audio/note_color_scriabin.test.js` instead of by a shared import.
+ */
+const NOTE_COLOR_SCRIABIN = {
+  c: 0.00, cSharp: 0.75, d: 0.14, dSharp: 0.05, e: 0.53, f: 0.99,
+  fSharp: 0.66, g: 0.08, gSharp: 0.79, a: 0.33, aSharp: 0.95, b: 0.60,
+};
+
+// Two-step RESET ALL — arm / disarm. `S.noteResetTimer` holds the lapse timer so
+// a re-arm never stacks two timers on the same button.
+const NOTE_RESET_ARM_MS = 3000;
+function armNoteColorReset() {
+  const button = $('note-color-reset-all');
+  if (!button) return;
+  S.noteResetArmed = true;
+  button.textContent = 'CONFIRM RESET';
+  button.classList.add('armed');
+  button.title = `Tap again to reset all 12 hues (cancels in ${NOTE_RESET_ARM_MS / 1000}s)`;
+  clearTimeout(S.noteResetTimer);
+  S.noteResetTimer = setTimeout(disarmNoteColorReset, NOTE_RESET_ARM_MS);
+}
+function disarmNoteColorReset() {
+  const button = $('note-color-reset-all');
+  clearTimeout(S.noteResetTimer);
+  S.noteResetTimer = null;
+  S.noteResetArmed = false;
+  if (!button) return;
+  button.textContent = 'RESET ALL';
+  button.classList.remove('armed');
+  button.title = '';
+}
+
+function refreshNoteColorWheel() {
+  const colors = S.derivedConfig && S.derivedConfig.noteColors;
+  const wheel = $('note-color-wheel');
+  if (!colors || !wheel) return;
+  const stops = [];
+  NOTE_COLOR_FIFTHS.forEach((key, index) => {
+    const hue = Number.isFinite(colors[key]) ? colors[key] * 360 : 0;
+    const color = hueCss(colors[key]);
+    const button = wheel.querySelector(`[data-note-key="${key}"]`);
+    if (button) {
+      button.style.background = color;
+      // Label colour follows THIS key's swatch, not a fixed near-black.
+      const label = keyLabelStyle(hue);
+      button.style.color = label.color;
+      button.style.textShadow = label.textShadow;
+      button.classList.toggle('selected', key === S.noteColorSelected);
+    }
+    stops.push(`${color} ${index * 30}deg ${(index + 1) * 30}deg`);
+  });
+  wheel.style.setProperty('--note-wheel-gradient', `conic-gradient(from -15deg, ${stops.join(',')})`);
+  const selectedHue = colors[S.noteColorSelected];
+  $('note-color-selected-note').textContent = NOTE_COLOR_LABELS[S.noteColorSelected];
+  $('note-color-selected-swatch').style.background = hueCss(selectedHue);
+  $('note-color-hue').value = Math.round(selectedHue * 360);
+  $('note-color-hue-num').value = Math.round(selectedHue * 360);
+  const pc = Math.max(0, Math.min(11, Math.round(S.derived.note || 0)));
+  $('note-color-current-note').textContent = NOTE_NAMES[pc] || '—';
+  $('note-color-current-swatch').style.background = hueCss(S.derived.hue);
+}
+
+// IDEAL note-change latency, in hops, straight from the estimator's own gate:
+// the window must reach consensus (ceil(medianN * minConsensus) hops) and THEN
+// the change must hold — holdHops for a far move (> nearChangeSemitones), the
+// larger nearHoldHops for a near one. The confirming hop is the last hold hop,
+// hence the −1.
+//
+// The OLD readout was (medianN + holdHops)/86.13 ≈ 290 ms: it charged the full
+// window instead of the consensus fraction AND ignored nearHoldHops, which is
+// the dominant path for small moves — an underclaim in both directions. Both
+// numbers are shown, plus the measured end-to-end typical, so nobody reads the
+// best case as the shipped behaviour.
+const ANALYSIS_HOPS_PER_SEC = 86.13;
+const NOTE_MEASURED_TYPICAL_S = 0.44;   // p50 through the real analyzer, under noise
+function noteResponseHops(values, holdKey) {
+  const consensus = Math.ceil(values.medianN * values.minConsensus);
+  return consensus + values[holdKey] - 1;
+}
+function noteResponseText(values) {
+  const secs = (hops) => (hops / ANALYSIS_HOPS_PER_SEC).toFixed(2);
+  const far = secs(noteResponseHops(values, 'holdHops'));
+  const near = secs(noteResponseHops(values, 'nearHoldHops'));
+  return `Ideal response ≈ ${far} s far / ${near} s near move at ~86 hops/s; `
+    + `measured ~${NOTE_MEASURED_TYPICAL_S.toFixed(2)} s typical under noise.`;
+}
+
+function derivedInputId(group, key) {
+  const dashed = (value) => value.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  return `derived-${dashed(group)}-${dashed(key)}`;
+}
+
+function wireDerivedInput(input, group) {
+  input.onchange = () => {
+    const value = input.type === 'checkbox' ? input.checked : Number(input.value);
+    if (input.type !== 'checkbox' && !Number.isFinite(value)) {
+      refreshDerivedPage();
+      return;
+    }
+    send({ type: 'setDerivedConfig', group, patch: { [input.dataset.key]: value } });
+  };
+}
+
+function buildDerivedEventGroups() {
+  const host = $('derived-event-groups');
+  if (!host || host.children.length) return;
+  for (const def of DERIVED_EVENT_GROUPS) {
+    const details = el('details', 'derived-event-group');
+    const summary = el('summary', '', def.title);
+    const help = el('p', 'derived-event-help', def.help);
+    const controls = el('div', 'derived-controls');
+    controls.dataset.group = def.group;
+    details.append(summary, help, controls);
+    for (const [key, labelText, unit, step] of def.fields) {
+      const id = derivedInputId(def.group, key);
+      const label = el('label', 'derived-field');
+      label.htmlFor = id;
+      label.appendChild(el('span', '', labelText));
+      const wrap = el('span', 'derived-input-unit');
+      const input = document.createElement('input');
+      input.id = id;
+      input.dataset.key = key;
+      if (unit === 'boolean') {
+        input.type = 'checkbox';
+        wrap.classList.add('boolean');
+        wrap.appendChild(input);
+      } else {
+        input.type = 'number';
+        input.step = String(step);
+        wrap.appendChild(input);
+        if (unit) wrap.appendChild(el('em', '', unit));
+      }
+      label.appendChild(wrap);
+      controls.appendChild(label);
+      wireDerivedInput(input, def.group);
+    }
+    host.appendChild(details);
+  }
+}
+
+function buildDerivedPage() {
+  if (!S.derivedBuilt) {
+    buildNoteColorWheel();
+    buildDerivedEventGroups();
+    for (const controls of document.querySelectorAll('#page-derived .derived-controls')) {
+      for (const input of controls.querySelectorAll('input[data-key]')) {
+        if (!input.onchange) wireDerivedInput(input, controls.dataset.group);
+      }
+    }
+    $('derived-silence-card').tabIndex = -1;
+    S.derivedBuilt = true;
+  }
+  buildBpmSlewControl();
+  refreshDerivedPage();
+}
+
+// ── TEMPO OUTPUT: published vs raw BPM ───────────────────────────────────────
+// The live frame carries the PUBLISHED (slewed) BPM only; the tracker's exact
+// estimate lives in the server's /signal_snapshot as `bpmOutput.raw`. Poll it
+// while DERIVED TUNE is open so the operator can watch the slew close the gap.
+// A missing/failed snapshot renders "—" (honest "not published"), never a
+// stand-in number.
+const TEMPO_POLL_MS = 1000;
+function renderTempoReadout(published, raw) {
+  const bpmText = (v) => (Number.isFinite(v) && v > 0 ? v.toFixed(1) : '—');
+  const pub = $('bpm-published'), rawEl = $('bpm-raw');
+  if (pub) pub.textContent = bpmText(published);
+  if (rawEl) rawEl.textContent = bpmText(raw);
+}
+function pollTempoOutput() {
+  fetch('/signal_snapshot')
+    .then((r) => r.json())
+    .then((snapshot) => {
+      const out = snapshot && snapshot.bpmOutput;
+      renderTempoReadout(out ? out.published : null, out ? out.raw : null);
+    })
+    .catch((err) => {
+      renderTempoReadout(null, null);
+      console.warn('tempo snapshot poll failed', err);
+    });
+}
+function startTempoPoll() {
+  if (S.tempoPollTimer) return;
+  pollTempoOutput();
+  S.tempoPollTimer = setInterval(pollTempoOutput, TEMPO_POLL_MS);
+}
+function stopTempoPoll() {
+  if (!S.tempoPollTimer) return;
+  clearInterval(S.tempoPollTimer);
+  S.tempoPollTimer = null;
+}
+
+function refreshDerivedLink() {
+  const state = $('derived-link-state');
+  if (!state) return;
+  state.textContent = S.engineLinkConnected ? '● mirrored to engine' : '○ local only (engine offline)';
+  state.className = `mic-link-state ${S.engineLinkConnected ? 'ok' : 'warn'}`;
+}
+
+function refreshDerivedPage() {
+  const ready = S.derivedConfig !== null;
+  for (const controls of document.querySelectorAll('#page-derived .derived-controls')) {
+    const values = ready ? S.derivedConfig[controls.dataset.group] : null;
+    for (const input of controls.querySelectorAll('input[data-key]')) {
+      // `values ? … : undefined` — NOT `values && values[key]`: with no config
+      // yet, `&&` yields null (not undefined) and every field stayed ENABLED,
+      // offering edits against a config the client does not have.
+      const value = values ? values[input.dataset.key] : undefined;
+      input.disabled = value === undefined;
+      if (value === undefined) continue;
+      if (input.type === 'checkbox') input.checked = value;
+      else input.value = value;
+    }
+  }
+  const noteTracking = ready ? S.derivedConfig.noteTracking : null;
+  const noteTiming = $('derived-note-timing');
+  if (noteTiming && noteTracking) noteTiming.textContent = noteResponseText(noteTracking);
+  refreshDerivedLink();
+  syncBpmSlewControl();
+  updateDerivedMeters();
+  refreshNoteColorWheel();
+}
+
+function updateDerivedMeter(prefix, value, offThresh, onThresh) {
+  const finite = Number.isFinite(value);
+  const normalized = finite ? clamp01(value) : 0;
+  $(`derived-${prefix}-loudness`).textContent = finite ? value.toFixed(3) : '—';
+  $(`derived-${prefix}-fill`).style.width = `${normalized * 100}%`;
+  const meter = $(`derived-${prefix}-meter`);
+  meter.setAttribute('aria-valuenow', finite ? value.toFixed(3) : '0');
+  for (const [kind, threshold] of [['off', offThresh], ['on', onThresh]]) {
+    const marker = $(`derived-${prefix}-${kind}-marker`);
+    marker.style.left = Number.isFinite(threshold) ? `${clamp01(threshold) * 100}%` : '0%';
+    marker.hidden = !Number.isFinite(threshold);
+    $(`derived-${prefix}-${kind}-readout`).textContent = Number.isFinite(threshold)
+      ? threshold.toFixed(2) : '—';
+  }
+}
+
+function updateDerivedMeters() {
+  const track = S.derivedConfig && S.derivedConfig.trackChange;
+  const party = S.derivedConfig && S.derivedConfig.party;
+  updateDerivedMeter(
+    'silence', S.derivedMetrics.silenceLoudness,
+    track && track.offThresh, track && track.onThresh,
+  );
+  updateDerivedMeter(
+    'party', S.derivedMetrics.partyLoudness,
+    party && party.offThresh, party && party.onThresh,
+  );
+  const silence = (S.derived.silence || 0) > 0.5;
+  const partyOn = (S.derived.party || 0) > 0.5;
+  const silencePill = $('derived-silence-state');
+  const partyPill = $('derived-party-state');
+  silencePill.textContent = silence ? 'SILENCE' : 'MUSIC';
+  silencePill.classList.toggle('on', silence);
+  partyPill.textContent = partyOn ? 'PARTY' : 'CALM';
+  partyPill.classList.toggle('on', partyOn);
+  refreshNoteColorWheel();
+}
+
 const METER_MAX = 0.6;   // meter + slider full-scale (so the gate line aligns)
 const BANDS3 = ['low', 'mid', 'high'];
+// How long a ✓ apply confirmation stays up (noise floor AND input gain).
+// Operator directive: keep it QUIET — a few seconds, then gone. The persistent
+// summary line under each card carries the value from then on, so nothing is
+// lost when this clears. FAILURES never auto-clear.
+const APPLY_CONFIRM_MS = 5000;
+let noiseApplyT = null;
+let gainApplyT = null;
 // Effective gate for a band = its per-band override, or the global gate.
 function effGate(band) {
   const v = S.gates[band + 'Gate'];
@@ -1276,6 +1992,11 @@ function hasOverride(band) {
 
 function buildMicPage() {
   if (!S.micBuilt) {
+    $('mic-derived-link').onclick = () => {
+      setPage('derived');
+      $('derived-silence-card').focus({ preventScroll: true });
+      $('derived-silence-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
     // One-time wiring. Calibrations.
     $('noisecal-btn').onclick = () => send({ type: 'startNoiseCal' });
     $('noisecal-apply').onclick = () => {
@@ -1292,7 +2013,18 @@ function buildMicPage() {
     };
     $('gaincal-apply').onclick = () => {
       const r = S.cal.result; if (!r) return;
-      send({ type: 'setInputGain', value: r.recommendedGain });
+      // VERIFIED apply (report 20260725_131): the server writes through, awaits
+      // the engine, reads the resulting gain back and answers with what really
+      // landed — not the fire-and-forget setInputGain the slider uses.
+      send({ type: 'applyInputGain', value: r.recommendedGain });
+    };
+    $('gaincal-save').onclick = () => {
+      const r = S.cal.result; if (!r) return;
+      // Calibrate the GAIN INTO the active profile — the mirror of the noise
+      // card's 💾 Save (report 20260725_132). The server routes it through the
+      // SAME verified apply and only snapshots the profile once the read-back
+      // proves the gain landed, so the ✓/✗ line answers this button too.
+      send({ type: 'saveActiveProfile', inputGain: r.recommendedGain });
     };
     // Profiles: add (saves current gates+gain under a name).
     const nameInp = $('mp-name');
@@ -1316,8 +2048,51 @@ function buildMicPage() {
   }
   refreshMicControls();
   renderNoiseCal();
+  renderNoiseFloorState();
   renderGainCal();
+  renderGainApplyState();
   renderProfiles();
+}
+
+// The two feedback lines under the noise-floor calibration (operator request
+// 2026-08-03 — "applying it shows nothing"):
+//   • #noisecal-current — ALWAYS there: the gates actually in force, as the
+//     SERVER reports them (`gates.summary`, re-seeded on hello → survives a
+//     reload). This is the "what is my noise floor set to?" readout.
+//   • #noisecal-applied — the transient one-line apply confirmation carrying
+//     the server's READ-BACK numbers, or a loud failure line that stays until
+//     the next apply.
+function renderNoiseFloorState() {
+  const cur = $('noisecal-current');
+  if (!cur) return;
+  cur.textContent = S.gatesSummary ? `noise floor now: ${S.gatesSummary}` : 'noise floor: —';
+  const line = $('noisecal-applied');
+  const a = S.noiseApply;
+  let text = a ? a.text : '';
+  if (a && a.savedTo) text += ` · saved to "${a.savedTo}"`;
+  if (a && a.stale) text += ' (last apply)';
+  line.textContent = text;
+  line.className = 'mac-applied' + (a ? (a.ok ? ' ok' : ' err') : '');
+}
+
+// The same two lines under the GAIN calibration (report 20260725_131):
+//   • #gaincal-current — ALWAYS there: the input gain actually in force, as the
+//     SERVER reports it (`inputGain.summary`, re-seeded on hello → survives a
+//     reload). This is the "what is my gain set to?" readout.
+//   • #gaincal-applied — the transient one-line apply confirmation carrying the
+//     server's READ-BACK value, or a loud failure line that stays until the
+//     next apply.
+function renderGainApplyState() {
+  const cur = $('gaincal-current');
+  if (!cur) return;
+  cur.textContent = S.gainSummary ? `input gain now: ${S.gainSummary}` : 'input gain: —';
+  const line = $('gaincal-applied');
+  const a = S.gainApply;
+  let text = a ? a.text : '';
+  if (a && a.savedTo) text += ` · saved to "${a.savedTo}"`;
+  if (a && a.stale) text += ' (last apply)';
+  line.textContent = text;
+  line.className = 'mac-applied' + (a ? (a.ok ? ' ok' : ' err') : '');
 }
 
 // Render the profile chips + the active-profile detail row.
@@ -1347,9 +2122,12 @@ function renderProfiles() {
       det.innerHTML = '<span class="mp-active-vals">no profile selected</span>';
     }
   }
-  // Keep the calibration "Save to <profile>" button label current.
+  // Keep both calibrations' "Save to <profile>" button labels current.
+  const label = active ? `"${active.name}"` : 'profile';
   const sn = $('noisecal-save-name');
-  if (sn) sn.textContent = active ? `"${active.name}"` : 'profile';
+  if (sn) sn.textContent = label;
+  const gsn = $('gaincal-save-name');
+  if (gsn) gsn.textContent = label;
 }
 
 // Reflect S.gates / S.inputGain into the sliders + labels + gate lines.
@@ -1427,22 +2205,446 @@ function updateMicMeters() {
   }
 }
 
+// ── PARTY page (report 20260725_19) ──────────────────────────────────────────
+// THE place party detection is tuned. Report 20260725_12 §6's curl-loop
+// procedure, as a UI: live meters drawn against the live thresholds, editors
+// with APPLY (runtime) + PERSIST (surgical config.yaml write), the §6.2 capture
+// helpers, read-only engine session context, validation mode and FAKE TRIGGER.
+
+// Meter full-scales. Loudness is auto-ranged off the threshold so a 0.002
+// ambient floor is still readable; the rest are their natural [0,1] / kicks-s.
+const PARTY_KICK_MAX = 8;
+
+const pctOf = (v, max) => (100 * Math.max(0, Math.min(1, (v || 0) / max))).toFixed(1) + '%';
+const fmtMs = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms');
+const fmtSec = (s) => (s == null ? '—' : (s >= 60 ? `${Math.round(s / 60)}min ${s % 60 ? (s % 60) + 's' : ''}`.trim() : `${s}s`));
+
+function buildPartyPage() {
+  if (!S.partyBuilt) {
+    $('party-apply').onclick = () => {
+      send({ type: 'setPartyParams', params: partyEditPayload() });
+    };
+    $('party-persist').onclick = () => {
+      confirmModal(
+        'Write these thresholds into marsin_engine/config.yaml → party: ?\n\n'
+        + 'Only the individual value lines are replaced — comments and formatting survive.',
+        () => send({ type: 'persistPartyParams', params: partyEditPayload() }),
+        'Write',
+      );
+    };
+    $('party-revert').onclick = () => {
+      if (S.partyParams) S.partyEdits = { ...S.partyParams };
+      renderPartyEditors(); renderPartyDirty();
+    };
+    $('party-validation').onchange = () => {
+      send({ type: 'setPartyValidationMode', on: $('party-validation').checked });
+    };
+    $('party-cap-ambient').onclick = () => startCapture('ambient');
+    $('party-cap-party').onclick = () => startCapture('party');
+    $('party-cap-cancel').onclick = () => send({ type: 'cancelPartyCapture' });
+    $('party-fake-clear').onclick = () => send({ type: 'setPartyOverride', mode: 'auto' });
+    for (const b of document.querySelectorAll('.pfake-btn')) {
+      b.onclick = () => send({ type: 'setPartyOverride', mode: b.dataset.mode });
+    }
+    $('party-arm-toggle').onclick = () => {
+      const cfg = S.partyConfig;
+      if (!cfg) { flash('party config not loaded from the engine yet', true); return; }
+      const next = !cfg.enabled;
+      confirmModal(
+        next
+          ? 'ARM party mode? Detection-driven party sessions will be allowed to fire.'
+          : 'DISABLE party mode? No party session can fire, and a live session ends immediately.',
+        () => putPartyConfig({ enabled: next }),
+        next ? 'Arm' : 'Disable',
+      );
+    };
+    S.partyBuilt = true;
+  }
+  renderPartyEditors();
+  renderPartyDirty();
+  renderPartyOverride();
+  renderPartyCalib();
+  renderPartyMeters();
+  refreshPartySession();
+}
+
+/** The editor values to send — numbers coerced, booleans as-is. */
+function partyEditPayload() {
+  const out = {};
+  for (const t of S.partyTunables) {
+    const v = S.partyEdits[t.key];
+    if (v === undefined) continue;
+    out[t.key] = t.kind === 'boolean' ? !!v : Number(v);
+  }
+  return out;
+}
+
+function startCapture(kind) {
+  const seconds = Number($('party-cap-sec').value);
+  send({ type: 'startPartyCapture', kind, seconds });
+}
+
+function renderPartyEditors() {
+  const grid = $('party-editors');
+  if (!grid || !S.partyTunables.length) return;
+  // Don't rebuild under a focused input — it would eat a half-typed number.
+  const ae = document.activeElement;
+  if (ae && grid.contains(ae)) return;
+  grid.innerHTML = '';
+  for (const t of S.partyTunables) {
+    const row = el('div', 'pe-row');
+    row.appendChild(el('span', 'pe-lab', `${t.label}<span class="pe-key">${t.key}</span>`));
+    if (t.kind === 'boolean') {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'pe-check';
+      cb.checked = !!S.partyEdits[t.key];
+      cb.onchange = () => { S.partyEdits[t.key] = cb.checked; renderPartyDirty(); };
+      row.appendChild(cb);
+      row.appendChild(el('span', 'pe-unit', ''));
+    } else {
+      const num = document.createElement('input');
+      num.type = 'number';
+      num.className = 'pe-num';
+      num.min = t.min; num.max = t.max; num.step = t.step;
+      const v = S.partyEdits[t.key];
+      num.value = v === undefined ? '' : v;
+      num.oninput = () => { S.partyEdits[t.key] = num.value === '' ? undefined : Number(num.value); renderPartyDirty(); };
+      row.appendChild(num);
+      row.appendChild(el('span', 'pe-unit', t.unit || ''));
+    }
+    row.appendChild(el('span', 'pe-hint', t.hint || ''));
+    grid.appendChild(row);
+  }
+  const chk = $('party-validation');
+  if (chk) chk.checked = S.partyValidation;
+}
+
+/** Show which editor values differ from what the detector is actually running. */
+function renderPartyDirty() {
+  const out = $('party-dirty');
+  if (!out || !S.partyParams) return;
+  const changed = S.partyTunables
+    .filter((t) => S.partyEdits[t.key] !== undefined
+      && String(S.partyEdits[t.key]) !== String(S.partyParams[t.key]))
+    .map((t) => t.key);
+  out.textContent = changed.length ? `${changed.length} unapplied: ${changed.join(', ')}` : 'in sync with the live detector';
+  out.classList.toggle('on', changed.length > 0);
+}
+
+function renderPartyOverride() {
+  const banner = $('party-fake-banner');
+  const active = S.partyOverride !== 'auto';
+  if (banner) banner.style.display = active ? 'flex' : 'none';
+  for (const b of document.querySelectorAll('.pfake-btn')) {
+    b.classList.toggle('active', b.dataset.mode === S.partyOverride);
+    b.classList.toggle('forced', b.dataset.mode !== 'auto' && b.dataset.mode === S.partyOverride);
+  }
+}
+
+function renderPartyMeters() {
+  const st = S.partyState;
+  if (!st || !$('pm-loud-fill')) return;
+  const p = st.params || {};
+
+  // LOUDNESS — auto-ranged so a tiny calibrated floor is still legible: full
+  // scale is 2× the threshold (never below 0.05, so an idle room isn't jumpy).
+  const thr = st.levelThreshold || 0;
+  const loudMax = Math.max(0.05, thr * 2, (st.loudness || 0) * 1.2);
+  $('pm-loud-fill').style.width = pctOf(st.loudness, loudMax);
+  $('pm-loud-fill').classList.toggle('ok', !!st.levelOk);
+  $('pm-loud-line').style.left = pctOf(thr, loudMax);
+  $('pm-loud-val').textContent = (st.loudness || 0).toFixed(4);
+  $('pm-loud-thr').textContent = `≥ ${thr.toFixed(4)} (floor ${(p.ambientFloor ?? 0)} × ${(p.marginX ?? 0)})`;
+
+  // KICK RATE — shaded acceptance window between min and max.
+  $('pm-kr-fill').style.width = pctOf(st.kickRate, PARTY_KICK_MAX);
+  $('pm-kr-fill').classList.toggle('ok', !!st.beatOk);
+  const bandEl = $('pm-kr-band');
+  const lo = (p.kickRateMin ?? 0) / PARTY_KICK_MAX, hi = (p.kickRateMax ?? 0) / PARTY_KICK_MAX;
+  bandEl.style.left = (100 * lo).toFixed(1) + '%';
+  bandEl.style.width = (100 * Math.max(0, hi - lo)).toFixed(1) + '%';
+  $('pm-kr-val').textContent = (st.kickRate || 0).toFixed(2);
+  $('pm-kr-thr').textContent = `${p.kickRateMin ?? '—'}–${p.kickRateMax ?? '—'} /s`;
+
+  const line = (fillId, lineId, valId, thrId, value, limit, ok, digits = 2) => {
+    $(fillId).style.width = pctOf(value, 1);
+    $(fillId).classList.toggle('ok', !!ok);
+    $(lineId).style.left = pctOf(limit, 1);
+    $(valId).textContent = (value || 0).toFixed(digits);
+    $(thrId).textContent = `≥ ${limit ?? '—'}`;
+  };
+  line('pm-reg-fill', 'pm-reg-line', 'pm-reg-val', 'pm-reg-thr', st.kickReg, p.kickRegMin, st.kickReg >= (p.kickRegMin ?? 1));
+  line('pm-low-fill', 'pm-low-line', 'pm-low-val', 'pm-low-thr', st.lowShare, p.shapeLowMin, st.lowShare >= (p.shapeLowMin ?? 1));
+  line('pm-high-fill', 'pm-high-line', 'pm-high-val', 'pm-high-thr', st.highShare, p.shapeHighMin, st.highShare >= (p.shapeHighMin ?? 1));
+
+  const locked = (st.bpmLocked || 0) >= 0.5;
+  const lockEl = $('pm-lock');
+  lockEl.textContent = locked ? 'BPM LOCKED' : 'BPM UNLOCKED';
+  lockEl.classList.toggle('ok', locked);
+  lockEl.classList.toggle('off', !locked);
+  lockEl.classList.toggle('muted', p.requireBpmLock === false);
+  lockEl.title = p.requireBpmLock === false ? 'requireBpmLock is off — this term is not gating' : 'the BPM tracker lock state';
+
+  const sil = (st.silence || 0);
+  const silEl = $('pm-silence');
+  silEl.textContent = st.quietOk ? 'NOT SILENT' : 'SILENT';
+  silEl.classList.toggle('ok', !!st.quietOk);
+  silEl.classList.toggle('off', !st.quietOk);
+  silEl.title = `audioSilence ${sil} (must be < ${p.silenceMax})`;
+  $('pm-conf').textContent = 'conf ' + (st.bpmConf == null ? '—' : st.bpmConf.toFixed(2));
+
+  const term = (id, ok) => {
+    const e = $(id);
+    e.classList.toggle('ok', !!ok);
+    e.classList.toggle('off', !ok);
+  };
+  term('pm-term-level', st.levelOk); term('pm-term-beat', st.beatOk);
+  term('pm-term-shape', st.shapeOk); term('pm-term-quiet', st.quietOk);
+  term('pm-term-qualify', st.qualify);
+
+  // DEBOUNCE progress — qualifying toward ON, or disqualifying toward OFF.
+  const onMs = p.onSustainMs || 1, offMs = p.offConfirmMs || 1;
+  let label, num, frac;
+  if (!st.party && st.qualifyingForMs > 0) {
+    label = 'qualifying → ON'; frac = st.qualifyingForMs / onMs;
+    num = `${fmtMs(st.qualifyingForMs)} / ${fmtMs(onMs)}`;
+  } else if (st.party && st.disqualifyingForMs > 0) {
+    label = 'disqualifying → OFF'; frac = st.disqualifyingForMs / offMs;
+    num = `${fmtMs(st.disqualifyingForMs)} / ${fmtMs(offMs)}`;
+  } else {
+    label = st.party ? 'PARTY held' : (st.warmedUp ? 'idle — not qualifying' : 'warming up');
+    frac = st.party ? 1 : 0; num = '—';
+  }
+  $('pm-deb-label').textContent = label;
+  $('pm-deb-num').textContent = num;
+  const debFill = $('pm-deb-fill');
+  debFill.style.width = pctOf(frac, 1);
+  debFill.classList.toggle('ok', !!st.party);
+
+  // GATE pill = the PUBLISHED value; the truth line appears only when forced.
+  const gate = $('party-gate-pill');
+  const published = st.publishedParty;
+  gate.textContent = 'GATE ' + (published ? '1' : '0');
+  gate.classList.toggle('on', !!published);
+  const truth = $('pm-truth');
+  if (st.overrideMode && st.overrideMode !== 'auto') {
+    truth.style.display = 'block';
+    truth.innerHTML = `detector says <b>${st.party ? 'PARTY' : 'no party'}</b> · `
+      + `publishing <b>${published ? '1' : '0'}</b> (FORCED — ${st.overrideMode})`;
+  } else {
+    truth.style.display = 'none';
+  }
+
+  if (S.partyValidation !== !!st.validationMode) {
+    S.partyValidation = !!st.validationMode;
+    const chk = $('party-validation'); if (chk) chk.checked = S.partyValidation;
+  }
+  renderPartyCaptureProgress(st.capture);
+}
+
+function renderPartyCaptureProgress(cap) {
+  const wrap = $('pcal-prog');
+  if (!wrap || !cap) return;
+  wrap.style.display = cap.recording ? 'flex' : 'none';
+  if (!cap.recording) return;
+  $('pcal-prog-lab').textContent = `recording ${cap.kind}… ${(cap.elapsedMs / 1000).toFixed(0)}s / ${(cap.durationMs / 1000).toFixed(0)}s`;
+  $('pcal-prog-fill').style.width = pctOf(cap.elapsedMs / (cap.durationMs || 1), 1);
+}
+
+function renderPartyCalib() {
+  for (const kind of ['ambient', 'party']) {
+    const out = $('pcal-res-' + kind);
+    if (!out) continue;
+    const st = S.partyCaptures[kind];
+    if (!st) { out.textContent = 'not captured'; out.classList.remove('on'); continue; }
+    out.classList.add('on');
+    out.innerHTML = kind === 'ambient'
+      ? `<b>P95 ${st.p95.toFixed(4)}</b> · median ${st.p50.toFixed(4)} · max ${st.max.toFixed(4)} · n=${st.n}`
+      : `<b>P5 ${st.p5.toFixed(4)}</b> · median ${st.p50.toFixed(4)} · kickReg ${st.kickReg == null ? '—' : st.kickReg.toFixed(2)}`
+        + ` · bpm locked ${(st.bpmLockedFrac * 100).toFixed(0)}% · n=${st.n}`;
+  }
+  const sg = $('pcal-sugg');
+  if (!sg) return;
+  const s = S.partySuggestions;
+  if (!s) {
+    sg.innerHTML = '<span class="pcal-sugg-none">capture BOTH baselines to get a suggestion</span>';
+    return;
+  }
+  sg.innerHTML = '<span class="pcal-sugg-lab">SUGGESTED</span>';
+  const vals = el('span', 'pcal-sugg-vals',
+    `ambientFloor <b>${s.ambientFloor.toFixed(4)}</b> · marginX <b>${s.marginX.toFixed(2)}</b>`
+    + (s.kickRegMin !== undefined ? ` · kickRegMin <b>${s.kickRegMin.toFixed(2)}</b>` : ''));
+  sg.appendChild(vals);
+  const btn = el('button', 'primary', '↧ load into the editors');
+  btn.title = 'fills the editors above — nothing is applied until you press APPLY';
+  btn.onclick = () => {
+    S.partyEdits.ambientFloor = +s.ambientFloor.toFixed(4);
+    S.partyEdits.marginX = +s.marginX.toFixed(2);
+    if (s.kickRegMin !== undefined) S.partyEdits.kickRegMin = +s.kickRegMin.toFixed(2);
+    renderPartyEditors(); renderPartyDirty();
+    flash('suggestions loaded — press APPLY to make them live');
+  };
+  sg.appendChild(btn);
+}
+
+// ── engine-owned session context (read-only) + the arm/disable authority ─────
+// Both go through the companion's own /party/* proxies (the engine lives on a
+// different port). Polled slowly — this is show state, not a meter.
+const PARTY_SESSION_POLL_MS = 3000;
+let partySessionTimer = null;
+
+async function refreshPartySession() {
+  try {
+    const [sess, cfg] = await Promise.all([
+      fetch('/party/session').then((r) => r.json()),
+      fetch('/party/config').then((r) => r.json()),
+    ]);
+    if (sess && sess.error) throw new Error(sess.error);
+    if (cfg && cfg.error) throw new Error(cfg.error);
+    S.partySession = sess; S.partyConfig = cfg; S.partySessionError = null;
+  } catch (e) {
+    S.partySession = null; S.partyConfig = null;
+    S.partySessionError = String(e && e.message);
+  }
+  renderPartySession();
+}
+
+async function putPartyConfig(patch) {
+  try {
+    const r = await fetch('/party/config', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    S.partyConfig = j; S.partySessionError = null;
+    flash(`party mode ${j.enabled ? 'ARMED' : 'DISABLED'}`);
+    renderPartySession();
+  } catch (e) {
+    flash('party config: ' + (e && e.message), true);
+  }
+}
+
+const EFFECTIVE_LABEL = {
+  armed: 'ARMED — a real party can start a session',
+  disabled: 'DISABLED by the operator',
+  no_plan: 'no plan driving — the mood trigger lives in the plan, so nothing can fire',
+  manual: 'a human has taken over — the plan (and party) yields',
+  in_session: 'PARTY SESSION RUNNING',
+  cooldown: 'cooling down since the last session',
+};
+
+function renderPartySession() {
+  const err = $('psx-err');
+  if (!err) return;
+  if (S.partySessionError) {
+    err.style.display = 'block';
+    err.textContent = 'engine unreachable: ' + S.partySessionError;
+  } else {
+    err.style.display = 'none';
+  }
+  const cfg = S.partyConfig, sess = S.partySession;
+  const armPill = $('party-arm-pill'), armBtn = $('party-arm-toggle');
+  if (cfg) {
+    const on = !!cfg.enabled;
+    armPill.textContent = on ? 'ARMED' : 'DISABLED';
+    armPill.classList.toggle('on', on);
+    armPill.classList.toggle('off', !on);
+    armPill.title = EFFECTIVE_LABEL[cfg.effectiveState] || cfg.effectiveState || '';
+    armBtn.textContent = on ? '⏻ DISABLE party mode' : '⏻ ARM party mode';
+    armBtn.classList.toggle('danger', on);
+    $('psx-eff').textContent = EFFECTIVE_LABEL[cfg.effectiveState] || cfg.effectiveState || '—';
+    $('psx-playlist').textContent = cfg.playlist || '—';
+    $('psx-dwell').textContent = fmtSec(cfg.minDwellSec) + ' (always enforced)';
+    // FOLLOW-THE-MUSIC: no fixed length, and the release sustain is the
+    // detector's own offConfirmMs — the editor above, not a second timer.
+    if (cfg.durationEnabled === false) {
+      const off = S.partyParams ? S.partyParams.offConfirmMs : null;
+      $('psx-dur').textContent = 'follow the music — ends ~'
+        + (off == null ? 'offConfirmMs' : fmtSec(Math.round(off / 1000)))
+        + ' after the music stops (that is offConfirmMs above)';
+      $('psx-cool').textContent = 'none in follow-the-music mode';
+    } else {
+      $('psx-dur').textContent = cfg.durationMin == null ? '—' : `${cfg.durationMin} min`;
+      $('psx-cool').textContent = cfg.effectiveCooldownEnabled === false
+        ? 'off'
+        : fmtSec(cfg.cooldownSec)
+          + (cfg.cooldownRemainingSec > 0 ? ` (${fmtSec(cfg.cooldownRemainingSec)} left)` : '');
+    }
+  } else {
+    armPill.textContent = '—'; armPill.classList.remove('on', 'off');
+    armBtn.textContent = '—';
+    for (const id of ['psx-eff', 'psx-playlist', 'psx-dwell', 'psx-dur', 'psx-cool']) $(id).textContent = '—';
+  }
+  if (sess) {
+    $('psx-mood').textContent = `${sess.currentMood || '—'} (value ${sess.moodValue ?? '—'}, key ${sess.moodKey || '—'})`;
+    $('psx-cue').textContent = sess.activeCue ? `${sess.activeCue.label} [${sess.activeCue.id}]` : 'none (baseline)';
+    const stale = $('psx-stale');
+    stale.style.display = sess.moodStale ? 'inline-block' : 'none';
+    stale.textContent = `⚠ moodStale ${sess.moodStaleForSec ?? '?'}s — party detection looks DOWN, the show is on ambient because of it`;
+    const plan = $('psx-plan');
+    const driving = sess.planActive === true;
+    plan.style.display = driving ? 'none' : 'inline-block';
+    plan.textContent = sess.inFestivalWindow === false
+      ? `plan dormant — festival starts in ${sess.festivalStartsInDays ?? '?'} days`
+      : `plan not driving (controller ${sess.controller || '—'})`;
+  } else {
+    $('psx-mood').textContent = '—';
+    $('psx-cue').textContent = '—';
+  }
+}
+
 function setPage(page) {
-  S.page = (page === 'osc' || page === 'mic') ? page : 'design';
-  const design = $('page-design'), osc = $('page-osc'), mic = $('page-mic');
-  if (design) design.style.display = S.page === 'design' ? '' : 'none';
-  if (osc) osc.style.display = S.page === 'osc' ? 'flex' : 'none';
-  if (mic) mic.style.display = S.page === 'mic' ? 'flex' : 'none';
+  const pages = ['design', 'mic', 'party', 'derived', 'osc'];
+  S.page = pages.includes(page) ? page : 'design';
+  for (const name of pages) {
+    const panel = $(`page-${name}`);
+    if (panel) {
+      const active = name === S.page;
+      panel.hidden = !active;
+      panel.style.display = active ? '' : 'none';
+    }
+  }
   for (const b of document.querySelectorAll('.nav-btn')) {
-    b.classList.toggle('active', b.dataset.page === S.page);
+    const active = b.dataset.page === S.page;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+    b.tabIndex = active ? 0 : -1;
   }
   if (S.page === 'osc') renderOscPage();
   if (S.page === 'mic') buildMicPage();
+  // The session poll only runs while the PARTY page is open — off the page it
+  // is pure noise on the engine.
+  if (partySessionTimer) { clearInterval(partySessionTimer); partySessionTimer = null; }
+  if (S.page === 'party') {
+    buildPartyPage();
+    partySessionTimer = setInterval(refreshPartySession, PARTY_SESSION_POLL_MS);
+  }
+  // The published/raw tempo poll costs an HTTP round trip per second, so it only
+  // runs while its card is actually on screen.
+  if (S.page === 'derived') { buildDerivedPage(); startTempoPoll(); } else stopTempoPoll();
 }
 function buildNav() {
-  for (const b of document.querySelectorAll('.nav-btn')) {
+  const nav = $('nav-seg');
+  const buttons = [...document.querySelectorAll('.nav-btn')];
+  nav.setAttribute('role', 'tablist');
+  nav.setAttribute('aria-label', 'Audio Companion pages');
+  for (const b of buttons) {
     b.onclick = () => setPage(b.dataset.page);
+    b.onkeydown = (event) => {
+      const current = buttons.indexOf(b);
+      let next = null;
+      if (event.key === 'ArrowRight') next = (current + 1) % buttons.length;
+      else if (event.key === 'ArrowLeft') next = (current - 1 + buttons.length) % buttons.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = buttons.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      setPage(buttons[next].dataset.page);
+      buttons[next].focus();
+    };
   }
+  setPage(S.page);
 }
 
 // ── export modal ────────────────────────────────────────────────────────────
@@ -1495,6 +2697,7 @@ function draw() {
     for (const id in m.signals) { const v = m.signals[id]; if (v) S.live[id] = v; }
     if (m.dom) S.dom = m.dom;
     if (m.bands) S.liveBands = m.bands;
+    if (m.derivedMetrics) S.derivedMetrics = m.derivedMetrics;
     if (m.struct) S.struct = m.struct;
     if (m.spectrum) S.spectrum = m.spectrum;
     if (m.wave) S.wave = m.wave;
@@ -1565,6 +2768,7 @@ function draw() {
   }
   renderLive();
   if (S.page === 'mic') updateMicMeters();
+  if (S.page === 'derived') updateDerivedMeters();
   requestAnimationFrame(draw);
 }
 function trLine(ctx, buf, W, H, lw, alpha) {

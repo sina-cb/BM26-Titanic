@@ -45,6 +45,9 @@
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
+// Canonical append-only optional fixture role; absent roles match no pixels.
+var FIX_TE_SIGN = 7;
+
 export var localSpeed = 0.5;   // glide / flap animation rate
 export var swell = 0.5;        // PRIMARY: water bri + manta count + glide speed — mid bias (lit sea, school of ~3)
 export var foam = 0.3;         // 2nd dim: wing-tip foam sparkle (highs)
@@ -135,9 +138,9 @@ export function beforeRender(delta) {
   clock = clock + dt * 0.06 * rate * surge;
   flapClock = flapClock + dt * 0.11 * rate;
   waterClock = waterClock + dt * 0.04 * rate;
-  if (clock > 100000.0) clock = clock - 100000.0;
-  if (flapClock > 100000.0) flapClock = flapClock - 100000.0;
-  if (waterClock > 100000.0) waterClock = waterClock - 100000.0;
+  // Do not wrap these shared clocks: each is multiplied by several irrational
+  // ratios below, so subtracting any finite constant would jump every derived
+  // phase at once. The VM uses f64, which retains ample multi-day precision.
 
   // Manta count rides the bass: calm sea = 1 ray, big drop = full school.
   actN = 1 + floor(clamp01(swell) * (MAX_MANTA - 1) + 0.001);
@@ -158,15 +161,20 @@ export function beforeRender(delta) {
   waterBri = 0.16 + clamp01(swell) * 0.62;
 
   // Geometry from sliders.
-  spanW = 0.10 + span * 0.20;     // wing half-thickness in y
-  bodyW = 0.12 + span * 0.16;     // body half-width along glide in x
+  spanW = 0.055 + span * 0.40;    // wing half-thickness in y
+  bodyW = 0.08 + span * 0.34;     // body half-width along glide in x
   edgeP = 1.4 + depth * 3.2;      // higher depth => darker water between rays
 }
 
 export function render3D(index, x, y, z) {
   // ── Living water bed (cp1). Slow rolling shimmer so silence still reads. ──
   var roll = wave(waterClock + x * 0.7 - y * 0.4) * 0.5 + wave(waterClock * 1.31 - x * 1.1) * 0.5;
-  var water = waterBri * (0.55 + 0.45 * roll);
+  // Depth now owns negative space between mantas. Higher values remove the
+  // water floor while keeping a faint moving sea for navigation/visibility.
+  var waterFloor = 0.10 + (1.0 - depth) * 0.30;
+  var waterMotion = (0.10 + (1.0 - depth) * 0.24)
+                  * pow(roll, 1.55);
+  var water = waterBri * (waterFloor + waterMotion);
   // Water itself carries slow cp1<->cp2 caustic BANDS so BOTH palette colours
   // are always strongly present across the rig (deep cp1 troughs, full cp2
   // crests). Two incommensurate waves keep the bands drifting non-periodically.
@@ -179,6 +187,7 @@ export function render3D(index, x, y, z) {
   // ── Sum the manta school. Each is a separable Gaussian-ish wing. ──
   var mGlow = 0.0;     // accumulated manta glow brightness (cp2-leaning)
   var mTip = 0.0;      // accumulated wing-tip foam weight (for sparkle + W)
+  var mTurn = 0.0;     // wing-tip weight at the crest of a flap
   for (var kk = 0; kk < MAX_MANTA; kk++) {
     if (kk < actN) {
       // Distance from this pixel to the manta center along each axis.
@@ -209,6 +218,9 @@ export function render3D(index, x, y, z) {
       tipBand = tipBand * tipBand;       // crisp ridge
       var tip = tipBand * wx;
       if (tip > mTip) mTip = tip;
+      var flapCrest = abs(flap[kk] - 0.5) * 2.0;
+      var turningTip = tip * flapCrest;
+      if (turningTip > mTurn) mTurn = turningTip;
     }
   }
 
@@ -224,7 +236,7 @@ export function render3D(index, x, y, z) {
 
   // ── Compose brightness + palette blend. Water=cp1, manta glow/tips=cp2. ──
   var bri = water;
-  var glowBri = mGlow * (0.55 + swell * 0.6);   // mantas brighten with the bass too
+  var glowBri = mGlow * (0.68 + swell * 0.75);  // pronounced rays over darker water
   if (glowBri > bri) bri = glowBri;
   var tipBri = mTip * (0.30 + foam * 0.7);
   if (tipBri > bri) bri = tipBri;
@@ -237,8 +249,64 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  // Wing-tip foam glints add a crisp phosphorescent core on the W channel.
-  var ww = clamp01(foamGlint);
+  // Fixture-role staging keeps the water legible on the ship and bench alike.
+  if (fixtureType == FIX_BAR_18) {
+    g = g + b * 0.22; // teal survives the stained-wood Hull Canvas
+    b = b * 0.74;
+  } else if (fixtureType == FIX_PAR) {
+    r = r + bri * 0.10;
+    g = g + bri * 0.045;
+    b = b * 0.55;
+  } else if (fixtureType == FIX_TE_SIGN) {
+    // Identity is a broad lit ocean stage for the school, not a third localized
+    // silhouette. Counter-moving XYZ caustics cross two wide wing-pressure
+    // fields; their smooth meeting edge becomes phosphorescent tip foam.
+    var signPath = pixelLocalIndex * 0.01351351351;
+    var signCaustA = wave(x * 0.53 + y * 0.91 - z * 0.37
+                        + signPath * 0.21 + waterClock * 5.0);
+    var signCaustB = wave(x * 0.87 - y * 0.41 + z * 0.69
+                        - signPath * 0.17 - waterClock * 8.0);
+    var signCaustic = signCaustA * 0.58 + signCaustB * 0.42;
+    var signWingA = wave(x * 0.47 + y * 0.83 - z * 0.31
+                       + signPath * 0.27 + clock * 4.0);
+    var signWingB = wave(x * 0.89 - y * 0.37 + z * 0.61
+                       - signPath * 0.19 - flapClock * 4.0);
+    var signSchool = pow((signWingA + signWingB) * 0.50, 1.45);
+    var signWingFoam = 1.0 - clamp01(abs(signWingA - signWingB) * 3.2);
+    signWingFoam = signWingFoam * signWingFoam;
+    var signOrbit = wave(abs(x - 0.5) * 1.73 + y * 1.19 - z * 0.83
+                       + clock * 6.0 + signPath * 0.11);
+    var signFold = pow(clamp01(1.0 - abs(signCaustA - signCaustB)), 2.8);
+    var signBri = (0.27 + signCaustic * 0.10 + signSchool * 0.20
+                  + signOrbit * 0.075 + signFold * 0.095
+                  + signWingFoam * foam * 0.12)
+                * (0.81 + swell * 0.19);
+    var signMix = clamp01(0.05 + signCaustic * 0.24
+                        + signSchool * 0.34 + signOrbit * 0.19
+                        + signFold * 0.22 + signWingFoam * foam * 0.20);
+    r = (pr1 + (pr2 - pr1) * signMix) * signBri;
+    g = (pg1 + (pg2 - pg1) * signMix) * signBri;
+    b = (pb1 + (pb2 - pb1) * signMix) * signBri;
+  }
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), ww, 0.0, 0.0);
+  // Wing-tip foam glints add a crisp phosphorescent core on the W channel.
+  var ww = clamp01(foamGlint * 0.24 + mTurn * foam * 0.08);
+  if (fixtureType == FIX_TE_SIGN) {
+    // Sign foam follows the continuous wing-pressure edge above; never use the
+    // frame-quantized general sparkle, which would flicker across the letters.
+    ww = clamp01(signWingFoam * foam * 0.12);
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    // Jewelry flashes at the graceful wing turnaround, while smaller foam
+    // grains remain subordinate. The manta body and water retain their color.
+    ww = clamp01(foamGlint * 0.72
+      + mTurn * (0.22 + foam * 0.68));
+    r = r + ww * 0.16;
+    g = g + ww * 0.07;
+  }
+
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), ww, ww, 0.0);
 }

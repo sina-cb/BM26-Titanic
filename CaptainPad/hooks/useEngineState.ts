@@ -47,7 +47,8 @@ import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
 import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel, testConnection } from '@/utils/api';
-import type { RenderHealth, DeckRestoreDegraded } from '@/utils/api';
+import type { RenderHealth, DeckRestoreDegraded, AudioSuggestion, DeckColorAutopilotConfig } from '@/utils/api';
+import { colorAutopilotFrame } from '@/utils/color_autopilot_frame';
 
 export interface SharedParamValue {
   // The engine emits HSV objects for color palettes and plain floats
@@ -71,6 +72,10 @@ export interface MixerChannelExport {
   v0?: number;
   v1?: number;
   v2?: number;
+  /** Additive engine metadata: the pattern author's recommended audio binding
+   *  for this parameter (AUDIO_MODULATION_V1 header → `annotateCodeDefaults`).
+   *  Absent when the pattern declares none — never inferred. */
+  audioSuggestion?: AudioSuggestion;
 }
 
 export interface MixerChannel {
@@ -237,7 +242,30 @@ export interface EngineLiveState {
   engineHealth: {
     renderHealth: RenderHealth | null;
     deckRestoreDegraded: DeckRestoreDegraded | null;
+    /**
+     * SIZE-lock warning line from /status (`sizeLockWarning`), or null when
+     * nothing fought the lock. The engine pins the global SIZE fader at 0.5
+     * (operator ruling 2026-08-06, marsin_engine/lib/size_lock.js) and this
+     * app no longer renders a SIZE control, so the header chip is the only
+     * place a stale persisted size / a refused write becomes visible.
+     */
+    sizeLockWarning: string | null;
   } | null;
+  /**
+   * Read-only mirror of the `/ws/control` `colorAutopilot` broadcast
+   * (docs/61_colors_interaction_model.md §4.4, W4) — surfaced APP-WIDE so
+   * the shared-header COLOR chip can name a running colour rotation/
+   * follow-note mode from ANY tab, not just the Deck screen. The deck
+   * screen keeps its OWN existing consumer of this broadcast (its `colors`
+   * window state); this field is a SEPARATE read of the same wire, added
+   * for the chip only — nothing here writes to the engine.
+   *
+   * Parsed via `colorAutopilotFrame()` (utils/color_autopilot_frame.ts) so
+   * a malformed broadcast maps to `null` rather than a half-built config.
+   * `null` until the first broadcast lands (there is no REST seed for this
+   * field — the deck screen's own fetch already owns that on mount).
+   */
+  colorAutopilot: DeckColorAutopilotConfig | null;
 }
 
 /**
@@ -314,6 +342,7 @@ const EMPTY_STATE: EngineLiveState = {
   paramSchema: {},
   activeModel: null,
   engineHealth: null,
+  colorAutopilot: null,
 };
 
 let _cached: EngineLiveState = EMPTY_STATE;
@@ -648,6 +677,14 @@ function _onMessage(msg: EngineMessage) {
         lastKickMs: typeof msg.lastKickMs === 'number' ? msg.lastKickMs : 0,
       },
     });
+  } else if (msg.type === 'colorAutopilot') {
+    // App-wide read-only mirror (docs/61 §4.4, W4) — see the `colorAutopilot`
+    // field doc on EngineLiveState. `colorAutopilotFrame` copies the
+    // broadcast through WHOLESALE (mode-scoped, never merged with the prior
+    // frame), so a malformed message maps to a no-op here rather than
+    // corrupting the cached frame with a half-built config.
+    const frame = colorAutopilotFrame(msg);
+    if (frame) _emit({ ..._cached, colorAutopilot: frame });
   }
 }
 
@@ -699,13 +736,17 @@ function _seedFromStatus() {
       // degrade explicitly; absence is therefore not a silent fallback).
       const renderHealth = r.data.renderHealth ?? null;
       const deckRestoreDegraded = r.data.deckRestoreDegraded ?? null;
+      // A plain string, so this comparison is by VALUE — a clean engine
+      // reports null on every probe and never churns the health snapshot.
+      const sizeLockWarning = r.data.sizeLockWarning ?? null;
       const prev = _cached.engineHealth;
       if (
         !prev ||
         prev.renderHealth !== renderHealth ||
-        prev.deckRestoreDegraded !== deckRestoreDegraded
+        prev.deckRestoreDegraded !== deckRestoreDegraded ||
+        prev.sizeLockWarning !== sizeLockWarning
       ) {
-        next.engineHealth = { renderHealth, deckRestoreDegraded };
+        next.engineHealth = { renderHealth, deckRestoreDegraded, sizeLockWarning };
         changed = true;
       }
 
@@ -934,6 +975,36 @@ export function useLiveParams(): LiveParams | null {
     return () => { _liveListeners.delete(setState); };
   }, []);
   return state;
+}
+
+/**
+ * Is the LIVE-SIGNAL transport (/ws/signals — the socket that carries
+ * `liveParams`) connected right now?
+ *
+ * The live-param cache is deliberately NOT cleared when that socket drops:
+ * every meter holds its last frame rather than snapping to zero. That is the
+ * right default for a bar, but it means a BINARY readout (the AUDIO tab's
+ * PARTY SIGNAL pill) would keep asserting ON/OFF with no engine behind it.
+ * Such a readout pairs `useLiveParams()` with this hook and shows UNKNOWN
+ * while it reports false — presentation only; nothing here mutates the cache
+ * or any other surface's state.
+ *
+ * Narrow on purpose: it subscribes ONLY to the signals bus status (not the
+ * control/params buses), because that is the exact transport the live audio
+ * values arrive on, and it re-renders only on an actual connect/disconnect
+ * edge — never at the 15-30 Hz value cadence.
+ */
+export function useLiveSignalsConnected(): boolean {
+  _ensureSignalsInitialized();
+  const [connected, setConnected] = useState<boolean>(
+    () => engineSignalsEvents.getStatus().connected,
+  );
+  useEffect(() => {
+    // subscribeStatus fires immediately with the current status, which also
+    // closes the mount-vs-first-event race.
+    return engineSignalsEvents.subscribeStatus((s) => setConnected(!!s.connected));
+  }, []);
+  return connected;
 }
 
 /**
@@ -1174,6 +1245,22 @@ export function useMaster(): number {
 }
 
 /**
+ * Selector for the app-wide colour-autopilot control frame (docs/61 §4.4,
+ * W4) — the shared-header COLOR chip's ONLY read of engine state. Reference-
+ * stable per-key slice so a tab that doesn't render the chip never re-renders
+ * off this broadcast, and the chip itself only re-renders when the frame
+ * object actually changes (a fresh `colorAutopilot` broadcast, or a boot
+ * before the first one has landed).
+ *
+ * READ-ONLY: nothing in this hook, or the field it reads, ever posts to the
+ * engine. The deck screen's own `colors` window state is a SEPARATE consumer
+ * of the same broadcast — this selector does not replace it.
+ */
+export function useColorAutopilotFrame(): DeckColorAutopilotConfig | null {
+  return useEngineSlice<DeckColorAutopilotConfig | null>((s) => s.colorAutopilot);
+}
+
+/**
  * Selector for the engine's active model name (GET /status →
  * `activeModel`). Returns null until the first /status probe resolves
  * or while the engine is unreachable — headers degrade gracefully by
@@ -1190,7 +1277,11 @@ export function useActiveModel(): string | null {
  * (Codex P0 operator visibility). Pure function of the two /status degrade
  * signals — kept separate from the hook so it's unit-testable.
  *
- * Degraded (the chip shows) iff EITHER:
+ * Degraded (the chip shows) iff ANY of:
+ *   - `sizeLockWarning` is a non-empty string (the engine's global SIZE pin
+ *     was fought — a saved file carried a non-0.5 size, or something tried
+ *     to write one. Checked FIRST: there is no SIZE control in this app, so
+ *     the chip is the operator's only view of it), OR
  *   - `renderHealth.ok === false` (one or more channel blends failed to
  *     compile — compositing is running on the host-side linear-interp
  *     fallback), OR
@@ -1215,7 +1306,14 @@ export function deriveEngineHealth(
   health: EngineLiveState['engineHealth'],
 ): EngineHealthDerived {
   if (!health) return HEALTH_OK;
-  const { renderHealth, deckRestoreDegraded } = health;
+  const { renderHealth, deckRestoreDegraded, sizeLockWarning } = health;
+  // SIZE lock first: the operator has NO SIZE control anywhere in this app,
+  // so if something is fighting the engine's pin (a stale persisted value, a
+  // rogue writer) this chip is the only place they can find out. Everything
+  // else is recoverable from the UI; this one is not.
+  if (typeof sizeLockWarning === 'string' && sizeLockWarning.length > 0) {
+    return { degraded: true, reason: sizeLockWarning };
+  }
   // Prefer the deck-restore degrade in the reason string — it's the
   // mission-critical exterior signal. Fall back to the blend error.
   if (deckRestoreDegraded != null) {

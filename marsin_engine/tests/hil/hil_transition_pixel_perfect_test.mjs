@@ -26,7 +26,7 @@
  * No per-transition visual signature checks here — those live in
  * hil_transition_visual_test.mjs and the unit test. We only validate
  * the engine pipeline applied to every transition end-to-end, with
- * a total wall-time budget under 60 s for all 16 transitions.
+ * a total wall-time budget under 60 s for all 15 transitions.
  *
  * ── Self-booting ──────────────────────────────────────────────────────
  *   Per .agent/os/multi_agent.md §5, a sub-agent runs servers
@@ -73,7 +73,6 @@ const TRANSITIONS = [
   'trans_flash',
   'trans_dissolve',
   'trans_color_burst',
-  'trans_morse_blink',
   'trans_ripple_in',
   'trans_iris',
   'trans_iris_close',

@@ -1,11 +1,13 @@
 import React, { useMemo, useEffect, useState, useCallback, useRef } from 'react';
-import { Palette } from '@/constants/theme';
-import { View, Text, TextInput, Alert, Platform } from 'react-native';
+import { Palette, Radius, Type } from '@/constants/theme';
+import { View, Text, TextInput, Platform } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { useFocusEffect } from 'expo-router';
 import { usePalette } from '@/hooks/use-theme';
 import {
-  fetchPlaylist, savePlaylist, fetchMixerChannelPlaylist,
+  fetchPlaylist, savePlaylist, fetchChannelPlaylist,
   PlaylistData, PlaylistAssignment,
+  type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { usePerfLock } from '@/hooks/usePerformanceMode';
@@ -46,13 +48,19 @@ const AUTOSAVE_DEBOUNCE_MS = 500;
 //   - Locked channels show the label as static text — no input box.
 interface Props {
   channelId: string;
+  /**
+   * Playlist transport for this editor. This is required because the engine
+   * rejects a deck channel sent to `/mixer/channels/:id/playlist` (and vice
+   * versa) with WRONG_ROLE.
+   */
+  role: Extract<ChannelRole, 'deck' | 'mixer'>;
   /** Small badge prefix, e.g. "DECK MAIN" or "MIXER CH 1". */
   channelLabel?: string;
   /** When the channel is locked, the field becomes read-only. */
   locked?: boolean;
 }
 
-export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, locked: lockedProp }) => {
+export const EntryLabelEditor: React.FC<Props> = ({ channelId, role, channelLabel, locked: lockedProp }) => {
   // PERFORMANCE MODE: renaming an entry saves the whole playlist (POST
   // /playlists — a 409-gated route while a show is live), so the editor drops
   // to its read-only static-label mode. Shared component — gated by
@@ -64,6 +72,11 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
   const [assignment, setAssignment] = useState<PlaylistAssignment | null>(null);
   const [playlist, setPlaylist] = useState<PlaylistData | null>(null);
   const [draft, setDraft] = useState('');
+  // PAINT ONLY (docs/54 row 8): the focus ring. `focused` drives a
+  // `borderStrong` hairline on the input and nothing else — the commit
+  // path (debounce → onBlur → native DOM blur → unmount flush) is
+  // untouched; the blur handler below still calls the same `commit()`.
+  const [focused, setFocused] = useState(false);
 
   const playlistRef = useRef<PlaylistData | null>(null);
   const assignmentRef = useRef<PlaylistAssignment | null>(null);
@@ -99,7 +112,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
 
   const refresh = useCallback(async () => {
     if (!channelId) return;
-    const a = await fetchMixerChannelPlaylist(channelId);
+    const a = await fetchChannelPlaylist(role, channelId);
     const nextAssign = a.ok ? (a.data || null) : null;
     setAssignment(nextAssign);
     if (nextAssign?.name) {
@@ -108,7 +121,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
     } else {
       setPlaylist(null);
     }
-  }, [channelId]);
+  }, [channelId, role]);
 
   useEffect(() => { refresh(); }, [refresh]);
   useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
@@ -116,10 +129,21 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
   // Cross-tab consistency — react to the same broadcasts PlaylistPanel does.
   useEffect(() => {
     return engineEvents.subscribe((msg: EngineMessage) => {
-      if (msg.type === 'mixer') {
+      if (role === 'mixer' && msg.type === 'mixer') {
         const channels = (msg.channels as { id: string; playlist?: PlaylistAssignment | null }[]) || [];
         const ch = channels.find((c) => c.id === channelId);
         if (!ch) return;
+        const local = assignmentRef.current;
+        const next = ch.playlist || null;
+        if (
+          (local?.name ?? null) !== (next?.name ?? null) ||
+          (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null)
+        ) {
+          refresh();
+        }
+      } else if (role === 'deck' && msg.type === 'deck') {
+        const ch = msg.channel as { id?: string; playlist?: PlaylistAssignment | null } | null | undefined;
+        if (!ch || ch.id !== channelId) return;
         const local = assignmentRef.current;
         const next = ch.playlist || null;
         if (
@@ -141,7 +165,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
         if (cur && msg.playlist === cur.name) refresh();
       }
     });
-  }, [channelId, refresh]);
+  }, [channelId, refresh, role]);
 
   // The actual save. Pulls draft from the ref so it works correctly when
   // called from the debounce timer or the native blur listener — both of
@@ -168,7 +192,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
     if (!res.ok) {
       // Don't leak server-side details to the user — the engine already
       // logs the failure server-side; we just need a generic toast here.
-      Alert.alert('Rename failed', 'Could not save the new name. Try again.');
+      opError('Rename failed', 'Could not save the new name. Try again.');
       await refresh();
     }
   }, [refresh]);
@@ -231,7 +255,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
     return (
       <View style={styles.row}>
         {labelText ? <Badge text={labelText} /> : null}
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={styles.titleStatic} numberOfLines={1}>
             {activeEntry.label || activeEntry.pattern}
           </Text>
@@ -250,7 +274,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
   return (
     <View style={styles.row}>
       {labelText ? <Badge text={labelText} /> : null}
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, minWidth: 0 }}>
         <TextInput
           // Remount on entry change so the native input state can't get
           // out of step with the canonical label.
@@ -261,7 +285,8 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
           // React Native (iOS/Android) reliably fires onBlur — flush there.
           // On Web this rarely fires; the native DOM listener above covers
           // that case.
-          onBlur={commit}
+          onFocus={() => setFocused(true)}
+          onBlur={() => { setFocused(false); commit(); }}
           // Hardware-keyboard users who hit Enter still get an instant save,
           // and `blurOnSubmit` dismisses the iPad on-screen keyboard.
           onSubmitEditing={commit}
@@ -270,7 +295,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
           placeholder={activeEntry.pattern}
           placeholderTextColor={C.icon}
           accessibilityLabel="Rename pattern instance"
-          style={styles.input}
+          style={[styles.input, focused && styles.inputFocused]}
         />
         <Text style={styles.subtitle} numberOfLines={1}>
           {activeEntry.pattern}
@@ -301,22 +326,28 @@ function makeStyles(C: Palette) {
     alignItems: 'center' as const,
     gap: 10,
     marginBottom: 8,
+    width: '100%' as const,
+    maxWidth: '100%' as const,
+    minWidth: 0,
   },
   badge: {
+    flexShrink: 0,
     paddingHorizontal: 8,
     paddingVertical: 4,
     backgroundColor: C.surfaceContainerHigh,
-    borderRadius: 6,
+    borderRadius: Radius.control,
     borderWidth: 1,
     borderColor: C.ghostBorder,
   },
   badgeText: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 10,
+    fontFamily: Type.labelCaps.fontFamily,
+    fontSize: Type.labelCaps.fontSize,
+    letterSpacing: Type.labelCaps.letterSpacing,
     color: C.secondary,
-    letterSpacing: 1.2,
   },
   titleStatic: {
+    flexShrink: 1,
+    minWidth: 0,
     fontFamily: 'SpaceGrotesk_700Bold',
     fontSize: 16,
     color: C.text,
@@ -329,10 +360,15 @@ function makeStyles(C: Palette) {
     color: C.text,
     paddingVertical: 4,
     paddingHorizontal: 8,
-    borderRadius: 6,
+    borderRadius: Radius.control,
     borderWidth: 1,
     borderColor: C.ghostBorder,
     backgroundColor: C.surfaceContainerLowest,
+  },
+  // Focus ring — `borderStrong` is the token that exists precisely for
+  // "selected / focused" chrome (≥3:1 on every surface, WCAG 1.4.11).
+  inputFocused: {
+    borderColor: C.borderStrong,
   },
   subtitle: {
     fontFamily: 'Inter_400Regular',

@@ -4,7 +4,7 @@
 // channel's contribution at composite time (engine-side, `_effFader`). Each
 // channel has a SINGLE-membership pointer (`channel.mixGroupId`). This body:
 //   - lists every group as a card with a gang FADER + a MUTE toggle + a rename
-//     field + a delete (ConfirmSheet-gated), and shows its member chips.
+//     field + an inline delete confirmation, and shows its member chips.
 //   - creates a new (empty) group.
 //   - assigns / unassigns a channel to a group (the assign picker respects
 //     single-membership — the engine 400s a 2nd-group add and we surface it).
@@ -29,12 +29,12 @@
 // rejected PATCH reverts on the next `mixer` event.
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, TextInput } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   type MixGroup,
@@ -164,7 +164,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await createMixGroup();
     if (!res.ok) {
       console.error('[GroupRail] Create group failed:', res.error);
-      Alert.alert('Create group failed', res.error || 'The engine did not accept the new group.');
+      opError('Create group failed', res.error || 'The engine did not accept the new group.');
     }
     // Success: the WS mixer broadcast adds the group to the parent's list.
   }, []);
@@ -182,7 +182,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
       console.error(`[GroupRail] Gang-fader rejected for ${gid}:`, res.error);
       // Drop the optimistic draft so the next broadcast's truth shows.
       setFaderDraft((d) => { const n = { ...d }; delete n[gid]; return n; });
-      Alert.alert('Group fader not applied', `The engine rejected this group fader. ${res.error || ''}`.trim());
+      opError('Group fader not applied', `The engine rejected this group fader. ${res.error || ''}`.trim());
     }
   }, []);
 
@@ -190,7 +190,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await updateMixGroup(gid, { muted });
     if (!res.ok) {
       console.error(`[GroupRail] Group mute rejected for ${gid}:`, res.error);
-      Alert.alert('Group mute not applied', `The engine rejected this group mute. ${res.error || ''}`.trim());
+      opError('Group mute not applied', `The engine rejected this group mute. ${res.error || ''}`.trim());
     }
   }, []);
 
@@ -201,7 +201,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await deleteMixGroup(target.id);
     if (!res.ok) {
       console.error('[GroupRail] Delete group failed:', res.error);
-      Alert.alert('Delete group failed', `"${target.name}" is still active. ${res.error || ''}`.trim());
+      opError('Delete group failed', `"${target.name}" is still active. ${res.error || ''}`.trim());
     }
   }, [deletePrompt]);
 
@@ -212,7 +212,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
       // Surface the single-membership 400 ("already in a different group") and
       // the deck WRONG_ROLE 400 verbatim — these are the operator-facing errors.
       console.error(`[GroupRail] Assign channel ${channelId} → ${gid} rejected:`, res.error);
-      Alert.alert('Could not add to group', res.error || 'The engine rejected this assignment.');
+      opError('Could not add to group', res.error || 'The engine rejected this assignment.');
     }
   }, []);
 
@@ -220,7 +220,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
     const res = await removeChannelFromGroup(gid, channelId);
     if (!res.ok) {
       console.error(`[GroupRail] Unassign channel ${channelId} from ${gid} rejected:`, res.error);
-      Alert.alert('Could not remove from group', res.error || 'The engine rejected this change.');
+      opError('Could not remove from group', res.error || 'The engine rejected this change.');
     }
   }, []);
 
@@ -241,7 +241,7 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
             </View>
           ) : null}
         </View>
-        {mixGroups.length > 0 ? (
+        {mixGroups.length > 0 && !assignTo && !deletePrompt ? (
           <TouchableOpacity
             style={[styles.newGroupBtn, perfLocked && { opacity: 0.45 }]}
             hitSlop={HIT_SLOP}
@@ -256,7 +256,72 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
         ) : null}
       </View>
 
-      <ScrollView contentContainerStyle={styles.groupsRow} showsVerticalScrollIndicator={false}>
+      {assignTo ? (
+        <View style={styles.pickerPanel} accessibilityRole="menu">
+          <Text style={[styles.labelCaps, { marginBottom: 4 }]}>ADD CHANNEL TO GROUP</Text>
+          <Text style={styles.pickerContext} numberOfLines={1}>
+            {(assignTo.name || assignTo.id).toUpperCase()}
+          </Text>
+          <ScrollView style={styles.pickerList}>
+            {channels.length === 0 ? (
+              <Text style={[styles.labelCaps, { padding: 8 }]}>NO CHANNELS</Text>
+            ) : null}
+            {channels.map((ch) => {
+              const inThis = ch.mixGroupId === assignTo.id;
+              const inOther = !!ch.mixGroupId && ch.mixGroupId !== assignTo.id;
+              return (
+                <TouchableOpacity
+                  key={ch.id}
+                  style={[styles.pickerRow, inThis && styles.pickerRowActive, inOther && { opacity: 0.5 }]}
+                  onPress={() => { if (!inOther) void handleAssign(assignTo.id, ch.id); }}
+                  disabled={inOther}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add ${ch.name || ch.id} to ${assignTo.name || assignTo.id}`}
+                  accessibilityState={{ disabled: inOther, selected: inThis }}
+                >
+                  <Text style={[styles.valueReadout, inThis && { color: C.primary }]}>
+                    {ch.name || ch.id}{inThis ? ' ✓' : ''}{inOther ? ' · IN ANOTHER GROUP' : ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <TouchableOpacity
+            style={styles.pickerCancel}
+            onPress={() => setAssignTo(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel adding a channel"
+          >
+            <Text style={styles.labelCaps}>CANCEL</Text>
+          </TouchableOpacity>
+        </View>
+      ) : deletePrompt ? (
+        <View style={styles.confirmPanel} accessibilityRole="alert">
+          <Text style={[styles.labelCaps, { color: C.error }]}>DELETE GROUP?</Text>
+          <Text style={styles.confirmMessage}>
+            {'This removes the "'}{deletePrompt.name}{'" group. Its member channels stay in the mix and are released from the group.'}
+          </Text>
+          <View style={styles.confirmActions}>
+            <TouchableOpacity
+              style={[styles.confirmButton, styles.confirmCancel]}
+              onPress={() => setDeletePrompt(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel deleting group"
+            >
+              <Text style={styles.labelCaps}>CANCEL</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.confirmButton, styles.confirmDelete]}
+              onPress={() => { void confirmDelete(); }}
+              accessibilityRole="button"
+              accessibilityLabel="Delete group"
+            >
+              <Text style={[styles.labelCaps, { color: '#FFF' }]}>DELETE GROUP</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={styles.groupsRow} showsVerticalScrollIndicator={false}>
           {mixGroups.length === 0 ? (
             // Empty state IS the create affordance — tap it to spin up the
             // first group (mirrors the prior empty-rail behaviour).
@@ -289,7 +354,18 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
                   <TextInput
                     style={styles.groupNameInput}
                     defaultValue={groupName(g, idx)}
-                    onEndEditing={(e) => handleRename(g.id, e.nativeEvent.text)}
+                    onEndEditing={(e) => {
+                      const text = e.nativeEvent?.text;
+                      if (text != null) void handleRename(g.id, text);
+                    }}
+                    onSubmitEditing={(e) => {
+                      const text = e.nativeEvent?.text;
+                      if (text != null) void handleRename(g.id, text);
+                    }}
+                    onBlur={(e) => {
+                      const text = (e.nativeEvent as { text?: string })?.text;
+                      if (text != null) void handleRename(g.id, text);
+                    }}
                     placeholderTextColor={C.icon}
                   />
                   <TouchableOpacity
@@ -364,50 +440,9 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
               </View>
             );
           })}
-      </ScrollView>
+        </ScrollView>
+      )}
 
-      {/* Assign-channel picker — only ungrouped channels + channels already in
-          THIS group are sensible to show; the engine 400s a cross-group add so
-          we surface that too if the operator picks a grouped channel. We show
-          all overlays and disable ones already in another group with a hint. */}
-      <Modal transparent visible={!!assignTo} animationType="fade" onRequestClose={() => setAssignTo(null)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAssignTo(null)}>
-          <View style={styles.modalContent}>
-            <Text style={[styles.labelCaps, { marginBottom: 12 }]}>ADD CHANNEL TO GROUP</Text>
-            <ScrollView style={{ maxHeight: 360 }}>
-              {channels.length === 0 ? (
-                <Text style={[styles.labelCaps, { padding: 8 }]}>NO CHANNELS</Text>
-              ) : null}
-              {channels.map((ch) => {
-                const inThis = !!assignTo && ch.mixGroupId === assignTo.id;
-                const inOther = !!ch.mixGroupId && (!assignTo || ch.mixGroupId !== assignTo.id);
-                return (
-                  <TouchableOpacity
-                    key={ch.id}
-                    style={[styles.modalRow, inThis && styles.modalRowActive, inOther && { opacity: 0.5 }]}
-                    onPress={() => { if (assignTo && !inOther) handleAssign(assignTo.id, ch.id); }}
-                    disabled={inOther}
-                  >
-                    <Text style={[styles.valueReadout, inThis && { color: C.primary }]}>
-                      {ch.name || ch.id}{inThis ? ' ✓' : ''}{inOther ? ' · IN ANOTHER GROUP' : ''}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      <ConfirmSheet
-        visible={!!deletePrompt}
-        title="Delete group?"
-        message={`This removes the "${deletePrompt?.name ?? ''}" group. Its member channels stay in the mix and are released from the group (their own faders resume full control).`}
-        confirmLabel="DELETE GROUP"
-        cancelLabel="CANCEL"
-        onConfirm={confirmDelete}
-        onCancel={() => setDeletePrompt(null)}
-      />
     </View>
   );
 }
@@ -636,22 +671,25 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       fontSize: 18,
       color: C.primary,
     },
-    modalOverlay: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.4)',
-      justifyContent: 'center' as const,
-      alignItems: 'center' as const,
-    },
-    modalContent: {
-      backgroundColor: C.surfaceContainerLowest,
-      borderRadius: 16,
-      padding: 24,
-      minWidth: 260,
+    pickerPanel: {
+      width: 300,
+      maxHeight: 440,
+      padding: 12,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: C.ghostBorder,
-      ...globalStyles.ambientShadow,
+      backgroundColor: C.surfaceContainerLowest,
     },
-    modalRow: {
+    pickerContext: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 13,
+      color: C.text,
+      marginBottom: 8,
+    },
+    pickerList: {
+      maxHeight: 320,
+    },
+    pickerRow: {
       minHeight: 44,
       justifyContent: 'center' as const,
       paddingVertical: 12,
@@ -659,10 +697,55 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       borderRadius: 8,
       marginBottom: 4,
     },
-    modalRowActive: {
+    pickerRowActive: {
       backgroundColor: 'rgba(0,104,117,0.1)',
       borderWidth: 1,
       borderColor: 'rgba(0,104,117,0.3)',
+    },
+    pickerCancel: {
+      minHeight: 44,
+      marginTop: 8,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    confirmPanel: {
+      width: 300,
+      padding: 16,
+      gap: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: C.error,
+      backgroundColor: C.surfaceContainerLowest,
+    },
+    confirmMessage: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 13,
+      lineHeight: 18,
+      color: C.text,
+    },
+    confirmActions: {
+      flexDirection: 'row' as const,
+      gap: 8,
+    },
+    confirmButton: {
+      flex: 1,
+      minHeight: 44,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      borderRadius: 8,
+      borderWidth: 1,
+    },
+    confirmCancel: {
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    confirmDelete: {
+      borderColor: C.error,
+      backgroundColor: C.error,
     },
   };
 }

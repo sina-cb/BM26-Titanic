@@ -10,6 +10,8 @@ import {
 } from "./state.js";
 import { pushUndo, undo, redo } from "./undo.js";
 import { rebuildParLights } from "./fixtures.js";
+import { isGroupLocked, parGroupMemberIndices, isTeSignConfigs } from "./group_lock.js";
+import { applyTeSignPlacement } from "../fixtures/te_sign_generator.js";
 import { cyclePanelVisibility } from "../gui/panel_visibility.js";
 import { toggleControlDrawer } from "../gui/control_drawer.js";
 import { toggleHelpPanel, hideHelpPanel, isHelpPanelOpen } from "../gui/help_panel.js";
@@ -100,6 +102,19 @@ export function deselectAllFixtures() {
     }
   }
   selectedFixtureIndices.clear();
+
+  // LED strands carry their selection per-fixture (`_selected`), not in
+  // selectedFixtureIndices, so the PAR loop above never cleared them: the
+  // selection glow tube (led_strand.js) and endpoint handles stayed lit after
+  // an empty-space click / Escape / picking another fixture — the persistent
+  // "orange line" the operator sees. Clearing them here keeps ONE deselect
+  // authority that every entry point already routes through.
+  (window.ledStrandFixtures || []).forEach((f) => {
+    if (f && typeof f.setSelected === 'function') f.setSelected(false);
+  });
+  (window.strandGuiFolders || []).forEach((f) => {
+    if (f && f.domElement) f.domElement.classList.remove('gui-card-selected');
+  });
 }
 
 // ─── Helper: next fixture name ──────────────────────────────────────────
@@ -114,6 +129,20 @@ export function nextFixtureName(baseName) {
   return candidate;
 }
 
+// ─── Canvas-relative NDC ─────────────────────────────────────────────────
+// Pick rays must be computed from the RENDER CANVAS rect, never the window.
+// Under the split-screen layout the canvas is narrower than the window and
+// no longer window-origin-aligned, so window-based NDC silently mis-hits
+// every fixture (see split_layout.js). getBoundingClientRect() is the single
+// source of truth for both the canvas size and its on-screen offset.
+function pointerToCanvasNdc(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    y: -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  };
+}
+
 // ─── Pointer Move (snap cursor tracking) ─────────────────────────────────
 export function onPointerMove(event) {
   if (!snapMode || !snapCursorGroup) return;
@@ -122,8 +151,9 @@ export function onPointerMove(event) {
     return;
   }
 
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  const ndc = pointerToCanvasNdc(event);
+  mouse.x = ndc.x;
+  mouse.y = ndc.y;
 
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(modelMeshes, true);
@@ -156,7 +186,11 @@ export function onPointerMove(event) {
 }
 
 // ─── GUI Folder Sync ─────────────────────────────────────────────────────
-function syncGuiFolders() {
+// Exported so the Lighting Controls "☑ Select All" group button
+// (gui_builder.js) can mirror the folder-open/highlight state after a batch
+// select — it was calling this as an undefined global (ReferenceError on every
+// click); a static import is the fix, never an optional-chained window fallback.
+export function syncGuiFolders() {
   if (!window.parGuiFolders) return;
   window.parGuiFolders.forEach((folder, idx) => {
     if (!folder) return;
@@ -174,6 +208,26 @@ function syncGuiFolders() {
       }
     } catch (_) {}
   });
+}
+
+// ─── Group-lock rigid-move set ───────────────────────────────────────────
+// The par-fixture indices that must move rigidly with `dragIdx`: every
+// currently-selected fixture, PLUS — when the dragged fixture's group is LOCKED
+// — every member of that group. So moving any single member of a locked group
+// (even the only selected one) drags the WHOLE group as one rigid body, while an
+// unlocked drag stays exactly the classic multi-select behavior. Always includes
+// dragIdx. Exported so main.js captures start state for the same set on drag begin.
+export function computeRigidMoveIndices(dragIdx) {
+  const set = new Set(selectedFixtureIndices);
+  if (Number.isInteger(dragIdx)) {
+    set.add(dragIdx);
+    const cfg = params.parLights[dragIdx];
+    const group = cfg ? (cfg.group || 'Default') : null;
+    if (group && isGroupLocked(params.groupOverrides, group)) {
+      for (const i of parGroupMemberIndices(params.parLights, group)) set.add(i);
+    }
+  }
+  return [...set];
 }
 
 // ─── Transform Change Handler ────────────────────────────────────────────
@@ -200,10 +254,12 @@ export function onTransformChange() {
   fixture.writeTransformToConfig();
   fixture.updateVisualsFromHitbox();
 
-  // Apply differential transform to all other selected fixtures
-  if (dragStartState && dragStartState.dragIdx === dragIdx && selectedFixtureIndices.size > 1) {
+  // Apply the differential transform to the whole rigid-move set (multi-select
+  // AND locked-group siblings — captured on drag begin in main.js).
+  if (dragStartState && dragStartState.dragIdx === dragIdx) {
     const startDrag = dragStartState.fixtures[dragIdx];
-    if (startDrag) {
+    const moveIndices = dragStartState.indices || [];
+    if (startDrag && moveIndices.length > 1) {
       const dx = fixture.hitbox.position.x - startDrag.x;
       const dy = fixture.hitbox.position.y - startDrag.y;
       const dz = fixture.hitbox.position.z - startDrag.z;
@@ -212,7 +268,7 @@ export function onTransformChange() {
       const startQuatInv = startDrag.quat.clone().invert();
       const deltaQuat = new THREE.Quaternion().multiplyQuaternions(currentQuat, startQuatInv);
 
-      for (const idx of selectedFixtureIndices) {
+      for (const idx of moveIndices) {
         if (idx === dragIdx) continue;
         const startOther = dragStartState.fixtures[idx];
         const otherFixture = window.parFixtures[idx];
@@ -229,6 +285,24 @@ export function onTransformChange() {
 
         otherFixture.writeTransformToConfig();
         otherFixture.updateVisualsFromHitbox();
+      }
+
+      // TE Sign A ≡ B guard: when the whole moved set is TE-sign halves (the
+      // locked TE Sign group), route the placement through the generator so both
+      // halves carry ONE bit-identical transform — never per-fixture edits that
+      // could drift the seam. Copies the LEAD's just-written transform into both.
+      const movedConfigs = moveIndices.map((i) => params.parLights[i]);
+      if (isTeSignConfigs(movedConfigs)) {
+        const lead = params.parLights[dragIdx];
+        applyTeSignPlacement(movedConfigs, {
+          x: lead.x, y: lead.y, z: lead.z,
+          rotX: lead.rotX, rotY: lead.rotY, rotZ: lead.rotZ,
+          scaleX: lead.scaleX ?? 1, scaleY: lead.scaleY ?? 1, scaleZ: lead.scaleZ ?? 1,
+        });
+        for (const idx of moveIndices) {
+          const f = window.parFixtures[idx];
+          if (f) f.syncFromConfig();
+        }
       }
     }
   }
@@ -251,10 +325,8 @@ export function onTransformChange() {
 let traceDotDragging = false;
 
 function buildPointerRay(event) {
-  const ndc = new THREE.Vector2(
-    (event.clientX / window.innerWidth) * 2 - 1,
-    -(event.clientY / window.innerHeight) * 2 + 1
-  );
+  const c = pointerToCanvasNdc(event);
+  const ndc = new THREE.Vector2(c.x, c.y);
   raycaster.setFromCamera(ndc, camera);
   return {
     origin: raycaster.ray.origin.clone(),
@@ -285,6 +357,21 @@ function beginTraceDotDrag(traceIndex, pointIndex) {
   window.addEventListener('pointerup', onTraceDotDragEnd, true);
 }
 
+/**
+ * Is this object actually drawn? `Object3D.visible` is local — an object whose
+ * own flag is true is still invisible if any ancestor is hidden. Raycasts
+ * against an explicit object array skip Three.js's own traversal check, so
+ * pickability has to ask this question itself.
+ */
+function _visibleInSceneGraph(object) {
+  let node = object;
+  while (node) {
+    if (node.visible === false) return false;
+    node = node.parent;
+  }
+  return true;
+}
+
 // ─── Pointer Down ────────────────────────────────────────────────────────
 export function onPointerDown(event) {
   // Only handle left clicks, ignore UI clicks. The handler is on
@@ -300,14 +387,15 @@ export function onPointerDown(event) {
     event.target.closest(".vm-modal-overlay") ||
     event.target.closest(
       "#view-masks-panel, #vm-isolation-hud, #pattern-editor-panel, " +
-      "#controller-map-panel, #cm-toast, " +
+      "#controller-map-panel, #cm-toast, #sim-split-divider, #sim-split-restore-tab, " +
       "#sacn-in-monitor-panel, #sacn-out-monitor-panel, #view-presets, #info-panel"
     )
   )
     return;
 
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  const ndc = pointerToCanvasNdc(event);
+  mouse.x = ndc.x;
+  mouse.y = ndc.y;
 
   // ─── Snap Mode ───
   if (snapMode && lastSnapPoint) {
@@ -374,6 +462,15 @@ export function onPointerDown(event) {
     intersects = intersects.filter(i => !i.object.userData.isTrace && !i.object.userData.isTraceVisual);
   }
 
+  // The toggle is not the only thing that hides them: the beauty profiles keep
+  // trace visuals off by default (src/gui/trace_visual_gate.js), which hides the
+  // GROUP while `generatorsVisible` stays true — and a preview dot is a child of
+  // that group, so its own `.visible` is still true. Ask the scene graph instead
+  // of any flag: an invisible trace object is never pickable, whatever hid it.
+  intersects = intersects.filter(
+    (i) => !((i.object.userData.isTrace || i.object.userData.isTraceVisual) &&
+             !_visibleInSceneGraph(i.object)));
+
   // Same Three.js caveat for LED strand handles: they stay in interactiveObjects
   // but are hidden in the beauty view (guides off + strand unselected). Drop any
   // invisible strand handle so it can't be picked while hidden.
@@ -423,13 +520,15 @@ export function onPointerDown(event) {
     }
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
-    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+    // Selection-only: patch chip highlights + counters (+ scroll the picked
+    // fixture's/strand's chip into view) without rebuilding the mapping panel.
+    if (window.syncControllerMapSelection) window.syncControllerMapSelection();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
-    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+    if (window.syncControllerMapSelection) window.syncControllerMapSelection();
   }
 }
 

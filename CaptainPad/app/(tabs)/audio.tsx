@@ -38,62 +38,45 @@
 // mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { Redirect, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { LockableScrollView } from '@/components/ui/lockable_scroll_view';
 import {
   fetchAudioConfig, patchAudioConfig, resetAudioConfig,
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
   resetAllAudioChains,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useLiveSignalsConnected, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { PulseFlash } from '@/components/audio/PulseFlash';
-import { audioAccentHex, audioGenreName, isGenreKey, isPulseKey } from '@/utils/audioSignals';
+import {
+  audioAccentHex, audioGenreName, describePartySignal, isGenreKey, isPulseKey,
+  nextPartySignalTruth, PARTY_SIGNAL_UNKNOWN, type PartySignalTruth,
+} from '@/utils/audioSignals';
+import { companionUrlFromApiBase } from '@/utils/companion_url';
+import { EmbeddedServiceScreen } from '@/components/embedded_service_screen';
+import { usePerformanceMode, usePerformanceModeReady } from '@/hooks/usePerformanceMode';
+import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
+import {
+  audioPageLayout,
+  audioRouteBodyState,
+  paramCenterWriteError,
+  paramValueMatches,
+  parseAudioConfig,
+  type AudioConfig,
+} from '@/components/audio/audio_configuration_logic';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
 // isn't yet picked up by the consuming module's checker.
 const ACCENT_AUTO = '#1b9e77';
-
-// Mirrors the engine's /audio/config blob verbatim so we can read it back and
-// PATCH a subset. NOTE: this tab only reads/writes capture.device* + bands.
-// inputGain + fftSize/hopSize (read-only); the kick/bands-crossover/
-// structureDetector fields are kept for type fidelity with the engine doc but
-// are NOT edited here (the per-signal analyzer tuning moved to the Companion).
-interface AudioConfig {
-  enabled: boolean;
-  capture: {
-    backend: string; device: string | null; deviceLabel?: string | null; deviceId?: string | null;
-    sampleRate: number; channels: number; inputFormat: string | null;
-  };
-  fftSize: number;
-  hopSize: number;
-  // Bands now use an asymmetric attack/release envelope + noise gate
-  // (2026-05-25; see marsin_engine/lib/audio_analyzer.js).
-  bands: {
-    lowMaxHz: number; midMaxHz: number;
-    attackMs: number; releaseMs: number; noiseGate: number;
-    inputGain?: number; // software mic-preamp (audio.bands.inputGain)
-  };
-  kick:  { minHz: number; maxHz: number; threshold: number; refractoryMs: number; decayMs: number };
-  // Audio structure detector (build/drop/sustain cues, docs/30). Optional:
-  // absent until the engine has it in its merged audio config. Only the
-  // fields the UI reads/patches are typed here.
-  structureDetector?: {
-    enabled?: boolean;
-    dropEdgeMode?: 'level' | 'windowed';
-    dropDeltaWindowMs?: number;
-    buildThreshold?: number; dropEnergyJump?: number;
-    eventRefractoryMs?: number; stemsTimeoutMs?: number;
-  };
-}
 
 // BPM-sync absolute bounds. Operator picks min/max inside this band;
 // the UI refuses to let them cross (each slider's bound moves to keep
@@ -110,6 +93,43 @@ interface AudioDevice {
   ffmpegDevice: string;
   isDefault?: boolean;
   alternativeName?: string;
+}
+
+// ── What `capture.device` actually SELECTS ──────────────────────────────
+//
+// `capture.device` is a SHARED field: the Audio Companion (the sole
+// analyzer) uses it to carry its whole SOURCE MODE, not just a mic —
+// 'test' = its synthetic generator, 'file:<path>' = clip replay, '' / null
+// = the platform default input, anything else = that pinned mic
+// (marsin_engine/audio/companion/companion_config.js parseCaptureDevice).
+//
+// `deviceLabel` / `deviceId` are NOT cleared when the source flips to
+// test/file, so rendering `deviceLabel` blindly names a MICROPHONE that is
+// demonstrably not the source. Observed live 2026-07-27 on this rig and
+// checked into marsin_engine/states/test_bench/audio_state.yaml:
+// `device: test` alongside `deviceLabel: Microphone (Amazon USB Streaming
+// Mic)` — the AUDIO tab claimed a USB mic was the running capture device
+// while the Companion was on its test generator. Read the sentinel, never
+// the stale label (codex P0: the UI must not report a source we aren't on).
+type CaptureSource =
+  | { kind: 'mic'; label: string }
+  | { kind: 'default' }
+  | { kind: 'test' }
+  | { kind: 'file'; file: string };
+
+function describeCaptureSource(capture: AudioConfig['capture']): CaptureSource {
+  const dev = capture?.device;
+  if (dev === 'test') return { kind: 'test' };
+  if (typeof dev === 'string' && dev.startsWith('file:')) return { kind: 'file', file: dev.slice('file:'.length) };
+  if (dev == null || dev === '') return { kind: 'default' };
+  return { kind: 'mic', label: capture.deviceLabel || dev };
+}
+
+function captureSourceText(src: CaptureSource): string {
+  if (src.kind === 'test') return 'TEST SIGNAL — Companion synthetic generator';
+  if (src.kind === 'file') return `FILE — ${src.file.split(/[\\/]/).pop() || src.file}`;
+  if (src.kind === 'default') return 'Platform default input (no mic pinned)';
+  return src.label;
 }
 
 // ── Card primitives ─────────────────────────────────────────────────────
@@ -170,11 +190,12 @@ type FaderRowProps = {
   value: number;
   step?: number;
   hint?: string;
+  disabled?: boolean;
   onDrag: (v: number) => void;
   onCommit: (v: number) => void;
 };
 
-function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit }: FaderRowProps) {
+function FaderRow({ label, suffix, min, max, value, step, hint, disabled = false, onDrag, onCommit }: FaderRowProps) {
   const C = usePalette();
   const [draftNorm, setDraftNorm] = useState<number | null>(null);
   const lastValRef = useRef<number>(value);
@@ -201,7 +222,10 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
   const isInt = Number.isInteger(display);
 
   return (
-    <View style={{ marginBottom: 14 }}>
+    <View
+      pointerEvents={disabled ? 'none' : 'auto'}
+      style={{ marginBottom: 14, opacity: disabled ? 0.55 : 1 }}
+    >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</Text>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 11 }}>
@@ -244,21 +268,21 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
 
 // ── Mic picker ──────────────────────────────────────────────────────────
 
-function MicPickerRow({ device, isCurrent, onPress, busy }: {
-  device: AudioDevice; isCurrent: boolean; onPress: () => void; busy?: boolean;
+function MicPickerRow({ device, isCurrent, onPress, busy, disabled = false }: {
+  device: AudioDevice; isCurrent: boolean; onPress: () => void; busy?: boolean; disabled?: boolean;
 }) {
   const C = usePalette();
   return (
     <TouchableOpacity
       onPress={onPress}
-      disabled={busy}
+      disabled={busy || disabled}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: 12,
         paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, marginTop: 6,
         backgroundColor: isCurrent ? 'rgba(0, 99, 155, 0.08)' : C.surfaceContainerLowest,
         borderWidth: isCurrent ? 2 : 1,
         borderColor: isCurrent ? C.primary : C.ghostBorder,
-        opacity: busy ? 0.6 : 1,
+        opacity: busy || disabled ? 0.6 : 1,
       }}
     >
       <View style={{
@@ -395,24 +419,10 @@ function slotValueText(slot: SignalSlot, value: number): string {
 // of the audio page, so it's given a generous, touch-friendly height.
 const PINNED_TRACE_HEIGHT = 40;
 
-// AUDIO SIGNALS grid — the signals lay out as a 3-column × N-row grid
-// (operator brief 2026-06-17) rather than one horizontally-scrolling
-// row, to read cleaner on the iPad and mirror the Audio Companion's
-// desktop layout. 3 cells across, wrapping to new rows; the BPM tile
-// rides along as its own cell. `flexWrap` + percentage-width cells give
-// the wrap; per-cell padding makes the gutters (RN's `gap` on a wrap
-// container is unreliable across cells, so we pad inside each cell).
-const SIGNAL_GRID_COLUMNS = 3;
-
-// Max on-screen height of the AUDIO SIGNALS grid before it scrolls inside
-// its own bounded ScrollView (operator brief 2026-06-17 "scrollable signal
-// grid"). ~3 rows of signal columns (each column ≈ 100 px tall with header +
-// bar + trace + RAW footnote, + the 10 px row gutter) stay visible; beyond
-// that the grid scrolls so the lower rows (dom/energy/note/switch/bar-phase/
-// downbeat/genre/onsets) are reachable without the rest of the page being
-// pushed off-screen. A short signal set never reaches this cap, so the grid
-// keeps its natural height and doesn't scroll.
-const SIGNAL_GRID_MAX_HEIGHT = 340;
+// AUDIO SIGNALS uses a responsive wrapped grid: three columns on iPad and
+// desktop, two on constrained landscape, and one on very narrow layouts.
+// The grid stays in the page's single scroll surface so every signal remains
+// reachable without a nested touch or wheel trap.
 
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
@@ -455,7 +465,7 @@ const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active,
   // over ~150-250 ms so the operator actually SEES the cue (Adv-D P2-A).
   if (slot.isPulse) {
     return (
-      <View style={{ flex: 1 }}>
+      <View style={{ width: '100%' }}>
         {/* header — slot label only; the dot IS the value, a numeric POST
             readout on a one-hop pulse is meaningless (it reads 0.00 the rest
             of the time). */}
@@ -481,7 +491,7 @@ const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active,
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ width: '100%' }}>
       {/* header — slot label + live POST value */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
         <Text numberOfLines={1} style={{
@@ -543,7 +553,6 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
     <View style={{
       paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8,
       backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.border,
-      marginRight: 8,
     }}>
       <Text style={{
         fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
@@ -554,10 +563,12 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
 }
 
 function LiveAudioMeters({
-  oscStatus, inputGain, onCommitInputGain,
+  oscStatus, inputGain, inputGainBusy, meterColumns, onCommitInputGain,
 }: {
   oscStatus: OscPillState | null;
   inputGain: number;
+  inputGainBusy: boolean;
+  meterColumns: 1 | 2 | 3;
   onCommitInputGain: (g: number) => void;
 }) {
   const C = usePalette();
@@ -638,20 +649,49 @@ function LiveAudioMeters({
     syncOn && !(arbitratedBpm > 0) ? 'warn' :
     syncOn                         ? 'on'   :
                                      'off';
+  // Prominent read-only mirror of the exact held gate patterns and the
+  // optimizer receive. Detector sensitivity stays in Audio Companion ->
+  // DERIVED TUNE; CaptainPad observes engine truth and does not maintain a
+  // second threshold. Missing live data is shown as unknown, never as calm.
+  //
+  // "Missing" includes the LINK being down: the live-param cache holds its
+  // last frame when /ws/signals drops (deliberate — every meter freezes
+  // rather than snapping to zero), so reading the cached `audioParty` alone
+  // let the pill keep asserting ON/OFF with no engine behind it. We therefore
+  // fold {is the signals socket up, which live doc is in hand, what does it
+  // say} through nextPartySignalTruth: it yields null (→ "PARTY SIGNAL …")
+  // the instant the link drops, and holds unknown after a reconnect until a
+  // live doc actually ARRIVES rather than re-reading the one frozen on screen.
+  //
+  // Reduced during render (not in an effect) so the unknown paints on the
+  // SAME frame as the disconnect; the reducer is idempotent for a repeated
+  // observation, so a re-render with no new data is a no-op.
+  const signalsConnected = useLiveSignalsConnected();
+  const partyEntry = liveDoc?.params?.audioParty;
+  const partyTruthRef = useRef<PartySignalTruth>(PARTY_SIGNAL_UNKNOWN);
+  partyTruthRef.current = nextPartySignalTruth(partyTruthRef.current, {
+    connected: signalsConnected,
+    doc: liveDoc,
+    value: partyEntry && typeof partyEntry.value === 'number' ? partyEntry.value : null,
+  });
+  const partySignal = describePartySignal(partyTruthRef.current.value);
 
   return (
-    <View style={{ marginBottom: 24 }}>
+    <View testID="audio-primary-controls" style={{ marginBottom: 24 }}>
       {/* Status pills row + LIVE rate on the right. This is a normal
           section of the page (no longer a pinned strip) — it flows in the
           single page ScrollView so the whole AUDIO tab scrolls as one. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+      <View style={{
+        flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center',
+        columnGap: 8, rowGap: 8, marginBottom: 12,
+      }}>
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
-        <View style={{ flex: 1 }} />
+        <StatusPill label={partySignal.label} tone={partySignal.tone} />
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, letterSpacing: 0.8,
-        }}>LIVE · 60 FPS</Text>
+          color: C.secondary, letterSpacing: 0.8, marginLeft: 'auto',
+        }}>LIVE</Text>
       </View>
       {/* Section header — "AUDIO SIGNALS" on the left, the live BPM read-out
           on the right. BPM is the song tempo, NOT an analyser signal, so it
@@ -678,31 +718,11 @@ function LiveAudioMeters({
           No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
         </Text>
       ) : (
-        // 3×N grid that wraps to new rows, inside a HEIGHT-CAPPED vertical
-        // ScrollView (operator brief 2026-06-17 "scrollable signal grid").
-        //
-        // WHY a nested scroller: the Companion now routes many signals
-        // (low/mid/high/kick, dom1/dom2 + energies, energy/slow/build/party,
-        // note/switch/bar-phase/downbeat, genre, per-band onsets, chest-hit …).
-        // At 3 columns that's 4-6+ rows; on the iPad the lower rows pushed the
-        // BPM-sync / settings cards off-screen and, worse, were unreachable
-        // when the grid alone filled the viewport. Capping the grid's height
-        // and letting IT scroll keeps every signal reachable while the rest of
-        // the page (sync, settings) stays in view below.
-        //
-        // The cap only engages when the grid is tall: a short set sits at its
-        // natural height (the ScrollView never scrolls), so a 3-6 signal rig
-        // looks identical to before. nestedScrollEnabled lets the inner
-        // scroller win the vertical gesture inside its bounds (Android); on
-        // web/iOS the bounded height naturally captures the wheel/drag.
-        <ScrollView
-          style={{ maxHeight: SIGNAL_GRID_MAX_HEIGHT }}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-          contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}
-        >
+        // Keep all meter rows in normal page flow. This deliberately avoids a
+        // second vertical gesture owner around the live controls.
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
           {slots.map((slot) => (
-            <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
+            <View key={slot.key} style={{ width: `${100 / meterColumns}%`, paddingHorizontal: 6, marginBottom: 10 }}>
               <SignalColumn
                 slot={slot}
                 raw={valueOf(slot.rawKey)}
@@ -712,7 +732,7 @@ function LiveAudioMeters({
               />
             </View>
           ))}
-        </ScrollView>
+        </View>
       )}
       {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
           gain (patches audio.bands.inputGain): it lifts the mic bands
@@ -726,6 +746,7 @@ function LiveAudioMeters({
           max={INPUT_GAIN_MAX}
           step={0.1}
           value={inputGain}
+          disabled={inputGainBusy}
           hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so the mic bands lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
           onDrag={() => { /* FaderRow shows the live draft; commit on release */ }}
           onCommit={onCommitInputGain}
@@ -828,36 +849,91 @@ function BpmInlineReadout() {
 // are kept ≥ 1 BPM apart on commit (client-side guard; engine validates).
 
 function CompactBpmCard({
-  sp, bpmSyncOn,
+  sp, bpmSyncOn, stackControls, onPatchError,
 }: {
   sp: Record<string, number>;
   bpmSyncOn: boolean;
+  stackControls: boolean;
+  onPatchError: (error: string | null) => void;
 }) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
   const minVal = Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS));
   const maxVal = Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS));
+  const [pending, setPending] = useState<{ key: string; expected: number } | null>(null);
+  const pendingRef = useRef(pending);
+  const readbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  pendingRef.current = pending;
+
+  useEffect(() => () => {
+    if (readbackTimerRef.current) clearTimeout(readbackTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!pending || !paramValueMatches(sp[pending.key], pending.expected)) return;
+    if (readbackTimerRef.current) clearTimeout(readbackTimerRef.current);
+    readbackTimerRef.current = null;
+    pendingRef.current = null;
+    setPending(null);
+  }, [pending, sp]);
+
+  const writeParam = useCallback(async (key: string, expected: number) => {
+    if (pendingRef.current) return;
+    const next = { key, expected };
+    pendingRef.current = next;
+    setPending(next);
+    let error: string | null;
+    try {
+      error = paramCenterWriteError(await updateParamCenter({ [key]: expected }), key);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+    if (error) {
+      if (readbackTimerRef.current) clearTimeout(readbackTimerRef.current);
+      readbackTimerRef.current = null;
+      pendingRef.current = null;
+      setPending(null);
+      onPatchError(error);
+      return;
+    }
+    onPatchError(null);
+    readbackTimerRef.current = setTimeout(() => {
+      const current = pendingRef.current;
+      if (!current || current.key !== key || current.expected !== expected) return;
+      pendingRef.current = null;
+      setPending(null);
+      onPatchError(`${key} was accepted but no authoritative readback arrived`);
+    }, 2500);
+  }, [onPatchError]);
+
   return (
     <View style={CARD}>
       {/* Header row — title + tap-to-toggle status pill + live read-out.
           Tap the pill to flip SYNC; saves a whole MasterToggle row. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+      <View style={{
+        flexDirection: stackControls ? 'column' : 'row',
+        alignItems: stackControls ? 'flex-start' : 'center',
+        gap: stackControls ? 8 : 12,
+      }}>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text,
-          letterSpacing: 0.8, flex: 1,
+          letterSpacing: 0.8, ...(stackControls ? {} : { flex: 1 }),
         }}>
           BPM → SPEED SYNC
         </Text>
         <BpmInlineReadout />
         <TouchableOpacity
-          onPress={() => updateParamCenter({ bpmSpeedSync: bpmSyncOn ? 0 : 1 })}
+          onPress={() => { void writeParam('bpmSpeedSync', bpmSyncOn ? 0 : 1); }}
+          disabled={pending !== null}
           activeOpacity={0.7}
           style={{
             paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
             backgroundColor: bpmSyncOn ? ACCENT_AUTO : C.surfaceContainerHigh,
             borderWidth: 1,
             borderColor: bpmSyncOn ? ACCENT_AUTO : C.ghostBorder,
+            opacity: pending ? 0.55 : 1,
+            alignSelf: 'flex-start',
           }}
         >
           <Text style={{
@@ -872,6 +948,11 @@ function CompactBpmCard({
       {/* Stale/no-signal banner only when sync is on AND something is
           actually wrong. BpmStaleWarning self-gates and self-subscribes. */}
       <BpmStaleWarning bpmSyncOn={bpmSyncOn} />
+      {pending ? (
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 9, marginTop: 6 }}>
+          SAVING {pending.key}â€¦
+        </Text>
+      ) : null}
       {/* Two sliders on one row (min | max). Reuses FaderRow but with
           a compacted column layout — short labels, no per-slider hint
           paragraph. The one-liner hint sits below the pair. */}
@@ -881,7 +962,7 @@ function CompactBpmCard({
           which made the slider knobs visibly shift along their tracks
           as the partner was dragged. Cross-bound constraint (min < max)
           stays enforced at COMMIT time via the existing clamp. */}
-      <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
+      <View style={{ flexDirection: stackControls ? 'column' : 'row', gap: 12, marginTop: 10 }}>
         <View style={{ flex: 1 }}>
           <FaderRow
             label="BPM min"
@@ -889,8 +970,9 @@ function CompactBpmCard({
             max={BPM_MAX_ABS}
             value={minVal}
             step={1}
+            disabled={pending !== null}
             onDrag={() => { /* commit on release */ }}
-            onCommit={(v) => updateParamCenter({ bpmSpeedMin: Math.max(BPM_MIN_ABS, Math.min(v, maxVal - 1)) })}
+            onCommit={(v) => { void writeParam('bpmSpeedMin', Math.max(BPM_MIN_ABS, Math.min(v, maxVal - 1))); }}
           />
         </View>
         <View style={{ flex: 1 }}>
@@ -900,14 +982,94 @@ function CompactBpmCard({
             max={BPM_MAX_ABS}
             value={maxVal}
             step={1}
+            disabled={pending !== null}
             onDrag={() => { /* commit on release */ }}
-            onCommit={(v) => updateParamCenter({ bpmSpeedMax: Math.min(BPM_MAX_ABS, Math.max(v, minVal + 1)) })}
+            onCommit={(v) => { void writeParam('bpmSpeedMax', Math.min(BPM_MAX_ABS, Math.max(v, minVal + 1))); }}
           />
         </View>
       </View>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: -4 }}>
         Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the arbitrated BPM — whatever is driving the clock, OSC (Audio Companion) OR a tapped tempo (TAP).
       </Text>
+    </View>
+  );
+}
+
+// ── Audio Companion launcher ───────────────────────────────────────────
+//
+// One tap opens the Marsin Audio Companion as an explicit view inside this
+// Audio tab (signal/chain DESIGN lives there since 2026-06-17). The Companion
+// runs on the SAME machine as the engine
+// (launcher.js → COMPANIONS.audio), so its address is derived from the
+// EFFECTIVE api_base (Config-tab AsyncStorage override included) with the
+// port swapped — never a hardcoded host, never 127.0.0.1 on the operator's
+// iPad. Derivation is the pure, unit-tested companionUrlFromApiBase().
+//
+// Codex P0: a base we cannot parse throws, and we render the LOUD error
+// instead of a link to a guessed address.
+
+function CompanionLinkCard({ onOpen }: { onOpen: () => void }) {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
+  const [url, setUrl] = useState<string | null>(null);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const base = await getApiBaseAsync();
+        if (!alive) return;
+        setUrl(companionUrlFromApiBase(base));
+        setUrlError(null);
+      } catch (err: any) {
+        if (!alive) return;
+        setUrl(null);
+        setUrlError(err?.message || String(err));
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <View style={CARD}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{
+          width: 36, height: 36, borderRadius: 8,
+          backgroundColor: C.primaryContainer, alignItems: 'center', justifyContent: 'center',
+        }}>
+          <IconSymbol name="waveform" size={20} color={C.primary} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 0.8 }}>
+            AUDIO COMPANION
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: urlError ? C.error : C.secondary, marginTop: 2 }}>
+            {urlError
+              ? `Cannot derive the Companion address — ${urlError}`
+              : `Design signals + chains in the analyzer · ${url ?? 'resolving…'}`}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={onOpen}
+          disabled={!url}
+          activeOpacity={0.7}
+          style={{
+            paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8,
+            backgroundColor: url ? C.primary : C.surfaceContainerLowest,
+            borderWidth: 1, borderColor: url ? C.primary : C.ghostBorder,
+            opacity: url ? 1 : 0.6,
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+            color: url ? '#fff' : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8,
+          }}>
+            Open in Audio
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -1111,26 +1273,127 @@ const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
 // screen, so the operator never sees the spinner stick.
 
 export default function AudioAnalysisScreen() {
-  const globalStyles = useGlobalStyles();
+  const { active: globalPerformanceActive, engineOffline } = usePerformanceMode();
+  const performanceModeReady = usePerformanceModeReady();
+  const bodyState = audioRouteBodyState({
+    performanceModeReady,
+    globalPerformanceActive,
+    engineOffline,
+  });
+
+  if (bodyState === 'redirect') return <Redirect href="/" />;
+  if (bodyState === 'authority_pending') return <AudioAuthorityPending />;
+  return <AudioAnalysisScreenContent />;
+}
+
+function AudioAuthorityPending() {
+  const C = usePalette();
+  return (
+    <View
+      testID="audio-analysis-screen"
+      style={{ flex: 1, backgroundColor: C.background, padding: 48 }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+        <IconSymbol name="waveform" size={32} color={C.primary} />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
+          AUDIO
+        </Text>
+      </View>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 14, marginBottom: 8 }}>
+        CHECKING EDIT AUTHORITY
+      </Text>
+      <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 13, lineHeight: 19 }}>
+        CaptainPad is connected but the engine has not answered its Performance-mode check yet. Audio writes remain unmounted until the authoritative answer arrives. If this persists, reconnect the control bus or reopen the app.
+      </Text>
+    </View>
+  );
+}
+
+function AudioAnalysisScreenContent() {
+  const [view, setView] = useState<'controls' | 'companion'>('controls');
+
+  if (view === 'companion') {
+    return (
+      <EmbeddedServiceScreen
+        title="AUDIO COMPANION"
+        description="LOCAL SIGNAL DESIGNER · PORT 6966"
+        resolveUrl={companionUrlFromApiBase}
+        onExit={() => setView('controls')}
+        exitLabel="AUDIO CONTROLS"
+      />
+    );
+  }
+
+  return <AudioAnalysisControls onOpenCompanion={() => setView('companion')} />;
+}
+
+function AudioAnalysisControls({ onOpenCompanion }: { onOpenCompanion: () => void }) {
   const C = usePalette();
   const status = useAudioStatus();
   const oscStatus = useOscStatus();
   const [cfg, setCfg] = useState<AudioConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
-    await getApiBaseAsync();
-    const r = await fetchAudioConfig();
-    if (r.ok) { setCfg(r.data as AudioConfig); setLoadError(null); }
-    else { setLoadError(r.error || 'unknown error'); }
+  const acceptConfig = useCallback((value: unknown, source: string) => {
+    try {
+      setCfg(parseAudioConfig(value));
+      setLoadError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoadError(`${source}: ${message}`);
+    }
   }, []);
+
+  // One fetch at a time. Guards the mount effect + first focus from
+  // double-fetching, and makes the RETRY button mash-safe.
+  const inFlightRef = useRef(false);
+  const reload = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      await getApiBaseAsync();
+      const r = await fetchAudioConfig();
+      if (r.ok) { acceptConfig(r.data, 'GET /audio/config'); }
+      else { setLoadError(r.error || 'unknown error'); }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoadError(`Cannot resolve or load the Audio API: ${message}`);
+    } finally { inFlightRef.current = false; }
+  }, [acceptConfig]);
 
   useEffect(() => { reload(); }, [reload]);
 
+  // The expo-router tab screen never remounts, so without this a single
+  // failed GET /audio/config latches the error (or the spinner) until the
+  // operator hits RETRY or reloads the app. Re-attempt on every focus while
+  // we still have no config. This is a RETRY, not a fallback: a failing
+  // refetch re-renders the same loud error.
+  useFocusEffect(useCallback(() => { if (!cfg) void reload(); }, [cfg, reload]));
+
+  useEffect(() => {
+    const unsubscribeMessage = engineEvents.subscribe((message: EngineMessage) => {
+      if (message.type !== 'audioConfig') return;
+      acceptConfig((message as EngineMessage & { config?: unknown }).config, 'audioConfig broadcast');
+    });
+    const unsubscribeStatus = engineEvents.subscribeStatus((busStatus) => {
+      if (busStatus.connected) void reload();
+    });
+    return () => {
+      unsubscribeMessage();
+      unsubscribeStatus();
+    };
+  }, [acceptConfig, reload]);
+
   if (loadError) {
     return (
-      <View style={globalStyles.container}>
+      <View testID="audio-analysis-screen" style={{ flex: 1, backgroundColor: C.background }}>
         <ScrollView contentContainerStyle={{ padding: 48 }} style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 24 }}>
+            <IconSymbol name="waveform" size={32} color={C.primary} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
+              AUDIO
+            </Text>
+          </View>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, marginBottom: 8 }}>
             AUDIO CONFIG UNAVAILABLE
           </Text>
@@ -1144,16 +1407,33 @@ export default function AudioAnalysisScreen() {
   }
   if (!cfg) {
     return (
-      <View style={globalStyles.container}>
-        <ScrollView contentContainerStyle={{ padding: 48, alignItems: 'center' }} style={{ flex: 1 }}>
-          <ActivityIndicator size="large" color={C.primary} />
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, marginTop: 16 }}>Loading audio config…</Text>
+      <View testID="audio-analysis-screen" style={{ flex: 1, backgroundColor: C.background }}>
+        <ScrollView contentContainerStyle={{ padding: 48 }} style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 24 }}>
+            <IconSymbol name="waveform" size={32} color={C.primary} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
+              AUDIO
+            </Text>
+          </View>
+          <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+            <ActivityIndicator size="large" color={C.primary} />
+            <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, marginTop: 16 }}>Loading audio config…</Text>
+          </View>
         </ScrollView>
       </View>
     );
   }
 
-  return <AudioConfigBody cfg={cfg} setCfg={setCfg} status={status} oscStatus={oscStatus} reload={reload} />;
+  return (
+    <AudioConfigBody
+      cfg={cfg}
+      setCfg={setCfg}
+      status={status}
+      oscStatus={oscStatus}
+      reload={reload}
+      onOpenCompanion={onOpenCompanion}
+    />
+  );
 }
 
 // ── Loaded body ────────────────────────────────────────────────────────────
@@ -1166,24 +1446,52 @@ export default function AudioAnalysisScreen() {
 // spinner even if /ws/signals is firehose-streaming behind us.
 
 function AudioConfigBody({
-  cfg, setCfg, status, oscStatus, reload,
+  cfg, setCfg, status, oscStatus, reload, onOpenCompanion,
 }: {
   cfg: AudioConfig;
   setCfg: React.Dispatch<React.SetStateAction<AudioConfig | null>>;
   status: ReturnType<typeof useAudioStatus>;
   oscStatus: ReturnType<typeof useOscStatus>;
   reload: () => Promise<void>;
+  onOpenCompanion: () => void;
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
+  const { width: windowWidth } = useWindowDimensions();
+  const layout = useMemo(() => audioPageLayout(windowWidth), [windowWidth]);
   const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
   const SUB_CARD = useMemo(() => makeSubCard(C), [C]);
   const [patchError, setPatchError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const busyRef = useRef<string | null>(null);
   const [devices, setDevices] = useState<AudioDevice[] | null>(null);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const beginMutation = useCallback((operation: string): boolean => {
+    if (busyRef.current) {
+      setPatchError(`Audio configuration is still saving ${busyRef.current}`);
+      return false;
+    }
+    busyRef.current = operation;
+    setBusy(operation);
+    return true;
+  }, []);
+  const finishMutation = useCallback((operation: string) => {
+    if (busyRef.current !== operation) return;
+    busyRef.current = null;
+    setBusy(null);
+  }, []);
+  const applyConfigReadback = useCallback((value: unknown, operation: string): boolean => {
+    try {
+      setCfg(parseAudioConfig(value));
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setPatchError(`${operation}: ${message}`);
+      return false;
+    }
+  }, [setCfg]);
   // Ref to the page-level ScrollView so "Open Settings" on the cross-
   // machine mic banner can scroll the (off-screen) SETTINGS disclosure
   // at the bottom into view. Without this the operator taps the button
@@ -1233,10 +1541,15 @@ function AudioConfigBody({
   const loadDevices = useCallback(async () => {
     setDevicesLoading(true);
     setDevicesError(null);
-    const r = await fetchAudioDevices();
-    if (r.ok) setDevices(r.data?.devices || []);
-    else setDevicesError(r.error || 'failed to list mics');
-    setDevicesLoading(false);
+    try {
+      const r = await fetchAudioDevices();
+      if (r.ok) setDevices(r.data?.devices || []);
+      else setDevicesError(r.error || 'failed to list mics');
+    } catch (err) {
+      setDevicesError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDevicesLoading(false);
+    }
   }, []);
 
   // The per-band/per-kick `updateLocal` + `commitField` helpers were
@@ -1252,36 +1565,50 @@ function AudioConfigBody({
   // even though chain DESIGN now lives in the Audio Companion (the chain
   // editor card was removed from this tab on 2026-06-17).
   const resetToDefaults = useCallback(async () => {
-    setBusy('reset');
+    if (!beginMutation('reset')) return;
     const [cfgRes, chainsRes] = await Promise.all([
       resetAudioConfig(),
       resetAllAudioChains(),
     ]);
-    setBusy(null);
     const errors: string[] = [];
     if (!cfgRes.ok) errors.push(`config: ${cfgRes.error || 'reset failed'}`);
     if (!chainsRes.ok) errors.push(`chains: ${chainsRes.error || 'reset failed'}`);
+    // Reconcile the analyzer reset independently from the chain reset. A
+    // successful /audio/config/reset changes engine truth even when the
+    // parallel chain reset fails, so its readback must never be discarded.
+    let configReadbackApplied = false;
+    if (cfgRes.ok) {
+      configReadbackApplied = applyConfigReadback(cfgRes.data, 'reset readback');
+      if (!configReadbackApplied) await reload();
+    } else {
+      await reload();
+    }
     if (errors.length) {
       setPatchError(errors.join(' · '));
-    } else {
+    } else if (configReadbackApplied) {
       setPatchError(null);
     }
-    // Always reload audio config: even a chains-only failure still
-    // means the analyzer side reset succeeded and we need the fresh
-    // numbers reflected in the sliders.
-    reload();
-  }, [reload]);
+    finishMutation('reset');
+  }, [applyConfigReadback, beginMutation, finishMutation, reload]);
 
   // Software INPUT GAIN (audio.bands.inputGain) — real engine gain set from
   // the pinned strip slider. Optimistic local update, then patch + reload.
   const commitInputGain = useCallback(async (g: number) => {
     if (!cfg) return;
+    if (!beginMutation('input_gain')) return;
     const clamped = Math.max(INPUT_GAIN_MIN, Math.min(INPUT_GAIN_MAX, g));
     setCfg(prev => prev && ({ ...prev, bands: { ...prev.bands, inputGain: clamped } }));
     const r = await patchAudioConfig({ bands: { inputGain: clamped } });
-    if (!r.ok) { setPatchError(r.error || 'failed to set input gain'); reload(); }
-    else { setPatchError(null); }
-  }, [cfg, reload, setCfg]);
+    if (!r.ok) {
+      setPatchError(r.error || 'failed to set input gain');
+      await reload();
+    } else if (applyConfigReadback(r.data, 'input gain readback')) {
+      setPatchError(null);
+    } else {
+      await reload();
+    }
+    finishMutation('input_gain');
+  }, [applyConfigReadback, beginMutation, cfg, finishMutation, reload, setCfg]);
 
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
   // and respawns on the new input. AudioDevice and AudioStatusDevice
@@ -1292,7 +1619,8 @@ function AudioConfigBody({
   // audioStatus (error cleared), the banner hides on its own, and the
   // reload() below also resyncs the SETTINGS cfg.
   const selectDevice = useCallback(async (d: AudioDevice | AudioStatusDevice) => {
-    setBusy(`mic:${d.id}`);
+    const operation = `mic:${d.id}`;
+    if (!beginMutation(operation)) return;
     const r = await patchAudioConfig({
       capture: {
         device:      d.ffmpegDevice,
@@ -1302,10 +1630,15 @@ function AudioConfigBody({
         platform:    d.platform,
       },
     });
-    setBusy(null);
     if (!r.ok) { setPatchError(r.error || 'failed to switch mic'); }
-    else { setPatchError(null); setPickerOpen(false); reload(); }
-  }, [reload]);
+    else if (applyConfigReadback(r.data, 'capture-device readback')) {
+      setPatchError(null);
+      setPickerOpen(false);
+    } else {
+      await reload();
+    }
+    finishMutation(operation);
+  }, [applyConfigReadback, beginMutation, finishMutation, reload]);
 
   // Audio SOURCE is always the MIC / capture device (operator brief
   // 2026-06-17). The TEST (synthetic) and FILE (clip replay) sources were
@@ -1337,6 +1670,9 @@ function AudioConfigBody({
   }, [devices, loadDevices]);
 
   // ── Derived ────────────────────────────────────────────────────────
+  // What `capture.device` actually selects right now (mic / default input /
+  // Companion test generator / file replay) — see describeCaptureSource.
+  const capSource = describeCaptureSource(cfg?.capture);
   const enabled  = cfg?.enabled ?? false;
   const phase    = status?.phase ?? (enabled ? 'unknown' : 'off');
   const phaseColor =
@@ -1355,11 +1691,11 @@ function AudioConfigBody({
   // COLUMN that is ONE scrollable area — title, live meters, sync, and
   // settings all flow inside the same page ScrollView (no pinned strip).
   return (
-    <View style={{ flex: 1, flexDirection: 'column', backgroundColor: C.background }}>
-      <ScrollView
+    <View testID="audio-analysis-screen" style={{ flex: 1, flexDirection: 'column', backgroundColor: C.background }}>
+      <LockableScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
-        contentContainerStyle={{ padding: 32, paddingBottom: 80 }}
+        contentContainerStyle={{ padding: layout.pagePadding, paddingBottom: 80 }}
       >
         {/* ── Page title ──────────────────────────────────────────────
             Reset is no longer a top-right header action — it lives at
@@ -1379,6 +1715,8 @@ function AudioConfigBody({
         <LiveAudioMeters
           oscStatus={oscStatus}
           inputGain={cfg?.bands?.inputGain ?? 1}
+          inputGainBusy={busy !== null}
+          meterColumns={layout.meterColumns}
           onCommitInputGain={commitInputGain}
         />
 
@@ -1405,10 +1743,14 @@ function AudioConfigBody({
             mapping is reachable without expanding a disclosure. Tap
             the SYNC pill to flip; min/max sliders side-by-side. The
             stale/no-signal banner is self-rendered when sync is on. */}
-        <CompactBpmCard
-          sp={sp}
-          bpmSyncOn={bpmSyncOn}
-        />
+        <View testID="audio-bpm-sync">
+          <CompactBpmCard
+            sp={sp}
+            bpmSyncOn={bpmSyncOn}
+            stackControls={layout.stackBpmControls}
+            onPatchError={setPatchError}
+          />
+        </View>
 
         {/* STRUCTURE DETECTOR — RETIRED (2026-06-17). The dedicated
             build/drop/sustain preview card was an unused, under-
@@ -1441,6 +1783,14 @@ function AudioConfigBody({
             were removed here. Restore from git history if the editor ever
             comes back to CaptainPad. */}
 
+        {/* ── Audio Companion launcher ─────────────────────────────────
+            Sits with the config controls, ABOVE the SETTINGS disclosure so
+            it is visible without expanding anything. Address is derived
+            from the effective api_base (see CompanionLinkCard). */}
+        <View testID="audio-companion-card">
+          <CompanionLinkCard onOpen={onOpenCompanion} />
+        </View>
+
         {/* ── 4. SETTINGS (collapsed by default) ───────────────────────
             Pinned bottom disclosure that holds everything rarely touched
             mid-show. Operator brief 2026-05-26: the old BPM mapping,
@@ -1450,7 +1800,7 @@ function AudioConfigBody({
             signal inside the chain editor. What remains here is what
             genuinely belongs in "configuration": mic picker, engine
             (FFT/hop, read-only), reset-to-defaults. */}
-        <View style={CARD}>
+        <View testID="audio-settings-card" style={CARD}>
           <TouchableOpacity
             onPress={toggleSettings}
             activeOpacity={0.7}
@@ -1490,6 +1840,7 @@ function AudioConfigBody({
                   max={INPUT_GAIN_MAX}
                   step={0.1}
                   value={cfg?.bands?.inputGain ?? 1}
+                  disabled={busy !== null}
                   hint="Software preamp on the audio input (0–10×). Boosts a quiet feed so every signal lifts above the noise gate — affects the engine, not just the display."
                   onDrag={() => { /* commit on release */ }}
                   onCommit={commitInputGain}
@@ -1503,10 +1854,12 @@ function AudioConfigBody({
                   right={
                     <TouchableOpacity
                       onPress={() => { setPickerOpen(o => !o); if (!devices && !pickerOpen) loadDevices(); }}
+                      disabled={busy !== null}
                       style={{
                         paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
                         backgroundColor: pickerOpen ? C.primary : C.surfaceContainerLowest,
                         borderWidth: 1, borderColor: pickerOpen ? C.primary : C.ghostBorder,
+                        opacity: busy !== null ? 0.55 : 1,
                       }}
                     >
                       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: pickerOpen ? '#fff' : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
@@ -1515,15 +1868,29 @@ function AudioConfigBody({
                     </TouchableOpacity>
                   }
                 />
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                <View style={{
+                  flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap',
+                  columnGap: 10, rowGap: 4, marginBottom: 6,
+                }}>
                   <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: phaseColor }} />
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 14 }}>
-                    {cfg.capture.deviceLabel || cfg.capture.device || 'No device selected'}
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 14,
+                    minWidth: 0, flexShrink: 1,
+                  }}>
+                    {captureSourceText(capSource)}
                   </Text>
-                  <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, fontSize: 11 }}>
+                  <Text style={{
+                    fontFamily: 'Inter_400Regular', color: C.secondary, fontSize: 11,
+                    flexShrink: 0,
+                  }}>
                     {enabled ? `· ${phase}` : '· disabled'}
                   </Text>
                 </View>
+                {capSource.kind === 'test' || capSource.kind === 'file' ? (
+                  <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginBottom: 4 }}>
+                    Not listening to a microphone — the Audio Companion is running its {capSource.kind === 'test' ? 'synthetic test signal' : 'file replay'}. Pick a device below to go back to live mic input.
+                  </Text>
+                ) : null}
                 <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11 }}>
                   {cfg.capture.inputFormat || '—'} · {cfg.capture.sampleRate} Hz · {cfg.capture.channels} ch · {cfg.fftSize}-pt FFT · {status?.captureFps ?? 0} fps
                 </Text>
@@ -1562,12 +1929,18 @@ function AudioConfigBody({
                       <MicPickerRow
                         key={d.id}
                         device={d}
+                        // Only a PINNED mic can mark a row ACTIVE. On 'test' /
+                        // 'file:' / default-input the stale deviceId would
+                        // otherwise light up a row that is not the source.
                         isCurrent={
-                          cfg.capture.deviceId === d.id ||
-                          (cfg.capture.device === d.ffmpegDevice && cfg.capture.inputFormat === d.inputFormat)
+                          capSource.kind === 'mic' && (
+                            cfg.capture.deviceId === d.id ||
+                            (cfg.capture.device === d.ffmpegDevice && cfg.capture.inputFormat === d.inputFormat)
+                          )
                         }
                         onPress={() => selectDevice(d)}
                         busy={busy === `mic:${d.id}`}
+                        disabled={busy !== null}
                       />
                     ))}
                   </View>
@@ -1629,13 +2002,13 @@ function AudioConfigBody({
                   above; no silent fallbacks. */}
               <TouchableOpacity
                 onPress={resetToDefaults}
-                disabled={busy === 'reset'}
+                disabled={busy !== null}
                 style={{
                   marginTop: 16, alignSelf: 'flex-start',
                   paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8,
                   borderWidth: 1, borderColor: C.error,
                   backgroundColor: 'rgba(186, 26, 26, 0.06)',
-                  opacity: busy === 'reset' ? 0.7 : 1,
+                  opacity: busy !== null ? 0.55 : 1,
                   flexDirection: 'row', alignItems: 'center', gap: 10,
                 }}
               >
@@ -1651,7 +2024,7 @@ function AudioConfigBody({
             </View>
           ) : null}
         </View>
-      </ScrollView>
+      </LockableScrollView>
     </View>
   );
 }

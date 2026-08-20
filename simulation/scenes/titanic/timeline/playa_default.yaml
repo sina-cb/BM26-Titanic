@@ -1,0 +1,420 @@
+schemaVersion: 2
+name: playa_default
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+festival:
+  startDate: '2026-08-30'
+  days: 8
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  philharmonic:
+    start:
+      sun: sunset
+      offsetMin: -30
+    end:
+      sun: sunset
+      offsetMin: 60
+  party_night:
+    start:
+      sun: sunset
+      offsetMin: 120
+    end:
+      sun: sunrise
+      offsetMin: -60
+  sunrise_set:
+    start:
+      sun: sunrise
+      offsetMin: -30
+    end:
+      sun: sunrise
+      offsetMin: 90
+looks:
+  daytime:
+    playlist: default
+    palette: deep_sea
+    globals:
+      master: 0.5
+    target:
+      channel: deck
+      id: null
+  philharmonic:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: false
+    palette: sunset_coral
+    target:
+      channel: deck
+      id: null
+  party:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 30
+      shuffle: true
+    palette: bass_drop
+    target:
+      channel: deck
+      id: null
+  sunrise:
+    playlist: default
+    palette: aurora
+    globals:
+      master: 0.6
+    target:
+      channel: deck
+      id: null
+  burn_night:
+    playlist: default
+    palette: bass_drop
+    globals:
+      master: 1
+    target:
+      channel: deck
+      id: null
+  ambient:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    palette: deep_sea
+    target:
+      channel: deck
+      id: null
+  party_high:
+    playlist: party_high
+    autopilot:
+      active: true
+      delay_s: 30
+      shuffle: true
+    palette: bass_drop
+    target:
+      channel: deck
+      id: null
+  party_low:
+    playlist: party_low
+    autopilot:
+      active: true
+      delay_s: 45
+      shuffle: true
+    palette: ultraviolet
+    target:
+      channel: deck
+      id: null
+  temple:
+    playlist: default
+    palette: aurora
+    globals:
+      master: 0.4
+    target:
+      channel: deck
+      id: null
+cues:
+  - id: c_visibility_on
+    label: Exterior up at golden hour
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: -45
+    action:
+      type: look
+      look: philharmonic
+    kind: program
+    hold:
+      min: 90
+    days: all
+  - id: c_party_start
+    label: Party night ramp
+    enabled: true
+    catchUp: true
+    trigger:
+      type: phase
+      phase: party_night
+    action:
+      type: look
+      look: party
+    kind: ambient
+    days: all
+  - id: c_mood_to_party
+    label: 'Party session: sustained real music -> party_high'
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 120
+      cooldownSec: 120
+    action:
+      type: look
+      look: party_high
+    kind: mood
+    durationMin: 12
+    days: all
+  - id: c_sunrise
+    label: Sunrise wind-down
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: -15
+    action:
+      type: playlist
+      name: white_only
+      target:
+        channel: deck
+        id: null
+    kind: program
+    hold:
+      min: 90
+    durationMin: 60
+    days: all
+  - id: c_burn_night
+    label: Burn night spectacle
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 90
+    action:
+      type: look
+      look: burn_night
+    kind: program
+    hold:
+      min: 120
+    days:
+      - 6
+  - id: c_temple
+    label: Temple burn — reverent
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 60
+    action:
+      type: look
+      look: temple
+    kind: program
+    hold:
+      min: 120
+    days:
+      - 7
+  - id: c_baby_reveal_pink
+    label: BABY REVEAL - PINK
+    enabled: true
+    catchUp: false
+    trigger:
+      type: manual
+    action:
+      type: sequence
+      steps:
+        - afterSec: 0
+          action:
+            type: playlist
+            name: baby_tease
+            # PRE-EXISTING BREAK, repaired here: this pinned
+            # `e_baby_tease_two_color_world_walk`, a tease retired by the
+            # redesign in report `_300` and flagged as a dangling cue in `_305`
+            # §2.4. Both reveal cues would have failed at fire time. Repointed
+            # to the tease arc's own calm opener.
+            entryId: e_baby_tease_bullseye_tide
+            palette: baby_reveal_duet
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: false
+              delay_s: 90
+              shuffle: false
+            transition:
+              mode: trans_crossfade
+              durationMs: 1
+              enabled: false
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_reveal_duet
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+        - afterSec: 992
+          action:
+            type: playlist
+            name: baby_reveal
+            entryId: e_baby_reveal_diamond_quilt
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: true
+              delay_s: 90
+              shuffle: true
+            transition:
+              mode: trans_crossfade
+              durationMs: 3000
+              enabled: true
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_pink
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+              # THE ANSWER'S COLOUR (docs/73 §2, PALETTE CONTRACT v2). ONE
+              # `baby_reveal` playlist now serves both outcomes — the family is
+              # carried by the palette, not by which playlist fires.
+              # `colorPalette1` IS the answer: the patterns render that colour
+              # and DERIVE their own dark tone from it (the primary's value x
+              # DARK_K), so one slot decides everything and there is no two-slot
+              # handshake to satisfy.
+              # `colorPalette2` is still written, at the same hue and the dark
+              # value, FOR OTHER CONSUMERS ONLY — the reveal patterns never read
+              # it. It keeps the global palette PAIR mirroring the tone the ship
+              # is actually showing.
+              # `colorTransitionMs: 0` pins the palette to SNAP — the slots are
+              # slewed by default, and a mid-ramp sample is an INTERMEDIATE HUE
+              # crossing the wheel toward the answer, i.e. a visibly wrong
+              # colour on the ship in the middle of the ceremony.
+              # The curated `palette:` key was REMOVED from this step on purpose:
+              # a curated palette is hue-only (s=1, v=1) and would overwrite
+              # `colorPalette1` — it would change THE ANSWER'S COLOUR.
+              colorTransitionMs: 0
+              colorPalette1: { h: 0.943869, s: 0.965, v: 1.0 }
+              colorPalette2: { h: 0.943869, s: 0.965, v: 0.28 }
+    kind: program
+    hold:
+      min: 120
+    days: all
+  - id: c_baby_reveal_blue
+    label: BABY REVEAL - BLUE
+    enabled: true
+    catchUp: false
+    trigger:
+      type: manual
+    action:
+      type: sequence
+      steps:
+        - afterSec: 0
+          action:
+            type: playlist
+            name: baby_tease
+            # PRE-EXISTING BREAK, repaired here: this pinned
+            # `e_baby_tease_two_color_world_walk`, a tease retired by the
+            # redesign in report `_300` and flagged as a dangling cue in `_305`
+            # §2.4. Both reveal cues would have failed at fire time. Repointed
+            # to the tease arc's own calm opener.
+            entryId: e_baby_tease_bullseye_tide
+            palette: baby_reveal_duet
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: false
+              delay_s: 90
+              shuffle: false
+            transition:
+              mode: trans_crossfade
+              durationMs: 1
+              enabled: false
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_reveal_duet
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+        - afterSec: 992
+          action:
+            type: playlist
+            name: baby_reveal
+            entryId: e_baby_reveal_diamond_quilt
+            target:
+              channel: deck
+              id: null
+            autopilot:
+              active: true
+              delay_s: 90
+              shuffle: true
+            transition:
+              mode: trans_crossfade
+              durationMs: 3000
+              enabled: true
+              shuffle: false
+            overlays: disable
+            colorAutopilot:
+              active: false
+              palettes:
+                - baby_blue
+              delay_s: 60
+              shuffle: false
+              transitionMs: 0
+            hue: 0
+            globals:
+              speed: 0.5
+              bpmSpeedSync: 0
+              # THE ANSWER'S COLOUR (docs/73 §2, PALETTE CONTRACT v2). ONE
+              # `baby_reveal` playlist now serves both outcomes — the family is
+              # carried by the palette, not by which playlist fires.
+              # `colorPalette1` IS the answer: the patterns render that colour
+              # and DERIVE their own dark tone from it (the primary's value x
+              # DARK_K), so one slot decides everything and there is no two-slot
+              # handshake to satisfy.
+              # `colorPalette2` is still written, at the same hue and the dark
+              # value, FOR OTHER CONSUMERS ONLY — the reveal patterns never read
+              # it. It keeps the global palette PAIR mirroring the tone the ship
+              # is actually showing.
+              # `colorTransitionMs: 0` pins the palette to SNAP — the slots are
+              # slewed by default, and a mid-ramp sample is an INTERMEDIATE HUE
+              # crossing the wheel toward the answer, i.e. a visibly wrong
+              # colour on the ship in the middle of the ceremony.
+              # The curated `palette:` key was REMOVED from this step on purpose:
+              # a curated palette is hue-only (s=1, v=1) and would overwrite
+              # `colorPalette1` — it would change THE ANSWER'S COLOUR.
+              colorTransitionMs: 0
+              colorPalette1: { h: 0.594795, s: 0.967, v: 1.0 }
+              colorPalette2: { h: 0.594795, s: 0.967, v: 0.28 }
+    kind: program
+    hold:
+      min: 120
+    days: all
+defaultCue:
+  label: Ambient program
+  action:
+    type: look
+    look: ambient

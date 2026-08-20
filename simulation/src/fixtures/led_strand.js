@@ -1,6 +1,15 @@
 import * as THREE from 'three';
 import { params } from '../core/state.js';
-import { scaleSimulationPreviewRgb, mixRgbwauToRgb } from "../core/sim_preview.js";
+import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
+import { ledPreviewRgb } from "../dmx/led_wire.js";
+import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
+import {
+  LED_HALO_RADIUS,
+  createLedHaloMaterial,
+  ledHaloRadius,
+  resolveLedSize,
+  resolveLocalHaloScale,
+} from "./led_halo.js";
 
 // ── Shared, never-disposed module geometry ───────────────────────────────
 // Endpoint handles: small draggable spheres (was 0.3 — ~6× the bulb radius,
@@ -24,16 +33,17 @@ const pixelSphereGeo = new THREE.SphereGeometry(1, 6, 4);
 // byte-for-byte (dmx_fixture_runtime.js:227-234) — additive BackSide rim, no
 // hard front edge, soft glow. No dark housing mesh exists any more.
 export const LED_BULB_RADIUS = 0.05;   // world units
-export const LED_HALO_RADIUS = 0.14;   // world units, ×params.globalHaloScale
-const LED_HALO_OPACITY = 0.2;
+
+// The halo radius/material live in led_halo.js — the ONE recipe shared with the
+// LED-bus fixtures rendered by dmx_fixture_runtime (TE Sign, TE LED Grid), so a
+// strand and a sign glow identically under the same settings. Re-exported here
+// because callers/tests have always imported LED_HALO_RADIUS from this module.
+export { LED_HALO_RADIUS };
 
 // A GLOBAL size (params.ledPixelSize / params.ledHaloSize) sets the bulb + halo
 // radius for EVERY strand at once — one control above the strand list, not
 // per-strand. Absent/invalid (non-finite or non-positive) falls back to the
 // module default — a defined default, not a codex "fallback behavior".
-function resolveSize(value, fallback) {
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
 
 // Reused across setLedColorRGB calls so per-frame recolors allocate nothing.
 const _pixelColor = new THREE.Color();
@@ -111,7 +121,16 @@ export class LedStrand {
     const dir = end.clone().sub(start);
     const length = dir.length();
     const color = this.config.color || '#ff8800';
-    const colorObj = new THREE.Color(color);
+    // Static-preview color scaled by the GLOBAL master (params.strandsEnabled) +
+    // this strand's group master (On/Off + Brightness) so an OFF master/group
+    // dims/blacks the pixels even when no pattern is painting — the same override
+    // the direct-paint path applies live. Either OFF ⇒ black. One source of
+    // truth (scaleRgbForLedOutput → ledOutputScale) across every LED path.
+    const baseColor = new THREE.Color(color);
+    const [gr, gg, gb] = scaleRgbForLedOutput(
+      params.strandsEnabled, params.ledGroupOverrides, ledDisplayGroup(this.config),
+      baseColor.r, baseColor.g, baseColor.b);
+    const colorObj = new THREE.Color(gr, gg, gb);
 
     // ─── Thin wire between endpoints (guide — hidden in the beauty render) ───
     if (length > 0.01) {
@@ -162,22 +181,17 @@ export class LedStrand {
     // so disable culling (per-strand pixel counts are modest).
     bulbInst.frustumCulled = false;
 
-    // Soft additive rim — DMX halo recipe (dmx_fixture_runtime.js:227-234).
-    const haloMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: LED_HALO_OPACITY,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.BackSide,
-    });
+    // Soft additive rim — the shared LED halo recipe (led_halo.js).
+    const haloMat = createLedHaloMaterial();
     const haloInst = new THREE.InstancedMesh(pixelSphereGeo, haloMat, ledCount);
     haloInst.userData._strandPart = 'led';
     haloInst.frustumCulled = false;
 
-    const globalHalo = Number.isFinite(params.globalHaloScale) ? params.globalHaloScale : 1;
-    const bulbScale = resolveSize(params.ledPixelSize, LED_BULB_RADIUS);
-    const haloScale = resolveSize(params.ledHaloSize, LED_HALO_RADIUS) * globalHalo;
+    const bulbScale = resolveLedSize(params.ledPixelSize, LED_BULB_RADIUS);
+    // Three factors: params.ledHaloSize (class base) × params.globalHaloScale
+    // (the one global knob) × this strand's own local haloScale. Absent local
+    // ⇒ 1.0 ⇒ identical to every scene written before the property existed.
+    const haloScale = ledHaloRadius() * resolveLocalHaloScale(this.config, this.config.name);
 
     const dummy = new THREE.Object3D();
     for (let i = 0; i < ledCount; i++) {
@@ -285,16 +299,17 @@ export class LedStrand {
   }
 
   /**
-   * Set an LED's color from the FULL RGBWAU pixel. The W/A/U channels are
-   * folded into RGB using the firmware's exact toRGBFallback weights
-   * (mixRgbwauToRgb) so a pattern that calls rgbwau(...,w,...) lights this
-   * strand white in the sim, matching how the WS2812-RGBW hardware would
-   * render the same pixel. Then the standard sim-brightness scale applies.
+   * Set an LED's color from the FULL RGBWAU pixel. The strand is driven
+   * through the SAME wire encode the sACN mapper sends (led_wire.js) and
+   * then through the LED controller's own white processing, so what this
+   * bulb shows is what the physical pixel will emit: amber folded into
+   * RGB, UV dropped (no UV emitter on the strand), no clipping, and the
+   * controller's gamma applied. Then the standard sim-brightness scale.
    * @param {number} index - LED index (0-based)
-   * @param {number} r,g,b,w,a,u - channels (0-1)
+   * @param {number} r,g,b,w,a,u - channels (0-1); u is intentionally unused
    */
   setLedColorRGBWAU(index, r, g, b, w = 0, a = 0, u = 0) {
-    const [mr, mg, mb] = mixRgbwauToRgb(r, g, b, w, a, u);
+    const [mr, mg, mb] = ledPreviewRgb(r, g, b, w, a);
     this.setLedColorRGB(index, mr, mg, mb);
   }
 

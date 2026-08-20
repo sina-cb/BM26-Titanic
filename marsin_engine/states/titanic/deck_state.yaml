@@ -1,0 +1,83 @@
+channel:
+  id: ch_base
+  name: Base
+  pattern: 00_golden_hour_wash
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  locked: false
+  faderLocked: false
+  localControls:
+    '537253481':
+      v0: 0.25
+      v1: 0
+      v2: 0
+    '590147806':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '614525773':
+      v0: 0
+      v1: 0
+      v2: 0
+    '1037917937':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '2073951030':
+      v0: 0.2
+      v1: 0
+      v2: 0
+    '2504041261':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '3334264878':
+      v0: 0.45
+      v1: 0
+      v2: 0
+    '3994789032':
+      v0: 1
+      v1: 0
+      v2: 0
+    '4234014351':
+      v0: 0.5
+      v1: 0
+      v2: 0
+  playlist:
+    name: default
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 2
+    autopilot:
+      active: false
+      delay_s: 90
+      shuffle: true
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+  faderMax: 1
+  color: null
+  mixGroupId: null
+  soloSafe: false
+  hue: 0
+  followsTempo: false
+  followLeaderId: null
+  followScale: 1
+transitionConfig:
+  enabled: false
+  mode: trans_crossfade
+  durationMs: 1000
+  shuffle: false
+overlays: []
+overlayAutopilot:
+  active: false
+  delay_s: 30
+  shuffle: false
+  groupMode: false
+  groupSize: 3
+  groupDwell: 6
+playlistSlots:
+  primary: default
+  secondary: null
+  splitRatio: 0.5

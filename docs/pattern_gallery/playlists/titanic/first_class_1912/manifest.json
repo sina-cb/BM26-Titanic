@@ -1,0 +1,1293 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "first_class_1912",
+  "seconds": 10,
+  "fps": 8,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/first_class_1912.yaml",
+  "playlistDigest": "a799a8525404990a771322be80ce84af98bb2f74ff9729328cade74a7a34467d",
+  "goalsDigest": "c052f77a6087939d5c5fdb51cb94b4df6d57d182ace3cfc3e8ff2c92f1c9ab44",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "00_golden_hour_wash",
+      "title": "Golden Hour Wash",
+      "goal": "The iconic bread-and-butter Titanic look: a continuous sunset wash with ember texture and Vintage-only golden-white sweeps.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.38,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.2,
+          "valueSource": "playlist saved value",
+          "description": "whole-ship breathing",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.42,
+            "max": 0.92,
+            "curve": "ease",
+            "note": "whole-ship breathing"
+          }
+        },
+        {
+          "name": "sliderGrain",
+          "label": "Grain",
+          "value": 0.67,
+          "valueSource": "playlist saved value",
+          "description": "Grain character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderEmberSwell",
+          "label": "Ember Swell",
+          "value": 0.95,
+          "valueSource": "playlist saved value",
+          "description": "broad warm expansion",
+          "audio": {
+            "slider": "sliderEmberSwell",
+            "signal": "micFlux",
+            "min": 0.08,
+            "max": 0.95,
+            "curve": "ease",
+            "note": "broad warm expansion"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderJewelrySpeed",
+          "label": "Jewelry Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderJewelryFlash",
+          "label": "Jewelry Flash",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "Vintage-only golden-white hit",
+          "audio": {
+            "slider": "sliderJewelryFlash",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "Vintage-only golden-white hit"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.2,
+        "sliderGrain": 0.67,
+        "sliderEmberSwell": 0.95,
+        "sliderJewelryWhite": 0.64,
+        "sliderJewelrySpeed": 0.72,
+        "sliderJewelryFlash": 0.24
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.38,
+        "sliderLevel": 0.2,
+        "sliderGrain": 0.67,
+        "sliderEmberSwell": 0.95,
+        "sliderJewelryWhite": 0.64,
+        "sliderJewelrySpeed": 0.72,
+        "sliderJewelryFlash": 0.24
+      },
+      "gif": "001_00_golden_hour_wash.gif",
+      "video": "001_00_golden_hour_wash.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "49735c89f60cab77617e16eb14efa132044da570304b931b2ae709447429870f"
+    },
+    {
+      "index": 1,
+      "pattern": "07_shimmer",
+      "title": "Shimmer",
+      "goal": "Elegant candlelight on moving water: fine traveling glints, a stable readable sign, and Jewelry as the golden lead.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.26,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "whole-pattern brightness",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "whole-pattern brightness"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "shimmer texture/count",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.2,
+            "max": 0.95,
+            "curve": "linear",
+            "note": "shimmer texture/count"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "colored + Jewelry glint punch",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "colored + Jewelry glint punch"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.82,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.26,
+        "sliderLevel": 0.68,
+        "sliderDetail": 0.9,
+        "sliderKick": 0.86,
+        "sliderJewelryWhite": 0.82
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.26,
+        "sliderLevel": 0.68,
+        "sliderDetail": 0.9,
+        "sliderKick": 0.86,
+        "sliderJewelryWhite": 0.82
+      },
+      "gif": "002_07_shimmer.gif",
+      "video": "002_07_shimmer.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "4e1c65352ab04b0639cee02e8a99ef19d931ddb42d9374e40444dad114b9ed6e"
+    },
+    {
+      "index": 2,
+      "pattern": "12_breathing",
+      "title": "Breathing",
+      "goal": "Make the entire model inhale and exhale as one organism over a detailed quasicrystal field, with Identity protected through the exhale.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.87,
+          "valueSource": "playlist saved value",
+          "description": "whole-model energy",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "whole-model energy"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.13,
+          "valueSource": "playlist saved value",
+          "description": "immediate heartbeat",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.72,
+            "curve": "pow2",
+            "note": "immediate heartbeat"
+          }
+        },
+        {
+          "name": "sliderBreathDepth",
+          "label": "Breath Depth",
+          "value": 0.69,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBreathShape",
+          "label": "Breath Shape",
+          "value": 0.23,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloom",
+          "label": "Bloom",
+          "value": 0.94,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibbing",
+          "label": "Ribbing",
+          "value": 0.19,
+          "valueSource": "playlist saved value",
+          "description": "Ribbing character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSparkle",
+          "label": "Sparkle",
+          "value": 0.37,
+          "valueSource": "playlist saved value",
+          "description": "high-frequency scintillation",
+          "audio": {
+            "slider": "sliderSparkle",
+            "signal": "micHigh",
+            "min": 0.04,
+            "max": 0.72,
+            "curve": "ease",
+            "note": "high-frequency scintillation"
+          }
+        },
+        {
+          "name": "sliderWhiteGlow",
+          "label": "White Glow",
+          "value": 0.69,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderFieldDetail",
+          "label": "Field Detail",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.13,
+        "sliderBreathDepth": 0.69,
+        "sliderBreathShape": 0.23,
+        "sliderBloom": 0.94,
+        "sliderRibbing": 0.19,
+        "sliderSparkle": 0.37,
+        "sliderWhiteGlow": 0.69,
+        "sliderFieldDetail": 0.91
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.87,
+        "sliderKick": 0.13,
+        "sliderBreathDepth": 0.69,
+        "sliderBreathShape": 0.23,
+        "sliderBloom": 0.94,
+        "sliderRibbing": 0.19,
+        "sliderSparkle": 0.37,
+        "sliderWhiteGlow": 0.69,
+        "sliderFieldDetail": 0.91
+      },
+      "gif": "003_12_breathing.gif",
+      "video": "003_12_breathing.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "2267e44927db2c11ec25a8dedacecbc20226502e1f38dee2482a79b34614143b"
+    },
+    {
+      "index": 3,
+      "pattern": "13_sparkle",
+      "title": "Sparkle",
+      "goal": "An elegant Celestial Chandelier: fixed constellation points ignite, form diamond cores, and decay over velvet-black negative space.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.57,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.17,
+          "valueSource": "playlist saved value",
+          "description": "total elegance budget",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.2,
+            "max": 0.72,
+            "curve": "linear",
+            "note": "total elegance budget"
+          }
+        },
+        {
+          "name": "sliderStarCount",
+          "label": "Star Count",
+          "value": 0.73,
+          "valueSource": "playlist saved value",
+          "description": "build reveals more stars",
+          "audio": {
+            "slider": "sliderStarCount",
+            "signal": "micFlux",
+            "min": 0.12,
+            "max": 0.86,
+            "curve": "ease",
+            "note": "build reveals more stars"
+          }
+        },
+        {
+          "name": "sliderBrilliance",
+          "label": "Brilliance",
+          "value": 0.59,
+          "valueSource": "playlist saved value",
+          "description": "high-frequency diamonds",
+          "audio": {
+            "slider": "sliderBrilliance",
+            "signal": "micHigh",
+            "min": 0.16,
+            "max": 0.76,
+            "curve": "linear",
+            "note": "high-frequency diamonds"
+          }
+        },
+        {
+          "name": "sliderTwinkleFocus",
+          "label": "Twinkle Focus",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderAfterglow",
+          "label": "Afterglow",
+          "value": 0.13,
+          "valueSource": "playlist saved value",
+          "description": "Afterglow character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarChorus",
+          "label": "Star Chorus",
+          "value": 0.63,
+          "valueSource": "playlist saved value",
+          "description": "Star Chorus character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurst",
+          "label": "Burst",
+          "value": 0.15,
+          "valueSource": "playlist saved value",
+          "description": "constellation burst",
+          "audio": {
+            "slider": "sliderBurst",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.78,
+            "curve": "pow2",
+            "note": "constellation burst"
+          }
+        },
+        {
+          "name": "sliderJewelryWhite",
+          "label": "Jewelry White",
+          "value": 0.81,
+          "valueSource": "playlist saved value",
+          "description": "Native-white material or Jewelry treatment.",
+          "audio": null
+        },
+        {
+          "name": "sliderUvStars",
+          "label": "Uv Stars",
+          "value": 0.78,
+          "valueSource": "playlist saved value",
+          "description": "Ultraviolet contribution on capable fixtures.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.57,
+        "sliderLevel": 0.17,
+        "sliderStarCount": 0.73,
+        "sliderBrilliance": 0.59,
+        "sliderTwinkleFocus": 0.88,
+        "sliderAfterglow": 0.13,
+        "sliderStarChorus": 0.63,
+        "sliderBurst": 0.15,
+        "sliderJewelryWhite": 0.81,
+        "sliderUvStars": 0.78
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.57,
+        "sliderLevel": 0.17,
+        "sliderStarCount": 0.73,
+        "sliderBrilliance": 0.59,
+        "sliderTwinkleFocus": 0.88,
+        "sliderAfterglow": 0.13,
+        "sliderStarChorus": 0.63,
+        "sliderBurst": 0.15,
+        "sliderJewelryWhite": 0.81,
+        "sliderUvStars": 0.78
+      },
+      "gif": "004_13_sparkle.gif",
+      "video": "004_13_sparkle.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "e793ac29e726d423dcab8a2c879d871aa0a41e277be2e112cc38201535246d42"
+    },
+    {
+      "index": 4,
+      "pattern": "19_swaying_lattice_ballet",
+      "title": "Swaying Lattice Ballet",
+      "goal": "Living architecture: lattice cohorts bow in counterphase so the geometry feels organic and theatrical rather than rigid.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "beat pop on the nodes",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "beat pop on the nodes"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "sway radius / bow travel",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "sway radius / bow travel"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "node sharpness / sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "node sharpness / sparkle"
+          }
+        },
+        {
+          "name": "sliderLatticeScale",
+          "label": "Lattice Scale",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Lattice Scale character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCounterPhase",
+          "label": "Counter Phase",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        },
+        {
+          "name": "sliderFloorLevel",
+          "label": "Floor Level",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "white keep on crests (bass)",
+          "audio": {
+            "slider": "sliderWhiteLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "white keep on crests (bass)"
+          }
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0,
+          "valueSource": "playlist saved value",
+          "description": "white accent pop (beat)",
+          "audio": {
+            "slider": "sliderWhiteKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "white accent pop (beat)"
+          }
+        },
+        {
+          "name": "sliderWhiteSpread",
+          "label": "White Spread",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderCounterPhase": 0.5,
+        "sliderFloorLevel": 0.45,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderWhiteSpread": 0.5
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.45,
+        "sliderKick": 0,
+        "sliderRadius": 0.5,
+        "sliderDetail": 0.5,
+        "sliderLatticeScale": 0.5,
+        "sliderCounterPhase": 0.5,
+        "sliderFloorLevel": 0.45,
+        "sliderWhiteLevel": 0.5,
+        "sliderWhiteKick": 0,
+        "sliderWhiteSpread": 0.5
+      },
+      "gif": "005_19_swaying_lattice_ballet.gif",
+      "video": "005_19_swaying_lattice_ballet.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "1aec17408298240d7e615392eb0c294939d19b9d69f813dcf12998bd37ec3f90"
+    },
+    {
+      "index": 5,
+      "pattern": "20_parametric_sway_field",
+      "title": "Parametric Sway Field",
+      "goal": "Three dancing attractors wander on incommensurate Lissajous paths, leaving colored proximity trails and node punctuation.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.47,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.39,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness (bass)",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "pow2",
+            "note": "PRIMARY brightness (bass)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0.29,
+          "valueSource": "playlist saved value",
+          "description": "beat brightness pop",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "beat brightness pop"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.85,
+          "valueSource": "playlist saved value",
+          "description": "attractor travel / movement",
+          "audio": {
+            "slider": "sliderRadius",
+            "signal": "micFlux",
+            "min": 0.4,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "attractor travel / movement"
+          }
+        },
+        {
+          "name": "sliderDetail",
+          "label": "Detail",
+          "value": 0.24,
+          "valueSource": "playlist saved value",
+          "description": "glow sharpness / sparkle",
+          "audio": {
+            "slider": "sliderDetail",
+            "signal": "micHigh",
+            "min": 0.3,
+            "max": 0.9,
+            "curve": "linear",
+            "note": "glow sharpness / sparkle"
+          }
+        },
+        {
+          "name": "sliderFocus",
+          "label": "Focus",
+          "value": 0.67,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderTrailBlend",
+          "label": "Trail Blend",
+          "value": 0.11,
+          "valueSource": "playlist saved value",
+          "description": "Trail Blend character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.47,
+        "sliderLevel": 0.39,
+        "sliderKick": 0.29,
+        "sliderRadius": 0.85,
+        "sliderDetail": 0.24,
+        "sliderFocus": 0.67,
+        "sliderTrailBlend": 0.11
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.47,
+        "sliderLevel": 0.39,
+        "sliderKick": 0.29,
+        "sliderRadius": 0.85,
+        "sliderDetail": 0.24,
+        "sliderFocus": 0.67,
+        "sliderTrailBlend": 0.11
+      },
+      "gif": "006_20_parametric_sway_field.gif",
+      "video": "006_20_parametric_sway_field.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f58a3ed098fb716f7971861208d75ce524842104c429194ec37ca223bdb52d0d"
+    },
+    {
+      "index": 6,
+      "pattern": "26_dom_dancers_chevron",
+      "title": "Dom Dancers Chevron",
+      "goal": "A saved Dom Dancers Chevron look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderBaseGlow",
+          "label": "Base Glow",
+          "value": 0.15,
+          "valueSource": "code default",
+          "description": "Quiet-state floor and negative-space balance.",
+          "audio": null
+        },
+        {
+          "name": "sliderDancerSize",
+          "label": "Dancer Size",
+          "value": 0.34,
+          "valueSource": "code default",
+          "description": "Dancer Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderDancerGlow",
+          "label": "Dancer Glow",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "PRIMARY whole-rig brightness (both halos)",
+          "audio": {
+            "slider": "sliderDancerGlow",
+            "signal": "micLow",
+            "min": 0.35,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY whole-rig brightness (both halos)"
+          }
+        },
+        {
+          "name": "sliderChevronSpeedup",
+          "label": "Chevron Speedup",
+          "value": 0.4,
+          "valueSource": "code default",
+          "description": "spiral spin speed (build = faster filigree)",
+          "audio": {
+            "slider": "sliderChevronSpeedup",
+            "signal": "micFlux",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "spiral spin speed (build = faster filigree)"
+          }
+        },
+        {
+          "name": "sliderBall1X",
+          "label": "Ball1 X",
+          "value": 0.34,
+          "valueSource": "code default",
+          "description": "Ball1 X character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBall1Energy",
+          "label": "Ball1 Energy",
+          "value": 0.333333,
+          "valueSource": "playlist saved value",
+          "description": "geometry: dancer-1 size + core pop",
+          "audio": {
+            "slider": "sliderBall1Energy",
+            "signal": "micMid",
+            "min": 0.25,
+            "max": 1,
+            "curve": "linear",
+            "note": "geometry: dancer-1 size + core pop"
+          }
+        },
+        {
+          "name": "sliderBall2X",
+          "label": "Ball2 X",
+          "value": 0.66,
+          "valueSource": "code default",
+          "description": "Ball2 X character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderBall2Energy",
+          "label": "Ball2 Energy",
+          "value": 0.333333,
+          "valueSource": "playlist saved value",
+          "description": "detail: dancer-2 size + core pop",
+          "audio": {
+            "slider": "sliderBall2Energy",
+            "signal": "micHigh",
+            "min": 0.25,
+            "max": 1,
+            "curve": "linear",
+            "note": "detail: dancer-2 size + core pop"
+          }
+        }
+      ],
+      "savedValues": {
+        "sliderBall1Energy": 0.333333,
+        "sliderBall2Energy": 0.333333
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderBaseGlow": 0.15,
+        "sliderDancerSize": 0.34,
+        "sliderDancerGlow": 0.7,
+        "sliderChevronSpeedup": 0.4,
+        "sliderBall1X": 0.34,
+        "sliderBall1Energy": 0.333333,
+        "sliderBall2X": 0.66,
+        "sliderBall2Energy": 0.333333
+      },
+      "gif": "007_26_dom_dancers_chevron.gif",
+      "video": "007_26_dom_dancers_chevron.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "d48023d982e438cb1254f9dc4c5cdadb4692dbd1a2ef5a0caf2923a7b6795892"
+    },
+    {
+      "index": 7,
+      "pattern": "43_golden_hour_pulse",
+      "title": "Golden Hour Pulse",
+      "goal": "The musical sibling of Golden Hour: a sunset field rises in a clear double-heartbeat while 00 remains the continuous iconic wash.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderSwell",
+          "label": "Swell",
+          "value": 0.13,
+          "valueSource": "playlist saved value",
+          "description": "PRIMARY brightness/swell",
+          "audio": {
+            "slider": "sliderSwell",
+            "signal": "micLow",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness/swell"
+          }
+        },
+        {
+          "name": "sliderBlinder",
+          "label": "Blinder",
+          "value": 1,
+          "valueSource": "playlist saved value",
+          "description": "Vintage golden pulse",
+          "audio": {
+            "slider": "sliderBlinder",
+            "signal": "micKick",
+            "min": 0,
+            "max": 1,
+            "curve": "linear",
+            "note": "Vintage golden pulse"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "fine warm shimmer/detail",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 0.8,
+            "curve": "pow2",
+            "note": "fine warm shimmer/detail"
+          }
+        },
+        {
+          "name": "sliderNoiseScale",
+          "label": "Noise Scale",
+          "value": 0.75,
+          "valueSource": "playlist saved value",
+          "description": "Noise Scale character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderSwell": 0.13,
+        "sliderBlinder": 1,
+        "sliderShimmer": 0.5,
+        "sliderNoiseScale": 0.75
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderSwell": 0.13,
+        "sliderBlinder": 1,
+        "sliderShimmer": 0.5,
+        "sliderNoiseScale": 0.75
+      },
+      "gif": "008_43_golden_hour_pulse.gif",
+      "video": "008_43_golden_hour_pulse.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "206d14c85e79bc11644a78c9933beb2a03d8ded9ee96d974046749fef39dcd84"
+    },
+    {
+      "index": 8,
+      "pattern": "52_silk_ribbons",
+      "title": "Silk Ribbons",
+      "goal": "A saved Silk Ribbons look authored for Titanic.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderAudioLevel",
+          "label": "Audio Level",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "PRIMARY brightness — ribbon width + core brightness + overall track the low band",
+          "audio": {
+            "slider": "sliderAudioLevel",
+            "signal": "micLow",
+            "min": 0.3,
+            "max": 1,
+            "curve": "linear",
+            "note": "PRIMARY brightness — ribbon width + core brightness + overall track the low band"
+          }
+        },
+        {
+          "name": "sliderShimmer",
+          "label": "Shimmer",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "sparkle/detail — high-freq glint riding the bright ribbon crests",
+          "audio": {
+            "slider": "sliderShimmer",
+            "signal": "micHigh",
+            "min": 0,
+            "max": 1,
+            "curve": "pow2",
+            "note": "sparkle/detail — high-freq glint riding the bright ribbon crests"
+          }
+        },
+        {
+          "name": "sliderRibbons",
+          "label": "Ribbons",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Ribbons character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderSoftness",
+          "label": "Softness",
+          "value": 0.5,
+          "valueSource": "code default",
+          "description": "Softness character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.5,
+        "sliderAudioLevel": 0.5,
+        "sliderShimmer": 0.5,
+        "sliderRibbons": 0.5,
+        "sliderSoftness": 0.5
+      },
+      "gif": "009_52_silk_ribbons.gif",
+      "video": "009_52_silk_ribbons.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "120a382c91c18ada03c3e748ebbf774e0ebed33db55913911a383391daa125cc"
+    },
+    {
+      "index": 9,
+      "pattern": "64_temple_warm_white",
+      "title": "Temple Warm White",
+      "goal": "A warm candle procession composes the vessel as layered wax and flame, lantern contour, Jewelry cups, Organ vigils, and engraved Identity fields.",
+      "intent": {
+        "schema_version": 1,
+        "concept": "A warm candle procession composes the vessel as layered wax and flame, lantern contour, Jewelry cups, Organ vigils, and engraved Identity fields.",
+        "design_intent": "Preserve Temple reverence and the hard ceiling while replacing equal warm dimness with a deliberate ceremonial hierarchy led by Vintage candle cups and a slow asymmetric procession fold.",
+        "why_exists": "It is the white family's reverent slow look: warm, calm, readable, and intentionally incapable of becoming a party cue at its defaults.",
+        "visual_goal_titanic": "The Hull should feel softly revealed through dust, the outline should remain lantern-clear, Jewelry should read as small candle sources, and Identity should be warm and still enough to read.",
+        "unique_topology": "Golden-ratio and square-root-related clocks shape layered candle wells, flame and wax material, a broad asymmetric procession fold, six candle cups, independent Organ vigils, and a complete folded 74-pixel field.",
+        "distance_silhouette": "A steady warm contour with a very shallow lift preserves the whole ship throughout the slow dust cycle.",
+        "close_detail": "Six-head candle flames, height-biased Organ vigils, fine Hull dust rays, and subtle complete folded 74-pixel warm-plaque variation create a ceremonial close read.",
+        "motion_grammar": "Very slow signed candle material and a broad asymmetric procession fold reverse together through large wraps; all controls slew and no pulse snaps or strobes.",
+        "xyz_use": "Centered X/Y/Z define candle wells, layered flame/wax material, and the broad procession fold; pixelLocalIndex authors Jewelry candles, while fixtureId phases Organ vigils. Identity computes signIndex = index % 74 and remaps that folded address into one complete 10x8/74-pixel local surface; both physical signs therefore use identical local coordinates.",
+        "fixture_roles": {
+          "Hull Canvas": "Slow candle-white material and soft light-through-dust rays.",
+          "Silhouette": "Steady lantern contour with only a shallow warm lift.",
+          "Jewelry": "Hero row of six restrained candle cups with native-white flames.",
+          "Organs": "Quiet individual vigils shaped by fixture phase and real height.",
+          "Identity": "Both physical signs render the same complete, non-repeating 74-pixel warm vigil plaque from signIndex=index%74, with minimal full-surface lift and strong legibility."
+        },
+        "te_sign_treatment": "Both physical signs render the same complete, non-repeating 74-pixel warm vigil plaque from signIndex=index%74, with minimal full-surface lift and strong legibility.",
+        "jewelry_white": "Vintage native white is limited to candle-flame cores; warm-neutral RGB carries the cup and halo so the Jewelry remains dimensional under the ceiling.",
+        "palette_white_material": "No palette exports. Warmth reaches the family maximum R:G:B ratio of 1.00:0.68:0.32 at full control, W=A remains exact, UV is zero, and the ceiling binds RGB and W/A.",
+        "controls": [
+          {
+            "exported_name": "sliderLocalSpeed",
+            "behavior": "Sets the deliberately slow dust and vigil rates.",
+            "code_default_value": 0.25
+          },
+          {
+            "exported_name": "sliderDirection",
+            "behavior": "Reverses signed dust travel and the vigil breath together.",
+            "code_default_value": 1
+          },
+          {
+            "exported_name": "sliderLevel",
+            "behavior": "Sets shallow ceremonial intensity above the warm safety bed.",
+            "code_default_value": 0.55
+          },
+          {
+            "exported_name": "sliderKick",
+            "behavior": "Adds only a gentle lift, with restrained Organ emphasis.",
+            "code_default_value": 0
+          },
+          {
+            "exported_name": "sliderRadius",
+            "behavior": "Sets spatial scale of the slow dust planes.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderCeiling",
+            "behavior": "Sets the hard maximum for RGB and matched W/A while retaining a minimum non-black cap.",
+            "code_default_value": 0.45
+          },
+          {
+            "exported_name": "sliderWarmth",
+            "behavior": "Sets candle temperature from neutral to the bounded tungsten-white RGB ratio.",
+            "code_default_value": 0.85
+          },
+          {
+            "exported_name": "sliderWhiteLevel",
+            "behavior": "Moves the body from warm-neutral RGB toward matched native W/A.",
+            "code_default_value": 0.7
+          },
+          {
+            "exported_name": "sliderWhiteKick",
+            "behavior": "Adds a deliberately small native-white lift to candle and vigil cores.",
+            "code_default_value": 0.06
+          }
+        ],
+        "audio_handles": [
+          {
+            "target": "sliderLevel",
+            "source": "micLow",
+            "range": [
+              0.35,
+              0.8
+            ],
+            "curve": "linear",
+            "intent": "Shallow intensity (PRIMARY)."
+          },
+          {
+            "target": "sliderKick",
+            "source": "micKick",
+            "range": [
+              0,
+              0.45
+            ],
+            "curve": "pow2",
+            "intent": "Gentle lift only."
+          }
+        ],
+        "safety_floor": "The ceiling maps to a minimum 0.06 cap and every role owns a positive bed, so Temple can be dim but never black.",
+        "anti_duplication_notes": "Protect the candle-vigil restraint and hard ceiling. Do not brighten it into Wash, deepen it into Breathe, sharpen it into Shimmer, or turn it into a Chase.",
+        "review_state": "TUNE",
+        "evidence_notes": "The prior capture was uniformly brown-white across fixture families. The bold rework preserves exact public values and the two source audio handles while separating Hull candle material, protected contour, six-cup Jewelry, independent Organ vigils, and warm Identity. Exact saved-value silence/audio gates cover Titanic and test_bench; cross-model truth reports zero WRONG, WEAK, or DEAD controls. The gallery manifest fingerprints the exact source, goal registry, playlist, saved/effective values, duration, frame rate, and media shown on this row."
+      },
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.25,
+          "valueSource": "code default",
+          "description": "Sets the deliberately slow dust and vigil rates.",
+          "audio": null
+        },
+        {
+          "name": "sliderDirection",
+          "label": "Direction",
+          "value": 1,
+          "valueSource": "code default",
+          "description": "Reverses signed dust travel and the vigil breath together.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.55,
+          "valueSource": "code default",
+          "description": "Sets shallow ceremonial intensity above the warm safety bed.",
+          "audio": {
+            "slider": "sliderLevel",
+            "signal": "micLow",
+            "min": 0.35,
+            "max": 0.8,
+            "curve": "linear",
+            "note": "shallow intensity (PRIMARY)"
+          }
+        },
+        {
+          "name": "sliderKick",
+          "label": "Kick",
+          "value": 0,
+          "valueSource": "code default",
+          "description": "Adds only a gentle lift, with restrained Organ emphasis.",
+          "audio": {
+            "slider": "sliderKick",
+            "signal": "micKick",
+            "min": 0,
+            "max": 0.45,
+            "curve": "pow2",
+            "note": "gentle lift only"
+          }
+        },
+        {
+          "name": "sliderRadius",
+          "label": "Radius",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Sets spatial scale of the slow dust planes.",
+          "audio": null
+        },
+        {
+          "name": "sliderCeiling",
+          "label": "Ceiling",
+          "value": 0.45,
+          "valueSource": "code default",
+          "description": "Sets the hard maximum for RGB and matched W/A while retaining a minimum non-black cap.",
+          "audio": null
+        },
+        {
+          "name": "sliderWarmth",
+          "label": "Warmth",
+          "value": 0.85,
+          "valueSource": "code default",
+          "description": "Sets candle temperature from neutral to the bounded tungsten-white RGB ratio.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteLevel",
+          "label": "White Level",
+          "value": 0.7,
+          "valueSource": "code default",
+          "description": "Moves the body from warm-neutral RGB toward matched native W/A.",
+          "audio": null
+        },
+        {
+          "name": "sliderWhiteKick",
+          "label": "White Kick",
+          "value": 0.06,
+          "valueSource": "code default",
+          "description": "Adds a deliberately small native-white lift to candle and vigil cores.",
+          "audio": null
+        }
+      ],
+      "savedValues": {},
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.25,
+        "sliderDirection": 1,
+        "sliderLevel": 0.55,
+        "sliderKick": 0,
+        "sliderRadius": 0.45,
+        "sliderCeiling": 0.45,
+        "sliderWarmth": 0.85,
+        "sliderWhiteLevel": 0.7,
+        "sliderWhiteKick": 0.06
+      },
+      "gif": "010_64_temple_warm_white.gif",
+      "video": "010_64_temple_warm_white.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "bcb8ec50b93a0b740c54a6b8111381cc1683c2cbd35352e95b7176c8c949d7de"
+    }
+  ]
+}

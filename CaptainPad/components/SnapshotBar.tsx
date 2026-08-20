@@ -17,7 +17,9 @@
 // honour res.ok and never fabricate success.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
+import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
@@ -46,7 +48,10 @@ function sanitizeSnapshotName(raw: string): string {
     .slice(0, 64);
 }
 
-export function SnapshotBar({ disabled = false }: {
+export function SnapshotBar({ disabled = false, compact = false }: {
+  /** Drop the LOOKS caption and shorten CAPTURE — used by the mixer's
+   *  one-row landscape header (2026-07-27). Both actions stay reachable. */
+  compact?: boolean;
   /** Soft PLAN lock gate (planLocked && !leaseHeld). When true the RECALL and
    *  + CAPTURE entry buttons are disabled — dimmed, handlers blocked — until
    *  the operator takes over (every mutating path in this bar flows through a
@@ -93,7 +98,7 @@ export function SnapshotBar({ disabled = false }: {
     setBusy(false);
     if (!res.ok) {
       console.error('[SnapshotBar] Capture rejected:', res.error);
-      Alert.alert('Snapshot not saved', `The engine rejected this look. ${res.error || ''}`.trim());
+      opError('Snapshot not saved', `The engine rejected this look. ${res.error || ''}`.trim());
       return;
     }
     setNameDraft('');
@@ -108,7 +113,7 @@ export function SnapshotBar({ disabled = false }: {
     const res = await recallSnapshot(name);
     if (!res.ok) {
       console.error(`[SnapshotBar] Recall rejected for "${name}":`, res.error);
-      Alert.alert(
+      opError(
         'Look not recalled',
         `The engine rejected recalling "${name}". ${res.error || ''} `.trim() +
           'A look with more overlays than the channel cap, or a malformed snapshot, cannot be recalled.',
@@ -126,7 +131,7 @@ export function SnapshotBar({ disabled = false }: {
     const res = await recallSnapshotFade(name, Math.round(durationS * 1000));
     if (!res.ok) {
       console.error(`[SnapshotBar] Morph rejected for "${name}":`, res.error);
-      Alert.alert(
+      opError(
         'Look not morphed',
         `The engine rejected morphing to "${name}". ${res.error || ''} `.trim() +
           'A look with more overlays than the channel cap, or a malformed snapshot, cannot be recalled.',
@@ -141,14 +146,16 @@ export function SnapshotBar({ disabled = false }: {
     const res = await deleteSnapshot(name);
     if (!res.ok) {
       console.error(`[SnapshotBar] Delete rejected for "${name}":`, res.error);
-      Alert.alert('Snapshot not deleted', `The engine rejected deleting "${name}". ${res.error || ''}`.trim());
+      opError('Snapshot not deleted', `The engine rejected deleting "${name}". ${res.error || ''}`.trim());
     }
     // WS `snapshots` event reconciles the list on success.
   }, [deletePrompt]);
 
   return (
     <View style={styles.bar}>
-      <Text style={styles.barLabel}>LOOKS</Text>
+      {/* The LOOKS caption is decoration — the two buttons are self-describing,
+          so the compact header drops it rather than a control. */}
+      {compact ? null : <Text style={styles.barLabel}>LOOKS</Text>}
       <TouchableOpacity
         style={[styles.recallBtn, disabled && { opacity: 0.45 }]}
         hitSlop={HIT_SLOP}
@@ -171,11 +178,19 @@ export function SnapshotBar({ disabled = false }: {
         accessibilityState={{ disabled: busy || disabled }}
         accessibilityLabel="Capture current mixer state as a new look"
       >
-        <Text style={styles.captureBtnText}>{busy ? 'SAVING…' : '+ CAPTURE'}</Text>
+        {/* Compact keeps the verb but drops the noun ("+ SAVE") — the modal it
+            opens is still titled CAPTURE LOOK, so nothing is ambiguous. */}
+        <Text style={styles.captureBtnText}>{busy ? 'SAVING…' : (compact ? '+ SAVE' : '+ CAPTURE')}</Text>
       </TouchableOpacity>
 
       {/* ── Recall / delete list ─────────────────────────────────────── */}
-      <Modal transparent visible={listOpen} animationType="fade" onRequestClose={() => { setMorphRow(null); setListOpen(false); }}>
+      <Modal
+        transparent
+        visible={listOpen}
+        animationType="fade"
+        onRequestClose={() => { setMorphRow(null); setListOpen(false); }}
+        supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+      >
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => { setMorphRow(null); setListOpen(false); }}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>
@@ -244,7 +259,13 @@ export function SnapshotBar({ disabled = false }: {
 
       {/* ── Capture name prompt (in-app modal — RN-web drops Alert
           button callbacks, see ConfirmSheet's note) ──────────────── */}
-      <Modal transparent visible={nameOpen} animationType="fade" onRequestClose={() => setNameOpen(false)}>
+      <Modal
+        transparent
+        visible={nameOpen}
+        animationType="fade"
+        onRequestClose={() => setNameOpen(false)}
+        supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+      >
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setNameOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>

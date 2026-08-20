@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
 import { KNOWN_SIGNALS, validateChain, slug } from '../postproc/signal_post_processor.js';
+import { audioSignalDescriptors } from '../postproc/audio_signals.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -91,19 +92,54 @@ export const VIEW_TYPES = Object.freeze({
 // keeps that key + its canonical address; every OTHER name slug-derives. The
 // operator still edits only the name; these are derivation rules, not editable
 // fields. Curated map mirrors audio/postproc/audio_signals.js oscAddress fields.
-export const CURATED_OUTPUTS = Object.freeze({
-  micLow:      '/marsin/mic/low',
-  micMid:      '/marsin/mic/mid',
-  micHigh:     '/marsin/mic/high',
-  micKick:     '/marsin/mic/kick',
-  micDomFreq1: '/marsin/dom/freq1',
-  micDomFreq2: '/marsin/dom/freq2',
+const RAW_SOURCE_CPC_KEY = Object.freeze({
+  rawLow:      'micLow',
+  rawMid:      'micMid',
+  rawHigh:     'micHigh',
+  rawKick:     'micKick',
+  rawFlux:     'micFlux',
+  rawDom1:     'micDomFreq1',
+  rawDom2:     'micDomFreq2',
   // Dom ENERGY (dom split): the engine binds /marsin/dom/energy1·2 →
   // micDomEnergy1/2 (audio/postproc/audio_signals.js), so an energy signal named
   // micDomEnergy1/2 keeps that canonical engine-bound address.
-  micDomEnergy1: '/marsin/dom/energy1',
-  micDomEnergy2: '/marsin/dom/energy2',
+  rawDom1Energy: 'micDomEnergy1',
+  rawDom2Energy: 'micDomEnergy2',
 });
+
+const COMPANION_OUTPUT_PREFIXES = Object.freeze(['/marsin/mic/', '/marsin/dom/']);
+
+function buildCuratedOutputs() {
+  const out = {};
+  for (const descriptor of audioSignalDescriptors()) {
+    if (typeof descriptor.oscAddress !== 'string') continue;
+    if (!COMPANION_OUTPUT_PREFIXES.some(prefix => descriptor.oscAddress.startsWith(prefix))) continue;
+    out[descriptor.key] = descriptor.oscAddress;
+  }
+  for (const [rawId, cpcKey] of Object.entries(RAW_SOURCE_CPC_KEY)) {
+    if (!out[cpcKey]) {
+      throw new Error(`companion_config: raw source "${rawId}" expects curated output "${cpcKey}"`);
+    }
+  }
+  const reachable = new Set(Object.values(RAW_SOURCE_CPC_KEY));
+  for (const cpcKey of Object.keys(out)) {
+    if (!reachable.has(cpcKey)) {
+      throw new Error(`companion_config: curated output "${cpcKey}" has no raw source`);
+    }
+  }
+  return Object.freeze(out);
+}
+
+export const CURATED_OUTPUTS = buildCuratedOutputs();
+
+export function missingCuratedOutputs(cfg) {
+  const published = new Set(
+    (cfg && Array.isArray(cfg.signals) ? cfg.signals : [])
+      .map(sig => outputCpcKeyOf(sig))
+      .filter(key => key !== null),
+  );
+  return Object.keys(CURATED_OUTPUTS).filter(key => !published.has(key));
+}
 
 /**
  * Resolve an osc_out `name` → its derived { name, cpcKey, address }.
@@ -146,7 +182,7 @@ export function oscOutTapOf(sig) {
  */
 export function outputCpcKeyOf(sig) {
   const tap = oscOutTapOf(sig);
-  if (!tap) return null;
+  if (!tap || tap.enabled === false) return null;
   return resolveOscOut(tap.params.name).cpcKey;
 }
 
@@ -169,6 +205,40 @@ export function parseCaptureDevice(device) {
   }
   // mic: '' / null / undefined all mean "default input" (device: null).
   return { mode: 'mic', device: (device == null || device === '') ? null : device };
+}
+
+/**
+ * Resolve the Companion boot source without confusing persisted source
+ * sentinels (`test`, `file:...`) for physical microphone device names.
+ * An explicit Companion device override keeps the authored companion.source
+ * contract; otherwise the persisted capture.device is the latest operator
+ * source selection and therefore owns both mode and device.
+ */
+export function resolveCompanionBootSource({
+  sourceOverride = null,
+  companionSource,
+  companionDevice = null,
+  captureDevice,
+} = {}) {
+  const persisted = parseCaptureDevice(captureDevice);
+  const mode = sourceOverride !== null
+    ? sourceOverride
+    : (companionDevice !== null && companionDevice !== undefined
+        ? companionSource
+        : (captureDevice !== undefined ? persisted.mode : companionSource));
+  if (!['mic', 'test', 'file'].includes(mode)) {
+    throw new Error('Companion source must be one of: mic, test, file');
+  }
+  if (mode === 'test') return { mode: 'test' };
+  if (mode === 'file') {
+    return { mode: 'file', file: persisted.mode === 'file' ? persisted.file : null };
+  }
+  return {
+    mode: 'mic',
+    device: companionDevice !== null && companionDevice !== undefined
+      ? companionDevice
+      : (persisted.mode === 'mic' ? persisted.device : null),
+  };
 }
 
 /**
@@ -239,6 +309,7 @@ export function defaultCompanionConfig() {
       intensity('mid',  'micMid',      'rawMid',  8.0),
       intensity('high', 'micHigh',     'rawHigh', 14.0),
       intensity('kick', 'micKick',     'rawKick', 18.0),
+      intensity('flux', 'micFlux',     'rawFlux', 22.0),
       // Dom split: each dom lane is TWO independent signals — a FREQ signal and
       // an ENERGY signal, each with its own op chain (each independently post-
       // processable). The freq stays freq-only; the energy is an intensity band

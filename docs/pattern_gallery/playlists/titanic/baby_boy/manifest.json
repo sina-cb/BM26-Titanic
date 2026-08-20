@@ -1,0 +1,605 @@
+{
+  "schemaVersion": 3,
+  "scene": "titanic",
+  "playlist": "baby_boy",
+  "seconds": 10,
+  "fps": 8,
+  "globalSpeed": 1,
+  "variation": "saved",
+  "palette": null,
+  "source": "simulation/scenes/titanic/playlists/baby_boy.yaml",
+  "playlistDigest": "ce5bd5d96802d01d8a1fc7391a4ddfce9ae44db191822181f78ebbc26d32cb37",
+  "goalsDigest": "db1ff26dc63feb9e49bf72cc8329ec2d45c336379a94739a3c7604fb44a2e034",
+  "items": [
+    {
+      "index": 0,
+      "pattern": "baby/22_boy_constellation_flow",
+      "title": "Baby Boy - Constellation Flow",
+      "goal": "Baby-blue drifting constellation lattice. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.42,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderStarSize",
+          "label": "Star Size",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Star Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderConstellationDensity",
+          "label": "Constellation Density",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.42,
+        "sliderLevel": 0.88,
+        "sliderStarSize": 0.54,
+        "sliderConstellationDensity": 0.48
+      },
+      "gif": "001_baby__22_boy_constellation_flow.gif",
+      "video": "001_baby__22_boy_constellation_flow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "53a05ab501113549cbf945fcb09acf4b3e61a6b3b5cb8e4462d418ff7a751fde"
+    },
+    {
+      "index": 1,
+      "pattern": "baby/16_boy_orbit_glow",
+      "title": "Baby Boy - Orbit Glow",
+      "goal": "Baby-blue orbital shells for long photo holds. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.3,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.84,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRingWidth",
+          "label": "Ring Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.68,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.3,
+        "sliderLevel": 0.84,
+        "sliderRingWidth": 0.54,
+        "sliderSpatialDepth": 0.68
+      },
+      "gif": "002_baby__16_boy_orbit_glow.gif",
+      "video": "002_baby__16_boy_orbit_glow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "59e9f1d83121583ee453055049a7c3704fcc93fb239fa9c6e16d7f089677368d"
+    },
+    {
+      "index": 2,
+      "pattern": "baby/18_boy_rose_glow",
+      "title": "Baby Boy - Rose Glow",
+      "goal": "Baby-blue counter-wound rose for long photo holds. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.34,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.86,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderPetalWidth",
+          "label": "Petal Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderSpatialDepth",
+          "label": "Spatial Depth",
+          "value": 0.7,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.34,
+        "sliderLevel": 0.86,
+        "sliderPetalWidth": 0.52,
+        "sliderSpatialDepth": 0.7
+      },
+      "gif": "003_baby__18_boy_rose_glow.gif",
+      "video": "003_baby__18_boy_rose_glow.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "0db6d530640b7267787d81d7061a956552b0879f758bb418f8afab8f66a32514"
+    },
+    {
+      "index": 3,
+      "pattern": "baby/24_boy_ribbon_braid",
+      "title": "Baby Boy - Ribbon Braid",
+      "goal": "Baby-blue three-strand ribbon braid. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderRibbonWidth",
+          "label": "Ribbon Width",
+          "value": 0.54,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderBraidAmount",
+          "label": "Braid Amount",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Braid Amount character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.46,
+        "sliderLevel": 0.89,
+        "sliderRibbonWidth": 0.54,
+        "sliderBraidAmount": 0.56
+      },
+      "gif": "004_baby__24_boy_ribbon_braid.gif",
+      "video": "004_baby__24_boy_ribbon_braid.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "f573111b82325dbe6c09f7d0303b5a9c296dadd45d2b303421fde6000d5c19ea"
+    },
+    {
+      "index": 4,
+      "pattern": "baby/26_boy_lighthouse_fans",
+      "title": "Baby Boy - Lighthouse Fans",
+      "goal": "Baby-blue mirrored lighthouse fans. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBeamWidth",
+          "label": "Beam Width",
+          "value": 0.48,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderFanCount",
+          "label": "Fan Count",
+          "value": 0.45,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.52,
+        "sliderLevel": 0.9,
+        "sliderBeamWidth": 0.48,
+        "sliderFanCount": 0.45
+      },
+      "gif": "005_baby__26_boy_lighthouse_fans.gif",
+      "video": "005_baby__26_boy_lighthouse_fans.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "9824f8909659c6956187620c7ae150667b080ad156ceb9fa60537ac9a96b12a5"
+    },
+    {
+      "index": 5,
+      "pattern": "baby/25_boy_bubble_chorus",
+      "title": "Baby Boy - Bubble Chorus",
+      "goal": "Baby-blue breathing bubble field. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.49,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.89,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBubbleSize",
+          "label": "Bubble Size",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Bubble Size character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCellDensity",
+          "label": "Cell Density",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.49,
+        "sliderLevel": 0.89,
+        "sliderBubbleSize": 0.5,
+        "sliderCellDensity": 0.52
+      },
+      "gif": "006_baby__25_boy_bubble_chorus.gif",
+      "video": "006_baby__25_boy_bubble_chorus.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "67901f21fc4cb0386c10c6533c9e7b056e1c5b0eed321238d04a667987e70045"
+    },
+    {
+      "index": 6,
+      "pattern": "baby/29_boy_diamond_quilt",
+      "title": "Baby Boy - Diamond Quilt",
+      "goal": "Baby-blue travelling diamond quilt. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.65,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.91,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderSeamWidth",
+          "label": "Seam Width",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Spatial reach or width within this pattern.",
+          "audio": null
+        },
+        {
+          "name": "sliderQuiltScale",
+          "label": "Quilt Scale",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Quilt Scale character control.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.65,
+        "sliderLevel": 0.91,
+        "sliderSeamWidth": 0.5,
+        "sliderQuiltScale": 0.52
+      },
+      "gif": "007_baby__29_boy_diamond_quilt.gif",
+      "video": "007_baby__29_boy_diamond_quilt.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "87d0913e58dddad3f135a787b787bbaf98ff8ea532f6b4fbfef98a5987d9a285"
+    },
+    {
+      "index": 7,
+      "pattern": "baby/21_boy_comet_lullaby",
+      "title": "Baby Boy - Comet Lullaby",
+      "goal": "Baby-blue smooth comet procession. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.4,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.88,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderTailLength",
+          "label": "Tail Length",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Tail Length character control.",
+          "audio": null
+        },
+        {
+          "name": "sliderCometCount",
+          "label": "Comet Count",
+          "value": 0.46,
+          "valueSource": "playlist saved value",
+          "description": "Amount of active visual material.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.4,
+        "sliderLevel": 0.88,
+        "sliderTailLength": 0.56,
+        "sliderCometCount": 0.46
+      },
+      "gif": "008_baby__21_boy_comet_lullaby.gif",
+      "video": "008_baby__21_boy_comet_lullaby.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "705a2daf0ff9bf4546be9ca317d73d89b5f7eb631f186fd42340398375f5b415"
+    },
+    {
+      "index": 8,
+      "pattern": "baby/27_boy_heartbeat_bloom",
+      "title": "Baby Boy - Heartbeat Bloom",
+      "goal": "Baby-blue nested heartbeat blooms. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.56,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.9,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBloomSharpness",
+          "label": "Bloom Sharpness",
+          "value": 0.5,
+          "valueSource": "playlist saved value",
+          "description": "Fine structure and visual definition.",
+          "audio": null
+        },
+        {
+          "name": "sliderEchoDepth",
+          "label": "Echo Depth",
+          "value": 0.58,
+          "valueSource": "playlist saved value",
+          "description": "Shape and intensity of the main organic motion.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.56,
+        "sliderLevel": 0.9,
+        "sliderBloomSharpness": 0.5,
+        "sliderEchoDepth": 0.58
+      },
+      "gif": "009_baby__27_boy_heartbeat_bloom.gif",
+      "video": "009_baby__27_boy_heartbeat_bloom.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "b31778a08379520d5889e9b26f0ba3d44dcc7043907dae5b241b9aa5ecd76b80"
+    },
+    {
+      "index": 9,
+      "pattern": "baby/30_boy_celebration_burst",
+      "title": "Baby Boy - Celebration Burst",
+      "goal": "Baby-blue repeating celebration bursts. Hard-coded baby-blue photo hold â€” no palette binding, no audio, RGB only.",
+      "intent": null,
+      "controls": [
+        {
+          "name": "sliderLocalSpeed",
+          "label": "Local Speed",
+          "value": 0.72,
+          "valueSource": "playlist saved value",
+          "description": "Pattern-local motion rate.",
+          "audio": null
+        },
+        {
+          "name": "sliderLevel",
+          "label": "Level",
+          "value": 0.92,
+          "valueSource": "playlist saved value",
+          "description": "Brightness or energy for this visual layer.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstWidth",
+          "label": "Burst Width",
+          "value": 0.52,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
+        },
+        {
+          "name": "sliderBurstReach",
+          "label": "Burst Reach",
+          "value": 0.64,
+          "valueSource": "playlist saved value",
+          "description": "Transient accent strength.",
+          "audio": null
+        }
+      ],
+      "savedValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "effectiveValues": {
+        "sliderLocalSpeed": 0.72,
+        "sliderLevel": 0.92,
+        "sliderBurstWidth": 0.52,
+        "sliderBurstReach": 0.64
+      },
+      "gif": "010_baby__30_boy_celebration_burst.gif",
+      "video": "010_baby__30_boy_celebration_burst.mp4",
+      "seconds": 10,
+      "chapters": [],
+      "featureLabel": "IDENTITY · TE SIGNS",
+      "sourceDigest": "8554a298bc8145b4aebeba78a2adb035d7e9d37adaa170c91690141beafdcf7b"
+    }
+  ]
+}

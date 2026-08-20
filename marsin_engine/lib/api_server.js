@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
-import { ColorAutopilot } from './color_autopilot.js';
+import { ColorAutopilot, validatePaletteChannel } from './color_autopilot.js';
 import {
   AUTO_GROUP_SIZE_MIN,
   AUTO_GROUP_SIZE_MAX,
@@ -22,16 +22,24 @@ import {
   normalizeAutopilotProfile,
   createAutopilotProfile,
 } from './autopilot_profiles/profile_registry.js';
-import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
-import { sceneStateDir, resolvePlaylistsDir } from './state_paths.js';
+import {
+  StateManager,
+  serializeChannel as serializeChannelForState,
+  BOOT_MODES,
+  normalizeBootMode,
+} from './state_manager.js';
+import {
+  sceneStateDir, resolvePlaylistsDir, resolveTimelineDir, resolveSpecialEventsDir,
+} from './state_paths.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
+import { LiveTouchPresetManager, LiveTouchPresetStoreError } from './live_touch_preset_manager.js';
 import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
 import {
   validateModulationMapping,
 } from './modulation_engine.js';
 import { validateMidiMapping } from './midi_mapping_engine.js';
-import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
+import { describeLibrary, GLOBAL_EFFECT_LIBRARY, getPrimaryIntensity } from './global_effect_library.js';
 import { migrateSlotFile } from './global_effect_slot_manager.js';
 import { createLayoutDeployHook, isLayoutDeployEnabled } from './vsn1_layout_deploy.js';
 import {
@@ -41,12 +49,44 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import { LOCKED_SIZE, SIZE_LOCK_KEY, SIZE_LOCK_REASON, SIZE_LOCK_MESSAGE } from './size_lock.js';
 import { TimelineService, buildOverview } from './timeline/timeline_service.js';
+import {
+  isReadOnlyTimelineBodyRequest,
+  isTimelineAuthorityMutation,
+} from './timeline/http_ownership.js';
+import { createTimelinePreemptionGate } from './timeline/timeline_preemption_gate.js';
 import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
+import { MoodSource } from './timeline/mood_source.js';
+import {
+  SpecialEventsService, SpecialEventError, EVENT_SNAPSHOT_NAME,
+} from './special_events/special_events_service.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
+// The ONE parser of the AUDIO_MODULATION_V1 header block (offline tooling +
+// the engine share it — never a second implementation). Pure, no I/O.
+import { parseAudioModSpec, audioSuggestionsBySlider } from '../tools/audio_mod_spec.mjs';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
-import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
+import { DECK_OVERLAY_MAX, compileViewSelectionMask } from './pattern_mixer.js';
 import { SessionParamCache } from './session_param_cache.js';
+import {
+  DEFAULT_LAYER_TRANSITION_DURATION_MS,
+  LAYER_SETTING_ID_SET,
+  LAYER_SETTING_IDS,
+} from './layer_surface_router.js';
+import {
+  groupsByNameToSectionMap,
+  serializeTouchBrightness,
+  statusForTouchBrightnessError,
+  touchControlOwner,
+} from './touch_brightness_api.js';
+import { audioRegistryEntries } from '../audio/postproc/audio_signals.js';
+import { createCaptainPadAuth } from './captainpad_auth.js';
+import { persistChannelParamState } from './channel_param_persistence.js';
+import {
+  DECK_TRANSITION_MODES,
+  isDeckTransitionMode,
+  pickDeckTransitionMode,
+} from './transition_modes.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -114,6 +154,12 @@ export function validateViewSelection(vs) {
     default:
       return { ok: false, error: `Unknown viewSelection.type '${type}' (expected: all | group | section | fixture | viewMask)` };
   }
+}
+
+/** Map audio-config failures without misreporting durable-write faults as bad input. */
+export function audioConfigErrorStatus(error) {
+  if (error instanceof TypeError || error instanceof RangeError) return 400;
+  return 500;
 }
 
 // Range per Companion signal type. The Companion sends a `type`
@@ -187,9 +233,10 @@ export function validateSignalManifest(body) {
 // PATCH /deck/channel, and /deck/transition-config paths can't drift apart
 // (before this, each path open-coded its own `startsWith('trans_')` check
 // or accepted anything). An unknown mode is rejected with 400 instead of
-// being silently handed to the mixer (which would then composite it via
-// the degraded host-side fallback — visible on /status, but better caught
-// at the API boundary).
+// being silently handed to the mixer, whose render hot path has NO
+// fallback compositor: an uncompiled mode throws out of renderAll6ch()
+// (recorded in renderHealth, visible on /status). This gate is what keeps
+// that throw unreachable from the API surface.
 export const VALID_CHANNEL_BLEND_MODES = Object.freeze(new Set([
   'blend_screen',
   'blend_add',
@@ -203,7 +250,7 @@ export const VALID_CHANNEL_BLEND_MODES = Object.freeze(new Set([
 export function isValidBlendMode(mode) {
   if (typeof mode !== 'string' || mode.length === 0) return false;
   if (VALID_CHANNEL_BLEND_MODES.has(mode)) return true;
-  if (mode.startsWith('trans_')) return true;
+  if (isDeckTransitionMode(mode)) return true;
   return false;
 }
 
@@ -388,6 +435,43 @@ const autoGroupFields = (ap) => ({
 // so a "5 minute" or "1 ms" fade can never reach the render loop.
 export const DECK_TRANSITION_MIN_MS = 50;
 export const DECK_TRANSITION_MAX_MS = 30000;
+export const LIVE_TOUCH_PATTERN_TRANSITION_MS = 500;
+export const LIVE_TOUCH_PATTERN_TRANSITION_MODE = 'trans_crossfade';
+
+/**
+ * Send a JSON error response that can NEVER write headers twice.
+ *
+ * A route handler that has already committed its response (writeHead ran,
+ * and then something after it threw) cannot legally send a status line
+ * again. Calling `res.writeHead` a second time throws Node's
+ * `ERR_HTTP_HEADERS_SENT` from INSIDE the catch handler — where there is
+ * nothing left to catch it. It propagates to engine.js's
+ * `process.on('uncaughtException')`, which (correctly, by its own design)
+ * logs ENGINE FATAL and `process.exit(1)`. The rig goes dark.
+ *
+ * That is how `GET /pattern-dirs/<invalid-slug>` killed the whole engine
+ * with one unauthenticated request (report `_164` §3). The real fix is
+ * per-route: compute the body BEFORE committing headers. This responder is
+ * the second half — it makes the catch arm itself incapable of turning a
+ * handled error into a process kill, WITHOUT swallowing anything: when the
+ * response is already committed we still fail loudly on stderr (named error,
+ * named intended status) and close the socket, so the operator sees the real
+ * fault and the show stays lit.
+ *
+ * `headers` is passed straight through to `writeHead`; omit it to match a
+ * bare `res.writeHead(status)` exactly.
+ */
+export function sendJsonError(res, status, payload, headers) {
+  if (res.headersSent) {
+    console.error(`  ⛔ [api] handler threw AFTER response headers were sent — ` +
+      `intended ${status} ${JSON.stringify(payload)}. Response truncated; ` +
+      `engine kept alive (a second writeHead here would kill the process).`);
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(payload));
+}
 
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
@@ -401,6 +485,15 @@ function listPatterns(patternsDir) {
 // characters. Subdir patterns reference as `<dir>/<name>` which the
 // playlist VALID_PATTERN regex already accepts.
 const VALID_PATTERN_DIR = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/**
+ * `POST /fog` deadman bounds. The default is a little over twice the client's
+ * refresh interval, so one dropped request does not stutter the fog; the
+ * ceiling is what stops a caller asking the engine to run a fogger unattended
+ * for minutes — the endpoint is a hold, not a timer.
+ */
+const FOG_DEFAULT_HOLD_MS = 1500;
+const FOG_MAX_HOLD_MS = 10000;
 
 // Synthetic directory name for the top-level patterns/ folder. The "load
 // directory" picker surfaces it as `default` so an operator can pull every
@@ -446,6 +539,49 @@ function listPatternsInDir(patternsDir, dir) {
     .filter(f => !f.startsWith('_'))
     .map(f => `${dir}/${f.replace(/\.js$/, '')}`)
     .sort();
+}
+
+// A pattern name may name a SUBDIRECTORY — "summer_camp/111_logsville_x" — and
+// that is the engine's OWN canonical form: listPatternsIn above emits
+// `${dir}/${file}` and GET /pattern-dirs advertises eight subfolders.
+//
+// The request-body routes used to normalise with path.basename(), which threw
+// the directory away, so nothing outside the top level could be addressed
+// through them at all (measured: POST /pattern with a summer_camp path failed
+// with "Pattern not found: patterns\111_....js"). But that basename was also
+// doing double duty as the PATH-TRAVERSAL GUARD — these names come off the
+// wire and get joined onto patternsDir — so it cannot simply be deleted.
+//
+// This validator replaces it: one optional directory segment, lowercase
+// alphanumerics with _ and -, nothing else. Dots are not in the class at all,
+// so "..", absolute paths and drive letters cannot express themselves; the
+// result is contained in patternsDir by construction rather than by a check
+// that could be got around. Same shape as VALID_PATTERN in playlist_manager.js,
+// which is what the playlist entries are already validated against.
+const VALID_PATTERN_NAME = /^[a-z0-9][a-z0-9_-]{0,63}(\/[a-z0-9][a-z0-9_-]{0,63})?$/;
+
+function resolvePatternName(raw) {
+  const name = String(raw === undefined || raw === null ? '' : raw)
+    .replace(/\\/g, '/')
+    .replace(/\.js$/i, '');
+  if (!VALID_PATTERN_NAME.test(name)) {
+    throw new Error(
+      `invalid pattern name '${raw}' - expected "<name>" or "<dir>/<name>" ` +
+      '(lowercase letters, digits, underscore or hyphen)');
+  }
+  return name;
+}
+
+// A rejected name is a CLIENT error, not an engine fault. PortWatch reaches us
+// over LoRa with whatever landed in its possibly-stale catalog, and the pattern
+// route's own comment calls a bad name "a routine, recoverable case" — so it
+// must answer 400, not 500. A 500 tells the operator the engine broke.
+function badPatternName(res, err) {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: String((err && err.message) || err), code: 'INVALID_PATTERN_NAME',
+  }));
+  return null;
 }
 
 function loadPattern(patternsDir, name) {
@@ -534,6 +670,53 @@ function buildDeckFallback(saved, failedPattern, reason, defaultPattern, build) 
 }
 
 /**
+ * Restore-time view-selection sanitizer (codex P0 — the DECK MUST BOOT).
+ *
+ * A saved channel's `viewSelection` can name a view that no longer exists:
+ * the operator deleted or renamed it in the sim, re-exported the model, and
+ * the engine restarted. `setDeckChannel`/`addMixerChannel` compile the mask
+ * eagerly and THROW on an unknown name — correct for the live API (the
+ * operator gets an error and the channel keeps its old selection), but at
+ * RESTORE time there is no old selection to keep, and for the deck the throw
+ * used to escalate all the way to `_deckRestoreFatal`: the pattern fallback
+ * rebuilt with the SAME stale viewSelection, failed again, and the engine
+ * REFUSED TO BOOT over a deleted view name. A dark ship because a view was
+ * renamed is exactly the failure class this rig cannot have on playa.
+ *
+ * So: compile the candidate HERE, against the live mixer's model tables. If
+ * it resolves, return it verbatim. If it does not, log the loud degrade
+ * (naming the channel, the stale selection and the remedy — same voice as
+ * `setModelViewMasks`'s hot-reload path) and return the full-rig selection
+ * so the channel still renders. Never silent: the error text carries the
+ * compile failure verbatim.
+ *
+ * @param {object} mixer   the live PatternMixer (pixels/viewMasks/maskRegistry)
+ * @param {object|null} viewSelection the saved selection (may be null)
+ * @param {string} role    'deck' | 'mixer' | 'deckOverlay' (log wording only)
+ * @param {string} channelId
+ * @returns {{type: string, target: *, invert: boolean}} a selection that compiles
+ */
+export function sanitizeRestoredViewSelection(mixer, viewSelection, role, channelId) {
+  const candidate = viewSelection || { type: 'all', target: null, invert: false };
+  try {
+    compileViewSelectionMask({
+      pixels: mixer.pixels,
+      pixelCount: mixer.pixelCount,
+      viewSelection: candidate,
+      viewMasks: mixer.viewMasks,
+      maskRegistry: mixer.maskRegistry,
+    });
+    return candidate;
+  } catch (e) {
+    console.error(`[Restore] ${role} channel '${channelId}': saved view selection ` +
+      `${JSON.stringify(candidate)} no longer resolves against this model (${e.message}) — ` +
+      `restoring the channel with the FULL RIG (type 'all') so it still renders. ` +
+      `Re-pick the view in CaptainPad.`);
+    return { type: 'all', target: null, invert: false };
+  }
+}
+
+/**
  * Boot `--pattern` pin vs restored deck autopilot (operator-intent ruling
  * 2026-07-07 — full-stack smoke report 20260707_2, anomaly 2).
  *
@@ -570,6 +753,134 @@ export function bootPatternPinDecision({ cliPattern, daemonActive, deckMirrorAct
     reason: daemonActive
       ? 'restored deck autopilot is ACTIVE'
       : 'restored deck state mirrors autopilot ACTIVE',
+  };
+}
+
+/**
+ * Decide what `POST /scene/reload` does — the SAME-scene deliberate restart.
+ *
+ * Why this exists (report `_33` §5 step 4): the on-disk model watcher
+ * hot-reloads a same-scene re-export in place, but it REFUSES a pixel-count
+ * change (engine.js: sets `modelSync.stale`, surfaced as
+ * `GET /status.modelStale`) — the engine keeps rendering the OLD model until
+ * it restarts, because the render loop / WASM buffers are sized once at boot.
+ * `POST /scene` with the currently-active scene is a documented no-op, so
+ * before this endpoint the only way to apply a re-export was a scene-bounce
+ * (switch away, switch back = two restarts) or an out-of-band kill.
+ *
+ * The reload is DELIBERATE BY CONSTRUCTION — never implicit:
+ *   - the caller must NAME the scene, and it must equal the active model
+ *     (a mismatch is a 409, not a redirect into a scene switch — use
+ *     `POST /scene` for that);
+ *   - it is blocked in performance mode by the caller (the shared
+ *     `rejectIfPerformanceMode` gate, exactly like `POST /scene`);
+ *   - it restarts through the ONE sanctioned path — the engine's
+ *     `requestSceneSwitch` hook (graceful shutdown → supervisor handoff or
+ *     detached self-respawn → exit 75). It never frees the API port by any
+ *     other means, and it never starts a second engine.
+ *
+ * Pure decision seam (unit-testable without booting the engine): the caller
+ * supplies the facts, this returns `{ status, body, restart }` and performs
+ * no I/O. `restart: true` means "respond first, then call
+ * `engineCore.requestSceneSwitch(scene)`".
+ *
+ * Codex P0 (fail loudly, no fallback): every refusal is an explicit status +
+ * `code`, never a silent success and never a substituted scene.
+ *
+ * @param {object}  facts
+ * @param {*}       facts.requestedScene       — raw `scene` from the request body
+ * @param {?string} facts.activeScene          — engine's active model name
+ * @param {boolean} facts.modelExists          — models/<scene>.js exists on disk
+ * @param {boolean} facts.hasSwitchHook        — engineCore.requestSceneSwitch is wired
+ * @param {boolean} facts.supervised           — BM26_SUPERVISED=1 (launcher owns respawn)
+ * @returns {{status:number, body:object, restart:boolean}}
+ */
+export function sceneReloadDecision({
+  requestedScene,
+  activeScene,
+  modelExists,
+  hasSwitchHook,
+  supervised,
+}) {
+  const scene = typeof requestedScene === 'string' ? requestedScene.trim() : '';
+  if (!scene) {
+    return {
+      status: 400,
+      restart: false,
+      body: {
+        error: 'scene (string) required — name the scene you intend to reload',
+        code: 'SCENE_REQUIRED',
+        activeModel: activeScene || null,
+      },
+    };
+  }
+  // Reject path-traversal / nested names — model files are flat under
+  // marsin_engine/models/ (mirrors the POST /scene guard).
+  if (scene !== path.basename(scene)) {
+    return {
+      status: 400,
+      restart: false,
+      body: { error: `invalid scene name '${scene}'`, code: 'INVALID_SCENE' },
+    };
+  }
+  if (!activeScene) {
+    return {
+      status: 500,
+      restart: false,
+      body: {
+        error: 'engine has no active model name — refusing to reload',
+        code: 'NO_ACTIVE_MODEL',
+      },
+    };
+  }
+  if (scene !== activeScene) {
+    return {
+      status: 409,
+      restart: false,
+      body: {
+        error: `engine is rendering '${activeScene}' — refusing to reload '${scene}'. `
+          + 'POST /scene to switch scenes; /scene/reload only restarts the ACTIVE one.',
+        code: 'SCENE_MISMATCH',
+        activeModel: activeScene,
+      },
+    };
+  }
+  if (!modelExists) {
+    return {
+      status: 404,
+      restart: false,
+      body: {
+        error: `Engine model not found: models/${scene}.js. Save/export the scene's model from the sim first.`,
+        code: 'MODEL_NOT_FOUND',
+        activeModel: activeScene,
+      },
+    };
+  }
+  if (!hasSwitchHook) {
+    return {
+      status: 500,
+      restart: false,
+      body: {
+        error: 'engine does not support scene switching (no requestSceneSwitch hook)',
+        code: 'NO_RELOAD_HOOK',
+        activeModel: activeScene,
+      },
+    };
+  }
+  return {
+    status: 200,
+    restart: true,
+    body: {
+      status: 'ok',
+      scene,
+      restarting: true,
+      activeModel: activeScene,
+      supervised: !!supervised,
+      // What the caller should expect next, so a runbook/curator can poll the
+      // right thing: a supervised engine is respawned by the launcher after
+      // the exit-75 handoff; a standalone engine respawns itself (detached).
+      mode: supervised ? 'supervised-handoff' : 'standalone-respawn',
+    },
   };
 }
 
@@ -629,8 +940,42 @@ function reachableUrls(port) {
   return ips.map(ip => `http://${ip}:${port}`);
 }
 
+export function activeColorParamCenter(paramCenter, liveTouchSession) {
+  if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
+  if (!liveTouchSession || !liveTouchSession.getState().active) return paramCenter;
+  if (!liveTouchSession.paramCenter) {
+    throw new Error('active Live Touch session has no private ParamCenter');
+  }
+  return liveTouchSession.paramCenter;
+}
+
+export function seedColorAutopilotFromActiveSurface(
+  colorAutopilot,
+  paramCenter,
+  liveTouchSession,
+) {
+  const renderedParamCenter = activeColorParamCenter(paramCenter, liveTouchSession);
+  const params = {
+    colorPalette1: renderedParamCenter.get('colorPalette1'),
+    colorPalette2: renderedParamCenter.get('colorPalette2'),
+  };
+  colorAutopilot.seedCurrentParams(params);
+  return params;
+}
+
+// Version 2 requires the engine-owned canonical Performance catalog and
+// session overlay authority. Older engines must fail the panel handshake.
+export const LIVE_TOUCH_PROTOCOL_VERSION = 2;
+
+export function liveTouchProtocolStatus() {
+  return { liveTouchProtocolVersion: LIVE_TOUCH_PROTOCOL_VERSION };
+}
+
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
   const { mixer, wasmHost, paramRouter, paramCenter, model } = engineCore;
+  const liveTouchSession = engineCore.liveTouchSession || null;
+  const captainPadAuth = opts.captainPadAuth || createCaptainPadAuth();
+  console.log(`  CaptainPad privileged auth: ${captainPadAuth.required ? 'REQUIRED' : 'DISABLED (direct engine/test mode)'}`);
   const localControlKinds = new Set([1, 2, 3, 6]);
   // The operator's explicit boot `--pattern`, captured BEFORE the state
   // restore below mutates opts.pattern to whatever deck actually restored.
@@ -654,13 +999,42 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     return [...seen].sort();
   }
+
+  /**
+   * { groupName: sectionId } for the loaded model — first pixel per group
+   * wins, exactly the map GET /dimmer-groups has always served. This is
+   * the single translation table between the WIRE format (numeric section
+   * ids, unchanged for CaptainPad) and the PERSISTED dimmer state, which
+   * is keyed by stable group name (section ids are re-minted every time
+   * the operator regenerates the scene/model — names survive; see
+   * StateManager.migrateDimmersToGroupKeys).
+   */
+  function modelDimmerGroups() {
+    const groups = {};
+    if (model && Array.isArray(model.pixels)) {
+      for (const px of model.pixels) {
+        if (px.group && px.sId > 0 && !groups[px.group]) {
+          groups[px.group] = px.sId;
+        }
+      }
+    }
+    return groups;
+  }
   // Monotonic suffix for new-channel ids — guards against two POSTs in
   // the same millisecond producing the same `ch_<Date.now()>` id.
   let channelIdCounter = 0;
 
+  function isLiveTouchParamChannel(channel) {
+    return !!(channel && liveTouchSession
+      && (channel.id === 'live_touch' || channel.id === '__live_touch_swap__'));
+  }
+
   function onChannelCompiled(channel, source = null) {
-    if (paramCenter) {
-      paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
+    const channelParamCenter = isLiveTouchParamChannel(channel)
+      ? liveTouchSession.paramCenter
+      : paramCenter;
+    if (channelParamCenter) {
+      channelParamCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
       // Force the VM to execute its top-level scope (export var defaults) so that
       // CPC values don't get clobbered by the first real beginFrame.
       wasmHost.beginFrame(channel.handle, 0);
@@ -672,7 +1046,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     seedSliderCodeDefaults(channel, source);
     if (paramCenter) {
       // We also broadcast so clients know the new schema bindings
-      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+      if (channelParamCenter === paramCenter) {
+        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+      }
     } else {
       // Even without CPC we still need the top-level scope executed once so
       // the seed below sits on a properly-initialized VM.
@@ -722,11 +1098,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     const { defaults, computed } = parsePatternDefaults(src);
     const sliderExports = wasmHost.getExports(channel.handle).filter(e => e.kind === 1);
+    const channelParamCenter = isLiveTouchParamChannel(channel)
+      ? liveTouchSession.paramCenter
+      : paramCenter;
     const noDefault = [];
     for (const exp of sliderExports) {
       // CPC owns these — never let a code default fight the global value.
-      if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
-      if (paramCenter && paramCenter.getBlockedIds(channel.id).has(exp.id)) continue;
+      if (channelParamCenter && channelParamCenter.isSharedExport(channel.id, exp.name)) continue;
+      if (channelParamCenter && channelParamCenter.getBlockedIds(channel.id).has(exp.id)) continue;
       if (!(exp.name in defaults)) {
         noDefault.push(exp.name);   // collected; summarized once below
         continue;
@@ -768,15 +1147,54 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return defaults;
   }
 
+  // Per-pattern cache of parsed AUDIO_MODULATION_V1 suggestions, keyed by
+  // pattern name. Same shape + invalidation posture as codeDefaultsCache above:
+  // the stamped field is an additive HINT, so a live-edit recompile that keeps
+  // the pattern name serving a stale suggestion changes no value anywhere.
+  //
+  // A pattern with NO block has no suggestions (`{}`) — that is the documented
+  // "no metadata" state, never an inferred one. A pattern with a MALFORMED
+  // block is REFUSED by name: parseAudioModSpec throws, we log the pattern +
+  // the offending line at error level and serve no suggestions for it. We do
+  // NOT let the throw escape: this runs inside the /mixer and /deck serializers
+  // on the hot broadcast path, and a header typo must never take the operator's
+  // control surface (or the exterior lighting it drives) down with it. The
+  // hard gate is `tests/tools/audio_mod_spec.test.mjs`, which parses EVERY
+  // pattern in the repo and fails the suite on any bad block.
+  const audioSuggestionsCache = new Map();
+  function audioSuggestionsForPattern(patternName) {
+    if (!patternName) return {};
+    if (audioSuggestionsCache.has(patternName)) return audioSuggestionsCache.get(patternName);
+    let suggestions = {};
+    try {
+      const src = loadPattern(patternsDir, patternName);
+      suggestions = audioSuggestionsBySlider(parseAudioModSpec(src, patternName));
+    } catch (err) {
+      console.error(`[AudioSuggest] REFUSED "${patternName}": ${err.message}`);
+    }
+    audioSuggestionsCache.set(patternName, suggestions);
+    return suggestions;
+  }
+
   /**
    * Additive: stamp each SLIDER export (kind 1) with `codeDefault` — the
    * pattern's declared `export var` default — so clients can show / reset to
-   * it. Does NOT touch existing fields; mutates and returns the same array.
+   * it, and with `audioSuggestion` — the AUDIO_MODULATION_V1 header's declared
+   * { version, signal, range, curve, note? } for that parameter, so CaptainPad
+   * can offer the pattern author's intended audio binding.
+   *
+   * Both are METADATA. Neither touches `name` or `v0/v1/v2` — the parameter's
+   * identity and value are unchanged by the presence or absence of a
+   * suggestion, and nothing here creates a modulation. Mutates and returns the
+   * same array.
    */
   function annotateCodeDefaults(channel, exportsArr) {
     const defaults = codeDefaultsForPattern(channel.pattern);
+    const suggestions = audioSuggestionsForPattern(channel.pattern);
     for (const e of exportsArr) {
-      if (e.kind === 1 && e.name in defaults) e.codeDefault = defaults[e.name];
+      if (e.kind !== 1) continue;
+      if (e.name in defaults) e.codeDefault = defaults[e.name];
+      if (e.name in suggestions) e.audioSuggestion = suggestions[e.name];
     }
     return exportsArr;
   }
@@ -788,8 +1206,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    * wins over any per-pattern state.
    */
   function finalizeCpcValues(channel) {
-    if (paramCenter) {
-      paramCenter.applyToChannel(wasmHost, channel.id);
+    const channelParamCenter = isLiveTouchParamChannel(channel)
+      ? liveTouchSession.paramCenter
+      : paramCenter;
+    if (channelParamCenter) {
+      channelParamCenter.applyToChannel(wasmHost, channel.id);
     }
   }
 
@@ -846,6 +1267,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // torn-write safety. Captures one channel's localControls; recall is
   // pattern-scoped (see param_preset_manager.js + docs/39).
   const paramPresetManager = new ParamPresetManager(stateDir, stateManager);
+  // docs/70 W4: the per-scene Live Touch preset PLAYLIST — a THIRD sibling
+  // of snapshots/param_presets. Single file `<stateDir>/live_touch_presets.yaml`
+  // holding one explicitly ordered `entries` array (not one-file-per-preset
+  // like ParamPresetManager). Reuses the StateManager's atomic writer;
+  // writes directly on every mutation, autoSave-INDEPENDENT (see
+  // live_touch_preset_manager.js header). `state` is an opaque panel-owned
+  // blob the engine stores/returns verbatim.
+  const liveTouchPresetManager = new LiveTouchPresetManager(stateDir, stateManager);
 
   // Playlist library lives in simulation/scenes/<scene>/playlists/ —
   // resolved through lib/state_paths.js so MARSIN_PLAYLISTS_DIR can redirect
@@ -950,6 +1379,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let mixerState = stateManager.loadMixerState();
   let deckState = stateManager.loadDeckState();
   let globalsState = stateManager.loadGlobalsState();
+  // SIZE is an operator-pinned schema invariant, not an auto-save preference.
+  // Converge a legacy boot file before applying it so the lock stays loud for
+  // real writers/snapshots without permanently degrading every clean restart.
+  stateManager.convergeBootSizeLock(globalsState);
+  // One-time forward migration: legacy numeric-section-id dimmer keys →
+  // stable group-name keys, resolved against the CURRENT model. Orphans
+  // (ids/names no current group matches) are warned loudly and preserved
+  // untouched; the migrated shape hits disk on the next globals save.
+  stateManager.migrateDimmersToGroupKeys(globalsState, modelDimmerGroups());
 
   // ── Engine-wide settings (auto-save toggle) ──────────────────────────
   // `autoSave` (default TRUE) is the single choke that gates EVERY
@@ -972,18 +1410,126 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   //   • structural / persistent-change routes 409 (rejectIfPerformanceMode);
   //   • a `performance-preshow` snapshot captured on ENTRY holds the exact
   //     look + globals so EXIT/restore can put the rig back deterministically.
-  // Deliberately NOT persisted: a crash/restart boots active:false, and the
-  // last-saved pre-show disk state is the implicit RESTORE (we never entered
-  // a state where the pre-show wasn't already on disk). Boot cleanup below
-  // removes any stale pre-show snapshot left by a mid-performance crash.
+  // The mode itself remains in memory, but the reserved pre-show snapshot is
+  // also the fail-safe restart marker. A crash/restart restores the last-saved
+  // pre-show disk state AND resumes the global lock; it never exposes Edit on
+  // every CaptainPad merely because the engine restarted.
   const PERF_SNAPSHOT_NAME = 'performance-preshow';
-  const performanceMode = { active: false, enteredAt: null };
+  const interruptedPerformanceMode = snapshotManager.has(PERF_SNAPSHOT_NAME);
+  // ── BOOT-LOCKED SHOW ENGINE (docs/56 D1) ─────────────────────────────
+  // "On initial launch, go into Performance mode on captain's pad." Decided
+  // ENGINE-side, never pad-side: CaptainPad has no mode of its own (it renders
+  // the engine's broadcast), so a pad-side boot flip would be a lie one
+  // reconnect deep and incoherent across several pads.
+  //
+  // Privileged auth being enabled IS the show context — it is exactly the
+  // deployment where a passcode exists to unlock with. Auth disabled (benches,
+  // isolated test engines) boots UNLOCKED, byte-identical to before, matching
+  // the inert-gate rule every other privileged gate already follows
+  // (checkTakeoverPasscode, the perf-exit gate).
+  //
+  // The lock is armed HERE (before anything can serve a request or auto-save),
+  // but the reserved pre-show snapshot needs the RESTORED mixer, so its capture
+  // runs after the boot restore completes — see "BOOT-LOCK SNAPSHOT" below.
+  // Capture failure there is FATAL (throw, abort startup): a disk that cannot
+  // write the pre-show snapshot cannot save state either, and codex P0 forbids
+  // the quiet fallback of booting unlocked.
+  //
+  // ── BOOT MODE TOGGLE (report _236) ───────────────────────────────────
+  // The operator can persist "come up in EDIT instead" (settings_state.yaml →
+  // `bootMode`, POST /settings, takes effect NEXT boot). Three properties of
+  // that override, all deliberate:
+  //
+  //   1. It only ever RELAXES the show lock, never the auth gate. Booting into
+  //      edit leaves `editSession.principal` null, so on an auth-enabled engine
+  //      `principalMaySave()` is false and the engine persists NOTHING until a
+  //      principal is asserted (POST /edit-session — the pad's session chip,
+  //      which already renders `NO EDIT SESSION — NOT SAVING` for exactly this
+  //      state). The rig is editable; the disk is not. docs/56's engine-side
+  //      gate never opens by itself.
+  //   2. An INTERRUPTED show still wins. A reserved pre-show snapshot on disk
+  //      means a show was live when the engine died, so the lock resumes
+  //      regardless of the toggle — a crash mid-show must not hand the rig to
+  //      whoever restarts the process.
+  //   3. No snapshot is captured when booting into edit: nothing is locked, so
+  //      there is nothing to restore to. The normal POST enter path captures it.
+  const bootLockForShow = captainPadAuth.required
+    && engineSettings.bootMode !== BOOT_MODES.EDIT
+    && !interruptedPerformanceMode;
+  if (captainPadAuth.required && engineSettings.bootMode === BOOT_MODES.EDIT
+      && !interruptedPerformanceMode) {
+    console.log('[PerformanceMode] boot mode is EDIT (persisted operator setting) — '
+      + 'the show lock is OFF at boot, but persistence stays FROZEN until an edit-session '
+      + 'principal is asserted (POST /edit-session).');
+  }
+  const performanceMode = {
+    active: interruptedPerformanceMode || bootLockForShow,
+    enteredAt: (interruptedPerformanceMode || bootLockForShow) ? new Date().toISOString() : null,
+  };
+
+  function syncLiveTouchPerformanceMode() {
+    if (!liveTouchSession || !liveTouchSession.getState().active) return;
+    liveTouchSession.syncPerformanceMode(performanceMode.active);
+  }
+
+  // ── EDIT SESSION PRINCIPAL (docs/56 D3) ──────────────────────────────
+  // WHO unlocked the rig, engine-global and IN MEMORY ONLY. Set when a
+  // performance-mode EXIT is authorised by a fresh passcode (D2), replaced by
+  // POST /edit-session (escalation + handover), cleared on perf ENTER, and dead
+  // on restart. Never persisted, never sent to a client as anything but the
+  // public enum NAME ('owner' | 'collaborator' | 'bringup') — no credential
+  // material, no session token.
+  //
+  // Persistence follows this ONE global principal, never the originating pad
+  // (D4): disk is global, so "is the engine saving" must have exactly one
+  // answer, and per-request attribution can only be made honest by a credential
+  // per request (unusable) or a spoofable session token (contrary to the
+  // passcode-EVERY-TIME ruling this design inherits).
+  const editSession = { principal: null, unlockedAt: null };
+
+  /**
+   * May the CURRENT edit session write rig state to disk?
+   *
+   * Auth disabled → always true (inert gate; benches and the whole test fleet
+   * behave byte-identically to before this wave). Auth enabled → only an
+   * `owner` session may persist; collaborator/bringup/no-session edit LIVE but
+   * never touch disk.
+   */
+  function principalMaySave() {
+    return !captainPadAuth.required || editSession.principal === 'owner';
+  }
+
+  /**
+   * Set (or clear) the edit-session principal and log the transition ONCE
+   * (docs/56 D8: loud, not spammy — a transition is a discrete operator act,
+   * unlike the per-cycle auto-save predicate, which is never logged).
+   */
+  function setEditPrincipal(principal, why) {
+    if (editSession.principal === principal) return;
+    editSession.principal = principal;
+    editSession.unlockedAt = principal ? new Date().toISOString() : null;
+    if (!captainPadAuth.required) return;
+    if (principal === 'owner') {
+      console.log(`[EditSession] principal 'owner' (${why}) — parameter/playlist ` +
+        'persistence OPEN (stored auto-save preference applies)');
+    } else if (principal) {
+      console.log(`[EditSession] principal '${principal}' (${why}) — parameter/playlist ` +
+        'persistence FROZEN (session-only; nothing reaches disk)');
+    } else {
+      console.log(`[EditSession] principal cleared (${why}) — no edit session; ` +
+        'parameter/playlist persistence FROZEN');
+    }
+  }
+
   // The single effective auto-save predicate. Every automatic persistence
   // choke reads THIS (not engineSettings.autoSave directly) so performance
   // mode transparently freezes disk writes without touching the operator's
-  // stored autoSave preference.
+  // stored autoSave preference. The principal term (docs/56 D5a) adds the
+  // identity dimension: a sailor edit session drives the rig live but writes
+  // nothing. Every choke re-reads this predicate AT WRITE TIME, so a principal
+  // that flips while an auto-save timer is in flight is honoured, not raced.
   function effectiveAutoSave() {
-    return engineSettings.autoSave && !performanceMode.active;
+    return engineSettings.autoSave && !performanceMode.active && principalMaySave();
   }
 
   // ── SESSION PARAM RETENTION (feature A) ──────────────────────────────
@@ -1019,18 +1565,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     entries.set(entryId, defaults);
   }
 
-  // Boot cleanup: performance mode is never persisted, so a live pre-show
-  // snapshot on disk at startup can only mean the engine was SIGKILLed
-  // mid-performance. In that case the disk deck/mixer/globals state IS the
-  // pre-show state (we froze auto-save the moment we entered), so the restore
-  // already happened implicitly — the stale snapshot is dead weight. Delete it
-  // loudly (codex P0 — visible, never silent).
-  if (snapshotManager.has(PERF_SNAPSHOT_NAME)) {
-    snapshotManager.delete(PERF_SNAPSHOT_NAME);
+  // A reserved snapshot at startup can only mean the engine was interrupted
+  // mid-performance. Disk is already the pre-show look because auto-save was
+  // frozen on entry. Keep the snapshot for the eventual explicit RESTORE and
+  // resume the global lock loudly.
+  if (interruptedPerformanceMode) {
     console.log(
       '[PerformanceMode] stale performance-mode pre-show snapshot — engine ' +
       'restarted mid-performance; disk already holds the pre-show state ' +
-      '(implicit restore). Deleted the orphaned snapshot.');
+      '(implicit restore). Resumed the global Performance lock; privileged ' +
+      'operator exit is required.');
+  } else if (bootLockForShow) {
+    console.log(
+      '[PerformanceMode] BOOT-LOCKED (docs/56 D1) — privileged CaptainPad auth ' +
+      'is REQUIRED, so this engine is a show engine: it starts in Performance ' +
+      'mode with no edit session. An operator passcode is required to exit.');
   }
 
   // ── Deck transition config ───────────────────────────────────────────
@@ -1055,6 +1604,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     shuffle: false,
     ...(deckState && deckState.transitionConfig ? deckState.transitionConfig : {}),
   };
+  if (!isDeckTransitionMode(deckTransitionConfig.mode)) {
+    throw new Error(`saved Deck transition mode is not executable: '${deckTransitionConfig.mode}'`);
+  }
+  if (typeof deckTransitionConfig.enabled !== 'boolean' || typeof deckTransitionConfig.shuffle !== 'boolean') {
+    throw new Error('saved Deck transition enabled/shuffle values must be booleans');
+  }
+  if (!Number.isFinite(deckTransitionConfig.durationMs) ||
+      deckTransitionConfig.durationMs < DECK_TRANSITION_MIN_MS ||
+      deckTransitionConfig.durationMs > DECK_TRANSITION_MAX_MS) {
+    throw new Error(`saved Deck transition duration is outside ${DECK_TRANSITION_MIN_MS}..${DECK_TRANSITION_MAX_MS} ms`);
+  }
+  let activeDeckSwapDone = Promise.resolve();
 
   // ── Deck playlist SLOTS (split playlists — two stacked panes) ──────────
   // The deck plays exactly ONE pattern (channel.playlist stays the single live
@@ -1093,9 +1654,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // pre-existing `saveGlobalsState(globalsState)` no-paramCenter calls);
   // sites that changed shared params (or want the freshest snapshot) pass
   // true. When autoSave is OFF this is a no-op — nothing hits disk.
-  function saveGlobals(withParams = false) {
+  function saveGlobals(withParams = false, strict = false) {
     if (!effectiveAutoSave()) return;
-    stateManager.saveGlobalsState(globalsState, withParams ? paramCenter : undefined);
+    stateManager.saveGlobalsState(globalsState, withParams ? paramCenter : undefined, { strict });
   }
 
   if (paramCenter) {
@@ -1105,7 +1666,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   try {
-    stateManager.applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController);
+    stateManager.applyGlobalsState(
+      globalsState, paramCenter, intensityController, globalEffectsController,
+      modelDimmerGroups());
   } catch (err) {
     console.warn('Failed to apply loaded state:', err);
   }
@@ -1116,6 +1679,39 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // If validation throws (e.g. old yaml references a removed effect),
   // we leave the defaults in place and log — never silently fall back.
   const globalEffectSlotManager = engineCore.globalEffectSlotManager || null;
+
+  // ── Fog deadman (report 20260805_171) ──────────────────────────────
+  // `POST /fog` holds the fogger for a bounded window and switches it off
+  // itself when the client stops refreshing. See the endpoint for why a latch
+  // is the wrong shape for a fog machine.
+  let _fogDeadman = null;
+  const clearFogDeadman = () => {
+    if (_fogDeadman === null) return;
+    clearTimeout(_fogDeadman);
+    _fogDeadman = null;
+  };
+  const setFogState = (state, holdMs) => {
+    clearFogDeadman();
+    globalEffectsController.setEffect('fogger', state);
+    if (!globalsState.effects) globalsState.effects = {};
+    globalsState.effects.fogger = state;
+    saveGlobals(false);
+    if (!state) return;
+    _fogDeadman = setTimeout(() => {
+      _fogDeadman = null;
+      // Loud: fog that stops because nobody said "keep going" is a client that
+      // went away mid-hold, and the operator should know the rig did that by
+      // itself rather than wonder why the fog stopped.
+      console.warn(`  ⚠ [fog] deadman expired after ${holdMs} ms with no refresh — ` +
+        'fogger OFF. The client holding it stopped talking (tab closed, reload, ' +
+        'or network drop).');
+      globalEffectsController.setEffect('fogger', false);
+      if (!globalsState.effects) globalsState.effects = {};
+      globalsState.effects.fogger = false;
+      saveGlobals(false);
+    }, holdMs);
+    if (_fogDeadman.unref) _fogDeadman.unref();
+  };
   // ── VSN1 MIDI-layout deploy hook (effects_v2_midi_layout, Track E) ────
   // The engine is the source of truth for the 32-slot layout. When an effect
   // is ADDED or REMOVED from a slot (assign/clear/rename/recolor/reorder or a
@@ -1128,13 +1724,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // dev never flash hardware. Value/mode/active changes are runtime feedback,
   // never a layout deploy.
   let vsn1DeployStatus = null;
+  let vsn1DeployHook = null;
   if (globalEffectSlotManager) {
-    const { hook, status } = createLayoutDeployHook({
+    const { hook, status, probeAttach, dispose } = createLayoutDeployHook({
       stateDir,
       engineConfig: engineCore.engineConfig,
       broadcast: broadcastWs,
     });
     vsn1DeployStatus = status;
+    vsn1DeployHook = { probeAttach, dispose };
     globalEffectSlotManager.setLayoutChangedHook((evt) => {
       // Fire-and-report: a deploy failure fails loud into the status flag +
       // WS broadcast (the hook handles that) but must not crash the request
@@ -1173,12 +1771,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // never flash. The hook debounces/serializes; boot restore itself stays
     // deploy-silent (emitLayout false above) — this is the single, explicit
     // boot deploy. Populated pages only (empty pages have nothing to show).
+    //
+    // ATTACH GATE (report _30 §5, fix plan step 7): ask whether a VSN1 is
+    // actually plugged in BEFORE announcing a sync. Previously this fired on
+    // every boot of every machine — the committed config has deployLayout +
+    // deployOnBoot ON — so a laptop with no device printed "syncing page 0",
+    // spawned the full deploy CLI, and failed ~2-3 s later. Now a detached
+    // boot prints ONE "not attached" line (from the hook's transition latch)
+    // and queues nothing. The probe is fire-and-forget: boot must never block
+    // on a child process, and the drain re-probes anyway.
     const vsn1Cfg = (engineCore.engineConfig && engineCore.engineConfig.vsn1) || {};
     if (isLayoutDeployEnabled(engineCore.engineConfig) && vsn1Cfg.deployOnBoot !== false) {
-      const pages = globalEffectSlotManager.requestFullDeploy();
-      if (pages.length) {
-        console.log(`  🎛  VSN1 deploy-on-load: syncing page(s) ${pages.join(', ')} to the device.`);
-      }
+      Promise.resolve(vsn1DeployHook.probeAttach())
+        .then((attachState) => {
+          if (attachState === 'detached') return; // the hook already said it, once
+          const pages = globalEffectSlotManager.requestFullDeploy();
+          if (pages.length) {
+            console.log(`  🎛  VSN1 deploy-on-load: syncing page(s) ${pages.join(', ')} to the device.`);
+          }
+        })
+        .catch((e) => {
+          console.error(`[VSN1] deploy-on-load attach probe failed: ${e.message}`);
+        });
     }
   }
 
@@ -1528,6 +2142,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           `'${channel.playlist.name}/${channel.playlist.activeEntryId}' on switch: ` +
           `${err && err.message}`);
       }
+    } else if (!performanceMode.active && !principalMaySave()) {
+      // SAILOR SESSION (docs/56 D5/W4): a non-owner EDIT session must not even
+      // ENTER the save backlog. Deferring here would park the sailor's tuning
+      // where a later owner `keep-save` exit or a POST /settings {autoSave:true}
+      // would flush it to the playlist files behind Sina's back — a delayed
+      // version of exactly what the operator asked us not to store. Dropping it
+      // is the honest reading: session-only means session-only.
+      //
+      // In-session continuity is UNAFFECTED — stowSessionParams() above is
+      // deliberately unconditional and keeps the tuning alive in memory across
+      // A→B→A switches for the whole engine session.
+      //
+      // PERFORMANCE MODE IS DELIBERATELY EXCLUDED from this skip. While the
+      // show lock is on there is no edit session at all (principal null), yet
+      // the backlog is exactly what feeds the exit sheet's "N unsaved entries"
+      // ask and the owner's `keep-save` flush — unchanged from before this
+      // wave. A sailor exit never flushes it (D7); it is cleared instead.
     } else {
       try {
         const snap = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
@@ -1566,22 +2197,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
-  function saveAllState() {
-    // AUTO-SAVE GATE (single choke for ~80 auto deck/mixer persistence
-    // triggers). When OFF, zero bytes hit deck_state/mixer_state from any
-    // automatic trigger; a restart reverts to the last save. Explicit
-    // content-authoring routes never call saveAllState — they persist their
-    // own files directly, so they keep working when auto-save is OFF.
-    if (!effectiveAutoSave()) return;
-    stateManager.saveMixerState(mixer);
-    stateManager.saveDeckState(mixer, {
+  function currentDeckStateExtras() {
+    return {
       transitionConfig: { ...deckTransitionConfig },
-      // Deck dynamic view overrides: persist the overlay stack + the SHARED
-      // overlay autopilot cadence so they survive an engine restart (operator
-      // ruling #5). Each overlay is serialized with the same channel shape the
-      // mixer overlays use (serializeChannelForState) so the restore path can
-      // rebuild them via buildChannelFromSaved + loadPlaylistEntry. order is
-      // array order (bottom→top). The transient shared anchor is not persisted.
       overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannelForState),
       overlayAutopilot: {
         active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
@@ -1590,29 +2208,83 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
         ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
-      // Split-playlist SLOTS: persist the two name bindings + the divider ratio
-      // per-scene so the panes + split survive an engine restart. Plain scalars
-      // (name strings / null / a number) — restored + validated at boot.
       playlistSlots: {
         primary: deckPlaylistSlots.primary,
         secondary: deckPlaylistSlots.secondary,
         splitRatio: deckPlaylistSlots.splitRatio,
       },
-    });
+    };
   }
 
-  // Confirm a DECK LOCAL-PARAM write was PERSISTED, so the deck's "✓ SAVED"
-  // flash fires honestly. Emitted ONLY when auto-save actually wrote to disk
-  // (engineSettings.autoSave) — with auto-save OFF a deck tweak is NOT persisted,
-  // so we must never claim it was (codex P0 — no false confirmation; the badge
-  // simply stays hidden). Scoped to the deck param-write paths (NOT saveAllState,
-  // which fires on ~80 unrelated triggers) so the flash means exactly "your deck
-  // tuning was saved". Call AFTER saveAllState().
+  // `strict` (L5, report _120) is FALSE for every auto-save caller (the ~80
+  // render-adjacent triggers) — those stay best-effort: a transient write
+  // failure is warn-only in StateManager.save() and never crashes the engine.
+  // ONLY the explicit operator save (POST /settings/save-now) passes strict:true
+  // so a failed write PROPAGATES and the endpoint returns an honest non-200
+  // instead of a lying 200 {saved:true}. Default false keeps every existing
+  // caller byte-identical.
+  function saveAllState(strict = false) {
+    // AUTO-SAVE GATE (single choke for ~80 auto deck/mixer persistence
+    // triggers). When OFF, zero bytes hit deck_state/mixer_state from any
+    // automatic trigger; a restart reverts to the last save. Explicit
+    // content-authoring routes never call saveAllState — they persist their
+    // own files directly, so they keep working when auto-save is OFF.
+    if (!effectiveAutoSave()) return;
+    stateManager.saveMixerState(mixer, { strict });
+    stateManager.saveDeckState(mixer, currentDeckStateExtras(), { strict });
+  }
+
+  // Confirm a playlist capture that already reached disk. Direct deck
+  // local-parameter writes use persistDeckChannelParams() below so their flash
+  // is coupled to a strict deck_state write instead of broad best-effort save.
   function broadcastDeckParamsSaved() {
     if (!effectiveAutoSave()) return;
     const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
     if (!deckCh) return;
     broadcastWs({ type: 'deckParamsSaved', channelId: deckCh.id });
+  }
+
+  function persistDeckChannelParams() {
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (!deckCh) {
+      return { attempted: false, saved: false, error: 'No deck channel is active.' };
+    }
+    return persistChannelParamState({
+      enabled: effectiveAutoSave(),
+      channelId: deckCh.id,
+      save: () => stateManager.saveDeckState(
+        mixer, currentDeckStateExtras(), { strict: true },
+      ),
+      emit: broadcastWs,
+      successType: 'deckParamsSaved',
+      failureMessage: 'The live value was applied, but deck state could not be saved to disk.',
+      logFailure: (err) => {
+        const detail = String(err && err.message ? err.message : err);
+        console.error(`[Deck] parameter state save failed for '${deckCh.id}': ${detail}`);
+      },
+    });
+  }
+
+  /**
+   * Persist one mixer channel's LOCAL-PARAM write without touching shared
+   * playlist defaults. The strict write is deliberate: an acknowledgement is
+   * useful only when the bytes actually reached mixer_state.yaml. Automatic
+   * persistence gates return `attempted:false` and emit nothing, preserving
+   * Performance mode / auto-save OFF / non-owner session honesty.
+   */
+  function persistMixerChannelParams(channelId) {
+    return persistChannelParamState({
+      enabled: effectiveAutoSave(),
+      channelId,
+      save: () => stateManager.saveMixerState(mixer, { strict: true }),
+      emit: broadcastWs,
+      successType: 'channelParamsSaved',
+      failureMessage: 'The live value was applied, but mixer state could not be saved to disk.',
+      logFailure: (err) => {
+        const detail = String(err && err.message ? err.message : err);
+        console.error(`[Mixer] parameter state save failed for '${channelId}': ${detail}`);
+      },
+    });
   }
 
   function getReplayableLocalExport(channel, controlId) {
@@ -1646,8 +2318,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   /**
    * Capture current channel state as the entry.defaults of the playlist's
-   * currently active entry. Persists to disk. EXPLICIT operator action only —
-   * never wired to a control-write path.
+   * currently active entry. Persists to disk.
+   *
+   * TWO callers, and one of them is AUTOMATIC:
+   *   1. EXPLICIT operator capture routes — `POST /deck/playlist/capture` and
+   *      `POST /mixer/channel/<id>/playlist/capture`.
+   *   2. AUTOMATIC deck capture-on-entry-switch — `captureOrDeferOutgoingDeckEntry`
+   *      calls this on every deck entry switch when auto-save is ON, the channel
+   *      is the deck, and there is an active entry. No operator "save" action is
+   *      required; merely switching entries persists the outgoing one (item 2 of
+   *      the note above — the "night of deck tuning lost on switch" fix).
+   *
+   * The automatic path is gated on `channel._paramsTouchedSinceLoad`, which is
+   * set ONLY by the operator control-write routes (legacy `/control`,
+   * `POST /deck/channel/control`, WS `setControl`) — autopilot, applyEntryDefaults
+   * and seeded pattern defaults do not set it. So the capture is never wired to a
+   * control-write DIRECTLY, but a control-write does arm it, and the next entry
+   * switch then writes the playlist file without further operator intent.
    */
   function captureActiveEntryDefaults(channel) {
     if (!channel.playlist || !channel.playlist.name || !channel.playlist.activeEntryId) {
@@ -1726,17 +2413,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // and the (infrequent) performanceMode broadcast/replay, never per render.
   function computeDirtyDeckState() {
     // Dedupe by (playlist, entryId) — the live entry may also already be pending.
-    const rows = new Map(); // `${playlist} ${entryId}` -> { playlist, entryId }
+    const rows = new Map(); // `${playlist}\\u0000${entryId}` -> { playlist, entryId }
     for (const [plName, entries] of pendingDeckFlush) {
       for (const entryId of entries.keys()) {
-        rows.set(`${plName} ${entryId}`, { playlist: plName, entryId });
+        rows.set(`${plName}\u0000${entryId}`, { playlist: plName, entryId });
       }
     }
     const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
     if (deckCh
         && deckCh._paramsTouchedSinceLoad
         && deckCh.playlist && deckCh.playlist.name && deckCh.playlist.activeEntryId) {
-      rows.set(`${deckCh.playlist.name} ${deckCh.playlist.activeEntryId}`, {
+      rows.set(`${deckCh.playlist.name}\u0000${deckCh.playlist.activeEntryId}`, {
         playlist: deckCh.playlist.name,
         entryId: deckCh.playlist.activeEntryId,
       });
@@ -1798,6 +2485,47 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    * handle, apply entry defaults, and let CPC have the last word. Updates
    * channel.playlist.activeEntryId + cursor.
    */
+  // ── I3 (report _116 / _112): broken-entry tracking for the autopilots ─────
+  // A playlist entry that EXISTS but won't COMPILE is NOT `_missing` (its file
+  // is present), so the pure picker treats it as usable, an autopilot loads it,
+  // the compile throws, the daemon logs + swallows — and because a failed load
+  // never advances `activeEntryId`, the SEQUENTIAL picker re-selects the very
+  // same broken entry every cycle, wedging the deck FOREVER on it (the live
+  // ChatGPT-authoring failure mode). We remember which (playlist, entry) failed
+  // to compile so `annotateBrokenEntries` can tag it `_broken` and the pure
+  // picker SKIPS it — surfacing WHICH entry is broken (loud, once) instead of
+  // silently looping. Cleared when that entry later loads CLEANLY (operator
+  // fixes the pattern and re-selects it).
+  const brokenAutoEntries = new Set();
+  const brokenAutoKey = (plName, entryId) => `${plName}\u0000${entryId}`;
+  function markAutoEntryBroken(plName, entryId, reason) {
+    const key = brokenAutoKey(plName, entryId);
+    if (!brokenAutoEntries.has(key)) {
+      brokenAutoEntries.add(key);
+      console.warn(`  ⚠ [autopilot] entry '${entryId}' in playlist '${plName}' will not load ` +
+        `(${reason}) — SKIPPING it in auto-cycle so the deck advances past instead of wedging. ` +
+        `Fix the pattern and re-select the entry to clear.`);
+    }
+  }
+  // Tag a freshly-loaded playlist's entries with `_broken` so the pure picker
+  // (autopilot_pick.js) skips them. `playlistManager.load` re-parses from disk
+  // each call, so this must run AFTER every load and BEFORE every pick.
+  function annotateBrokenEntries(pl, plName) {
+    if (!pl || !Array.isArray(pl.entries)) return pl;
+    for (const e of pl.entries) {
+      if (brokenAutoEntries.has(brokenAutoKey(plName, e.id))) e._broken = true;
+    }
+    return pl;
+  }
+  // Whether a load failure is a DETERMINISTIC compile/missing error (mark the
+  // entry broken) vs a transient one (EBUSY swap-in-flight, a save hiccup — do
+  // NOT permanently skip). Compile errors repeat every attempt; skipping them is
+  // the fix. Transient errors must be retried, never latched.
+  function isDeterministicLoadFailure(err) {
+    if (!err || err.code === 'EBUSY') return false;
+    return /compile error|pattern (missing|not found)|entry not found/i.test(err.message || '');
+  }
+
   function loadPlaylistEntry(channel, playlistName, entryId, { stowOutgoing = true } = {}) {
     // ── SESSION PARAM RETENTION: stow the outgoing pattern (feature A) ──
     // Before we tear down the outgoing entry (line below wipes
@@ -1886,6 +2614,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       noteDeckLivePlaylist(playlistName);
     }
 
+    // I3: this entry just compiled + loaded CLEANLY, so clear any stale
+    // broken-flag (the operator fixed the pattern and re-selected it). The
+    // compile-before-commit above (lines guarding channel.handle) means a
+    // throw here never left the cursor pointing at a half-loaded entry.
+    brokenAutoEntries.delete(brokenAutoKey(playlistName, entryId));
+
     return { entry, index: idx, total: playlist.entries.length };
   }
 
@@ -1937,6 +2671,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const ap = channel.playlist.autopilot;
       const pl = playlistManager.load(channel.playlist.name);
       if (!pl || pl.entries.length === 0) { channel._autoCycleLastAdvanceMs = now; continue; }
+      annotateBrokenEntries(pl, channel.playlist.name); // I3: skip known-broken entries
       const next = pickNextAutoCycleEntry(pl, ap, channel.playlist.activeEntryId, channel._autoGroup);
       if (!next) {
         // Held / no usable target — re-anchor so we re-check after delay_s,
@@ -1960,6 +2695,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         } catch (e) {
           // Fail LOUD; keep the current pattern (NOT a silent swallow).
           console.warn(`[AutoCycle] advance failed on channel ${channel.id} → ${targetId}: ${e.message}`);
+          // I3: a deterministic (compile/missing) failure marks the entry broken
+          // so the next pick SKIPS it instead of re-selecting it forever.
+          if (isDeterministicLoadFailure(e)) markAutoEntryBroken(plName, targetId, e.message);
         } finally {
           channel._autoCycleInFlight = false;
         }
@@ -2021,6 +2759,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (!overlay.playlist || !overlay.playlist.name) continue;
       const pl = playlistManager.load(overlay.playlist.name);
       if (!pl || pl.entries.length === 0) continue;
+      annotateBrokenEntries(pl, overlay.playlist.name); // I3: skip known-broken entries
       // Each overlay picks its OWN next entry from its OWN playlist + cursor,
       // honoring the SHARED shuffle flag (per-overlay content, shared timer).
       const next = pickNextAutoCycleEntry(pl, ap, overlay.playlist.activeEntryId, overlay._autoGroup);
@@ -2036,6 +2775,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         } catch (e) {
           // Fail LOUD; keep the current pattern (NOT a silent swallow).
           console.warn(`[DeckOverlayAutoCycle] advance failed on overlay ${overlay.id} → ${targetId}: ${e.message}`);
+          // I3: a deterministic (compile/missing) failure marks the entry broken
+          // so the next pick SKIPS it instead of re-selecting it forever.
+          if (isDeterministicLoadFailure(e)) markAutoEntryBroken(plName, targetId, e.message);
         } finally {
           overlay._autoCycleInFlight = false;
         }
@@ -2062,24 +2804,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   //
   // If `transitionConfig` is missing or disabled, we fall back to the
   // instant `loadPlaylistEntry`.
-  function pickRandomTransitionMode() {
-    // Transition shuffle picks a random visual style each swap. We list
-    // these explicitly (instead of reading the transitions/ dir) so we
-    // can guarantee the picks are scripts the engine knows how to drive
-    // via the `progress` argument — adding a new wipe script needs an
-    // intentional bump here so a busted script doesn't silently roulette.
-    const TRANSITION_OPTIONS = [
-      'trans_crossfade', 'trans_flash', 'trans_dissolve',
-      'trans_wipe_right', 'trans_wipe_left', 'trans_wipe_down',
-      'trans_iris', 'trans_iris_close',
-      'trans_diagonal_wipe', 'trans_diamond_wipe',
-      'trans_ripple_in', 'trans_color_burst',
-      'trans_split_horizontal', 'trans_split_vertical',
-      'trans_wave_sweep', 'trans_morse_blink',
-    ];
-    return TRANSITION_OPTIONS[Math.floor(Math.random() * TRANSITION_OPTIONS.length)];
-  }
-
   /**
    * Returns:
    *   {
@@ -2110,6 +2834,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return null;
   }
 
+  // ── Awaiting a deck transition that may be CANCELLED ───────────────────
+  // `loadPlaylistEntryWithTransition().done` rejects with `code:'ECANCELED'`
+  // when the swap is cancelled rather than completed (see `onCancel` below).
+  // Cancellation is a DESIGNED outcome, not a failure: PANIC, a look/snapshot
+  // morph, a special-event FINISH/ABORT restore and a newer swap all call
+  // `mixer.cancelDeckPatternSwap()` deliberately. The caller that asked for the
+  // load has simply been superseded by a LATER authoritative action, so its
+  // await must SETTLE — a naked rejection there turns a routine show handover
+  // into `unhandledRejection`, which this engine treats as fatal (engine.js →
+  // exit 1). Every other rejection (compile error, onComplete bookkeeping
+  // failure) still propagates untouched — this absorbs one specific,
+  // self-issued sentinel, it is not a fallback for a failed load.
+  async function settleDeckTransition(promise) {
+    try {
+      await promise;
+    } catch (error) {
+      if (!error || error.code !== 'ECANCELED') throw error;
+    }
+  }
+
   function loadPlaylistEntryWithTransition(channel, playlistName, entryId, transitionConfig) {
     const enabled = !!(transitionConfig && transitionConfig.enabled);
     if (!enabled) {
@@ -2120,7 +2864,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       // Warm the predicted-next handle for the next sequential advance.
       if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
-        precompileNextDeckEntry(channel);
+        scheduleDeckPrecompile(channel);
       }
       return { ...r, transitionId: null, done: Promise.resolve() };
     }
@@ -2171,6 +2915,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // entries have empty defaults, so this branch is rare.)
     const inactivePattern = mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern();
     const wantHandleReuse = inactivePattern === entry.pattern
+      && mixer.isInactiveDeckHandleFresh && mixer.isInactiveDeckHandleFresh()
       && (!entry.defaults || Object.keys(entry.defaults).length === 0);
 
     let handleForSwap = null;
@@ -2191,9 +2936,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     // Resolve transition mode + duration. Shuffle picks a fresh random
     // visual style per swap; otherwise the operator's configured pick wins.
-    let transMode = transitionConfig.mode || 'trans_crossfade';
-    if (transitionConfig.shuffle) transMode = pickRandomTransitionMode();
-    const durationMs = Math.max(50, Math.min(30000, Number(transitionConfig.durationMs) || 1000));
+    let transMode = transitionConfig.mode;
+    if (transitionConfig.shuffle) transMode = pickDeckTransitionMode();
+    if (!isDeckTransitionMode(transMode)) {
+      throw new Error(`Deck transition mode is not executable: '${transMode}'`);
+    }
+    const durationMs = Number(transitionConfig.durationMs);
+    if (!Number.isFinite(durationMs) ||
+        durationMs < DECK_TRANSITION_MIN_MS || durationMs > DECK_TRANSITION_MAX_MS) {
+      throw new Error(`Deck transition duration must be within ${DECK_TRANSITION_MIN_MS}..${DECK_TRANSITION_MAX_MS} ms`);
+    }
 
     // CPC needs to know about the inactive handle so it receives
     // global color palette / speed / etc. during the fade. We register
@@ -2201,37 +2953,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // handle is already warm — re-registering is still cheap and
     // ensures CPC's per-channel snapshot reflects the current global
     // state (which may have shifted since the previous swap).
+    wasmHost.beginFrame(handleForSwap, 0);
     if (paramCenter) {
       paramCenter.registerChannel('__deck_swap__', handleForSwap, handleExports);
-      if (!isReused) {
-        // Execute top-level scope so export var defaults land. Skip on
-        // reuse — the handle has been ticking via beginFrame() the
-        // whole time (warm in the inactive slot) so its exports are
-        // already initialized.
-        wasmHost.beginFrame(handleForSwap, 0);
-      }
       paramCenter.applyToChannel(wasmHost, '__deck_swap__');
     }
     // Seed the shadow swap handle's sliders to their pattern code defaults so
     // the fading-in pattern reads author intent as its BASE (entry defaults +
     // CPC still layer on top below / via finalizeCpcValues on completion).
-    // Skip on reuse — the warm inactive handle was already seeded when it was
-    // first compiled and has been ticking since. CPC-owned/blocked sliders are
-    // skipped (resolved against the shadow id).
-    if (!isReused) {
-      try {
-        const swapSrc = loadPattern(patternsDir, entry.pattern);
-        const { defaults: swapDefaults } = parsePatternDefaults(swapSrc);
-        for (const exp of (handleExports || [])) {
-          if (exp.kind !== 1) continue;
-          if (!(exp.name in swapDefaults)) continue;
-          if (paramCenter && paramCenter.isSharedExport('__deck_swap__', exp.name)) continue;
-          if (paramCenter && paramCenter.getBlockedIds('__deck_swap__').has(exp.id)) continue;
-          wasmHost.setControl(handleForSwap, exp.id, swapDefaults[exp.name], 0, 0);
-        }
-      } catch (err) {
-        console.warn(`[SliderDefaults] deck-swap seed skipped for "${entry.pattern}": ${err.message}`);
+    // CPC-owned/blocked sliders are skipped (resolved against the shadow id).
+    try {
+      const swapSrc = loadPattern(patternsDir, entry.pattern);
+      const { defaults: swapDefaults } = parsePatternDefaults(swapSrc);
+      for (const exp of (handleExports || [])) {
+        if (exp.kind !== 1) continue;
+        if (!(exp.name in swapDefaults)) continue;
+        if (paramCenter && paramCenter.isSharedExport('__deck_swap__', exp.name)) continue;
+        if (paramCenter && paramCenter.getBlockedIds('__deck_swap__').has(exp.id)) continue;
+        wasmHost.setControl(handleForSwap, exp.id, swapDefaults[exp.name], 0, 0);
       }
+    } catch (err) {
+      console.warn(`[SliderDefaults] deck-swap seed skipped for "${entry.pattern}": ${err.message}`);
     }
     // Apply per-entry defaults to the swap handle directly (not via
     // the channel object — that's still pointing at the active
@@ -2256,19 +2998,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     let resolveDone;
-    const done = new Promise((res) => { resolveDone = res; });
+    let rejectDone;
+    const done = new Promise((resolve, reject) => {
+      resolveDone = resolve;
+      rejectDone = reject;
+    });
 
-    const txid = mixer.triggerDeckPatternSwap({
+    let txid;
+    try {
+      txid = mixer.triggerDeckPatternSwap({
       // On reuse, signal "use the warm inactive handle" by passing
       // null. Otherwise transfer ownership of the fresh compile to
       // the mixer (it destroys the previously-inactive handle on our
       // behalf).
-      newHandle: isReused ? null : handleForSwap,
-      patternName: entry.pattern,
-      durationMs,
-      transitionMode: transMode,
-      steadyMode: 'blend_screen',
-      onComplete: () => {
+        newHandle: isReused ? null : handleForSwap,
+        patternName: entry.pattern,
+        durationMs,
+        transitionMode: transMode,
+        onComplete: () => {
+          try {
         // Handle has been promoted onto `channel` (the base) by the
         // mixer. Finish the bookkeeping that loadPlaylistEntry would
         // normally do synchronously.
@@ -2277,10 +3025,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // registration in-place for `channel.id`).
         if (paramCenter) {
           paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
-          wasmHost.beginFrame(channel.handle, 0);
           broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
-        } else {
-          wasmHost.beginFrame(channel.handle, 0);
         }
         // Seed Pixelblaze defaults for untouched local controls BEFORE the
         // saved defaults replay (same ordering as onChannelCompiled) so every
@@ -2329,27 +3074,59 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // Warm the predicted-next handle now that the swap landed and the
         // inactive slot is free again. Sequential autopilot only (the
         // helper guards this) so manual ping-pong warmth is preserved.
-        precompileNextDeckEntry(channel);
+        scheduleDeckPrecompile(channel);
         // Resolve the autopilot's await so its inter-pattern timer
         // can start its next countdown from a clean baseline.
-        try { resolveDone(); } catch (_) {}
-      },
-    });
+            resolveDone();
+          } catch (error) {
+            rejectDone(error);
+            broadcastWs({
+              type: 'deckSwapFailed',
+              pattern: entry.pattern,
+              transitionId: txid,
+              error: error.message,
+            });
+            throw error;
+          }
+        },
+        onCancel: () => {
+          if (paramCenter && paramCenter.unregisterChannel) {
+            paramCenter.unregisterChannel('__deck_swap__');
+          }
+          const error = new Error(`Deck transition '${txid}' was cancelled`);
+          error.code = 'ECANCELED';
+          rejectDone(error);
+        },
+      });
 
     if (!txid) {
       // Swap rejected (e.g. no deck base). Fall back to instant load
       // so the operator's pick still lands instead of vanishing.
-      console.warn('[Deck] triggerDeckPatternSwap returned null — falling back to instant load');
       if (paramCenter && paramCenter.unregisterChannel) {
         paramCenter.unregisterChannel('__deck_swap__');
       }
-      const r = loadPlaylistEntry(channel, playlistName, entryId);
-      saveAllState();
-      opts.pattern = channel.pattern;
-      broadcastWs({ type: 'pattern', name: channel.pattern });
-      broadcastMixerState();
-      try { resolveDone(); } catch (_) {}
-      return { ...r, transitionId: null, done };
+      throw new Error(`Deck transition '${transMode}' was rejected without an error`);
+    }
+
+    activeDeckSwapDone = done;
+    // Baseline handler so `done` is never an unhandled rejection when no
+    // caller awaits it (HTTP handlers deliberately don't). A CANCELLED swap is
+    // a designed outcome, not a failure — PANIC, a look/snapshot morph and a
+    // special-event restore all cancel on purpose, and a show would otherwise
+    // print a red "transition failed" line at every handover. Log it as what
+    // it is; keep `console.error` for anything that actually broke.
+    void done.catch((error) => {
+      if (error && error.code === 'ECANCELED') {
+        console.log(`[Deck] transition ${txid} cancelled (superseded)`);
+        return;
+      }
+      console.error(`[Deck] transition ${txid} failed: ${error.message}`);
+    });
+    } catch (error) {
+      if (paramCenter && paramCenter.unregisterChannel) {
+        paramCenter.unregisterChannel('__deck_swap__');
+      }
+      throw error;
     }
 
     // Optimistic broadcast so the UI knows a transition is in flight.
@@ -2377,6 +3154,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   //
   // Safe to call after every deck entry load. Never throws (a prediction
   // failure must not break the load that just succeeded).
+  let deckPrecompileScheduled = false;
+  function scheduleDeckPrecompile(channel) {
+    if (deckPrecompileScheduled) return;
+    deckPrecompileScheduled = true;
+    setImmediate(() => {
+      deckPrecompileScheduled = false;
+      precompileNextDeckEntry(channel);
+    });
+  }
+
   function precompileNextDeckEntry(channel) {
     try {
       if (!channel || !channel.playlist || !channel.playlist.name) return;
@@ -2385,18 +3172,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // timeline-playback scenario). Manual taps are left to the ping-pong
       // warm-keeper so we don't evict a useful back-and-forth handle on a
       // single manual advance. Shuffle is unpredictable → skip.
-      if (!ap || !ap.active || ap.shuffle) return;
+      if (ap && ap.active && ap.shuffle) return;
       const pl = playlistManager.tryLoad(channel.playlist.name);
       if (!pl || pl.entries.length === 0) return;
       const usable = pl.entries.filter(e => !e._missing);
       if (usable.length === 0) return;
       const activeIdx = usable.findIndex(e => e.id === channel.playlist.activeEntryId);
-      // Next sequential entry, wrapping. If the active entry isn't found
-      // (e.g. it was missing), start from the first usable entry.
-      const nextEntry = usable[(activeIdx + 1) % usable.length];
+      const inactivePattern = mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern();
+      const nextEntry = ap && ap.active
+        ? usable[(activeIdx + 1) % usable.length]
+        : usable.find((candidate) => candidate.pattern === inactivePattern);
       if (!nextEntry || nextEntry.pattern === channel.pattern) return;
       // Already warm? getInactiveDeckPattern avoids a redundant compile.
-      if (mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern() === nextEntry.pattern) {
+      if (mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern() === nextEntry.pattern &&
+          mixer.isInactiveDeckHandleFresh && mixer.isInactiveDeckHandleFresh()) {
         return;
       }
       // Don't fight an in-flight swap — the inactive slot is the live fade
@@ -2458,13 +3247,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       locked: !!saved.locked,
       faderLocked: !!saved.faderLocked,
       // Same reasoning for transition prefs.
-      transitionMode: saved.transitionMode || 'trans_crossfade',
+      transitionMode: saved.transitionMode === undefined
+        ? 'trans_crossfade'
+        : saved.transitionMode,
       transitionTime: saved.transitionTime || 1.0,
       // Restore view-selection so a mask-restricted channel survives
       // engine restart. setDeckChannel / addMixerChannel will compile
-      // the mask immediately via recompileChannelMask (no extra call
-      // needed here).
-      viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
+      // the mask immediately via recompileChannelMask — which THROWS on
+      // a view deleted/renamed since the state was saved, so the saved
+      // selection is sanitized first: a stale name degrades LOUDLY to
+      // the full rig instead of killing the restore (for the deck that
+      // throw used to escalate to _deckRestoreFatal — a refused BOOT
+      // over a renamed view). See sanitizeRestoredViewSelection.
+      viewSelection: sanitizeRestoredViewSelection(
+        mixer, saved.viewSelection, role, saved.id),
       // F-C / F-D restore. An old state file without these fields restores
       // to the documented schema defaults (faderMax 1.0 = no clamp,
       // color null). The PatternChannel constructor clamps/types both.
@@ -2530,17 +3326,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (entry && !entry._missing) {
       playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
     }
-    // CHANNEL-LOCAL params survive a restart for the DECK + deck overlays:
-    // their own saved localControls (live values at the last state save)
-    // replay ON TOP of the shared playlist entry defaults so the deck's look
-    // is exactly what the operator left. MIXER channels are the exception
-    // (operator ruling, 2026-07 auto-save wave): their parameters are never
-    // persisted (saveMixerState emits `localControls: {}`), so on restore we
-    // SKIP the replay entirely — a mixer channel restores to its playlist
-    // entry defaults only. An OLD state file that still carries mixer
-    // localControls is read tolerantly and simply ignored here (never
-    // crashes) rather than replayed.
-    if (saved.localControls && role !== 'mixer') {
+    // CHANNEL-LOCAL params survive a restart for every channel role. Replay
+    // them ON TOP of shared playlist-entry defaults so a mixer layer restores
+    // its own saved live tuning without rewriting the shared preset. Old state
+    // files with an empty localControls map remain backward-compatible.
+    if (saved.localControls) {
       for (const [idStr, cv] of Object.entries(saved.localControls)) {
         const controlId = parseInt(idStr, 10);
         if (!getReplayableLocalExport(ch, controlId)) continue;
@@ -2703,7 +3493,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     if (mixerState.master !== undefined) {
-      mixer.setMaster(mixerState.master);
+      // A PERSISTED GRAND MASTER OF ZERO IS NEVER RESTORED — the same hazard as
+      // a persisted blackout (see applyGlobalsState), and the one that actually
+      // bites: clearing the blackout on boot does NOT light the ship if the
+      // master is separately restored at 0. The touch panel drives this master,
+      // so a crash while it was down used to boot dark and stay dark through
+      // every relaunch.
+      //
+      // ONLY the fully-dark case is overridden. A low-but-nonzero master is a
+      // legitimate saved look and is restored untouched.
+      if (!(mixerState.master > 0)) {
+        console.warn(`  ⚠ [state] mixer_state had master: ${mixerState.master} — a persisted ` +
+          'ZERO grand master is NEVER restored; a crash must not leave the Titanic dark. Booting at 1.0.');
+        mixer.setMaster(1.0);
+      } else {
+        mixer.setMaster(mixerState.master);
+      }
     }
 
     // If the saved deck channel failed to restore (e.g. its pattern was
@@ -2756,6 +3561,33 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // WAVE 15: a state file with a group registry but no surviving channels
     // is still worth restoring (the operator may re-add members). Idempotent.
     restoreMixGroups();
+  }
+
+  // ── BOOT-LOCK SNAPSHOT (docs/56 D1) ──────────────────────────────────
+  // The lock itself was armed at boot (see `bootLockForShow`); its reserved
+  // pre-show snapshot is captured HERE because captureLook() serializes the
+  // RESTORED mixer — before this point the deck/overlays are still the bare
+  // boot rig, and a snapshot of that would restore the operator to nothing.
+  // Disk == memory at this instant, so the snapshot is exactly "as Sina left
+  // it", the same guarantee POST /performance-mode {active:true} gives.
+  //
+  // FATAL on failure (codex P0 — no quiet fallback): the POST enter path
+  // already refuses entry when the capture fails, and booting UNLOCKED because
+  // the disk misbehaved would silently hand an unauthenticated show engine to
+  // anyone. Never locked without a restore point, never silently unlocked.
+  if (bootLockForShow) {
+    try {
+      snapshotManager.save(PERF_SNAPSHOT_NAME, {
+        ...captureLook(),
+        globals: captureGlobalsForSnapshot(),
+      });
+    } catch (err) {
+      throw new Error(
+        '[PerformanceMode] BOOT-LOCK pre-show snapshot capture FAILED — refusing to '
+        + 'start. A show engine must never run locked without a restore point, and a '
+        + 'disk that cannot write this snapshot cannot persist state either: '
+        + `${err && err.message}`);
+    }
   }
 
   // ── Named mixer snapshots / look recall (F-A) ─────────────────────────
@@ -3141,8 +3973,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // discard / entry swap (see markChannelDirtyIfLocked +
       // clearChannelDirty).
       dirty: !!c._dirty,
-      transitionMode: c.transitionMode || 'trans_crossfade',
-      transitionTime: c.transitionTime || 1.0,
+      transitionMode: c.transitionMode,
+      transitionTime: c.transitionTime,
       playlist: c.playlist || null,
       viewSelection: c.viewSelection || { type: 'all', target: null, invert: false },
       // F-C: per-channel intensity ceiling (hard cap on this channel's own
@@ -3294,8 +4126,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // prompt on the client. Cleared on lock toggle / capture / discard
         // / entry swap (see markChannelDirtyIfLocked + clearChannelDirty).
         dirty: !!c._dirty,
-        transitionMode: c.transitionMode || 'trans_crossfade',
-        transitionTime: c.transitionTime || 1.0,
+        transitionMode: c.transitionMode,
+        transitionTime: c.transitionTime,
         // View-selection: per-channel masking config (which group/section/
         // fixture/viewMask the channel paints). Broadcast so CaptainPad
         // can show / set the selection per channel strip. See
@@ -3451,14 +4283,210 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // mixer truth so any optimistic CaptainPad edit (a dragged fader-lock, a
   // half-rendered delete) visibly re-pegs to the engine's real state. Runtime
   // control, selection, safety (blackout / panic), and every GET stay OPEN.
-  function rejectIfPerformanceMode(res) {
+  function rejectIfPerformanceMode(req, res) {
     if (!performanceMode.active) return false;
+    if (captainPadAuth.isPrivilegedRequest(req)) return false;
+    if (req.headers['x-captainpad-session']) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'CaptainPad privileged session is invalid or expired',
+        code: 'CAPTAINPAD_SESSION_INVALID',
+      }));
+      return true;
+    }
     res.writeHead(409, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       error: 'performance mode is active — structural/persistent changes are locked',
       code: 'PERFORMANCE_MODE',
     }));
     broadcastMixerState();
+    return true;
+  }
+
+  // ══ PERFORMANCE-MODE OPERATOR PASSCODE GATES ═══════════════════════════════
+  //
+  // While a show is live, seizing the rig FROM a running plan, leaving the show
+  // lock, and asserting an edit-session principal are operator-authority acts.
+  // Each request must carry EITHER:
+  //   • a fresh `X-CaptainPad-Passcode` header (verified per attempt), OR
+  //   • a valid opaque `X-CaptainPad-Passcode-Waiver` minted within the last
+  //     30 minutes after a successful passcode check (operator ruling 2026-08-18).
+  //
+  // A privileged SESSION (`X-CaptainPad-Session`) deliberately buys nothing here.
+  // Waivers are scoped ONLY to these passcode gates — they do not unlock
+  // structural performance locks, mint privileged sessions, or broaden route
+  // authority. The engine-verified principal from passcode or waiver still
+  // drives owner-only save checks (docs/56 D7).
+  //
+  // THE REVERSE DIRECTION IS NEVER GATED. Timeline resume and operator-lease
+  // expiry force-disarm Live Touch with no auth at all — getting BACK to the
+  // plan is always free (see forceDisarmLiveTouchForTimeline).
+  //
+  // Performance mode OFF → no gate, byte-identical to the previous behaviour.
+  const TAKEOVER_PASSCODE_HEADER = 'x-captainpad-passcode';
+  const PASSCODE_WAIVER_HEADER = 'x-captainpad-passcode-waiver';
+
+  function headerValue(req, name) {
+    const raw = req && req.headers ? req.headers[name] : null;
+    return Array.isArray(raw) ? raw[0] : raw;
+  }
+
+  /**
+   * Resolve the engine-verified operator principal from passcode OR waiver.
+   *
+   * @returns {{ok: true, principal: string, via: 'passcode'|'waiver'}} or
+   *   {ok:false, status, body}. Never trusts a client-supplied principal name.
+   */
+  function resolveOperatorPrincipal(req, what, codes) {
+    const passcode = headerValue(req, TAKEOVER_PASSCODE_HEADER);
+    if (typeof passcode === 'string' && passcode.length > 0) {
+      const result = captainPadAuth.verifyPassphrase(
+        passcode,
+        req.socket && req.socket.remoteAddress,
+      );
+      if (!result.ok) {
+        console.warn(`  ⚠ [operator-auth] REFUSED ${what} — operator passcode rejected ` +
+          `(${result.code}).`);
+        return {
+          ok: false,
+          status: result.status,
+          body: {
+            error: result.status === 429
+              ? 'Too many attempts. Wait before trying again.'
+              : 'Operator passcode rejected.',
+            code: result.status === 429 ? codes.rateLimited : codes.invalid,
+            ...(result.retryAfterMs ? { retryAfterMs: result.retryAfterMs } : {}),
+          },
+        };
+      }
+      return { ok: true, principal: result.principal, via: 'passcode' };
+    }
+
+    const waiverToken = headerValue(req, PASSCODE_WAIVER_HEADER);
+    if (typeof waiverToken === 'string' && waiverToken.length > 0) {
+      const waiver = captainPadAuth.waiverForToken(waiverToken);
+      if (!waiver) {
+        console.warn(`  ⚠ [operator-auth] REFUSED ${what} — passcode waiver invalid or expired.`);
+        return {
+          ok: false,
+          status: 401,
+          body: {
+            error: 'Operator passcode waiver is invalid or expired — enter the passcode again.',
+            code: codes.waiverInvalid || codes.invalid,
+          },
+        };
+      }
+      return { ok: true, principal: waiver.principal, via: 'waiver' };
+    }
+
+    console.warn(`  ⚠ [operator-auth] REFUSED ${what} — no operator passcode or waiver was supplied.`);
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        error: codes.requiredMessage || 'an operator passcode is required',
+        code: codes.required,
+      },
+    };
+  }
+
+  /**
+   * @returns {null} when the takeover may proceed, or a
+   *   {status, body} refusal the caller must send. Never logs the secret.
+   */
+  function checkTakeoverPasscode(req, what) {
+    if (!performanceMode.active) return null;
+    if (!captainPadAuth.required) return null;
+    const resolved = resolveOperatorPrincipal(req, what, {
+      required: 'TAKEOVER_AUTH_REQUIRED',
+      invalid: 'TAKEOVER_AUTH_INVALID',
+      rateLimited: 'TAKEOVER_AUTH_RATE_LIMITED',
+      waiverInvalid: 'TAKEOVER_AUTH_WAIVER_INVALID',
+      requiredMessage: 'performance mode is live — an operator passcode is required to take over '
+        + 'from the timeline',
+    });
+    if (!resolved.ok) return { status: resolved.status, body: resolved.body };
+    console.log(`[takeover] ${what} authorised by principal '${resolved.principal}' ` +
+      `(via ${resolved.via}; no privileged session was created or consumed)`);
+    return null;
+  }
+
+  /** Write the refusal from checkTakeoverPasscode. Returns true iff refused. */
+  function rejectTakeoverWithoutPasscode(req, res, what) {
+    const refusal = checkTakeoverPasscode(req, what);
+    if (!refusal) return false;
+    if (refusal.body.retryAfterMs) {
+      res.setHeader('Retry-After', String(Math.ceil(refusal.body.retryAfterMs / 1000)));
+    }
+    res.writeHead(refusal.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(refusal.body));
+    return true;
+  }
+
+  // ══ EDIT-SESSION PRINCIPAL GATES (docs/56 D2/D3/D5b) ═════════════════════
+  //
+  // Same ring and lockout as the takeover gate above. Accepts passcode OR a
+  // valid 30-minute passcode waiver — never a privileged session token.
+
+  /**
+   * Verify operator authority for an identity-establishing act.
+   *
+   * @returns {{ok: true, principal: string}} when verified, or
+   *   {ok:false, status, body} the caller must send. The attempted secret is
+   *   NEVER logged, echoed, or included in the refusal.
+   */
+  function verifyPrincipalPasscode(req, what, codes) {
+    const resolved = resolveOperatorPrincipal(req, what, {
+      required: codes.required,
+      invalid: codes.invalid,
+      rateLimited: codes.rateLimited,
+      waiverInvalid: codes.waiverInvalid || codes.invalid,
+      requiredMessage: codes.requiredMessage
+        || 'an operator passcode is required — a privileged session is not a substitute',
+    });
+    if (!resolved.ok) {
+      console.warn(`  ⚠ [EditSession] REFUSED ${what} — ${resolved.body.code}.`);
+      return resolved;
+    }
+    return { ok: true, principal: resolved.principal };
+  }
+
+  /** Write a {status, body} refusal produced by verifyPrincipalPasscode. */
+  function sendPrincipalRefusal(res, refusal) {
+    if (refusal.body.retryAfterMs) {
+      res.setHeader('Retry-After', String(Math.ceil(refusal.body.retryAfterMs / 1000)));
+    }
+    res.writeHead(refusal.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(refusal.body));
+  }
+
+  /**
+   * 403 gate for routes that write RIG STATE FILES outside the auto-save choke
+   * (docs/56 D6 family 3 + 4): playlist CRUD, modulation/MIDI mapping
+   * mutations, the explicit capture routes, and the persistence controls
+   * themselves. Sibling of rejectIfPerformanceMode — ALWAYS placed AFTER it, so
+   * a locked show outranks identity (a 409 PERFORMANCE_MODE is the truer answer
+   * while the lock is on).
+   *
+   * Client-side hiding alone would be a lie — any HTTP client can still POST —
+   * so the refusal lives here. Refusing LOUDLY is also the honest reading of
+   * "don't store playlist changes": an in-memory overlay that evaporates on
+   * restart would be a silent drop wearing a 200.
+   *
+   * Returns true (and writes the 403) when the caller must return immediately.
+   */
+  function rejectIfPrincipalReadonly(req, res, what) {
+    if (principalMaySave()) return false;
+    console.warn(`  ⚠ [EditSession] REFUSED ${what} — edit session principal is ` +
+      `'${editSession.principal || 'none'}'; rig state files are read-only ` +
+      '(live control is unaffected).');
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'this edit session may not write rig state to disk — the captain\'s passcode '
+        + 'is required to save',
+      code: 'EDIT_PRINCIPAL_READONLY',
+      principal: editSession.principal,
+    }));
     return true;
   }
 
@@ -3512,6 +4540,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       transitionId: transitionId || null,
     });
     broadcastMixerState();
+  };
+
+  // ── Deck-swap cancellation → release every client's "swap in flight" UI ──
+  // A cancelled swap (PANIC, look/snapshot morph kickoff, deck channel
+  // remove/replace, shutdown mid-fade) never runs the swap's onComplete
+  // closure — by design, since that would commit the cancelled target — so
+  // the `deckSwapComplete` broadcast inside it never fires. Clients that
+  // dim + disable their playlist on `deckSwapStarted` (CaptainPad deck tab)
+  // would then stay wedged until a remount. Reuse the SAME message type so
+  // every existing client heals with no client-side change; `cancelled:true`
+  // is additive for anyone who wants to distinguish.
+  mixer.onDeckSwapCancelled = ({ transitionId } = {}) => {
+    broadcastWs({
+      type: 'deckSwapComplete',
+      cancelled: true,
+      transitionId: transitionId || null,
+    });
   };
 
   // ── Snapshot morph finalizer (round-2 #1) ──────────────────────────────
@@ -3679,11 +4724,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // stale saved mixer value that would black the rig out (bug 2026-07-02
         // round 2). The operator explicitly flips to mixer output afterward if
         // they want it. So force the deck view, ignoring savedTargetViewFader.
-        mixer.targetViewFader = 0.0;
+        activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+          durationMs: 1000,
+          reason: 'plan_override_release',
+        });
       } else if (savedTargetViewFader !== null) {
         // A PortWatch device pin restores whatever the operator had before the
         // device took over (unchanged device semantics).
-        mixer.targetViewFader = savedTargetViewFader;
+        activateLayerSettingInternal(
+          savedTargetViewFader < 0.5 ? LAYER_SETTING_IDS.DECK : LAYER_SETTING_IDS.MIXER,
+          { durationMs: 1000, reason: 'portwatch_override_release' },
+        );
       }
     }
     viewOverrideMode = null;
@@ -3815,6 +4866,1061 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return r;
   }
 
+  // ── TOUCH CONTROL deadman lease — paint that cannot outlive its owner ────
+  //
+  // PAINT SHIP writes group fixed-colour overrides, and those are a FLAT
+  // OVERWRITE: `px.r = c[0] * b` for every pixel in the group
+  // (effects/group_fixed_color.js), so a painted group goes STATIC and stops
+  // showing the pattern at all.
+  //
+  // Before this lease, a painted group survived every recovery an operator
+  // would reach for, which is why it needed fixing:
+  //   - the panel dying sends no DELETE (its releasePaint() never runs),
+  //   - panicStop() spares group locks BY DESIGN (global_effects_controller
+  //     ~1432, and the repo's own test asserts it), so e-stop does not clear it,
+  //   - the override was persisted to globals_state.yaml and RE-APPLIED at boot
+  //     (state_manager ~459), so restarting the engine brought the paint back.
+  // Net effect: an iPad that walked out of wifi range left part of the ship
+  // frozen with no recovery short of hand-editing YAML.
+  //
+  // Modelled exactly on the FLASH/BUMP lease above — two independent nets,
+  // because each covers what the other cannot:
+  //   1. LEASE: a PUT carrying `ownerId` is LEASED. The panel renews it by
+  //      heartbeat; a sweep clears any group whose lease lapsed. This is the
+  //      net for hard link loss, where no close event ever fires.
+  //   2. WS-CLOSE: a /ws/control socket that announced `touchControlHello`
+  //      owns an ownerId; when that socket closes we clear its groups at once.
+  //      This is the fast path for the common tab-closed / app-quit case,
+  //      without waiting out the lease.
+  //
+  // A leased override is deliberately NOT PERSISTED: its owner is by
+  // definition gone after a restart, so it must never come back from disk.
+  //
+  // NOT A SILENT FALLBACK (codex P0): every auto-release logs loudly and
+  // broadcasts the same `groupFixedColors` message a manual DELETE does, so
+  // every surface sees it and nothing is swallowed. A PUT with no `ownerId`
+  // keeps the previous permanent, persisted behaviour byte-for-byte, so saved
+  // operator looks and every existing caller are unaffected.
+  // Lease window. 12 s by default: comfortably longer than the panel's
+  // heartbeat cadence so a healthy link never drops paint, short enough that a
+  // dead panel un-freezes the ship well inside a song. Overridable via
+  // BM26_TOUCH_PAINT_LEASE_MS (tests drive expiry without a 12 s wait; an
+  // operator can retune on site). An invalid override THROWS at startup rather
+  // than silently falling back to the default — codex P0, a wrong lease here
+  // decides how long the ship can stay frozen.
+  const TOUCH_PAINT_LEASE_MS = (() => {
+    const raw = process.env.BM26_TOUCH_PAINT_LEASE_MS;
+    if (raw === undefined || raw === '') return 12_000;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error(
+        `BM26_TOUCH_PAINT_LEASE_MS must be a positive number of milliseconds, got '${raw}'`,
+      );
+    }
+    return n;
+  })();
+  // Sweep at a fraction of the lease so expiry is detected promptly even when
+  // the lease is tuned very short (tests), without busy-polling a long one.
+  const TOUCH_PAINT_SWEEP_MS = Math.max(50, Math.min(1_000, Math.floor(TOUCH_PAINT_LEASE_MS / 4)));
+  const touchPaintLease = new Map();   // group -> { expiresAt, ownerId, priorOverride }
+  let touchPaintSweepTimer = null;
+
+  function armTouchPaintSweep() {
+    if (touchPaintSweepTimer !== null) return;
+    touchPaintSweepTimer = setInterval(sweepExpiredTouchPaint, TOUCH_PAINT_SWEEP_MS);
+    // Never hold the event loop open just for this sweep.
+    if (typeof touchPaintSweepTimer.unref === 'function') touchPaintSweepTimer.unref();
+  }
+  function disarmTouchPaintSweep() {
+    if (touchPaintSweepTimer !== null) {
+      clearInterval(touchPaintSweepTimer);
+      touchPaintSweepTimer = null;
+    }
+  }
+
+  /** Stamp/renew a leased paint on one group. */
+  function touchPaintLeaseSet(group, ownerId, priorOverride = null) {
+    const existing = touchPaintLease.get(group);
+    touchPaintLease.set(group, {
+      expiresAt: Date.now() + TOUCH_PAINT_LEASE_MS,
+      ownerId,
+      // A renewal or owner replacement keeps the ORIGINAL durable layer, not
+      // the currently-visible transient overlay. That exact layer is restored
+      // when the last lease disappears.
+      priorOverride: existing
+        ? existing.priorOverride
+        : (priorOverride ? JSON.parse(JSON.stringify(priorOverride)) : null),
+    });
+    armTouchPaintSweep();
+  }
+
+  /**
+   * Clear a set of leased groups and tell everyone. Shared by the sweep and
+   * the WS-close path so both produce identical, visible side effects.
+   * Returns the group names actually cleared.
+   */
+  function releaseTouchPaintGroups(groups, why) {
+    const cleared = [];
+    for (const group of groups) {
+      const lease = touchPaintLease.get(group);
+      touchPaintLease.delete(group);
+      if (!globalEffectsController || !lease) continue;
+      if (lease.priorOverride) {
+        globalEffectsController.setGroupFixedColor(
+          group,
+          lease.priorOverride.color,
+          lease.priorOverride.brightness,
+          lease.priorOverride.colors,
+        );
+        cleared.push(group);
+      } else if (globalEffectsController.clearGroupFixedColor(group)) {
+        cleared.push(group);
+      }
+    }
+    if (cleared.length > 0) {
+      // The durable layer was never deleted or overwritten. Releasing a lease
+      // is memory-only and restores that exact layer; there is nothing to save.
+      broadcastWs({
+        type: 'groupFixedColors',
+        overrides: globalEffectsController ? globalEffectsController.groupFixedColors : {},
+      });
+      console.log(`[touchPaint] ${why} — auto-released ${cleared.length} group(s): ${cleared.join(', ')}`);
+    }
+    if (touchPaintLease.size === 0) disarmTouchPaintSweep();
+    return cleared;
+  }
+
+  /** Periodic sweep: release any leased paint whose owner stopped renewing. */
+  function sweepExpiredTouchPaint() {
+    const now = Date.now();
+    const lapsed = [];
+    for (const [group, lease] of touchPaintLease) {
+      if (lease.expiresAt <= now) lapsed.push(group);
+    }
+    if (lapsed.length > 0) releaseTouchPaintGroups(lapsed, 'lease expired (owner stopped renewing)');
+    else if (touchPaintLease.size === 0) disarmTouchPaintSweep();
+  }
+
+  // ── REVERT TO THE AUTOMATIC SHOW ────────────────────────────────────────
+  //
+  // The one recovery path, shared by the panel deadman (a surface that stopped
+  // answering) and the crash boot policy (a run that ended uncleanly). The
+  // operator asked for exactly this: "if the system crashes the system reverts
+  // to the default automatic playlist."
+  //
+  // THIS IS A REQUESTED FALLBACK, SO IT IS LOUD. Codex P0 forbids silent
+  // fallbacks; it does not forbid a recovery the operator asked for. Every step
+  // announces itself and every failure is reported — the ship reverting by
+  // itself must never be something the operator has to infer.
+  //
+  // ORDER IS THE DESIGN. Lighting the ship comes FIRST and is never gated on
+  // anything below it: the mission rule is that the Titanic is visible at night,
+  // and a revert that threw while loading a playlist must still have left the
+  // hull lit. Every later step is individually wrapped, because
+  // timelineLoadPlaylistOnDeck and timelineSetAutopilotOnDeck both THROW ('no
+  // deck channel', 'playlist not found', 'has no loadable entries') and one
+  // failure must not abort the rest — least of all step 1.
+  const REVERT_PLAYLIST = 'default';
+  let revertInFlight = false;
+
+  function revertToAutomaticShow(why, ownerId) {
+    // Re-entrancy guard: the deadman sweep and a WS close can fire on the same
+    // tick, and running the playlist load twice would fight the deck swap.
+    if (revertInFlight) return false;
+    revertInFlight = true;
+    try {
+      // If Live is still visible, keep its private full look intact for the
+      // outgoing canonical blend. Completion releases it below.
+      const keepLiveLookForHandback = !!(
+        ownerId
+        && liveTouchSession
+        && liveTouchSession.getState().active
+        && layerStateIncludesLiveTouch()
+      );
+      if (keepLiveLookForHandback) {
+        pendingLiveTouchDeadmanOwner = ownerId;
+      } else {
+        resetLiveBrightness(ownerId || null);
+        if (ownerId && liveTouchSession && liveTouchSession.getState().active) {
+          liveTouchSession.end(ownerId);
+        }
+      }
+      preArmSourceLock = null;
+      if (ownerId && liveTouchTimelineTakeoverOwner === ownerId) {
+        liveTouchTimelineTakeoverOwner = null;
+      }
+      // DISARM ALWAYS HANDS THE RIG BACK (operator ruling 2026-08-14). A panel
+      // that stopped answering is still a disarm, so it lands in the same two
+      // states as every other one: plan enabled → the plan is running again
+      // (its catchUp lands after the sync steps below and wins, which is the
+      // point); plan disabled → the default-playlist recovery below stands and
+      // nothing resurrects the plan.
+      resumeTimelineAfterDisarm(`deadman revert (${why})`);
+    } catch (error) {
+      console.warn(`  ⚠ [revert] Live Touch brightness reset failed: ${error.message}`);
+    }
+    const step = (label, fn) => {
+      try {
+        fn();
+      } catch (e) {
+        console.warn(`  ⚠ [revert] step '${label}' FAILED: ${e && e.message ? e.message : e} ` +
+          '— continuing; the remaining steps still run.');
+      }
+    };
+    try {
+      console.warn(`  ⚠ [revert] REVERTING TO THE AUTOMATIC SHOW — ${why}` +
+        (ownerId ? ` (owner '${ownerId}')` : ''));
+
+      // 1. LIGHT THE SHIP. Blackout off, grand master up, arm envelope released.
+      //    All three, because they are three independent ways to be dark and
+      //    the panel drives all three. Modelled on forceLit() in /mixer/panic.
+      step('light', () => {
+        if (intensityController) {
+          intensityController.setBlackout(false);
+          intensityController.startArmFade(1, 0);
+          // Dimmer Rack is authoritative, including an intentional all-zero
+          // table. Live Touch brightness is transient and was reset above, so
+          // recovery never rewrites the rack behind the operator's back.
+        }
+        globalsState.blackout = false;
+        if (!(mixer.master > 0)) mixer.setMaster(1.0);
+        saveGlobals(false);
+        broadcastMixerState();
+        console.warn('  ⚠ [revert] 1/4 ship lit: blackout off, master up, dimmers checked, ' +
+          'arm envelope released');
+      });
+
+      // 2. RELEASE THE SOURCE LOCK. Mandatory: with the panel's lock still in
+      //    place the param centre rejects every autopilot/timeline/BPM write
+      //    with reason 'source_lock', so the "automatic show" could not change
+      //    colour or speed. Same broadcast the REST route emits.
+      step('source-lock', () => {
+        if (!paramCenter) return;
+        paramCenter.setSourceLock({ mode: 'open' });
+        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        console.warn('  ⚠ [revert] 2/4 param-centre source lock released (mode: open)');
+      });
+
+      step('layer-setting', () => {
+        pendingLiveTouchReleaseOwner = null;
+        const state = mixer.getLayerSettingsState();
+        const options = {
+          durationMs: 1000,
+          reason: 'deadman_revert',
+        };
+        // A Mixer -> Live entry has Deck as a third setting. Reverse to Mixer
+        // first, then queue Deck so the dead surface never lands steady Live.
+        if (state.transition
+            && state.transition.to === LAYER_SETTING_IDS.LIVE_TOUCH
+            && state.transition.from === LAYER_SETTING_IDS.MIXER) {
+          activateLayerSettingInternal(LAYER_SETTING_IDS.MIXER, options);
+          activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, options);
+        } else {
+          activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, options);
+        }
+      });
+
+      // 6. FORCE THE DEFAULT AUTOMATIC SHOW. Deliberately NOT "restore whatever
+      //    was there before" — what was there before is, by definition, a rig
+      //    that a dead panel had already switched off. The operator asked for
+      //    the default automatic playlist, so it is asserted.
+      step('playlist', () => {
+        // `timelineLoadPlaylistOnDeck` is ASYNC (it awaits the deck transition
+        // it starts), so its 'playlist not found' / 'no loadable entries'
+        // throws arrive as a REJECTION that `step`'s synchronous catch can no
+        // longer see. Unhandled, that rejection is fatal to the engine
+        // (engine.js) — which would turn a panel-deadman revert into a hard
+        // exit. Land it in the exact same warning `step` would have printed,
+        // so the remaining steps still run.
+        void timelineLoadPlaylistOnDeck(REVERT_PLAYLIST).catch((e) => {
+          console.warn(`  ⚠ [revert] step 'playlist' FAILED: ${e && e.message ? e.message : e} ` +
+            '— continuing; the remaining steps still run.');
+        });
+        console.warn(`  ⚠ [revert] 3/4 playlist '${REVERT_PLAYLIST}' loaded on the deck`);
+      });
+      step('autopilot', () => {
+        timelineSetAutopilotOnDeck({ active: true });
+        console.warn('  ⚠ [revert] 4/4 deck autopilot ACTIVE — the automatic show is running');
+      });
+
+      broadcastWs({ type: 'armRevert', why, ownerId: ownerId || null });
+      return true;
+    } catch (e) {
+      // Belt and braces: this function must NEVER throw into its callers (a
+      // sweep timer or a WS close handler), because an exception there takes
+      // the engine down and a dead engine cannot light anything.
+      console.warn(`  ⚠ [revert] unexpected failure: ${e && e.message ? e.message : e}`);
+      return false;
+    } finally {
+      revertInFlight = false;
+    }
+  }
+
+  // ── ARM LEASE (the panel deadman) ───────────────────────────────────────
+  //
+  // Arming the touch panel takes the whole rig: the params are source-locked,
+  // both autopilots are switched off, every effect is disabled and the overlay
+  // faders are pulled to zero. Before this lease, a panel that stopped
+  // answering left ALL of that in place with nobody driving — the ship frozen
+  // mid-look, and the automatic show unable to come back.
+  //
+  // LIVENESS IS MEASURED WITH WEBSOCKET PING/PONG, NOT A JS HEARTBEAT.
+  // That is the whole point. A heartbeat sent from page JavaScript stops when
+  // the browser throttles a backgrounded tab — so an operator who switches apps
+  // on the iPad for half a minute would have the show yanked out from under
+  // them. A WS ping is answered by the browser's NETWORK STACK, not by page
+  // script, so it keeps answering through throttling, backgrounding and a
+  // locked screen. Only a genuinely dead link stops the pongs.
+  const ARM_LEASE_MS = (() => {
+    const raw = process.env.BM26_ARM_LEASE_MS;
+    if (raw === undefined) return 15_000;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error(
+        `BM26_ARM_LEASE_MS must be a positive number of milliseconds, got '${raw}'`,
+      );
+    }
+    return n;
+  })();
+  // Ping well inside the lease so a single dropped pong cannot expire it.
+  const ARM_PING_MS = Math.max(500, Math.floor(ARM_LEASE_MS / 5));
+  // How long a closed control socket has to come back before the show reverts.
+  // Long enough to cover an engine restart or a wifi blip and the panel's 2 s
+  // reconnect timer; short enough that a genuinely closed tab is not left
+  // driving the rig for the full lease.
+  const ARM_CLOSE_GRACE_MS = Math.max(1000, Math.min(5000, Math.floor(ARM_LEASE_MS / 3)));
+  const armLease = new Map();   // ownerId -> { expiresAt, ws }
+  let armSweepTimer = null;
+  let pendingLiveTouchReleaseOwner = null;
+  let pendingLiveTouchDeadmanOwner = null;
+  let preArmSourceLock = null;
+  let liveTouchTimelineTakeoverOwner = null;
+  const liveTouchTimelineActivityAt = new Map();
+  let dimmerAuthorityRevision = 0;
+  let lastLayerSettingsBroadcastMs = 0;
+  // Set before the server tears its sockets down. closeNow() terminate()s every
+  // client, which fires 'close' on all of them — without this guard a clean
+  // shutdown or a scene switch would look exactly like a dead panel and revert
+  // the rig on its way out.
+  let shuttingDown = false;
+
+  function currentArmLeaseOwner() {
+    if (armLease.size === 0) return null;
+    return armLease.keys().next().value;
+  }
+
+  function currentLayerSettingTarget() {
+    return mixer.getLayerSettingsState().target;
+  }
+
+  function legacyViewFaderForLayerSetting(setting) {
+    return setting === LAYER_SETTING_IDS.MIXER ? 1 : 0;
+  }
+
+  function layerStateIncludesLiveTouch(state = mixer.getLayerSettingsState()) {
+    return state.active === LAYER_SETTING_IDS.LIVE_TOUCH ||
+      !!(state.transition &&
+        (state.transition.from === LAYER_SETTING_IDS.LIVE_TOUCH ||
+         state.transition.to === LAYER_SETTING_IDS.LIVE_TOUCH));
+  }
+
+  /**
+   * Route every internal setting change through the same transaction as the
+   * public activation API. When Live Touch is outgoing, retain its ARM lease
+   * through the blend and release it only after the landing frame.
+   */
+  function activateLayerSettingInternal(target, options) {
+    const timelineInactivityHandback = options && options.reason === 'timeline_deck_pin';
+    if (target !== LAYER_SETTING_IDS.LIVE_TOUCH && layerStateIncludesLiveTouch()
+        && !timelineInactivityHandback) {
+      pendingLiveTouchReleaseOwner = currentArmLeaseOwner();
+    }
+    return mixer.activateLayerSetting(target, options);
+  }
+
+  function buildLayerSettingsPayload() {
+    const state = mixer.getLayerSettingsState();
+    const live = mixer.getLiveTouchChannel();
+    const ownerId = currentArmLeaseOwner();
+    return {
+      type: 'layerSettings',
+      ...state,
+      liveTouch: {
+        armed: ownerId !== null,
+        ownerId,
+        ready: !!(live && live.handle),
+        pattern: live ? live.pattern : null,
+        patternTransition: mixer.getLiveTouchPatternTransitionState
+          ? mixer.getLiveTouchPatternTransitionState()
+          : null,
+        sessionRevision: liveTouchSession
+          ? liveTouchSession.getState().revision
+          : null,
+      },
+    };
+  }
+
+  function rejectMixerActivationIfUnready(res) {
+    const readiness = mixer.getMixerReadiness();
+    if (readiness.ready) return false;
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: readiness.reason,
+      code: 'MIXER_NOT_READY',
+      mixer: readiness,
+    }));
+    return true;
+  }
+
+  function broadcastLayerSettings(force = false) {
+    const nowMs = Date.now();
+    if (!force && nowMs - lastLayerSettingsBroadcastMs < 100) return;
+    lastLayerSettingsBroadcastMs = nowMs;
+    broadcastWs(buildLayerSettingsPayload());
+  }
+
+  function installLiveTouchPattern(requestedPattern, entry = null) {
+    if (mixer.isLiveTouchPatternSwapInFlight()) {
+      const error = new Error('Live Touch base transition is already in flight');
+      error.code = 'EBUSY';
+      throw error;
+    }
+    const patternName = resolvePatternName(requestedPattern);
+    const source = loadPattern(patternsDir, patternName);
+    const compiled = wasmHost.compile(source);
+    if (!compiled.ok) {
+      throw new Error(`Live Touch pattern '${patternName}' failed to compile: ${compiled.error}`);
+    }
+
+    const current = mixer.getLiveTouchChannel();
+    const oldHandle = current ? current.handle : null;
+    let channel;
+    if (current) {
+      current.handle = compiled.handle;
+      current.pattern = patternName;
+      current.mode = 'blend_screen';
+      current.fader = 1;
+      current.enabled = true;
+      current.localControls = {};
+      channel = current;
+    } else {
+      channel = mixer.setLiveTouchChannel({
+        id: 'live_touch',
+        name: 'Live Touch',
+        pattern: patternName,
+        handle: compiled.handle,
+        mode: 'blend_screen',
+        fader: 1,
+        enabled: true,
+      });
+    }
+
+    onChannelCompiled(channel, source);
+    if (entry) {
+      // Blessed playlist-entry defaults, applied AFTER code defaults and
+      // BEFORE CPC — same precedence as a deck stage (loadPlaylistEntry).
+      // Live's channel registers only with the SESSION's private param
+      // centre while a Live Touch session is active (see onChannelCompiled
+      // above / finalizeCpcValues below); applyEntryDefaults' own
+      // shared/blocked-export skip must consult that SAME centre, not the
+      // shared one, or it would fail to skip CPC-owned exports for 'live_touch'.
+      const channelParamCenter = channel.id === 'live_touch' && liveTouchSession
+        ? liveTouchSession.paramCenter
+        : paramCenter;
+      playlistManager.applyEntryDefaults(channel, entry, wasmHost, paramRouter, channelParamCenter);
+    }
+    finalizeCpcValues(channel);
+    if (liveTouchSession) liveTouchSession.notePatternStaged();
+    if (oldHandle && oldHandle !== compiled.handle) wasmHost.destroy(oldHandle);
+    broadcastLayerSettings(true);
+    return channel;
+  }
+
+  function startRetainedLiveTouchPatternTransition(requestedPattern, entry = null) {
+    if (!liveTouchSession || !liveTouchSession.getState().active) {
+      throw new Error('Live Touch retained pattern transition requires an active session');
+    }
+    const patternName = resolvePatternName(requestedPattern);
+    const source = loadPattern(patternsDir, patternName);
+    const compiled = wasmHost.compile(source);
+    if (!compiled.ok) {
+      throw new Error(`Live Touch pattern '${patternName}' failed to compile: ${compiled.error}`);
+    }
+
+    let incoming = null;
+    let localControls = null;
+    let transitionId = null;
+    try {
+      incoming = mixer.prepareLiveTouchPatternSwap({
+        newHandle: compiled.handle,
+        patternName,
+      });
+      onChannelCompiled(incoming, source);
+      if (entry) {
+        playlistManager.applyEntryDefaults(
+          incoming,
+          entry,
+          wasmHost,
+          paramRouter,
+          liveTouchSession.paramCenter,
+        );
+      }
+      finalizeCpcValues(incoming);
+      localControls = playlistManager.captureDefaults(
+        incoming,
+        wasmHost,
+        liveTouchSession.paramCenter,
+      );
+      transitionId = mixer.startLiveTouchPatternSwap({
+        onComplete: () => {
+          const live = mixer.getLiveTouchChannel();
+          liveTouchSession.paramCenter.unregisterChannel('__live_touch_swap__');
+          liveTouchSession.unregisterLiveChannel();
+          liveTouchSession.registerLiveChannel(live, { apply: false });
+          liveTouchSession.notePatternStaged();
+        },
+        onCancel: () => {
+          liveTouchSession.paramCenter.unregisterChannel('__live_touch_swap__');
+        },
+      });
+    } catch (error) {
+      if (liveTouchSession && liveTouchSession.paramCenter) {
+        liveTouchSession.paramCenter.unregisterChannel('__live_touch_swap__');
+      }
+      if (mixer.getInactiveLiveTouchChannel && mixer.getInactiveLiveTouchChannel()) {
+        mixer.cancelLiveTouchPatternSwap();
+      }
+      throw error;
+    }
+
+    return {
+      channel: mixer.getLiveTouchChannel(),
+      incoming,
+      localControls,
+      transitionId,
+      transition: mixer.getLiveTouchPatternTransitionState(),
+    };
+  }
+
+  mixer.onLayerSettingsChange = change => {
+    if (change.event === 'started' && change.state && change.state.transition
+        && change.state.transition.from === LAYER_SETTING_IDS.LIVE_TOUCH
+        && change.state.transition.to !== LAYER_SETTING_IDS.LIVE_TOUCH) {
+      mixer.cancelLiveTouchPatternSwap();
+    }
+    if (change.event === 'completed' && change.detail &&
+        change.detail.from === LAYER_SETTING_IDS.LIVE_TOUCH &&
+        change.detail.to !== LAYER_SETTING_IDS.LIVE_TOUCH) {
+      const deadmanOwner = pendingLiveTouchDeadmanOwner;
+      if (deadmanOwner) {
+        pendingLiveTouchDeadmanOwner = null;
+        try {
+          resetLiveBrightness(deadmanOwner);
+          if (liveTouchSession && liveTouchSession.getState().active) {
+            liveTouchSession.end(deadmanOwner);
+          }
+        } catch (error) {
+          console.warn(`[armLease] failed to release dead Live session '${deadmanOwner}' ` +
+            `after handback: ${error.message}`);
+        }
+      }
+      const ownerId = pendingLiveTouchReleaseOwner;
+      if (ownerId) {
+        // The surface still has owner-scoped cleanup to perform in its private
+        // Live context. Keep the lease after visual landing so those writes
+        // remain authorized. Explicit touchControlArmed:false discards the
+        // context and releases brightness + ARM atomically. Shared Deck/Mixer
+        // paint is never touched by this lifecycle.
+      }
+    }
+    broadcastLayerSettings(change.event !== 'progress');
+  };
+  mixer.onLiveTouchPatternSwapChange = change => {
+    broadcastLayerSettings(change.event !== 'progress');
+  };
+
+  function armSweepArm() {
+    if (armSweepTimer !== null) return;
+    armSweepTimer = setInterval(sweepArmLeases, ARM_PING_MS);
+    if (typeof armSweepTimer.unref === 'function') armSweepTimer.unref();
+  }
+  function armSweepDisarm() {
+    if (armSweepTimer !== null) { clearInterval(armSweepTimer); armSweepTimer = null; }
+  }
+
+  function requireLiveBrightnessController() {
+    const controller = intensityController && intensityController.liveBrightness;
+    if (!controller) throw new Error('Live Touch brightness controller is unavailable');
+    return controller;
+  }
+
+  function liveBrightnessPayload() {
+    const controller = requireLiveBrightnessController();
+    return {
+      ...serializeTouchBrightness(
+      controller,
+      modelDimmerGroups(),
+      intensityController.sectionBrightness,
+      ),
+      rackRevision: dimmerAuthorityRevision,
+    };
+  }
+
+  function broadcastLiveBrightness() {
+    broadcastWs({ type: 'touchControlBrightness', ...liveBrightnessPayload() });
+  }
+
+  function broadcastDimmerAuthority() {
+    const groups = modelDimmerGroups();
+    const rackCeilings = {};
+    for (const [name, sectionId] of Object.entries(groups)) {
+      rackCeilings[name] = intensityController.sectionBrightness[sectionId] === undefined
+        ? 1
+        : intensityController.sectionBrightness[sectionId];
+    }
+    broadcastWs({
+      type: 'dimmerState',
+      revision: dimmerAuthorityRevision,
+      rackCeilings,
+    });
+  }
+
+  function activateLiveBrightness(ownerId) {
+    const controller = requireLiveBrightnessController();
+    const state = controller.getState();
+    if (state.active && state.ownerId === ownerId) return state;
+    if (state.active) {
+      throw new Error(`Live Touch brightness is already owned by '${state.ownerId}'`);
+    }
+    const sectionIds = [...new Set(Object.values(modelDimmerGroups()))];
+    const activated = controller.activate(ownerId, sectionIds);
+    broadcastLiveBrightness();
+    return activated;
+  }
+
+  function resetLiveBrightness(ownerId = null) {
+    const controller = requireLiveBrightnessController();
+    const state = controller.getState();
+    if (!state.active) return state;
+    const reset = controller.reset(ownerId);
+    broadcastLiveBrightness();
+    return reset;
+  }
+
+  /** The panel says it is armed: start watching its socket. */
+  function armLeaseSet(ownerId, ws) {
+    const renewing = armLease.has(ownerId);
+    activateLiveBrightness(ownerId);
+    if (liveTouchSession) {
+      try {
+        liveTouchSession.begin(ownerId, paramCenter, {
+          performanceModeActive: performanceMode.active,
+        });
+      } catch (error) {
+        resetLiveBrightness(ownerId);
+        throw error;
+      }
+    }
+    if (!renewing && paramCenter) {
+      preArmSourceLock = paramCenter.getSourceLock();
+      paramCenter.setSourceLock({ mode: 'global', source: 'api' });
+      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    }
+    armLease.set(ownerId, { expiresAt: Date.now() + ARM_LEASE_MS, ws });
+    armSweepArm();
+    console.log(`[armLease] owner '${ownerId}' ARMED — watching its socket ` +
+      `(lease ${ARM_LEASE_MS} ms, ping every ${ARM_PING_MS} ms)`);
+    broadcastLayerSettings(true);
+  }
+
+  /**
+   * Clean disarm, or an explicit release. No revert — the panel handled it.
+   *
+   * `force` (TIMELINE PRIORITY, operator ruling 2026-08-14) does NOT take a
+   * different route: it runs the SAME steps in the SAME order, but the two that
+   * can throw — brightness reset and ending the owner-local Live session — are
+   * individually guarded so neither can abort the release. Without that, an
+   * owner-mismatched controller or a wedged session would leave the ARM lease
+   * and the param-centre source lock in place and the timeline could never take
+   * the rig back. A Live Touch surface must never hold the show hostage, so the
+   * lease deletion, the source-lock restore and the client notification always
+   * happen; a failed step is loud, not fatal.
+   */
+  function armLeaseClear(ownerId, why, {
+    force = false, resumePlan = true, deferSessionEnd = false,
+  } = {}) {
+    if (!armLease.has(ownerId)) return false;
+    const guarded = (label, fn) => {
+      if (!force) return fn();
+      try {
+        return fn();
+      } catch (error) {
+        console.warn(`  ⚠ [armLease] FORCED disarm of '${ownerId}': step '${label}' FAILED: ` +
+          `${error && error.message ? error.message : error} — continuing; the rest of the ` +
+          'release still runs so the timeline is never blocked.');
+        return null;
+      }
+    };
+    guarded('brightness-reset', () => resetLiveBrightness(ownerId));
+    // `deferSessionEnd` hands the owner-scoped Live session to the OUTGOING
+    // BLEND instead of ending it here: while the layer router is still
+    // rendering Live, the render participant REQUIRES a live session (engine.js
+    // asserts it and exits rather than render a Live frame with no owner). The
+    // mixer completion hook ends it on the landing frame — the exact handback
+    // the panel deadman already uses via `pendingLiveTouchDeadmanOwner`.
+    if (!deferSessionEnd) {
+      guarded('session-end', () => {
+        if (liveTouchSession) liveTouchSession.end(ownerId);
+      });
+    }
+    armLease.delete(ownerId);
+    if (armLease.size === 0 && paramCenter) {
+      paramCenter.setSourceLock(preArmSourceLock || { mode: 'open' });
+      preArmSourceLock = null;
+      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    }
+    // Whoever held the Timeline takeover on Live's behalf no longer does. The
+    // plan itself is resumed by resumeTimelineAfterDisarm below — see there.
+    if (liveTouchTimelineTakeoverOwner === ownerId) liveTouchTimelineTakeoverOwner = null;
+    liveTouchTimelineActivityAt.delete(ownerId);
+    if (pendingLiveTouchReleaseOwner === ownerId) pendingLiveTouchReleaseOwner = null;
+    if (!deferSessionEnd && pendingLiveTouchDeadmanOwner === ownerId) {
+      pendingLiveTouchDeadmanOwner = null;
+    }
+    if (armLease.size === 0) armSweepDisarm();
+    console.log(`[armLease] owner '${ownerId}' released — ${why}`);
+    broadcastLayerSettings(true);
+    if (resumePlan) resumeTimelineAfterDisarm(`disarm: ${why}`);
+    return true;
+  }
+
+  // ══ DISARM ALWAYS HANDS THE RIG BACK — OPERATOR RULING 2026-08-14 ════════
+  //
+  // "Disarming the live touch should automatically resume the plan too."
+  //
+  // ARMED → DISARMED has exactly TWO landing states and no third:
+  //   • a plan is ENABLED  → the plan is RUNNING again, immediately. No second
+  //     gesture, no RESUME button, no waiting out the operator lease.
+  //   • a plan is DISABLED → NO-PLAN IDLE. Nothing resurrects the plan (see
+  //     TimelineService.planEnabled) — the rig keeps whatever non-plan state it
+  //     has, which is exactly what the engine does when no plan is enabled.
+  // There is deliberately NO limbo where a plan is enabled but sits paused
+  // waiting for a human. Every disarm route funnels through here: clean
+  // touchControlArmed:false, touchControlRelease, socket close, the panel
+  // deadman revert, and the timeline's own force-disarm.
+  //
+  // `resumePlan:false` exists for the two callers where resuming would be
+  // wrong, not optional: evicting a stale holder so a NEW panel can arm
+  // immediately, and the force-disarm that IS already inside resume()/lease
+  // release (re-entering resume there would recurse into _catchUp).
+  function resumeTimelineAfterDisarm(why) {
+    if (armLease.size > 0) return false;   // another desk still holds the rig
+    if (!timelineService || typeof timelineService.resume !== 'function') return false;
+    // Boot-time reverts can run before the service has loaded its state; there
+    // is no plan to hand back to yet, and the boot catchUp will settle it.
+    if (!timelineService.state) return false;
+    if (typeof timelineService.planEnabled === 'function' && !timelineService.planEnabled()) {
+      console.log(`[armLease] ${why} — the show plan is DISABLED, so nothing resumes; ` +
+        'the rig stays in its ordinary no-plan state.');
+      return false;
+    }
+    console.log(`[armLease] ${why} — handing the rig back to the show plan (auto-resume).`);
+    Promise.resolve(timelineService.resume()).catch(error => {
+      console.warn(`  ⚠ [armLease] auto-resume after disarm FAILED: ${error.message}`);
+    });
+    return true;
+  }
+
+  function armLeaseRenew(ownerId, ws = null) {
+    const l = armLease.get(ownerId);
+    if (!l) return false;
+    // Only the socket currently bound to this owner may prove liveness. A
+    // replaced/stale socket must not keep a dead active connection alive.
+    if (ws && l.ws !== ws) return false;
+    l.expiresAt = Date.now() + ARM_LEASE_MS;
+    return true;
+  }
+
+  // ══ TIMELINE PRIORITY OVER LIVE TOUCH — OPERATOR RULING 2026-08-14 ═══════
+  //
+  // "The timeline resume when live touch takes over needs to disarm and switch
+  // back to timeline when resume is pressed OR when the lease is expired —
+  // EVEN IF THE ARM IS ACTIVE. The timeline is high priority."
+  //
+  // TimelineService calls this (deps.yieldLiveTouch) at the TOP of resume() and
+  // _releaseOperatorLease(), before their catchUp. Live Touch never blocks the
+  // plan: an ARM is not a veto, it is something the plan revokes.
+  //
+  // ORDERING IS DELIBERATE — CLEANUP FIRST, THEN THE VISUAL LANDING, THEN the
+  // caller's catchUp:
+  //   1. Arming takes a param-centre source lock of {mode:'global', source:
+  //      'api'} (armLeaseSet). While it is held the CPC rejects every
+  //      timeline/autopilot write with reason 'source_lock' — so a catchUp run
+  //      before the release would silently apply NOTHING. Releasing the lock is
+  //      a PRECONDITION of the takeover, not a tidy-up after it.
+  //   2. The hostage risk is removed by making the disarm unabortable
+  //      (armLeaseClear force:true) rather than by reordering: every fallible
+  //      step is individually guarded and loud, and the lease + lock release
+  //      always happen.
+  //   3. The layer lands on DECK — the mission-safe destination the deadman
+  //      revert also uses — because the plan pins Deck anyway. Live's WASM
+  //      values are left frozen (the ended session stops flushing params), so
+  //      the outgoing blend keeps the look it had instead of snapping to
+  //      defaults. If the plan happens to be DISABLED, nothing resurrects it:
+  //      the rig simply sits on Deck with whatever is loaded.
+  //
+  // Never gated on authentication (see the performance-mode takeover gate):
+  // taking over FROM the timeline may cost a passcode, coming BACK never does.
+  function forceDisarmLiveTouchForTimeline(why) {
+    const ownerId = currentArmLeaseOwner();
+    if (!ownerId) return false;
+    console.warn(`  ⚠ [armLease] TIMELINE PRIORITY — force-disarming Live Touch owner ` +
+      `'${ownerId}': ${why}. The timeline outranks an active ARM.`);
+    // While Live is still on air its render participant REQUIRES a live
+    // owner-scoped session. Hand the session to the outgoing blend (the same
+    // marker the panel deadman uses) so the completion hook ends it on the
+    // landing frame; everything else — brightness, ARM lease, source lock — is
+    // released right now, because the source lock is what the plan's catchUp
+    // is blocked on.
+    const liveOnAir = layerStateIncludesLiveTouch();
+    if (liveOnAir) pendingLiveTouchDeadmanOwner = ownerId;
+    // resumePlan:false — we are ALREADY inside resume()/_releaseOperatorLease();
+    // the caller's own catchUp is the resume. Re-entering it would recurse.
+    armLeaseClear(ownerId, `forced by the timeline (${why})`, {
+      force: true,
+      resumePlan: false,
+      deferSessionEnd: liveOnAir,
+    });
+    if (liveOnAir) {
+      activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+        durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+        reason: 'timeline_priority_disarm',
+      });
+    }
+    // Tell the Live surface WHY it just lost the desk so its UI drops out of
+    // armed mode deliberately instead of discovering it through a 409 on the
+    // next write. It must NOT re-arm on this — that is the whole point.
+    broadcastWs({
+      type: 'liveTouchForceDisarm',
+      ownerId,
+      why,
+      source: 'timeline',
+      autoRearm: false,
+    });
+    return true;
+  }
+
+  /**
+   * Treat owner-tagged Live Touch mutations as operator activity.
+   *
+   * ARM heartbeats prove only that the desk is alive; they must never keep the
+   * Timeline takeover alive. The Timeline lease is renewed solely by real
+   * control changes, matching Deck/Mixer. If inactivity already handed the rig
+   * back to the plan, the next Live mutation performs the same explicit
+   * takeover gesture and returns the isolated Live surface to air.
+   */
+  function noteLiveTouchTimelineActivity(ownerId, req) {
+    if (!ownerId || liveTouchTimelineTakeoverOwner !== ownerId) return;
+    if (pendingLiveTouchReleaseOwner === ownerId || pendingLiveTouchDeadmanOwner === ownerId) return;
+    if (!timelineService || typeof timelineService.getState !== 'function') return;
+
+    const state = timelineService.getState();
+    const leaseWindowMs = Number.isFinite(state.operatorLeaseSec)
+      ? state.operatorLeaseSec * 1000
+      : 120_000;
+    const throttleMs = Math.max(100, Math.min(10_000, Math.floor(leaseWindowMs / 3)));
+    const now = Date.now();
+    const last = liveTouchTimelineActivityAt.get(ownerId) || 0;
+    if (now - last < throttleMs) return;
+
+    if (state.planActive === true && !state.operatorLease) {
+      // PERFORMANCE-MODE PASSCODE (operator ruling 2026-08-14): this is an
+      // IMPLICIT re-takeover of a running plan — the plan already has the rig
+      // back and a Live write is asking for it again. While a show is live that
+      // still costs a fresh passcode, which a background mutation cannot
+      // supply, so it is refused and the caller is told to make an explicit
+      // takeover gesture. The throw is mapped to 409/401 by the response
+      // wrapper below; the plan keeps running either way.
+      const refusal = checkTakeoverPasscode(req, `Live Touch re-takeover by '${ownerId}'`);
+      if (refusal) {
+        const error = new Error('performance mode is live — an operator passcode is required '
+          + 'to take the rig back from the timeline');
+        error.takeoverRefusal = refusal;
+        throw error;
+      }
+      const takeover = timelineService.takeover();
+      if (!takeover || takeover.ok !== true || !takeover.operatorLease) {
+        throw new Error('Live Touch could not reacquire the Timeline operator lease');
+      }
+      const layerState = mixer.getLayerSettingsState();
+      if (!layerStateIncludesLiveTouch(layerState)) {
+        activateLayerSettingInternal(LAYER_SETTING_IDS.LIVE_TOUCH, {
+          durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+          reason: 'live_touch_operator_activity',
+        });
+      }
+    } else if (state.operatorLease) {
+      timelineService.activity();
+    }
+    liveTouchTimelineActivityAt.set(ownerId, now);
+  }
+
+  const TOUCH_CONTROL_OWNER_HEADER = 'x-touch-control-owner';
+  const TOUCH_CONTROL_EMERGENCY_PATHS = new Set([
+    '/global-blackout',
+    '/global-effect-macros/panic-stop',
+    '/mixer/panic',
+    '/shutdown',
+    // ── TIMELINE PRIORITY (operator ruling 2026-08-14) ──────────────────
+    // "The timeline is high priority." An armed Live Touch desk must NOT be
+    // able to lock the operator out of handing the rig back to the plan, or
+    // out of switching the plan off. Without these two, an armed desk 423s
+    // every untagged RESUME — i.e. Live Touch holds the show hostage through
+    // the lease gate alone, before any of the disarm logic is even reached.
+    // Taking over FROM the plan (/timeline/takeover) stays gated; only the
+    // paths that GIVE the rig back or turn the plan off are exempt.
+    '/timeline/resume',
+    '/timeline/autopilot',
+  ]);
+
+  /**
+   * Enforce the arm lease for every mutating HTTP route.
+   *
+   * The param-centre source lock only distinguishes `api` from WS/MIDI/OSC;
+   * without this gate, any unrelated HTTP client can still overwrite an armed
+   * touch desk. Tagged writes are also rejected after their lease expires, so a
+   * panel whose control socket died cannot resume mutating the reverted show.
+   * Emergency stop routes remain reachable from every surface.
+   */
+  function rejectTouchControlLeaseConflict(req, res) {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return false;
+    if (isReadOnlyTimelineBodyRequest(req.method, req.url)) return false;
+    // Timeline authority was already arbitrated by the async preemption gate.
+    // A stale Touch header must not demote it to the generic 409 path.
+    if (isTimelineAuthorityMutation(req.method, req.url)) return false;
+    if (TOUCH_CONTROL_EMERGENCY_PATHS.has(req.url)) return false;
+
+    const rawOwner = req.headers[TOUCH_CONTROL_OWNER_HEADER];
+    const claimedOwner = Array.isArray(rawOwner) ? rawOwner[0] : rawOwner;
+    // Dimmer Rack outranks the Live Touch lease and remains writable while the
+    // panel is armed. A tagged Touch write is rejected by the route itself;
+    // an untagged rack client must not be locked out by the lower authority.
+    if (req.url === '/section-brightness' && !claimedOwner) return false;
+    if (claimedOwner) {
+      if (armLease.has(claimedOwner)) {
+        return false;
+      }
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `touch-control lease '${claimedOwner}' is not active`,
+        code: 'TOUCH_CONTROL_LEASE_INACTIVE',
+      }));
+      return true;
+    }
+
+    if (armLease.size === 0) return false;
+    const heldBy = armLease.keys().next().value;
+    res.writeHead(423, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: `touch control is armed by '${heldBy}'; mutating HTTP requests require its owner header`,
+      code: 'TOUCH_CONTROL_LEASE_HELD',
+      heldBy,
+    }));
+    return true;
+  }
+
+  /**
+   * Count only successful owner mutations as Timeline activity. Buffering the
+   * small JSON response until the route has validated prevents malformed or
+   * rejected writes from reacquiring/renewing the operator lease.
+   */
+  function installLiveTouchTimelineActivityResponse(req, res) {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
+    if (isReadOnlyTimelineBodyRequest(req.method, req.url)) return;
+    if (isTimelineAuthorityMutation(req.method, req.url)) return;
+    if (TOUCH_CONTROL_EMERGENCY_PATHS.has(req.url)) return;
+    const rawOwner = req.headers[TOUCH_CONTROL_OWNER_HEADER];
+    const ownerId = Array.isArray(rawOwner) ? rawOwner[0] : rawOwner;
+    if (!ownerId || !armLease.has(ownerId)) return;
+
+    const originalWriteHead = res.writeHead.bind(res);
+    const originalEnd = res.end.bind(res);
+    let pendingHead = null;
+    res.writeHead = (statusCode, ...args) => {
+      pendingHead = { statusCode, args };
+      return res;
+    };
+    res.end = (chunk, ...args) => {
+      let statusCode = pendingHead ? pendingHead.statusCode : res.statusCode;
+      let headArgs = pendingHead ? pendingHead.args : [];
+      let body = chunk;
+      if (statusCode >= 200 && statusCode < 300) {
+        try {
+          noteLiveTouchTimelineActivity(ownerId, req);
+        } catch (error) {
+          // A performance-mode passcode refusal carries its own status/code so
+          // the client can tell "type the passcode" apart from "the takeover
+          // itself failed". Never carries credential material.
+          const refusal = error.takeoverRefusal;
+          statusCode = refusal ? refusal.status : 409;
+          headArgs = [{ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }];
+          body = JSON.stringify(refusal ? refusal.body : {
+            error: error.message,
+            code: 'TIMELINE_TAKEOVER_FAILED',
+          });
+        }
+      }
+      originalWriteHead(statusCode, ...headArgs);
+      return originalEnd(body, ...args);
+    };
+  }
+
+  /**
+   * Ping every armed socket and expire the ones that stopped answering.
+   * Runs on the same timer: ping first, then judge, so a socket always gets a
+   * fresh chance before its lease is measured.
+   */
+  function sweepArmLeases() {
+    if (shuttingDown) return;
+    const now = Date.now();
+    for (const [ownerId, lease] of [...armLease]) {
+      const ws = lease.ws;
+      if (ws && ws.readyState === 1) {
+        try { ws.ping(); } catch { /* a failed ping just means no pong; the lease decides */ }
+      }
+      if (lease.expiresAt <= now) {
+        armLease.delete(ownerId);
+        if (armLease.size === 0) armSweepDisarm();
+        revertToAutomaticShow(
+          `the armed panel stopped answering for ${ARM_LEASE_MS} ms (tab closed, wifi drop, ` +
+          'device asleep, or power loss)', ownerId);
+      }
+    }
+    if (armLease.size === 0) armSweepDisarm();
+  }
+
+  /** Release every leased group held by one owner (WS close / explicit end). */
+  function releaseTouchPaintForOwner(ownerId, why) {
+    if (!ownerId) return [];
+    const mine = [];
+    for (const [group, lease] of touchPaintLease) {
+      if (lease.ownerId === ownerId) mine.push(group);
+    }
+    if (mine.length === 0) return [];
+    return releaseTouchPaintGroups(mine, why);
+  }
+
+  /** Renew every lease held by an owner. Returns how many were renewed. */
+  function renewTouchPaintForOwner(ownerId) {
+    if (!ownerId) return 0;
+    const now = Date.now();
+    let n = 0;
+    for (const [, lease] of touchPaintLease) {
+      if (lease.ownerId === ownerId) { lease.expiresAt = now + TOUCH_PAINT_LEASE_MS; n++; }
+    }
+    return n;
+  }
+
   function broadcastViewOverride() {
     broadcastWs({
       type: 'viewOverride',
@@ -3836,7 +5942,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
         ? CONTROL_LOCK_LEASE_MS
         : null,
-      currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+      currentView: currentLayerSettingTarget(),
       savedView: savedTargetViewFader === null
         ? null
         : (savedTargetViewFader < 0.5 ? 'deck' : 'mixer'),
@@ -3894,10 +6000,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     async () => {
       const baseCh = mixer.getDeckChannel();
       if (!baseCh || !baseCh.playlist || !baseCh.playlist.name) return;
+      // I3 (report _116 / _112): the entry this beat attempts, hoisted so the
+      // catch can mark it broken if the compile fails — otherwise the sequential
+      // picker re-selects the same broken entry every beat and the deck wedges.
+      let attemptedEntryId = null;
+      const daemonPlName = baseCh.playlist.name;
       try {
-        const pl = playlistManager.load(baseCh.playlist.name);
+        const pl = playlistManager.load(daemonPlName);
         if (!pl || pl.entries.length === 0) return;
-        const usable = pl.entries.filter(e => !e._missing);
+        annotateBrokenEntries(pl, daemonPlName); // skip entries already known-broken
+        const usable = pl.entries.filter(e => !e._missing && !e._broken);
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
@@ -3914,6 +6026,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const nextEntry = activeAutopilotProfile.pickNextEntry(
           pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
+        attemptedEntryId = nextEntry.id;
         // Route through the deck-transition path: if the operator has
         // enabled transitions, the load runs as a smooth double-buffer
         // swap; otherwise it falls back to the instant load that
@@ -3939,6 +6052,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn('[Autopilot] tick skipped: swap already in flight');
         } else {
           console.warn('Autopilot playlist swap failed:', e.message);
+          // I3: a deterministic (compile/missing) failure marks the entry broken
+          // so the sequential picker SKIPS it next beat instead of wedging the
+          // deck on it forever (the live ChatGPT-authoring failure mode).
+          if (attemptedEntryId && isDeterministicLoadFailure(e)) {
+            markAutoEntryBroken(daemonPlName, attemptedEntryId, e.message);
+          }
         }
       }
     },
@@ -4019,13 +6138,206 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // an unknown id (codex P0 — no silent skip). Shared by the engine ColorAutopilot
   // daemon AND the timeline's setColorAutopilot dep, so a cue and a manual deck
   // write resolve palettes identically.
-  function resolveColorPaletteParams(id) {
+  // OPERATOR-SAVED colour-pair gallery (docs/53 §4). Scene-owned so every iPad
+  // sees the same list; capped so the gallery stays a gallery and the state
+  // file stays small. A malformed persisted entry is DROPPED on read with a
+  // loud warn (the file is hand-editable and a half-written pair must not be
+  // able to paint a wrong colour), while the WRITE path refuses it outright.
+  const COLOR_PAIRS_MAX = 24;
+  // _242: an entry grew from a bare {c1,c2} hue pair into a PRESET PALETTE.
+  // `c1`/`c2` stay REQUIRED and unchanged — that is what makes a v1 file a
+  // valid v2 file with no migration step — and everything added is optional:
+  //   name          operator's label (absent == unnamed; '' is never stored)
+  //   ring + sel    the five staged TURNS colours and which two feed A/B
+  //   scheme + base the latched generator, so a recall restores the latch
+  // `ring`/`sel` are all-or-nothing, as are `scheme`/`base`, and `scheme`
+  // requires a `ring`. The client half of this contract (and the same rules,
+  // stated as one validator) lives in
+  // CaptainPad/components/deck/colors_window_logic.ts → `presetExtras`.
+  const COLOR_PRESETS_SCHEMA_VERSION = 2;
+  const COLOR_PRESET_NAME_MAX = 24;
+  // Mirrors TURNS_SLOT_COUNT on the client. A ring is at least a pair and at
+  // most the five slots the COLORS window stages; anything else is a shape
+  // neither surface can render, so it is refused rather than stored.
+  const COLOR_PRESET_RING_MIN = 2;
+  const COLOR_PRESET_RING_MAX = 5;
+  const COLOR_PRESET_SCHEMES = [
+    'master', 'hue', 'complement', 'contrast',
+    'analogous', 'triadic', 'split', 'tetrad', 'golden',
+  ];
+
+  const isUnit = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+
+  /**
+   * Validate one preset, THROWING on anything malformed. Used by the POST path
+   * directly (→ 400) and by the read path inside a try (→ drop with a warn, so
+   * one hand-edited row cannot take the whole gallery down).
+   */
+  function validateColorPreset(p, where) {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) {
+      throw new Error(`${where} must be an object { c1, c2, ... }`);
+    }
+    for (const k of ['c1', 'c2']) {
+      if (!isUnit(p[k])) {
+        throw new Error(`${where}.${k} must be a hue number in [0,1], got ${JSON.stringify(p[k])}`);
+      }
+    }
+    const out = { c1: p.c1, c2: p.c2 };
+    if (p.name !== undefined) {
+      if (typeof p.name !== 'string') {
+        throw new Error(`${where}.name must be a string, got ${JSON.stringify(p.name)}`);
+      }
+      const trimmed = p.name.trim();
+      if (trimmed.length > COLOR_PRESET_NAME_MAX) {
+        throw new Error(`${where}.name is ${trimmed.length} characters, the limit is ${COLOR_PRESET_NAME_MAX}`);
+      }
+      // Absence is the ONE encoding of "unnamed" — never store an empty string.
+      if (trimmed) out.name = trimmed;
+    }
+    const hasRing = p.ring !== undefined;
+    const hasSel = p.sel !== undefined;
+    if (hasRing !== hasSel) {
+      throw new Error(`${where}: 'ring' and 'sel' must be present together`);
+    }
+    if (hasRing) {
+      if (!Array.isArray(p.ring) || p.ring.length < COLOR_PRESET_RING_MIN || p.ring.length > COLOR_PRESET_RING_MAX) {
+        throw new Error(`${where}.ring must be an array of ${COLOR_PRESET_RING_MIN}..${COLOR_PRESET_RING_MAX} {h,s,v} colours, got ${Array.isArray(p.ring) ? p.ring.length : typeof p.ring}`);
+      }
+      out.ring = p.ring.map((c, i) => {
+        if (!c || typeof c !== 'object' || Array.isArray(c) || !isUnit(c.h) || !isUnit(c.s) || !isUnit(c.v)) {
+          throw new Error(`${where}.ring[${i}] must be {h,s,v} with every channel in [0,1], got ${JSON.stringify(c)}`);
+        }
+        return { h: c.h, s: c.s, v: c.v };
+      });
+      if (!Array.isArray(p.sel) || p.sel.length !== 2) {
+        throw new Error(`${where}.sel must be a two-element array of ring indices`);
+      }
+      out.sel = p.sel.map((i, k) => {
+        if (!Number.isInteger(i) || i < 0 || i >= out.ring.length) {
+          throw new Error(`${where}.sel[${k}] must be an integer index into a ring of ${out.ring.length}, got ${JSON.stringify(i)}`);
+        }
+        return i;
+      });
+      if (out.sel[0] === out.sel[1]) {
+        throw new Error(`${where}.sel picks slot ${out.sel[0]} for BOTH channels — A and B would be the same colour`);
+      }
+    }
+    const hasScheme = p.scheme !== undefined;
+    const hasBase = p.base !== undefined;
+    if (hasScheme !== hasBase) {
+      throw new Error(`${where}: 'scheme' and 'base' must be present together`);
+    }
+    if (hasScheme) {
+      if (!hasRing) throw new Error(`${where}: 'scheme' requires a 'ring'`);
+      if (!COLOR_PRESET_SCHEMES.includes(p.scheme)) {
+        throw new Error(`${where}.scheme must be one of ${COLOR_PRESET_SCHEMES.join(', ')}, got ${JSON.stringify(p.scheme)}`);
+      }
+      if (!isUnit(p.base)) {
+        throw new Error(`${where}.base must be a hue in [0,1], got ${JSON.stringify(p.base)}`);
+      }
+      out.scheme = p.scheme;
+      out.base = p.base;
+    }
+    return out;
+  }
+
+  function readColorPairs() {
+    const raw = stateManager.load('color_pairs_state.yaml', { pairs: [] });
+    // A schemaVersion from the FUTURE is not a malformed row we can skip — the
+    // file may carry fields whose meaning this build does not know, and serving
+    // it as if it did would put colours on the rig nobody chose. Fail loudly
+    // (codex P0); the GET turns this into a 500 the gallery displays.
+    if (raw && raw.schemaVersion !== undefined) {
+      if (!Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 1) {
+        throw new Error(`color_pairs_state.yaml: schemaVersion must be a positive integer, got ${JSON.stringify(raw.schemaVersion)}`);
+      }
+      if (raw.schemaVersion > COLOR_PRESETS_SCHEMA_VERSION) {
+        throw new Error(`color_pairs_state.yaml is schemaVersion ${raw.schemaVersion}; this engine understands up to ${COLOR_PRESETS_SCHEMA_VERSION}`);
+      }
+    }
+    const list = raw && Array.isArray(raw.pairs) ? raw.pairs : [];
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      try {
+        out.push(validateColorPreset(list[i], `pairs[${i}]`));
+      } catch (e) {
+        // The file is hand-editable, so ONE bad row must not blank the gallery
+        // — but it never passes silently either.
+        console.warn('[ColorPairs] dropping malformed saved palette:', e.message);
+      }
+    }
+    return out.slice(0, COLOR_PAIRS_MAX);
+  }
+
+  // Scene-owned visibility choices for the operator palette menu. Curated
+  // palettes still remain in config.yaml for Timeline/special-event lookups;
+  // this list only removes unwanted entries from CaptainPad's human-facing
+  // chooser. Starred house palettes are protected and can never be hidden.
+  function validateHiddenColorPaletteIds(value, where) {
+    if (!Array.isArray(value)) {
+      throw new Error(`${where} must be an array of curated palette ids`);
+    }
     const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
-    const entry = palettes.find((p) => p && p.id === id);
-    if (!entry) throw new Error(`palette "${id}" not found in colorPalettes config`);
+    const byId = new Map(palettes.filter(Boolean).map((p) => [p.id, p]));
+    const out = [];
+    const seen = new Set();
+    for (let i = 0; i < value.length; i++) {
+      const id = value[i];
+      if (typeof id !== 'string' || id.trim() === '') {
+        throw new Error(`${where}[${i}] must be a non-empty string`);
+      }
+      const palette = byId.get(id);
+      if (!palette) throw new Error(`${where}[${i}] references unknown palette "${id}"`);
+      if (String(palette.name || '').includes('\u2605')) {
+        throw new Error(`palette "${id}" is starred and cannot be removed from the operator menu`);
+      }
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    return out;
+  }
+
+  function readColorPaletteVisibility() {
+    const raw = stateManager.load('color_palette_visibility_state.yaml', { hiddenPaletteIds: [] });
+    const ids = raw && raw.hiddenPaletteIds !== undefined ? raw.hiddenPaletteIds : [];
+    return validateHiddenColorPaletteIds(ids, 'color_palette_visibility_state.yaml.hiddenPaletteIds');
+  }
+
+  // E1 (docs/53 §5.3): an entry is EITHER a library id OR an INLINE {c1,c2} hue
+  // pair posted by the COLORS window's PALETTE TURNS (five ad-hoc colours, no
+  // library id). Both forms produce the SAME params shape, so the crossfade
+  // tween, seedCurrentParams and the timeline path need no branch of their own.
+  // An inline pair is still validated loudly here (ColorAutopilot.validate is
+  // the front door, but the timeline/look paths reach this resolver too).
+  // D2 (docs/55 §1): a channel is EITHER a hue number (→ {h,s,v} with s=v=1,
+  // the historical wire, byte-unchanged) OR a full {h,s,v} object, copied
+  // verbatim. Validation is the daemon's own `validatePaletteChannel` so the
+  // two front doors cannot disagree about what a legal pair is.
+  function resolvedChannel(value, label) {
+    const c = validatePaletteChannel(value, label);
+    return typeof c === 'number' ? { h: c, s: 1, v: 1 } : { h: c.h, s: c.s, v: c.v };
+  }
+  function resolveColorPaletteParams(entry, livePalette) {
+    if (Array.isArray(livePalette) && livePalette.length === 5) {
+      return {
+        colorPalette1: resolvedChannel(livePalette[0], 'livePalettes[][0]'),
+        colorPalette2: resolvedChannel(livePalette[1], 'livePalettes[][1]'),
+      };
+    }
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      return {
+        colorPalette1: resolvedChannel(entry.c1, 'inline palette c1'),
+        colorPalette2: resolvedChannel(entry.c2, 'inline palette c2'),
+      };
+    }
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    const found = palettes.find((p) => p && p.id === entry);
+    if (!found) throw new Error(`palette "${entry}" not found in colorPalettes config`);
     return {
-      colorPalette1: { h: entry.c1, s: 1, v: 1 },
-      colorPalette2: { h: entry.c2, s: 1, v: 1 },
+      colorPalette1: { h: found.c1, s: 1, v: 1 },
+      colorPalette2: { h: found.c2, s: 1, v: 1 },
     };
   }
   function knownPaletteIds() {
@@ -4046,13 +6358,51 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // onSchedule hook cover every config change).
   function writeColorPaletteParams(params) {
     if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
-    for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
+    for (const k in params) paramCenter.setColorAutopilotFrame(k, params[k]);
+    // docs/70 §4.2 W3 fan-out (recon option A): an ARMED Live Touch session
+    // renders from its OWN private ParamCenter, and ARM source-locks the
+    // SHARED one above to 'api' for the whole armed session — so every
+    // 'colorAutopilot' write just above is silently swallowed by the shared
+    // CPC's source lock while the daemon keeps broadcasting, and Live never
+    // sees the deck's colour. One daemon, one config, two destinations: also
+    // write the SAME params into the session's private centre, which carries
+    // no source lock of its own (the lock lives on `paramCenter`, never on
+    // `liveTouchSession.paramCenter`) — the shared write and its lock
+    // semantics above are untouched.
+    //
+    // `liveTouchSession.paramCenter` is read FRESH every call, never cached:
+    // arm/disarm and prepare/commit REBUILD it
+    // (live_touch_session_context.js `_replaceTransientState`/
+    // `commitPreparedReplacement`), so a captured reference would go stale
+    // and write into a dead, unrendered object.
+    if (liveTouchSession && liveTouchSession.getState().active) {
+      const livePc = liveTouchSession.paramCenter;
+      for (const k in params) {
+        const result = livePc.setColorAutopilotFrame(k, params[k]);
+        // This private centre carries no source lock, so a refusal here is a
+        // real bug, not the expected shared-CPC behaviour above — codex P0
+        // says surface it, not swallow it. But this runs per tween frame
+        // (~25 fps) off a fire-and-forget caller (ColorAutopilot's own
+        // scheduler/tween loop) with no error path back to an operator
+        // surface, and a throw out of exactly this kind of caller has taken
+        // the live engine down before (report _253, unhandledRejection).
+        // So: warn loudly and keep rendering, never throw out of this
+        // function.
+        if (result.status !== 'ok') {
+          console.warn(
+            `[colorAutopilot] Live Touch fan-out write REFUSED for '${k}': ` +
+              `reason='${result.reason}' — the private session centre should ` +
+              'never lock out the daemon; investigate.',
+          );
+        }
+      }
+    }
   }
   // HARD-CUT palette apply (one write per cycle tick, never per frame):
   // surface the change the same way an operator palette write would — persist +
   // broadcast so every UI mirrors the live palette without polling.
-  function applyColorPalette(id) {
-    writeColorPaletteParams(resolveColorPaletteParams(id));
+  function applyColorPalette(id, livePalette) {
+    writeColorPaletteParams(resolveColorPaletteParams(id, livePalette));
     saveAllState();
     broadcastColorAutopilot();
   }
@@ -4065,29 +6415,87 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
     resolvePaletteFn: resolveColorPaletteParams,
     applyParamsFn: writeColorPaletteParams,
+    onTransition: (transitionState) => {
+      if (!transitionState) return;
+      broadcastWs({ type: 'colorAutopilot', ...colorAutopilotState(), colorTransition: transitionState });
+    },
+    resolveTransitionScopeFn: () => 'live-five',
     // Re-broadcast the next-swap time on every (re)schedule so the deck
     // color-autopilot countdown stays accurate after each palette switch.
     onSchedule: () => broadcastColorAutopilot(),
+    // The card's state line reads the note off the broadcast, so a committed
+    // note change has to re-broadcast or the letter lags by up to a whole
+    // method hold. Fires on CHANGE only — the hop-rate republishes never reach
+    // this hook.
+    onNoteChange: () => broadcastColorAutopilot(),
+    // FOLLOW NOTE (docs/59 §4.2): the note loop lives INSIDE the daemon and
+    // reads the note straight off the CPC — the same `audioNote`/`audioNoteHue`
+    // keys the audio companion publishes at 10 Hz and
+    // `autopilot_profiles/audio_reactive_profile.js` already consumes. A
+    // SUBSCRIPTION, not a poll: no third clock in the engine, and zero work
+    // while the note holds.
+    getSignalFn: (k) => (paramCenter ? paramCenter.get(k) : undefined),
+    subscribeSignalsFn: (fn) => paramCenter.subscribe(fn),
   });
 
   // Single payload shape for every colorAutopilot writer (REST, timeline cue),
   // mirroring broadcastAutopilot. CaptainPad's deck tab wires
   // `if (msg.type === 'colorAutopilot') …`.
+  //
+  // MODE-SCOPED (docs/59 §4.1): the payload carries exactly ONE mode's fields,
+  // because the daemon can only be running one and a payload that showed both
+  // would let the card render a rotation nobody armed. `mode` is ALWAYS present
+  // — a client should decide what is running from the discriminator, not by
+  // sniffing palette shapes.
   function colorAutopilotState() {
     const st = colorAutopilot.state;
-    return {
+    const mode = st.mode === 'followNote' ? 'followNote' : 'palettes';
+    const base = {
       active: !!st.active,
+      mode,
+      // Wall-clock ms of the next transition (null when inactive) — drives both
+      // the deck's "next color in M:SS" countdown and the follow-note card's
+      // method countdown. Kept fresh each cycle via the daemon's onSchedule hook.
+      nextSwapAtMs: colorAutopilot.nextSwapAtMs,
+    };
+    if (mode === 'followNote') {
+      return {
+        ...base,
+        followNote: {
+          ...st.followNote,
+          schemes: [...st.followNote.schemes],
+          sel: [...st.followNote.sel],
+        },
+        // RUNTIME FACTS the card renders its state line from — derived here and
+        // never re-derived on the client, so "NOTE IS DRIVING — E · TRIADIC"
+        // is a report of the rig rather than a client guess about it.
+        currentScheme: colorAutopilot.currentScheme,
+        notePc: colorAutopilot.notePc,
+        noteHue: colorAutopilot.noteHue,
+        nextMethodAtMs: colorAutopilot.nextMethodAtMs,
+      };
+    }
+    const out = {
+      ...base,
       palettes: Array.isArray(st.palettes) ? [...st.palettes] : [],
       delay_s: typeof st.delay_s === 'number' ? st.delay_s : 30,
       shuffle: !!st.shuffle,
-      // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
-      // hard cut. Older persisted configs omit it → report 0.
-      transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
-      // Wall-clock ms of the next palette switch (null when inactive) — drives
-      // the deck's "next color in M:SS" countdown. Kept fresh each cycle via the
-      // daemon's onSchedule hook.
-      nextSwapAtMs: colorAutopilot.nextSwapAtMs,
+    // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
+    // hard cut. Older persisted configs omit it → report 0.
+    transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
     };
+    if (Array.isArray(st.livePalettes)) {
+      out.livePalettes = st.livePalettes.map(
+        palette => palette.map(channel => ({ ...channel })),
+      );
+    }
+    const transition = colorAutopilot.transition;
+    if (transition) out.colorTransition = transition;
+    // The INERT follow-note block rides along so the card can show (and a mode
+    // toggle can restore) the operator's cycle tuning. Nothing reads it to
+    // decide anything while the mode is palettes.
+    if (st.followNote !== undefined) out.followNote = { ...st.followNote };
+    return out;
   }
   function broadcastColorAutopilot() {
     broadcastWs({ type: 'colorAutopilot', ...colorAutopilotState() });
@@ -4097,6 +6505,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // start cycling that set; active:false → stop (the daemon pauses on inactive).
   function setColorAutopilot(wire) {
     const validated = ColorAutopilot.validate(wire, knownPaletteIds());
+    // SEED THE FADE START from the LIVE rig on every activation (docs/55 §3.2
+    // item 6). Without this the FIRST transition of a deck-started rotation has
+    // no `from` and hard-CUTS to palette[0] before the cadence ever fades —
+    // visible as a snap the operator did not ask for. Deliberately WITHOUT
+    // triggerNext(), because the manual REST toggle keeps its wait-then-cycle
+    // cadence (the immediate first apply is a timeline-cue behaviour, not a
+    // deck one).
+    //
+    // ORDER (docs/59): the seed now runs BEFORE setState, not after. FOLLOW
+    // NOTE puts its first ring on the rig DURING setState (a start must not
+    // leave the card claiming "NOTE IS DRIVING" for a 60 s method hold while
+    // nothing is), so a seed that landed afterwards would arrive too late and
+    // that first slew would snap. Nothing in setState touches `_currentParams`,
+    // so the palettes path is byte-identical either way.
+    if (validated.active && paramCenter) {
+      seedColorAutopilotFromActiveSurface(colorAutopilot, paramCenter, liveTouchSession);
+    }
     colorAutopilot.setState(validated);
     broadcastColorAutopilot();
     return colorAutopilotState();
@@ -4114,10 +6539,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   function timelineSetColorAutopilot(wire) {
     const out = setColorAutopilot(wire);
     if (wire && wire.active && paramCenter) {
-      colorAutopilot.seedCurrentParams({
-        colorPalette1: paramCenter.get('colorPalette1'),
-        colorPalette2: paramCenter.get('colorPalette2'),
-      });
+      seedColorAutopilotFromActiveSurface(colorAutopilot, paramCenter, liveTouchSession);
       // Fire-and-forget: the crossfade tween schedules its own frames. A throw
       // here (e.g. unknown palette) can't happen — the ids were validated above.
       colorAutopilot.triggerNext();
@@ -4205,7 +6627,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
     broadcastMixerState();
   }
-  function timelineLoadPlaylistOnDeck(name) {
+  async function timelineLoadPlaylistOnDeck(name, entryId = null) {
     const baseCh = mixer.getDeckChannel();
     if (!baseCh) throw new Error('no deck channel');
     const pl = playlistManager.load(name);
@@ -4214,7 +6636,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // whose entries are ALL missing pattern files must FAIL LOUD (codex P0) — the
     // deck must never silently load a broken `_missing` entry. The timeline's
     // per-cue try/catch surfaces this as a loud cueError.
-    const firstEntry = pl.entries.find(e => !e._missing);
+    const firstEntry = entryId
+      ? pl.entries.find(e => e.id === entryId)
+      : pl.entries.find(e => !e._missing);
+    if (entryId && !firstEntry) {
+      throw new Error(`entry "${entryId}" not found in playlist "${name}"`);
+    }
+    if (entryId && firstEntry._missing) {
+      throw new Error(`entry "${entryId}" in playlist "${name}" references missing pattern "${firstEntry.pattern}"`);
+    }
     if (!firstEntry) {
       if (pl.entries.length > 0) {
         throw new Error(`playlist "${name}" has no loadable entries`);
@@ -4237,27 +6667,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // itself falls back to the exact instant load + save/broadcast this used to
     // do — byte-for-byte identical.
     //
-    // CONCURRENCY: only ONE deck swap can animate at a time (the mixer refuses an
-    // overlapping one with EBUSY). A cue apply can land on the deck while a prior
-    // swap is still fading — most notably on BOOT, where catchUp restores a cue
-    // (animated) and the autopilot baseline loads its playlist immediately after.
-    // A second animated swap can't start, so LAND THE TARGET INSTANTLY in that
-    // window — the SAME guaranteed-load behavior this path always had before
-    // transitions were added (the cue content must never be dropped). This is a
-    // concurrency decision, not error-hiding: we animate when we can, else load
-    // now. The returned `done` promise is intentionally NOT awaited: the fade
-    // runs in the background (mixer-driven), same as an operator's manual swap.
+    // CONCURRENCY: Timeline is deterministic and serialized. If a prior Deck
+    // swap is active, await its authoritative completion before starting this
+    // cue, then await this cue's own transition. Manual taps retain their 409
+    // EBUSY contract; Timeline never substitutes a hard cut for an overlap.
+    //
+    // Both awaits go through `settleDeckTransition`: a CANCELLED transition
+    // (ECANCELED) is a supersession, not a load failure, and must not reject
+    // out of this function — see the helper's note next to
+    // `deckSwapInFlightReason`.
     if (deckSwapInFlightReason()) {
-      loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
-      saveAllState();
-      opts.pattern = baseCh.pattern;
-      broadcastWs({ type: 'pattern', name: baseCh.pattern });
-      broadcastMixerState();
-    } else {
-      loadPlaylistEntryWithTransition(baseCh, pl.name, firstEntry.id, deckTransitionConfig);
+      await settleDeckTransition(activeDeckSwapDone);
+    }
+    const result = loadPlaylistEntryWithTransition(
+      baseCh, pl.name, firstEntry.id, deckTransitionConfig,
+    );
+    if (result.done) {
+      await settleDeckTransition(result.done);
     }
   }
-  function timelineLoadPlaylistOnMixer(id, name) {
+  function timelineLoadPlaylistOnMixer(id, name, entryId = null) {
     const ch = mixer.getMixerChannel(id);
     if (!ch) throw new Error(`mixer channel not found: ${id}`);
     const pl = playlistManager.load(name);
@@ -4265,7 +6694,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // Same fail-loud contract as the deck loader: never silently load a broken
     // `_missing` entry. An all-missing playlist throws; a truly empty one is the
     // legitimate "nothing loaded" state.
-    const firstEntry = pl.entries.find(e => !e._missing);
+    const firstEntry = entryId
+      ? pl.entries.find(e => e.id === entryId)
+      : pl.entries.find(e => !e._missing);
+    if (entryId && !firstEntry) {
+      throw new Error(`entry "${entryId}" not found in playlist "${name}"`);
+    }
+    if (entryId && firstEntry._missing) {
+      throw new Error(`entry "${entryId}" in playlist "${name}" references missing pattern "${firstEntry.pattern}"`);
+    }
     if (!firstEntry) {
       if (pl.entries.length > 0) {
         throw new Error(`playlist "${name}" has no loadable entries`);
@@ -4287,19 +6724,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // but we re-assert the trans_* shape here too — FAIL LOUD, never coerce.
   function timelineSetDeckTransition(patch) {
     if (!patch || typeof patch !== 'object') throw new Error('setDeckTransition: patch must be an object');
-    if (patch.enabled !== undefined) deckTransitionConfig.enabled = !!patch.enabled;
-    if (patch.shuffle !== undefined) deckTransitionConfig.shuffle = !!patch.shuffle;
+    const nextConfig = { ...deckTransitionConfig };
+    if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') {
+      throw new Error('setDeckTransition: enabled must be a boolean');
+    }
+    if (patch.shuffle !== undefined && typeof patch.shuffle !== 'boolean') {
+      throw new Error('setDeckTransition: shuffle must be a boolean');
+    }
+    if (patch.enabled !== undefined) nextConfig.enabled = patch.enabled;
+    if (patch.shuffle !== undefined) nextConfig.shuffle = patch.shuffle;
     if (patch.mode !== undefined) {
-      if (typeof patch.mode !== 'string' || !patch.mode.startsWith('trans_')) {
-        throw new Error(`setDeckTransition: mode must be a trans_* name, got '${patch.mode}'`);
+      if (!isDeckTransitionMode(patch.mode)) {
+        throw new Error(`setDeckTransition: mode is not executable: '${patch.mode}'`);
       }
-      deckTransitionConfig.mode = patch.mode;
+      nextConfig.mode = patch.mode;
     }
     if (patch.durationMs !== undefined) {
       const n = Number(patch.durationMs);
       if (!Number.isFinite(n)) throw new Error(`setDeckTransition: durationMs must be finite, got '${patch.durationMs}'`);
-      deckTransitionConfig.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
+      nextConfig.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
     }
+    Object.assign(deckTransitionConfig, nextConfig);
     saveAllState();
     broadcastWs({ type: 'deckTransitionConfig', ...deckTransitionConfig });
   }
@@ -4335,13 +6780,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // live fader on the mixer while the pin is a plan soft-lock, snap it to
       // the deck so the locked output is the lit deck, never a black mixer
       // (bug 2026-07-02 round 2). Never touch a PortWatch-owned pin's fader.
-      if (controlLockSource === 'plan' && mixer.targetViewFader !== 0.0) {
-        mixer.targetViewFader = 0.0;
+      if (controlLockSource === 'plan' &&
+          currentLayerSettingTarget() !== LAYER_SETTING_IDS.DECK) {
+        activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+          durationMs: 1000,
+          reason: 'timeline_deck_pin',
+        });
       }
       return;
     }
-    savedTargetViewFader = mixer.targetViewFader;
-    mixer.targetViewFader = 0.0;
+    savedTargetViewFader = legacyViewFaderForLayerSetting(currentLayerSettingTarget());
+    activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+      durationMs: 1000,
+      reason: 'timeline_deck_pin',
+    });
     viewOverrideMode = 'deck';
     // SOFT lock: source 'plan'. We do NOT arm the PortWatch lease here — the
     // plan releases the pin itself via the timeline (resume/handback).
@@ -4381,36 +6833,52 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const timelineMoodKey = timelineMoodCfg.key || 'audioParty';
   const timelinePartyThreshold = typeof timelineMoodCfg.partyThreshold === 'number'
     ? timelineMoodCfg.partyThreshold : 0.5;
+  // STALENESS BUDGET for the mood key (report 20260725_10 build item 5). The
+  // companion is a separate process; if it dies the CPC key FREEZES at its last
+  // value, and a frozen 1 would pin the rig in party mode forever. MoodSource
+  // watches the key's write revision and forces CALM when it stops moving —
+  // loudly, and visibly on GET /timeline/state. See lib/timeline/mood_source.js.
+  const timelineMoodStaleSec = typeof timelineMoodCfg.staleSec === 'number'
+    ? timelineMoodCfg.staleSec : 10;
+
+  // Built once, before the service, so getMood() closes over a stable instance
+  // (its stale/fresh edge state must survive across ticks). Null when there is
+  // no CPC at all — then the timeline reads permanent CALM, which is correct.
+  const moodSource = paramCenter
+    ? new MoodSource({
+      paramCenter,
+      key: timelineMoodKey,
+      partyThreshold: timelinePartyThreshold,
+      staleSec: timelineMoodStaleSec,
+    })
+    : null;
 
   let timelineService = null;
   if (timelineEnabled) {
     const sceneName = opts.modelName || 'default';
-    const timelineSceneDir = path.join(
-      patternsDir, '..', '..', 'simulation', 'scenes', sceneName, 'timeline',
-    );
+    // Resolved through state_paths so MARSIN_TIMELINE_DIR can redirect the
+    // SHOW PLAN library into a throwaway dir — the timeline e2e suite spawns
+    // real engines that create/save/activate plans, and those writes must
+    // never land in the operator's tracked `simulation/scenes/**` tree.
+    const timelineSceneDir = resolveTimelineDir(path.join(patternsDir, '..'), sceneName);
     timelineService = new TimelineService({
       scene: sceneName,
       sceneDir: timelineSceneDir,
       stateDir,
       getMood: () => {
-        // Read the mood key DIRECTLY off the CPC (docs/38 §15). The audio
-        // companion populates audioParty; default CALM (0) when unknown so a
-        // mood cue never spuriously fires before the first analyser frame.
-        let value = 0;
-        try {
-          if (paramCenter) {
-            const v = paramCenter.get(timelineMoodKey);
-            value = typeof v === 'number' ? v : (v && typeof v.value === 'number' ? v.value : 0);
-          }
-        } catch (_) {
-          value = 0; // key not registered yet → calm
-        }
-        return { party: value >= timelinePartyThreshold ? 1 : 0, value };
+        // Read the mood key off the CPC through the STALENESS GUARD (docs/38
+        // §15 + report 20260725_10). The companion publishes `audioPartyStrong`
+        // at 5 Hz; MoodSource trusts it only while it is being republished, and
+        // forces CALM (→ the ambient default cue) the moment it freezes —
+        // logging loud and exposing `moodStale` on the timeline state so the
+        // failure is SEEN, not silently absorbed.
+        if (!moodSource) return { party: 0, value: 0 };
+        return moodSource.read();
       },
       deps: {
-        loadPlaylist: ({ target, name }) => {
-          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name);
-          return timelineLoadPlaylistOnMixer(target.id, name);
+        loadPlaylist: ({ target, name, entryId }) => {
+          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name, entryId || null);
+          return timelineLoadPlaylistOnMixer(target.id, name, entryId || null);
         },
         setAutopilot: ({ target, state }) => {
           if (target.kind === 'deck') return timelineSetAutopilotOnDeck(state);
@@ -4426,6 +6894,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // nothing. `source_lock` is NOT an authoring error — it's normal
             // runtime arbitration (another source holds the param) — so let it
             // pass silently, exactly as a live operator write would be arbitrated.
+            // SIZE LOCK (lib/size_lock.js): a hand-authored cue/look that still
+            // carries `size` is an AUTHORING error and surfaces as a cueError —
+            // unless it asked for the pinned value, which is a harmless no-op.
+            if (r && r.status === 'ignored' && r.reason === SIZE_LOCK_REASON) {
+              if (r.noop) continue;
+              throw new Error(`setParams: '${k}' rejected — ${r.message}`);
+            }
             if (r && r.status === 'ignored' && r.reason !== 'source_lock') {
               throw new Error(`setParams: '${k}' rejected (${r.reason})`);
             }
@@ -4496,6 +6971,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // Read-only view of the engine's current view-override pin so getState()
         // can surface `forcingDeckView` (plan active AND output pinned to deck).
         getViewOverrideMode: () => viewOverrideMode,
+        // TIMELINE PRIORITY (operator ruling 2026-08-14): the plan revokes an
+        // active Live Touch ARM on resume / operator-lease expiry. Never throws
+        // — a broken Live surface must not hold the show hostage.
+        yieldLiveTouch: (why) => forceDisarmLiveTouchForTimeline(why),
       },
       broadcast: broadcastWs,
       config: {
@@ -4504,20 +6983,393 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         tickMs: timelineConfigBlock.tickMs || 1000,
         programLeaseSec: timelineConfigBlock.programLeaseSec || 30,
         operatorLeaseSec: timelineConfigBlock.operatorLeaseSec || 120,
-        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
+        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold, staleSec: timelineMoodStaleSec },
         colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
       },
     });
   }
 
-  const server = http.createServer((req, res) => {
+  // ── SPECIAL EVENTS runner (docs/52) ──────────────────────────────────
+  // Staged one-button shows (Baby Reveal is show #1). A sibling of the
+  // timeline service in shape — deps-injected engine internals, its own 1 s
+  // tick, a WS broadcast, a persisted state file — and a stage machine rather
+  // than an arbiter. Every dep below is a thin wrapper over the SAME internal
+  // the equivalent REST route uses, so a stage's playlist / master / effect
+  // change is indistinguishable from the operator doing it by hand (same
+  // broadcasts, same persistence) AND still fires while performance mode 409s
+  // the HTTP equivalents — exactly like a timeline cue.
+  //
+  // Always constructed: shows are scene DATA and the tab must be reachable
+  // even on an engine with the timeline switched off. `timeline: null` in that
+  // case simply means there is no plan to take over.
+  // Explicit Timeline mutations outrank an armed Live Touch desk. This gate is
+  // release-only by design: it clears and confirms the lower-priority ARM/source
+  // lock, then the original route performs the one requested Timeline operation.
+  // A blanket resume here would briefly apply the old plan before activate,
+  // travel, takeover, cue-fire, or AUTO OFF, and would double-run RESUME itself.
+  const timelinePreemptionGate = createTimelinePreemptionGate({
+    currentLiveTouchOwner: () => currentArmLeaseOwner(),
+    forceDisarmLiveTouch: operation => forceDisarmLiveTouchForTimeline(operation),
+    confirmLiveTouchReleased: () => armLease.size === 0 && currentArmLeaseOwner() === null,
+  });
+  let timelinePriorityDispatches = 0;
+
+  function holdTimelinePriorityUntilResponse(res) {
+    let released = false;
+    timelinePriorityDispatches += 1;
+    const release = () => {
+      if (released) return;
+      released = true;
+      timelinePriorityDispatches = Math.max(0, timelinePriorityDispatches - 1);
+    };
+    res.once('finish', release);
+    res.once('close', release);
+  }
+
+  async function rejectIfTimelinePreemptionFails(req, res) {
+    if (!isTimelineAuthorityMutation(req.method, req.url)) return false;
+    // Preserve the route's authoritative 503 timeline-disabled response without
+    // changing Live Touch state when no Timeline service can execute the request.
+    if (!timelineService) return false;
+
+    const heldBy = currentArmLeaseOwner();
+    try {
+      await timelinePreemptionGate.preempt(`${req.method} ${req.url}`);
+      // Keep the higher authority through body parsing and asynchronous route
+      // completion. Otherwise Live Touch could re-arm after confirmed release
+      // but before the original Timeline mutation actually commits.
+      holdTimelinePriorityUntilResponse(res);
+      return false;
+    } catch (error) {
+      console.error(`  [timelinePriority] PREEMPT FAILED for ${req.method} ${req.url}: ` +
+        `${error && error.message ? error.message : error}`);
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `Timeline could not take priority over Live Touch: ${error && error.message ? error.message : error}`,
+        code: 'TIMELINE_LIVE_TOUCH_PREEMPT_FAILED',
+        heldBy,
+      }));
+      return true;
+    }
+  }
+
+  const specialEventsService = new SpecialEventsService({
+    scene: opts.modelName || 'default',
+    showsDir: resolveSpecialEventsDir(path.join(patternsDir, '..'), opts.modelName || 'default'),
+    stateDir,
+    broadcast: broadcastWs,
+    deps: {
+      // Deck playlist activation — the SAME internal a timeline cue's
+      // `playlist` action uses (transition-aware, fail-loud on a missing
+      // playlist / unloadable entry).
+      activatePlaylist: (name, entryId) => timelineLoadPlaylistOnDeck(name, entryId || null),
+      listPlaylists: () => playlistManager.list(),
+      // ARM-time playlist health. `tryLoad` (not `load`) so a MALFORMED file
+      // reads as "present but unloadable" instead of throwing out of the ARM
+      // transaction; the runner grades exists / loadable / missingPatterns
+      // itself. `_missing` is the playlist manager's own marker for an entry
+      // whose pattern file is gone — the exact drift a pattern rename leaves
+      // behind, and the reason a show must be checked at ARM and not at 2 a.m.
+      inspectPlaylist: (name) => {
+        const present = playlistManager.list().includes(name);
+        const pl = playlistManager.tryLoad(name);
+        if (!pl) return { exists: present, entries: 0, loadable: 0, missingPatterns: [] };
+        const missingPatterns = pl.entries
+          .filter(e => e._missing)
+          .map(e => e.pattern || '(entry has no pattern)');
+        return {
+          exists: true,
+          entries: pl.entries.length,
+          loadable: pl.entries.length - missingPatterns.length,
+          missingPatterns,
+        };
+      },
+      // A control write / rising-edge pulse on whatever pattern is CURRENTLY on
+      // the deck. Resolved at FIRE time, not at ARM: a playlist-driven show
+      // changes the deck pattern as it goes, so the only honest moment to
+      // resolve an export name is when the write happens. An unknown name is a
+      // loud authoring error naming what the live pattern actually exports.
+      setDeckControl: (controlName, value) => {
+        const channel = mixer.getDeckChannel();
+        if (!channel) throw new Error('no deck channel to write a control on');
+        const exports = wasmHost.getExports(channel.handle) || [];
+        const exp = exports.find(e => e.name === controlName);
+        if (!exp) {
+          throw new Error(
+            `the pattern on the deck ("${channel.pattern}") exports no control ` +
+            `"${controlName}" — it exports: ${exports.map(e => e.name).join(', ') || '(none)'}`);
+        }
+        paramRouter.setChannelControl(channel.id, exp.id, value, 0, 0);
+        broadcastMixerState();
+        broadcastDeckState();
+      },
+      // Grand-master timed ramp — the /mixer/master/fade path. THIS is how a
+      // BLACKOUT stage goes dark: a clean, transient, non-persisted ramp that
+      // the snapshot restore (or the next stage's ramp) simply brings back. The
+      // e-stop blackout is deliberately NOT used — that is a panic surface, it
+      // persists, and it kills every macro on the way through.
+      fadeMaster: (target, durationMs) => {
+        mixer.startMasterFade(target, durationMs);
+        broadcastMixerState();
+      },
+      // The never-dark backstop used only when a restore FAILS.
+      setMaster: (value) => {
+        mixer.setMaster(value);
+        saveAllState();
+        broadcastMixerState();
+      },
+      getMaster: () => mixer.master,
+      setGlobals: (obj) => {
+        if (!paramCenter) throw new Error('paramCenter not available');
+        for (const k in obj) {
+          const r = paramCenter.set(k, obj[k], 'special_event');
+          if (r && r.status === 'ignored' && r.reason === SIZE_LOCK_REASON) {
+            if (r.noop) continue;
+            throw new Error(`globals: '${k}' rejected — ${r.message}`);
+          }
+          // `source_lock` is runtime arbitration, not an authoring error —
+          // same contract as the timeline's setParams dep.
+          if (r && r.status === 'ignored' && r.reason !== 'source_lock') {
+            throw new Error(`globals: '${k}' rejected (${r.reason})`);
+          }
+        }
+      },
+      // `opts` is the authored RELEASE envelope for a falling edge
+      // ({ releaseMs, releaseTo }, docs/57 §2.2). Forwarded verbatim; when the
+      // runner passes nothing this stays a two-argument call and the controller
+      // does exactly what it always did.
+      // G1 (docs/57 §6, gap found in `_231` §7.1). ARM captured only the mixer
+      // LOOK, so a stage that pinned SPEED with the `globals` verb left it
+      // pinned after FINISH. The `globals` verb writes ParamCenter params, so
+      // the restore needs the pre-show value of exactly those params. Built on
+      // the same capture PERFORMANCE MODE's boot-lock snapshot uses, flattened
+      // to the { key: value } shape `setGlobals` consumes — capture and restore
+      // speak one shape, with no translation in the runner.
+      captureGlobals: () => {
+        const snap = captureGlobalsForSnapshot();
+        const canonical = snap && snap.params;
+        if (!canonical || !canonical.params) {
+          throw new Error('captureGlobals: the engine has no ParamCenter state to capture');
+        }
+        const out = {};
+        for (const [key, slot] of Object.entries(canonical.params)) out[key] = slot.value;
+        return out;
+      },
+      setEffect: (effectId, state, opts) => {
+        if (!globalEffectsController) throw new Error('no global effects controller');
+        if (effectId === 'invert') {
+          if (opts) {
+            throw new Error(
+              "setEffect: 'invert' has no release envelope — it is a whole-frame "
+              + 'filter, not a boost that can decay');
+          }
+          globalEffectsController.setInvert(!!state);
+          globalsState.invert = globalEffectsController.invert;
+          saveGlobals(true);
+          broadcastWs({ type: 'globalInvert', invert: globalEffectsController.invert });
+          return;
+        }
+        globalEffectsController.setEffect(effectId, !!state, opts);
+        if (!globalsState.effects) globalsState.effects = {};
+        globalsState.effects[effectId] = !!state;
+        saveGlobals(false);
+        broadcastWs({
+          type: 'globalEffectMacroStatus',
+          controller: globalEffectsController.getStatus(),
+          slots: globalEffectSlotManager ? globalEffectSlotManager.getStatus() : [],
+        });
+      },
+      // `fadeOutMs` (0 = the historical snap-off) rides the controller's
+      // EXISTING strobeFadingOut blend — it only ever needed threading through
+      // the burst meta to reach show data (docs/57 §2.2).
+      fireStrobeBurst: (hz, durationMs, fadeOutMs = 0) => {
+        if (!globalEffectsController) throw new Error('no global effects controller');
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        globalEffectsController.triggerStrobeBurst(hz, durationMs, frameIndex, {
+          presetId: 'special_event', slotId: null, fadeOutMs,
+        });
+        broadcastWs({
+          type: 'globalEffectMacroStatus',
+          controller: globalEffectsController.getStatus(),
+          slots: globalEffectSlotManager ? globalEffectSlotManager.getStatus() : [],
+        });
+      },
+      startStrobe: (hz) => {
+        if (!globalEffectsController) throw new Error('no global effects controller');
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        globalEffectsController.setStrobe(true, hz, 0.5, 1.0, frameIndex, {
+          presetId: 'special_event', slotId: null, fadeOutMs: 0,
+        });
+        broadcastWs({
+          type: 'globalEffectMacroStatus',
+          controller: globalEffectsController.getStatus(),
+          slots: globalEffectSlotManager ? globalEffectSlotManager.getStatus() : [],
+        });
+      },
+      stopStrobe: () => {
+        if (!globalEffectsController) return;
+        globalEffectsController.stopStrobe({});
+        broadcastWs({
+          type: 'globalEffectMacroStatus',
+          controller: globalEffectsController.getStatus(),
+          slots: globalEffectSlotManager ? globalEffectSlotManager.getStatus() : [],
+        });
+      },
+      // The restore primitive: the full mixer look (master + deck + every
+      // overlay + groups), the same capture/morph pair /mixer/snapshots and
+      // /recall-fade use.
+      captureSnapshot: (name) => snapshotManager.save(name, captureLook()),
+      recallSnapshotFade: (name, durationMs) => {
+        const look = snapshotManager.load(name);
+        if (!look) throw new Error(`pre-show snapshot '${name}' is missing`);
+        if (typeof mixer.cancelMorph === 'function') mixer.cancelMorph();
+        morphToLook(look, durationMs);
+        broadcastWs({
+          type: 'snapshots', action: 'recall-fade', name, snapshots: snapshotManager.list(),
+        });
+        broadcastMixerState();
+      },
+      getAutopilotFlags: () => {
+        const deck = mixer.getDeckChannel();
+        const ap = deck && deck.playlist ? deck.playlist.autopilot : null;
+        return {
+          patternAutopilot: !!(ap && ap.active),
+          colorAutopilot: colorAutopilotState(),
+        };
+      },
+      // STAGE ROTATION. The show autopilot IS the deck pattern autopilot,
+      // driven by the runner — same daemon, same broadcasts, same persistence,
+      // so a rotating tease stage is indistinguishable from the operator
+      // working the deck's AUTOPILOT PATTERNS card by hand. `nextSwapAtMs`
+      // comes off the daemon itself so the tab's countdown is the deck's own
+      // clock rather than a second estimate of it.
+      getPatternAutopilot: () => {
+        const deck = mixer.getDeckChannel();
+        const ap = deck && deck.playlist ? deck.playlist.autopilot : null;
+        return {
+          active: !!(ap && ap.active),
+          delay_s: ap && ap.delay_s !== undefined ? ap.delay_s : 30,
+          shuffle: !!(ap && ap.shuffle),
+          nextSwapAtMs: autopilot ? autopilot.nextSwapAtMs : null,
+        };
+      },
+      // NOW PLAYING for the simplified SHOW autopilot card (docs/57 §4.3). The
+      // deck's ACTIVE playlist entry, named the way the operator named it:
+      // `label` when the entry carries one, else the pattern id — the same
+      // precedence the deck's own EntryLabelEditor shows. `null` whenever the
+      // deck has no playlist entry to name, so the card can say so rather than
+      // invent a title. Same read as pushActiveEntryToModulation().
+      getDeckNowPlaying: () => {
+        const deckCh = mixer.getDeckChannel();
+        const playlistName = deckCh?.playlist?.name || null;
+        const entryId = deckCh?.playlist?.activeEntryId || null;
+        if (!playlistName || !entryId) return null;
+        const pl = playlistManager.load(playlistName);
+        const entry = pl && pl.entries.find((e) => e.id === entryId);
+        if (!entry) return null;
+        return {
+          pattern: entry.pattern || deckCh?.pattern || null,
+          label: entry.label || null,
+        };
+      },
+      setPatternAutopilot: (state) => timelineSetAutopilotOnDeck(state || {}),
+      getDeckTransition: () => ({ ...deckTransitionConfig }),
+      setDeckTransition: (patch) => timelineSetDeckTransition(patch),
+      setColorAutopilot: (wire) => setColorAutopilot(wire),
+    },
+    // TIMELINE COMPOSITION (operator ruling 2026-08-14, report `_200`). A
+    // special event is an operator TAKEOVER and rides the plan's existing lease
+    // — no new lock. The reverse direction is never blocked: RESUME and lease
+    // expiry are free, and when either happens the runner sees the lease is
+    // gone on its next tick and aborts the show WITH the restore. It never
+    // re-seizes.
+    timeline: timelineService ? {
+      takeover: () => {
+        const r = timelineService.takeover();
+        return { leaseHeld: !!(r && r.operatorLease) };
+      },
+      activity: () => timelineService.activity(),
+      authorityHeld: () => {
+        const st = timelineService.state;
+        if (!st) return true;
+        // A plan the operator switched OFF drives nothing (report `_200` §2.2:
+        // "plan disabled = totally inert"), so there is no authority to lose
+        // and no reason to tear a live show down. Only a RUNNING plan taking
+        // the rig back — RESUME, or its lease released — ends the event.
+        if (typeof timelineService.planEnabled === 'function' && !timelineService.planEnabled()) {
+          return true;
+        }
+        return !!(st.mode === 'overridden' && st.operatorLease);
+      },
+      release: (why) => {
+        console.log(`  ⏱ [special-events] handing the timeline back — ${why}`);
+        Promise.resolve(timelineService.resume()).catch((e) => console.error(
+          `  ⛔ [special-events] timeline resume after the show failed: ${e && e.message}`));
+      },
+    } : null,
+  });
+
+  /**
+   * SINGLE-WRITER GATE (docs/52 §4). While a special event holds the rig, the
+   * runner is the ONLY writer of deck CONTENT — a stray CaptainPad pattern tap
+   * mid-blackout would otherwise walk straight over the show. Same shape as the
+   * PERFORMANCE_MODE 409 so CaptainPad's existing `code`-aware callers quiet it
+   * correctly.
+   *
+   * Deliberately gated from ARM (not just from the first stage): ARM has already
+   * captured the look the show will restore to, so a deck change made after it
+   * would be silently thrown away at FINISH — worse than a refusal.
+   *
+   * Everything safety-shaped stays OPEN: panic, blackout, the grand master,
+   * dimmers, group fixed colours, and /special-events/* itself.
+   */
+  function rejectIfSpecialEventHoldsRig(req, res) {
+    if (!specialEventsService.holdsRig()) return false;
+    const state = specialEventsService.getState();
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: `special event "${state.showId}" is ${state.status} and owns the deck — ` +
+        'end or abort it from the Events tab first',
+      code: 'SPECIAL_EVENT',
+      showId: state.showId,
+      status: state.status,
+    }));
+    return true;
+  }
+
+  /** Map a SpecialEventError (or any throw) onto the JSON error contract. */
+  function sendSpecialEventError(res, err) {
+    const status = err instanceof SpecialEventError ? err.status : 500;
+    const code = err instanceof SpecialEventError ? err.code : 'SPECIAL_EVENT_ERROR';
+    if (res.headersSent) return;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: err && err.message ? err.message : String(err),
+      code,
+      ...(err && err.detail ? { detail: err.detail } : {}),
+    }));
+  }
+
+  const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST, PATCH, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers',
+      'Content-Type, X-Touch-Control-Owner, X-CaptainPad-Session, X-CaptainPad-Passcode, '
+      + 'X-CaptainPad-Passcode-Waiver');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       return res.end();
+    }
+
+    const captainPadAuthRoute = req.url === '/captainpad/auth/login'
+      || req.url === '/captainpad/auth/session'
+      || req.url === '/captainpad/auth/logout'
+      || req.url === '/captainpad/auth/passcode-waiver';
+    if (!captainPadAuthRoute) {
+      if (await rejectIfTimelinePreemptionFails(req, res)) return;
+      if (rejectTouchControlLeaseConflict(req, res)) return;
+      installLiveTouchTimelineActivityResponse(req, res);
     }
 
     // Body parsing helper
@@ -4542,13 +7394,165 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
       req.on('end', () => {
         if (aborted) return;
+        // PARSE and HANDLE in separate try/catches (audit H18b). The single
+        // catch conflated "bad JSON" with "the route handler threw", and if
+        // the handler threw AFTER writing headers, the catch's writeHead(400)
+        // itself threw ERR_HTTP_HEADERS_SENT — an engine-side crash path
+        // reachable by any request that made a handler fail late.
+        let parsed;
         try {
-          callback(JSON.parse(body || '{}'));
+          parsed = JSON.parse(body || '{}');
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid JSON' }));
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        }
+        try {
+          callback(parsed);
+        } catch (e) {
+          console.warn(`  ⚠ [api] handler threw for ${req.method} ${req.url}: ` +
+            `${e && e.message ? e.message : e}`);
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: String((e && e.message) || e) }));
+          } else {
+            try { res.end(); } catch (e2) { /* socket already gone */ }
+          }
         }
       });
     };
+
+    if (req.method === 'GET' && req.url === '/captainpad/auth/session') {
+      const session = captainPadAuth.sessionForRequest(req);
+      res.writeHead(session ? 200 : 401, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        'Vary': 'X-CaptainPad-Session',
+      });
+      res.end(JSON.stringify(session ? {
+        authenticated: true,
+        principal: session.principal,
+        expiresAt: session.expiresAt,
+        remainingMs: Math.max(0, session.expiresAt - Date.now()),
+        remembered: session.remembered,
+      } : {
+        authenticated: false,
+        code: captainPadAuth.required ? 'AUTH_REQUIRED' : 'PRIVILEGED_AUTH_DISABLED',
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/captainpad/auth/login') {
+      readBody((data) => {
+        const result = captainPadAuth.authenticate(
+          data.passphrase,
+          data.remember30,
+          req.socket && req.socket.remoteAddress,
+        );
+        if (!result.ok) {
+          if (result.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)));
+          res.writeHead(result.status, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+          });
+          return res.end(JSON.stringify({
+            authenticated: false,
+            error: result.status === 429 ? 'Too many attempts. Wait before trying again.' : 'Authentication failed.',
+            code: result.code,
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+          authenticated: true,
+          token: result.token,
+          principal: result.principal,
+          expiresAt: result.expiresAt,
+          remainingMs: result.remainingMs,
+          remembered: result.remembered,
+        }));
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/captainpad/auth/logout') {
+      captainPadAuth.revokeRequest(req);
+      const waiverToken = headerValue(req, PASSCODE_WAIVER_HEADER);
+      if (typeof waiverToken === 'string' && waiverToken.length > 0) {
+        captainPadAuth.revokePasscodeWaiver(waiverToken);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ authenticated: false }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/captainpad/auth/passcode-waiver') {
+      readBody((data) => {
+        const passcode = data && data.passcode;
+        const result = captainPadAuth.mintPasscodeWaiver(
+          passcode,
+          req.socket && req.socket.remoteAddress,
+        );
+        if (!result.ok) {
+          if (result.retryAfterMs) {
+            res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)));
+          }
+          res.writeHead(result.status, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+          });
+          return res.end(JSON.stringify({
+            ok: false,
+            error: result.status === 429
+              ? 'Too many attempts. Wait before trying again.'
+              : 'Operator passcode rejected.',
+            code: result.status === 429 ? 'PASSCODE_WAIVER_RATE_LIMITED' : 'PASSCODE_WAIVER_INVALID',
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+          ok: true,
+          token: result.token,
+          principal: result.principal,
+          expiresAt: result.expiresAt,
+          remainingMs: result.remainingMs,
+        }));
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/captainpad/auth/passcode-waiver') {
+      const waiverToken = headerValue(req, PASSCODE_WAIVER_HEADER);
+      const waiver = captainPadAuth.waiverForToken(
+        typeof waiverToken === 'string' ? waiverToken : '',
+      );
+      res.writeHead(waiver ? 200 : 401, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        'Vary': 'X-CaptainPad-Passcode-Waiver',
+      });
+      res.end(JSON.stringify(waiver ? {
+        ok: true,
+        principal: waiver.principal,
+        expiresAt: waiver.expiresAt,
+        remainingMs: Math.max(0, waiver.expiresAt - Date.now()),
+      } : {
+        ok: false,
+        code: 'PASSCODE_WAIVER_INVALID',
+      }));
+      return;
+    }
+
+    // Compatibility seam: owner-tagged Live Touch requests use the existing
+    // endpoint shapes but land in the in-memory setting context. Delegating
+    // before the durable handlers makes it structurally impossible for Live
+    // CPC/effects/paint/slot writes to touch Deck/Mixer state or state files.
+    if (liveTouchSession && liveTouchSession.routesRequest(req)) {
+      const handled = liveTouchSession.handleHttp({
+        req,
+        res,
+        readBody,
+        listModelGroups,
+        getFrameIndex: engineCore.getFrameIndex,
+        sharedGlobals: globalsState,
+        serializeMixerState,
+        performanceModeActive: performanceMode.active,
+      });
+      if (handled) return;
+    }
 
     if (req.method === 'GET' && (req.url === '/patterns' || req.url === '/list-patterns')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -4561,12 +7565,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'GET' && req.url.match(/^\/pattern-dirs\/[^\/]+$/)) {
       // List the patterns inside one sub-directory as `<dir>/<name>`
       // slugs ready to drop into playlist entries.
+      //
+      // COMPUTE THE BODY BEFORE COMMITTING HEADERS. `listPatternsInDir`
+      // REFUSES (throws) any slug failing VALID_PATTERN_DIR — a traversal
+      // probe (`..%2F..`), an uppercase name, anything with a dot or a
+      // space. `decodeURIComponent` likewise throws on malformed percent
+      // escapes (`%ZZ`). Both are ordinary hostile/sloppy input on an
+      // unauthenticated LAN, and both MUST produce a loud, named 400 —
+      // never a silent default, and never a second writeHead on an
+      // already-committed 200 (that throws ERR_HTTP_HEADERS_SENT inside
+      // the catch and kills the entire engine process; report `_164` §3).
       try {
         const dir = decodeURIComponent(req.url.split('/')[2]);
+        const body = JSON.stringify(listPatternsInDir(patternsDir, dir));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(listPatternsInDir(patternsDir, dir)));
+        res.end(body);
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 400, { error: e.message });
       }
     } else if (req.method === 'GET' && req.url === '/channel-blends') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -4588,13 +7603,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     } else if (req.method === 'GET' && req.url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ 
+      res.end(JSON.stringify({
         service: 'marsin-engine',
+        ...liveTouchProtocolStatus(),
         name: 'MarsinEngine',
         version: '2.0',
         port: opts.port || 6968,
-        activeScene: opts.modelName || 'unknown', 
-        activeModel: opts.modelName || 'unknown', 
+        activeScene: opts.modelName || 'unknown',
+        activeModel: opts.modelName || 'unknown',
         activePattern: opts.pattern || 'unknown',
         unrealState: 'streaming',
         // True when a model hot reload was refused (pixel count changed)
@@ -4602,9 +7618,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
         modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
         // Render-health (Codex P0 visibility): renderHealth.ok === false
-        // means at least one channel blend is degraded — running on the
-        // host-side linear-interp fallback because its WASM blend script is
-        // missing or failed to compile. blendErrors lists the offending
+        // means at least one channel blend is unavailable; its render path
+        // fails loudly because the WASM script is missing or failed to compile.
+        // blendErrors lists the offending
         // modes. A green rig has renderHealth.ok === true with an empty
         // blendErrors array. See pattern_mixer.getRenderHealth().
         renderHealth: mixer.getRenderHealth ? mixer.getRenderHealth() : null,
@@ -4628,6 +7644,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           active: performanceMode.active,
           enteredAt: performanceMode.enteredAt,
         },
+        // OUTPUT ROUTING introspection. This engine delivers NOTHING directly
+        // to hardware: the per-controller `controllers:` block that used to
+        // unicast declared universes straight to a box is REMOVED and refused
+        // at boot (lib/output_config_guard.js). All engine output is sACN to
+        // `sacn.destinations`, where the simulation's input bridge is the
+        // single router.
+        //
+        // The field STAYS, permanently empty, because its absence means
+        // something different: the sim's bridge treats a missing
+        // `outputRouting` as "this engine is too old to say what it delivers
+        // itself", which makes one-writer unprovable and is a hard refusal
+        // (bench-mirror R-8). An explicit empty list is the positive proof that
+        // there is no second writer the bridge cannot see.
+        // Shape: { controllers: [] } — always, by construction.
+        outputRouting: { controllers: [] },
+        // SIZE LOCK (operator ruling 2026-08-06, lib/size_lock.js). The
+        // global SIZE fader is pinned at LOCKED_SIZE (coordinate identity)
+        // and no path may change it. There is no SIZE control left in any
+        // UI, so THIS is where the operator learns something fought the
+        // lock: `sizeLockWarning` is a ready-to-render one-liner (null when
+        // clean) that CaptainPad shows in its header health chip;
+        // `sizeLock` carries the full record (which file carried a stale
+        // value, how many writes were refused, and from where).
+        sizeLockWarning: paramCenter ? paramCenter.getSizeLockWarning() : null,
+        sizeLock: paramCenter ? paramCenter.getSizeLockReport() : null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -4652,7 +7693,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(404); res.end('Not Found');
       }
     } else if (req.method === 'POST' && req.url === '/save-pattern') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       readBody(data => {
         if (!data.name || !data.code) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'name and code required' }));
@@ -4660,16 +7701,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         let safeName = path.basename(data.name);
         if (!safeName.endsWith('.js')) safeName += '.js';
         const filePath = path.join(patternsDir, safeName);
-        
+
         // Compile check (does not destroy existing running patterns because of WasmHost!)
         const comp = wasmHost.compile(data.code);
         if (!comp.ok) {
           res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
         }
         wasmHost.destroy(comp.handle); // Clean up validation handle
-        
+
         fs.writeFileSync(filePath, data.code, 'utf8');
-        
+
         const patternName = safeName.replace('.js', '');
         const allChannels = [
           ...(mixer.getDeckChannel() ? [mixer.getDeckChannel()] : []),
@@ -4695,7 +7736,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             }
           }
         });
-        
+
         saveAllState();
         broadcastMixerState();
 
@@ -4703,13 +7744,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if ((req.method === 'PUT' || req.method === 'POST') && (req.url === '/pattern' || req.url === '/set-pattern')) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfSpecialEventHoldsRig(req, res)) return;
       readBody(data => {
         try {
           if (!data.pattern) {
             res.writeHead(400); return res.end(JSON.stringify({ error: 'pattern required' }));
           }
-          const patternName = path.basename(data.pattern, '.js');
+          let patternName;
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
 
           // Compile FIRST so we never tear down the live deck channel
           // for a pattern that turns out to fail to compile / load.
@@ -4833,7 +7877,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/scene') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Scene/model coordination (sim → engine). When the operator picks a
       // different scene in the sim's #scene-select dropdown, the sim POSTs the
       // new scene name here so the engine follows and renders that scene's
@@ -4871,10 +7915,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
           const current = opts.modelName || null;
           if (scene === current) {
-            // Already rendering this scene — nothing to switch. The on-disk
-            // file watcher already hot-reloads same-scene edits in place.
+            // Already rendering this scene — nothing to SWITCH. The on-disk
+            // file watcher hot-reloads same-scene edits in place, EXCEPT a
+            // pixel-count change (which goes `modelStale` and keeps the old
+            // model live). Applying that needs a deliberate same-scene
+            // restart: POST /scene/reload. Point the caller at it rather than
+            // silently doing nothing (no fallback — the caller must choose).
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ status: 'ok', scene, restarting: false, activeModel: current }));
+            return res.end(JSON.stringify({
+              status: 'ok',
+              scene,
+              restarting: false,
+              activeModel: current,
+              modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
+              hint: 'already rendering this scene — POST /scene/reload {"scene":"'
+                + scene + '"} to restart the engine on the re-exported model',
+            }));
           }
 
           if (typeof engineCore.requestSceneSwitch !== 'function') {
@@ -4890,10 +7946,61 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // Defer the restart a tick so the HTTP response fully flushes.
           setTimeout(() => engineCore.requestSceneSwitch(scene), 50);
         } catch (err) {
-          try {
-            res.writeHead(500);
-            res.end(JSON.stringify({ error: String(err && err.message || err) }));
-          } catch (_) { /* response already sent */ }
+          // Was a nested try that SWALLOWED the second-writeHead throw.
+          // sendJsonError does the same job without the swallow: it checks
+          // headersSent and reports the real fault on stderr.
+          sendJsonError(res, 500, { error: String(err && err.message || err) });
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/scene/reload') {
+      if (rejectIfPerformanceMode(req, res)) return;
+      // SAME-scene deliberate model reload (report `_33` §5 step 4). Applies a
+      // re-exported model that the on-disk hot reloader REFUSED — i.e. one
+      // whose pixelCount changed (`GET /status.modelStale: true`) — by
+      // restarting this engine on the same `--model` through the existing
+      // requestSceneSwitch path. Same ports, same argv, one engine.
+      //
+      // Guards live in the pure `sceneReloadDecision` seam above; this handler
+      // only supplies the facts and executes the verdict. Performance mode is
+      // gated here (shared 409 + mixer snap-back), exactly like POST /scene.
+      readBody(data => {
+        try {
+          const requested = data && data.scene;
+          const activeScene = opts.modelName || null;
+          const safeName = typeof requested === 'string'
+            && requested.trim() === path.basename(requested.trim());
+          const modelExists = !!(safeName && fs.existsSync(
+            path.join(patternsDir, '..', 'models', `${requested.trim()}.js`),
+          ));
+          const verdict = sceneReloadDecision({
+            requestedScene: requested,
+            activeScene,
+            modelExists,
+            hasSwitchHook: typeof engineCore.requestSceneSwitch === 'function',
+            supervised: process.env.BM26_SUPERVISED === '1',
+          });
+          if (!verdict.restart) {
+            console.warn(`  ⛔ /scene/reload refused (${verdict.body.code}): ${verdict.body.error}`);
+            res.writeHead(verdict.status, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify(verdict.body));
+          }
+          // Carry the staleness that motivated the reload into the ack, so the
+          // caller's log records WHY it restarted.
+          verdict.body.modelStale = !!(engineCore.modelSync && engineCore.modelSync.stale);
+          verdict.body.modelStaleMessage = (engineCore.modelSync && engineCore.modelSync.message) || null;
+
+          console.log(`\n  ♻️  Same-scene model reload requested via /scene/reload: '${activeScene}'`
+            + ` (${verdict.body.mode}, modelStale=${verdict.body.modelStale}). Restarting engine…`);
+          // Respond BEFORE the restart tears the process down, so the caller
+          // gets a clean acknowledgement instead of a dropped connection.
+          res.writeHead(verdict.status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(verdict.body));
+          // Defer a tick so the HTTP response fully flushes.
+          setTimeout(() => engineCore.requestSceneSwitch(activeScene), 50);
+        } catch (err) {
+          // Was a nested try that SWALLOWED the second-writeHead throw.
+          // sendJsonError does the same job without the swallow.
+          sendJsonError(res, 500, { error: String(err && err.message || err) });
         }
       });
     } else if (req.method === 'POST' && req.url === '/control') {
@@ -4902,6 +8009,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
         const ctlRes = paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        // AN IGNORED WRITE MUST SAY SO (audit medium). This returned
+        // {status:'ok'} even when the router refused the control — a surface
+        // sweeping a fader saw success while the rig did nothing.
+        if (ctlRes && ctlRes.status && ctlRes.status !== 'ok') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: ctlRes.status, id: data.id, reason: ctlRes.reason || null }));
+        }
         // Legacy /control targets the deck base channel. CHANNEL-LOCAL write:
         // no cross-channel mirroring (operator ruling 2026-07-07 — parameter
         // isolation). It DOES mark the deck's params touched so the next entry
@@ -4910,29 +8025,113 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         markChannelDirtyIfLocked(mixer.baseChannelId);
         markDeckParamsTouched();
         if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, data.id);
-        saveAllState();
-        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
+        const saveResult = persistDeckChannelParams();
         broadcastMixerState();
         broadcastDeckState();
 
+        if (saveResult.attempted && !saveResult.saved) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: 'applied_not_saved',
+            saved: false,
+            error: saveResult.error,
+          }));
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', id: data.id }));
+        res.end(JSON.stringify({
+          status: 'ok',
+          id: data.id,
+          saved: saveResult.saved,
+          persistence: saveResult.attempted ? 'saved' : 'suppressed',
+        }));
       });
     } else if (req.method === 'GET' && req.url === '/dimmer-groups') {
-      // Build group→sectionId map from model pixels
-      const groups = {};
-      if (model && model.pixels) {
-        for (const px of model.pixels) {
-          if (px.group && px.sId > 0 && !groups[px.group]) {
-            groups[px.group] = px.sId;
-          }
-        }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(modelDimmerGroups()));
+    } else if (req.method === 'GET' && req.url === '/dimmers') {
+      // WIRE format stays { sectionId: brightness } for CaptainPad; the
+      // PERSISTED state is keyed by stable group name. Resolve each name to
+      // the CURRENT model's section id. Unresolvable keys (orphans from an
+      // older model generation) pass through verbatim — clients only look
+      // up ids served by /dimmer-groups, so they are inert, and hiding them
+      // would misrepresent the persisted state.
+      const dimmerGroups = modelDimmerGroups();
+      const wire = {};
+      for (const [key, val] of Object.entries(globalsState.dimmers || {})) {
+        const sId = dimmerGroups[key];
+        wire[sId !== undefined ? sId : key] = val;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(groups));
-    } else if (req.method === 'GET' && req.url === '/dimmers') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(globalsState.dimmers || {}));
+      res.end(JSON.stringify(wire));
+
+    } else if (req.method === 'GET' && req.url === '/touch-control/brightness') {
+      try {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(liveBrightnessPayload()));
+      } catch (error) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error.message, code: 'TOUCH_BRIGHTNESS_UNAVAILABLE' }));
+      }
+    } else if (req.method === 'PUT' && req.url === '/touch-control/brightness') {
+      readBody(data => {
+        try {
+          const groups = groupsByNameToSectionMap(data.groups, modelDimmerGroups(), true);
+          requireLiveBrightnessController().replace(
+            touchControlOwner(req), data.expectedRevision, data.master, groups,
+          );
+          broadcastLiveBrightness();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(liveBrightnessPayload()));
+        } catch (error) {
+          res.writeHead(statusForTouchBrightnessError(error), { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: error.code || 'TOUCH_BRIGHTNESS_INVALID',
+          }));
+        }
+      });
+    } else if (req.method === 'PATCH' && req.url === '/touch-control/brightness') {
+      readBody(data => {
+        try {
+          const patch = {};
+          if (Object.prototype.hasOwnProperty.call(data, 'master')) patch.master = data.master;
+          if (Object.prototype.hasOwnProperty.call(data, 'groups')) {
+            patch.groupsBySectionId = groupsByNameToSectionMap(
+              data.groups, modelDimmerGroups(), false,
+            );
+          }
+          requireLiveBrightnessController().patch(
+            touchControlOwner(req), data.expectedRevision, patch,
+          );
+          broadcastLiveBrightness();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(liveBrightnessPayload()));
+        } catch (error) {
+          res.writeHead(statusForTouchBrightnessError(error), { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: error.code || 'TOUCH_BRIGHTNESS_INVALID',
+          }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/touch-control/brightness/master/fade') {
+      readBody(data => {
+        try {
+          requireLiveBrightnessController().startMasterFade(
+            touchControlOwner(req), data.expectedRevision, data.target, data.durationMs,
+          );
+          broadcastLiveBrightness();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(liveBrightnessPayload()));
+        } catch (error) {
+          res.writeHead(statusForTouchBrightnessError(error), { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: error.message,
+            code: error.code || 'TOUCH_BRIGHTNESS_INVALID',
+          }));
+        }
+      });
 
     // ── Group fixed colors (docs/32) ─────────────────────────────────
     // Per-group color locks driven by the CaptainPad Dimmer Rack.
@@ -4940,6 +8139,80 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // PUT    /group-fixed-colors/:group   → set/replace override
     // DELETE /group-fixed-colors/:group   → clear override
     // Group names are URL-encoded in the path (names may have spaces).
+    // ── PARKED (locked) groups ──────────────────────────────────────────
+    // GET  /parked-groups           → { groups: string[]|null }
+    // PUT  /parked-groups {groups}  → these groups hold exactly what they were
+    //   set to: the GRAND MASTER skips them. Operator ruling, made with the
+    //   conflict pointed out. BLACKOUT still kills them (IntensityController
+    //   runs later) - an e-stop is not defeatable from a UI toggle.
+    } else if (req.method === 'GET' && req.url === '/parked-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      const m = globalEffectsController.parkedGroupMask;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ groups: m ? [...m] : null }));
+    } else if (req.method === 'PUT' && req.url === '/parked-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      readBody(data => {
+        try {
+          const wanted = (data && data.groups !== undefined) ? data.groups : null;
+          if (Array.isArray(wanted)) {
+            const known = listModelGroups();
+            const bad = wanted.filter(g => !known.includes(g));
+            if (bad.length) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: `unknown group(s): ${bad.join(', ')}`, known }));
+            }
+          }
+          globalEffectsController.setParkedGroups(wanted);
+          const m = globalEffectsController.parkedGroupMask;
+          broadcastWs({ type: 'parkedGroups', groups: m ? [...m] : null });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', groups: m ? [...m] : null }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
+    // ── Per-group EFFECT SCOPE (docs/44) ────────────────────────────────
+    // GET  /effect-groups            → { groups: string[]|null }
+    // PUT  /effect-groups {groups}   → restrict the whole effect chain to those
+    //   groups. null = unrestricted (the default and the shipped behaviour).
+    //   [] is legal and means "no group" - an explicit operator choice, not a
+    //   mistake, so it is NOT turned back into "everywhere".
+    } else if (req.method === 'GET' && req.url === '/effect-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      const mask = globalEffectsController.effectGroupMask;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ groups: mask ? [...mask] : null }));
+    } else if (req.method === 'PUT' && req.url === '/effect-groups') {
+      if (!globalEffectsController) { res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' })); }
+      readBody(data => {
+        try {
+          const wanted = (data && data.groups !== undefined) ? data.groups : null;
+          if (Array.isArray(wanted)) {
+            // Reject a typo'd group loudly - a mask naming a group that does
+            // not exist would silently shrink the effect's reach.
+            const known = listModelGroups();
+            const bad = wanted.filter(g => !known.includes(g));
+            if (bad.length) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `unknown group(s): ${bad.join(', ')}`, known,
+              }));
+            }
+          }
+          globalEffectsController.setEffectGroups(wanted);
+          const mask = globalEffectsController.effectGroupMask;
+          broadcastWs({ type: 'effectGroups', groups: mask ? [...mask] : null });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', groups: mask ? [...mask] : null }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
     } else if (req.method === 'GET' && req.url === '/group-fixed-colors') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -4961,6 +8234,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       if (req.method === 'DELETE') {
         const removed = globalEffectsController.clearGroupFixedColor(group);
+        // Drop any deadman lease with it, so the sweep stops tracking a group
+        // that is already clear (and can disarm once the last one goes).
+        touchPaintLease.delete(group);
+        if (touchPaintLease.size === 0) disarmTouchPaintSweep();
         if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
         saveGlobals(false);
         broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
@@ -4976,36 +8253,125 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400);
             return res.end(JSON.stringify({ error: `unknown group '${group}' (model groups: ${known.join(', ')})` }));
           }
-          globalEffectsController.setGroupFixedColor(group, data.color, data.brightness);
-          if (!globalsState.groupFixedColors) globalsState.groupFixedColors = {};
-          globalsState.groupFixedColors[group] = {
-            color: [...data.color],
-            brightness: data.brightness,
-          };
-          saveGlobals(false);
+          const ownerId = typeof data.ownerId === 'string' && data.ownerId.length > 0
+            ? data.ownerId
+            : null;
+          // Capture the durable underlay before replacing the controller's
+          // visible value. A leased Live overlay is transient and must never
+          // overwrite or delete the saved Deck/Mixer paint beneath it.
+          const priorOverride = ownerId && globalsState.groupFixedColors?.[group]
+            ? JSON.parse(JSON.stringify(globalsState.groupFixedColors[group]))
+            : null;
+
+          // `colors` (optional) lets ONE group carry a whole palette, spread
+          // across its own pixels by per-group ordinal. `color` stays required
+          // and is what every existing caller sends.
+          globalEffectsController.setGroupFixedColor(
+            group, data.color, data.brightness, data.colors);
+
+          // LEASED paint (`ownerId` present) vs PERMANENT paint (absent).
+          //
+          // Leased: held alive only while its owner keeps renewing, and NOT
+          // written to globals_state.yaml — the owner is definitionally gone
+          // after a restart, so persisting it would resurrect a frozen group
+          // that nothing is left to release. A pre-existing permanent value is
+          // retained byte-for-byte and restored when the lease ends.
+          //
+          // Permanent (no ownerId): unchanged from before — applied, persisted,
+          // survives restart. This is what saved operator looks rely on.
+          if (ownerId) {
+            touchPaintLeaseSet(group, ownerId, priorOverride);
+          } else {
+            // An unleased write takes the group back off the deadman.
+            touchPaintLease.delete(group);
+            if (touchPaintLease.size === 0) disarmTouchPaintSweep();
+            if (!globalsState.groupFixedColors) globalsState.groupFixedColors = {};
+            globalsState.groupFixedColors[group] = {
+              color: [...data.color],
+              brightness: data.brightness,
+            };
+            saveGlobals(false);
+          }
           broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', group, override: globalEffectsController.groupFixedColors[group] }));
+          res.end(JSON.stringify({
+            status: 'ok',
+            group,
+            override: globalEffectsController.groupFixedColors[group],
+            leased: Boolean(ownerId),
+            leaseMs: ownerId ? TOUCH_PAINT_LEASE_MS : null,
+          }));
         } catch (e) {
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
     } else if (req.method === 'POST' && req.url === '/section-brightness') {
       readBody(data => {
+        if (touchControlOwner(req)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch cannot overwrite the authoritative Dimmer Rack',
+            code: 'TOUCH_CANNOT_WRITE_DIMMER_RACK',
+          }));
+        }
         if (data.sectionId === undefined || data.brightness === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'sectionId and brightness required' }));
         }
-        if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
+        // Wire keeps the numeric sectionId; persistence is keyed by the
+        // owning group's STABLE NAME (section ids are re-minted whenever
+        // the operator regenerates the model — names survive). An id no
+        // group in the loaded model maps to is rejected loudly (codex P0):
+        // accepting it would persist a key that can never be read back.
+        const sId = Number(data.sectionId);
+        const dimmerGroups = modelDimmerGroups();
+        let groupName = null;
+        for (const [name, id] of Object.entries(dimmerGroups)) {
+          if (id === sId) { groupName = name; break; }
+        }
+        if (groupName === null) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `unknown sectionId ${data.sectionId} — no group in the loaded model maps to it (see GET /dimmer-groups)`,
+          }));
+        }
+        // STRICT brightness (audit medium): a non-numeric value became NaN,
+        // was applied, AND was persisted to globals_state.yaml — a poisoned
+        // dimmer that survives reboot. Codex P0: reject, never coerce.
+        const bVal = data.brightness;
+        if (typeof bVal !== 'number' || !Number.isFinite(bVal) || bVal < 0 || bVal > 1) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `brightness must be a finite number in 0..1, got ${JSON.stringify(bVal)}` }));
+        }
+        const previousBrightness = intensityController.sectionBrightness[sId] === undefined
+          ? 1
+          : intensityController.sectionBrightness[sId];
+        if (intensityController) intensityController.setSectionBrightness(sId, bVal);
+        if (previousBrightness !== bVal) dimmerAuthorityRevision++;
         if (!globalsState.dimmers) globalsState.dimmers = {};
-        globalsState.dimmers[data.sectionId] = data.brightness;
+        globalsState.dimmers[groupName] = bVal;
         saveGlobals(false);
+        broadcastDimmerAuthority();
+        if (intensityController.liveBrightness.getState().active) broadcastLiveBrightness();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId, brightness: data.brightness }));
+        res.end(JSON.stringify({
+          status: 'ok',
+          revision: dimmerAuthorityRevision,
+          sectionId: sId,
+          group: groupName,
+          brightness: data.brightness,
+        }));
       });
     } else if (req.method === 'POST' && req.url === '/global-blackout') {
       readBody(data => {
-        if (data.state === undefined) {
-           res.writeHead(400); return res.end(JSON.stringify({ error: 'state boolean required' }));
+        // STRICT boolean (audit H17). This used to accept any truthy value, so
+        // {"state":"false"} — a stringified boolean from any confused client —
+        // ENGAGED the blackout and persisted it across boot. On a safety
+        // endpoint, coercion is the bug: reject anything that is not exactly
+        // true or false. Codex P0: throw, never guess.
+        if (typeof data.state !== 'boolean') {
+           res.writeHead(400); return res.end(JSON.stringify({
+             error: `state must be boolean true or false, got ${JSON.stringify(data.state)}` }));
         }
         if (intensityController) intensityController.setBlackout(data.state);
         globalsState.blackout = data.state;
@@ -5013,6 +8379,259 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
+      });
+      // DELIBERATELY does NOT touch the arm envelope. Releasing the blackout is
+      // a step INSIDE the panel's arm sequence — it happens while the envelope
+      // is holding the ship at 0 precisely so the takeover is invisible — so
+      // resetting armFade here would cancel the fade this endpoint is hiding
+      // behind. The recovery paths for a stuck envelope are POST /mixer/panic
+      // (forceLit), the arm deadman, and the fact that armFade is never
+      // persisted so any restart comes back at full level.
+    } else if (req.method === 'POST' && req.url === '/arm-fade') {
+      // THE TOUCH PANEL'S ARM ENVELOPE. See IntensityController.startArmFade for
+      // why the ramp lives in the engine rather than as a burst of writes from
+      // the browser. One request per fade leg; it returns IMMEDIATELY with the
+      // completion time rather than holding the socket open for the duration —
+      // concurrent/long-held writes from this panel have been measured to hang,
+      // and the panel already races an 8 s arm deadline. The client waits on its
+      // own timer; if the client dies mid-fade the engine still lands on target.
+      readBody(data => {
+        if (!intensityController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no intensity controller' }));
+        }
+        // 400, never a clamp. A silently coerced fade target is a silently wrong
+        // house level on the last stage before the wire (codex P0: no silent
+        // fallbacks — fail loudly).
+        let r;
+        try {
+          r = intensityController.startArmFade(data.target, data.durationMs);
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        broadcastWs({ type: 'armFade', ...r });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', ...r }));
+      });
+    } else if (req.method === 'POST' && req.url === '/movement-rate') {
+      // LIGHT WALKING DOWN THE FIXTURE GROUPS, at a live speed for the XY pad's
+      // Y axis (operator's own suggestion). movementTrace's 'whole_group' mode
+      // lights one group at a time and steps along; pixelsPerSecond is how fast
+      // it walks. Same reasoning as /strobe-rate for having its own route: the
+      // slot machinery is for occasional tweaks, this is a finger.
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no global effects controller' }));
+        }
+        const active = !!(data && data.active);
+        const pps = (data && data.pixelsPerSecond !== undefined) ? data.pixelsPerSecond : 6;
+        if (active && (typeof pps !== 'number' || !Number.isFinite(pps) || pps < 0.05 || pps > 120)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'movement-rate: pixelsPerSecond 0.05..120' }));
+        }
+        const mode = (data && data.mode) || 'whole_group';
+        if (['every_other', 'one_per_color', 'whole_group', 'pulse'].indexOf(mode) === -1) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `movement-rate: unknown mode '${mode}'` }));
+        }
+        try {
+          if (!active) {
+            globalEffectsController.setMovementTrace(false);
+          } else {
+            const params = {
+              mode, travel: 'repeat', sync: false,
+              pixelsPerSecond: pps,
+              amount: (data && typeof data.amount === 'number') ? data.amount : 1,
+            };
+            // COLOURS ARE VALIDATED, AND ALL-BLACK IS REFUSED (audit medium +
+            // H10's movement half). Unvalidated entries let string colours
+            // inject NaN into every painted pixel; an all-black palette is a
+            // walking blackout that passes every never-black failsafe.
+            if (data.colors !== undefined) {
+              if (!Array.isArray(data.colors) || data.colors.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'movement-rate: colors must be a non-empty array' }));
+              }
+              let peak = 0;
+              for (const c of data.colors) {
+                if (!Array.isArray(c) || c.length < 6
+                    || c.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1)) {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  return res.end(JSON.stringify({
+                    error: 'movement-rate: every color must be 6 finite numbers in 0..1' }));
+                }
+                for (const v of c) peak = Math.max(peak, v);
+              }
+              if (peak < 0.05) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({
+                  error: 'movement-rate: an all-black palette is a walking blackout — refused' }));
+              }
+              params.colors = data.colors;
+            }
+            globalEffectsController.setMovementTrace(true, params, { presetId: 'xy_pad' });
+          }
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        const m = globalEffectsController.movement || {};
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', active: !!m.enabled,
+          mode: m.mode, pixelsPerSecond: m.pixelsPerSecond, amount: m.amount }));
+      });
+    } else if (req.method === 'GET' && req.url === '/movement-rate') {
+      if (!globalEffectsController) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'no global effects controller' }));
+      }
+      const m = globalEffectsController.movement || {};
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ active: !!m.enabled, mode: m.mode,
+        pixelsPerSecond: m.pixelsPerSecond, amount: m.amount }));
+    } else if (req.method === 'POST' && req.url === '/strobe-rate') {
+      // LIVE STROBE SPEED for the XY pad's Y axis. setStrobe() already exists
+      // but was only reachable through the effect-slot machinery, which is
+      // built for occasional operator tweaks — this is a continuous stream off
+      // a finger, the same reason /spatial-paint bypasses it.
+      // The controller re-anchors the pulse train on an hz change ("the pulse
+      // train re-tempos in place instead of jumping to a fresh cycle start"),
+      // so sweeping the axis speeds the flashing up smoothly rather than
+      // restarting it on every sample.
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no global effects controller' }));
+        }
+        const num = (v, lo, hi, dflt) => {
+          if (v === undefined) return dflt;
+          if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) return null;
+          return v;
+        };
+        const active = !!(data && data.active);
+        const hz = num(data && data.hz, 0.2, 25, 6);
+        const duty = num(data && data.duty, 0.02, 0.98, 0.5);
+        // intensity floor 0.02, not 0 (audit H10): the gate maths scales OFF
+        // frames by 0 and ON frames by intensity, so an active strobe at
+        // intensity 0 multiplies EVERY frame by zero — a constant blackout
+        // that passes every never-black failsafe. "No flash" is active:false.
+        const intensity = num(data && data.intensity, 0.02, 1, 1);
+        if (hz === null || duty === null || intensity === null) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'strobe-rate: hz 0.2..25, duty 0.02..0.98, intensity 0.02..1 (use active:false for off)',
+          }));
+        }
+        try {
+          if (active) {
+            const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+            globalEffectsController.setStrobe(true, hz, duty, intensity,
+              frameIndex, { presetId: 'xy_pad', slotId: null });
+          } else {
+            // No nowMs: stopStrobe defaults to performance.now(), the frame
+            // clock. Date.now() here (audit H18) put a wall-clock value into a
+            // performance.now() domain — the fade elapsed computed as ~55 YEARS
+            // negative, so an opt-in fadeOutMs strobe could never finish fading.
+            globalEffectsController.stopStrobe({});
+          }
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok', active: !!globalEffectsController.strobeActive,
+          hz, duty, intensity,
+        }));
+      });
+    } else if (req.method === 'GET' && req.url === '/strobe-rate') {
+      if (!globalEffectsController) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'no global effects controller' }));
+      }
+      const c = globalEffectsController.strobeConfig || {};
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        active: !!globalEffectsController.strobeActive,
+        hz: c.hz ?? null, actualHz: c.actualHz ?? null,
+        duty: c.duty ?? null, intensity: c.intensity ?? null,
+        presetId: c.presetId ?? null,
+      }));
+    } else if (req.method === 'POST' && req.url === '/spatial-paint') {
+      // THE OPERATOR'S STROKE, above the pattern layer so it works on EVERY
+      // pattern. Partial patch: the pad sends {targetX,targetY,touch} at drag
+      // rate and the mode/colour only when they change. Deliberately NOT routed
+      // through the slot-param machinery — that is built for occasional
+      // operator tweaks, and this is a positional stream at ~20 writes/second.
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503);
+          return res.end(JSON.stringify({ error: 'no global effects controller' }));
+        }
+        let out;
+        try {
+          out = globalEffectsController.setSpatialPaint(data);
+        } catch (e) {
+          // 400, never a clamp: a coerced coordinate is a stroke landing where
+          // the operator did not point.
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', ...out }));
+      });
+    } else if (req.method === 'GET' && req.url === '/spatial-paint') {
+      if (!globalEffectsController) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'no global effects controller' }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(globalEffectsController.getSpatialPaint()));
+    } else if (req.method === 'GET' && req.url === '/arm-fade') {
+      // A read surface is mandatory, not a nicety: armFade gates the entire
+      // rig's output and is invisible everywhere else. Without this, an engine
+      // holding the ship at 0 looks identical to a working engine on every
+      // other endpoint.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(intensityController
+        ? intensityController.getArmFade()
+        : { armFade: null, ramping: false }));
+    } else if (req.method === 'POST' && req.url === '/shutdown') {
+      // Operator STOP path (report 20260805_160 T1, fixed in _169). The
+      // launcher force-kills the whole process tree on Windows
+      // (`taskkill /T /F`), so the engine's SIGTERM handler — the ONLY thing
+      // that emits the shutdown blackout frame (engine.js §8) — never ran and
+      // the rig froze on its last live frame. This is the in-band request that
+      // runs that exact same shutdown path BEFORE the kill.
+      //
+      // Two deliberate properties:
+      //   • NOT gated by rejectIfPerformanceMode — a stop during a live show is
+      //     exactly when the blackout matters (safety, like /global-blackout).
+      //   • Persists NOTHING. /global-blackout would write
+      //     globalsState.blackout: true, which state_manager restores at boot —
+      //     i.e. the next start would come up dark. This path only exits.
+      readBody(data => {
+        if (data.confirm !== true) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'shutdown requires {"confirm": true} — refusing an unconfirmed stop',
+            code: 'CONFIRM_REQUIRED',
+          }));
+        }
+        if (typeof engineCore.requestShutdown !== 'function') {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'engine does not support in-band shutdown (no requestShutdown hook)',
+            code: 'NO_SHUTDOWN_HOOK',
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', shuttingDown: true, blackout: true }));
+        // Defer a tick so the response fully flushes before shutdown() closes
+        // the API socket — same pattern as POST /scene.
+        setTimeout(() => engineCore.requestShutdown(), 50);
       });
     } else if (req.method === 'POST' && req.url === '/global-effect') {
       readBody(data => {
@@ -5025,6 +8644,56 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
+      });
+
+    // ── POST /fog — the sim's "Hold to Fog" button, with a DEADMAN ────
+    //
+    // WHY THIS EXISTS AND `/global-effect` DOES NOT SUFFICE (report 20260805_171).
+    // The sim used to fire fog by writing DMX from the BROWSER: the button
+    // submitted straight into the browser-local `dmxRouter` and the browser
+    // transmitted to the controller. That path is gone — the browser is not the
+    // router — so the button now asks the ENGINE, and the fog channels are
+    // written by `GlobalEffectsController.applyDmx()` on the normal
+    // engine → bridge → controller route like everything else.
+    //
+    // The old browser path had one accidental virtue worth keeping: it was a
+    // DEADMAN. Fog flowed only while the browser kept sending, so a closed tab,
+    // a crashed renderer or a yanked network cable stopped the fog. Plain
+    // `/global-effect {effect:'fogger'}` is a LATCH — it would leave a fog
+    // machine running until someone noticed. On a fogger that is a real-world
+    // problem, not a style preference, so this endpoint holds the effect only
+    // for `holdMs` and turns it off itself if the client stops refreshing.
+    //
+    // The client re-POSTs while the button is held and POSTs `state:false` on
+    // release; either way the engine ends up off.
+    } else if (req.method === 'POST' && req.url === '/fog') {
+      readBody(data => {
+        if (typeof data.state !== 'boolean') {
+          return sendJsonError(res, 400, {
+            error: 'state must be a boolean (true = fog on and refresh the hold, false = off)',
+          });
+        }
+        let holdMs = FOG_DEFAULT_HOLD_MS;
+        if (data.holdMs !== undefined) {
+          if (!Number.isInteger(data.holdMs) || data.holdMs <= 0 || data.holdMs > FOG_MAX_HOLD_MS) {
+            return sendJsonError(res, 400, {
+              error: `holdMs must be an integer 1..${FOG_MAX_HOLD_MS} ms — it is a DEADMAN ` +
+                'window, not a duration to run unattended',
+            });
+          }
+          holdMs = data.holdMs;
+        }
+        if (!globalEffectsController) {
+          return sendJsonError(res, 503, {
+            error: 'no global effects controller — this engine cannot drive fog',
+          });
+        }
+
+        setFogState(data.state, holdMs);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok', state: data.state, holdMs: data.state ? holdMs : null,
+        }));
       });
 
     // ── Global Effect Macros (docs/28 §5) ────────────────────────────
@@ -5144,7 +8813,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // POST /global-effects/banks { name? } — CREATE an empty bank (auto-named
     //   `Bank N` when name omitted). Structural → performance-gated (409).
     } else if (req.method === 'POST' && req.url === '/global-effects/banks') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       readBody(data => {
         try {
@@ -5162,7 +8831,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     //   deleted, the NEXT bank in order becomes active (full switch side
     //   effects: grid status broadcast + page-0 re-flash).
     } else if (req.method === 'DELETE' && /^\/global-effects\/banks\/[A-Za-z0-9_]+$/.test(req.url)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       const id = req.url.match(/^\/global-effects\/banks\/([A-Za-z0-9_]+)$/)[1];
       const meta = globalEffectSlotManager.getBanksMeta();
@@ -5197,7 +8866,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     //   409-gated. (The `/active` route above is matched first, so it never
     //   collides with a bank literally reachable here.)
     } else if (req.method === 'PATCH' && /^\/global-effects\/banks\/[A-Za-z0-9_]+$/.test(req.url)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       const id = req.url.match(/^\/global-effects\/banks\/([A-Za-z0-9_]+)$/)[1];
       readBody(data => {
@@ -5212,7 +8881,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'PATCH' && req.url === '/global-effect-slots') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       readBody(data => {
         try {
@@ -5223,13 +8892,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           globalEffectSlotManager.setSlots(data.slots, { emitLayout: true });
           persistGlobalEffectSlots();
           broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
+          // Body BEFORE headers (see sendJsonError's header comment).
+          const body = JSON.stringify({ slots: globalEffectSlotManager.getSlots() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ slots: globalEffectSlotManager.getSlots() }));
+          res.end(body);
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'POST' && req.url === '/global-effect-macros/panic-stop') {
+      // PANIC WINS — see POST /mixer/panic. Fire-and-forget, never awaited.
+      specialEventsService.notePanic('POST /global-effect-macros/panic-stop');
       if (!globalEffectsController || !globalEffectsController.panicStop) {
         res.writeHead(503); return res.end(JSON.stringify({ error: 'macros controller not initialized' }));
       }
@@ -5255,6 +8928,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         if (typeof data.enabled !== 'boolean') {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'enabled boolean required' }));
+        }
+        // E-STOP WINS over a special event. Only on ENABLE: releasing a
+        // blackout is not an emergency and must not tear a show down.
+        if (data.enabled) {
+          specialEventsService.notePanic('POST /global-effect-macros/blackout (e-stop)');
         }
         if (intensityController) intensityController.setBlackout(data.enabled);
         globalsState.blackout = data.enabled;
@@ -5310,7 +8988,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok', invert: globalEffectsController.invert }));
       });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // PATCH /global-effect-slots/:slotId
       const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
       if (!m) { res.writeHead(404); return res.end('Not Found'); }
@@ -5500,11 +9178,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // nothing is populated (never an error — a no-hardware/gated engine just
     // reports it did nothing).
     } else if (req.method === 'POST' && req.url === '/global-effects/deploy') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
-      const triggeredPages = globalEffectSlotManager.requestFullDeploy();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', triggeredPages, deploy: vsn1DeployStatus }));
+      // PROBE FIRST (report _30 §5): a manual re-sync is one of the attach
+      // decision points, and the caller deserves a truthful answer NOW rather
+      // than an optimistic "ok" followed by a failure banner seconds later.
+      // With nothing plugged in this returns triggeredPages: [] and
+      // attachState: 'detached' — a clean, non-error "there is no device".
+      (async () => {
+        const attachState = await vsn1DeployHook.probeAttach();
+        const triggeredPages = attachState === 'detached'
+          ? []
+          : globalEffectSlotManager.requestFullDeploy();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', triggeredPages, attachState, deploy: vsn1DeployStatus }));
+      })().catch((e) => {
+        console.error(`[VSN1] manual deploy request failed: ${e.message}`);
+        try {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        } catch (_) { /* response already sent */ }
+      });
     } else if (req.method === 'POST' && req.url.startsWith('/global-effect-slots/')) {
       // POST /global-effect-slots/:slotId/{press,activate,deactivate,trigger,toggle,down,up}
       // `press` is behavior-resolved server-side (trigger→fire, toggle→flip,
@@ -5524,14 +9218,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           slots: globalEffectSlotManager.getStatus(),
           controller: globalEffectsController.getStatus(),
         });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        // Body BEFORE headers (see sendJsonError's header comment).
+        const body = JSON.stringify({
           status: 'ok',
           slotId, action,
           controller: globalEffectsController.getStatus(),
-        }));
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(body);
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 400, { error: e.message });
       }
 
     // ── Scheduled tasks (docs/31_scheduled_tasks.md) ────────────────
@@ -5601,6 +9297,56 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
       }
 
+    // ── PARTY OVERRIDE API (report 20260725_19) ──────────────────────────
+    // The operator's SHOW POLICY for detection-driven party sessions, owned and
+    // persisted by the engine (states/<scene>/timeline_state.yaml) so it
+    // survives a supervisor restart. Both clients (CaptainPad + the Audio
+    // Companion's PARTY tab) read/write THIS — neither stores it itself.
+    //
+    //   GET /party-config → { enabled, playlist, availablePlaylists: [...] }
+    //   PUT /party-config   body { enabled?, playlist? } (partial)
+    //
+    // `enabled:false` means the mood→party cue CANNOT fire and a live session
+    // ends immediately. The DETECTOR is untouched: `audioPartyStrong` keeps
+    // publishing, so the companion's meters stay live while the policy says no.
+    // Validation is strict and all-or-nothing (unknown playlist / non-boolean
+    // ⇒ 400 with nothing applied — codex P0, no clamping).
+    } else if (req.url === '/party-config' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        // getPartyStatus() = the persisted { enabled, playlist } PLUS the
+        // derived `effectiveState` (armed | disabled | no_plan | manual |
+        // in_session | cooldown) so no client paints ARMED while the plan
+        // isn't running or a human holds the deck. Additive to the contract.
+        const cfg = timelineService.getPartyStatus();
+        // Body BEFORE headers: listAvailablePlaylists() reads the playlist
+        // directory and can throw. Committing the 200 first would make the
+        // catch's writeHead a second writeHead — a process kill, not a 500.
+        const body = JSON.stringify({ ...cfg, availablePlaylists: timelineService.listAvailablePlaylists() });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(body);
+      } catch (e) {
+        sendJsonError(res, 500, { error: e.message });
+      }
+    } else if (req.url === '/party-config' && req.method === 'PUT') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(async (data) => {
+        try {
+          await timelineService.setPartyConfig(data);
+          const payload = {
+            ...timelineService.getPartyStatus(),
+            availablePlaylists: timelineService.listAvailablePlaylists(),
+          };
+          // Live-sync BOTH clients (CaptainPad + the companion PARTY tab) —
+          // same posture as engineSettings / playlistLibrary.
+          broadcastWs({ type: 'partyConfig', ...payload });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(payload));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
     // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
     // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
     // /timeline/plans/:name · POST /timeline/plan/activate ·
@@ -5610,7 +9356,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.url === '/timeline/state' && req.method === 'GET') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
-        const payload = JSON.stringify(timelineService.getState());
+        const st = timelineService.getState();
+        // W1-3 handoff (report _116): surface the pattern-VM "never-black"
+        // verdict on /timeline/state so the launcher watchdog (W1-2) and
+        // CaptainPad see a dark-while-lit ship here too — a dead-but-armed
+        // timeline must not read healthy. `/status.renderHealth` already folds
+        // this into `.ok`; here it rides as a standalone additive field. Guarded
+        // so an older mixer without the method simply omits it (no fallback lie).
+        if (mixer && typeof mixer.getNeverBlackHealth === 'function') {
+          st.renderHealth = mixer.getNeverBlackHealth();
+        }
+        const payload = JSON.stringify(st);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(payload);
       } catch (e) {
@@ -5620,7 +9376,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Multi-day overview of the ACTIVE plan for the UI (docs/38 §15.2).
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
-        const payload = JSON.stringify(buildOverview(timelineService.plan, Date.now()));
+        // J1 (report _116 / _113): memoised per (plan, calendar-day) so a repeated
+        // day-zoom open can no longer freeze the render/tick/sACN thread.
+        const payload = JSON.stringify(timelineService.getOverview(Date.now()));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(payload);
       } catch (e) {
@@ -5740,13 +9498,60 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Operator-takeover lease ARM (docs/38 §16): CaptainPad signals the
       // operator grabbed manual control. mode→overridden, arm the lease.
       // Idempotent (re-calling refreshes expiry).
+      //
+      // ZOOM (report _94 §3.2): an OPTIONAL body { scope:'perform', cueId? }
+      // tags the lease as an EVENT ZOOM (adds `zoom` to the broadcast state and
+      // defers a pending program's auto-start). A BODYLESS call is the plain
+      // takeover, byte-identical to what shipped.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      // PERFORMANCE-MODE PASSCODE (operator ruling 2026-08-14): while a show is
+      // live, every takeover attempt — including a lease REFRESH, since the
+      // refusal must not depend on guessing intent — needs a fresh operator
+      // passcode. Refused → the timeline just keeps running.
+      if (rejectTakeoverWithoutPasscode(req, res, 'POST /timeline/takeover')) return;
+      readBody(data => {
+        try {
+          const r = timelineService.takeover(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(r));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url === '/timeline/travel' && req.method === 'POST') {
+      // TIME TRAVEL (report _94 §3.3): enter a scoped takeover and put the
+      // plan's RESOLVED deck state at the target instant on the rig. Body:
+      //   { date:'YYYY-MM-DD', time:'HH:MM' } | { cueId, date? } | { step:'prev'|'next' }
+      // Static snapshot (D4) — the live clock is never warped and the real
+      // night's bookkeeping is untouched. Exit via POST /timeline/resume.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(async (data) => {
+        try {
+          const r = await timelineService.travel(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(r));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url.startsWith('/timeline/resolve') && req.method === 'GET') {
+      // READ-ONLY resolver peek (report _94 §4.1/§4.2):
+      //   GET /timeline/resolve?date=YYYY-MM-DD&time=HH:MM
+      //   GET /timeline/resolve?cueId=<id>[&date=YYYY-MM-DD]
+      // Zero side effects — nothing is dispatched, no lease armed, no latch
+      // written. 400 on an unresolvable or out-of-festival-window target.
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
-        const r = timelineService.takeover();
+        const q = new URL(req.url, 'http://localhost').searchParams;
+        const spec = {};
+        for (const key of ['date', 'time', 'cueId']) {
+          if (q.has(key)) spec[key] = q.get(key);
+        }
+        const payload = JSON.stringify(timelineService.resolveAt(spec));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(r));
+        res.end(payload);
       } catch (e) {
-        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.url === '/timeline/activity' && req.method === 'POST') {
       // Operator-activity ping (docs/38 §16): CaptainPad throttles to ~once/10s
@@ -5793,6 +9598,217 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
         .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
 
+    // ── SPECIAL EVENTS API (docs/52) ──────────────────────────────────
+    // Staged one-button shows. GET /special-events (library + load errors) ·
+    // GET /special-events/state · POST arm | fire | extend | quick-effect |
+    // finish | abort | dismiss | autopilot. Every mutation answers with the FULL runner
+    // state, byte-identical to the WS `specialEvents` frame, so the tab has
+    // exactly one shape to reconcile and never has to be optimistic.
+    //
+    // NOT performance-mode gated (docs/52 §4): performance mode freezes
+    // STRUCTURE during a live set, and a special event IS the live set —
+    // shows are read-only data authored off-playa and every button here is a
+    // performance action. The ONE exception is ARM, below.
+    } else if (req.url === '/special-events' && req.method === 'GET') {
+      const state = specialEventsService.getState();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ shows: state.shows, loadErrors: state.loadErrors }));
+    } else if (req.url === '/special-events/state' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(specialEventsService.getState()));
+    } else if (req.url === '/special-events/arm' && req.method === 'POST') {
+      // ARM IS A TAKEOVER, so it wears the SAME gate as every other way of
+      // seizing the rig from a running plan (operator ruling 2026-08-14,
+      // report `_200`): in performance mode it needs a FRESH operator passcode
+      // — Sina / Muisha / Sailors — every single time. A live privileged
+      // session buys nothing. Outside performance mode the gate is inert.
+      if (rejectTakeoverWithoutPasscode(req, res, 'POST /special-events/arm')) return;
+      readBody(async (data) => {
+        try {
+          const state = await specialEventsService.arm(data && data.show);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        } catch (e) {
+          sendSpecialEventError(res, e);
+        }
+      });
+    } else if (req.url === '/special-events/fire' && req.method === 'POST') {
+      readBody(async (data) => {
+        try {
+          const state = await specialEventsService.fire(
+            data && data.stageId,
+            data && data.choiceId !== undefined ? data.choiceId : null,
+          );
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        } catch (e) {
+          sendSpecialEventError(res, e);
+        }
+      });
+    } else if (req.url === '/special-events/extend' && req.method === 'POST') {
+      specialEventsService.extend()
+        .then((state) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        })
+        .catch((e) => sendSpecialEventError(res, e));
+    } else if (req.url === '/special-events/quick-effect' && req.method === 'POST') {
+      readBody(async (data) => {
+        try {
+          const state = await specialEventsService.quickEffect(data && data.id);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        } catch (e) {
+          sendSpecialEventError(res, e);
+        }
+      });
+    } else if (req.url === '/special-events/finish' && req.method === 'POST') {
+      specialEventsService.finish()
+        .then((state) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        })
+        .catch((e) => sendSpecialEventError(res, e));
+    } else if (req.url === '/special-events/abort' && req.method === 'POST') {
+      // NEVER gated. Giving the rig back is always free — the same principle
+      // that keeps timeline RESUME ungated (report `_200` §2.3).
+      specialEventsService.abort()
+        .then((state) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        })
+        .catch((e) => sendSpecialEventError(res, e));
+    } else if (req.url === '/special-events/dismiss' && req.method === 'POST') {
+      try {
+        const state = specialEventsService.dismiss();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', state }));
+      } catch (e) {
+        sendSpecialEventError(res, e);
+      }
+    } else if (req.url === '/special-events/autopilot' && req.method === 'POST') {
+      // STAGE ROTATION, tuned live: { active?, everySec?, shuffle?,
+      // transition: { enabled?, mode?, durationMs?, shuffle? } } — or
+      // { reset: true } to drop the override and return to the show file.
+      //
+      // UNGATED, like every other in-show verb: retuning the tease cadence
+      // mid-ceremony is a performance action, not a takeover (ARM already took
+      // the rig). The runner refuses when no stage is running or when the live
+      // stage authors no autopilot block, so the engine is the guard here too.
+      readBody(async (data) => {
+        try {
+          const state = await specialEventsService.setAutopilot(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', state }));
+        } catch (e) {
+          sendSpecialEventError(res, e);
+        }
+      });
+
+    // ── AUDIO BINDINGS ────────────────────────────────────────────────
+    // One audio signal per effect slot / per group, chosen by the operator.
+    // GET /audio-sources lists what can be bound RIGHT NOW - the curated
+    // built-in keys plus whatever the Companion registered - each with its
+    // label, its range, and whether a live value is actually arriving. A
+    // dropdown built from this cannot drift from the audio panel, and a signal
+    // nobody is sending shows as not-live instead of silently doing nothing.
+    } else if (req.method === 'GET' && req.url === '/audio-sources') {
+      const snapshot = paramCenter ? paramCenter.getAll() : {};
+      const dyn = paramCenter && paramCenter.getDynamicLiveParamKeys
+        ? paramCenter.getDynamicLiveParamKeys() : [];
+      const seen = {};
+      const list = [];
+      // The BPM pulse is SYNTHETIC - derived from the arbitrated tempo, not
+      // from audio - so it is listed first and is always live. It is the only
+      // source that still works with the Companion switched off, which is why
+      // the panel can fall back to it.
+      list.push({ key: 'bpmPulse', label: 'BPM · Beat', range: [0, 1], builtin: true, live: true, synthetic: true });
+      seen.bpmPulse = 1;
+      for (const e of audioRegistryEntries()) {
+        seen[e.key] = 1;
+        list.push({
+          key: e.key,
+          label: e.label || e.key,
+          range: e.range || [0, 1],
+          builtin: true,
+          live: Object.prototype.hasOwnProperty.call(snapshot, e.key),
+        });
+      }
+      for (const k of dyn) {
+        if (seen[k]) continue;
+        list.push({ key: k, label: k, range: [0, 1], builtin: false,
+          live: Object.prototype.hasOwnProperty.call(snapshot, k) });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sources: list, audioPresent: list.some(x => x.live) }));
+
+    } else if (req.method === 'GET' && req.url === '/audio-bindings') {
+      const ab = globalEffectsController && globalEffectsController.audioBindings;
+      if (!ab) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_bindings_not_initialized' })); }
+      const gains = globalEffectsController._audioGains || { effects: {}, groups: {} };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ bindings: ab.getAll(), gains, missing: ab.missingSources }));
+
+    } else if (req.method === 'PUT' && req.url.startsWith('/audio-bindings/')) {
+      // PUT /audio-bindings/<effects|groups>/<id> { source, mode, depth,
+      // threshold, decayMs }. A body of null (or source:null) clears it.
+      const ab = globalEffectsController && globalEffectsController.audioBindings;
+      if (!ab) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_bindings_not_initialized' })); }
+      const parts = req.url.split('?')[0].split('/').filter(Boolean);
+      if (parts.length < 3) {
+        res.writeHead(400); return res.end(JSON.stringify({ error: 'expected /audio-bindings/<scope>/<id>' }));
+      }
+      const bScope = parts[1];
+      const bId = decodeURIComponent(parts.slice(2).join('/'));
+      readBody(body => {
+        try {
+          // CLEAR only when the body names no source AT ALL. Checking `source`
+          // alone silently cleared every multi-stem binding, because those
+          // carry `sources` and no `source`.
+          const hasOne = body && typeof body.source === 'string' && body.source;
+          const hasMany = body && Array.isArray(body.sources) && body.sources.length;
+          const b = (hasOne || hasMany) ? body : null;
+
+          // FAIL LOUD on an effect that has nothing for audio to drive.
+          // An effect binding rides the effect's own primary parameter
+          // (primaryIntensity). vintageWhite / blastWhite / uvBlast / invert /
+          // fogger declare `primaryIntensity: null` - they are on/off slams
+          // with no magnitude. Binding a signal to one of those used to be
+          // accepted and then silently do nothing, which is the "I set it and
+          // the rig ignored me" failure the codex forbids. Say so instead.
+          if (b && bScope === 'effects' && globalEffectSlotManager) {
+            const slot = globalEffectSlotManager.getSlot(Number(bId));
+            if (slot && slot.effectId) {
+              const desc = getPrimaryIntensity(slot.effectId);
+              if (!desc) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({
+                  error: `effect '${slot.effectId}' on slot ${bId} has no audio-drivable `
+                    + 'parameter (primaryIntensity is null - it is an on/off effect). '
+                    + 'Bind audio to an effect with a magnitude, or drive the group fader instead.',
+                  effectId: slot.effectId,
+                  slotId: Number(bId),
+                }));
+              }
+            }
+          }
+
+          const saved = ab.set(bScope, bId, b);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, scope: bScope, id: bId, binding: saved }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
+    } else if (req.method === 'POST' && req.url === '/audio-bindings/clear') {
+      const ab = globalEffectsController && globalEffectsController.audioBindings;
+      if (!ab) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_bindings_not_initialized' })); }
+      ab.clearAll();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
       // persisted to disk — the in-memory `viewOverrideMode` is the
@@ -5820,6 +9836,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
+        // STRICT TYPES, PATCH-STYLE (audit medium). This route silently
+        // coerced: delay_s 'abc' or 0 became 30 via `parseInt(..) || 30`,
+        // group fields silently clamped. A wrong autopilot cadence from a
+        // typo'd script is a wrong SHOW; reject bad fields loudly instead.
+        // Absent fields stay absent — this remains a merge, not a replace.
+        const apBad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'autopilot: ' + msg }));
+        };
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return apBad('body must be an object');
+        for (const boolKey of ['active', 'shuffle', 'groupMode']) {
+          if (data[boolKey] !== undefined && typeof data[boolKey] !== 'boolean') {
+            return apBad(`${boolKey} must be boolean, got ${JSON.stringify(data[boolKey])}`);
+          }
+        }
+        if (data.delay_s !== undefined) {
+          // NUMERIC STRINGS ARE ACCEPTED for delay_s only: the deployed
+          // CaptainPad posts delay_s as a string (utils/api.ts setAutopilot),
+          // and strictness must not brick the installed iPad app. '45' is
+          // unambiguous; 'abc' and 0 (which `parseInt(..) || 30` silently
+          // turned into 30) are still refused.
+          const d = (typeof data.delay_s === 'number') ? data.delay_s
+            : (typeof data.delay_s === 'string' && data.delay_s.trim() !== ''
+              ? Number(data.delay_s) : NaN);
+          if (!Number.isFinite(d) || d < 1 || d > 3600) {
+            return apBad(`delay_s must be seconds in 1..3600, got ${JSON.stringify(data.delay_s)}`);
+          }
+          data.delay_s = d;
+        }
+        const intBad = (k, lo, hi) => data[k] !== undefined && (typeof data[k] !== 'number'
+          || !Number.isInteger(data[k]) || data[k] < lo || data[k] > hi);
+        if (intBad('groupSize', AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX)) {
+          return apBad(`groupSize must be an integer in ${AUTO_GROUP_SIZE_MIN}..${AUTO_GROUP_SIZE_MAX}`);
+        }
+        if (intBad('groupDwell', AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX)) {
+          return apBad(`groupDwell must be an integer in ${AUTO_GROUP_DWELL_MIN}..${AUTO_GROUP_DWELL_MAX}`);
+        }
         // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
         // deck tab). main's frame-driven system: the daemon's timer is driven
         // by autopilot.updateState({active,delay_s}); the next-entry pick reads
@@ -5883,17 +9936,47 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // over the current config, so the deck UI can post a single toggle/stepper
       // change (e.g. { delay_s } or { transitionMs }) optimistically. The MERGED
       // object is then validated STRICTLY (codex P0): palettes a non-empty array
-      // of KNOWN ids, delay_s number>0, transitionMs number>=0, active+shuffle
-      // booleans. A bad shape → 400 with a loud message (never coerce / skip).
+      // of KNOWN ids or inline {c1,c2} pairs, delay_s number>=0 (0 = CONTINUOUS,
+      // which additionally requires transitionMs>=100), transitionMs number>=0,
+      // active+shuffle booleans. A bad shape → 400 with a loud message (never
+      // coerce / skip).
       readBody(data => {
         try {
-          if (!data || typeof data !== 'object' || Array.isArray(data)) {
-            throw new Error('colorAutopilot body must be an object');
-          }
-          const merged = { ...colorAutopilotState(), ...data };
+          // MODE-AWARE merge (docs/59 §4.1). `{ ...state, ...body }` cannot
+          // survive a mode discriminator: the live state always carries
+          // `palettes`/`delay_s`, so a body saying `mode:'followNote'` would
+          // merge into a config carrying BOTH modes' fields and be refused —
+          // START FOLLOW NOTE would 400 on a perfectly good request.
+          const merged = ColorAutopilot.mergeWire(colorAutopilotState(), data);
           const out = setColorAutopilot(merged);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(out));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e && e.message ? e.message : String(e) }));
+        }
+      });
+    } else if (req.method === 'PATCH' && req.url === '/deck/color-autopilot') {
+      // LIVE RETUNE (docs/59 §5.2), the `_230` sparse-patch idiom.
+      //
+      // The difference from POST is the whole point: POST is a full REPLACE —
+      // it bumps the daemon's generation, kills the in-flight tween and re-arms
+      // the hold from zero, so a running rotation visibly restarts. PATCH
+      // applies the moved knob IN PLACE: the generation is untouched, the tween
+      // is never cancelled, a hold change re-arms phase-preserving and a fade
+      // change lands on the NEXT fade. `active` and `mode` are REFUSED here —
+      // those are takeovers and belong on POST, where the clean break is the
+      // correct behaviour rather than a bug.
+      //
+      // A PATCH while inactive edits the parked config (there are no timers to
+      // re-arm), which is what makes the pills honest before a start too.
+      readBody(data => {
+        try {
+          colorAutopilot.patchState(data, knownPaletteIds());
+          saveAllState();
+          broadcastColorAutopilot();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(colorAutopilotState()));
         } catch (e) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: e && e.message ? e.message : String(e) }));
@@ -5946,14 +10029,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // picker can render them; the existing `viewMasks` array stays the
       // bit-backed subset for back-compat.
       const reg = mixer && mixer.maskRegistry;
+      const modelGroupCounts = new Map();
+      for (const px of pixels) {
+        if (px && typeof px.group === 'string' && px.group.length > 0) {
+          modelGroupCounts.set(px.group, (modelGroupCounts.get(px.group) || 0) + 1);
+        }
+      }
       const namedViews = reg
         ? reg.names().map(name => {
           const e = reg.get(name);
           let memberCount = 0;
+          const memberGroups = new Map();
           if (e && e.members) {
-            for (let k = 0; k < e.members.length; k++) memberCount += e.members[k];
+            for (let k = 0; k < e.members.length; k++) {
+              if (!e.members[k]) continue;
+              memberCount++;
+              const group = pixels[k] && pixels[k].group;
+              if (typeof group === 'string' && group.length > 0) {
+                memberGroups.set(group, (memberGroups.get(group) || 0) + 1);
+              }
+            }
           }
-          return { name, kind: e ? e.kind : 'group', bit: e ? e.bit : 0, memberCount };
+          const groupNames = [];
+          const partialGroupNames = [];
+          for (const [group, count] of memberGroups) {
+            if (count === modelGroupCounts.get(group)) groupNames.push(group);
+            else partialGroupNames.push(group);
+          }
+          groupNames.sort();
+          partialGroupNames.sort();
+          return {
+            name,
+            kind: e ? e.kind : 'group',
+            bit: e ? e.bit : 0,
+            memberCount,
+            groupNames,
+            partialGroupNames,
+          };
         })
         : [];
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -5974,6 +10086,139 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         pixelCount: pixels.length,
       }));
     }
+    // GET /model/group-layout — the ship's TOP-DOWN footprint, per group.
+    //
+    // WHY THIS EXISTS: a spatial touch surface needs to know WHERE things are,
+    // and nothing exposed that. `/model/view-selection-options` returns group
+    // NAMES only, and the sim's hand-tuned 2D layout lives in a sim-side
+    // sidecar (simulation/scenes/<scene>/pixel_map_views.yaml) that CaptainPad
+    // cannot reach — it talks to the engine, not the sim's static server.
+    //
+    // So this derives the footprint from the LOADED MODEL, which means it can
+    // never drift out of sync with what is actually rendering, and it works
+    // offline (the playa has no internet, and the sim may not be up).
+    //
+    // Coordinates are the model's normalized nx/ny/nz. The client is expected
+    // to do its own rectification before drawing — MEASURED on titanic:
+    // nx 0.40..0.65 holds ZERO pixels (25% of the axis, the empty centre of the
+    // ship) and the two sides occupy different nz bands, so a raw
+    // screen-aligned pad is ~74% dead. Bounds are returned per group precisely
+    // so a client can lay the groups out honestly instead of guessing.
+    else if (req.method === 'GET' && req.url === '/model/group-layout') {
+      const pixels = (model && Array.isArray(model.pixels)) ? model.pixels : [];
+      const acc = new Map();
+      for (const p of pixels) {
+        if (!p || typeof p.group !== 'string' || p.group.length === 0) continue;
+        const nx = p.nx, ny = p.ny, nz = p.nz;
+        if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) continue;
+        let g = acc.get(p.group);
+        if (!g) {
+          g = {
+            name: p.group, pixelCount: 0, sx: 0, sy: 0, sz: 0,
+            minX: Infinity, maxX: -Infinity,
+            minY: Infinity, maxY: -Infinity,
+            minZ: Infinity, maxZ: -Infinity,
+          };
+          acc.set(p.group, g);
+        }
+        g.pixelCount++;
+        g.sx += nx; g.sy += ny; g.sz += nz;
+        if (nx < g.minX) g.minX = nx;
+        if (nx > g.maxX) g.maxX = nx;
+        if (ny < g.minY) g.minY = ny;
+        if (ny > g.maxY) g.maxY = ny;
+        if (nz < g.minZ) g.minZ = nz;
+        if (nz > g.maxZ) g.maxZ = nz;
+      }
+      const groups = [...acc.values()]
+        .map(g => ({
+          name: g.name,
+          pixelCount: g.pixelCount,
+          // Centroid in normalized model space.
+          cx: g.sx / g.pixelCount,
+          cy: g.sy / g.pixelCount,
+          cz: g.sz / g.pixelCount,
+          bounds: {
+            minX: g.minX, maxX: g.maxX,
+            minY: g.minY, maxY: g.maxY,
+            minZ: g.minZ, maxZ: g.maxZ,
+          },
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        // `opts.modelName` is the authoritative name here — the same source
+        // the scene-reload path derives its own `activeScene` from
+        // (api_server ~5519). `opts` is a startApiServer parameter, so it is
+        // genuinely in scope; `activeScene` is a LOCAL of another function and
+        // referencing it here crashed the engine with a ReferenceError.
+        scene: opts.modelName || null,
+        model: opts.modelName || null,
+        pixelCount: pixels.length,
+        placedPixelCount: groups.reduce((n, g) => n + g.pixelCount, 0),
+        groups,
+      }));
+    }
+    // GET /model/pixel-layout — PER-PIXEL geometry, for surfaces that must
+    // reproduce the sim's 2D pixel view.
+    //
+    // WHY GROUP-LEVEL IS NOT ENOUGH: `/model/group-layout` collapses each group
+    // to one centroid. On titanic four of the 24 groups hold 90 pixels each, so
+    // a spatial pad built on centroids would address 24 points instead of 964
+    // and could never reproduce the sim's picture.
+    //
+    // WHY RAW WORLD COORDS ARE INCLUDED: the sim's gap compression
+    // (`compressProjectedGaps`, simulation/src/gui/pixel_map/pixel_map_layout.js)
+    // operates on RAW WORLD units — `minWorldGap` / `gapWorld` are world units,
+    // not normalized. A client given only nx/ny/nz could NOT compute the same
+    // bands, so it could not match the sim. Both are therefore returned.
+    //
+    // WHY NOT JUST FETCH THE SIM: the sim's static server is a different
+    // process on a different port that may not be running (the `prod` profile
+    // does run it, but a show server need not), and CaptainPad's discovery
+    // deliberately scans only the engine port. Serving this from the engine
+    // keeps the iPad on ONE port and works with no sim at all — which matters
+    // because the playa has no internet and no guarantees.
+    //
+    // Size: ~964 records on titanic. Trimmed to the fields a spatial surface
+    // actually needs — patch/channels/vMask are deliberately omitted (they are
+    // wiring, not geometry, and would roughly double the payload).
+    else if (req.method === 'GET' && req.url === '/model/pixel-layout') {
+      const pixels = (model && Array.isArray(model.pixels)) ? model.pixels : [];
+      const out = [];
+      for (const p of pixels) {
+        if (!p) continue;
+        // Skip anything without usable geometry rather than emitting a hole a
+        // client would have to guess about (codex P0: no silent garbage).
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) continue;
+        if (!Number.isFinite(p.nx) || !Number.isFinite(p.ny) || !Number.isFinite(p.nz)) continue;
+        out.push({
+          i: p.i,
+          x: p.x, y: p.y, z: p.z,          // RAW world — needed for gap bands
+          nx: p.nx, ny: p.ny, nz: p.nz,    // normalized — what patterns consume
+          group: typeof p.group === 'string' ? p.group : null,
+          type: typeof p.type === 'string' ? p.type : null,
+          fixtureType: typeof p.fixtureType === 'string' ? p.fixtureType : null,
+          fId: p.fId,
+          sId: p.sId,
+          localIndex: p.localIndex,
+        });
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        scene: opts.modelName || null,
+        model: opts.modelName || null,
+        pixelCount: pixels.length,
+        // If this is lower than pixelCount, some pixels had unusable geometry.
+        // Surfaced so a client can SEE the shortfall instead of silently
+        // drawing an incomplete ship.
+        returnedCount: out.length,
+        pixels: out,
+      }));
+    }
     // ---- MIXER API ----
     else if (req.method === 'GET' && req.url === '/mixer') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -5981,6 +10226,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'PATCH' && req.url === '/mixer') {
       readBody(data => {
         if (data.master !== undefined) {
+          if (touchControlOwner(req)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch must use its transient master, not the Mixer master',
+              code: 'TOUCH_CANNOT_WRITE_MIXER_MASTER',
+            }));
+          }
           // Codex P0: master is a [0,1] fader. Reject non-finite with 400
           // (setMaster's Math.max/min would otherwise pass NaN straight
           // through to applyMaster and black the rig). Clamp finite.
@@ -6000,6 +10252,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // toward `target` over `durationMs` on the render tick. A timed
       // blackout is target=0; a restore is a fade to a non-zero value.
       readBody(data => {
+        if (touchControlOwner(req)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch must fade its transient master, not the Mixer master',
+            code: 'TOUCH_CANNOT_WRITE_MIXER_MASTER',
+          }));
+        }
         // Codex P0: reject non-finite / out-of-range BEFORE touching the
         // mixer. target reuses validateFader's finite-[0,1] contract (but
         // is NOT clamped silently here — validateFader clamps a finite
@@ -6160,7 +10419,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ mixGroups: mixer.getMixGroups() }));
     } else if (req.method === 'POST' && req.url === '/mixer/groups') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Create a group. name/color optional; fader=1, muted=false to start.
       readBody(data => {
         if (data.name !== undefined && data.name !== null && typeof data.name !== 'string') {
@@ -6178,7 +10437,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok', group }));
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Add a mixer channel to this group (single membership).
       const gid = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
@@ -6196,7 +10455,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Remove a channel from this group.
       const parts = req.url.split('/');
       const gid = decodeURIComponent(parts[3]);
@@ -6241,7 +10500,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', group }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Delete a group (clears every member's mixGroupId first).
       const gid = decodeURIComponent(req.url.split('/')[3]);
       const removed = mixer.deleteMixGroup(gid);
@@ -6291,7 +10550,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ snapshots: snapshotManager.list() }));
     } else if (req.method === 'POST' && req.url === '/mixer/snapshots') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Capture the current full mixer state under a name.
       readBody(data => {
         if (typeof data.name !== 'string' || data.name.trim() === '') {
@@ -6305,6 +10564,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             error: `'${PERF_SNAPSHOT_NAME}' is a reserved snapshot name (performance mode)`,
+            code: 'SNAPSHOT_NAME_RESERVED',
+          }));
+        }
+        // Same rule for the SPECIAL EVENTS pre-show capture (docs/52 §3): the
+        // runner owns this slot and restores from it, so a manual save under
+        // the name — even outside a show — would rewrite what an abort recalls.
+        if (data.name === EVENT_SNAPSHOT_NAME) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `'${EVENT_SNAPSHOT_NAME}' is a reserved snapshot name (special events pre-show look)`,
             code: 'SNAPSHOT_NAME_RESERVED',
           }));
         }
@@ -6334,7 +10603,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       try {
         const removed = snapshotManager.delete(name);
@@ -6346,7 +10615,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       let look;
       try {
@@ -6381,7 +10650,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name }));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall-fade$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // ── SNAPSHOT CROSSFADE / MORPH (round-2 #1, docs/39 §10.8) ──────────
       // Recall a saved look by RAMPING current→target over durationMs instead
       // of the instant cut /recall does. Body: { durationMs } (finite > 0).
@@ -6449,7 +10718,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // (fail loud, NOT a silent no-op — Codex P0). GET /mixer/undo → {depth,
     // top} for the UI button enable/label.
     else if (req.method === 'POST' && req.url === '/mixer/undo') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       if (undoStack.isEmpty) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'nothing to undo', code: 'UNDO_EMPTY' }));
@@ -6491,20 +10760,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // mixer.getChannel — disjoint from the snapshot routes above. See docs/39.
     else if (req.method === 'GET' && req.url === '/mixer/param-presets') {
       try {
+        // Body BEFORE headers: listParamPresets() reads every preset file's
+        // header and THROWS on a corrupt one (that is the intended loud
+        // behavior). Committing the 200 first turned that throw into a
+        // second writeHead in the catch — i.e. a dead engine, not a 400.
+        const body = JSON.stringify({ paramPresets: paramPresetManager.listParamPresets() });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ paramPresets: paramPresetManager.listParamPresets() }));
+        res.end(body);
       } catch (e) {
         // A corrupt preset file surfaces here (listParamPresets reads each
         // header) — fail loud rather than hiding the bad preset from the list.
         if (e instanceof ParamPresetError) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          return sendJsonError(res, 400, { error: e.message, code: e.code }, { 'Content-Type': 'application/json' });
         }
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 400, { error: e.message }, { 'Content-Type': 'application/json' });
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Capture the addressed channel's current params under a name.
       const id = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
@@ -6587,7 +10859,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name, channelId: channel.id }));
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/param-presets\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       try {
         const removed = paramPresetManager.deleteParamPreset(name);
@@ -6599,13 +10871,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist
       //     onto the new channel; pattern comes from the entry.
       //  2. {pattern:'<name>'} — legacy; we still attach the 'default' playlist
       //     afterwards so every channel is always in playlist mode.
       readBody(data => {
+        // Blend-mode gate — the SAME one PATCH /mixer/channels/:id, WS
+        // setChannelMode and the deck-overlay routes use. This route was
+        // the one channel-creating path that passed `data.mode` straight
+        // through to the mixer unvalidated. That matters now that the
+        // render hot path has NO fallback compositor: a channel carrying
+        // an uncompiled mode makes renderAll6ch() THROW inside the 40 Hz
+        // tick, which the engine's uncaughtException handler turns into
+        // `⛔ ENGINE FATAL` + exit(1). An unknown mode must be refused at
+        // the boundary, not discovered mid-show. (Report `_254`.)
+        if (data.mode !== undefined && !isValidBlendMode(data.mode)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `Invalid blend mode '${data.mode}' (expected one of ` +
+              `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+          }));
+        }
         let playlistName = data.playlist;
         let entryId = data.playlistEntryId;
         let patternName;
@@ -6627,7 +10915,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           entryId = entry.id;
           patternName = entry.pattern;
         } else if (data.pattern) {
-          patternName = path.basename(data.pattern, '.js');
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           playlistName = 'default';
         } else {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
@@ -6768,7 +11057,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // additive fields (faderMax, color, mixGroupId, soloSafe, viewSelection,
     // locks, transition prefs) ride along in the serialized blob for free.
     else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/duplicate$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       // Decks can't be duplicated via /mixer routes (single deck identity).
       const reject = rejectIfWrongRole(id, 'mixer');
@@ -6822,7 +11111,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // permutation BEFORE mutating (fail loud, no partial apply).
     // order[0] = bottom of the mix, order[last] = top.
     else if (req.method === 'POST' && req.url === '/mixer/channels/reorder') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       readBody(data => {
         const order = data && data.order;
         const current = mixer.getMixerChannels();
@@ -6870,6 +11159,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // Always cancels master-fade / deck-swap / transitions, clears solo,
     // un-mutes groups (panicToSafeDefault), and persists.
     else if (req.method === 'POST' && req.url === '/mixer/panic') {
+      // PANIC WINS over a special event (docs/52 §4). Fire-and-forget, NEVER
+      // awaited — panic latency is untouchable. The runner ends the show,
+      // releases every effect it pulsed, restores the autopilot flags and hands
+      // the timeline back, but deliberately does NOT recall its snapshot: panic
+      // is about to establish a known-good LIT state and must not be fought.
+      specialEventsService.notePanic('POST /mixer/panic');
       readBody(data => {
         const HOME_NAME = 'home';
         const wantHome = data && data.home !== undefined ? !!data.home : true;
@@ -6878,11 +11173,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // every exit path (success, safe-default, broken-home loud fallback)
         // leaves the rig visible.
         const forceLit = () => {
-          if (intensityController) intensityController.setBlackout(false);
+          if (intensityController) {
+            intensityController.setBlackout(false);
+            // THE ARM ENVELOPE IS PART OF THE LIT GUARANTEE. It is the LAST
+            // scalar before the wire, so a panic that cleared the blackout and
+            // raised the master while armFade sat at 0 would answer
+            // `rigLit: true` over a completely black ship — the exact failure
+            // this endpoint exists to prevent. Snapped, not ramped: panic is an
+            // e-stop, and an e-stop does not have a fade time.
+            intensityController.startArmFade(1, 0);
+          }
           globalsState.blackout = false;
           saveGlobals(true);
           mixer.setMaster(1.0);
-          mixer.targetViewFader = 1.0;
+          activateLayerSettingInternal(LAYER_SETTING_IDS.MIXER, {
+            durationMs: 1000,
+            reason: 'panic_lit_default',
+          });
         };
 
         // Try a home snapshot first when requested + present.
@@ -7103,7 +11410,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // PERFORMANCE MODE: viewSelection is a structural (view-mask) change —
         // gate ONLY that field while live; sibling fields in the same PATCH
         // (fader, mode, hue, enabled, lock) stay allowed.
-        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
         // View-selection update: validate first so a typo can't brick
         // the render loop. The mixer recompiles the channel's
         // compiledPixelMask synchronously; the next frame composites
@@ -7138,7 +11445,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         // Pattern swap: recompile WASM, swap handle, preserve channel ID
         if (data.pattern !== undefined && data.pattern !== channel.pattern) {
-          const patternName = path.basename(data.pattern, '.js');
+          let patternName;
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
@@ -7233,7 +11542,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -7270,20 +11579,643 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // localControls. No playlist auto-capture, no cross-channel mirroring
         // (operator ruling 2026-07-07 — parameter isolation).
         const ctlRes = paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        if (!ctlRes || ctlRes.status !== 'ok') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: ctlRes && ctlRes.status ? ctlRes.status : 'rejected',
+            error: ctlRes && ctlRes.reason ? ctlRes.reason : 'Mixer control write was rejected.',
+          }));
+        }
         markChannelDirtyIfLocked(id);
         // Session-cache continuity: record the operator-touched control so the
         // mixer layer's tuning is retained across in-playlist pattern switches.
         if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(id, data.id);
-        saveAllState();
+        const saveResult = persistMixerChannelParams(id);
         broadcastMixerState();
         broadcastDeckState();
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+        if (saveResult.attempted && !saveResult.saved) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: 'applied_not_saved',
+            saved: false,
+            error: saveResult.error,
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          saved: saveResult.saved,
+          persistence: saveResult.attempted ? 'saved' : 'suppressed',
+        }));
       });
+    } else if (req.method === 'GET' && req.url === '/layers/state') {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      });
+      res.end(JSON.stringify(buildLayerSettingsPayload()));
+    } else if (req.method === 'POST' && req.url === '/layers/live_touch/prepare') {
+      readBody(data => {
+        const requestStartedAt = performance.now();
+        const ownerId = touchControlOwner(req);
+        try {
+          if (!liveTouchSession) {
+            const error = new Error('Live Touch session context is unavailable');
+            error.code = 'LIVE_TOUCH_SESSION_UNAVAILABLE';
+            throw error;
+          }
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('Live Touch prepare body must be an object');
+          }
+          if (!Number.isInteger(data.expectedSessionRevision)
+              || data.expectedSessionRevision < 0) {
+            throw new Error('expectedSessionRevision must be a non-negative integer');
+          }
+          const sessionState = liveTouchSession.getState();
+          if (!sessionState.active || sessionState.ownerId !== ownerId) {
+            const error = new Error(`Live Touch session is not owned by '${ownerId}'`);
+            error.code = 'LIVE_TOUCH_SESSION_INACTIVE';
+            throw error;
+          }
+          if (data.expectedSessionRevision !== sessionState.revision) {
+            const error = new Error(
+              `stale Live Touch session revision ${data.expectedSessionRevision}; `
+                + `current revision is ${sessionState.revision}`,
+            );
+            error.code = 'LIVE_TOUCH_PREPARE_STALE_REVISION';
+            throw error;
+          }
+
+          const validateStartedAt = performance.now();
+          const prepared = liveTouchSession.buildPreparedReplacement(
+            ownerId,
+            data.operations,
+            {
+              listModelGroups,
+              getFrameIndex: engineCore.getFrameIndex,
+              sharedGlobals: globalsState,
+              serializeMixerState,
+              performanceModeActive: performanceMode.active,
+            },
+          );
+
+          let brightness = null;
+          let brightnessGroups = null;
+          if (data.brightness !== undefined) {
+            brightness = data.brightness;
+            if (!brightness || typeof brightness !== 'object' || Array.isArray(brightness)) {
+              throw new Error('brightness must be an object when supplied');
+            }
+            brightnessGroups = groupsByNameToSectionMap(
+              brightness.groups,
+              modelDimmerGroups(),
+              true,
+            );
+            requireLiveBrightnessController().validateReplacement(
+              ownerId,
+              brightness.expectedRevision,
+              brightness.master,
+              brightnessGroups,
+            );
+          }
+          const validateMs = performance.now() - validateStartedAt;
+
+          // Validation above is side-effect free. These synchronous commits
+          // share one event-loop turn, so no render frame or competing owner
+          // can observe a half-prepared Live look before the blend begins.
+          const commitStartedAt = performance.now();
+          const committedSession = liveTouchSession.commitPreparedReplacement(ownerId, prepared);
+          if (brightness) {
+            requireLiveBrightnessController().replace(
+              ownerId,
+              brightness.expectedRevision,
+              brightness.master,
+              brightnessGroups,
+            );
+            broadcastLiveBrightness();
+          }
+          const commitMs = performance.now() - commitStartedAt;
+          const totalMs = performance.now() - requestStartedAt;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok',
+            ownerId,
+            operationCount: prepared.operationCount,
+            sessionRevision: committedSession.revision,
+            brightnessRevision: brightness
+              ? requireLiveBrightnessController().getState().revision
+              : null,
+            timing: {
+              validateMs: Number(validateMs.toFixed(3)),
+              commitMs: Number(commitMs.toFixed(3)),
+              totalMs: Number(totalMs.toFixed(3)),
+            },
+          }));
+        } catch (error) {
+          let status = statusForTouchBrightnessError(error);
+          if (error && [
+            'LIVE_TOUCH_PREPARE_STALE_REVISION',
+            'LIVE_TOUCH_SESSION_INACTIVE',
+            'LIVE_TOUCH_NOT_READY',
+            'PERFORMANCE_MODE',
+          ].includes(error.code)) status = 409;
+          if (error && error.code === 'LIVE_TOUCH_SESSION_UNAVAILABLE') status = 503;
+          if (error && [
+            'LIVE_TOUCH_PREPARE_COMMIT_FAILED',
+            'LIVE_TOUCH_PREPARE_ROLLBACK_FAILED',
+          ].includes(error.code)) status = 500;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: String(error && error.message ? error.message : error),
+            code: error && error.code ? error.code : 'LIVE_TOUCH_PREPARE_INVALID',
+            operationIndex: Number.isInteger(error && error.operationIndex)
+              ? error.operationIndex
+              : null,
+          }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/layers/activate') {
+      readBody(data => {
+        const requestStartedAt = performance.now();
+        if (!data || typeof data !== 'object' || Array.isArray(data) ||
+            !LAYER_SETTING_ID_SET.has(data.target)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'target must be deck, mixer, or live_touch',
+            code: 'INVALID_LAYER_SETTING',
+          }));
+        }
+        const durationMs = data.durationMs === undefined
+          ? DEFAULT_LAYER_TRANSITION_DURATION_MS
+          : data.durationMs;
+        if (!Number.isFinite(durationMs) || durationMs < 1 || durationMs > 30000) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'durationMs must be finite in [1, 30000]',
+            code: 'INVALID_TRANSITION_DURATION',
+          }));
+        }
+
+        if (currentControlLock() === 'portwatch' && data.target !== LAYER_SETTING_IDS.DECK) {
+          res.writeHead(423, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'PortWatch holds the rig on Deck',
+            code: 'LAYER_SETTING_LOCKED',
+          }));
+        }
+        if (currentControlLock() === 'plan'
+            && data.target === LAYER_SETTING_IDS.MIXER) {
+          res.writeHead(423, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Timeline plan holds the rig on Deck; take over before activating Mixer',
+            code: 'LAYER_SETTING_LOCKED',
+            heldBy: 'plan',
+          }));
+        }
+
+        // Never accept a transition to a configured-black Mixer surface. This
+        // is a preflight, before Deck-swap finalization, Live handback markers,
+        // or router mutation. Rendered luminance is deliberately not sampled:
+        // a black-authored pattern is valid, while an empty/fully-gated stack
+        // is a control configuration error the operator can fix.
+        if (data.target === LAYER_SETTING_IDS.MIXER
+            && rejectMixerActivationIfUnready(res)) {
+          return;
+        }
+
+        const rawHeader = req.headers[TOUCH_CONTROL_OWNER_HEADER];
+        const headerOwner = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+        const bodyOwner = typeof data.ownerId === 'string' && data.ownerId.length > 0
+          ? data.ownerId
+          : null;
+        if (headerOwner && bodyOwner && headerOwner !== bodyOwner) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'ownerId does not match X-Touch-Control-Owner',
+            code: 'LIVE_TOUCH_OWNER_MISMATCH',
+          }));
+        }
+        const claimedOwner = bodyOwner || headerOwner || null;
+        const heldBy = currentArmLeaseOwner();
+        const layerState = mixer.getLayerSettingsState();
+        const liveParticipates = layerStateIncludesLiveTouch(layerState);
+
+        if (data.target === LAYER_SETTING_IDS.LIVE_TOUCH) {
+          const live = mixer.getLiveTouchChannel();
+          if (!live || !live.handle) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch has no staged pattern',
+              code: 'LIVE_TOUCH_NOT_READY',
+            }));
+          }
+          if (!heldBy) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch activation requires an active ARM lease',
+              code: 'LIVE_TOUCH_ARM_REQUIRED',
+            }));
+          }
+          if (!claimedOwner || claimedOwner !== heldBy) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Live Touch ARM lease is held by '${heldBy}'`,
+              code: 'LIVE_TOUCH_OWNER_MISMATCH',
+              heldBy,
+            }));
+          }
+          if (currentControlLock() === 'portwatch') {
+            res.writeHead(423, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'PortWatch owns the rig; Live Touch cannot take over',
+              code: 'LAYER_SETTING_LOCKED',
+              heldBy: 'portwatch',
+            }));
+          }
+
+          // Explicit ARM is an operator takeover gesture. If the timeline owns
+          // the soft Deck pin, acquire the same operator takeover lease as the
+          // timeline endpoint and clear only the plan-owned pin before starting
+          // the canonical blend. Passive Live tab focus never reaches here.
+          if (currentControlLock() === 'plan') {
+            if (!timelineService) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: 'timeline plan pin is active but timeline takeover is unavailable',
+                code: 'LAYER_SETTING_LOCKED',
+                heldBy: 'plan',
+              }));
+            }
+            // PERFORMANCE-MODE PASSCODE (operator ruling 2026-08-14): this IS
+            // the Live Touch takeover FROM a running plan, so while a show is
+            // live it needs a fresh operator passcode. Refused → the plan keeps
+            // its pin and Live Touch does not go to air.
+            if (rejectTakeoverWithoutPasscode(
+              req, res, 'Live Touch takeover of the timeline plan',
+            )) return;
+            try {
+              timelineService.takeover();
+              liveTouchTimelineTakeoverOwner = heldBy;
+              viewOverrideMode = null;
+              savedTargetViewFader = null;
+              controlLockSource = null;
+              disarmControlLockLease();
+              syncControlLockToGlobals();
+              broadcastViewOverride();
+            } catch (error) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `Live Touch could not take over the timeline: ${error.message}`,
+                code: 'LAYER_SETTING_LOCKED',
+                heldBy: 'plan',
+              }));
+            }
+          }
+          const timelineState = timelineService && typeof timelineService.getState === 'function'
+            ? timelineService.getState()
+            : null;
+          if (timelineState && timelineState.operatorLease) {
+            liveTouchTimelineTakeoverOwner = heldBy;
+            liveTouchTimelineActivityAt.set(heldBy, Date.now());
+          }
+          pendingLiveTouchReleaseOwner = null;
+        } else if (liveParticipates && heldBy) {
+          if (!claimedOwner || claimedOwner !== heldBy) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Live Touch handback requires owner '${heldBy}'`,
+              code: 'LIVE_TOUCH_OWNER_MISMATCH',
+              heldBy,
+            }));
+          }
+          pendingLiveTouchReleaseOwner = heldBy;
+        }
+
+        // Canonical setting activation owns the same Deck-swap finalization as
+        // the legacy /mixer/view adapter. The hidden Deck must preserve its
+        // intended destination state without continuing to render or leaving a
+        // parked timer that jump-completes when Deck becomes visible again.
+        if (data.target !== LAYER_SETTING_IDS.DECK && deckSwapInFlightReason()) {
+          mixer.finishDeckSwapNow();
+        }
+
+        const result = activateLayerSettingInternal(data.target, {
+          durationMs,
+          reason: typeof data.reason === 'string' && data.reason.length > 0
+            ? data.reason
+            : 'operator',
+        });
+        const statusCode = result.status === 'queued' ? 202 : 200;
+        const payload = buildLayerSettingsPayload();
+        payload.timing = {
+          activationMs: Number((performance.now() - requestStartedAt).toFixed(3)),
+          blendDurationMs: durationMs,
+        };
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      });
+    } else if (req.method === 'PUT' && req.url === '/layers/live_touch/pattern') {
+      readBody(data => {
+        if (!data || typeof data.pattern !== 'string' || data.pattern.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'pattern must be a non-empty string',
+            code: 'LIVE_TOUCH_PATTERN_INVALID',
+          }));
+        }
+        const wantsTransition = data.transition !== undefined;
+        if (wantsTransition) {
+          const transition = data.transition;
+          if (!transition || typeof transition !== 'object' || Array.isArray(transition)
+              || Object.keys(transition).some(key => !['mode', 'durationMs'].includes(key))
+              || transition.mode !== LIVE_TOUCH_PATTERN_TRANSITION_MODE
+              || transition.durationMs !== LIVE_TOUCH_PATTERN_TRANSITION_MS) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: "transition must be exactly {mode:'trans_crossfade',durationMs:500}",
+              code: 'LIVE_TOUCH_PATTERN_TRANSITION_INVALID',
+            }));
+          }
+          const layerState = mixer.getLayerSettingsState();
+          const sessionState = liveTouchSession ? liveTouchSession.getState() : null;
+          if (!sessionState || !sessionState.active
+              || layerState.active !== LAYER_SETTING_IDS.LIVE_TOUCH
+              || layerState.transition !== null) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch base transition requires an armed, steady Live Touch surface',
+              code: 'LIVE_TOUCH_PATTERN_TRANSITION_UNAVAILABLE',
+              current: buildLayerSettingsPayload(),
+            }));
+          }
+          if (mixer.isLiveTouchPatternSwapInFlight()) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'Live Touch base transition is already in flight',
+              code: 'EBUSY',
+              current: buildLayerSettingsPayload(),
+            }));
+          }
+        }
+        // Optional blessed-entry form: {pattern, playlist, entryId}. The two
+        // must arrive together — one without the other is an incomplete
+        // reference, not a partial request to guess at (codex P0: no
+        // fallback behaviours).
+        const hasPlaylist = typeof data.playlist === 'string' && data.playlist.length > 0;
+        const hasEntryId = typeof data.entryId === 'string' && data.entryId.length > 0;
+        if (hasPlaylist !== hasEntryId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: hasPlaylist
+              ? 'entryId is required when playlist is supplied'
+              : 'playlist is required when entryId is supplied',
+            code: 'LIVE_TOUCH_PATTERN_INVALID',
+          }));
+        }
+        try {
+          const stageStartedAt = performance.now();
+          // Resolve the playlist entry BEFORE touching mixer/channel state —
+          // an unknown playlist/entry (or a healed-missing entry) must 400
+          // without leaving Live staged at code defaults.
+          let entry = null;
+          if (hasPlaylist) {
+            const playlist = playlistManager.load(data.playlist);
+            if (!playlist) throw new Error(`Playlist not found: ${data.playlist}`);
+            const idx = playlist.entries.findIndex(e => e.id === data.entryId);
+            if (idx < 0) throw new Error(`Entry not found in ${data.playlist}: ${data.entryId}`);
+            entry = playlist.entries[idx];
+            if (entry._missing) {
+              throw new Error(`Pattern missing for entry ${data.entryId}: ${entry.pattern}`);
+            }
+            if (entry.pattern !== data.pattern) {
+              throw new Error(
+                `Pattern '${data.pattern}' does not match entry ${data.entryId}: ${entry.pattern}`,
+              );
+            }
+          }
+          const retained = wantsTransition
+            ? startRetainedLiveTouchPatternTransition(data.pattern, entry)
+            : null;
+          const channel = retained ? retained.channel : installLiveTouchPattern(data.pattern, entry);
+          // Same session-vs-shared param centre idiom as installLiveTouchPattern
+          // (channel registers with the SESSION's private centre while Live
+          // Touch owns it) — reused here (not re-derived ad hoc) so the
+          // shared/blocked-export filtering matches what was actually applied.
+          const responseParamCenter = channel.id === 'live_touch' && liveTouchSession
+            ? liveTouchSession.paramCenter
+            : paramCenter;
+          const payload = {
+            status: retained ? 'transitioning' : 'ok',
+            pattern: channel.pattern,
+            targetPattern: retained ? retained.incoming.pattern : channel.pattern,
+            transitionId: retained ? retained.transitionId : null,
+            transition: retained ? retained.transition : null,
+            sessionRevision: liveTouchSession
+              ? liveTouchSession.getState().revision
+              : null,
+            // Current per-export local-control values after staging (code
+            // defaults, plus entry defaults + CPC when a blessed entry was
+            // named) — GET /layers/live_touch/exports deliberately omits
+            // values (the WASM VM has no get_var cwrap; see its handler),
+            // so this is the only place a caller can observe what actually
+            // landed on the channel.
+            localControls: retained
+              ? retained.localControls
+              : playlistManager.captureDefaults(channel, wasmHost, responseParamCenter),
+            timing: {
+              stageMs: Number((performance.now() - stageStartedAt).toFixed(3)),
+            },
+          };
+          res.writeHead(retained ? 202 : 200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(payload));
+        } catch (error) {
+          // A rejected reference (bad playlist/entry, missing pair, compile
+          // failure) is resolved/validated BEFORE installLiveTouchPattern
+          // ever runs, so the previously-staged channel (if any) is
+          // untouched — surface its CURRENT local controls alongside the
+          // error so a caller can confirm nothing silently fell back to
+          // code defaults.
+          const existing = mixer.getLiveTouchChannel();
+          const errorParamCenter = existing && existing.id === 'live_touch' && liveTouchSession
+            ? liveTouchSession.paramCenter
+            : paramCenter;
+          const status = error && error.code === 'EBUSY' ? 409 : 400;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: String(error && error.message ? error.message : error),
+            code: error && error.code ? error.code : 'LIVE_TOUCH_PATTERN_INVALID',
+            localControls: existing && existing.handle
+              ? playlistManager.captureDefaults(existing, wasmHost, errorParamCenter)
+              : null,
+          }));
+        }
+      });
+    } else if (req.method === 'GET' && req.url === '/layers/live_touch/exports') {
+      const live = mixer.getLiveTouchChannel();
+      if (!live || !live.handle) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          error: 'Live Touch has no staged pattern',
+          code: 'LIVE_TOUCH_NOT_READY',
+        }));
+      }
+      const exports = wasmHost.getExports(live.handle)
+        .filter(entry => !(liveTouchSession
+          && liveTouchSession.paramCenter.isSharedExport(live.id, entry.name)));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(annotateCodeDefaults(live, exports)));
+    } else if (req.method === 'POST' && req.url === '/layers/live_touch/control') {
+      readBody(data => {
+        const live = mixer.getLiveTouchChannel();
+        if (!live || !live.handle) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch has no staged pattern',
+            code: 'LIVE_TOUCH_NOT_READY',
+          }));
+        }
+        if (!data || data.id === undefined) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'id required', code: 'LIVE_TOUCH_CONTROL_INVALID' }));
+        }
+        const result = liveTouchSession
+          ? liveTouchSession.setLiveControl(
+            live,
+            data.id,
+            data.v0 || 0,
+            data.v1 || 0,
+            data.v2 || 0,
+          )
+          : paramRouter.setChannelControl(
+            live.id,
+            data.id,
+            data.v0 || 0,
+            data.v1 || 0,
+            data.v2 || 0,
+          );
+        if (!result || result.status !== 'ok') {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: result && result.reason ? result.reason : 'Live Touch control write failed',
+            code: 'LIVE_TOUCH_CONTROL_REJECTED',
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', id: data.id }));
+      });
+    // ── LIVE TOUCH PRESET PLAYLIST (docs/70 W4, item 3) ──────────────────
+    // One ordered per-scene playlist of Live Touch presets. `state` is an
+    // opaque blob the panel owns (palette/scheme/follow/groups/fx/spatial/
+    // mode/background/colour) — this layer stores/returns it verbatim and
+    // never interprets it. Mutations pass through the global HTTP lease gate
+    // before this router: an armed desk requires its current owner header,
+    // while an unowned or stale request is refused without touching the
+    // document. Recall remains panel-local and any engine WRITE it drives goes
+    // through the existing ARM-gated control routes above. No engine-side
+    // "apply preset" route exists here on purpose (see
+    // live_touch_preset_manager.js).
+    } else if (req.method === 'GET' && req.url === '/layers/live_touch/presets') {
+      try {
+        // Body BEFORE headers — list() reads+validates the whole store and
+        // THROWS on a corrupt file (fail-loud, no silent empty list).
+        const body = JSON.stringify({ entries: liveTouchPresetManager.list() });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(body);
+      } catch (e) {
+        const code = e instanceof LiveTouchPresetStoreError ? e.code : undefined;
+        sendJsonError(res, 400, { error: e.message, ...(code ? { code } : {}) }, { 'Content-Type': 'application/json' });
+      }
+    } else if (req.method === 'POST' && req.url === '/layers/live_touch/presets') {
+      // Create (snapshot now). Body: { name, state }.
+      readBody(data => {
+        try {
+          const entry = liveTouchPresetManager.create(data && data.name, data && data.state);
+          broadcastWs({
+            type: 'liveTouchPresets', action: 'created', id: entry.id,
+            entries: liveTouchPresetManager.list(),
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', entry }));
+        } catch (e) {
+          const code = e instanceof LiveTouchPresetStoreError ? e.code : 'LIVE_TOUCH_PRESET_INVALID';
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message, code }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/layers/live_touch/presets/reorder') {
+      // Reorder the whole playlist. Body: { order: [id, ...] } — must be
+      // exactly the current id set, once each; an unknown or missing id
+      // rejects loudly and leaves the store UNCHANGED (no partial write).
+      readBody(data => {
+        try {
+          const entries = liveTouchPresetManager.reorder(data && data.order);
+          broadcastWs({ type: 'liveTouchPresets', action: 'reordered', entries });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', entries }));
+        } catch (e) {
+          const code = e instanceof LiveTouchPresetStoreError ? e.code : 'LIVE_TOUCH_PRESET_INVALID';
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message, code }));
+        }
+      });
+    } else if (req.method === 'PATCH' && req.url.match(/^\/layers\/live_touch\/presets\/[^\/]+$/)) {
+      // Rename. Body: { name }.
+      const id = decodeURIComponent(req.url.split('/')[4]);
+      readBody(data => {
+        try {
+          const entry = liveTouchPresetManager.rename(id, data && data.name);
+          if (!entry) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `Live Touch preset '${id}' not found` }));
+          }
+          broadcastWs({
+            type: 'liveTouchPresets', action: 'renamed', id,
+            entries: liveTouchPresetManager.list(),
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', entry }));
+        } catch (e) {
+          const code = e instanceof LiveTouchPresetStoreError ? e.code : 'LIVE_TOUCH_PRESET_INVALID';
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message, code }));
+        }
+      });
+    } else if (req.method === 'DELETE' && req.url.match(/^\/layers\/live_touch\/presets\/[^\/]+$/)) {
+      const id = decodeURIComponent(req.url.split('/')[4]);
+      try {
+        const removed = liveTouchPresetManager.delete(id);
+        if (!removed) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `Live Touch preset '${id}' not found` }));
+        }
+        broadcastWs({
+          type: 'liveTouchPresets', action: 'deleted', id,
+          entries: liveTouchPresetManager.list(),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+      } catch (e) {
+        const code = e instanceof LiveTouchPresetStoreError ? e.code : 'LIVE_TOUCH_PRESET_INVALID';
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message, code }));
+      }
     } else if (req.method === 'POST' && req.url === '/mixer/view') {
       // NOTE: this match must be exact-string, NOT a regex like
       // /\/mixer\/view/, otherwise it would also catch
       // /mixer/view-override and shadow the override handler below.
       readBody(data => {
+        if (!data || (data.view !== LAYER_SETTING_IDS.DECK &&
+            data.view !== LAYER_SETTING_IDS.MIXER)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'view must be deck or mixer',
+            code: 'INVALID_LAYER_SETTING',
+          }));
+        }
+        if (data.view === LAYER_SETTING_IDS.MIXER
+            && rejectMixerActivationIfUnready(res)) {
+          return;
+        }
         // View routing depends on WHO owns the deck-pin:
         //
         //   • HARD PortWatch lock ('portwatch'): the operator is locked out of
@@ -7313,8 +12245,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (data.view === 'deck') savedTargetViewFader = 0.0;
           else if (data.view === 'mixer') savedTargetViewFader = 1.0;
         } else {
-          if (data.view === 'deck') mixer.targetViewFader = 0.0;
-          else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
+          activateLayerSettingInternal(data.view, {
+            durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+            reason: 'legacy_mixer_view',
+          });
         }
         // ── Auto-finalize an in-flight deck swap on view → mixer ────
         // Per the operator's spec: navigating to the mixer tab while a
@@ -7327,7 +12261,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.view === 'mixer' && mixer.isDeckSwapInFlight && mixer.isDeckSwapInFlight()) {
           mixer.finishDeckSwapNow();
         }
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(buildLayerSettingsPayload()));
         broadcastViewOverride();
       });
     } else if (req.method === 'POST' && req.url === '/mixer/view-override') {
@@ -7339,8 +12274,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const requested = (data && data.override) || null;
         if (requested === 'deck') {
           if (viewOverrideMode !== 'deck') {
-            savedTargetViewFader = mixer.targetViewFader;
-            mixer.targetViewFader = 0.0;
+            savedTargetViewFader = legacyViewFaderForLayerSetting(currentLayerSettingTarget());
+            activateLayerSettingInternal(LAYER_SETTING_IDS.DECK, {
+              durationMs: 1000,
+              reason: 'portwatch_deck_pin',
+            });
             viewOverrideMode = 'deck';
           }
           // This is the REAL PortWatch-device deck-pin path (HARD lock). Mark the
@@ -7382,7 +12320,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
             ? CONTROL_LOCK_LEASE_MS
             : null,
-          currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+          currentView: currentLayerSettingTarget(),
         }));
         broadcastViewOverride();
       });
@@ -7396,7 +12334,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
-        currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+        currentView: currentLayerSettingTarget(),
         savedView: savedTargetViewFader === null
           ? null
           : (savedTargetViewFader < 0.5 ? 'deck' : 'mixer'),
@@ -7408,6 +12346,84 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // response — the picker just hides the Presets tab.
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : []));
+    } else if (req.method === 'GET' && req.url === '/color-palette-visibility') {
+      try {
+        const hiddenPaletteIds = readColorPaletteVisibility();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ hiddenPaletteIds }));
+      } catch (e) {
+        sendJsonError(res, 500, { error: e && e.message ? e.message : String(e) });
+      }
+    } else if (req.method === 'POST' && req.url === '/color-palette-visibility') {
+      readBody(data => {
+        try {
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('color-palette-visibility body must be { hiddenPaletteIds: string[] }');
+          }
+          const hiddenPaletteIds = validateHiddenColorPaletteIds(
+            data.hiddenPaletteIds,
+            'color-palette-visibility.hiddenPaletteIds',
+          );
+          stateManager.save(
+            'color_palette_visibility_state.yaml',
+            { hiddenPaletteIds },
+            { strict: true },
+          );
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ hiddenPaletteIds }));
+        } catch (e) {
+          sendJsonError(res, 400, { error: e && e.message ? e.message : String(e) });
+        }
+      });
+    } else if (req.method === 'GET' && req.url === '/color-pairs') {
+      // OPERATOR-SAVED colour pairs (docs/53 §4 "SAVE PAIR"). The Deck COLORS
+      // window's gallery. SCENE-OWNED, not per-tablet: the operator ruled these
+      // are shared across every iPad, so they live in the scene's state dir
+      // (states/<scene>/color_pairs_state.yaml) exactly like the mixer/deck
+      // state — a browser localStorage copy would be a per-device shadow of
+      // show state, and the prototype's localStorage is scaffolding only.
+      // Distinct from /color-palettes: that is the CURATED, named library from
+      // config.yaml; this is the operator's own gallery.
+      // _242: entries may now also carry name / ring+sel / scheme+base — see
+      // `validateColorPreset`. An unreadable FILE (a schemaVersion this build
+      // does not know) 500s with the reason rather than serving an empty list
+      // the gallery would render as "you saved nothing".
+      try {
+        const pairs = readColorPairs();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ schemaVersion: COLOR_PRESETS_SCHEMA_VERSION, pairs }));
+      } catch (e) {
+        sendJsonError(res, 500, { error: e && e.message ? e.message : String(e) });
+      }
+    } else if (req.method === 'POST' && req.url === '/color-pairs') {
+      // Whole-list replacement (the gallery is capped at COLOR_PAIRS_MAX, so
+      // there is nothing to gain from a patch protocol and a lot to lose: two
+      // iPads patching by index would interleave into a list neither operator
+      // asked for). Validated STRICTLY — a malformed pair is an authoring error
+      // and 400s loudly (codex P0), never a silently-dropped entry.
+      readBody(data => {
+        try {
+          if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.pairs)) {
+            throw new Error('color-pairs body must be an object { pairs: [{c1,c2}] }');
+          }
+          if (data.pairs.length > COLOR_PAIRS_MAX) {
+            throw new Error(`color-pairs holds at most ${COLOR_PAIRS_MAX} palettes, got ${data.pairs.length}`);
+          }
+          // The WRITE path refuses outright where the read path drops-with-warn:
+          // a client posting a shape the engine does not understand is a bug to
+          // surface now, not a row to quietly discard.
+          const pairs = data.pairs.map((p, i) => validateColorPreset(p, `color-pairs.pairs[${i}]`));
+          stateManager.save(
+            'color_pairs_state.yaml',
+            { schemaVersion: COLOR_PRESETS_SCHEMA_VERSION, pairs },
+            { strict: true },
+          );
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ schemaVersion: COLOR_PRESETS_SCHEMA_VERSION, pairs }));
+        } catch (e) {
+          sendJsonError(res, 400, { error: e && e.message ? e.message : String(e) });
+        }
+      });
     } else if (req.method === 'GET' && req.url === '/param-center/schema') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(paramCenter ? paramCenter.getSchema() : []));
@@ -7422,18 +12438,79 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // need to call applySnapshot/save/broadcastWs here — doing
         // so would double-broadcast every write (docs/24 §7.2).
         let rev = 0;
+        const ignored = [];
+        let sizeRefused = null;
         for (const k in data) {
           const r = paramCenter.set(k, data[k], 'api');
           if (r.status === 'ok') rev = r.revision;
+          else {
+            ignored.push({ key: k, reason: r.reason || r.status });
+            if (r.reason === SIZE_LOCK_REASON && r.noop !== true) {
+              sizeRefused = { key: k, requested: data[k], ...r };
+            }
+          }
         }
+        if (sizeRefused) {
+          return sendJsonError(res, 409, {
+            error: SIZE_LOCK_MESSAGE,
+            reason: SIZE_LOCK_REASON,
+            key: SIZE_LOCK_KEY,
+            requested: sizeRefused.requested,
+            lockedValue: LOCKED_SIZE,
+            revision: rev,
+            ignored,
+          }, { 'Content-Type': 'application/json' });
+        }
+        // SAY WHAT WAS REFUSED (audit medium/low). This returned a bare
+        // {status:'ok'} even when the source lock rejected every write — the
+        // WS path reports paramRejected, but the HTTP path (the one the touch
+        // panel itself uses) lied by omission. Still 200: partial application
+        // is this route's contract; the list makes it honest.
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', revision: rev }));
+        res.end(JSON.stringify(ignored.length
+          ? { status: 'partial', revision: rev, ignored }
+          : { status: 'ok', revision: rev }));
       });
     } else if (req.method === 'POST' && req.url === '/param-center/source-lock') {
       readBody(data => {
-        if (paramCenter) paramCenter.setSourceLock(data);
+        if (!paramCenter) { res.writeHead(503); return res.end(JSON.stringify({ error: 'no param center' })); }
+        if (currentArmLeaseOwner()) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'Live Touch ARM owns the ParamCenter source lock',
+            code: 'TOUCH_SOURCE_LOCK_OWNED',
+            heldBy: currentArmLeaseOwner(),
+          }));
+        }
+        // STRICT SCHEMA (audit H16). This used to hand ANY body straight to
+        // setSourceLock — a malformed lock (mode typo, garbage leases) could
+        // wedge every param write engine-wide with nothing saying why. The
+        // lock is the arm takeover's backbone; validate it like one.
+        const bad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'source-lock: ' + msg }));
+        };
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return bad('body must be an object');
+        if (['open', 'global', 'per-param'].indexOf(data.mode) === -1) {
+          return bad(`mode must be open|global|per-param, got ${JSON.stringify(data.mode)}`);
+        }
+        if (data.mode === 'global' && !(typeof data.source === 'string' && data.source.length > 0)) {
+          return bad('global mode requires a non-empty source string');
+        }
+        if (data.mode === 'per-param') {
+          const l = data.leases;
+          if (!l || typeof l !== 'object' || Array.isArray(l) || Object.keys(l).length === 0) {
+            return bad('per-param mode requires a non-empty leases object');
+          }
+          for (const k of Object.keys(l)) {
+            if (!(typeof l[k] === 'string' && l[k].length > 0)) {
+              return bad(`lease '${k}' must name its owning source as a non-empty string`);
+            }
+          }
+        }
+        paramCenter.setSourceLock(data);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', sourceLock: paramCenter ? paramCenter.getSourceLock() : null }));
+        res.end(JSON.stringify({ status: 'ok', sourceLock: paramCenter.getSourceLock() }));
         broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
       });
     }
@@ -7509,18 +12586,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         try {
           const next = oscState.restart(patch);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
+          // Body BEFORE headers (see sendJsonError's header comment).
+          const body = JSON.stringify({
             enabled: !!next.enabled,
             port: next.port ?? null,
             host: next.host ?? null,
             allowedSenders: next.allowedSenders || [],
             bindingsCount: Object.keys(next.bindings || {}).length,
             running: !!oscState.listener,
-          }));
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(body);
         } catch (err) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, 400, { error: err.message }, { 'Content-Type': 'application/json' });
         }
       });
     }
@@ -7705,8 +12783,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(next));
           } catch (err) {
-            // Analyzer.reconfigure throws RangeError on bad combos.
-            res.writeHead(400, { 'Content-Type': 'application/json' });
+            // Validation/reconfigure errors are client input (400); durable
+            // state read/write failures are server faults (500).
+            res.writeHead(audioConfigErrorStatus(err), { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
           }
         });
@@ -7837,7 +12916,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url === '/playlists') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfPrincipalReadonly(req, res, 'playlist create/save')) return;
       readBody(data => {
         try {
           if (!data || !data.name) {
@@ -7884,11 +12964,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastWs({ type: 'playlistLibrary', names: playlistManager.list() });
           broadcastWs({ type: 'playlistSaved', name: saved.name, playlist: saved });
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route: a throw from the broadcasts above
+          // arrives with headers already sent. sendJsonError refuses to
+          // writeHead twice (which would kill the process).
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/playlists\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfPrincipalReadonly(req, res, 'playlist delete')) return;
       try {
         let name;
         try {
@@ -7902,7 +12986,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'playlistLibrary', names: playlistManager.list() });
         broadcastWs({ type: 'playlistDeleted', name });
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     }
     // ── PLAYLIST MODULATIONS (Phase 1A) ──────────────────────────────────
@@ -7921,7 +13006,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // mappings to the ModulationController IF the entry is currently
     // active on the deck.
     else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/modulations\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfPrincipalReadonly(req, res, 'playlist modulation mapping write')) return;
       const parts = req.url.split('/');
       let playlistName, itemId, mappingId;
       try {
@@ -8028,7 +13114,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     //   PATCH  /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
     //   DELETE /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
     else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/midi-mappings\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfPrincipalReadonly(req, res, 'playlist MIDI mapping write')) return;
       const parts = req.url.split('/');
       let playlistName, itemId, mappingId;
       try {
@@ -8144,7 +13231,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // the deck-overlay stack: REQUIRES an explicit, non-'all' view (never-dark
     // guard), rejects a taken view (409), and the cap (400 over 4).
     else if (req.method === 'POST' && req.url === '/deck/overlays') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       readBody(data => {
         // viewSelection is REQUIRED (an all-view overlay would defeat the
         // feature AND violate never-dark). Validate first (fail loud).
@@ -8196,7 +13283,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           entryId = entry.id;
           patternName = entry.pattern;
         } else if (data.pattern) {
-          patternName = path.basename(data.pattern, '.js');
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           playlistName = 'default';
         } else {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
@@ -8255,7 +13343,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // POST /deck/overlays/reorder { order:[ids] } (armed before :id regexes).
     else if (req.method === 'POST' && req.url === '/deck/overlays/reorder') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       readBody(data => {
         const order = data && data.order;
         const current = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
@@ -8339,7 +13427,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // POST /deck/overlays/:id/playlist { name } — swap the overlay's playlist.
     else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
         const overlay = mixer.getDeckOverlay(id);
@@ -8371,7 +13459,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastChannelPlaylistData(overlay);
           broadcastDeckState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     }
@@ -8393,7 +13482,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, pattern: overlay.pattern }));
           broadcastDeckState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     }
@@ -8453,7 +13543,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         // PERFORMANCE MODE: gate ONLY the viewSelection field on a deck
         // overlay while live; other fields in the same PATCH stay allowed.
-        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
         if (data.viewSelection !== undefined) {
           const v = validateViewSelection(data.viewSelection);
           if (!v.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: v.error })); }
@@ -8469,7 +13559,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.setDeckOverlayViewSelection(id, v.value);
         }
         if (data.pattern !== undefined && data.pattern !== overlay.pattern) {
-          const patternName = path.basename(data.pattern, '.js');
+          let patternName;
+          try { patternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
@@ -8496,7 +13588,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // DELETE /deck/overlays/:id — remove an overlay (free its WASM handle).
     else if (req.method === 'DELETE' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       if (paramCenter) paramCenter.unregisterChannel(id);
       const removed = mixer.removeDeckOverlay(id);
@@ -8594,7 +13686,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         // PERFORMANCE MODE: gate ONLY the viewSelection field on the deck
         // channel while live; other fields in the same PATCH stay allowed.
-        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
         if (data.viewSelection !== undefined) {
           const v = validateViewSelection(data.viewSelection);
           if (!v.ok) {
@@ -8630,14 +13722,33 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // means the NEXT entry switch auto-captures this tuning into the
         // outgoing entry (auto-save wave) so it survives the pattern change.
         const ctlRes = paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        if (!ctlRes || ctlRes.status !== 'ok') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: ctlRes && ctlRes.status ? ctlRes.status : 'rejected',
+            error: ctlRes && ctlRes.reason ? ctlRes.reason : 'Deck control write was rejected.',
+          }));
+        }
         markChannelDirtyIfLocked(channel.id);
         markDeckParamsTouched();
         if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(channel.id, data.id);
-        saveAllState();
-        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
+        const saveResult = persistDeckChannelParams();
         broadcastMixerState();
         broadcastDeckState();
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+        if (saveResult.attempted && !saveResult.saved) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            status: 'applied_not_saved',
+            saved: false,
+            error: saveResult.error,
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          saved: saveResult.saved,
+          persistence: saveResult.attempted ? 'saved' : 'suppressed',
+        }));
       });
     }
     // ── DECK PLAYLIST ASSIGNMENT ─────────────────────────────────────────
@@ -8646,7 +13757,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(baseCh && baseCh.playlist ? baseCh.playlist : null));
     } else if (req.method === 'POST' && req.url === '/deck/playlist') {
-      if (rejectIfPerformanceMode(res)) return;
+      // PERFORMANCE MODE: OPEN (operator ruling 2026-08-16, report `_283`).
+      // "in the performance mode, allow playlist changing in the deck and
+      // mixer too."
+      //
+      // This is not a loosening of what the lock protects. The gate blocks
+      // STRUCTURAL and PERSISTENT changes; re-pointing an existing deck channel
+      // at an existing playlist is neither:
+      //   • not persistent — saveAllState() below is already a no-op while a
+      //     show is live (effectiveAutoSave() reads !performanceMode.active),
+      //     so a mid-show switch writes ZERO bytes and a restart reverts it;
+      //   • not structural — no channel, playlist, view or overlay is created,
+      //     destroyed or reordered; it is the same class of runtime selection
+      //     as POST /deck/playlist/entry, which has always been open.
+      // The pre-show snapshot records the binding (captureLook() →
+      // serializeChannelForState), so RESTORE on exit still puts back exactly
+      // the playlist the operator went live with, and KEEP keeps the new one.
+      // Playlist CRUD, capture, and the split-pane BINDING route stay gated.
+      if (rejectIfSpecialEventHoldsRig(req, res)) return;
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -8688,7 +13816,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastWs({ type: 'pattern', name: baseCh.pattern });
           broadcastMixerState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'GET' && req.url === '/deck/playlist/slots') {
@@ -8701,7 +13830,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         splitRatio: deckPlaylistSlots.splitRatio,
       }));
     } else if (req.method === 'POST' && req.url === '/deck/playlist/secondary') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfSpecialEventHoldsRig(req, res)) return;
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -8778,6 +13908,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastDeckState();
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/entry') {
+      if (rejectIfSpecialEventHoldsRig(req, res)) return;
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -8846,7 +13977,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/capture') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfPrincipalReadonly(req, res, 'explicit deck playlist-entry capture')) return;
       const baseCh = mixer.getDeckChannel();
       if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
       try {
@@ -8856,7 +13988,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'playlistEntryCaptured', channelId: baseCh.id, playlist: baseCh.playlist.name, entryId: baseCh.playlist.activeEntryId, defaults: captured });
         broadcastMixerState();
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     } else if (req.method === 'POST' && req.url === '/deck/playlist/autopilot') {
       readBody(data => {
@@ -8924,19 +14057,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         // Validate + clamp each field individually so a partial POST
         // can update one knob without resetting the rest.
-        if (typeof data.enabled === 'boolean') deckTransitionConfig.enabled = data.enabled;
-        if (typeof data.shuffle === 'boolean') deckTransitionConfig.shuffle = data.shuffle;
+        const nextConfig = { ...deckTransitionConfig };
+        if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'transition-config enabled must be a boolean' }));
+        }
+        if (data.shuffle !== undefined && typeof data.shuffle !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'transition-config shuffle must be a boolean' }));
+        }
+        if (data.enabled !== undefined) nextConfig.enabled = data.enabled;
+        if (data.shuffle !== undefined) nextConfig.shuffle = data.shuffle;
         if (data.mode !== undefined) {
           // The deck transition `mode` is a scripted transition (trans_*),
           // not a steady channel blend. Reject anything else with 400 so a
           // typo can't silently leave the previous mode in place.
-          if (typeof data.mode !== 'string' || !data.mode.startsWith('trans_')) {
+          if (!isDeckTransitionMode(data.mode)) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({
-              error: `transition-config mode must be a trans_* transition name, got '${data.mode}'`,
+              error: `transition-config mode must be executable; got '${data.mode}', expected one of ${DECK_TRANSITION_MODES.join(', ')}`,
             }));
           }
-          deckTransitionConfig.mode = data.mode;
+          nextConfig.mode = data.mode;
         }
         if (data.durationMs !== undefined) {
           // NaN/finite validation (Codex P0): reject a non-finite duration
@@ -8950,8 +14092,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               error: `durationMs must be a finite number, got '${data.durationMs}'`,
             }));
           }
-          deckTransitionConfig.durationMs = Math.max(50, Math.min(30000, n));
+          nextConfig.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
         }
+        Object.assign(deckTransitionConfig, nextConfig);
         saveAllState();
         // Broadcast so other clients see the change immediately.
         broadcastWs({ type: 'deckTransitionConfig', ...deckTransitionConfig });
@@ -8964,7 +14107,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(engineSettings));
     } else if (req.method === 'POST' && req.url === '/settings') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      // Persistent config write ("disk stays as Sina left it"). Note the D5(a)
+      // principal term ALSO makes a hypothetical sailor autoSave:true flip
+      // harmless — effectiveAutoSave() would still return false — so this gate
+      // is about not rewriting the operator's stored preference, not about
+      // plugging a save hole.
+      if (rejectIfPrincipalReadonly(req, res, 'engine settings write')) return;
       readBody(data => {
         // Fail loud (codex P0): autoSave MUST be a real boolean. No coercion —
         // a truthy/falsy string or number is a broken client, not a valid
@@ -8975,6 +14124,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           return res.end(JSON.stringify({
             error: `settings.autoSave must be a boolean, got '${data.autoSave}'`,
           }));
+        }
+        // BOOT MODE (report _236) — OPTIONAL on the wire so every pre-_236
+        // client keeps working unchanged, but STRICTLY validated when present:
+        // a typo must not silently coerce to 'performance' here. (The
+        // load/save coercion in StateManager is the last line of defence
+        // against a hand-edited YAML, not a licence for this route to guess.)
+        if (data.bootMode !== undefined) {
+          if (data.bootMode !== BOOT_MODES.PERFORMANCE && data.bootMode !== BOOT_MODES.EDIT) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `settings.bootMode must be '${BOOT_MODES.PERFORMANCE}' or `
+                + `'${BOOT_MODES.EDIT}', got '${data.bootMode}'`,
+              code: 'INVALID_BOOT_MODE',
+            }));
+          }
+          const nextBootMode = normalizeBootMode(data.bootMode);
+          if (nextBootMode !== engineSettings.bootMode) {
+            console.log(`[BootMode] engine will next start in '${nextBootMode}' mode `
+              + '(persisted; takes effect on the NEXT engine start — the current '
+              + 'session is unchanged).');
+          }
+          engineSettings.bootMode = nextBootMode;
         }
         engineSettings.autoSave = data.autoSave;
         // ALWAYS persist the setting itself — this write BYPASSES the auto-save
@@ -8994,16 +14165,33 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify(engineSettings));
       });
     } else if (req.method === 'POST' && req.url === '/settings/save-now') {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      // The explicit "write everything now" act — owner only, or its 200
+      // {saved:true} badge would lie about what reached disk.
+      if (rejectIfPrincipalReadonly(req, res, 'explicit save-now')) return;
       // Operator checkpoint: force a full persistence of deck/mixer + globals
       // RIGHT NOW, ignoring the auto-save gate. The single manual "save my
       // current look" button for when auto-save is OFF. Writes the same files
       // the auto triggers would, so a subsequent restart restores this state.
       const wasAutoSave = engineSettings.autoSave;
+      // L5 (report _116 / _115 / _120): a failed state write must NOT report
+      // success — the CaptainPad "✓ SAVED" badge reads this response, so a 200
+      // {saved:true} on a disk-full/EBUSY write is a lie. We call the STRICT
+      // (strict:true) save path here so a write failure PROPAGATES and is caught
+      // below as an honest 500 {saved:false,error}. The shared-core swallow that
+      // was the remaining L5 root (StateManager.save() warn-only) is now a
+      // per-call choice: strict:true re-throws for THIS explicit operator save,
+      // while every auto-save trigger keeps the best-effort warn-only default so
+      // a transient disk blip never crashes the ship (W1-1 backstop).
       try {
         engineSettings.autoSave = true; // temporarily lift the gate for this write
-        saveAllState();
-        saveGlobals(true);
+        saveAllState(true);
+        saveGlobals(true, true);
+      } catch (e) {
+        console.error(`  ⛔ [save-now] state write FAILED — reporting non-200 (badge must not lie): ${e && e.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', saved: false, error: e && e.message }));
+        return;
       } finally {
         engineSettings.autoSave = wasAutoSave;
       }
@@ -9022,6 +14210,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify({
         active: performanceMode.active,
         enteredAt: performanceMode.enteredAt,
+        // WHO holds the edit session (docs/56 D3) — the public enum NAME or
+        // null, never credential material and never a session token.
+        editPrincipal: editSession.principal,
+        authRequired: captainPadAuth.required,
         // Pending dirty deck tuning so the exit sheet can ask whether to save.
         ...computeDirtyDeckState(),
       }));
@@ -9064,16 +14256,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           performanceMode.active = true;
           performanceMode.enteredAt = new Date().toISOString();
+          syncLiveTouchPerformanceMode();
+          // There is no edit session while the show lock is on (docs/56 D3).
+          // Entering is NEVER gated — locking the rig is always free, mirroring
+          // "the reverse direction is never gated" on the takeover ring.
+          setEditPrincipal(null, 'performance mode entered');
           broadcastWs({
             type: 'performanceMode',
             active: true,
             enteredAt: performanceMode.enteredAt,
+            editPrincipal: null,
+            authRequired: captainPadAuth.required,
             ...computeDirtyDeckState(),
           });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             active: true,
             enteredAt: performanceMode.enteredAt,
+            editPrincipal: null,
+            authRequired: captainPadAuth.required,
           }));
         }
         // ── EXIT ───────────────────────────────────────────────────────
@@ -9083,6 +14284,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             error: 'performance mode is not active',
             code: 'PERFORMANCE_MODE_NOT_ACTIVE',
           }));
+        }
+        // ── EXIT AUTHORISATION (docs/56 D2) ──────────────────────────
+        // A privileged SESSION no longer opens this door. Leaving the show lock
+        // is an identity-establishing act — it decides who owns persistence for
+        // the whole edit session that follows (D3) — so the passcode is
+        // re-verified per attempt through the shared ring, with the same lockout
+        // policy as the takeover gate. Sessions and remembered devices buy
+        // nothing, exactly as the 2026-08-14 EVERY-TIME ruling requires.
+        //
+        // Auth disabled (benches / isolated test engines) → inert, byte-identical
+        // to before: no credential store exists to check against.
+        let exitPrincipal = null;
+        if (captainPadAuth.required) {
+          const verified = verifyPrincipalPasscode(req, 'performance-mode exit', {
+            required: 'EXIT_AUTH_REQUIRED',
+            invalid: 'EXIT_AUTH_INVALID',
+            rateLimited: 'EXIT_AUTH_RATE_LIMITED',
+            waiverInvalid: 'EXIT_AUTH_WAIVER_INVALID',
+          });
+          if (!verified.ok) return sendPrincipalRefusal(res, verified);
+          exitPrincipal = verified.principal;
         }
         const exitAction = data.exitAction;
         // Three exit semantics (fail loud on anything else):
@@ -9098,6 +14320,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           return res.end(JSON.stringify({
             error: `exit requires exitAction 'keep', 'keep-save' or 'restore', got '${exitAction}'`,
             code: 'PERFORMANCE_MODE_INVALID_EXIT',
+          }));
+        }
+        // ── EXIT SEMANTICS BY PRINCIPAL (docs/56 D7 — the forcePersist hole) ──
+        // Every exit path force-persists today, ignoring the autoSave toggle. If
+        // a sailor could exit with `keep`, THEIR look would land on disk —
+        // precisely what "don't store params for a sailor" forbids. So the
+        // force-persist becomes owner-only. Auth off ⇒ owner-equivalent, so
+        // every existing bench/test exit stays byte-identical.
+        const exitMaySave = !captainPadAuth.required || exitPrincipal === 'owner';
+        if (exitAction === 'keep-save' && !exitMaySave) {
+          console.warn(`  ⚠ [EditSession] REFUSED performance exit 'keep-save' — principal ` +
+            `'${exitPrincipal}' may not write rig state. Mid-show tuning reaches playlist ` +
+            'files only through a captain exit.');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'only the captain\'s passcode can save session tuning on exit — '
+              + 'choose DISCARD PERFORMANCE CHANGES',
+            code: 'EXIT_KEEP_SAVE_OWNER_ONLY',
+            principal: exitPrincipal,
           }));
         }
         // Force one full persist regardless of the stored autoSave toggle
@@ -9117,7 +14358,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (exitAction === 'keep' || exitAction === 'keep-save') {
           performanceMode.active = false;
           performanceMode.enteredAt = null;
-          forcePersist();
+          syncLiveTouchPerformanceMode();
+          setEditPrincipal(exitPrincipal, `performance exit '${exitAction}'`);
+          // OWNER ONLY (D7). For a sailor `keep`, the live look stays in memory
+          // and disk keeps the pre-show state — which is already correct, since
+          // saves were frozen for the whole show, so disk IS "as Sina left it".
+          if (exitMaySave) forcePersist();
           // SESSION CACHE (feature A6): both KEEP variants keep the session cache
           // — the live look is what we're keeping, so its in-memory tuning stays
           // valid across later A→B→A switches.
@@ -9139,11 +14385,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           snapshotManager.delete(PERF_SNAPSHOT_NAME);
           broadcastWs({
             type: 'performanceMode', active: false, enteredAt: null,
+            editPrincipal: editSession.principal,
+            authRequired: captainPadAuth.required,
             ...computeDirtyDeckState(),
           });
           broadcastMixerState();
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ active: false, exitAction }));
+          return res.end(JSON.stringify({
+            active: false,
+            exitAction,
+            editPrincipal: editSession.principal,
+            authRequired: captainPadAuth.required,
+          }));
         }
         // exitAction === 'restore': put the whole rig back to the pre-show
         // capture. A missing snapshot is a fail-loud 500 (we should always
@@ -9180,10 +14433,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         pendingDeckFlush.clear();
         recallLook(look);
         stateManager.applyGlobalsState(
-          look.globals, paramCenter, intensityController, globalEffectsController);
+          look.globals, paramCenter, intensityController, globalEffectsController,
+          modelDimmerGroups(),
+          path.join(stateDir, 'snapshots', `${PERF_SNAPSHOT_NAME}.yaml`));
         performanceMode.active = false;
         performanceMode.enteredAt = null;
-        forcePersist();
+        syncLiveTouchPerformanceMode();
+        setEditPrincipal(exitPrincipal, "performance exit 'restore'");
+        // OWNER ONLY (D7). For a sailor RESTORE the skip is a no-op in content
+        // terms — disk already equals the restored state byte-for-byte (the
+        // frozen pre-show files) — so we simply don't touch it.
+        if (exitMaySave) forcePersist();
         snapshotManager.delete(PERF_SNAPSHOT_NAME);
         // applyGlobalsState routes params through paramCenter.set(..., 'init')
         // which does NOT emit a sharedParams WS frame — push one explicitly so
@@ -9193,13 +14453,75 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         broadcastWs({
           type: 'performanceMode', active: false, enteredAt: null,
+          editPrincipal: editSession.principal,
+          authRequired: captainPadAuth.required,
           ...computeDirtyDeckState(),
         });
         broadcastMixerState();
         broadcastAutopilot();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ active: false, exitAction: 'restore' }));
+        return res.end(JSON.stringify({
+          active: false,
+          exitAction: 'restore',
+          editPrincipal: editSession.principal,
+          authRequired: captainPadAuth.required,
+        }));
       });
+    }
+    // ── EDIT SESSION (docs/56 D3/W6) ─────────────────────────────────────
+    // Re-assert WHO owns persistence while already in edit mode. One route,
+    // two jobs:
+    //   • ESCALATION  — a sailor session is live, Sina enters her code, saves
+    //                   open up (and the CURRENT live look starts auto-saving:
+    //                   asserting the owner code BLESSES the current state, the
+    //                   same meaning `keep-save` has at exit — D4).
+    //   • HANDOVER    — Sina walks away, a sailor enters theirs, saves freeze.
+    // Empty JSON body; the identity rides in X-CaptainPad-Passcode and is
+    // verified per attempt. Issues nothing, stores nothing client-side.
+    else if (req.method === 'POST' && req.url === '/edit-session') {
+      if (!captainPadAuth.required) {
+        // No credential store to name a principal with. Fail LOUD rather than
+        // pretend an edit session was asserted (codex P0 — no quiet fallback).
+        res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify({
+          error: 'privileged CaptainPad auth is disabled on this engine — there is no '
+            + 'edit-session principal to assert',
+          code: 'PRIVILEGED_AUTH_DISABLED',
+        }));
+      }
+      if (performanceMode.active) {
+        // The show lock outranks identity: there is no edit session to
+        // re-assert while it is on. Use the exit flow, which establishes one.
+        res.writeHead(409, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify({
+          error: 'performance mode is active — leave it to start an edit session',
+          code: 'EDIT_SESSION_PERFORMANCE_ACTIVE',
+        }));
+      }
+      const verified = verifyPrincipalPasscode(req, 'edit-session assertion', {
+        required: 'EDIT_SESSION_AUTH_REQUIRED',
+        invalid: 'EDIT_SESSION_AUTH_INVALID',
+        rateLimited: 'EDIT_SESSION_AUTH_RATE_LIMITED',
+        waiverInvalid: 'EDIT_SESSION_AUTH_WAIVER_INVALID',
+      });
+      if (!verified.ok) return sendPrincipalRefusal(res, verified);
+      setEditPrincipal(verified.principal, 'edit-session assertion');
+      broadcastWs({
+        type: 'performanceMode',
+        active: false,
+        enteredAt: null,
+        editPrincipal: editSession.principal,
+        authRequired: captainPadAuth.required,
+        ...computeDirtyDeckState(),
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({
+        active: false,
+        enteredAt: null,
+        editPrincipal: editSession.principal,
+        authRequired: captainPadAuth.required,
+        unlockedAt: editSession.unlockedAt,
+      }));
     }
     // ── MIXER CHANNEL PLAYLIST ASSIGNMENT ────────────────────────────────
     else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
@@ -9211,7 +14533,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(ch.playlist || null));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      // PERFORMANCE MODE: OPEN — the mixer half of the same operator ruling
+      // (2026-08-16, report `_283`). Same reasoning as POST /deck/playlist:
+      // runtime re-assignment of an existing channel, no disk write while the
+      // show is live, restored exactly by RESTORE on exit. Channel CRUD,
+      // reordering, view re-targeting and playlist capture all stay gated.
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -9260,7 +14586,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastChannelPlaylistData(ch);
           broadcastMixerState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/entry$/)) {
@@ -9286,12 +14613,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, pattern: ch.pattern }));
           broadcastMixerState();
         } catch (e) {
+          // Respond-then-broadcast route — never writeHead twice.
           if (e && e.code === 'EBUSY') {
-            res.writeHead(409); res.end(JSON.stringify({
-              error: 'transition in progress', code: 'EBUSY',
-            }));
+            sendJsonError(res, 409, { error: 'transition in progress', code: 'EBUSY' });
           } else {
-            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+            sendJsonError(res, 400, { error: e.message });
           }
         }
       });
@@ -9333,7 +14659,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastMixerState();
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
-      if (rejectIfPerformanceMode(res)) return;
+      if (rejectIfPerformanceMode(req, res)) return;
+      if (rejectIfPrincipalReadonly(req, res, 'explicit mixer playlist-entry capture')) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -9352,7 +14679,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         });
         broadcastMixerState();
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/discard$/)) {
       // Discard in-memory edits and snap the channel back to the saved
@@ -9399,7 +14727,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', defaults: entry.defaults || {} }));
         broadcastMixerState();
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     } else {
       res.writeHead(404); res.end('Not Found');
@@ -9485,6 +14814,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     const wssForTopic = wssByTopic[topic];
     wssForTopic.handleUpgrade(req, socket, head, (ws) => {
+      // CRITICAL (report _116, _108 Family A — the dark-ship crash): attach a
+      // per-CONNECTION error handler BEFORE the connection event fires. The
+      // `ws` library emits 'error' on the SOCKET INSTANCE for every protocol /
+      // frame violation (invalid-UTF-8 text, reserved opcode, RSV1 with no
+      // extension, bad close code, oversize control frame). An EventEmitter
+      // 'error' with NO listener THROWS — and none of the four `/ws/*` sockets
+      // (nor the `/` alias) had one, so a single malformed frame became an
+      // uncaughtException that killed the whole engine → dark ship with no
+      // self-heal. A WiFi-corrupted frame does this with zero malice, and playa
+      // RF is hostile. Classified NON-FATAL: `ws` closes the offending socket
+      // itself, so every other client and the render/tick/sACN loops are
+      // untouched — we log at WARN and return (the `_99` bridge shape). The
+      // per-topic `wss.on('error')` registered above catches SERVER-level
+      // errors; this catches the per-socket ones it cannot see. Attaching here
+      // (before emit) covers all four topics AND the `/` alias in one place.
+      ws.on('error', (err) => {
+        console.warn(`  ⚠ [ws:${topic}] non-fatal per-connection error (frame/protocol) — ` +
+          `socket dropped, engine unaffected: ${err && err.message ? err.message : err}`);
+      });
       wssForTopic.emit('connection', ws, req);
     });
   });
@@ -9529,7 +14877,71 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // daemon starts — armAutopilotProfile injects the timing profile the daemon's
   // first _scheduleNext will consult (timer vs event-driven). The name was
   // validated + cleared to 'random' at restore, so this never throws.
+  // THE CRASH MARKER lives in the OS temp dir, NOT in marsin_engine/states/.
+  // Everything in that tree is tracked, and a runtime file appearing and
+  // vanishing there would show up as a git diff on the show server on every
+  // start and stop. Keyed by scene AND port so two engines on one machine
+  // (dev + a probe) cannot read each other's marker.
+  // opts carries `modelName` (the scene/model, e.g. 'titanic'), NOT `scene`.
+  // Sanitised because it reaches a filename.
+  const crashMarkerScene = String(opts.modelName || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const crashMarkerPath = path.join(
+    os.tmpdir(), `bm26_engine_running_${crashMarkerScene}_${opts.port}.marker`);
+  // READ ONCE, HERE, before anything can write it. fs.existsSync is cheap and
+  // this runs once per boot.
+  const crashMarkerPresentAtBoot = fs.existsSync(crashMarkerPath);
+
+  function writeCrashMarker() {
+    try {
+      fs.writeFileSync(crashMarkerPath, String(process.pid), 'utf8');
+    } catch (e) {
+      // Not fatal: without the marker a crash simply will not be detected next
+      // boot. Loud, because that is a silently reduced safety net.
+      console.warn(`  ⚠ [boot] could not write the crash marker ${crashMarkerPath}: ` +
+        `${e && e.message ? e.message : e} — a crash will NOT be detected on the next start.`);
+    }
+  }
+  function clearCrashMarker() {
+    try {
+      if (fs.existsSync(crashMarkerPath)) fs.unlinkSync(crashMarkerPath);
+    } catch (_) { /* a stale marker only costs one spurious revert next boot */ }
+  }
+
   armAutopilotProfile(currentAutopilotProfileName());
+
+  // ── CRASH BOOT POLICY ───────────────────────────────────────────────────
+  //
+  // "If the system crashes the system reverts to the default automatic
+  // playlist." A crash is distinguished from a deliberate restart by a marker
+  // file: written once the server is listening, deleted on the clean shutdown
+  // path. Still there at boot => the previous run did not stop cleanly.
+  //
+  // WHY GATED, and not forced on every boot: --pattern is mandatory and the
+  // launcher passes one, so an operator restarting deliberately with a chosen
+  // pattern must keep it. Only a crash overrides that choice.
+  //
+  // POSITION IS DELIBERATE: after armAutopilotProfile (which the daemon's first
+  // schedule consults) and BEFORE autopilot.start(), so the daemon starts with
+  // the reverted playlist and an active flag rather than being reconfigured
+  // underneath itself. A CLI --pattern pin also suspends the deck autopilot at
+  // boot; the revert deliberately overrides that pin, and says so.
+  // TEST/HARNESS OPT-OUT. A harness that stops engines with a signal cannot
+  // produce a clean shutdown on Windows — Node's proc.kill('SIGTERM') there
+  // terminates the process outright without running the handler, so closeNow()
+  // never deletes the marker and EVERY harness restart looks like a crash. That
+  // would silently override the playlist a test just restored.
+  // Explicit, opt-in, and loud: never set this in production.
+  const crashRevertDisabled = process.env.BM26_DISABLE_CRASH_REVERT === '1';
+  if (crashMarkerPresentAtBoot && crashRevertDisabled) {
+    console.warn('  ⚠ [boot] crash marker present but BM26_DISABLE_CRASH_REVERT=1 — ' +
+      'NOT reverting to the automatic playlist. This must only ever be set by a test harness.');
+  }
+  if (crashMarkerPresentAtBoot && !crashRevertDisabled) {
+    console.warn('  ⚠ [boot] the previous run did not shut down cleanly (crash marker present at ' +
+      `${crashMarkerPath}). Reverting to the default automatic playlist; any --pattern pin is ` +
+      'deliberately overridden by the crash policy.');
+    revertToAutomaticShow('the previous run ended uncleanly (crash boot policy)', null);
+  }
   // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
   // (autopilot.state); the next-entry pick reads the restored deck
   // playlist.autopilot live. Mixer + deck overlays resume on their own — the
@@ -9595,13 +15007,32 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
-        currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
+        currentView: currentLayerSettingTarget(),
         savedView: savedTargetViewFader === null
           ? null
           : (savedTargetViewFader < 0.5 ? 'deck' : 'mixer'),
       }));
     } catch (e) {
       // ignore
+    }
+    try {
+      ws.send(JSON.stringify(buildLayerSettingsPayload()));
+    } catch (e) {
+      // ignore — never break the handshake on a layer-setting replay
+    }
+    try {
+      ws.send(JSON.stringify({
+        type: 'touchControlBrightness',
+        ...liveBrightnessPayload(),
+      }));
+      const rackCeilings = liveBrightnessPayload().rackCeilings;
+      ws.send(JSON.stringify({
+        type: 'dimmerState',
+        revision: dimmerAuthorityRevision,
+        rackCeilings,
+      }));
+    } catch (e) {
+      // ignore — never break the handshake on a brightness-authority replay
     }
 
     // Replay cached telemetry so the pills paint immediately on
@@ -9651,6 +15082,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay the SPECIAL EVENTS runner state (docs/52) so a fresh CaptainPad —
+    // or the same iPad waking up mid-show — paints the live stage immediately
+    // instead of waiting a tick. The tab keeps no local state worth losing.
+    try {
+      ws.send(JSON.stringify(specialEventsService.getState()));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
+    // Replay the PARTY OVERRIDE (report 20260725_19) so a fresh CaptainPad /
+    // companion PARTY tab paints ARMED-or-DISABLED immediately, without a focus
+    // fetch. Same posture as the timeline replay directly above.
+    try {
+      if (timelineService) {
+        ws.send(JSON.stringify({
+          type: 'partyConfig',
+          ...timelineService.getPartyStatus(),
+          availablePlaylists: timelineService.listAvailablePlaylists(),
+        }));
+      }
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     // Replay engine settings (auto-save toggle) so a fresh CaptainPad config
     // screen paints the current state without a focus fetch. Same posture as
     // the deckTransitionConfig / timeline replays above.
@@ -9667,6 +15122,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         type: 'performanceMode',
         active: performanceMode.active,
         enteredAt: performanceMode.enteredAt,
+        editPrincipal: editSession.principal,
+        authRequired: captainPadAuth.required,
         ...computeDirtyDeckState(),
       }));
     } catch (e) {
@@ -9690,6 +15147,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay the Live Touch preset PLAYLIST (docs/70 W4) so a freshly
+    // connected pad renders the current per-scene preset list immediately,
+    // without a focus fetch (same posture as the effectBanks/snapshots-
+    // adjacent state above). liveTouchPresetManager.list() throws on a
+    // corrupt store (fail-loud, codex P0) — logged loudly here rather than
+    // silently swallowed, but never allowed to break the WS handshake for
+    // every OTHER piece of replayed state.
+    try {
+      const entries = liveTouchPresetManager.list();
+      ws.send(JSON.stringify({ type: 'liveTouchPresets', action: 'replay', entries }));
+    } catch (e) {
+      console.error('[api] liveTouchPresets connect-replay failed — the store is likely corrupt:', e.message);
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
@@ -9699,11 +15170,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // touched so the next entry switch auto-captures this tuning into the
           // outgoing entry (auto-save wave — survives the pattern change).
           const ctlRes = paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (!ctlRes || ctlRes.status !== 'ok') {
+            ws.send(JSON.stringify({
+              type: 'paramRejected',
+              channelId: mixer.baseChannelId,
+              id: d.id,
+              reason: ctlRes && ctlRes.reason ? ctlRes.reason : 'Deck control write was rejected.',
+            }));
+            return;
+          }
           markChannelDirtyIfLocked(mixer.baseChannelId);
           markDeckParamsTouched();
           if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, d.id);
-          saveAllState();
-          broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
+          persistDeckChannelParams();
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
@@ -9712,9 +15191,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // localControls. No playlist auto-capture, no cross-channel
           // mirroring (operator ruling 2026-07-07 — parameter isolation).
           const ctlRes = paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (!ctlRes || ctlRes.status !== 'ok') {
+            ws.send(JSON.stringify({
+              type: 'paramRejected',
+              channelId: d.channelId,
+              id: d.id,
+              reason: ctlRes && ctlRes.reason ? ctlRes.reason : 'Mixer control write was rejected.',
+            }));
+            return;
+          }
           markChannelDirtyIfLocked(d.channelId);
           if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(d.channelId, d.id);
-          saveAllState();
+          persistMixerChannelParams(d.channelId);
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {
@@ -9825,14 +15313,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const durationMs = Math.max(1, Math.min(30000, Number.isFinite(d.durationMs) ? d.durationMs : 1000));
           const curve = (d.curve === 'linear') ? 'linear' : 'smoothstep';
           const mode = d.mode || 'exclusiveOverlays';
-          // The visual transition style — one of the scripts under
-          // patterns/transitions/ (trans_crossfade, trans_flash,
-          // trans_dissolve, trans_iris, trans_wipe_*). Defaults to
-          // trans_crossfade for back-compat with old clients that don't
-          // send this field. Validated again in the mixer.
-          const transitionMode = (typeof d.transitionMode === 'string' && d.transitionMode.startsWith('trans_'))
-            ? d.transitionMode
-            : 'trans_crossfade';
+          // Missing uses the protocol default for older clients. A supplied
+          // invalid/removed id is rejected and is never rewritten to
+          // crossfade.
+          const transitionMode = d.transitionMode === undefined
+            ? 'trans_crossfade'
+            : d.transitionMode;
+
+          if (!isDeckTransitionMode(transitionMode)) {
+            ws.send(JSON.stringify({
+              type: 'mixerTransitionRejected',
+              targetChannelId: d.targetChannelId,
+              transitionMode,
+              reason: 'invalid-transition-mode',
+            }));
+            return;
+          }
 
           if (d.targetChannelId === mixer.baseChannelId) {
             ws.send(JSON.stringify({
@@ -9928,11 +15424,169 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           saveAllState();
           broadcastMixerState();
+        } else if (d.type === 'touchControlHello') {
+          // A control surface (TOUCH CONTROL) announcing itself so the engine
+          // knows something manual is driving and can clean up after it.
+          // Before this, touch-control writes were byte-indistinguishable from
+          // any other WS client, so nothing could detect the surface going away.
+          if (typeof d.ownerId !== 'string' || d.ownerId.length === 0) {
+            ws.send(JSON.stringify({
+              type: 'touchControlRejected', reason: 'ownerId required (non-empty string)',
+            }));
+            return;
+          }
+          ws._touchControlOwnerId = d.ownerId;
+          console.log(`[touchPaint] owner '${d.ownerId}' registered on /ws/control`);
+          ws.send(JSON.stringify({
+            type: 'touchControlHelloAck', ownerId: d.ownerId, leaseMs: TOUCH_PAINT_LEASE_MS,
+          }));
+        } else if (d.type === 'touchControlArmed') {
+          // ARM / DISARM declaration. `armed:true` starts the deadman watching
+          // THIS socket; `armed:false` is a clean release with no revert,
+          // because the panel is doing the handback itself.
+          const requestStartedAt = performance.now();
+          const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
+            ? d.ownerId
+            : ws._touchControlOwnerId;
+          if (!ownerId) {
+            ws.send(JSON.stringify({
+              type: 'touchControlRejected', reason: 'ownerId required before touchControlArmed',
+            }));
+            return;
+          }
+          ws._touchControlOwnerId = ownerId;
+          let acknowledgedArmed = !!d.armed;
+          let landing = null;
+          let leaseMutationMs = 0;
+          if (d.armed) {
+            if (timelinePreemptionGate.isPending() || timelinePriorityDispatches > 0) {
+              ws.send(JSON.stringify({
+                type: 'touchControlArmedRejected',
+                ownerId,
+                heldBy: 'timeline',
+                reason: 'Timeline priority handoff is in progress',
+              }));
+              return;
+            }
+            // ONE DESK AT A TIME. Two panels both believing they are armed is
+            // strictly worse than one being told someone else has it: they
+            // fight over the same source lock, each disarm hands back state the
+            // other is still driving, and either one's tab closing used to
+            // revert the show out from under the other. So a second, DIFFERENT
+            // owner is REFUSED and told who holds it, rather than silently
+            // overwriting the lease. Re-arming as the SAME owner is a renewal
+            // (the panel re-asserts on every socket reconnect) and is allowed.
+            // ONLY A LIVE HOLDER CAN REFUSE. A lease whose socket is gone or
+            // half-open must never lock the desk: the 'close' event does not
+            // always arrive (a hard-killed client leaves the socket half-open,
+            // which is the whole reason the ping exists), and REPRODUCED here —
+            // a dead panel held the desk and refused three subsequent arms with
+            // no way for the operator to take it back short of restarting the
+            // engine. Being told "disarm the other first" is useless when the
+            // other is unreachable.
+            // So a stale holder is EVICTED and the new panel takes over, loudly.
+            const holder = [...armLease.keys()].find(k => k !== ownerId);
+            const holderLease = holder ? armLease.get(holder) : null;
+            const holderAlive = !!(holderLease && holderLease.ws && holderLease.ws.readyState === 1);
+            if (holder && !holderAlive) {
+              console.warn(`  ⚠ [armLease] evicting STALE holder '${holder}' (its socket is gone) — ` +
+                `'${ownerId}' takes the desk. A dead panel must never lock out a live one.`);
+              // Release every transient authority owned by the dead session,
+              // including its Live Touch brightness state, before assigning
+              // the desk to the replacement. Deleting only the lease leaves
+              // brightness owned by `holder`, so armLeaseSet(ownerId) fails
+              // and the supposedly-evicted panel still locks out the rig.
+              // resumePlan:false — a NEW panel is arming in the same breath, so
+              // handing the rig to the plan first would be a pointless flash.
+              armLeaseClear(holder, `stale holder evicted for '${ownerId}'`,
+                { resumePlan: false });
+            }
+            if (holder && holderAlive) {
+              console.warn(`  ⚠ [armLease] REFUSED arm from '${ownerId}' — '${holder}' already ` +
+                'holds the desk. Two panels driving one rig is not supported; disarm the other first.');
+              ws.send(JSON.stringify({
+                type: 'touchControlArmedRejected', ownerId, heldBy: holder,
+                reason: 'another panel already holds the desk — disarm it first',
+              }));
+              return;
+            }
+            const leaseStartedAt = performance.now();
+            armLeaseSet(ownerId, ws);
+            leaseMutationMs = performance.now() - leaseStartedAt;
+          } else {
+            const layerState = mixer.getLayerSettingsState();
+            if (armLease.has(ownerId) && layerStateIncludesLiveTouch(layerState)) {
+              // ARM may not disappear underneath a performing Live surface.
+              // Reverse an in-flight entry back to its source, preserve an
+              // already-running handback destination, or land steady Live on
+              // the mission-safe Deck. The completion callback clears the
+              // lease through setting-local cleanup. The final explicit
+              // ARM-off releases it after the cleanup succeeds.
+              let landingTarget = LAYER_SETTING_IDS.DECK;
+              if (layerState.transition) {
+                if (layerState.transition.from === LAYER_SETTING_IDS.LIVE_TOUCH) {
+                  landingTarget = layerState.transition.to;
+                } else if (layerState.transition.to === LAYER_SETTING_IDS.LIVE_TOUCH) {
+                  landingTarget = layerState.transition.from;
+                }
+              }
+              pendingLiveTouchReleaseOwner = ownerId;
+              const result = activateLayerSettingInternal(landingTarget, {
+                durationMs: DEFAULT_LAYER_TRANSITION_DURATION_MS,
+                reason: 'live_touch_disarm',
+              });
+              acknowledgedArmed = true;
+              landing = {
+                target: landingTarget,
+                transitionId: result.state.transition ? result.state.transition.id : null,
+              };
+            } else {
+              armLeaseClear(ownerId, 'clean disarm (touchControlArmed false)');
+            }
+          }
+          ws.send(JSON.stringify({
+            type: 'touchControlArmedAck',
+            ownerId,
+            armed: acknowledgedArmed,
+            requestedArmed: !!d.armed,
+            landing,
+            leaseMs: ARM_LEASE_MS,
+            sessionRevision: liveTouchSession
+              ? liveTouchSession.getState().revision
+              : null,
+            timing: {
+              leaseMutationMs: Number(leaseMutationMs.toFixed(3)),
+              serverMs: Number((performance.now() - requestStartedAt).toFixed(3)),
+            },
+          }));
+        } else if (d.type === 'touchControlHeartbeat') {
+          // Renew every lease this owner holds. The panel sends this well
+          // inside TOUCH_PAINT_LEASE_MS while it is armed; stopping is exactly
+          // the signal the deadman is watching for.
+          const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
+            ? d.ownerId
+            : ws._touchControlOwnerId;
+          const renewed = renewTouchPaintForOwner(ownerId);
+          ws.send(JSON.stringify({ type: 'touchControlHeartbeatAck', ownerId: ownerId || null, renewed }));
+        } else if (d.type === 'touchControlRelease') {
+          // Explicit "I am done" (disarm). Same path the deadman would take,
+          // so a clean disarm and a crash converge on identical rig state.
+          const ownerId = typeof d.ownerId === 'string' && d.ownerId.length > 0
+            ? d.ownerId
+            : ws._touchControlOwnerId;
+          const cleared = releaseTouchPaintForOwner(ownerId, `owner '${ownerId}' released explicitly`);
+          ws.send(JSON.stringify({ type: 'touchControlReleased', ownerId: ownerId || null, cleared }));
         } else if (d.type === 'setSharedParam') {
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
           if (res.status === 'ignored') {
-            ws.send(JSON.stringify({ type: 'paramRejected', key: d.key, reason: res.reason, lockedTo: res.lockedTo }));
+            // `message` / `lockedValue` are populated by the SIZE lock
+            // (lib/size_lock.js) so a client shows WHY, not just a reason code.
+            ws.send(JSON.stringify({
+              type: 'paramRejected', key: d.key, reason: res.reason,
+              lockedTo: res.lockedTo, lockedValue: res.lockedValue,
+              message: res.message,
+            }));
           }
           // Success path: paramCenter.onChange (wired at boot)
           // handles persistence + throttled WS broadcast + WASM
@@ -9957,6 +15611,57 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // holding — instant cleanup so a channel can't stay pinned full. The lease
     // sweep is the backstop for the case where close never fires (hard link
     // loss); this is the fast path for clean disconnects.
+    // TOUCH CONTROL fast release: if the socket that owns leased paint closes
+    // (tab closed, app force-quit, backgrounded long enough to drop the
+    // socket), clear that owner's groups immediately rather than leaving the
+    // ship part-frozen for the remainder of the lease. The sweep above is the
+    // backstop for hard link loss, where 'close' never fires; this is the fast
+    // path for clean disconnects. Registered as its own listener so it runs
+    // regardless of whether the bump handler below early-returns.
+    // THE PONG IS THE HEARTBEAT. Sent by the browser's network stack, not by
+    // page JavaScript, so it survives a throttled or backgrounded tab — the
+    // whole reason the arm deadman is built on ping/pong rather than a timer in
+    // the page. See the ARM LEASE block for why that distinction matters.
+    ws.on('pong', () => {
+      const ownerId = ws._touchControlOwnerId;
+      if (ownerId) armLeaseRenew(ownerId, ws);
+    });
+
+    ws.on('close', () => {
+      const ownerId = ws._touchControlOwnerId;
+      if (!ownerId) return;
+      const lease = armLease.get(ownerId);
+      // The same owner may already have rebound ARM to a replacement socket.
+      // A delayed close from the superseded socket must not clear paint or
+      // detach the new socket from the lease.
+      if (lease && lease.ws && lease.ws !== ws) return;
+      releaseTouchPaintForOwner(ownerId, `/ws/control closed (owner '${ownerId}')`);
+      // ARM DEADMAN, fast path. Lease expiry is the net that catches hard link
+      // loss (where 'close' never fires); this catches the clean cases — tab
+      // closed, app quit — without making the operator wait out the lease.
+      // Skipped during shutdown: closeNow() terminates every client, and a
+      // clean stop or a scene switch must not look like a dead panel.
+      if (shuttingDown) return;
+      if (lease) {
+        // A CLOSE IS NOT PROOF THE PANEL IS GONE — it is also what a RECONNECT
+        // looks like from this side. The engine restarting, a wifi blip, or the
+        // iPad rotating all drop this socket, and the panel re-opens it and
+        // re-asserts within a second or two. Reverting the whole show instantly
+        // on close meant every one of those yanked the operator's look away.
+        //
+        // So a close SHORTENS the lease to a grace window instead of firing.
+        // Reconnect inside it (the panel re-sends touchControlArmed on every
+        // open) and nothing happens; stay gone and the normal sweep reverts.
+        // The fast path is preserved — a genuinely closed tab still recovers in
+        // ARM_CLOSE_GRACE_MS instead of waiting out the full lease.
+        lease.expiresAt = Math.min(lease.expiresAt, Date.now() + ARM_CLOSE_GRACE_MS);
+        lease.ws = null;
+        armSweepArm();
+        console.log(`[armLease] owner '${ownerId}' socket closed — ${ARM_CLOSE_GRACE_MS} ms ` +
+          'grace to reconnect before the show reverts');
+      }
+    });
+
     ws.on('close', () => {
       if (!ws._bumpedByThisWs || ws._bumpedByThisWs.size === 0) return;
       let releasedAny = false;
@@ -10013,6 +15718,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   });
 
   server.listen(opts.port, () => {
+    // "This engine is running." From here until closeNow() deletes it, the
+    // marker's presence at the NEXT boot means the run ended without a clean
+    // shutdown. Written on listen rather than earlier so a boot that dies
+    // before it can serve is not counted as a crashed show.
+    writeCrashMarker();
     console.log(`\n  🌐 Output Server listening on HTTP/WS port ${opts.port}`);
     console.log(`     Reachable on:`);
     for (const url of reachableUrls(opts.port)) {
@@ -10025,8 +15735,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (timelineService) {
       timelineService.start()
         .then(() => console.log(`  ⏱ Timeline service started (scene "${opts.modelName}", plan "${timelineService.activePlan}")`))
-        .catch((err) => console.warn(`  ⚠ Timeline service start failed: ${err && err.message}`));
+        // A BROKEN persisted file (unparseable YAML, or an invalid party field —
+        // both throw out of loadTimelineState) means the timeline does NOT run
+        // at all: say so ONCE, loudly, naming the file + field. It never ticks,
+        // so there is no per-tick spam and nothing half-runs.
+        .catch((err) => console.error(
+          `  ⛔ TIMELINE DID NOT START — the show plan/state is not running: ${err && err.message}`));
     }
+    // SPECIAL EVENTS runner (docs/52). Started after the WS sockets exist so
+    // its boot recovery + first state frame reach connected clients. Boot
+    // recovery is the important part: a persisted armed/running state means the
+    // engine died mid-show, and a restart IS an abort — the rig must come back
+    // NORMAL, not stuck in a blackout stage with the autopilots off.
+    specialEventsService.start()
+      .then(() => {
+        const st = specialEventsService.getState();
+        console.log(
+          `  🎈 Special events runner started (scene "${opts.modelName}", ` +
+          `${st.shows.length} show(s)${st.loadErrors.length ? `, ${st.loadErrors.length} REFUSED` : ''})`);
+      })
+      .catch((err) => console.error(
+        `  ⛔ SPECIAL EVENTS RUNNER DID NOT START: ${err && err.message}`));
   });
 
   publishStatsRef.publish = (data) => {
@@ -10080,6 +15809,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Stop the in-engine Timeline tick on shutdown / scene-switch restart.
   server.stopTimeline = () => {
     try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
+    try { specialEventsService.stop(); } catch (_) { /* ignore */ }
   };
 
   // AUTO-CYCLE (round-2 #2): the per-frame auto-cycle tick. engine.js composes
@@ -10097,7 +15827,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // server.close() and the port release) and stop accepting connections so a
   // replacement engine can re-bind :6968 immediately.
   server.closeNow = () => {
+    // FIRST, BEFORE ANY SOCKET IS TOUCHED. Terminating the WS clients below
+    // fires 'close' on every one of them, which is indistinguishable from a
+    // panel dying — without this flag a clean shutdown or a scene switch would
+    // revert the rig to the automatic show on its way out the door, and the
+    // arm sweep could fire a revert against a half-torn-down engine.
+    shuttingDown = true;
+    armSweepDisarm();
+    armLease.clear();
+    // THIS IS WHAT MAKES THE CRASH MARKER MEAN SOMETHING. closeNow() runs only
+    // on the deliberate stop paths (SIGINT / SIGTERM / POST /shutdown), so
+    // deleting it here is exactly the definition of "ended cleanly". A crash,
+    // an OOM kill, a power cut or a Windows `taskkill /T /F` never reaches this
+    // line, leaves the marker behind, and is correctly treated as unclean.
+    clearCrashMarker();
+    // TEARDOWN HYGIENE (report _30 step 10): drop the VSN1 deploy hook's live
+    // handles — its debounce timer and any CLI child whose stdout/stderr pipes
+    // this process still holds. The libuv `!(handle->flags & UV_HANDLE_CLOSING)`
+    // abort can only be tripped while handles are torn down, so every live
+    // handle we can retire before exit is abort surface removed.
+    try { if (vsn1DeployHook) vsn1DeployHook.dispose(); } catch (_) { /* ignore */ }
     try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
+    try { specialEventsService.stop(); } catch (_) { /* ignore */ }
     try {
       for (const wssInst of Object.values(wssByTopic)) {
         for (const client of wssInst.clients) {

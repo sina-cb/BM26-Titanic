@@ -297,7 +297,8 @@ export function autoPatchAll(fixtureList) {
 }
 
 /**
- * Clear only metadata fields (sectionId, controllerId, fixtureId, viewMask)
+ * Clear only metadata fields (sectionId, controllerId, fixtureId, and BOTH
+ * per-fixture view words viewMask/viewMaskHi)
  * without touching DMX patches (universe, address, controllerIp).
  *
  * @param {Array} fixtureList - array of fixture config objects (mutated in place)
@@ -308,11 +309,15 @@ export function clearMetadata(fixtureList) {
   let cleared = 0;
   for (const config of fixtureList) {
     if (!config) continue;
-    if (config.sectionId || config.controllerId || config.fixtureId || config.viewMask) cleared++;
+    if (config.sectionId || config.controllerId || config.fixtureId ||
+      config.viewMask || config.viewMaskHi) cleared++;
     config.sectionId = 0;
     config.controllerId = 0;
     config.fixtureId = 0;
+    // Both view words — clearing only word 0 would leave a word-1
+    // membership behind as invisible, un-clearable state.
     config.viewMask = 0;
+    config.viewMaskHi = 0;
   }
   console.log(`[AutoPatcher] Cleared metadata on ${cleared} fixture(s)`);
   return cleared;
@@ -363,6 +368,7 @@ export function clearAllPatches(fixtureList, options = {}) {
     config.sectionId = 0;
     config.fixtureId = 0;
     config.viewMask = 0;
+    config.viewMaskHi = 0;
   }
 
   // Clear router read buffers to prevent stale data persistence

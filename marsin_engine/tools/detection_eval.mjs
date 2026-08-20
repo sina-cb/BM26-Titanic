@@ -40,13 +40,14 @@ import path from 'node:path';
 
 import { buildScenarios } from '../tests/integration/detector_scenarios.mjs';
 import { applyMicModel } from '../tests/integration/mic_model.mjs';
+import { isMainModule } from './cli_entrypoint.mjs';
 import {
   runClip, dropMetrics, f1Score, buildCorrelation, slowZoneSeparation,
 } from '../tests/integration/run_analysis.mjs';
 import { TUNED_DETECTOR } from '../tests/integration/tuning_configs.mjs';
 import { readWavMono } from '../tests/integration/wav_io.mjs';
 
-const ALL_TIERS = ['clean', 'moderate', 'heavy'];
+const ALL_TIERS = ['clean', 'moderate', 'heavy', 'adversarial'];
 const MIC_SEED = 0x5EED;
 const DROP_TOLERANCE_MS = 1200;
 
@@ -197,15 +198,14 @@ function _evalConfigInner(ds, cfg, tiers) {
   };
 }
 
-// ── REAL-CORPUS NEGATIVE SET (report 20260620_23) ─────────────────────────
+// ── REAL-CORPUS UNLABELED EVENT RATE ─────────────────────────────────────
 // The single highest-leverage structural fix from the adversarial re-wave: the
 // SYNTHETIC scenarios were structurally blind to the build-mem THIN edge's
 // false-fires on real continuous music. We wire the real CC genre corpus
 // (~/tmp/genre_corpus/<genre>/*.wav — 60 continuous DJ/dance tracks, ~60 min)
-// in as a NEGATIVE set: these tracks have NO EDM drops in their 60 s windows,
-// so EVERY dropFired on them is a FALSE POSITIVE. This measures the REAL
-// falseFiresPerMin — the dance-floor safety metric — which the synthetic set
-// could not see. Audio lives in ~/tmp (never committed); the corpus is OPTIONAL
+// as an UNLABELED real-audio set. These tracks have no human drop timestamps,
+// so an emitted event cannot honestly be classified as true or false.
+// Audio lives in ~/tmp (never committed); the corpus is OPTIONAL
 // (CI has no audio) — when absent, evalRealCorpus returns { available: false }.
 
 const DEFAULT_REAL_CORPUS = path.join(os.homedir(), 'tmp', 'genre_corpus');
@@ -231,12 +231,12 @@ function listCorpusWavs(corpusDir) {
 }
 
 /**
- * Run one detector config over the REAL corpus as a negative set. Each track is
- * a continuous DJ/dance clip with NO drop, so every dropFired is a false fire.
- * Reports the REAL falseFiresPerMin + per-genre counts. The mic-only path is
+ * Run one detector config over the unlabeled real corpus. Report event density
+ * and per-genre counts without asserting whether an event was true or false.
+ * The mic-only path is
  * used (a file replay has no stems), matching production file-capture.
  *
- * @returns {object} { available, falseFiresPerMin, drops, minutes, tracks,
+ * @returns {object} { available, eventRatePerMin, events, minutes, tracks,
  *                     tracksWithFire, infiniteBuildDur, perGenre }
  */
 export function evalRealCorpus(detectorConfig, { corpusDir = DEFAULT_REAL_CORPUS, quiet = true } = {}) {
@@ -246,7 +246,7 @@ export function evalRealCorpus(detectorConfig, { corpusDir = DEFAULT_REAL_CORPUS
   const origLog = console.log;
   if (quiet) console.log = () => {};
   try {
-    let drops = 0, totalMs = 0, tracksWithFire = 0, infiniteBuildDur = 0;
+    let events = 0, totalMs = 0, tracksWithFire = 0, infiniteBuildDur = 0;
     const perGenre = {};
     for (const w of wavs) {
       const { samples, sampleRate } = readWavMono(w.path);
@@ -257,7 +257,7 @@ export function evalRealCorpus(detectorConfig, { corpusDir = DEFAULT_REAL_CORPUS
       };
       const rec = runClip(clip, { mode: 'mic-only', detectorConfig: cfg });
       const fired = rec.dropFired.length;
-      drops += fired;
+      events += fired;
       totalMs += rec.durationMs;
       if (fired > 0) tracksWithFire += 1;
       for (const d of rec.dropFired) if (!Number.isFinite(d.buildDurationMs)) infiniteBuildDur += 1;
@@ -266,8 +266,8 @@ export function evalRealCorpus(detectorConfig, { corpusDir = DEFAULT_REAL_CORPUS
     const minutes = totalMs / 60000;
     return {
       available: true, corpusDir,
-      falseFiresPerMin: minutes > 0 ? drops / minutes : null,
-      drops, minutes, tracks: wavs.length, tracksWithFire, infiniteBuildDur, perGenre,
+      eventRatePerMin: minutes > 0 ? events / minutes : null,
+      events, minutes, tracks: wavs.length, tracksWithFire, infiniteBuildDur, perGenre,
     };
   } finally {
     console.log = origLog;
@@ -354,8 +354,8 @@ function printSummary(name, r) {
   // number the synthetic set was blind to. Gating target: ≤ 0.1 ff/min.
   if (r.real) {
     if (r.real.available) {
-      console.log(`  REAL   falseFiresPerMin=${fmt(r.real.falseFiresPerMin)} ` +
-        `(${r.real.drops} phantom drops over ${fmt(r.real.minutes, 1)} min, ` +
+      console.log(`  REAL   unlabeledEventRatePerMin=${fmt(r.real.eventRatePerMin)} ` +
+        `(${r.real.events} events over ${fmt(r.real.minutes, 1)} min, ` +
         `${r.real.tracksWithFire}/${r.real.tracks} tracks; inf-buildDur=${r.real.infiniteBuildDur})`);
     } else {
       console.log(`  REAL   corpus absent (${r.real.corpusDir}) — real ff/min not measured`);
@@ -398,11 +398,13 @@ function main() {
   const skipReal = args['no-real'] === true;
 
   const results = {};
+  let processedCases = 0;
   for (const name of configNames) {
     const detCfg = adhoc || CONFIGS[name];
     const r = evalConfig(detCfg, { tiers });
     if (!skipReal) r.real = evalRealCorpus(detCfg, { corpusDir: realCorpusDir });
     results[name] = { detectorConfig: detCfg, ...r };
+    processedCases += Object.keys(r.perScenario).length;
     printSummary(name, r);
     if (args.overlays) {
       const ov = writeOverlays(outDir, detCfg, name);
@@ -410,12 +412,22 @@ function main() {
     }
   }
 
+  if (processedCases === 0) {
+    throw new Error('detection_eval: zero cases processed');
+  }
+
   const outPath = resolveHome(args.out) || path.join(outDir, 'eval.json');
-  fs.writeFileSync(outPath, JSON.stringify({ tiers, micSeed: MIC_SEED, dropToleranceMs: DROP_TOLERANCE_MS, results }, null, 2));
-  console.log(`\nwrote ${outPath}`);
+  fs.writeFileSync(outPath, JSON.stringify({
+    processedCases,
+    tiers,
+    micSeed: MIC_SEED,
+    dropToleranceMs: DROP_TOLERANCE_MS,
+    results,
+  }, null, 2));
+  console.log(`\nprocessed ${processedCases} cases; wrote ${outPath}`);
 }
 
 // Run only when invoked as a CLI (not when imported by a test).
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   main();
 }

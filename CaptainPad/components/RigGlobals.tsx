@@ -31,6 +31,7 @@ import { View } from 'react-native';
 import { setGlobalEffect, fetchGlobals, setGlobalEffectBlackout, getApiBaseAsync } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 import { GlobalEffectMacros } from '@/components/GlobalEffectMacros';
+import { resolveEffectsBarGeometry } from '@/components/global_effect_macros_logic';
 
 interface RigState {
   effects: Record<string, boolean>;
@@ -111,7 +112,7 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
 /**
  * RigGlobals — the unified rig control surface for both the deck and
  * mixer tabs. Renders the engine-side GEM grid plus a compact BLACKOUT
- * e-stop.
+ * e-stop in Edit; Performance removes that touch affordance from layout.
  *
  * `variant` selects the layout:
  *   - 'deck'  → 2-row grid, 44 px buttons so slot labels fit cleanly
@@ -133,10 +134,14 @@ export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' } 
   // viewport. Deck mode keeps the natural width — the deck right
   // column is already constrained.
   const isStrip = gemVariant === 'mixer-strip';
+  const stripWrapperPaddingTop = resolveEffectsBarGeometry({
+    variant: gemVariant,
+    isPortrait: false,
+  }).stripWrapperPaddingTop;
   return (
     <RigContextBridge>
       {({ blackout, setBlackout }) => (
-        <View style={isStrip ? { flex: 1, paddingTop: 6 } : { paddingTop: 6 }}>
+        <View style={isStrip ? { flex: 1, paddingTop: stripWrapperPaddingTop } : { paddingTop: stripWrapperPaddingTop || 4 }}>
           <GlobalEffectMacros
             blackout={blackout}
             onBlackoutChange={setBlackout}

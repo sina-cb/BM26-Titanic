@@ -2,13 +2,13 @@ presets:
   - name: Front
     key: front
     position:
-      x: 49.303
-      'y': 13.842
-      z: 118.053
+      x: 7.738
+      'y': 31.991
+      z: 65.755
     target:
-      x: 0
-      'y': 4
-      z: 0
+      x: 1.189
+      'y': 3.596
+      z: -2.255
   - name: Side
     key: side
     position:
@@ -22,23 +22,23 @@ presets:
   - name: Aerial
     key: aerial
     position:
-      x: 12.251
-      'y': 160.894
-      z: 90.627
+      x: 42.903
+      'y': 161.352
+      z: 80.146
     target:
-      x: -13.73
-      'y': 8.045
-      z: 7.969
+      x: 16.922
+      'y': 8.503
+      z: -2.512
   - name: Dramatic
     key: dramatic
     position:
-      x: -11.015
-      'y': 6.512
-      z: 28.639
+      x: -50.067
+      'y': 8.18
+      z: 42.371
     target:
-      x: 3.125
-      'y': 4.611
-      z: 1.923
+      x: -12.565
+      'y': 4.009
+      z: -12.286
   - name: Night Walk
     key: night-walk
     position:
@@ -52,33 +52,23 @@ presets:
   - name: Top Right Half
     key: topright
     position:
-      x: 22
-      'y': 55
-      z: -8
+      x: 92.272
+      'y': 19.503
+      z: 92.272
     target:
-      x: 22
-      'y': 6
-      z: -8
+      x: -2
+      'y': 8
+      z: -5.341
   - name: Top Left Half
     key: topleft
     position:
-      x: -22
+      x: 24.334
       'y': 55
-      z: 8
+      z: -11.421
     target:
-      x: -22
+      x: 24.334
       'y': 6
-      z: 8
-  - name: LED Grids
-    key: led-grids
-    position:
-      x: 0
-      'y': 9
-      z: 26
-    target:
-      x: 0
-      'y': 9
-      z: 17
+      z: -11.421
   - name: LED Grid Close
     key: led-grid-close
     position:

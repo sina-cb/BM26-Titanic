@@ -10,17 +10,41 @@
 /** Is the deck COLOUR autopilot actually WRITABLE right now?
  *
  *  The engine validates every `/deck/color-autopilot` POST strictly (codex P0):
- *  the MERGED config must carry a NON-EMPTY `palettes` array of known ids, or the
- *  write 400s — for BOTH directions, `active:true` AND `active:false` alike (the
- *  validator checks palettes before it ever looks at `active`). So when no
- *  palettes are configured the colour autopilot cannot be toggled at all: it is
- *  definitionally OFF (it can't run without a palette set) and any write we send
- *  just 400s. This pure predicate is the ONE place that fact lives — the toggle
- *  reads it to skip the guaranteed-400 colour write, and the direction/LED
- *  helpers read it to fall back to pattern-only. `undefined`/malformed palettes
- *  read as not-writable (never fabricate a set). */
-export function colorAutopilotWritable(palettes: unknown): boolean {
+ *  the MERGED config must be one the validator accepts, or the write 400s — for
+ *  BOTH directions, `active:true` AND `active:false` alike (the validator checks
+ *  the config before it ever looks at `active`). So when nothing is configured
+ *  the colour autopilot cannot be toggled at all: it is definitionally OFF (it
+ *  can't run without something to run) and any write we send just 400s. This
+ *  pure predicate is the ONE place that fact lives — the toggle reads it to skip
+ *  the guaranteed-400 colour write, and the direction/LED helpers read it to
+ *  fall back to pattern-only.
+ *
+ *  MODE-AWARE (docs/59 §4.3, W6). A FOLLOW NOTE config has NO `palettes` at all
+ *  — the ring is re-derived engine-side on every committed note — so the
+ *  palettes-only test would call a perfectly runnable follow-note config
+ *  un-toggleable and quietly drop the colour half of the APC clip_stop press.
+ *  A follow-note config is writable exactly when its block carries a non-empty
+ *  method subset, which is the same thing the engine's validator requires.
+ *
+ *  `undefined`/malformed input reads as not-writable in both modes — never
+ *  fabricate a config. */
+export function colorAutopilotWritable(palettes: unknown, mode?: unknown, followNote?: unknown): boolean {
+  if (mode === 'followNote') {
+    if (!followNote || typeof followNote !== 'object' || Array.isArray(followNote)) return false;
+    const schemes = (followNote as { schemes?: unknown }).schemes;
+    return Array.isArray(schemes) && schemes.length > 0;
+  }
   return Array.isArray(palettes) && palettes.length > 0;
+}
+
+/** The same predicate, read straight off a `colorAutopilot` broadcast frame or a
+ *  `/deck/color-autopilot` GET body. One call site instead of three that each
+ *  have to remember to thread `mode` and `followNote` through. */
+export function colorAutopilotConfigWritable(
+  cfg: Readonly<Record<string, unknown>> | null | undefined,
+): boolean {
+  if (!cfg || typeof cfg !== 'object') return false;
+  return colorAutopilotWritable(cfg.palettes, cfg.mode, cfg.followNote);
 }
 
 /** Combined pattern+color autopilot direction (APC clip_stop).

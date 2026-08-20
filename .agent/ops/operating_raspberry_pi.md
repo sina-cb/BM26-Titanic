@@ -6,17 +6,17 @@
 >
 > **Address literals** sprinkled below (anything that looks like a fixed `10.*`
 > address) are **examples from one camp network**. The Pi-side SSH topology
-> lives in `control_podium/server_bridge/.ssh.secret` (gitignored, copy from
+> lives in `LookingGlass/control_podium/server_bridge/.ssh.secret` (gitignored, copy from
 > `.ssh.secret.example`). The engine URL lives in
-> `control_podium/.config.bridge.yaml::engine.url`. Update both when you move
+> `LookingGlass/control_podium/.config.bridge.yaml::engine.url`. Update both when you move
 > rigs.
 
 ## 0. TL;DR
 
 | Fact | Value |
 | --- | --- |
-| Pi LAN IP / SSH user / port | `HOST` / `USER` / `PORT` in `control_podium/server_bridge/.ssh.secret` |
-| SSH password | optional `PASSWORD` in `control_podium/server_bridge/.ssh.secret` |
+| Pi LAN IP / SSH user / port | `HOST` / `USER` / `PORT` in `LookingGlass/control_podium/server_bridge/.ssh.secret` |
+| SSH password | optional `PASSWORD` in `LookingGlass/control_podium/server_bridge/.ssh.secret` |
 | Install root | `INSTALL_ROOT` in `.ssh.secret` (example template uses `/opt/titanic-bridge`) |
 | Service name | `titanic-bridge` |
 | Engine URL the Pi reaches | `.config.bridge.yaml::engine.url` (override via `.ssh.secret::ENGINE_URL`) |
@@ -81,7 +81,7 @@ Treat its uptime like a fire alarm — silent ≠ healthy, see §5.
   will find the wrong device otherwise.
 * **Network**: WiFi or Ethernet onto the same LAN as the laptop
   running MarsinEngine. Prefer a DHCP reservation that matches the
-  `HOST` you set in `control_podium/server_bridge/.ssh.secret` — update
+  `HOST` you set in `LookingGlass/control_podium/server_bridge/.ssh.secret` — update
   BOTH the router DHCP table and `.ssh.secret` when you renumber so
   deploy + tooling stay coherent.
 * **Antenna**: U.FL-to-SMA pigtail to the LoRa antenna; the Heltec's
@@ -95,7 +95,7 @@ Treat its uptime like a fire alarm — silent ≠ healthy, see §5.
 
 ```
 ssh <USER>@<HOST> -p <PORT>
-# all three come from control_podium/server_bridge/.ssh.secret
+# all three come from LookingGlass/control_podium/server_bridge/.ssh.secret
 # password (if any): same file, PASSWORD key
 ```
 
@@ -104,7 +104,7 @@ You should land in `/home/titanic`. The deployed bridge lives in
 
 ### 3.2 The `.ssh.secret` file
 
-SSH host/user/port/install all come from `control_podium/server_bridge/.ssh.secret`
+SSH host/user/port/install all come from `LookingGlass/control_podium/server_bridge/.ssh.secret`
 (GITIGNORED). Copy from `.ssh.secret.example` and fill in `HOST`, `USER`,
 `INSTALL_ROOT` at minimum.
 
@@ -123,7 +123,7 @@ when bootstrapping a new Pi. Never commit the real file.
 ```
 /opt/titanic-bridge/
 ├── venv/                       Python 3.11+ virtualenv (deploy.py owns it)
-├── control_podium/             Mirror of the repo's control_podium/ dir
+├── control_podium/             Mirror of the repo's `LookingGlass/control_podium/` tree
 │   ├── .config.bridge.yaml     Bridge config (engine URL, pub cadence, health port)
 │   ├── .config.nodes.yaml      Node ACL + USB-MAC pairings
 │   ├── .config.firmware.yaml   Compile-time firmware knobs (read here by deploy)
@@ -143,7 +143,7 @@ launched by systemd from
 
 ## 5. Systemd service
 
-Unit file: `control_podium/server_bridge/systemd/titanic-bridge.service`
+Unit file: `LookingGlass/control_podium/server_bridge/systemd/titanic-bridge.service`
 (installed to `/etc/systemd/system/titanic-bridge.service` by
 deploy).
 
@@ -237,17 +237,18 @@ Default TCP port comes from `.config.bridge.yaml::health.port` (see `default_hea
 From the dev laptop:
 
 ```
-cd <repo>/control_podium
-python -m server_bridge.deploy
+cd <repo>/LookingGlass/control_podium
+PYTHONPATH=. python -m server_bridge.deploy
 ```
 
 What it does (see `server_bridge/deploy.py`):
 
 1. Loads SSH target + install root from `server_bridge/.ssh.secret`.
-2. `rsync`s `control_podium/` to `/opt/titanic-bridge/` over SSH
+2. `rsync`s the repo's `LookingGlass/control_podium/` tree to
+   `INSTALL_ROOT/control_podium/` on the Pi over SSH
    (excludes `__pycache__`, `tests/`, `PortWatch/`, etc.).
 3. Ensures `/opt/titanic-bridge/venv/` exists, then runs
-   `pip install -r control_podium/server_bridge/requirements.txt`.
+   `pip install -r control_podium/server_bridge/requirements.txt` on the Pi.
 4. Installs / updates the systemd unit.
 5. `systemctl daemon-reload && systemctl enable --now titanic-bridge`.
 6. Polls `journalctl` until the boot banner is seen, then exits.
@@ -264,7 +265,7 @@ The server Heltec's USB is on the Pi, not on your laptop. The dev
 laptop's `firmware/deploy.py` knows how to remote-flash:
 
 ```
-cd <repo>/control_podium
+cd <repo>/LookingGlass/control_podium
 python firmware/deploy.py --node 0x01           # server only
 python firmware/deploy.py --all                  # ALL paired controllers
 ```
@@ -313,7 +314,7 @@ If you've replaced the SD card or set up a new physical unit:
 
 4. Ensure the Linux account named by `.ssh.secret::USER` can open serial devices: `sudo usermod -aG dialout titanic` (replace `titanic` if you changed the account) then re-login.
 
-5. From the dev laptop, copy `server_bridge/.ssh.secret.example` to `server_bridge/.ssh.secret` and fill in `HOST` / `USER` / `INSTALL_ROOT` (and `PASSWORD` if needed). Edit `control_podium/.config.bridge.yaml::engine.url` to point at your laptop's engine. Then run `python -m server_bridge.deploy`. First-time deploy creates the venv, installs deps, installs systemd unit, and starts the service.
+5. From the dev laptop, copy `server_bridge/.ssh.secret.example` to `server_bridge/.ssh.secret` and fill in `HOST` / `USER` / `INSTALL_ROOT` (and `PASSWORD` if needed). Edit `LookingGlass/control_podium/.config.bridge.yaml::engine.url` to point at your laptop's engine. Then run `python -m server_bridge.deploy`. First-time deploy creates the venv, installs deps, installs systemd unit, and starts the service.
 
 6. Curl `http://<HOST>:7099/health` (or whatever you set in `.config.bridge.yaml::health.port`) and confirm JSON returns.
 
@@ -352,7 +353,7 @@ If you've replaced the SD card or set up a new physical unit:
   captain's firmware build. Re-flash the captain with the same
   `secret.yaml` (firmware deploy bakes it in).
 * Engine URL unreachable — bridge boots fine but every status call fails.
-  Update `control_podium/.config.bridge.yaml::engine.url` (or set
+  Update `LookingGlass/control_podium/.config.bridge.yaml::engine.url` (or set
   `ENGINE_URL` in `.ssh.secret` for a systemd-baked override) and re-deploy.
 
 ### "I want to roll back"
@@ -391,13 +392,13 @@ the install is fully owned by the deploy script.
   serial reconnect, log throttling.
 * `docs/21_portwatch_monitor.md` — how PortWatch consumes what
   this Pi produces.
-* `control_podium/comms/bridge.py` — the bridge implementation.
-* `control_podium/comms/bridge_health.py` — the `/health`
+* `LookingGlass/control_podium/comms/bridge.py` — the bridge implementation.
+* `LookingGlass/control_podium/comms/bridge_health.py` — the `/health`
   endpoint.
-* `control_podium/server_bridge/deploy.py` — code deploy.
-* `control_podium/firmware/deploy.py` — remote firmware flash.
-* `control_podium/firmware/hill_climb_link.py` — link tuning.
-* `control_podium/tests/hil/test_hil_link_reliability.py` —
+* `LookingGlass/control_podium/server_bridge/deploy.py` — code deploy.
+* `LookingGlass/control_podium/firmware/deploy.py` — remote firmware flash.
+* `LookingGlass/control_podium/firmware/hill_climb_link.py` — link tuning.
+* `LookingGlass/control_podium/tests/hil/test_hil_link_reliability.py` —
   end-to-end link stats.
 
 If you've read this whole doc and still don't know how the Pi

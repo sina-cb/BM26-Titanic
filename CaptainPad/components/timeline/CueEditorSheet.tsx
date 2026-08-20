@@ -17,7 +17,6 @@
  *                          TRANSITION (default|crossfade|flash|dissolve),
  *                          OVERLAYS (leave|enable|disable),
  *                          pattern AUTOPILOT + COLOR AUTOPILOT
- *   HOLD      none | minutes stepper            (programs only)
  *   DAYS      This day | All days | Pick…       (Pick = day-index toggles)
  *
  * PLAYLIST is the ONLY action the maker authors now (operator decision:
@@ -25,9 +24,20 @@
  * `globals` for hand-authored plans, but this editor never emits them. The
  * `scene` action is likewise NOT authored here: a scene switch restarts the
  * engine — dangerous + irrelevant inside the maker.
+ *
+ * Two authoring surfaces REMOVED (operator rulings 2026-08-03), both engine-
+ * intact — see cue_edit_logic.ts for the pinned round-trip rules:
+ *   - HOLD: gone from the UI ("remove hold from the cue UI to avoid
+ *     confusion, but keep it for the party"). An existing cue.hold round-trips
+ *     through an edit UNTOUCHED; new cues emit none (engine: holds until the
+ *     next program). The party program's hold in the plan YAML stays.
+ *   - cue-level `size` global: unused in cues. Accepted on read, shed on
+ *     save, never shown. The DECK-level size global is a real control and is
+ *     not affected.
  */
 import React, { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
+import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
@@ -38,6 +48,7 @@ import {
   hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
+import { assembleCue, stripCueSizeGlobal } from './cue_edit_logic';
 import { DayTimePicker, DayTimeContextCue } from './DayTimePicker';
 import { DeckTransitionControls } from '@/components/DeckTransitionControls';
 import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
@@ -254,7 +265,8 @@ export function CueEditorSheet({
   const [label, setLabel] = useState<string>('');
   const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
   const [action, setAction] = useState<CueAction>(defaultPlaylistAction());
-  const [holdMin, setHoldMin] = useState<number | null>(null);
+  // NOTE: no hold state — HOLD left the cue UI (operator ruling 2026-08-03).
+  // An existing cue.hold rides through assembleCue's spread untouched.
   // Cue DURATION (minutes) — REQUIRED. A cue always owns the deck for this window
   // after it fires (operator: "new CUEs must have a duration, no None"). Default 60.
   const [durationMin, setDurationMin] = useState<number>(60);
@@ -279,11 +291,11 @@ export function CueEditorSheet({
       // to a fresh deck playlist so the editor always has something to render.
       const dc = initialDefaultCue ?? null;
       setLabel(dc?.label || '');
-      setAction(dc && dc.action.type === 'playlist' ? dc.action : defaultPlaylistAction());
+      // Legacy `size` is shed at load (accept-and-ignore, never re-emitted).
+      setAction(dc && dc.action.type === 'playlist' ? stripCueSizeGlobal(dc.action) : defaultPlaylistAction());
       // The following are inert in default mode but reset for hygiene.
       setKind('program');
       setTrigger(defaultTrigger('manual'));
-      setHoldMin(null);
       setDurationMin(60);
       setDays('all');
       setDaysModeState('all');
@@ -293,9 +305,10 @@ export function CueEditorSheet({
       setTrigger(initialCue.trigger);
       // A hand-authored cue could carry a look/globals action; the maker only
       // edits playlist actions, so normalise anything else to a fresh playlist
-      // so the editor never gets stuck on an action it can't render.
-      setAction(initialCue.action.type === 'playlist' ? initialCue.action : defaultPlaylistAction());
-      setHoldMin(initialCue.hold && 'min' in initialCue.hold ? initialCue.hold.min : null);
+      // so the editor never gets stuck on an action it can't render. Legacy
+      // `size` is shed at load (accept-and-ignore, never re-emitted). The
+      // cue's hold (if any) is NOT loaded — it round-trips via assembleCue.
+      setAction(initialCue.action.type === 'playlist' ? stripCueSizeGlobal(initialCue.action) : defaultPlaylistAction());
       // DURATION is required; seed from a saved positive durationMin, else 60.
       setDurationMin(
         typeof initialCue.durationMin === 'number' && initialCue.durationMin > 0
@@ -311,7 +324,6 @@ export function CueEditorSheet({
       // snapped up to the next comfortable 5-minute boundary (smartDefaultClockAt).
       setTrigger(makeTrigger('clock'));
       setAction(defaultPlaylistAction());
-      setHoldMin(null);
       // A cue is an EVENT with a REQUIRED duration; a fresh cue defaults to 60 min
       // (renders as a deck-owned block on the day overview).
       setDurationMin(60);
@@ -433,34 +445,24 @@ export function CueEditorSheet({
       }
       outAction = pl;
     }
-    return outAction;
+    // Shed the legacy cue-level `size` on EVERY emit path (cue + default cue):
+    // accepted when reading an old plan, never written back.
+    return stripCueSizeGlobal(outAction);
   };
 
-  const buildCue = (): PlanCue => {
-    // The maker emits a DECK-only playlist target (mixer authoring removed) —
-    // same discipline as how the `scene` action was dropped. The action is
-    // normalized (deck target + autopilot/color-autopilot discipline) by
-    // buildNormalizedAction, shared with the default-cue path.
-    const outAction = buildNormalizedAction();
-    // Spread the ORIGINAL cue first so fields the editor doesn't surface
-    // (e.g. `catchUp`, and any future/unknown keys) survive a round-trip;
-    // then overlay only what the editor manages.
-    const cue: PlanCue = {
-      ...(initialCue ?? {}),
-      id: initialCue?.id ?? '', // parent mints id for new cues
-      kind,
-      trigger,
-      action: outAction,
-      days,
-    };
-    if (label.trim()) cue.label = label.trim();
-    else delete cue.label;
-    if (kind === 'program' && holdMin && holdMin > 0) cue.hold = { min: holdMin };
-    else delete cue.hold;
-    // DURATION is REQUIRED — always emit (durationMin is always a positive number).
-    cue.durationMin = durationMin;
-    return cue;
-  };
+  // Assembly (spread-the-original + overlay managed fields) lives in the PURE
+  // cue_edit_logic.assembleCue so the hold round-trip and the size shed are
+  // pinned by plain-node vitest. Notably: `hold` is NOT touched here — an
+  // existing cue keeps its hold byte-identical; a new cue emits none.
+  const buildCue = (): PlanCue => assembleCue({
+    initial: initialCue,
+    kind,
+    trigger,
+    action: buildNormalizedAction(),
+    days,
+    label,
+    durationMin,
+  });
 
   // Validate the candidate cue against every OTHER cue in the plan and return a
   // human-readable BLOCK message if it overlaps one, else null. Overlap rule:
@@ -667,13 +669,13 @@ export function CueEditorSheet({
     const transitionSource: 'default' | 'custom' = pl.transition ? 'custom' : 'default';
     const overlayMode: 'asis' | ActionOverlays = pl.overlays ?? 'asis';
     const hueDeg = typeof pl.hue === 'number' ? pl.hue : 0;
-    // GLOBALS (SPEED/SIZE/SYNC) — block presence gates the card; seeded on
-    // enable so the emitted JSON always carries all three. speed/size are CPC
-    // params in [0,1]; bpmSpeedSync is the SYNC toggle (0|1).
+    // GLOBALS (SPEED/SYNC) — block presence gates the card; seeded on enable
+    // so the emitted JSON always carries both. speed is a CPC param in [0,1];
+    // bpmSpeedSync is the SYNC toggle (0|1). Cue-level SIZE was removed
+    // (operator ruling 2026-08-03) — legacy values are shed at load/emit.
     const glOn = pl.globals !== undefined;
     const gl = pl.globals ?? {};
     const speedVal = typeof gl.speed === 'number' ? gl.speed : 0.5;
-    const sizeVal = typeof gl.size === 'number' ? gl.size : 0.5;
     const syncOn = (gl.bpmSpeedSync ?? 0) >= 0.5;
 
     // Adapter for the reused ColorAutopilotPanel: its config type requires a
@@ -888,9 +890,10 @@ export function CueEditorSheet({
           )}
         </ActionCard>
 
-        {/* 6. GLOBALS — NEW. Rig-wide CPC knobs (SPEED/SIZE/SYNC) applied when
-            the cue fires (deck-only). ON seeds {speed:0.5,size:0.5,bpmSpeedSync:0};
-            OFF drops the field. Lets a cue pin speed low and keep sync off. */}
+        {/* 6. GLOBALS — rig-wide CPC knobs (SPEED/SYNC) applied when the cue
+            fires (deck-only). ON seeds {speed:0.5,bpmSpeedSync:0}; OFF drops
+            the field. Lets a cue pin speed low and keep sync off. Cue-level
+            SIZE removed (operator ruling 2026-08-03). */}
         <ActionCard
           title="GLOBALS"
           right={
@@ -902,7 +905,7 @@ export function CueEditorSheet({
                   delete next.globals;
                   setAction(next);
                 } else {
-                  setAction({ ...pl, globals: { speed: 0.5, size: 0.5, bpmSpeedSync: 0 } });
+                  setAction({ ...pl, globals: { speed: 0.5, bpmSpeedSync: 0 } });
                 }
               }}
               label={glOn ? 'SET GLOBALS' : 'LEAVE AS-IS'}
@@ -925,20 +928,6 @@ export function CueEditorSheet({
                   thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
                 />
               </View>
-              {/* SIZE */}
-              <View style={{ gap: 6 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <FieldLabel>SIZE</FieldLabel>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(sizeVal * 100)}%`}</Text>
-                </View>
-                <HorizontalFader
-                  value={sizeVal}
-                  onChange={(v: number) => setAction({ ...pl, globals: { ...gl, size: Math.round(v * 100) / 100 } })}
-                  trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
-                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: C.primary }}
-                  thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
-                />
-              </View>
               {/* SYNC — bpmSpeedSync: drive SPEED from the arbitrated tempo. */}
               <ToggleChip
                 on={syncOn}
@@ -950,7 +939,7 @@ export function CueEditorSheet({
               </Text>
             </View>
           ) : (
-            <Text style={styles.hint}>Leave as-is — this cue doesn&apos;t change speed, size, or sync.</Text>
+            <Text style={styles.hint}>Leave as-is — this cue doesn&apos;t change speed or sync.</Text>
           )}
         </ActionCard>
 
@@ -978,7 +967,9 @@ export function CueEditorSheet({
   };
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}
+      supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
+    >
       <Pressable
         onPress={onClose}
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
@@ -1100,29 +1091,10 @@ export function CueEditorSheet({
                 </>
               ) : null}
 
-              {/* HOLD (programs only) */}
-              {!isDefaultMode && kind === 'program' ? (
-                <>
-                  <View style={{ height: 14 }} />
-                  <FieldLabel>HOLD</FieldLabel>
-                  <Segmented
-                    options={[{ id: 'none', label: 'None' }, { id: 'min', label: 'Minutes' }]}
-                    value={holdMin && holdMin > 0 ? 'min' : 'none'}
-                    onChange={(v) => setHoldMin(v === 'min' ? (holdMin || 30) : null)}
-                  />
-                  {holdMin && holdMin > 0 ? (
-                    <View style={{ marginTop: 8 }}>
-                      <Stepper
-                        value={holdMin}
-                        step={15}
-                        onChange={setHoldMin}
-                        min={5} max={480}
-                        format={(v) => `${v} min`}
-                      />
-                    </View>
-                  ) : null}
-                </>
-              ) : null}
+              {/* HOLD deliberately has NO section here (operator ruling
+                  2026-08-03: "remove hold from the cue UI to avoid confusion,
+                  but keep it for the party"). The field stays engine-side and
+                  round-trips untouched through assembleCue. */}
 
               {/* DAYS — cue-only (the default cue applies to every day/gap). */}
               {!isDefaultMode ? (

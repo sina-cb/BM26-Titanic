@@ -5,9 +5,17 @@
  * auto-managed group→bit table and lets the operator create named
  * custom views, attach whole groups to them, and assign/unassign the
  * currently selected fixtures. Custom-view fixture membership is stored
- * in each fixture's `viewMask` bitfield (persisted in patches.yaml);
- * group membership is stored on the view itself. The model exporter
- * turns all of it into `<scene>.viewmasks.js` for the engine.
+ * in the fixture mask field OF THE VIEW'S OWN WORD — `viewMask` (word 0)
+ * or `viewMaskHi` (word 1), both persisted in patches.yaml; group
+ * membership is stored on the view itself. The model exporter turns all of
+ * it into `<scene>.viewmasks.js` for the engine.
+ *
+ * The word matters here: `addCustomView` allocates word 1 FIRST (word 0 is
+ * reserved for base group bits), so the typical new view an operator makes
+ * and populates by clicking fixtures is a WORD-1 view. Writing its bit into
+ * `viewMask` would both lose the membership at export and alias a base group
+ * bit — every per-fixture read/write below therefore goes through
+ * `fixtureInView` / `setFixtureInView`, never a bare `config.viewMask`.
  */
 import { params, selectedFixtureIndices } from '../core/state.js';
 import {
@@ -18,8 +26,11 @@ import {
   setCustomViewBit,
   removeCustomView,
   listPixelGroups,
-  usedBitsMask,
+  freeSlotCounts,
   isEffectsOnlyFixture,
+  fixtureInView,
+  setFixtureInView,
+  fixtureMaskField,
 } from '../dmx/view_registry.js';
 import { generatePixelMap } from '../dmx/pixelblaze_model_exporter.js';
 import { pinForCornerResize } from './panel_layout.js';
@@ -47,7 +58,7 @@ function hex(bit) {
 function memberCount(view) {
   let n = 0;
   for (const f of fixtureList()) {
-    if (f && ((f.viewMask || 0) & view.bit) !== 0) n++;
+    if (fixtureInView(f, view)) n++;
   }
   return n;
 }
@@ -243,8 +254,10 @@ export function applyViewMaskIsolation() {
       return;
     }
 
-    // Isolate membership
-    const isBitMember = ((f.config.viewMask || 0) & activeView.bit) !== 0;
+    // Isolate membership. The bit test reads the view's OWN word — a word-1
+    // view tested against `viewMask` would isolate the wrong fixtures (it
+    // would match whatever base group happens to own that bit value).
+    const isBitMember = fixtureInView(f.config, activeView);
     const isGroupMember = activeView.groups && activeView.groups.includes(f.config.group);
     const isMember = isBitMember || isGroupMember;
 
@@ -303,9 +316,14 @@ export function setupViewMasksEditor() {
     body.innerHTML = '';
 
     // Group views (auto-managed, read-only here)
+    // Word 0's free-slot count IS the group headroom: base group bits can
+    // only live in word 0, so this number is how many more fixture groups
+    // the scene can take before the model export refuses.
+    const free = freeSlotCounts(reg);
     const groupsTitle = document.createElement('div');
     groupsTitle.className = 'vm-section-title';
-    groupsTitle.textContent = `GROUP VIEWS (auto) — ${Object.keys(reg.groupBits).length}`;
+    groupsTitle.textContent =
+      `GROUP VIEWS (auto) — ${Object.keys(reg.groupBits).length} · ${free.word0} new group(s) fit`;
     body.appendChild(groupsTitle);
 
     for (const [group, bit] of Object.entries(reg.groupBits)) {
@@ -323,17 +341,15 @@ export function setupViewMasksEditor() {
       body.appendChild(row);
     }
 
-    // Custom views. Surface the remaining bit budget: vMask has 31
-    // usable bits and titanic alone pins 30 groups — the operator must
-    // see the ceiling coming, not discover it as a failed save.
-    const usedMask = usedBitsMask(reg);
-    let freeBits = 0;
-    for (let b = 1; b <= 0x40000000; b *= 2) {
-      if ((usedMask & b) === 0) freeBits++;
-    }
+    // Custom views. Surface the remaining budget PER WORD: a new view
+    // takes a word-1 slot first and only spills into word 0 (the group
+    // word) once word 1 is full, so a single flat number would hide which
+    // ceiling is actually approaching.
+    const freeViews = free.word1 + free.word0;
     const customTitle = document.createElement('div');
     customTitle.className = 'vm-section-title';
-    customTitle.textContent = `CUSTOM VIEWS — ${reg.custom.length} · ${freeBits} bit(s) free`;
+    customTitle.textContent = `CUSTOM VIEWS — ${reg.custom.length} · ${freeViews} slot(s) free ` +
+      `(${free.word1} in word 1, ${free.word0} spill into the group word)`;
     body.appendChild(customTitle);
 
     for (const view of reg.custom) {
@@ -388,8 +404,11 @@ export function setupViewMasksEditor() {
     const card = document.createElement('div');
     card.className = 'vm-card';
 
-    // Highlight card if isolated/previewing
-    const isIsolated = window.__activePreviewView && window.__activePreviewView.bit === view.bit;
+    // Highlight card if isolated/previewing. Matched by view IDENTITY, not by
+    // bit value: word 0 and word 1 are independent bit spaces, so two views
+    // can legitimately share a bit VALUE and a `.bit ===` test would light up
+    // the wrong card (`__activePreviewView` is always one of `reg.custom`).
+    const isIsolated = window.__activePreviewView === view;
     if (isIsolated) {
       card.classList.add('vm-card-previewing');
     }
@@ -440,10 +459,13 @@ export function setupViewMasksEditor() {
       try {
         const oldBit = setCustomViewBit(reg, view, parsed);
         if (oldBit !== view.bit) {
-          // Migrate per-fixture membership to the new bit.
+          // Migrate per-fixture membership to the new bit. `setCustomViewBit`
+          // only ever moves a view WITHIN its own word, so both the old and
+          // the new bit live in the same field.
+          const field = fixtureMaskField(view);
           for (const f of fixtureList()) {
-            if (f && ((f.viewMask || 0) & oldBit) !== 0) {
-              f.viewMask = ((f.viewMask || 0) & ~oldBit) | view.bit;
+            if (f && ((f[field] || 0) & oldBit) !== 0) {
+              f[field] = ((f[field] || 0) & ~oldBit) | view.bit;
             }
           }
         }
@@ -548,7 +570,7 @@ export function setupViewMasksEditor() {
     assignBtn.onclick = () => {
       const list = fixtureList();
       for (const i of selectedFixtureIndices) {
-        if (list[i]) list[i].viewMask = (list[i].viewMask || 0) | view.bit;
+        setFixtureInView(list[i], view, true);
       }
       // markChanged() already resyncs the lil-gui metadata chip rows.
       markChanged();
@@ -562,7 +584,7 @@ export function setupViewMasksEditor() {
     unassignBtn.onclick = () => {
       const list = fixtureList();
       for (const i of selectedFixtureIndices) {
-        if (list[i]) list[i].viewMask = (list[i].viewMask || 0) & ~view.bit;
+        setFixtureInView(list[i], view, false);
       }
       markChanged();
       refreshCount();
@@ -575,13 +597,14 @@ export function setupViewMasksEditor() {
     delBtn.onclick = () => {
       showCustomConfirm({
         title: 'Delete View',
-        text: `Delete view '${view.name}'? Its bit ${hex(view.bit)} is cleared from all fixtures.`,
+        text: `Delete view '${view.name}'? Its bit ${hex(view.bit)} is cleared from every ` +
+          `fixture's ${fixtureMaskField(view)}.`,
         onConfirm: () => {
           for (const f of fixtureList()) {
-            if (f) f.viewMask = (f.viewMask || 0) & ~view.bit;
+            setFixtureInView(f, view, false);
           }
           // Turn off isolation preview if we deleted the isolated view
-          if (window.__activePreviewView && window.__activePreviewView.bit === view.bit) {
+          if (window.__activePreviewView === view) {
             window.__activePreviewView = null;
             applyViewMaskIsolation();
           }

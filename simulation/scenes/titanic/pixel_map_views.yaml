@@ -1,0 +1,339 @@
+version: 1
+views:
+  - id: top_down
+    label: Top-Down
+    panels:
+      - id: main
+        select:
+          - fixtureType: ShehdsBar
+          - kind: led
+          - group: Left SmokeStack
+          - group: Right SmokeStacks
+          - group: Left Small SmokeStack
+          - group: Right Small SmokeStack
+          - group: Left Auditorium
+          - group: Right Auditorium
+          - group: Left Back Rails
+          - group: Right Back Rails
+        layout: spatial
+        label: Bars + Strands + Stacks + Auditoriums
+        exclude:
+          - fixtureType: TeSignV3A40
+          - fixtureType: TeSignV3B34
+        projection: top
+    placements: {}
+    typeStyles:
+      UkingPar:
+        sizeX: 13
+        sizeY: 13
+      LedStrand:
+        sizeX: 5
+        sizeY: 5
+      ShehdsBar:
+        sizeX: 14
+        sizeY: 14
+      VintageLed:
+        sizeX: 16
+        sizeY: 16
+    framing:
+      zoom: 1.2544000000000013
+      panX: 653.0394090365528
+      panY: 209.97581167669932
+    offsets:
+      Left Auditorium 5:
+        dx: 104
+        dy: 40
+      Left Auditorium 6:
+        dx: 104
+        dy: 40
+      Left Auditorium 7:
+        dx: 104
+        dy: 16
+      Left Auditorium 8:
+        dx: 104
+        dy: 48
+      Left Auditorium 4:
+        dx: 104
+        dy: -24
+      Left Auditorium 3:
+        dx: 104
+        dy: -24
+      Left Auditorium 2:
+        dx: 104
+        dy: -24
+      Left Auditorium 1:
+        dx: 104
+        dy: -24
+      Left_Front_Right:
+        dx: 64
+        dy: 32
+      Left Front Wall 2:
+        dx: 48
+        dy: 32
+      Left Front Wall 1:
+        dx: 32
+        dy: 32
+      Left Front Wall 3:
+        dx: 24
+        dy: 32
+      Left Front Wall 4:
+        dx: 16
+        dy: 32
+      Left Front Wall 5:
+        dx: 0
+        dy: 32
+      Left_Front_Left:
+        dx: 16
+        dy: 32
+      Left_Back_Right:
+        dx: 64
+        dy: -16
+      Left Back Wall 5:
+        dx: -8
+        dy: -16
+      Left Back Wall 4:
+        dx: 8
+        dy: -16
+      Left Back Wall 3:
+        dx: 16
+        dy: -16
+      Left Back Wall 1:
+        dx: 32
+        dy: -16
+      Left Back Wall 2:
+        dx: 48
+        dy: -16
+      Left_Back_Left:
+        dx: 8
+        dy: -24
+      Left Small SmokeStack 1:
+        dx: 64
+        dy: 16
+      Left Small SmokeStack 2:
+        dx: 64
+        dy: 16
+      Left Small SmokeStack 3:
+        dx: 64
+        dy: 16
+      Left Small SmokeStack 4:
+        dx: 64
+        dy: 16
+      Right Auditorium 5:
+        dx: -32
+        dy: 48
+      Right Auditorium 6:
+        dx: -32
+        dy: 48
+      Right Auditorium 7:
+        dx: -32
+        dy: 48
+      Right Auditorium 8:
+        dx: -32
+        dy: 48
+      Right Auditorium 4:
+        dx: -48
+        dy: 32
+      Right Auditorium 3:
+        dx: -48
+        dy: 32
+      Right Auditorium 2:
+        dx: -48
+        dy: 32
+      Right Auditorium 1:
+        dx: -48
+        dy: 32
+      Right Front Wall 2:
+        dx: -8
+        dy: 56
+      Right Front Wall 1:
+        dx: 0
+        dy: 40
+      Right Front Wall 3:
+        dx: 8
+        dy: 24
+      Right Front Wall 4:
+        dx: 16
+        dy: 8
+      Right Front Wall 5:
+        dx: 16
+        dy: -8
+      Right_Front_Left:
+        dx: -8
+        dy: 48
+      Right Back Wall 2:
+        dx: -48
+        dy: 32
+      Right Back Wall 1:
+        dx: -48
+        dy: 24
+      Right Back Wall 3:
+        dx: -40
+        dy: 16
+      Right Back Wall 4:
+        dx: -32
+        dy: 8
+      Right Back Wall 5:
+        dx: -24
+        dy: 0
+      Right_Back_Left:
+        dx: -48
+        dy: 16
+      Right_Front_Right:
+        dx: -8
+        dy: 16
+      Right_Back_Right:
+        dx: -32
+        dy: 0
+      Right Small SmokeStack 3:
+        dx: -80
+        dy: 40
+      Right Small SmokeStack 4:
+        dx: -80
+        dy: 40
+      Right Small SmokeStack 1:
+        dx: -80
+        dy: 40
+      Right Small SmokeStack 2:
+        dx: -80
+        dy: 40
+  - id: front
+    label: Front
+    panels:
+      - id: left
+        select:
+          - group: Left Front Wall
+          - group: Left Front Rails
+          - group: Left_Front_Left
+          - group: Left_Front_Right
+          - name: Left SmokeStack 1
+          - name: Left SmokeStack 2
+          - name: Left SmokeStack 3
+          - name: Left SmokeStack 4
+        layout: spatial
+        label: Left Front
+        projection: front
+        washAngle: -30
+        expandPitch:
+          VintageLed: 0.6
+      - id: right
+        select:
+          - group: Right Front Wall
+          - group: Right Front Rails
+          - group: Right_Front_Right
+          - group: Right_Front_Left
+          - name: Right SmokeStacks 5
+          - name: Right SmokeStacks 6
+          - name: Right SmokeStacks 7
+          - name: Right SmokeStacks 8
+        layout: spatial
+        label: Right Front
+        projection: front
+        washAngle: 33
+        expandPitch:
+          VintageLed: 0.6
+    placements: {}
+    typeStyles:
+      VintageLed:
+        sizeX: 16
+        sizeY: 16
+      UkingPar:
+        sizeX: 18
+        sizeY: 60
+        effect: upwash
+    offsets:
+      Left SmokeStack 4:
+        dx: -64
+        dy: -104
+      Left SmokeStack 3:
+        dx: -80
+        dy: -96
+      Left SmokeStack 2:
+        dx: -112
+        dy: -80
+      Left SmokeStack 1:
+        dx: -120
+        dy: -72
+      Right_Front_Left:
+        dx: 80
+        dy: -24
+      Right_Front_Right:
+        dx: 104
+        dy: -32
+      Right SmokeStacks 5:
+        dx: 200
+        dy: -120
+      Right SmokeStacks 6:
+        dx: 160
+        dy: -128
+      Right SmokeStacks 7:
+        dx: 144
+        dy: -144
+      Right SmokeStacks 8:
+        dx: 168
+        dy: -152
+      Right Front Rails 1:
+        dx: 48
+        dy: 24
+      Right Front Rails 2:
+        dx: 48
+        dy: 24
+      Right Front Rails 3:
+        dx: 48
+        dy: 24
+      Right Front Rails 4:
+        dx: 48
+        dy: 24
+      Left_Front_Right:
+        dx: 40
+        dy: -8
+  - id: strands
+    label: LED Strands
+    panels:
+      - id: main
+        select:
+          - kind: led
+        layout: spatial
+        exclude:
+          - fixtureType: TeSignV3A40
+          - fixtureType: TeSignV3B34
+        projection: top
+    placements: {}
+    typeStyles: {}
+    offsets:
+      Left_Front_Right:
+        dx: 272
+        dy: -112
+      Left_Back_Right:
+        dx: 272
+        dy: -112
+      Left_Back_Left:
+        dx: 272
+        dy: -112
+      Left_Front_Left:
+        dx: 272
+        dy: -112
+  - id: te_sign
+    label: TE Sign
+    panels:
+      - id: sign_1
+        select:
+          - fixtureType: TeSignV3A40
+            group: TE Sign
+          - fixtureType: TeSignV3B34
+            group: TE Sign
+        layout: planar
+        label: TE Sign
+        rotate: 90
+        fit: true
+      - id: sign_2
+        select:
+          - fixtureType: TeSignV3A40
+            group: TE Sign 2
+          - fixtureType: TeSignV3B34
+            group: TE Sign 2
+        layout: planar
+        label: TE Sign 2
+        rotate: 90
+        fit: true
+    placements: {}
+    typeStyles: {}

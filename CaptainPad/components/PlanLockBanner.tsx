@@ -1,9 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, View, Text, TouchableOpacity, Alert } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Easing, View, Text, TouchableOpacity } from 'react-native';
+import { opError } from '@/utils/op_dialog';
 import { router } from 'expo-router';
-import { shadow } from '@/styles/globalStyles';
+import { readableInk, shadow, withAlpha } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { Radius } from '@/constants/theme';
 import { useEngineLock } from '@/hooks/useEngineLock';
 import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
+import { usePerformanceMode } from '@/hooks/usePerformanceMode';
 
 // ── PlanLockBanner ─────────────────────────────────────────────────────
 // The SOFT counterpart to EngineLockoutOverlay. Lights up whenever the
@@ -23,14 +27,22 @@ import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
 //       existing operator-takeover path re-enables them.
 //
 // The full red lockout overlay stays reserved ONLY for the portwatch HARD
-// lock; this banner is its quieter sibling. AMBER (#F5A623) matches the
-// app's established "plan / take-over" language (the takeover lease
-// countdown, the PANIC tile) rather than the red the portwatch lock uses,
-// so the two lock states read as visually distinct severities.
+// lock; this banner is its quieter sibling. AMBER matches the app's
+// established "plan / take-over" language (the takeover lease countdown, the
+// PANIC tile) rather than the red the portwatch lock uses, so the two lock
+// states read as visually distinct severities.
+//
+// RESTYLE (docs/54 row 4): the amber is now the palette's `warning` token
+// rather than a fixed loud hex, and every dark-on-amber ink is DERIVED with
+// `readableInk()` instead of the ten hardcoded near-black literals this file
+// used to carry. That matters on the LIGHT theme, where the loud amber is
+// ~2:1 on white: `warning` there is a deep gold whose derived ink is white,
+// so the banner stays legible instead of turning into a bright smear. The
+// PANIC bar keeps the frozen `PANIC_AMBER` identity hex — that one control
+// must read identically forever (docs/54 row 17); a caution banner must not.
 //
 // Layout mirrors ViewOverrideBanner (top strip, left:112 to clear the side
 // tab bar, zIndex 1000) so the two never collide visually.
-const PLAN_LOCK_AMBER = '#F5A623';
 
 // "M:SS", clamped at 0:00 (mirrors PlanIndicatorPill.formatMSS).
 function formatMSS(sec: number | null): string {
@@ -46,7 +58,27 @@ export const PlanLockBanner: React.FC<{
   onTemporaryTakeOver?: () => void | Promise<void>;
 }> = ({ onTemporaryTakeOver }) => {
   const { planLocked } = useEngineLock();
+  const C = usePalette();
+  // The whole banner is painted from ONE pair: the theme's caution amber and
+  // the ink WCAG-derived from it (docs/54 §1.1 `accentFill` discipline).
+  const tone = useMemo(() => {
+    const ink = readableInk(C.warning);
+    return {
+      fill: C.warning,
+      ink,
+      // A solid rule against the amber field. Derived from the ink rather
+      // than a second amber literal, so it darkens the dark-theme amber and
+      // lifts the light-theme deep gold — one rule, five themes.
+      rule: withAlpha(ink, 0.35),
+      inkSoft: withAlpha(ink, 0.82),
+    };
+  }, [C.warning]);
   const { takeover, state } = useTimeline();
+  // ENGINE-GLOBAL performance flag (not this device's privilege): while it is
+  // on, taking the rig from the timeline costs a fresh operator passcode, and
+  // the button says so up front. Ruling 2026-08-14; gate in
+  // utils/takeover_passcode.ts.
+  const { active: performanceActive } = usePerformanceMode();
   // The live event driving the deck (engine `activeCue`), named in the banner
   // so the operator sees WHAT is running while it's locked (operator request
   // 2026-07-02). Null → the autopilot baseline is driving (no specific cue).
@@ -60,6 +92,10 @@ export const PlanLockBanner: React.FC<{
   // controlLock is NOT 'plan' (planActive false under 'overridden'), so
   // exactly one variant renders at a time.
   const { leaseHeld, leaseRemainingSec, resumeNow } = useOperatorTakeover();
+  const [leaseDismissed, setLeaseDismissed] = useState(false);
+  useEffect(() => {
+    if (!leaseHeld) setLeaseDismissed(false);
+  }, [leaseHeld]);
   const handleGoToPlan = () => {
     try { router.push('/timeline'); } catch { /* router not ready during very early boot */ }
   };
@@ -67,6 +103,12 @@ export const PlanLockBanner: React.FC<{
   // for a while. The lease auto-resumes the plan after inactivity (each control
   // touch extends it); the banner then flips to the amber countdown variant.
   // Surface-specific override (mixer switches output too) or the plain lease.
+  //
+  // While PERFORMANCE MODE is live this button first opens the per-attempt
+  // operator passcode prompt (operator ruling 2026-08-14 — see
+  // utils/takeover_passcode.ts). A DISMISSED prompt returns 'cancelled': no
+  // request was made, the plan is still running exactly as before, and an
+  // alert would be a lie — only a real engine refusal alerts.
   const [takingOver, setTakingOver] = useState(false);
   const handleTakeOver = async () => {
     if (takingOver) return;
@@ -74,8 +116,10 @@ export const PlanLockBanner: React.FC<{
     try {
       if (onTemporaryTakeOver) await onTemporaryTakeOver();
       else {
-        const ok = await takeover();
-        if (!ok) Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
+        const outcome = await takeover();
+        if (outcome === 'failed') {
+          opError('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
+        }
       }
     } finally {
       setTakingOver(false);
@@ -90,7 +134,7 @@ export const PlanLockBanner: React.FC<{
   // was driving the deck — the exact bug this banner exists to surface.)
   const slide = useRef(new Animated.Value(0)).current;
 
-  const visible = planLocked || leaseHeld;
+  const visible = planLocked || (leaseHeld && !leaseDismissed);
   useEffect(() => {
     Animated.timing(slide, {
       toValue: visible ? 1 : 0,
@@ -134,13 +178,14 @@ export const PlanLockBanner: React.FC<{
     >
       <View
         style={{
-          // AMBER wash with a solid amber rule — calmer than the portwatch
+          // AMBER field with a solid rule — calmer than the portwatch
           // banner's red, but unmistakably a "hands-off" state.
-          backgroundColor: 'rgba(245, 166, 35, 0.96)',
+          backgroundColor: tone.fill,
           borderWidth: 2,
-          borderColor: '#9a6a12',
-          borderRadius: 10,
+          borderColor: tone.rule,
+          borderRadius: Radius.card,
           paddingHorizontal: 12,
+          paddingRight: leaseHeld ? 34 : 12,
           paddingVertical: 8,
           flexDirection: 'row',
           alignItems: 'center',
@@ -149,15 +194,36 @@ export const PlanLockBanner: React.FC<{
           elevation: 8,
         }}
       >
-        <PulsingDot />
+        {leaseHeld ? (
+          <TouchableOpacity
+            onPress={() => setLeaseDismissed(true)}
+            style={{
+              position: 'absolute',
+              right: 5,
+              top: 5,
+              width: 26,
+              height: 26,
+              borderRadius: 13,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss takeover lease notice"
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, lineHeight: 20, color: tone.ink }}>
+              ×
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        <PulsingDot color={tone.ink} />
         <View style={{ flex: 1 }}>
           <Text
             style={{
               fontFamily: 'SpaceGrotesk_700Bold',
               fontSize: 11.5,
-              // Dark text on amber for contrast (matches onPrimary-on-amber
-              // convention used by the gruvbox theme + the PANIC hint).
-              color: '#1a1a1a',
+              // Ink derived from the amber field, never a literal — the
+              // light theme's warning wants WHITE here, the dark ones black.
+              color: tone.ink,
               letterSpacing: 0.8,
               textTransform: 'uppercase',
             }}
@@ -174,7 +240,7 @@ export const PlanLockBanner: React.FC<{
               style={{
                 fontFamily: 'SpaceGrotesk_700Bold',
                 fontSize: 10.5,
-                color: '#1a1a1a',
+                color: tone.ink,
                 marginTop: 2,
               }}
               numberOfLines={1}
@@ -190,7 +256,7 @@ export const PlanLockBanner: React.FC<{
               style={{
                 fontFamily: 'Inter_400Regular',
                 fontSize: 10,
-                color: 'rgba(26,26,26,0.82)',
+                color: tone.inkSoft,
                 marginTop: 2,
               }}
             >
@@ -209,15 +275,15 @@ export const PlanLockBanner: React.FC<{
                 style={{
                   flex: 1,
                   minHeight: 30,
-                  borderRadius: 7,
-                  backgroundColor: '#1a1a1a',
+                  borderRadius: Radius.control,
+                  backgroundColor: tone.ink,
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Hand control back and resume the plan now"
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: PLAN_LOCK_AMBER }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: tone.fill }}>
                   RESUME NOW
                 </Text>
               </TouchableOpacity>
@@ -226,16 +292,16 @@ export const PlanLockBanner: React.FC<{
                 style={{
                   flex: 1,
                   minHeight: 30,
-                  borderRadius: 7,
+                  borderRadius: Radius.control,
                   borderWidth: 1.5,
-                  borderColor: '#1a1a1a',
+                  borderColor: tone.ink,
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Go to the timeline plan tab"
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: '#1a1a1a' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: tone.ink }}>
                   GO TO PLAN
                 </Text>
               </TouchableOpacity>
@@ -247,28 +313,34 @@ export const PlanLockBanner: React.FC<{
                 disabled={takingOver}
                 style={{
                   minHeight: 32,
-                  borderRadius: 7,
-                  backgroundColor: '#1a1a1a',
+                  borderRadius: Radius.control,
+                  backgroundColor: tone.ink,
                   alignItems: 'center',
                   justifyContent: 'center',
                   marginTop: 6,
                   opacity: takingOver ? 0.6 : 1,
                 }}
                 accessibilityRole="button"
-                accessibilityLabel="Temporarily take over — unlock the deck and mixer for manual control"
+                accessibilityLabel={performanceActive
+                  ? 'Temporarily take over — asks for the operator passcode, then unlocks the deck and mixer'
+                  : 'Temporarily take over — unlock the deck and mixer for manual control'}
                 accessibilityState={{ disabled: takingOver }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.6, color: PLAN_LOCK_AMBER }}>
-                  {takingOver ? 'TAKING OVER…' : 'TEMPORARY TAKE OVER'}
+                {/* Say the passcode is coming BEFORE the tap: mid-show, a modal
+                    that appears unannounced reads as a fault. */}
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.6, color: tone.fill }}>
+                  {takingOver
+                    ? 'TAKING OVER…'
+                    : performanceActive ? 'TAKE OVER · PASSCODE' : 'TEMPORARY TAKE OVER'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleGoToPlan}
                 style={{
                   minHeight: 28,
-                  borderRadius: 7,
+                  borderRadius: Radius.control,
                   borderWidth: 1.5,
-                  borderColor: '#1a1a1a',
+                  borderColor: tone.ink,
                   alignItems: 'center',
                   justifyContent: 'center',
                   marginTop: 6,
@@ -276,7 +348,7 @@ export const PlanLockBanner: React.FC<{
                 accessibilityRole="button"
                 accessibilityLabel="Go to the timeline plan tab"
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: '#1a1a1a' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: tone.ink }}>
                   GO TO PLAN
                 </Text>
               </TouchableOpacity>
@@ -288,7 +360,7 @@ export const PlanLockBanner: React.FC<{
   );
 };
 
-const PulsingDot: React.FC = () => {
+const PulsingDot: React.FC<{ color: string }> = ({ color }) => {
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -306,12 +378,10 @@ const PulsingDot: React.FC = () => {
         width: 12,
         height: 12,
         borderRadius: 6,
-        backgroundColor: '#1a1a1a',
+        backgroundColor: color,
         opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
         transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1.15] }) }],
       }}
     />
   );
 };
-
-export { PLAN_LOCK_AMBER };

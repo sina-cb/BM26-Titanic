@@ -1,0 +1,48 @@
+# bench_mirror_state.yaml — MACHINE-WRITTEN by the sACN bridge.
+#
+# Rewritten on every SUCCESSFUL bench-mirror ARM. Safe to delete: you lose the
+# remembered picker selections and nothing else. This file CANNOT arm anything —
+# it carries no arm bit, no universe, no address and no host, and the parser
+# refuses any key that is not `state_version` / `selections`.
+#
+# `selections` is keyed by the SOURCE scene (whatever the engine was running at
+# ARM time), so a mapping remembered for one ship scene can never surface under
+# another. `reverse: true` means "this bench fixture is wired opposite to its
+# source" — pure relative orientation between the two physical fixtures.
+#
+# Hand edits are allowed but pointless: the next successful ARM overwrites the
+# scene key wholesale. Anything stale here is reported by name at picker-open.
+state_version: 1
+selections:
+  titanic:
+    slots:
+      bar_left:
+        source: Left Front Wall 5
+        reverse: true
+      bar_right:
+        source: Left Front Wall 4
+        reverse: true
+      led_0:
+        source: Left_Front_Left
+        reverse: true
+      led_1:
+        source: Left_Back_Left
+        reverse: true
+      par_1:
+        source: Left SmokeStack 1
+        reverse: false
+      par_2:
+        source: Left SmokeStack 2
+        reverse: false
+      par_3:
+        source: Left SmokeStack 3
+        reverse: false
+      par_4:
+        source: Left SmokeStack 4
+        reverse: false
+      vintage_left:
+        source: Left Front Rails 4
+        reverse: false
+      vintage_right:
+        source: Left Front Rails 3
+        reverse: false

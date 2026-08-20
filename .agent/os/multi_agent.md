@@ -6,7 +6,7 @@ running in **isolated git worktrees** without stepping on each other's
 filesystem, ports, or branch state, then collect and merge their results.
 
 It exists because parallelizing real engineering work in this repo (engine,
-sim, CaptainPad, control_podium) is only safe when each agent owns:
+sim, CaptainPad, LookingGlass/control_podium) is only safe when each agent owns:
 
 1. its own working tree (no `.git/index` lock races),
 2. its own branch (no accidental cross-task commits),
@@ -150,11 +150,39 @@ git branch -D dev/<slug>        # only if abandoned
 
 ## 5. Port allocation
 
+### The operator's stack owns the default ports
+
+The operator launches the whole system himself with the launcher, from the
+repo root:
+
+```bash
+node launcher.js dev --scene titanic     # his standard dev launch
+node launcher.js prod --scene titanic    # prod variant
+```
+
+This is **his** stack. It starts (and supervises) the engine, simulation
+HTTP/save/sACN bridges, and related services on the default ports in the
+table below. Agents must treat every port and service the launcher starts
+as operator-owned:
+
+- **Never start a server on a default port** — if a test needs an engine or
+  sim server, run it on your slot's `31xxx` range (below) with a black-holed
+  config (`MARSIN_CONFIG_FILE`, `tests/helpers/setup_config_guard.mjs`).
+- **Never kill, restart, or "adopt" a service on a default port.** If the
+  operator's stack looks dead, report it — do not relaunch it for him
+  unless he asks. (He may also grant temporary service control for a
+  session; that grant expires with the session.)
+- Read-only probes of his running services are allowed where a task calls
+  for it; close probe browsers and abort writes at the network layer.
+- Instigators/coordinators: put this stay-away rule in every sub-agent
+  brief that might launch or touch services.
+
 The instigator assigns each sub-agent a **slot index** `0..6`. The slot's
 base port is `31000 + slot * 100`. Every server the sub-agent starts MUST
 use a port derived from its base.
 
-Default project ports (DO NOT use these in a worktree if another process,
+Default project ports (owned by the operator's launcher stack — DO NOT
+bind, kill, or restart these from a worktree or test; another process,
 including the operator's main checkout, may already be using them):
 
 | Service | Default | Source |
@@ -169,7 +197,7 @@ including the operator's main checkout, may already be using them):
 | Audio Slice OSC-in (local-only) | `10001` | `config.yaml::audioCompanion.audioSlice.listenPort` (Audio Slice → Companion; see docs/37 §6.2) |
 | CaptainPad `web:serve` | `6967` | `CaptainPad/package.json::web:serve` |
 | CaptainPad Expo Metro | `8081` | Expo default |
-| Server bridge `/health` | `7099` | `control_podium/.config.bridge.yaml::health.port` |
+| Server bridge `/health` | `7099` | `LookingGlass/control_podium/.config.bridge.yaml::health.port` |
 
 Per-slot allocation (use these in your worktree):
 
@@ -369,6 +397,15 @@ git branch -d dev/<slug>     # safe delete (only if merged)
 ```
 
 ## 9. Anti-patterns (don't do these)
+
+- **Leaving sim browser pages/probe browsers alive after your task.**
+  A live sim page is not passive: in sacn_in mode it RELAYS sACN to
+  hardware (a second writer = physical light flicker), its `setScene`
+  handshake rewrites bridge hardware routes (loading a scene with no
+  routes silently disconnects hardware), and it burns GPU (viewport
+  freezes for everyone). Close every page/browser you opened, every
+  time. (Root-caused the hard way on 2026-07-24 — report
+  `202607/20260724_15`.)
 
 - **Sub-agent edits files outside its worktree.** Causes silent corruption
   of other sub-agents' trees.

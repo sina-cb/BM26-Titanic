@@ -3,6 +3,14 @@
  * Modular helper functions for Mapping and Demapping sACN packets
  */
 
+import {
+  isLedEntry,
+  resolveLedWireConfig,
+  ledWireBytes,
+  ledPreviewRgbFromBytes,
+} from './led_wire.js';
+import { lostRangesFor, channelIsLost } from './address_merge.js';
+
 /**
  * Native strobe channel suppression — see docs/28_global_effect_macros.md §2.1.
  *
@@ -56,30 +64,42 @@ export function suppressNativeStrobes(list, dmxRouter) {
  * Demaps a DMX frame back into simulation pixel colors (for sacn_in)
  * @param {Object} list - The batch render list containing pixels
  * @param {Object} dmxRouter - The router containing DMX universes
+ * @param {boolean} showUnpatchedRed - the operator's "Show Unpatched (Red)"
+ *   switch. Required and strictly boolean: this is the ONE thing that decides
+ *   whether an undriven fixture screams red or goes dark, and a caller that
+ *   forgets to wire the toggle must fail loudly here rather than quietly pick
+ *   a colour for him.
  */
-export function demapSacnToPixels(list, dmxRouter) {
+export function demapSacnToPixels(list, dmxRouter, showUnpatchedRed) {
+  if (typeof showUnpatchedRed !== 'boolean') {
+    throw new TypeError(
+      '[sacn_mapper] demapSacnToPixels(list, dmxRouter, showUnpatchedRed): ' +
+      `showUnpatchedRed must be a boolean, got ${typeof showUnpatchedRed}`);
+  }
   if (!list || !dmxRouter) return;
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
     // Unpatched fixtures (and fixtures on universes with no received
-    // buffer) render BRIGHT RED in sACN-in mode — skipping them used to
-    // freeze whatever color the local pattern painted last, producing
-    // lit "bleeding" pixels that ignore the engine's fader entirely
-    // (operator report 2026-06-11). In this mode the frame is the only
-    // truth; a fixture the frame doesn't drive screams red so the
-    // operator spots the unmapped hole immediately (operator decision
-    // 2026-06-12: red, not black).
+    // buffer) are never left carrying a stale colour in sACN-in mode —
+    // skipping them used to freeze whatever color the local pattern
+    // painted last, producing lit "bleeding" pixels that ignore the
+    // engine's fader entirely (operator report 2026-06-11). In this mode
+    // the frame is the only truth, so an undriven entry is repainted
+    // every time its treatment changes: BRIGHT RED while the operator's
+    // "Show Unpatched (Red)" diagnostic is on (his 2026-06-12 ruling:
+    // red, not black), BLACK while it is off. Either way it stops
+    // bleeding — the toggle only chooses which of the two it is.
     if (!entry.patch || !entry.channels) {
-      paintUndrivenEntry(entry);
+      paintUndrivenEntry(entry, showUnpatchedRed);
       continue;
     }
 
     const frame = dmxRouter.getFullFrame(entry.patch.universe);
     if (!frame) {
-      paintUndrivenEntry(entry);
+      paintUndrivenEntry(entry, showUnpatchedRed);
       continue;
     }
-    
+
     const addr = entry.patch.addr - 1; // 0-indexed
     let ch = entry.channels;
     
@@ -121,48 +141,126 @@ export function demapSacnToPixels(list, dmxRouter) {
     // Without this, those consumers see 0 → black pixels.
     entry.r = r; entry.g = g; entry.b = b;
     entry.w = w; entry.a = a; entry.u = uv;
-    // A driven entry is no longer undriven — keep the flag honest so
+    // A driven entry is no longer undriven — keep the flags honest so
     // paintUndrivenEntry's steady-state fast path can't be fooled by a
     // stale marker (lose patch → regain → coincidentally red frame).
-    if (entry._sacnUndriven) entry._sacnUndriven = false;
+    if (entry._sacnUndriven) {
+      entry._sacnUndriven = false;
+      entry._sacnUndrivenRed = false;
+    }
 
-    // RGBWAU → RGB blend for 3D visual preview (same formula as Pixelblaze path)
-    const rn = Math.min(1, r + w * 0.8 + a * 0.9 + uv * 0.4);
-    const gn = Math.min(1, g + w * 0.8 + a * 0.6);
-    const bn = Math.min(1, b + w * 0.8 + uv * 0.7);
-    
+    // ── Preview colour ─────────────────────────────────────────────────
+    // LED strands: the frame bytes ARE the wire bytes, so the honest
+    // preview is those bytes pushed through the LED controller's own
+    // processing (white extraction + gamma) — see led_wire.js. This is
+    // what makes screen == strand on the sACN-IN path, and it is why the
+    // strand preview no longer shows amber/UV the hardware never gets.
+    // DMX fixtures keep the classic additive RGBWAU blend.
+    let rn, gn, bn;
+    if (isLedEntry(entry)) {
+      const cfg = resolveLedWireConfig(entry);
+      const preview = ledPreviewRgbFromBytes({
+        r: Math.round(r * 255), g: Math.round(g * 255),
+        b: Math.round(b * 255), w: Math.round(w * 255),
+      }, cfg);
+      entry._ledWirePreview = preview;
+      [rn, gn, bn] = preview;
+    } else {
+      rn = Math.min(1, r + w * 0.8 + a * 0.9 + uv * 0.4);
+      gn = Math.min(1, g + w * 0.8 + a * 0.6);
+      bn = Math.min(1, b + w * 0.8 + uv * 0.7);
+    }
+
     if (entry.apply) entry.apply(rn, gn, bn);
   }
 }
 
 /**
- * Paint an undriven entry bright red (the "this fixture is unmapped /
- * not receiving data" indicator). entry.r/g/b carry the red because
- * the V2 InstancedMesh dot flush and the SpotLight pool read those
- * fields directly (see demap above); entries without a patch are never
- * re-emitted as DMX (mapPixelsToSacn skips them), so the indicator
- * stays visual-only. Skips the (per-frame, per-pixel) apply call once
- * the entry is already marked so undriven fixtures cost nothing in
- * steady state.
+ * Paint an undriven entry — the "this fixture is unmapped / not receiving
+ * data" treatment. `red` is the operator's "Show Unpatched (Red)" switch:
+ * ON  → bright red, his 2026-06-12 diagnostic, unchanged in every respect;
+ * OFF → black, which is what the OTHER two unpatched indicators
+ *       (`_applyUnpatchedRedOverlay`'s shell tint and the instanced-dot
+ *       flush, both in animate.js) already do when the switch is off.
+ * Before 20260725_81 this third indicator answered to no switch at all, so
+ * an operator with the toggle OFF still got red bulbs and — once `_73`/`_75`
+ * grew the rim past the housing — red halo rings he could not turn off.
+ *
+ * entry.r/g/b carry the treatment because the V2 InstancedMesh dot flush and
+ * the SpotLight pool read those fields directly (see demap above); entries
+ * without a patch are never re-emitted as DMX (mapPixelsToSacn skips them),
+ * so the indicator stays visual-only either way.
+ *
+ * `_sacnUndrivenRed` records WHICH treatment is currently painted, so the
+ * (per-frame, per-pixel) apply call is skipped in steady state AND a live
+ * toggle flip repaints on the very next frame — no reload, no rebuild.
  */
-function paintUndrivenEntry(entry) {
-  if (entry._sacnUndriven &&
-      entry.r === 1 && !entry.g && !entry.b && !entry.w && !entry.a && !entry.u) {
+function paintUndrivenEntry(entry, red) {
+  const level = red ? 1 : 0;
+  if (entry._sacnUndriven && entry._sacnUndrivenRed === red &&
+      entry.r === level && !entry.g && !entry.b && !entry.w && !entry.a && !entry.u) {
     return;
   }
-  entry.r = 1; entry.g = 0; entry.b = 0;
+  entry.r = level; entry.g = 0; entry.b = 0;
   entry.w = 0; entry.a = 0; entry.u = 0;
   entry._sacnUndriven = true;
-  if (entry.apply) entry.apply(1, 0, 0);
+  entry._sacnUndrivenRed = red;
+  if (entry.apply) entry.apply(level, 0, 0);
+}
+
+/**
+ * The 1-based absolute channels a pixel's controller LOST to a higher-IP
+ * claimant on this universe, or null when nothing is contested (the normal
+ * case). See src/dmx/address_merge.js for the rule; the index is rebuilt once
+ * per projection by main.js `publishAddressMergePlan`, never per frame.
+ *
+ * The lookup is per ENTRY, not per channel, so an uncontested rig pays exactly
+ * one Map miss per pixel and zero per byte.
+ */
+function lostChannelsFor(entry, lostIndex) {
+  if (!lostIndex) return null;
+  const cfg = entry.fixtureConfig;
+  const ip = cfg && typeof cfg.controllerIp === 'string' ? cfg.controllerIp : null;
+  if (!ip) return null;
+  return lostRangesFor(lostIndex, entry.patch.universe, ip);
+}
+
+/**
+ * Write one byte into the universe buffer unless this claimant LOST that channel
+ * to a higher-IP one. `lost` is null for every uncontested fixture — which is
+ * all of them on a normal rig — so the check is a single null test per byte.
+ *
+ * @param {Uint8Array} buf  - the universe's 512-byte frame
+ * @param {number} index0   - 0-based buffer index (channel − 1)
+ * @param {number} value    - byte
+ * @param {Array|null} lost - lostRangesFor() result for this entry
+ */
+function pokeChannel(buf, index0, value, lost) {
+  if (lost !== null && channelIsLost(lost, index0 + 1)) return;
+  buf[index0] = value;
 }
 
 /**
  * Maps simulation pixel colors into outgoing DMX frame buffers (for Pixelblaze and Gradient modes)
+ *
+ * SHARED ADDRESSES (operator order 2026-07-31, report 20260725_102): several
+ * claimants are allowed to land on the same (universe, channel). The universe
+ * buffer is ALREADY the unification point — one buffer per universe, and
+ * animate.js emits exactly one packet per (universe, destination IP) from it, so
+ * two claimants can never race two packets. What this function adds is the
+ * DETERMINISTIC part: a claimant that lost a channel to a numerically higher
+ * controller IP does not write that channel at all, so the merged result no
+ * longer depends on the render list's order. `window.__addressSuppressionIndex`
+ * carries the (universe → losing IP → ranges) map main.js publishes on every
+ * projection.
+ *
  * @param {Object} list - The batch render list containing pixels
  * @param {Object} dmxRouter - The router containing DMX universes
  */
 export function mapPixelsToSacn(list, dmxRouter) {
   if (!list || !dmxRouter) return;
+  const lostIndex = (typeof window !== 'undefined' && window.__addressSuppressionIndex &&
+    window.__addressSuppressionIndex.size) ? window.__addressSuppressionIndex : null;
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
     if (!entry.patch) continue;
@@ -178,8 +276,11 @@ export function mapPixelsToSacn(list, dmxRouter) {
     }
     
     const addr = entry.patch.addr - 1; // 0-indexed buffer
+    // The channels this fixture's controller LOST to a higher-IP claimant on
+    // this universe (null = nothing contested, the normal case).
+    const lost = lostChannelsFor(entry, lostIndex);
     let ch = entry.channels;
-    
+
     // Polyfill if the model serialized channels as a flat number (e.g., 3 for RGB)
     // Legacy model.js exports `channels: 3` and `type: 'par'` for Par lights.
     if (typeof ch === 'number') {
@@ -199,46 +300,83 @@ export function mapPixelsToSacn(list, dmxRouter) {
     
     // Auto-set the master dimmers to 100%
     if (entry.type === 'par' || entry.fixtureType === 'UkingPar' || entry.fixtureType === 'VintageLed' || entry.fixtureType === 'ShehdsBar') {
-      buf[addr + 0] = 255;
+      pokeChannel(buf, addr + 0, 255, lost);
     }
     // Wait! Do not force global RGBWAUV dimmers to 255, as it blasts the fixture to full white.
     // Individual pixels are addressed starting at channel 12, so globals (6-11) should stay 0.
 
-    if (ch.r !== undefined && ch.g !== undefined && ch.b !== undefined) {
-      buf[addr + ch.r - 1] = Math.max(0, Math.min(255, entry.r * 255)) || 0;
-      buf[addr + ch.g - 1] = Math.max(0, Math.min(255, entry.g * 255)) || 0;
-      buf[addr + ch.b - 1] = Math.max(0, Math.min(255, entry.b * 255)) || 0;
-
-      // ── White lane policy ──────────────────────────────────────────
-      // LED strands (patch.led) default to NATIVE pass-through: the W
-      // byte is the rendered W lane AS-IS — 0 for plain rgb()/hsv()
-      // patterns (the LED controller extracts white in hardware), the
-      // explicit value for rgbwau(...,w,...) patterns. This is the
-      // Pixelblaze RGBW philosophy and the LED-parity contract (report
-      // 20260618_6 §D.3). An LED controller MAY opt into host-side white
-      // synth via whiteMode:'synth'. DMX fixtures keep their existing
-      // min(R,G,B) host-synth when the pattern produced no explicit W.
-      const isLed = !!(entry.patch && entry.patch.led);
-      const ledNative = isLed && (entry.whiteMode !== 'synth');
+    // ── LED-STRAND branch ──────────────────────────────────────────────
+    // Strands get the clip-proof composite encode (led_wire.js): amber
+    // folded into RGB (no amber emitter on a strand), UV dropped (no UV
+    // emitter either), an over-unity result fitted under the ceiling by
+    // scaling all three channels together so a warm white stays warm, and
+    // the white already split off as W = min(RGB) so the LED controller's
+    // own white processing is a no-op that CANNOT clip. Gamma is NOT
+    // applied here — the LED controller owns the only gamma curve in the
+    // chain. DMX fixtures never take this branch; their bytes are
+    // untouched by this work.
+    //
+    // `whiteMode` keeps its meaning: 'native' (default) sends the
+    // pattern's own white lane in the W byte — TRUE RGBW, so a controller
+    // with a wire-exact white path lights its dedicated white emitter —
+    // while 'synth' pushes as much of the colour as possible onto that
+    // white emitter instead. Both are clip-free, and both are identical
+    // on a controller that re-derives its own white split.
+    if (isLedEntry(entry) && ch.r !== undefined && ch.g !== undefined && ch.b !== undefined) {
+      const cfg = resolveLedWireConfig(entry);
+      const bytes = ledWireBytes(entry.r, entry.g, entry.b, entry.w, entry.a, cfg,
+        entry.whiteMode === 'synth' ? 'synth' : 'native');
       if (ch.w !== undefined) {
-        if (entry.w !== undefined && (ledNative || entry.w > 0)) {
-          buf[addr + ch.w - 1] = Math.max(0, Math.min(255, entry.w * 255));
-        } else if (ledNative) {
-          // Native LED with no W rendered: pass through 0 (hardware
-          // derives white), NEVER synthesize min(R,G,B) (that is the
-          // DMX-fixture behavior and must stay DMX-only).
-          buf[addr + ch.w - 1] = 0;
+        pokeChannel(buf, addr + ch.r - 1, bytes.r, lost);
+        pokeChannel(buf, addr + ch.g - 1, bytes.g, lost);
+        pokeChannel(buf, addr + ch.b - 1, bytes.b, lost);
+        pokeChannel(buf, addr + ch.w - 1, bytes.w, lost);
+      } else {
+        // RGB-only strand (no white emitter): the whole composite rides in
+        // RGB. Still amber-folded and still clip-free by construction.
+        pokeChannel(buf, addr + ch.r - 1, bytes.r + bytes.w, lost);
+        pokeChannel(buf, addr + ch.g - 1, bytes.g + bytes.w, lost);
+        pokeChannel(buf, addr + ch.b - 1, bytes.b + bytes.w, lost);
+      }
+      // Preview honesty: the strand's on-screen colour comes from these
+      // exact wire bytes, run back through the controller's white
+      // extraction + gamma (see led_wire.js). Cached on the entry so the
+      // 3D dot flush, the strand bulbs and the 2D map all read the SAME
+      // number the wire carries.
+      entry._ledWirePreview = ledPreviewRgbFromBytes(bytes, cfg);
+      continue;
+    }
+
+    if (ch.r !== undefined && ch.g !== undefined && ch.b !== undefined) {
+      pokeChannel(buf, addr + ch.r - 1, Math.max(0, Math.min(255, entry.r * 255)) || 0, lost);
+      pokeChannel(buf, addr + ch.g - 1, Math.max(0, Math.min(255, entry.g * 255)) || 0, lost);
+      pokeChannel(buf, addr + ch.b - 1, Math.max(0, Math.min(255, entry.b * 255)) || 0, lost);
+
+      // ── White lane policy (DMX fixtures) ───────────────────────────
+      // DMX fixtures host-synthesize white as min(R,G,B) when the pattern
+      // produced no explicit W, and pass an explicit W through as-is.
+      // (LED strands never reach here — see the strand branch above.)
+      if (ch.w !== undefined) {
+        if (entry.w !== undefined && entry.w > 0) {
+          pokeChannel(buf, addr + ch.w - 1, Math.max(0, Math.min(255, entry.w * 255)), lost);
         } else {
-          // DMX fixture (or LED whiteMode:'synth') with no explicit W:
-          // host-synthesize white as min(R,G,B).
-          buf[addr + ch.w - 1] = Math.min(buf[addr + ch.r - 1], buf[addr + ch.g - 1], buf[addr + ch.b - 1]);
+          // Synthesized from the RGB bytes AS THEY NOW STAND in the buffer —
+          // which, on a contested channel, are the WINNER's bytes. That is the
+          // honest white for a shared address: the white lane follows the colour
+          // the fixture will actually emit, not what this claimant proposed.
+          pokeChannel(buf, addr + ch.w - 1,
+            Math.min(buf[addr + ch.r - 1], buf[addr + ch.g - 1], buf[addr + ch.b - 1]), lost);
         }
       }
-      if (ch.a !== undefined && entry.a !== undefined) buf[addr + ch.a - 1] = Math.max(0, Math.min(255, entry.a * 255));
-      if (ch.u !== undefined && entry.u !== undefined) buf[addr + ch.u - 1] = Math.max(0, Math.min(255, entry.u * 255));
+      if (ch.a !== undefined && entry.a !== undefined) {
+        pokeChannel(buf, addr + ch.a - 1, Math.max(0, Math.min(255, entry.a * 255)), lost);
+      }
+      if (ch.u !== undefined && entry.u !== undefined) {
+        pokeChannel(buf, addr + ch.u - 1, Math.max(0, Math.min(255, entry.u * 255)), lost);
+      }
     } else if (ch.w !== undefined) {
       const luma = entry.w !== undefined ? entry.w * 255 : ((entry.r * 255 * 0.299) + (entry.g * 255 * 0.587) + (entry.b * 255 * 0.114));
-      buf[addr + ch.w - 1] = Math.max(0, Math.min(255, Math.round(luma))) || 0;
+      pokeChannel(buf, addr + ch.w - 1, Math.max(0, Math.min(255, Math.round(luma))) || 0, lost);
     }
   }
 }

@@ -1,15 +1,15 @@
 # autonomy.md — Radical Self-Reliance
 
 Agents are **trusted operators** of this OS, not supplicants asking
-permission at every step. You were given the codex, the laws, the runbooks,
-and the roles so you could **act** — within the law, without hand-holding.
+permission at every step. You were given the codex, the specs, the runbooks,
+and the roles so you could **act** — within the specs, without hand-holding.
 Anything not behind an explicit operator gate is yours to decide and do.
 
 ## Principles
 
 1. **Boot yourself.** Run the boot sequence (`context/boot.md`), load
    context, read your role. Don't ask what to read — the map is right here.
-2. **Act within the law.** If the law permits it and no gate blocks it,
+2. **Act within the specs.** If the specs permit it and no gate blocks it,
    do it. Don't ask permission for what the codex, `os/`, and `ops/`
    already authorize.
 3. **Verify yourself.** Evidence before assertion. Run the `ops/`
@@ -50,7 +50,7 @@ If it's not on this list, you don't need to ask.
 ## Autonomy in multi-agent runs
 
 When work fans out (`multi_agent.md`), **every sub-agent inherits this same
-doctrine** inside its own worktree and slice: boot, act within the law,
+doctrine** inside its own worktree and slice: boot, act within the specs,
 verify, leave an artifact. The one gate that stays with the **instigator**
 is the merge gate — sub-agents do their work and report; the instigator (or
 the operator) integrates. Sub-agents never push or merge to `origin`/`main`
