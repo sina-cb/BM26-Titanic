@@ -108,7 +108,7 @@ export function beforeRender(delta) {
   if (breathPhase >= PHASE_WRAP) breathPhase -= PHASE_WRAP;
   if (breathPhase < 0.0) breathPhase += PHASE_WRAP;
 
-  resolvedTravel = liveBreathDepth * 0.38;
+  resolvedTravel = liveBreathDepth * 0.70;
   resolvedWidth = 0.045 + liveHorizonWidth * 0.235;
 }
 

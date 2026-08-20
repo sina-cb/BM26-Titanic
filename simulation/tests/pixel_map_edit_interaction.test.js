@@ -13,6 +13,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { simServerSkip } from './helpers/sim_server_probe.mjs';
 
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,11 @@ const REPO_ROOT = path.resolve(HERE, '../..');
 const RENDER_DIR = path.join(REPO_ROOT, '.agent_renders');
 const ORIGIN = process.env.BM26_VALIDATION_ORIGIN || 'http://127.0.0.1:6969';
 const SIM = `${ORIGIN}/simulation/?scene=titanic&profile=2d_pixels&renderer=webgl&pixelmap=edit`;
+
+// This whole suite drives a REAL browser against the sim dev server. When
+// nothing is listening on :6969, SKIP WITH REASON instead of failing every
+// test with net::ERR_CONNECTION_REFUSED — see sim_server_probe.mjs.
+const SKIP_NO_SIM = await simServerSkip();
 
 async function withSimPage(fn) {
   const puppeteer = require('puppeteer');
@@ -91,7 +97,8 @@ async function visibleTarget(page, viewId, preferFixKey) {
   }, ORIGIN, viewId, preferFixKey);
 }
 
-test('EDIT mode selects and drags a fixture under saved framing (top_down)', { timeout: 120_000 }, async () => {
+test('EDIT mode selects and drags a fixture under saved framing (top_down)',
+  { timeout: 120_000, skip: SKIP_NO_SIM }, async () => {
   fs.mkdirSync(RENDER_DIR, { recursive: true });
   await withSimPage(async (page) => {
     const target = await visibleTarget(page, 'top_down', 'Left_Back_Left');
@@ -137,7 +144,8 @@ test('EDIT mode selects and drags a fixture under saved framing (top_down)', { t
   });
 });
 
-test('Front view vintage rails project four fixtures across two cy bands', { timeout: 120_000 }, async () => {
+test('Front view vintage rails project four fixtures across two cy bands',
+  { timeout: 120_000, skip: SKIP_NO_SIM }, async () => {
   await withSimPage(async (page) => {
     const stats = await page.evaluate(async (origin) => {
       const storeMod = await import(`${origin}/simulation/src/gui/pixel_map/pixel_map_store.js`);

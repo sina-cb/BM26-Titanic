@@ -81,6 +81,7 @@ const GOOD_SHOW = {
   name: 'Baby Reveal',
   color: '#FF9EC4',
   icon: 'sparkles',
+  playlistsUsable: true,
   stages: [
     GOOD_STAGE,
     {
@@ -169,6 +170,16 @@ describe('catalog parsing', () => {
       ...GOOD_SHOW,
       stages: [{ ...GOOD_STAGE, extend: { label: '+30s', kind: 'magic' } }],
     })).toThrow(/'extend.kind' must be 'time' or 'actions'/);
+  });
+
+  it('reads playlistsUsable — the non-throwing ARM question for THIS scene', () => {
+    expect(parseEventShow(GOOD_SHOW).playlistsUsable).toBe(true);
+    expect(parseEventShow({ ...GOOD_SHOW, playlistsUsable: false }).playlistsUsable).toBe(false);
+  });
+
+  it('refuses a show with no playlistsUsable flag rather than assuming one', () => {
+    const { playlistsUsable, ...rest } = GOOD_SHOW as typeof GOOD_SHOW & { playlistsUsable: boolean };
+    expect(() => parseEventShow(rest)).toThrow(/'playlistsUsable' must be a boolean/);
   });
 });
 
@@ -490,6 +501,7 @@ describe('stage autopilot', () => {
     const show = parseEventShow({
       id: 'baby_reveal',
       name: 'Baby Reveal',
+      playlistsUsable: true,
       stages: [
         { id: 'tease', label: 'TEASE', autopilot: { ...ROTATION, supported: true } },
         { id: 'blackout', label: 'GO DARK' },

@@ -73,6 +73,18 @@
     armed: false,
     phase: 'idle',
     online: false,
+    /* True only after the engine ACKs this panel's ARM lease over the
+       control socket (touchControlArmedAck below) — armed alone is a local
+       UI intent, this is the engine's confirmation. Lives on `state`, not a
+       closure-private var, for the same "for headless verification only"
+       reason `window.__wire = state` exists: a hermetic harness that stubs
+       `armed`/`online`/`phase` directly (bypassing the real WebSocket
+       handshake, which a hermetic WebSocket must refuse to send on) needs an
+       equally direct way to also mark the lease confirmed, or the periodic
+       touchtransportstate heartbeat below keeps reporting an unconfirmed
+       lease forever and its listener (touch_control.html) keeps tearing
+       down whatever the stubbed session is doing. */
+    leaseAcquired: false,
     channelId: null,
     channelPattern: null,
     exports: {},               /* name -> numeric id */
@@ -184,7 +196,7 @@
       online: state.online === true,
       phase: state.phase,
       armed: state.armed === true,
-      leaseAcquired: armLeaseAcquired === true,
+      leaseAcquired: state.leaseAcquired === true,
       surfaceAvailable: state.surfaceAvailable === true,
     } }));
   }
@@ -976,12 +988,12 @@
   function abortArm(label, err) {
     armChainTarget = false;
     fail(label + ' - ABORTED', err);
-    if (!armLeaseRequested && !armLeaseAcquired) {
+    if (!armLeaseRequested && !state.leaseAcquired) {
       forceDisarmedUi();
       return Promise.resolve();
     }
 
-    if (!armLeaseAcquired) {
+    if (!state.leaseAcquired) {
       /* WebSocket frames are ordered. Sending release after a timed-out ARM
          request closes a lease even when its positive ACK was merely late. */
       return releaseArmLease().then(forceDisarmedUi).catch(function (releaseError) {
@@ -3093,7 +3105,7 @@
         return { ok: false, reason: 'ARM is not confirmed' };
       }
       if (!state.online) return { ok: false, reason: 'engine connection is offline' };
-      if (!armLeaseAcquired) return { ok: false, reason: 'Live Touch lease is not confirmed' };
+      if (!state.leaseAcquired) return { ok: false, reason: 'Live Touch lease is not confirmed' };
       return { ok: true };
     };
     function settleTakeSample(requestId, error) {
@@ -5197,7 +5209,9 @@
   var disarmAckPending = false;/* waiting for authoritative lease release */
   var armRefused = false;      /* another panel holds the desk */
   var armLeaseRequested = false;
-  var armLeaseAcquired = false;
+  /* state.leaseAcquired (declared with the rest of `state` above) is the
+     source of truth — see that field's comment for why it lives there and
+     not as a var here. */
 
   /* Put the SURFACE back to disarmed, not just the wire's flag.
      The panel's arm state lives in the DOM (the class, aria-checked, the label,
@@ -5214,7 +5228,7 @@
     armAckPending = false;
     disarmAckPending = false;
     armLeaseRequested = false;
-    armLeaseAcquired = false;
+    state.leaseAcquired = false;
     if (typeof clearTransientSpatialContacts === 'function') {
       clearTransientSpatialContacts('force-disarm', false);
     }
@@ -5298,14 +5312,14 @@
           }
           state.sessionRevision = m.sessionRevision;
           armLeaseRequested = true;
-          armLeaseAcquired = true;
+          state.leaseAcquired = true;
           armAckPending = false;
           publishTouchTransportState();
           clearError();
         } else if (m.requestedArmed === false && m.armed === false) {
           state.sessionRevision = null;
           armLeaseRequested = false;
-          armLeaseAcquired = false;
+          state.leaseAcquired = false;
           disarmAckPending = false;
           publishTouchTransportState();
           clearError();
@@ -5338,7 +5352,7 @@
            engine's own account of who is driving. */
         if (state.phase !== 'idle') {
           armLeaseRequested = false;
-          armLeaseAcquired = false;
+          state.leaseAcquired = false;
           disarmAckPending = false;
           forceDisarmedUi();
           fail('arm', 'the engine REVERTED to the automatic show' +
@@ -5359,7 +5373,7 @@
         if (m.ownerId && m.ownerId !== OWNER) return;
         if (state.phase !== 'idle') {
           armLeaseRequested = false;
-          armLeaseAcquired = false;
+          state.leaseAcquired = false;
           disarmAckPending = false;
           forceDisarmedUi();
           fail('arm', 'TIMELINE RESUMED — the show plan took the rig back' +
@@ -5373,7 +5387,7 @@
            silently staying disarmed would look like a broken ARM button. */
         armAckPending = false;
         armLeaseRequested = false;
-        armLeaseAcquired = false;
+        state.leaseAcquired = false;
         armRefused = true;
         forceDisarmedUi();
         fail('arm', 'REFUSED — ' + (m.reason || 'another panel holds the desk') +

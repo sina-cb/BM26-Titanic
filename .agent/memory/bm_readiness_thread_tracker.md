@@ -25,7 +25,7 @@ their report link. Reports live in `.agent/reports/202607/20260724_N_*.md`.
   Sina approved the final Ambient gallery; no further action is open.
 - **P0 REOPENED — Live Touch:**
   `01a011f5-2ed6-72a1-bd3b-52613b5e8cfd`. Sina's physical-iPad test disproved
-  report `_311`'s offline GO. Proven causes are opaque post-pattern GLOBAL
+  report `_331`'s offline GO. Proven causes are opaque post-pattern GLOBAL
   colour overrides, obsolete ink-trail double-brush rendering, and instruments
   128/129/130 using non-canonical `render3D` parameter names that compile their
   Titanic coordinates as zero. A new iPad refusal reports protocol 1 vs engine
@@ -47,7 +47,7 @@ their report link. Reports live in `.agent/reports/202607/20260724_N_*.md`.
   auto-height wrapped meter row around `SignalColumn {flex: 1}` while its canvas
   still painted, suppressing lower-card flow. The intrinsic-width fix, native
   Yoga contracts, iOS bundle probes, full tests, independent review, and Sina's
-  physical iPad smoke pass. Report `_316`; task archived.
+  physical iPad smoke pass. Report `_333`; task archived.
 - **COMPLETE / PHYSICAL-NATIVE SMOKE OPEN — Timeline lease hardening:** exact
   armed-owner matrix 1/1, Timeline 450/450, CaptainPad 76/76, adjacent APIs 5/5,
   independent validation, and inspected AFTER captures pass.
@@ -19107,3 +19107,13 @@ integrated and automated-green (`_317`). Mixer adaptive sizing is automated-gree
 - `_316` — Live Touch Performance effects P0 (false disarmed validation + armed-entry-order slots): Fable quick review/contract
 - `_317` — Live Touch Performance effects implementation (Opus + Sonnets from _316)
 - `_317` reservation RETRACTED (operator order): no implementation wave on our side — the _316 review produces a self-contained Codex handoff brief instead; Codex implements. _317 stays reserved-unused unless reassigned.
+
+## 2026-08-19 — Bike color share (docs/76) operator rulings + firmware UI design wave
+- docs/76 open questions ruled by Sina: (1) push JUST COLOR — the rendered palette, colors only; (2) REVERT — after unlink, fade back to the bike's native palette; (3) AUTO IP-RANGE detection for registry admission (scan-based auto-register); (4) AP client budget left open (operator unsure — design caps N conservatively); (5) YES to a visible linked-to-ship status indicator.
+- Implementation NOT authorized yet — Sina reviews docs/76 + the firmware UI design before any build wave.
+- Fable #2 spawned: MarsinLED firmware pattern-editor param sliders + color1/color2 palette picker + Deck-style color-turn feature + bike_* pattern param compatibility → design doc docs/77 (next free number), review-first.
+- RELOCATION (operator order 2026-08-19): MarsinLED is PRIVATE and its designs/info must NOT live in this public repo. Both bike design docs moved out before any commit: docs/76 -> MarsinLED/docs/bike_color_share.md, docs/77 -> MarsinLED/docs/bike_param_color_ui.md (cross-refs rewritten). Rule going forward: firmware internals/designs go in MarsinLED/docs; if the BM engine-side module ever needs a tracked doc here, it gets a sanitized version (no firmware internals).
+- 2026-08-20 merge-readiness adversarial review wave (operator order): pulled to 6b26c72c (up to date w/ origin). Scope main...HEAD = 42 commits / 3251 files. Reserved: _326 Opus public-repo security sweep, _327 Opus structure+code-health, _328 Fable adversarial verifier + merge verdict. Findings-only, no fixes. Coordinator compiles P0/P1 for Sina.
+- Merge-readiness wave CLOSED: _326 (security: 0 P0, 2 P1), _327 (structure/health: 5 P0 incl 19 red engine tests + 2 deterministic LT UI tests + tracked bench_mirror_state.yaml), _328 (Fable adversarial: VERDICT NOT READY; all P0s repro-confirmed; 42-commit history scan CLEAN — no rewrite needed on secrets axis; merge-tree 0 conflicts). Operator decisions needed: 1.47GB docs/pattern_gallery keep-or-rewrite (branch already pushed → "no" = branch history rewrite), wedding playlists 2-file fix, states/** tracking policy. CI gap: no test workflow, only gitleaks.
+- _329 fix wave CLOSED (Opus mgr + Sonnets, mgr ran all gates itself): 29 reds -> 3. Engine 3939/3941, sim 2545/2554 (6 skip-with-reason :6969, 1 pre-existing red), CaptainPad all green, security byte-identical to _326 baseline. S1 wedding REMOVED from titanic (orphan yamls deleted, isShowUsableHere/playlistsUsable gate, fail-loud); renumbers 310->330,311->331,312->332,316->333. REMAINING 3 REDS = operator decisions: (1) uv purity 160-bar vs test_bench compressed band (17_violet_mantas 138, 18_ink_plumes 101); (2) 01_blacklight_tide vs 04_cathedral_uv_ribs distinctness 0.175<0.18 genuine similarity; (3) touch_control_take_playback_overlay_browser:98 PRE-EXISTING (last _325 blocker). PENDING SINA: gallery GIF cut (GIFs=81% of 1.47GB, only "Download GIF" links; mp4s are what render — dropping GIFs = -81%), eyeball 08_quiet_signal + 05_breathing_violet_horizon (both looked different pre-fix), orphaned 30MB wedding_party gallery keep/delete, then commit checkpoint incl. operator state tunings. NO commits made.
+- _334 PR-ready closeout CLOSED: ALL GATES GREEN — engine 3941/3941, sim 2546/0 fail (7 skip, 1 pre-existing todo), CaptainPad all green, security byte-identical _326 baseline. Per-model UV bar titanic 160 / test_bench 120 (evidence-derived); distinctness: _329 named the WRONG pair (6-window median unstable; 30-window sampling: 01-vs-04 CLEARS at 0.2150; real duplicate = 12_uv_rain vs 15_violet_breathing 0.1125, pending operator art ruling as self-retiring loud exception). Overlay-browser red = test measuring headless rAF cadence, product correct, test fixed with proven teeth. Open operator items: 12-vs-15 art ruling, 18_uv_ink_plumes test_bench 84/255 art call, patches.yaml.original todo residue, eyeball 08_quiet_signal + 05_breathing_violet_horizon. PR-READY: YES. Awaiting operator authorization for commit/push/PR.

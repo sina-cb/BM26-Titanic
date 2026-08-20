@@ -6,7 +6,7 @@
 ## Hot
 
 - **Live Touch is offline-green; physical-iPad acceptance remains open**
-  (`01a011f5-2ed6-72a1-bd3b-52613b5e8cfd`, report `_311`). Pattern switching,
+  (`01a011f5-2ed6-72a1-bd3b-52613b5e8cfd`, report `_331`). Pattern switching,
   instrument geometry, false-brush removal, Color, 16-slot Performance Effects,
   non-replacing overlays, TAKE REC/PLAY/LOOP/CLEAR, and authoritative 964/964
   Spatial map parity are validated. DISARM deactivates active overlay slots and
@@ -53,6 +53,11 @@
   an audio-effects implementation wave.
 - **Baby is Claude-owned.** The Codex Baby task is paused and archived. Do not
   touch Baby files until Sina explicitly returns ownership.
+- **CI gap — no automated suite workflow (Backlog, operator ruling).**
+  `.github/workflows/` holds only `security_privacy_scan.yml`; nothing runs
+  the engine, sim, or CaptainPad test suites in CI. Suite-green is
+  honor-system today, so a red suite can reach `main` unnoticed. Add a CI
+  test workflow covering the engine + sim + CaptainPad suites.
 
 ## Canonical model language
 
@@ -76,7 +81,7 @@
   native iPad layout tasks are archived.
 - Native Audio configuration restoration is complete, physically accepted,
   and archived. Fabric/Yoga collapsed an auto-height meter row around `flex: 1`
-  signal columns; intrinsic-width roots restore lower-card flow. Report `_316`.
+  signal columns; intrinsic-width roots restore lower-card flow. Report `_333`.
 - Deployment hardening is locally complete: secure secret provisioning,
   `.git` exclusion/ACL handling, `--no-launch`, and verified shortcuts/icons.
   No remote deploy was run by an agent.

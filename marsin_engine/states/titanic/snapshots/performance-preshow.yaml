@@ -1,0 +1,559 @@
+name: performance-preshow
+savedAt: '2026-08-20T03:42:10.937Z'
+master: 1
+deck:
+  id: ch_base
+  name: Base
+  pattern: 00_golden_hour_wash
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  locked: false
+  faderLocked: false
+  localControls:
+    '704068726':
+      v0: 0.72
+      v1: 0
+      v2: 0
+    '1037917937':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '1288664691':
+      v0: 0.95
+      v1: 0
+      v2: 0
+    '2698543588':
+      v0: 0.64
+      v1: 0
+      v2: 0
+    '3593764710':
+      v0: 0.67
+      v1: 0
+      v2: 0
+    '3760462803':
+      v0: 0.24
+      v1: 0
+      v2: 0
+    '4234014351':
+      v0: 0.5
+      v1: 0
+      v2: 0
+  playlist:
+    name: default
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 2
+    autopilot:
+      active: false
+      delay_s: 90
+      shuffle: true
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+  faderMax: 1
+  color: null
+  mixGroupId: null
+  soloSafe: false
+  hue: 0
+  followsTempo: false
+  followLeaderId: null
+  followScale: 1
+channels:
+  - id: ch_1785801995942_0
+    name: New Layer
+    pattern: 00_golden_hour_wash
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    locked: false
+    faderLocked: false
+    localControls:
+      '704068726':
+        v0: 0.72
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.38
+        v1: 0
+        v2: 0
+      '1288664691':
+        v0: 0.95
+        v1: 0
+        v2: 0
+      '2698543588':
+        v0: 0.64
+        v1: 0
+        v2: 0
+      '3593764710':
+        v0: 0.67
+        v1: 0
+        v2: 0
+      '3760462803':
+        v0: 0.24
+        v1: 0
+        v2: 0
+      '4234014351':
+        v0: 0.2
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_0_00_golden_hour_wash
+      cursor: 0
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: viewMask
+      target: Stacks
+      invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+mixGroups: []
+globals:
+  blackout: false
+  effects: {}
+  params:
+    revision: 71
+    sourceLock: null
+    params:
+      speed:
+        value: 0.16
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 1
+      size:
+        value: 0.5
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      rotate:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 2
+      colorPalette1:
+        value:
+          h: 0.64
+          s: 1
+          v: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 3
+      colorPalette2:
+        value:
+          h: 0.9
+          s: 1
+          v: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 4
+      colorTransitionMs:
+        value: 800
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 5
+      motionTransitionMs:
+        value: 0
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      tempoBpm:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 6
+      micLow:
+        value: 0.5752526543230361
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 7
+      micMid:
+        value: 0.5946163965096897
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 8
+      micHigh:
+        value: 0.6162043400466051
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 9
+      micKick:
+        value: 0.01657267540176125
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 10
+      micFlux:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 11
+      micLowRaw:
+        value: 0.5696828961372375
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 12
+      micMidRaw:
+        value: 0.5934824347496033
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 13
+      micHighRaw:
+        value: 0.6157888770103455
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 14
+      micKickRaw:
+        value: 0.007394543383270502
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 15
+      micFluxRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 16
+      micLowGain:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 17
+      micMidGain:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 18
+      micHighGain:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 19
+      micKickGain:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 20
+      micFluxGain:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 21
+      audioStructure:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 22
+      audioBuildScore:
+        value: 0.7793981432914734
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 23
+      audioEnergyRatio:
+        value: 0.49647629261016846
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 24
+      audioDropPulse:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 25
+      audioSlowZone:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 26
+      micDomFreq1:
+        value: 54.26778030395508
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 27
+      micDomEnergy1:
+        value: 0.4868791997432709
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 28
+      micDomFreq2:
+        value: 1000.8617553710938
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 29
+      micDomEnergy2:
+        value: 0.5032185912132263
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 30
+      audioBpm:
+        value: 73
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 31
+      audioBeat:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 32
+      audioParty:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 33
+      audioNote:
+        value: 9
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 34
+      audioNoteHue:
+        value: 0.75
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 35
+      audioSwitchPattern:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 36
+      audioSwitchPatternSeq:
+        value: 0
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      audioSwitchColor:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 37
+      audioSwitchColorSeq:
+        value: 0
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      audioBeatInBar:
+        value: 4
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 38
+      audioBarPhase:
+        value: 0.8387265205383301
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 39
+      audioDownbeat:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 40
+      audioDownbeatSeq:
+        value: 0
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      audioGenre:
+        value: 3
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 41
+      audioGenreConf:
+        value: 0.15163594484329224
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 42
+      audioRiserScore:
+        value: 0.37382635474205017
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 43
+      audioBuildEta:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 44
+      audioRiserConf:
+        value: 0.15587963163852692
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 45
+      audioSilence:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 46
+      audioTrackChange:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 47
+      audioTrackChangeSeq:
+        value: 0
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      audioClimax:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 48
+      audioPhrasePhase:
+        value: 0.9798408150672913
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 49
+      audioPhraseBoundary:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 50
+      audioPhraseBoundarySeq:
+        value: 0
+        lastSource: null
+        lastOrigin: null
+        lastRevision: 0
+      audioDropCountdown:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 51
+      audioPartyStrong:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 52
+      audioLoudness:
+        value: 0.6220216155052185
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 53
+      audioKickRate:
+        value: 1.9992141723632812
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 54
+      audioKickReg:
+        value: 0.9799920916557312
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 55
+      audioBpmLocked:
+        value: 1
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 56
+      audioBpmConf:
+        value: 0.6000000238418579
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 57
+      micOnsetLowRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 58
+      micOnsetMidRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 59
+      micOnsetHighRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 60
+      micSubRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 61
+      micOnsetLow:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 62
+      micOnsetMid:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 63
+      micOnsetHigh:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 64
+      audioChestHit:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 65
+      micTonalStabilityRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 66
+      micChromaFluxRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 67
+      micChromaTiltRaw:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 68
+      bpmSpeedSync:
+        value: 0
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 69
+      bpmSpeedMin:
+        value: 60
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 70
+      bpmSpeedMax:
+        value: 160
+        lastSource: init
+        lastOrigin: init
+        lastRevision: 71
+  dimmers:
+    '1': 0.3125
+    '2': 0.2946428571428571
+    '4': 0.25
+    '5': 0.2321428571428571
+    '6': 0.2589285714285714
+    '7': 0.1696428571428571
+    '8': 0.1785714285714286
+    '9': 0.3214285714285714
+    '10': 0.2053571428571429
+    '11': 0.2142857142857143
+    '12': 0.3214285714285714
+    '13': 0.1785714285714286
+    '14': 0.1696428571428571
+    '15': 0.1785714285714286
+    '16': 0.1607142857142857
+    '17': 0.1517857142857143
+    '189': 0
+    '486': 0.1339285714285714
+    '487': 0.0982142857142857
+    '488': 0.1160714285714286
+    '489': 0.1071428571428571
+    '490': 0.1339285714285714
+    '491': 0.125
+    '492': 0.1428571428571429
+    '493': 0.0714285714285714
+    '494': 0.1473214285714286
+    '495': 0.1205357142857143
+    '496': 0.1383928571428571
+    '497': 0.1517857142857143
+    '498': 0.1517857142857143
+    TE Sign: 1
+    Left_Front_Left: 1
+    Left_Back_Left: 1
+  invert: false
+  groupFixedColors: {}

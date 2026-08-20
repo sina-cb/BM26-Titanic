@@ -8,48 +8,40 @@ channel:
   locked: false
   faderLocked: false
   localControls:
-    '537253481':
-      v0: 0.25
-      v1: 0
-      v2: 0
-    '590147806':
-      v0: 0.5
-      v1: 0
-      v2: 0
-    '614525773':
-      v0: 0
+    '704068726':
+      v0: 0.72
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0.5
+      v0: 0.38
       v1: 0
       v2: 0
-    '2073951030':
-      v0: 0.2
+    '1288664691':
+      v0: 0.95
       v1: 0
       v2: 0
-    '2504041261':
-      v0: 0.5
+    '2698543588':
+      v0: 0.64
       v1: 0
       v2: 0
-    '3334264878':
-      v0: 0.45
+    '3593764710':
+      v0: 0.67
       v1: 0
       v2: 0
-    '3994789032':
-      v0: 1
+    '3760462803':
+      v0: 0.24
       v1: 0
       v2: 0
     '4234014351':
-      v0: 0.5
+      v0: 0.2
       v1: 0
       v2: 0
   playlist:
-    name: dirty_probe
-    activeEntryId: null
+    name: default
+    activeEntryId: e_default_0_00_golden_hour_wash
     cursor: 0
     autopilot:
-      active: false
+      active: true
       delay_s: 10
       shuffle: false
   viewSelection:
@@ -78,6 +70,6 @@ overlayAutopilot:
   groupSize: 3
   groupDwell: 6
 playlistSlots:
-  primary: dirty_probe
+  primary: default
   secondary: null
   splitRatio: 0.5

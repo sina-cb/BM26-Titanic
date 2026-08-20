@@ -476,11 +476,17 @@ export class SpecialEventsService {
     }
     const show = this.getShow(showId);
     if (!show) {
+      // Names BOTH the show and the scene: this is the refusal a request for
+      // e.g. the wedding on titanic actually hits (its show file lives only
+      // in test_bench's special_events/, so titanic's library never lists
+      // it) — a caller must never have to guess which of the two is wrong.
       throw new SpecialEventError(
-        `unknown show "${showId}" — available: ${this.shows.map((s) => s.id).join(', ') || '(none)'}`,
+        `show "${showId}" is not available in scene "${this.scene}" — ` +
+        `available here: ${this.shows.map((s) => s.id).join(', ') || '(none)'}`,
         { status: 404, code: 'SHOW_NOT_FOUND' });
     }
     this._assertPlaylistsUsable(show);
+    this._reportPlaylistDrift(show);
 
     const undo = [];
     let priorMaster = null;
@@ -611,11 +617,39 @@ export class SpecialEventsService {
    *
    * The runner NEVER creates or edits playlist content — playlists are the
    * operator's domain.
+   *
+   * The check itself lives in `_checkPlaylistsUsable`, which never throws, so
+   * the SAME question can be asked non-fatally for the show catalog (a show
+   * whose scene cannot ARM it must not even be offered as a card — see
+   * `playlistsUsable` on the wire summary) as well as fatally here at ARM.
    */
   _assertPlaylistsUsable(show) {
+    const { unusable, reasons, available } = this._checkPlaylistsUsable(show);
+    if (unusable.length > 0) {
+      throw new SpecialEventError(
+        `show "${show.id}" cannot be armed in scene "${this.scene}" — ${reasons.join('; ')}. ` +
+        'Create, rename or re-save the playlist(s); the show runner never authors playlist ' +
+        `content. Available playlists: ${available.join(', ') || '(none)'}`,
+        {
+          status: 400,
+          code: 'SPECIAL_EVENT_PLAYLIST_MISSING',
+          detail: { missing: unusable, reasons, available },
+        });
+    }
+  }
+
+  /**
+   * Non-throwing half of the playlist-usability question: which of `show`'s
+   * referenced playlists are absent or unloadable IN THIS SCENE, which are
+   * merely degraded (loadable but missing some entries), and the scene's full
+   * playlist list. `unusable.length === 0` is exactly the ARM contract; the
+   * catalog wire format also reads `unusable` to decide whether to offer the
+   * show as a card at all (`playlistsUsable`, see `getState()`).
+   */
+  _checkPlaylistsUsable(show) {
     const wanted = showPlaylistNames(show);
-    if (wanted.length === 0) return;
     const available = this.deps.listPlaylists();
+    if (wanted.length === 0) return { unusable: [], reasons: [], degraded: [], available };
     const unusable = [];
     const reasons = [];
     const degraded = [];
@@ -639,17 +673,30 @@ export class SpecialEventsService {
         degraded.push(`"${name}" is missing patterns [${info.missingPatterns.join(', ')}]`);
       }
     }
-    if (unusable.length > 0) {
-      throw new SpecialEventError(
-        `show "${show.id}" cannot be armed in scene "${this.scene}" — ${reasons.join('; ')}. ` +
-        'Create, rename or re-save the playlist(s); the show runner never authors playlist ' +
-        `content. Available playlists: ${available.join(', ') || '(none)'}`,
-        {
-          status: 400,
-          code: 'SPECIAL_EVENT_PLAYLIST_MISSING',
-          detail: { missing: unusable, reasons, available },
-        });
-    }
+    return { unusable, reasons, degraded, available };
+  }
+
+  /**
+   * `true` exactly when `show` could be ARMed in this scene right now — a
+   * cheap, non-throwing wrapper around `_checkPlaylistsUsable` for the show
+   * catalog. A show that fails this is still LISTED as a load error would be
+   * (it is valid show data), but the catalog says it cannot run here so a
+   * caller — CaptainPad's picker — can decline to offer it, rather than
+   * letting the operator ARM into a guaranteed `SPECIAL_EVENT_PLAYLIST_MISSING`
+   * refusal.
+   */
+  isShowUsableHere(show) {
+    return this._checkPlaylistsUsable(show).unusable.length === 0;
+  }
+
+  /**
+   * Report playlist drift (loadable but missing some entries) on `lastError`
+   * for a show that IS otherwise usable. Called once at ARM, where drift was
+   * previously logged inline; kept as its own step so `_assertPlaylistsUsable`
+   * stays a pure "may this ARM" gate.
+   */
+  _reportPlaylistDrift(show) {
+    const { degraded } = this._checkPlaylistsUsable(show);
     if (degraded.length > 0) {
       this.lastError = `playlist drift: ${degraded.join('; ')}`;
       console.warn(`  ⚠ [special-events] ${this.lastError}`);
@@ -1549,7 +1596,12 @@ export class SpecialEventsService {
       endedDetail: this.ended ? this.ended.detail : null,
       endedAtMs: this.ended ? this.ended.atMs : null,
       lastError: this.lastError,
-      shows: this.shows.map((s) => summarizeShow(s)),
+      // `playlistsUsable` is computed fresh per frame (cheap — a handful of
+      // playlist stat calls) so a playlist saved or removed mid-session is
+      // reflected on the very next tick, not just after a reload. It is the
+      // non-throwing ARM question (`isShowUsableHere`), so a card the picker
+      // offers as tappable is a card ARM will actually accept.
+      shows: this.shows.map((s) => ({ ...summarizeShow(s), playlistsUsable: this.isShowUsableHere(s) })),
       loadErrors: this.loadErrors,
     };
   }

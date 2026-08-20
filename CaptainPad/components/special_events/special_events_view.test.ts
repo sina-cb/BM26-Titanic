@@ -85,6 +85,7 @@ const BABY_REVEAL: EventShow = {
   color: PINK,
   icon: 'gift',
   description: 'Three playlists, one blackout, and a white flash.',
+  playlistsUsable: true,
   stages: [
     {
       id: 'tease',
@@ -358,6 +359,32 @@ describe('screen modes', () => {
 
   it('shows the picker while the runner is idle', () => {
     expect(describeEventScreen(state()).mode).toBe('picker');
+  });
+
+  it('the picker offers only shows the active scene can actually ARM', () => {
+    // The wedding show is real data (it loaded — no `loadErrors` entry) but
+    // ships on test_bench only. On a scene missing its playlists the engine
+    // marks it `playlistsUsable: false`; the picker must decline to draw a
+    // card that ARM is guaranteed to refuse (docs/52 §3, this task's S1).
+    const wedding: EventShow = { ...BABY_REVEAL, id: 'wedding_program', name: 'Wedding', playlistsUsable: false };
+    const screen = describeEventScreen(
+      state({ catalog: { shows: [BABY_REVEAL, wedding], errors: [] } }));
+    expect(screen.shows.map((s) => s.id)).toEqual(['baby_reveal']);
+  });
+
+  it('an unusable show is still findable once ARMED — gating hides the picker card only', () => {
+    // Gating must never make a RUNNING show vanish from its own screen: only
+    // the picker's offer list is narrowed, never the show lookup by id.
+    const wedding: EventShow = { ...BABY_REVEAL, id: 'wedding_program', name: 'Wedding', playlistsUsable: false };
+    const running = state({
+      status: 'running',
+      showId: 'wedding_program',
+      currentStageId: BABY_REVEAL.stages[0].id,
+      catalog: { shows: [wedding], errors: [] },
+    });
+    const screen = describeEventScreen(running);
+    expect(screen.mode).toBe('show');
+    expect(screen.show?.id).toBe('wedding_program');
   });
 
   it('shows the show column from ARM onward, with ABORT always reachable', () => {

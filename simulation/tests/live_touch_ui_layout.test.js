@@ -626,6 +626,22 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
     });
     await page.evaluate(() => {
       window.__wire.phase = 'armed'; window.__wire.armed = true; window.__wire.online = true;
+      /* This hermetic page's WebSocket is a stub whose send() always throws
+         (installHermeticBrowser above), so the real engine ACK
+         (touchControlArmedAck) that normally flips state.leaseAcquired true
+         can never arrive here. Without this, the wire's periodic
+         touchtransportstate heartbeat (runBackgroundRefresh) keeps
+         broadcasting leaseAcquired:false every ~2s even though this test
+         has stubbed `armed`/`online` true, and touch_control.html's own
+         listener for that event unconditionally tears down any in-progress
+         TAKE recording whenever leaseAcquired is false — racing the
+         recording this test is about to make and wiping it out from under
+         the test before the deliberate stop-recording click below ever
+         runs. Setting it here, alongside the same TouchTakeEligibility
+         stub right below (which exists for the identical reason: the real
+         eligibility check also gates on this same flag), keeps the
+         simulated armed session stable for the whole recording sequence. */
+      window.__wire.leaseAcquired = true;
       window.TouchTakeEligibility = () => ({ ok: true });
       const arm = document.getElementById('arm');
       arm.classList.add('is-armed'); arm.setAttribute('aria-checked', 'true');

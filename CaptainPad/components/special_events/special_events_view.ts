@@ -130,7 +130,12 @@ export type EventScreenMode =
 
 export interface EventScreenModel {
   mode: EventScreenMode;
-  /** The whole validated library — what the picker draws. */
+  /**
+   * What the picker draws — the validated library NARROWED to shows the
+   * active scene can actually ARM (`playlistsUsable`). A show whose scene is
+   * missing its playlists (e.g. wedding on titanic) loaded fine as data but
+   * is left out here rather than offered as a card that ARM would refuse.
+   */
   shows: EventShow[];
   /** Show files that refused to load — red, untappable cards in the picker. */
   loadErrors: EventShowLoadError[];
@@ -254,8 +259,15 @@ export function describeEventScreen(state: SpecialEventsState | null): EventScre
   }
 
   // The show library rides on every state frame, so the run and the shows can
-  // never be a version apart.
+  // never be a version apart. The PICKER only offers shows the active scene
+  // can actually ARM (`playlistsUsable`) — e.g. the wedding show ships on
+  // test_bench only, so its card must not appear on titanic even though the
+  // show file itself loads fine there. This is gating, not deletion: an
+  // already-armed/running show is looked up in the FULL, unfiltered list
+  // below, because a show that passed ARM must never vanish from its own
+  // running screen.
   const shows = state.catalog.shows;
+  const pickerShows = shows.filter((s) => s.playlistsUsable);
   const show = state.showId === null
     ? null
     : shows.find((s) => s.id === state.showId) ?? null;
@@ -308,7 +320,7 @@ export function describeEventScreen(state: SpecialEventsState | null): EventScre
 
   return {
     mode: state.status === 'ended' ? 'ended' : (running && show !== null ? 'show' : 'picker'),
-    shows,
+    shows: pickerShows,
     loadErrors: state.catalog.errors,
     show,
     stages,

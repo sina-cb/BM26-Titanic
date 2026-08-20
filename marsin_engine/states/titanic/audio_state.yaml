@@ -2,9 +2,12 @@
 # Contains:
 #   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)
 #   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})
-# Written by `engine.js --choose_mic --model <scene>` (mic) and by
-# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
-# the engine is running.
+#   - derivedSignals groups the operator has actually live-patched; every
+#     group absent here is owned by config.yaml and follows its retunes
+# The ENGINE is the SOLE writer: `engine.js --choose_mic --model <scene>` (mic)
+# and PATCH /audio/config (tuning — including Audio Companion edits, which the
+# Companion writes THROUGH to the engine rather than to this file).
+# Do not hand-edit while the engine is running.
 enabled: true
 fftSize: 2048
 hopSize: 512
@@ -30,10 +33,36 @@ sub:
   maxHz: 60
 structureDetector:
   enabled: true
+  buildThreshold: 0.35
+  dropEnergyJump: 4
   dropEdgeMode: windowed
+  dropDeltaWindowMs: 400
+  dropMinLevel: 0.06
+  dropLevelAssist: false
+  dropBuildGate: 0.5
+  dropBuildMemoryMs: 3000
+  dropSlowZoneMax: 0.3
+  dropBuildRise: 0.3
+  dropNoveltyRatio: 5
+  dropNoveltyWindowMs: 12000
+  dropRelLevel: 0
+  dropNisThreshold: 6.63
+  dropKalmanQ: 0.001
+  dropCoWindowMs: 60
+  slowZoneRef: 0.07
+  slowZoneWidth: 0.04
+  slowFluxFloor: 0.1
+  stemsTimeoutMs: 300
+  eventRefractoryMs: 3500
+  falseFireCount: 3
+  falseFireWindowMs: 30000
+  falseFireQuietMs: 60000
 capture:
   device: test
   deviceLabel: null
   deviceId: null
   inputFormat: null
   platform: auto
+bpmTracker:
+  outputSlewEnabled: true
+  outputSlewBpmPerSec: 16

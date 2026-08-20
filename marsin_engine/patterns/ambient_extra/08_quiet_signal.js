@@ -70,7 +70,6 @@ var GOLDEN_ANGLE = 2.39996323;
 var CLOCK_WRAP = 10000.0;
 
 var eventClock = 0.0;
-var eventAge = 0.0;
 var detailClock = 0.0;
 var liveInterval = 0.50;
 var liveSignLevel = 0.72;
@@ -156,19 +155,21 @@ export function beforeRender(delta) {
   var localMultiplier = 0.25 + clamp01(localSpeed)
     * (32.824 - 16.412 * clamp01(localSpeed));
   eventClock += dt * localMultiplier;
-  eventAge += dt;
   detailClock += dt * localMultiplier * localMultiplier * SQRT2 / PHI;
   if (detailClock >= CLOCK_WRAP) detailClock -= CLOCK_WRAP;
 
   var eventPeriod = 17.0 + clamp01(liveInterval) * 12.0;
   if (eventClock >= eventPeriod) {
     eventClock -= eventPeriod;
-    eventAge = 0.0;
   }
-  // The first gracious cue has the same envelope at every localSpeed setting;
-  // localSpeed changes how soon the next cue arrives, not how violently the
-  // current cue is truncated.
-  eventPhase = eventAge / eventPeriod;
+  // eventPhase is driven from the same scaled clock that decides the wrap, so
+  // the gracious cue always completes its full rise/hold/fall by the time the
+  // next one arrives, at every localSpeed setting; localSpeed only changes how
+  // soon that complete cue arrives, never how much of it plays out. (A prior
+  // version measured eventPhase off an unscaled real-time clock that wrapped
+  // independently of eventClock's scaled reset, so at the saved default the
+  // cue was cut off after ~12% of its envelope and the TE signs barely moved.)
+  eventPhase = eventClock / eventPeriod;
 
   // Broad periodic phrases replace the old sub-10% flashes. Sign Hold shapes
   // the central plateau; the Organ and Jewelry answers use phase offsets but

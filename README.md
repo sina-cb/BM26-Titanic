@@ -418,7 +418,8 @@ Key docs: [sACN architecture](docs/11_sim_sacn_integration.md) ·
 [MarsinEngine](docs/12_marsin_engine.md) · [CPC](docs/15_central_param_center_cpc.md) ·
 [CaptainPad](docs/16_captain_pad.md) · [OSC](docs/24_osc_integration.md) ·
 [Audio analysis](docs/25_marsin_audio_analysis.md) ·
-[Show-server deployment](docs/43_show_server_deployment.md).
+[Show-server deployment](docs/43_show_server_deployment.md) ·
+[Pattern gallery](docs/pattern_gallery/index.html) (rendered pattern/playlist gifs + videos).
 
 ---
 

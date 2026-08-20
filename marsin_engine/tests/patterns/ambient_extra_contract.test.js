@@ -153,8 +153,15 @@ test('approved factory patterns are locked in canonical Ambient and the review p
   const titanic = loadPlaylist('titanic', 'ambient');
   const bench = loadPlaylist('test_bench', 'ambient');
   assert.deepEqual(titanic, bench);
+  // Ambient Extra's promoted block is contiguous and ordered, but other
+  // approved factory families (e.g. Crisp) may be appended after it, so
+  // locate the block instead of assuming it is the literal tail.
+  const patterns = titanic.entries.map((entry) => entry.pattern);
+  const blockStart = patterns.indexOf(PROMOTED_QUALIFIED_IDS[0]);
+  assert.ok(blockStart >= 0,
+    `${PROMOTED_QUALIFIED_IDS[0]}: promoted Ambient Extra block missing from canonical Ambient`);
   assert.deepEqual(
-    titanic.entries.slice(-PROMOTED_QUALIFIED_IDS.length).map((entry) => entry.pattern),
+    patterns.slice(blockStart, blockStart + PROMOTED_QUALIFIED_IDS.length),
     PROMOTED_QUALIFIED_IDS,
   );
   assert.equal(fs.existsSync(path.join(

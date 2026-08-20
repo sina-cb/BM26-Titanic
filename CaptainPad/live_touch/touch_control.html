@@ -3253,6 +3253,23 @@ select option:checked { background-color: #2a2050; color: #fff; }
   .ch-timing-row { margin-bottom: 3px; }
   .ch-chip { min-height: 24px; }
   .ch-chip::after { inset: -10px; }
+  /* FOLLOW-CARD-ONLY rows — the gap this block originally missed. `_289`'s
+     unconditional spacing pass AND this block's own W4 measurement were both
+     taken against the TWO COLOUR / PALETTE TURNS cards; `.ch-follow-empty`
+     and `.ch-follow-state` exist only inside `#chCardFollow`, so neither was
+     in the measured stack and both kept their portrait-sized margins (8px and
+     2px/8px) while every shared row around them gave its back. FOLLOW is also
+     the TALLEST card (empty-note + ring + ARM A/B row + FOUR timing rows +
+     state + RUN), so it is the one card that could not afford the omission.
+     MEASURED at 1194x834 landscape: `#chCardFollow > #chRunFollow` bottom
+     601.0 against panel bottom 596.1 — a 4.9px overrun that clipped the
+     card's PRIMARY action below `.panel { overflow: hidden }`, unreachable
+     and unscrollable, in the show orientation. Both of these are plain TEXT
+     rows, not controls: they carry no `::after` hit region and no 44pt
+     obligation, so this is pure chrome and `.ch-run`'s 44px real box below is
+     untouched. 11px recovered against a 4.9px overrun. */
+  .ch-follow-empty { margin-bottom: 3px; }
+  .ch-follow-state { margin: 1px 0 3px; }
   .ch-run { margin-top: 2px; }
 }
 

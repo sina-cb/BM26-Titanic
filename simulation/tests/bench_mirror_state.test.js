@@ -212,6 +212,17 @@ test('a scene name is a single directory name — never a path', () => {
 test('_176 §5.3: a TEST-CONTEXT write into the REPO\'s real scenes dir is REFUSED', () => {
   assert.equal(isTestContext(), true,
     'this suite runs under `node --test`, which is what the guard keys on');
+  // Operator ruling (2026-08-20): `simulation/scenes/test_bench/bench_mirror_state.yaml`
+  // is a deliberately TRACKED test-bench mirror file — it stays checked in, so this
+  // guard can no longer assert the file is ABSENT. What it is actually guarding is
+  // that this suite never WRITES to the repo's real scenes directory, so snapshot
+  // the file's bytes (or its absence) before the refused writes below, and assert
+  // the exact same bytes (or the exact same absence) afterward — present-and-
+  // unchanged is proof of non-mutation just as much as absent-and-still-absent is.
+  const realFile = path.join(REAL_SCENES_ROOT, 'test_bench', BENCH_MIRROR_STATE_FILE);
+  const before = fs.existsSync(realFile)
+    ? { present: true, bytes: fs.readFileSync(realFile) }
+    : { present: false };
   const state = parse(baseTree());
   assert.throws(() => writeBenchMirrorState(REAL_SCENES_ROOT, 'test_bench', state),
     /refusing to write/);
@@ -219,9 +230,16 @@ test('_176 §5.3: a TEST-CONTEXT write into the REPO\'s real scenes dir is REFUS
     /NODE_TEST_CONTEXT is set/);
   assert.throws(() => writeBenchMirrorState(REAL_SCENES_ROOT, 'test_bench', state),
     /destroys the byte-identity proof/);
-  // …and the file really is not there because of this test.
-  assert.equal(fs.existsSync(path.join(REAL_SCENES_ROOT, 'test_bench', BENCH_MIRROR_STATE_FILE)),
-    false, 'the repo scene directory must be untouched by this suite');
+  // …and the file is exactly as this suite found it — no silent "close enough".
+  if (before.present) {
+    assert.equal(fs.existsSync(realFile), true,
+      'the repo scene directory must be untouched by this suite');
+    assert.ok(fs.readFileSync(realFile).equals(before.bytes),
+      'the tracked test-bench mirror file must be byte-identical after this suite');
+  } else {
+    assert.equal(fs.existsSync(realFile), false,
+      'the repo scene directory must be untouched by this suite');
+  }
 });
 
 test('the writer refuses a scene directory that does not exist — it never creates scenes', () => {

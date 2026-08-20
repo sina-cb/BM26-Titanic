@@ -231,6 +231,16 @@ export interface EventShow {
   icon: string | null;
   description: string | null;
   stages: EventStageSummary[];
+  /**
+   * `true` when every playlist this show references exists and is loadable in
+   * the ACTIVE scene right now — the engine's own non-throwing ARM question
+   * (`isShowUsableHere`). A show can be valid DATA (it loaded, it is not in
+   * `loadErrors`) and still be `false` here: e.g. the wedding show ships on
+   * test_bench only, so it loads everywhere its YAML lives but is only
+   * usable where its playlists do too. The picker uses this to decline to
+   * offer a card ARM is guaranteed to refuse.
+   */
+  playlistsUsable: boolean;
 }
 
 /** A show YAML that refused to load. Rendered as a red, untappable card. */
@@ -579,6 +589,7 @@ export function parseEventShow(raw: unknown, path: string = `GET ${BASE_PATH}`):
     icon: readOptionalString(o, 'icon', where),
     description: readOptionalString(o, 'description', where),
     stages: (stagesRaw as unknown[]).map((s) => parseEventStage(s, where)),
+    playlistsUsable: readBool(o, 'playlistsUsable', where),
   };
 }
 

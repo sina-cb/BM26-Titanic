@@ -19,12 +19,19 @@ import { fileURLToPath } from 'node:url';
 
 import yaml from 'js-yaml';
 
+import { simServerSkip } from './helpers/sim_server_probe.mjs';
+
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
 const RENDER_DIR = path.join(REPO_ROOT, '.agent_renders');
 const ORIGIN = process.env.BM26_VALIDATION_ORIGIN || 'http://127.0.0.1:6969';
 const SIM = `${ORIGIN}/simulation/?scene=titanic&profile=2d_pixels&renderer=webgl&pixelmap=edit`;
+
+// This suite drives a REAL browser against the sim dev server. When nothing
+// is listening on :6969, SKIP WITH REASON instead of failing with
+// net::ERR_CONNECTION_REFUSED — see sim_server_probe.mjs.
+const SKIP_NO_SIM = await simServerSkip();
 
 const TMP_VIEWS = path.join(os.homedir(), 'tmp', 'bm26_pixel_map_lifecycle_views.yaml');
 
@@ -223,7 +230,8 @@ async function ghostDiag(page) {
   }, ORIGIN);
 }
 
-test('EDIT lifecycle: one canvas, no ghost duplicate, drag + persist + touch + VIEW lock', { timeout: 180_000 }, async () => {
+test('EDIT lifecycle: one canvas, no ghost duplicate, drag + persist + touch + VIEW lock',
+  { timeout: 180_000, skip: SKIP_NO_SIM }, async () => {
   fs.mkdirSync(RENDER_DIR, { recursive: true });
   await withSimPage(async (page, { persistCalls, resetPersist }) => {
     const diag = await canvasDiag(page);

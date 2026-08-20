@@ -328,7 +328,7 @@
       {
         "exported_name": "sliderWhiteKick",
         "behavior": "Raises native-white accent peaks, strongest on Jewelry.",
-        "code_default_value": 0.2
+        "code_default_value": 0.3
       },
       {
         "exported_name": "sliderWarmth",

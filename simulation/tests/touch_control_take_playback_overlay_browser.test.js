@@ -117,16 +117,30 @@ test('record path stays unchanged while PLAY and LOOP move the display-only over
     assert.equal(recordResult.exported, 3);
     assert.equal(recordResult.phase, 'ready');
 
-    const playResult = await page.evaluate(async () => {
+    await page.evaluate(() => {
       window.__spatialPaintBodies = [];
       window.TouchTakePlaybackOverlayRuntime.clearAll('test-reset');
-      await window.TouchTakeBankRuntime.play(false);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      const bodies = window.__spatialPaintBodies.slice();
-      const overlay = window.TouchTakePlaybackOverlayRuntime.state();
-      return { bodies, overlay, keepPlaying: true };
+      return window.TouchTakeBankRuntime.play(false);
     });
+    /* Non-final spatial draws are deliberately coalesced onto
+       requestAnimationFrame (touch_control_wire.js sendDraw/scheduleDrawPump)
+       so the engine sees at most one write per real display frame — that is
+       intentional coalescing, not a defect. Headless Chrome does not pump rAF
+       anywhere near 60fps when nothing is forcing a frame (measured: as few
+       as one callback per ~300ms with no page interaction), so a fixed short
+       sleep here was testing Puppeteer's paint cadence, not the product. Poll
+       for the write instead, the way the sibling puppeteer suite
+       (live_touch_ui_layout.test.js) already does for this exact
+       TAKE-playback-emits-a-write scenario (see its `window.__takeRequests`
+       waitForFunction calls). `polling: 100` uses a plain timer instead of
+       rAF so this wait is not gated by the very throttling it exists to
+       tolerate. */
+    await page.waitForFunction(() => window.__spatialPaintBodies.length >= 1,
+      { polling: 100, timeout: 5000 });
+    const playResult = await page.evaluate(() => ({
+      bodies: window.__spatialPaintBodies.slice(),
+      overlay: window.TouchTakePlaybackOverlayRuntime.state(),
+    }));
 
     assert.ok(playResult.bodies.length >= 1, 'PLAY must still emit spatial writes');
     assert.ok(playResult.overlay[0].pathLength >= 1 || playResult.bodies.length >= 1,
@@ -161,13 +175,17 @@ test('record path stays unchanged while PLAY and LOOP move the display-only over
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'take_playback_two_slots.png') });
 
-    const loopResult = await page.evaluate(async () => {
+    await page.evaluate(() => {
       window.TouchTakeBankRuntime.replaceTake(0, [[0, 0.2, 0.2, 1], [30, 0.8, 0.2, 1], [60, 0.8, 0.8, 0]]);
       window.__spatialPaintBodies = [];
       window.TouchTakePlaybackOverlayRuntime.clearAll('loop-reset');
-      await window.TouchTakeBankRuntime.play(true);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      await new Promise((resolve) => setTimeout(resolve, 180));
+      return window.TouchTakeBankRuntime.play(true);
+    });
+    /* Same rAF-throttling reasoning as the PLAY assertion above: wait for the
+       actual writes instead of assuming they land inside a fixed sleep. */
+    await page.waitForFunction(() => window.__spatialPaintBodies.length >= 2,
+      { polling: 100, timeout: 5000 });
+    const loopResult = await page.evaluate(async () => {
       const bodies = window.__spatialPaintBodies.map((body) => JSON.stringify(body));
       await window.TouchTakeBankRuntime.stop('loop-stop');
       await new Promise((resolve) => setTimeout(resolve, 0));

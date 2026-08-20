@@ -6,13 +6,23 @@
 // route and no UI, so everything that can break it is a YAML edit — and a YAML
 // edit is exactly what nobody re-tests at 2 a.m.
 //
+// OPERATOR RULING: the wedding is a test_bench show ONLY (this task's S1 —
+// docs/52, report `_326`+). titanic never carries `wedding_program.yaml` or
+// any `wedding_*` playlist; the engine's `_assertPlaylistsUsable` /
+// `isShowUsableHere` refuse loudly if a scene ever half-carries the show
+// again, and the CaptainPad picker gates on `playlistsUsable` so the card
+// never even offers a show a scene cannot ARM. This file pins that contract.
+//
 // What this file refuses to let drift:
 //
 //   1. THE ARM MUST NOT FAIL IN FRONT OF A WEDDING PARTY. The runner's
 //      `_assertPlaylistsUsable` refuses to ARM when a referenced playlist is
 //      absent or has no loadable entry. That check runs on the rig; this file
-//      runs the same question offline, in BOTH scenes, so the answer is known
-//      before anybody is standing at an altar.
+//      runs the same question offline, against test_bench (the only scene
+//      that carries the show), so the answer is known before anybody is
+//      standing at an altar — and it also pins that titanic carries NEITHER
+//      the show file NOR any wedding playlist, so an accidental copy is
+//      caught here instead of at 2 a.m.
 //   2. THE FLASH MUST HIDE THE SWAP. THE KISS flashes every channel white and
 //      swaps the deck UNDER the flash. If the ordering ever inverts, the crowd
 //      watches the playlist change instead of a kiss. The timings are data, so
@@ -30,17 +40,23 @@
 //      `colorPalette1` and therefore cannot be tinted by the live global
 //      palette or the colour autopilot. That is the only reason those two
 //      stages look right regardless of what the deck was doing before ARM.
-//   6. EVERY PATTERN MUST LIGHT UP ON BOTH SHOW MODELS. A wedding stage that
-//      renders black on the bench (or, worse, on titanic) is a dark ship.
+//   6. EVERY PATTERN MUST LIGHT UP ON THE MODEL THE SHOW ACTUALLY SHIPS ON. A
+//      wedding stage that renders black on the bench is a dark ship.
+//   7. TITANIC MUST REFUSE THE WEDDING LOUDLY, NOT SILENTLY. Requesting a show
+//      a scene does not carry must never hang, no-op, or produce a confusing
+//      error — `arm()` throws `SHOW_NOT_FOUND`, naming both the show and the
+//      scene, checked here directly against the runner.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import yaml from 'js-yaml';
 
 import '../helpers/setup_config_guard.mjs';
+import { SpecialEventsService } from '../../lib/special_events/special_events_service.js';
 import {
   loadShow,
   loadShowLibrary,
@@ -59,8 +75,12 @@ const PATTERNS_DIR = path.join(ENGINE_DIR, 'patterns');
 const SCENES_DIR = path.join(REPO_DIR, 'simulation', 'scenes');
 
 const SHOW_ID = 'wedding_program';
-/** Both show scenes carry the wedding, so the bench can rehearse the whole flow. */
-const SCENES = ['titanic', 'test_bench'];
+/**
+ * The ONLY scene that carries the wedding (operator ruling — see the header).
+ * `OTHER_SCENE` is the negative space: everything the wedding must NOT touch.
+ */
+const SHOW_SCENE = 'test_bench';
+const OTHER_SCENE = 'titanic';
 /** Declaration order in the YAML is the operator's evening, in order. */
 const STAGE_ORDER = ['gathering', 'procession', 'ceremony', 'kiss', 'celebration', 'photos'];
 /** First-referenced order, which is what `showPlaylistNames` returns. */
@@ -81,7 +101,7 @@ function readPlaylist(scene, name) {
   return yaml.load(fs.readFileSync(playlistPath(scene, name), 'utf8'));
 }
 
-const SHOW = loadShow(showPath('titanic'));
+const SHOW = loadShow(showPath(SHOW_SCENE));
 
 /** Every action the show can possibly dispatch, flattened. */
 function allActions(show) {
@@ -103,26 +123,38 @@ function stage(id) {
 
 // ── the show file ───────────────────────────────────────────────────────────
 
-test('the wedding show validates in BOTH scenes and the copies are byte-identical', () => {
-  const bytes = SCENES.map((scene) => {
-    const file = showPath(scene);
-    assert.ok(fs.existsSync(file), `${scene} is missing ${SHOW_ID}.yaml`);
-    // Loading through the real loader is the point: a broken file here would
-    // become a red card on the tab instead of an armable show.
-    const show = loadShow(file);
-    assert.equal(show.id, SHOW_ID);
-    assert.deepEqual(show.stages.map((s) => s.id), STAGE_ORDER);
-    return fs.readFileSync(file);
-  });
-  assert.ok(bytes[0].equals(bytes[1]),
-    'the titanic and test_bench copies of the wedding show have drifted apart');
+test('the wedding show validates in test_bench, the only scene that carries it', () => {
+  const file = showPath(SHOW_SCENE);
+  assert.ok(fs.existsSync(file), `${SHOW_SCENE} is missing ${SHOW_ID}.yaml`);
+  // Loading through the real loader is the point: a broken file here would
+  // become a red card on the tab instead of an armable show.
+  const show = loadShow(file);
+  assert.equal(show.id, SHOW_ID);
+  assert.deepEqual(show.stages.map((s) => s.id), STAGE_ORDER);
 });
 
-test('each scene\'s special_events directory loads with zero errors', () => {
-  for (const scene of SCENES) {
-    const { shows, errors } = loadShowLibrary(path.join(SCENES_DIR, scene, 'special_events'));
-    assert.deepEqual(errors, [], `${scene} has broken show files: ${JSON.stringify(errors)}`);
-    assert.ok(shows.some((s) => s.id === SHOW_ID), `${scene} does not list ${SHOW_ID}`);
+test('test_bench\'s special_events directory loads with zero errors and lists the wedding', () => {
+  const { shows, errors } = loadShowLibrary(path.join(SCENES_DIR, SHOW_SCENE, 'special_events'));
+  assert.deepEqual(errors, [], `${SHOW_SCENE} has broken show files: ${JSON.stringify(errors)}`);
+  assert.ok(shows.some((s) => s.id === SHOW_ID), `${SHOW_SCENE} does not list ${SHOW_ID}`);
+});
+
+test('titanic carries NEITHER the wedding show file NOR any wedding playlist', () => {
+  // The operator ruling in one file: this is what catches a future "also copy
+  // it to titanic" edit before it ships. `_assertPlaylistsUsable` /
+  // `isShowUsableHere` are the RUNTIME half of this refusal (see the fail-loud
+  // test below and special_events_service.test.js); this is the static half.
+  assert.ok(!fs.existsSync(showPath(OTHER_SCENE)),
+    `${OTHER_SCENE} must not carry special_events/${SHOW_ID}.yaml — the wedding is test_bench-only`);
+
+  const { shows, errors } = loadShowLibrary(path.join(SCENES_DIR, OTHER_SCENE, 'special_events'));
+  assert.deepEqual(errors, [], `${OTHER_SCENE} has broken show files: ${JSON.stringify(errors)}`);
+  assert.ok(!shows.some((s) => s.id === SHOW_ID),
+    `${OTHER_SCENE} must not list ${SHOW_ID} among its special-event shows`);
+
+  for (const name of PLAYLISTS) {
+    assert.ok(!fs.existsSync(playlistPath(OTHER_SCENE, name)),
+      `${OTHER_SCENE} must not carry playlist '${name}' — the wedding is test_bench-only`);
   }
 });
 
@@ -334,38 +366,32 @@ test('THE KISS swaps as a hard CUT, so the 900 ms flash actually hides it', () =
 
 // ── the playlists (the ARM contract, run offline) ────────────────────────────
 
-test('every referenced playlist exists in BOTH scenes, byte-identical, and is loadable', () => {
+test('every referenced playlist exists in test_bench and is loadable', () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(PATTERNS_DIR, 'manifest.json'), 'utf8'));
   const manifestIds = new Set(Array.isArray(manifest) ? manifest : manifest.patterns);
 
   for (const name of PLAYLISTS) {
-    const bytes = [];
-    for (const scene of SCENES) {
-      const file = playlistPath(scene, name);
-      assert.ok(fs.existsSync(file),
-        `scene '${scene}' has no '${name}' playlist — ARM would refuse by name`);
-      bytes.push(fs.readFileSync(file));
+    const file = playlistPath(SHOW_SCENE, name);
+    assert.ok(fs.existsSync(file),
+      `scene '${SHOW_SCENE}' has no '${name}' playlist — ARM would refuse by name`);
 
-      const pl = readPlaylist(scene, name);
-      assert.equal(pl.schemaVersion, 1);
-      assert.equal(pl.name, name, `${scene}/${name}: the playlist's own name disagrees`);
-      assert.ok(Array.isArray(pl.entries) && pl.entries.length > 0,
-        `${scene}/${name}: exists but has no entry — ARM would refuse`);
+    const pl = readPlaylist(SHOW_SCENE, name);
+    assert.equal(pl.schemaVersion, 1);
+    assert.equal(pl.name, name, `${SHOW_SCENE}/${name}: the playlist's own name disagrees`);
+    assert.ok(Array.isArray(pl.entries) && pl.entries.length > 0,
+      `${SHOW_SCENE}/${name}: exists but has no entry — ARM would refuse`);
 
-      const ids = new Set();
-      for (const entry of pl.entries) {
-        assert.ok(!ids.has(entry.id), `${scene}/${name}: duplicate entry id '${entry.id}'`);
-        ids.add(entry.id);
-        const src = path.join(PATTERNS_DIR, `${entry.pattern}.js`);
-        assert.ok(fs.existsSync(src),
-          `${scene}/${name}: entry '${entry.id}' points at missing pattern '${entry.pattern}'`);
-        assert.ok(manifestIds.has(entry.pattern),
-          `${scene}/${name}: '${entry.pattern}' is not registered in patterns/manifest.json`);
-      }
+    const ids = new Set();
+    for (const entry of pl.entries) {
+      assert.ok(!ids.has(entry.id), `${SHOW_SCENE}/${name}: duplicate entry id '${entry.id}'`);
+      ids.add(entry.id);
+      const src = path.join(PATTERNS_DIR, `${entry.pattern}.js`);
+      assert.ok(fs.existsSync(src),
+        `${SHOW_SCENE}/${name}: entry '${entry.id}' points at missing pattern '${entry.pattern}'`);
+      assert.ok(manifestIds.has(entry.pattern),
+        `${SHOW_SCENE}/${name}: '${entry.pattern}' is not registered in patterns/manifest.json`);
     }
-    assert.ok(bytes[0].equals(bytes[1]),
-      `'${name}' has drifted between the titanic and test_bench scenes`);
   }
 });
 
@@ -375,7 +401,7 @@ test('CEREMONY and PHOTO GLOW lean on the palette-immune WHITE ONLY family', () 
   // on what the deck happened to be doing before ARM, so a majority of each of
   // those playlists is drawn from the family that declares neither.
   for (const name of ['wedding_ceremony', 'wedding_glow']) {
-    const entries = readPlaylist('titanic', name).entries;
+    const entries = readPlaylist(SHOW_SCENE, name).entries;
     const immune = entries.filter((entry) => {
       const src = fs.readFileSync(path.join(PATTERNS_DIR, `${entry.pattern}.js`), 'utf8');
       return !src.includes('export function colorPalette1');
@@ -386,16 +412,22 @@ test('CEREMONY and PHOTO GLOW lean on the palette-immune WHITE ONLY family', () 
   }
 });
 
-test('every wedding pattern compiles and renders lit on BOTH show models', async () => {
+test('every wedding pattern compiles and renders lit on the model it legitimately covers', async () => {
+  // The wedding is test_bench-only, so test_bench is the ONLY model this
+  // suite owes a lit-render guarantee on. These same pattern files are also
+  // used by titanic's OWN playlists (party_high/party_low/party_dancers, the
+  // same confetti/spectrum/orbital family) and their titanic-render is
+  // guarded there (patterns/party_dancers.test.js et al.) — this test is not
+  // that suite's only backstop.
   const wanted = [];
   for (const name of PLAYLISTS) {
-    for (const entry of readPlaylist('titanic', name).entries) {
+    for (const entry of readPlaylist(SHOW_SCENE, name).entries) {
       if (!wanted.includes(entry.pattern)) wanted.push(entry.pattern);
     }
   }
   assert.ok(wanted.length >= 20, `only ${wanted.length} distinct wedding patterns`);
 
-  for (const modelName of SCENES) {
+  for (const modelName of [SHOW_SCENE]) {
     const loaded = await loadModelForGauge(modelName);
     const host = new WasmHost();
     await host.init(loaded.pixels.length);
@@ -422,4 +454,67 @@ test('every wedding pattern compiles and renders lit on BOTH show models', async
       host.shutdown();
     }
   }
+});
+
+// ── the fail-loud refusal (docs P0) ──────────────────────────────────────────
+
+/** A full, inert dep set — ARM against 'wedding_program' on titanic fails
+ *  before any of these would be called; they exist only to satisfy the
+ *  constructor's REQUIRED_DEPS check. */
+function inertDeps() {
+  const noop = () => {};
+  return {
+    activatePlaylist: noop,
+    listPlaylists: () => [],
+    inspectPlaylist: () => ({ exists: false }),
+    setDeckControl: noop,
+    fadeMaster: noop,
+    setMaster: noop,
+    getMaster: () => 1,
+    setGlobals: noop,
+    captureGlobals: () => ({}),
+    setEffect: noop,
+    startStrobe: noop,
+    fireStrobeBurst: noop,
+    stopStrobe: noop,
+    captureSnapshot: noop,
+    recallSnapshotFade: noop,
+    getAutopilotFlags: () => ({ patternAutopilot: false, colorAutopilot: null }),
+    setPatternAutopilot: noop,
+    setColorAutopilot: noop,
+    getPatternAutopilot: () => ({ active: false, delay_s: 30, shuffle: false, nextSwapAtMs: null }),
+    getDeckTransition: () => ({ enabled: false }),
+    setDeckTransition: noop,
+    getDeckNowPlaying: () => null,
+  };
+}
+
+test('titanic refuses ARM of the wedding LOUDLY — named show, named scene, never silent', async (t) => {
+  // The real runner, pointed at titanic's REAL special_events/ directory (no
+  // fixture — an accidental future copy of wedding_program.yaml back into
+  // titanic would make this library scan pick it up and this test would stop
+  // proving what it claims to prove).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'se-titanic-wedding-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const svc = new SpecialEventsService({
+    scene: OTHER_SCENE,
+    showsDir: path.join(SCENES_DIR, OTHER_SCENE, 'special_events'),
+    stateDir: path.join(dir, 'state'),
+    deps: inertDeps(),
+    broadcast: () => {},
+  });
+  svc.reloadLibrary();
+  assert.ok(!svc.getShow(SHOW_ID), 'titanic must not carry the wedding show at all');
+
+  await assert.rejects(
+    () => svc.arm(SHOW_ID),
+    (err) => {
+      // Never silent (no resolve-with-nothing), never a generic 500, never a
+      // hang — a specific, listed refusal naming BOTH the show and the scene.
+      assert.equal(err.code, 'SHOW_NOT_FOUND');
+      assert.equal(err.status, 404);
+      assert.match(err.message, new RegExp(SHOW_ID));
+      assert.match(err.message, new RegExp(OTHER_SCENE));
+      return true;
+    });
 });

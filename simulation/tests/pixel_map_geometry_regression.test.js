@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 
 import yaml from 'js-yaml';
 
+import { simServerSkip } from './helpers/sim_server_probe.mjs';
+
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
@@ -23,6 +25,11 @@ const RENDER_DIR = path.join(REPO_ROOT, '.agent_renders');
 const ORIGIN = process.env.BM26_VALIDATION_ORIGIN || 'http://127.0.0.1:6969';
 const BARE_SIM = `${ORIGIN}/simulation/?scene=titanic`;
 const SIDECAR = path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml');
+
+// This suite drives a REAL browser against the sim dev server. When nothing
+// is listening on :6969, SKIP WITH REASON instead of failing with
+// net::ERR_CONNECTION_REFUSED — see sim_server_probe.mjs.
+const SKIP_NO_SIM = await simServerSkip();
 
 async function withPage(viewport, fn, { blockPersist = true } = {}) {
   const puppeteer = require('puppeteer');
@@ -193,7 +200,8 @@ function sidecarOffsetCount() {
 
 for (const [label, viewport] of [['screenshot', { width: 1440, height: 900 }],
   ['ipad', { width: 1024, height: 768 }]]) {
-  test(`operator sidecar geometry (${label} ${viewport.width}x${viewport.height})`, { timeout: 180_000 }, async () => {
+  test(`operator sidecar geometry (${label} ${viewport.width}x${viewport.height})`,
+    { timeout: 180_000, skip: SKIP_NO_SIM }, async () => {
     fs.mkdirSync(RENDER_DIR, { recursive: true });
     const offsets = sidecarOffsetCount();
     assert.equal(offsets.count, 52, 'operator sidecar must still carry 52 fixture offsets');
@@ -224,7 +232,8 @@ for (const [label, viewport] of [['screenshot', { width: 1440, height: 900 }],
   });
 }
 
-test('operator sidecar reload preserves offsets in memory', { timeout: 180_000 }, async () => {
+test('operator sidecar reload preserves offsets in memory',
+  { timeout: 180_000, skip: SKIP_NO_SIM }, async () => {
   await withPage({ width: 1440, height: 900 }, async (page) => {
     const before = await page.evaluate(async (origin) => {
       const v = (await import(`${origin}/simulation/src/gui/pixel_map/pixel_map_store.js`))
@@ -243,7 +252,8 @@ test('operator sidecar reload preserves offsets in memory', { timeout: 180_000 }
   });
 });
 
-test('drag moves bezel and lit glyph together (operator sidecar)', { timeout: 180_000 }, async () => {
+test('drag moves bezel and lit glyph together (operator sidecar)',
+  { timeout: 180_000, skip: SKIP_NO_SIM }, async () => {
   fs.mkdirSync(RENDER_DIR, { recursive: true });
   await withPage({ width: 1440, height: 900 }, async (page) => {
     await page.evaluate(async (origin) => {

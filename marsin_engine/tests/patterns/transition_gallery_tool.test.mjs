@@ -95,7 +95,13 @@ test('master gallery index links transitions and all three Baby galleries', () =
   for (const playlist of ['baby_tease', 'baby_boy', 'baby_girl']) {
     assert.match(index, new RegExp(`playlists/titanic/${playlist}/index\\.html`));
   }
-  assert.match(index, /<strong>Baby Tease<\/strong><small>20 entries<\/small>/);
-  assert.match(index, /<strong>Baby Boy<\/strong><small>30 entries<\/small>/);
-  assert.match(index, /<strong>Baby Girl<\/strong><small>30 entries<\/small>/);
+  // Baby Boy/Girl are retired one-shot source playlists; buildIndex()
+  // deliberately keeps linking their already-rendered review galleries by
+  // reading the entry count straight off their frozen manifest.json (see
+  // tools/playlist_gallery/generate.mjs buildIndex), so their counts stay
+  // fixed at whatever was rendered before retirement. Baby Tease is the
+  // live redesigned playlist and its count tracks the current saved YAML.
+  assert.match(index, /<strong>Baby Tease<\/strong><small>13 entries<\/small>/);
+  assert.match(index, /<strong>Baby Boy<\/strong><small>10 entries<\/small>/);
+  assert.match(index, /<strong>Baby Girl<\/strong><small>10 entries<\/small>/);
 });

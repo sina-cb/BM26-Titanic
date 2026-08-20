@@ -30,6 +30,16 @@ import { createEngineHarness } from '../helpers/spawn_engine.mjs';
 // Short arm lease so the deadman fires in ~2 s: grace = clamp(lease/3, 1s, 5s).
 const ARM_LEASE_MS = 3000;
 const ALL_PIXEL_INDICES = Array.from({ length: 166 }, (_, index) => index);
+// 'whole_group' movement (like every one_per_color/pulse mode) is a palette
+// overlay: it needs the authoritative five-colour Live Touch session palette
+// staged first (LIVE_TOUCH_OVERLAY_PALETTE_REQUIRED otherwise).
+const OVERLAY_PALETTE = [
+  { h: 0.00, s: 1, v: 1 },
+  { h: 0.16, s: 1, v: 1 },
+  { h: 0.33, s: 1, v: 1 },
+  { h: 0.55, s: 1, v: 1 },
+  { h: 0.78, s: 1, v: 1 },
+];
 
 const h = createEngineHarness({
   scene: 'test_bench',
@@ -99,8 +109,20 @@ test('deadman revert clears a stuck ERASE and the slot-less strobe/walk', async 
   r = await h.api('POST', '/strobe-rate', { active: true, hz: 4, duty: 0.5, intensity: 1 },
     ownerHeaders);
   assert.equal(r.status, 200, `strobe assert failed: ${JSON.stringify(r.data)}`);
-  r = await h.api('POST', '/movement-rate', {
-    active: true, mode: 'whole_group', pixelsPerSecond: 5, amount: 1,
+  // movement-rate is retired for Live Touch (LIVE_TOUCH_OVERLAY_ACTION_REQUIRED):
+  // driving movement now goes through the authoritative overlay slot action —
+  // bind a slot to the movementTrace effect, then dispatch it via
+  // POST /global-effect-slots/:id/movement-rate. Slot 20 is outside the
+  // pre-seeded 1..13 DEFAULT_SLOT_CONFIG range (create-on-patch).
+  const MOVEMENT_SLOT_ID = 20;
+  r = await h.api('POST', '/layers/live_touch/palette', { colorPalette: OVERLAY_PALETTE }, ownerHeaders);
+  assert.equal(r.status, 200, `palette stage failed: ${JSON.stringify(r.data)}`);
+  r = await h.api('PATCH', `/global-effect-slots/${MOVEMENT_SLOT_ID}`, {
+    enabled: true, effectId: 'movementTrace', presetId: 'whole_group_repeat', behavior: 'toggle',
+  }, ownerHeaders);
+  assert.equal(r.status, 200, `movement slot bind failed: ${JSON.stringify(r.data)}`);
+  r = await h.api('POST', `/global-effect-slots/${MOVEMENT_SLOT_ID}/movement-rate`, {
+    active: true, pixelsPerSecond: 5,
   }, ownerHeaders);
   assert.equal(r.status, 200, `movement assert failed: ${JSON.stringify(r.data)}`);
 
