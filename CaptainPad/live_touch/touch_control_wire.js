@@ -2480,6 +2480,8 @@
   var xyPad = document.getElementById('xyPad');
   var modeToggle = document.getElementById('modeToggle');
   var wirePadRect = null;
+  var xyMovementSlotId = null;
+  var xyMovementNoticeAt = 0;
 
   /* Mode identity is the `data-mode` ATTRIBUTE, never the button ordinal.
      docs/70 W1 reordered the toggle so SPATIAL ships first and lit; the old
@@ -2491,6 +2493,34 @@
     if (!modeToggle) return true;
     var spatialBtn = modeToggle.querySelector('button[data-mode="spatial"]');
     return !!(spatialBtn && spatialBtn.classList.contains('is-active'));
+  }
+
+  function xyMovementCell() {
+    if (!fxGrid) return null;
+    var active = fxGrid.querySelector('.fx-cell.is-on[data-fxkey="movementTrace"]');
+    if (active) {
+      xyMovementSlotId = Number(active.dataset.slot);
+      return active;
+    }
+    if (xyMovementSlotId === null) return null;
+    var remembered = fxGrid.querySelector(
+      '.fx-cell[data-slot="' + xyMovementSlotId + '"][data-fxkey="movementTrace"]'
+    );
+    if (!remembered) xyMovementSlotId = null;
+    return remembered;
+  }
+
+  function announceMissingMovementEffect() {
+    var now = Date.now();
+    if (now - xyMovementNoticeAt < 3000) return;
+    xyMovementNoticeAt = now;
+    document.dispatchEvent(new CustomEvent('panelstatus', {
+      detail: {
+        message: 'Turn on a movement effect before tuning WALK speed.',
+        role: 'status',
+        ttlMs: 3000,
+      },
+    }));
   }
 
   /* ── WHAT DRAWING DOES ──────────────────────────────────────────────────
@@ -3025,30 +3055,26 @@
             write('POST', '/strobe-rate', { active: true, hz: hz, duty: duty, intensity: 1 });
             return;
           }
-          /* WALK: light steps group by group along the ship, Y sets the pace.
-             0.5 .. 30 groups a second, exponential for the same reason the
-             strobe axis is — a linear sweep puts everything usable in the last
-             few pixels. Painted in the operator's own palette so the walk is
-             the colour they picked. */
+          /* WALK tunes the active owner-scoped movement slot. It used to call
+             the retired /movement-rate route, which the Live Touch authority
+             correctly refuses because that route can bypass the selected slot.
+             This action endpoint changes only the running private overlay; it
+             does not reconfigure or persist the effect bank, so it remains a
+             valid performance action in both Edit and Performance. */
+          var movementCell = xyMovementCell();
+          if (!movementCell) {
+            announceMissingMovementEffect();
+            return;
+          }
+          var movementSlotId = Number(movementCell.dataset.slot);
           var pps = window.xyWalkPps(up);
-          if (!pps) { write('POST', '/movement-rate', { active: false }); return; }
-          var cols = null;
-          try {
-            var pal = JSON.parse((slotsEl && slotsEl.dataset.palette) || '[]');
-            if (pal.length) cols = pal.map(function (c) { return hsvToRgb6(c.h, c.s, c.v); });
-          } catch (e) {
-            fail('xy walk', 'the palette is unreadable: ' + e.message);
-            write('POST', '/movement-rate', { active: false });
-            return;
-          }
-          if (!cols) {
-            fail('xy walk', 'the palette is empty; refusing to move with engine-owned colours');
-            write('POST', '/movement-rate', { active: false });
-            return;
-          }
-          var body = { active: true, mode: 'whole_group', pixelsPerSecond: pps, amount: 1 };
-          if (cols) body.colors = cols;
-          write('POST', '/movement-rate', body);
+          var movementPath = '/global-effect-slots/' + movementSlotId + '/movement-rate';
+          var body = pps
+            ? { active: true, pixelsPerSecond: pps }
+            : { active: false };
+          write('POST', movementPath, body).then(function () {
+            publishEffectTruth(movementCell, pps ? 'active' : 'inactive');
+          });
         });
       }
     };
@@ -3151,7 +3177,18 @@
     document.addEventListener('xyaxischange', function (ev) {
       var to = (ev.detail && ev.detail.axis) || 'walk';
       send('xyHandoff', function () {
-        write('POST', to === 'strobe' ? '/movement-rate' : '/strobe-rate', { active: false });
+        if (to !== 'strobe') {
+          write('POST', '/strobe-rate', { active: false });
+          return;
+        }
+        var movementCell = xyMovementCell();
+        if (!movementCell) return;
+        var slotId = Number(movementCell.dataset.slot);
+        write('POST', '/global-effect-slots/' + slotId + '/movement-rate', {
+          active: false,
+        }).then(function () {
+          publishEffectTruth(movementCell, 'inactive');
+        });
       });
     });
 

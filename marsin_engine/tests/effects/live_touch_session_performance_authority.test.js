@@ -336,6 +336,24 @@ test('same-owner Edit to Performance to Edit transition reseeds only on mode cha
       'POST', '/global-effect-slots/9/activate', undefined, ownerHeaders,
     );
     assert.equal(overlayOn.status, 200, JSON.stringify(overlayOn.data));
+    const tunedOverlay = await h.api(
+      'POST',
+      '/global-effect-slots/9/movement-rate',
+      { active: true, pixelsPerSecond: 17.5 },
+      ownerHeaders,
+    );
+    assert.equal(tunedOverlay.status, 200, JSON.stringify(tunedOverlay.data));
+    assert.equal(tunedOverlay.data.active, true);
+    assert.equal(tunedOverlay.data.pixelsPerSecond, 17.5,
+      'the Effect Control WALK axis must tune the running private overlay in Performance');
+    assert.equal(tunedOverlay.data.liveTouchOverlayPattern.slotId, 9);
+    assert.equal(tunedOverlay.data.liveTouchOverlayPattern.requestedActive, true);
+    const slotsAfterTune = await h.api(
+      'GET', '/global-effect-slots', undefined, ownerHeaders,
+    );
+    assert.equal(slotsAfterTune.data.slots.find(slot => slot.slotId === 9)
+      .paramsOverride?.pixelsPerSecond, undefined,
+    'runtime WALK tuning must not reconfigure the private Performance slot');
     const revisionBeforeRenewal = afterEnterState.data.liveTouch.sessionRevision;
     const renewed = await renewOwner(ws);
     assert.equal(renewed.sessionRevision, revisionBeforeRenewal,

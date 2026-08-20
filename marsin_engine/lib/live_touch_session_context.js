@@ -483,6 +483,7 @@ export class LiveTouchSessionContext {
     return ROUTED_EXACT_PATHS.has(url)
       || /^\/group-fixed-colors\/.+/.test(url)
       || /^\/global-effect-slots\/\d+$/.test(url)
+      || /^\/global-effect-slots\/\d+\/movement-rate$/.test(url)
       || /^\/global-effect-slots\/\d+\/intensity(?:\/reset)?$/.test(url)
       || /^\/global-effect-slots\/\d+\/mode(?:\/cycle)?$/.test(url)
       || /^\/global-effect-slots\/\d+\/(press|activate|deactivate|trigger|toggle|down|up)$/
@@ -873,6 +874,62 @@ export class LiveTouchSessionContext {
         const slot = slots.patchSlot(slotId, data);
         this._syncSelectedOverlayFromSlot();
         send(200, { slot });
+      });
+      return true;
+    }
+    const movementRateMatch = url.match(/^\/global-effect-slots\/(\d+)\/movement-rate$/);
+    if (method === 'POST' && movementRateMatch) {
+      withBody(data => {
+        const slotId = Number(movementRateMatch[1]);
+        const slot = slots.getSlot(slotId);
+        if (!slot) throw new Error(`Invalid slotId: ${slotId}`);
+        if (slot.effectId !== 'movementTrace') {
+          const error = new Error(`Slot ${slotId} is not a movement effect`);
+          error.code = 'LIVE_TOUCH_MOVEMENT_SLOT_REQUIRED';
+          error.status = 409;
+          throw error;
+        }
+        const active = data.active !== false;
+        const actionNowMs = nowMs();
+        const resolved = resolveSlotBinding({ slot });
+        const params = stripMovementColorOverrides(resolved.params);
+        if (active) {
+          if (!Object.hasOwn(data, 'pixelsPerSecond')) {
+            throw new Error('body must include pixelsPerSecond while movement is active');
+          }
+          params.pixelsPerSecond = strictNumber(
+            data.pixelsPerSecond, 0.05, 120, null, 'movement slot pixelsPerSecond',
+          );
+          if (this.overlayPattern.selectedSlotId === slotId
+              && this.overlayPattern.requestedActive) {
+            this.overlayPattern.updateParams(params);
+          } else {
+            this.overlayPattern.dispatch({
+              slotId,
+              presetId: resolved.presetId,
+              params,
+              action: 'activate',
+              behavior: resolved.behavior,
+              nowMs: actionNowMs,
+            });
+          }
+        } else {
+          this.overlayPattern.dispatch({
+            slotId,
+            presetId: resolved.presetId,
+            params,
+            action: 'deactivate',
+            behavior: resolved.behavior,
+            nowMs: actionNowMs,
+          });
+        }
+        send(200, {
+          status: 'ok',
+          slotId,
+          active,
+          pixelsPerSecond: active ? params.pixelsPerSecond : null,
+          liveTouchOverlayPattern: this.overlayPattern.getStatus(actionNowMs),
+        });
       });
       return true;
     }

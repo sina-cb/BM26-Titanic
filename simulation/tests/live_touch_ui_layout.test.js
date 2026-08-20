@@ -2247,6 +2247,116 @@ test('real Performance effect buttons reconcile toggle and hold actions from poi
   }
 });
 
+test('Performance Effect Control WALK tunes the active movement slot without an operator error', { timeout: 45_000 }, async () => {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await openPanel(page, { width: 1024, height: 682, deviceScaleFactor: 1 });
+    await page.evaluate(async (slots) => {
+      window.__walkRequests = [];
+      window.__walkActiveSlots = {};
+      window.__walkErrors = [];
+      document.addEventListener('panelerror', event => {
+        window.__walkErrors.push(event.detail && event.detail.message);
+      });
+      window.fetch = async (input, options = {}) => {
+        const path = String(input).slice(String(input).indexOf(':6968') + 5);
+        const method = options.method || 'GET';
+        const body = options.body ? JSON.parse(options.body) : null;
+        window.__walkRequests.push({ method, path, body });
+        if (path === '/status') {
+          return new Response(JSON.stringify({
+            liveTouchProtocolVersion: 2,
+            performanceMode: { active: true },
+          }), { status: 200 });
+        }
+        if (path === '/global-effect-slots') {
+          return new Response(JSON.stringify({ slots }), { status: 200 });
+        }
+        if (path === '/global-effect-slots/status') {
+          return new Response(JSON.stringify({
+            slots: slots.map(slot => ({
+              ...slot,
+              active: window.__walkActiveSlots[slot.slotId] === true,
+            })),
+            controller: {},
+          }), { status: 200 });
+        }
+        if (path === '/global-effect-slots/9/press') {
+          window.__walkActiveSlots[9] = !window.__walkActiveSlots[9];
+          return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+        }
+        if (path === '/global-effect-slots/9/movement-rate') {
+          window.__walkActiveSlots[9] = body.active !== false;
+          return new Response(JSON.stringify({
+            status: 'ok',
+            slotId: 9,
+            active: body.active !== false,
+            pixelsPerSecond: body.pixelsPerSecond ?? null,
+          }), { status: 200 });
+        }
+        if (path === '/globals') {
+          return new Response(JSON.stringify({ effects: {} }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+      };
+      window.__wire.phase = 'armed';
+      window.__wire.armed = true;
+      document.getElementById('arm').classList.add('is-armed');
+      document.dispatchEvent(new CustomEvent('touchtransportstate', {
+        detail: { online: true, phase: 'armed', armed: true, leaseAcquired: true },
+      }));
+      window.__wire._acceptPerformanceMode(true);
+    }, CANONICAL_PERFORMANCE_SLOTS);
+    await page.waitForFunction(() => {
+      const face = document.querySelector('#fxGrid .fx-cell[data-slot="9"] [data-role=fxface]');
+      return face && !face.disabled
+        && face.closest('.fx-cell').dataset.performanceBound === 'true';
+    });
+
+    await pointerDownUp(page, '#fxGrid .fx-cell[data-slot="9"] [data-role=fxface]');
+    await page.waitForFunction(() => document.querySelector(
+      '#fxGrid .fx-cell[data-slot="9"]'
+    ).classList.contains('is-on'));
+    await page.click('#modeToggle button[data-mode="effect"]');
+    const pad = await page.$eval('#xyPad', element => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    });
+    await page.mouse.move(pad.left + pad.width * 0.62, pad.top + pad.height * 0.28);
+    await page.mouse.down();
+    await page.mouse.move(pad.left + pad.width * 0.68, pad.top + pad.height * 0.18, {
+      steps: 3,
+    });
+    await page.mouse.up();
+    await page.waitForFunction(() => window.__walkRequests.some(request =>
+      request.path === '/global-effect-slots/9/movement-rate'
+      && request.body && request.body.active === true));
+
+    const result = await page.evaluate(() => ({
+      requests: window.__walkRequests,
+      errors: window.__walkErrors,
+      active: document.querySelector('#fxGrid .fx-cell[data-slot="9"]')
+        .classList.contains('is-on'),
+    }));
+    const tuning = result.requests.filter(request =>
+      request.path === '/global-effect-slots/9/movement-rate'
+      && request.body && request.body.active === true);
+    assert.ok(tuning.length >= 1, 'the physical pad gesture must issue runtime movement tuning');
+    assert.ok(tuning.every(request => Number.isFinite(request.body.pixelsPerSecond)
+      && request.body.pixelsPerSecond >= 0.5),
+    `WALK requests must carry the page curve's finite speed: ${JSON.stringify(tuning)}`);
+    assert.equal(result.requests.some(request => request.path === '/movement-rate'), false,
+      'the retired route must be unreachable from the Effect Control gesture');
+    assert.deepEqual(result.errors, [],
+      `the complete Performance gesture must stay error-free: ${JSON.stringify(result.errors)}`);
+    assert.equal(result.active, true, 'runtime tuning must preserve the active effect state');
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
 test('Performance effects require all canonical authoritative slots and send actions without configuration writes', { timeout: 30_000 }, async () => {
   const browser = await puppeteer.launch({ headless: true });
   try {

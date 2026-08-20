@@ -664,6 +664,16 @@ test('disarm cleanup uses overlay slot actions and proves no effect state remain
     'cleanup must release its guard so a clean retry remains idempotent');
 });
 
+test('Effect Control WALK tunes the active private movement slot without the retired route', () => {
+  assert.doesNotMatch(wire, /write\('POST', '\/movement-rate'/,
+    'the Effect Control pad must never call the retired owner-scoped movement route');
+  assert.match(wire,
+    /movementPath = '\/global-effect-slots\/' \+ movementSlotId \+ '\/movement-rate'/,
+    'WALK must tune the active authoritative movement slot');
+  assert.match(wire, /Turn on a movement effect before tuning WALK speed\./,
+    'touching WALK without an active movement effect must explain the required action calmly');
+});
+
 test('strict ARM assertions are authorized during the arming phase', () => {
   assert.match(wire, /state\.phase === 'armed' \|\| \(strict === true && state\.phase === 'arming'\)/);
   assert.match(wire, /function pushEffectColours\(strict\)[\s\S]*?liveStateCanWrite\(strict\)/);
