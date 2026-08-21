@@ -31,6 +31,13 @@ import {
   VIEW_MODE_CH, VIEW_MODE_CC,
   isDeviceHello, DEVICE_HELLO_CC,
 } from '../vsn1_feedback';
+import {
+  projectVsn1Layout,
+  VSN1_LAYOUT_ACK_CC,
+  VSN1_LAYOUT_COLOR_CH,
+  VSN1_LAYOUT_COMMIT_CC,
+  VSN1_LAYOUT_NAME_CH,
+} from '../vsn1_layout_feedback';
 
 const rawVsn1 = yaml.load(readFileSync(join(__dirname, '../../../midi_profiles/vsn1.yaml'), 'utf8'));
 
@@ -195,13 +202,17 @@ const baseSnap: MidiEngineSnapshot = {
   colorPalettes: [], focused: null, syncOwnedKeys: new Set<string>(),
 };
 
-function setup(snap: () => MidiEngineSnapshot = () => baseSnap) {
+function setup(
+  snap: () => MidiEngineSnapshot = () => baseSnap,
+  now?: () => number,
+) {
   const transport = new FakeTransport(vsn1Endpoints);
   const api = makeApi();
   const profile = validateProfile(rawVsn1, 'vsn1.yaml');
   const manager = new MidiManager({
     profiles: [profile], transportFactory: () => transport, api,
     getSnapshot: snap, defaultContext: 'deck', coalesceMs: 0, reconnectDebounceMs: 0,
+    ...(now ? { now } : {}),
   });
   return { transport, api, manager };
 }
@@ -536,6 +547,39 @@ describe('manager — downward propagation (UI/engine/device → device)', () =>
     manager.onEngineUpdate();
     expect(transport.sent).toContainEqual([0xb0 | FB_VALUE_CH, 32, 127]);       // value → 1.0
     expect(transport.sent).toContainEqual([0xb0 | FB_MODE_CH, 32, 1]);          // mode 'down' idx 1
+  });
+
+  it('does not echo a stale engine intensity backward during a VSN1 turn', async () => {
+    let clock = 1000;
+    let snap: MidiEngineSnapshot = { ...baseSnap };
+    const { manager, transport } = setup(() => snap, () => clock);
+    await manager.start();
+    transport.sent.length = 0;
+
+    // Grid predicts slot 1 at 100/127 and sends that absolute value.
+    transport.emit([0xb0, 32, 100], clock);
+    await drain();
+    // A lagging WS frame still carries 0.5. Feedback must preserve Grid's
+    // optimistic 100 rather than pulling its accumulator backward to 64.
+    manager.onEngineUpdate();
+    expect(transport.sent).toContainEqual([0xb0 | FB_VALUE_CH, 32, 100]);
+
+    transport.sent.length = 0;
+    snap = { ...baseSnap, globalEffectSlots: [
+      { ...baseSnap.globalEffectSlots[0], intensity: 100 / 127 },
+      baseSnap.globalEffectSlots[1],
+    ] };
+    manager.onEngineUpdate();
+    expect(transport.sent).toHaveLength(0);
+
+    // The guard is bounded: if the engine never agrees, its authority resumes.
+    clock += 751;
+    snap = { ...baseSnap, globalEffectSlots: [
+      { ...baseSnap.globalEffectSlots[0], intensity: 0.25 },
+      baseSnap.globalEffectSlots[1],
+    ] };
+    manager.onEngineUpdate();
+    expect(transport.sent).toContainEqual([0xb0 | FB_VALUE_CH, 32, 32]);
   });
 
   it('a UI-origin PAGE change re-sends the FULL frame with the new page window', async () => {
@@ -940,6 +984,20 @@ describe('manager — VSN1 select cue (LCD follows the pressed key)', () => {
 // (intensity/mode/active) must NOT trigger the full re-blast.
 
 describe('manager — layout edit → full feedback re-send (bug #3)', () => {
+  it('reports success only after the VSN1 ACKs the matching layout revision', async () => {
+    const { manager, transport } = setup();
+    await manager.start();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/awaiting controller/);
+
+    const revision = projectVsn1Layout(
+      baseSnap.effectsPage ?? 0,
+      baseSnap.globalEffectSlots,
+    ).revision;
+    transport.emit([0xb0, VSN1_LAYOUT_ACK_CC, revision]);
+
+    expect(manager.getStatuses()[0].lastEvent).toBe('VSN1 layout applied from iPad');
+  });
+
   it('a slot SWAP (effectId change) re-sends the full frame', async () => {
     let snap: MidiEngineSnapshot = { ...baseSnap, effectsPage: 0, globalEffectSlots: [
       { slot: 1, active: true, behavior: 'toggle', effectId: 'strobe', label: 'A', intensity: 0.5, mode: 'up', modeValues: ['up', 'down'] },
@@ -960,6 +1018,13 @@ describe('manager — layout edit → full feedback re-send (bug #3)', () => {
     expect(transport.sent).toContainEqual([0x90 | FB_ACTIVE_CH, 32, 127]);       // slot 1 active re-sent
     expect(transport.sent).toContainEqual([0xb0 | FB_VALUE_CH, 32, Math.round(0.5 * 127)]);
     expect(transport.sent).toContainEqual([0xb0 | FB_PAGE_CH, 40, 0]);           // page re-sent
+    // The new slot name itself is streamed to the directly attached VSN1, then
+    // committed atomically. Slot 2 starts at name controller 10.
+    expect(transport.sent).toContainEqual([0xb0 | VSN1_LAYOUT_NAME_CH, 10, 'C'.charCodeAt(0)]);
+    expect(transport.sent.some((message) => (
+      message[0] === (0xb0 | VSN1_LAYOUT_COLOR_CH)
+      && message[1] === VSN1_LAYOUT_COMMIT_CC
+    ))).toBe(true);
   });
 
   it('a slot CLEAR (enabled:false → empty effectId in the snapshot) re-sends the full frame', async () => {

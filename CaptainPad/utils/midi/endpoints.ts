@@ -7,13 +7,15 @@
 // the name, or the requested port index doesn't exist among the matches, we
 // THROW with the endpoints actually found — never auto-pick a different one.
 //
-// A device may additionally pin an OPTIONAL exact name (`nameEquals`): when set,
-// only endpoints whose name === it match (a near-name like "MIDIIN2 (APC …)"
-// no longer counts), so a spare identical unit enumerated first can't silently
-// shift portIndex 0 onto the wrong device. And when MORE than two same-name
-// matches enumerate (a second identical device really is attached), we surface a
-// LOUD `notes[]` entry — the portIndex pin is then a guess and the operator
-// must see that, not have it hidden.
+// A device may additionally pin one exact name (`nameEquals`) or an exact alias
+// allowlist (`nameEqualsAny`). The latter handles platform-specific driver names
+// without weakening the match into a substring fallback (VSN1: Windows/Web MIDI
+// = "Intech Grid MIDI device", iPadOS/CoreMIDI = "Grid"). A near-name like
+// "MIDIIN2 (APC …)" no longer counts, so a spare identical unit enumerated first
+// can't silently shift portIndex 0 onto the wrong device. And when MORE than two
+// same-name matches enumerate (a second identical device really is attached), we
+// surface a LOUD `notes[]` entry — the portIndex pin is then a guess and the
+// operator must see that, not have it hidden.
 
 import { MidiEndpoint } from './transport';
 import { DeviceDef } from './profile';
@@ -48,10 +50,23 @@ const AMBIGUITY_THRESHOLD = 2;
  *  substring test (backward-compatible). */
 function nameMatches(device: DeviceDef, endpoints: MidiEndpoint[], kind: 'source' | 'destination'): MidiEndpoint[] {
   const all = endpoints.filter((e) => e.kind === kind);
-  const matches = device.nameEquals !== undefined
-    ? all.filter((e) => e.name === device.nameEquals)
-    : all.filter((e) => e.name.includes(device.nameContains));
+  const matches = device.nameEqualsAny !== undefined
+    ? all.filter((e) => device.nameEqualsAny!.includes(e.name))
+    : device.nameEquals !== undefined
+      ? all.filter((e) => e.name === device.nameEquals)
+      : all.filter((e) => e.name.includes(device.nameContains));
   return matches.sort((a, b) => a.portIndex - b.portIndex);
+}
+
+/** True when at least one endpoint on either side satisfies the device's
+ *  declared name policy. The manager uses this for its grey "not attached"
+ *  gate before full source+destination resolution. Keeping it here is
+ *  important: duplicating a bare `nameContains` check in the manager would
+ *  discard platform exact aliases (such as iPadOS VSN1 = "Grid") before
+ *  `resolveEndpoints` ever gets a chance to open them. */
+export function hasMatchingEndpoint(device: DeviceDef, endpoints: MidiEndpoint[]): boolean {
+  return nameMatches(device, endpoints, 'source').length > 0
+    || nameMatches(device, endpoints, 'destination').length > 0;
 }
 
 function pick(
@@ -65,9 +80,11 @@ function pick(
   const kindWord = kind === 'source' ? 'input' : 'output';
   // Name the criterion in the error so an exact-pin miss reads differently from
   // a substring miss (a "MIDIIN2 (…)" near-name failing an exact pin is common).
-  const criterion = device.nameEquals !== undefined
-    ? `exactly matches "${device.nameEquals}"`
-    : `name contains "${device.nameContains}"`;
+  const criterion = device.nameEqualsAny !== undefined
+    ? `exactly matches one of ${device.nameEqualsAny.map((name) => `"${name}"`).join(', ')}`
+    : device.nameEquals !== undefined
+      ? `exactly matches "${device.nameEquals}"`
+      : `name contains "${device.nameContains}"`;
   if (matches.length === 0) {
     const seen = all.map((e) => `"${e.name}"`).join(', ') || '(none)';
     throw new EndpointResolutionError(
@@ -91,7 +108,7 @@ function ambiguityNote(device: DeviceDef, endpoints: MidiEndpoint[], kind: 'sour
   const matches = nameMatches(device, endpoints, kind);
   if (matches.length <= AMBIGUITY_THRESHOLD) return null;
   const kindWord = kind === 'source' ? 'input' : 'output';
-  const label = device.nameEquals ?? device.nameContains;
+  const label = device.nameEqualsAny?.join('" or "') ?? device.nameEquals ?? device.nameContains;
   return (
     `${device.label}: ${matches.length} ${kindWord} ports match "${label}" ` +
     `(expected 1-2) — a second identical device may be attached; port index ` +

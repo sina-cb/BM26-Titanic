@@ -70,6 +70,44 @@ describe('MidiManager (integration, fake transport)', () => {
     expect(s.sourceName).toBe('APC mini mk2');
   });
 
+  it('connects through an exact platform alias instead of discarding it at the presence gate', async () => {
+    const aliasProfile = validateProfile({
+      device: {
+        id: 'vsn1',
+        label: 'Intech VSN1',
+        nameContains: 'Intech Grid MIDI device',
+        nameEqualsAny: ['Intech Grid MIDI device', 'Grid'],
+        sourcePort: 0,
+        destinationPort: 0,
+      },
+      controls: [
+        {
+          id: 'key_1',
+          match: { type: 'note', channel: 0, notes: [32] },
+          action: { kind: 'globalEffectSlot', slot: 1 },
+        },
+      ],
+    });
+    const transport = new FakeTransport([
+      { id: 'grid-in', name: 'Grid', portIndex: 0, kind: 'source' },
+      { id: 'grid-out', name: 'Grid', portIndex: 0, kind: 'destination' },
+    ]);
+    const manager = new MidiManager({
+      profiles: [aliasProfile],
+      transportFactory: () => transport,
+      api: makeApi(),
+      getSnapshot: () => baseSnap,
+    });
+
+    await manager.start();
+
+    expect(manager.getStatuses()[0]).toMatchObject({
+      kind: 'connected',
+      sourceName: 'Grid',
+      destinationName: 'Grid',
+    });
+  });
+
   it('dispatches a fader CC to updateParamCenter with the scaled value', async () => {
     const { manager, api, transport } = setup(baseSnap);
     await manager.start();
@@ -1976,5 +2014,55 @@ describe('MidiManager — MFT UX v2 (row-0 globals + acceleration + LED resync)'
       expect(transport.sent).toContainEqual([0xb0, 1, Math.round((200 / 360) * 127)]);
       expect(transport.sent).not.toContainEqual([0xb0, 1, Math.round((optimisticDeg / 360) * 127)]);
     });
+  });
+});
+
+describe('MidiManager — endpoint-ambiguity notes on ControllerStatus', () => {
+  // A second identical APC unit produces THREE same-name matches on each
+  // side (the driver enumerates "APC mini mk2", "MIDIIN2 (APC mini mk2)",
+  // "APC mini mk2"). resolveEndpoints still resolves — the profile pins
+  // sourcePort/destinationPort 0 — but the pin is a guess among identical
+  // devices. That is a PERSISTENT fact of the enumeration; the manager
+  // routes it to `ControllerStatus.notes` (NOT `warning`, which is meant
+  // for "your writes just failed" and auto-clears).
+  const AMBIGUOUS_APC: MidiEndpoint[] = [
+    { id: 'in-0', name: 'APC mini mk2', portIndex: 0, kind: 'source' },
+    { id: 'in-1', name: 'MIDIIN2 (APC mini mk2)', portIndex: 1, kind: 'source' },
+    { id: 'in-2', name: 'APC mini mk2', portIndex: 2, kind: 'source' },
+    { id: 'out-0', name: 'APC mini mk2', portIndex: 0, kind: 'destination' },
+    { id: 'out-1', name: 'MIDIOUT2 (APC mini mk2)', portIndex: 1, kind: 'destination' },
+    { id: 'out-2', name: 'APC mini mk2', portIndex: 2, kind: 'destination' },
+  ];
+
+  it("surfaces resolveEndpoints ambiguity as `status.notes` (persistent, distinct from `warning`)", async () => {
+    const { manager } = setup(baseSnap, AMBIGUOUS_APC);
+    await manager.start();
+    const s = manager.getStatuses()[0];
+    expect(s.kind).toBe('connected');
+    expect(s.notes).toBeDefined();
+    expect(s.notes!.length).toBeGreaterThan(0);
+    for (const note of s.notes!) {
+      expect(note).toMatch(/second identical device|ports match/i);
+    }
+    // Warnings are a SEPARATE, non-sticky signal — nothing should have set
+    // one just because the enumeration was ambiguous.
+    expect(s.warning).toBeUndefined();
+  });
+
+  it("clears `status.notes` when the ambiguity goes away on the next connect pass", async () => {
+    const { manager } = setup(baseSnap, AMBIGUOUS_APC);
+    await manager.start();
+    expect(manager.getStatuses()[0].notes).toBeDefined();
+    // Simulate a replug that removes the third unit — status recomputes and
+    // notes must drop, otherwise a stale "second identical device" line would
+    // hover next to a clean 1-2 port enumeration.
+    // (setup() rebuilds a new manager with fewer endpoints; no reconnect API
+    // is exercised here — the operator flow is identical after a replug +
+    // manager restart because reconnect calls the same private path.)
+    const { manager: manager2 } = setup(baseSnap, fullEndpoints);
+    await manager2.start();
+    const s2 = manager2.getStatuses()[0];
+    expect(s2.kind).toBe('connected');
+    expect(s2.notes).toBeUndefined();
   });
 });

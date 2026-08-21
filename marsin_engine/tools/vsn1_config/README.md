@@ -475,7 +475,12 @@ budget-checks each against the 909-char limit, writes
 the four patches via `restore_config.cjs --live` child processes, pages
 3→2→1→0 (page 0 ends active), failing loudly on the first bad exit.
 **Runtime value/mode/active changes are MIDI feedback, never layout deploys**
-(dossier: knob twists never cause flash writes).
+(dossier: knob twists never cause flash writes). CaptainPad also has a
+direct-iPad runtime layout stream for a VSN1 connected through CoreMIDI:
+reserved CC channels update the active page's names, colors, behavior, and mode
+labels, followed by an atomic commit. `layout_rx.lua` receives that stream.
+Serial remains the one-time persistent/base-Lua deployment path; runtime layout
+state is re-sent after the LCD's VM-ready hello.
 
 ### Layout schema (version 1, JSON)
 

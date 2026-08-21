@@ -1,8 +1,14 @@
-// 🎹 APC header chip — same visual language as the engine connection badge
+// 🎹 MIDI header chip — same visual language as the engine connection badge
 // (DeckTopBar / mixer header). Colour encodes MIDI controller state:
 //   grey  = no device / not available on this platform
-//   green = a controller is connected
+//   green = one or more controllers connected
 //   red   = error (tap to read the message)
+//
+// The label reads `🎹 MIDI` (not `🎹 APC`) — CaptainPad runs three profiles
+// concurrently (APC mini mk2 + MIDI Fighter Twister + Intech VSN1) and a
+// controller-specific label misleads the operator when THAT one is unplugged
+// but the others are live. When more than one controller is connected we
+// show the count so a glance tells you how many surfaces are up (`2/3`).
 //
 // Reads the module store via useMidiStatus(); it does NOT drive the lifecycle
 // (that's useMidiControl in RootShell), so it is safe to render anywhere.
@@ -14,6 +20,11 @@ import { useRouter } from 'expo-router';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette, Radius, Type } from '@/constants/theme';
 import { useMidiStatus, midiChipState } from '@/hooks/useMidiControl';
+import { midiChipLabel } from '@/components/midi_chip_label';
+
+// Re-export so the header-layout source-text test can find `midiChipLabel`
+// in this file without a second import path.
+export { midiChipLabel } from '@/components/midi_chip_label';
 
 export function MidiStatusChip() {
   const palette = usePalette();
@@ -23,6 +34,12 @@ export function MidiStatusChip() {
   const isPortrait = width < height;
   const state = useMidiStatus();
   const chip = midiChipState(state);
+  const connectedCount = state.statuses.filter((s) => s.kind === 'connected').length;
+  // Count only detected controllers. Configured-but-unplugged profiles are
+  // intentionally absent from the UI; "MIDI 1/3" while only one physical
+  // controller is present makes the healthy setup look incomplete.
+  const totalCount = state.statuses.filter((s) => s.kind !== 'disconnected').length;
+  const label = midiChipLabel(chip.kind, connectedCount, totalCount);
 
   // `tertiary` is the palette's "connected / auto-driven" green — the SAME
   // token the engine CONNECTED badge two chips to the left now wears (docs/54
@@ -47,7 +64,7 @@ export function MidiStatusChip() {
     >
       <View style={[styles.dot, { backgroundColor: color }]} />
       {!isPortrait && (
-        <Text numberOfLines={1} style={[styles.label, { color }]}>🎹 APC</Text>
+        <Text numberOfLines={1} style={[styles.label, { color }]}>{label}</Text>
       )}
     </TouchableOpacity>
   );

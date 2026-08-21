@@ -53,6 +53,13 @@ where it persists until the next change.
   (`eventrx_cb`), so knob twists never trigger flash writes.
 - Deploy failures fail loudly (device unplugged / port busy) and are
   reported in engine status; no silent retry loops.
+- **Direct-iPad runtime path:** when the VSN1 is attached to CaptainPad through
+  iPad CoreMIDI, CaptainPad streams the active page's names, colors, behavior,
+  and mode labels over reserved MIDI CC channels and commits them atomically.
+  This immediately mirrors layout edits without requiring the engine computer
+  to own the controller's USB serial port. The serial deploy remains the
+  persistent/base-Lua installation path; the MIDI layout is re-sent after every
+  device VM-ready hello and therefore survives page loads and reconnects.
 
 ### CaptainPad UI
 - Effects panel gains a **page switcher** (4 pages × 8 slots). Follows +

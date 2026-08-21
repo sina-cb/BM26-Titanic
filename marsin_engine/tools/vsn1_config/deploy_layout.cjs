@@ -331,7 +331,9 @@ function slotAt(layout, page, key) {
 // unchanged — only the on-device text shortens), NOT a silent behavioral
 // fallback. It throws only if the tightest rung (6-char names, no mode tables)
 // still overflows — a genuine "too many slots on one page" error.
-function compileLcdInitShrink({ compile, sub, lcdInitTpl, page, names, modes, luaColors, maxLength }) {
+function compileLcdInitShrink({
+  compile, sub, lcdInitTpl, page, names, modes, luaColors, helloCc, maxLength,
+}) {
   const truncate = (s, cap) => String(s).slice(0, cap);
   // Per-slot total mode-name chars — picks which slots to drop first (longest).
   const modeWeight = modes.map((mm) => mm.reduce((t, x) => t + String(x).length, 0));
@@ -364,7 +366,12 @@ function compileLcdInitShrink({ compile, sub, lcdInitTpl, page, names, modes, lu
     const luaModes = `{${dispModes.map((mm) => `{${mm.map((x) => `"${x}"`).join(',')}}`).join(',')}}`;
     try {
       const lcdInit = compile(
-        sub(lcdInitTpl, { __NAMES__: luaNames, __COLORS__: luaColors, __MODES__: luaModes }),
+        sub(lcdInitTpl, {
+          __NAMES__: luaNames,
+          __COLORS__: luaColors,
+          __MODES__: luaModes,
+          __HCC__: helloCc,
+        }),
         `p${page} LCD INIT`,
       );
       if (r > 0) {
@@ -446,6 +453,11 @@ function buildLayout(gp, layout) {
     'encoder ENDLESS',
   );
   const systemInit = compile(readTpl('system_init.lua'), 'system INIT (ebar+wdw)');
+  const layoutRx = compile(readTpl('layout_rx.lua'), 'button 9 INIT (runtime layout receiver)');
+  const valueRx = compile(
+    sub(readTpl('value_rx.lua'), { __FCH__: m.feedbackChannel, __SB__: m.slotBase }),
+    'button 10 INIT (encoder value echo receiver)',
+  );
   const keyBcToggle = compile(readTpl('key_bc_toggle.lua'), 'key BC (toggle, sticky LED)');
   const encoderPress = compile(readTpl('encoder_press.lua'), 'encoder BC (mode cycle)');
   const sideButton = compile(readTpl('side_button.lua'), 'side-button BC');
@@ -454,7 +466,7 @@ function buildLayout(gp, layout) {
   const keyInitTpl = readTpl('key_init.lua');
   const lcdInitTpl = readTpl('lcd_init.lua');
 
-  const budgets = [encoderInit, encoderTurn, encoderPress, sideButton, lcdDraw, systemInit, keyBcToggle];
+  const budgets = [encoderInit, encoderTurn, encoderPress, sideButton, lcdDraw, systemInit, layoutRx, valueRx, keyBcToggle];
   const patches = [];
 
   for (let page = 0; page < PAGES; page++) {
@@ -524,6 +536,15 @@ function buildLayout(gp, layout) {
         elementIndex: el,
         elementType: 'button',
         events: [
+          // Element 9 owns layout transactions; element 10 owns host-value echo
+          // reconciliation. Each receiver is registered exactly once so shared
+          // globals are never mutated repeatedly by duplicate callbacks.
+          ...(el === 9
+            ? [{ eventType: 0, eventKey: 'INIT', actionLength: layoutRx.device.length, shortLua: layoutRx.device }]
+            : []),
+          ...(el === 10
+            ? [{ eventType: 0, eventKey: 'INIT', actionLength: valueRx.device.length, shortLua: valueRx.device }]
+            : []),
           { eventType: 3, eventKey: 'BC', actionLength: sideButton.device.length, shortLua: sideButton.device },
         ],
       });
@@ -544,7 +565,8 @@ function buildLayout(gp, layout) {
     // of silently keeping a stale screen; it throws only if the tightest rung
     // still overflows (Codex P0 fail-loud; review C1 2026-07-10).
     const lcdInit = compileLcdInitShrink({
-      compile, sub, lcdInitTpl, page, names, modes, luaColors, maxLength,
+      compile, sub, lcdInitTpl, page, names, modes, luaColors,
+      helloCc: m.helloCc, maxLength,
     });
     budgets.push(lcdInit);
 

@@ -27,6 +27,7 @@ import { opError } from '@/utils/op_dialog';
 import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
+import { useMidiControllerConnected } from '@/hooks/useMidiControl';
 
 // BPM-sync "auto-driven" accent (green). Lives here as a local
 // constant so this file doesn't depend on a brand-new theme token
@@ -104,6 +105,7 @@ function useAudioPlotSelection(screen: 'deck' | 'mixer') {
 }
 
 export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optimizerSlot, hideAudioRow = false }: CPCControlsProps = {}) => {
+  const mftConnected = useMidiControllerConnected('mft');
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
@@ -349,7 +351,9 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false, optim
           value={speedDisplay}
           fillColor={speedFill}
           badge={speedBadge}
-          leading={<KnobPill knobNumber={globalKnobNumber('speed')} />}
+          leading={mftConnected
+            ? <KnobPill knobNumber={globalKnobNumber('speed')} />
+            : undefined}
           disabled={disabled}
           onChange={(v) => update('speed', v)}
         />

@@ -26,6 +26,7 @@ import { Type } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
+import { useMidiControllerConnected } from '@/hooks/useMidiControl';
 
 export const DeckHueRow: React.FC<{
   /** The deck channel's live hue in degrees [0,360) (engine F-hue). */
@@ -39,6 +40,7 @@ export const DeckHueRow: React.FC<{
   disabled?: boolean;
 }> = ({ hue, onHueChange, disabled = false }) => {
   const C = usePalette();
+  const mftConnected = useMidiControllerConnected('mft');
   const degrees = Number.isFinite(hue) ? hue : 0;
 
   const onDegreesChange = useCallback((deg: number) => {
@@ -64,7 +66,9 @@ export const DeckHueRow: React.FC<{
           per-channel hue (push = reset to 0°). On the mixer tab the same
           knob drives the FOCUSED channel's HUE trim, which wears its own
           badge there. */}
-      <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 6 }} />
+      {mftConnected
+        ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 6 }} />
+        : null}
       {/* The shared caps recipe (docs/54 §1.1) — the row label is the same
           object as every other 10pt caps label on the deck. */}
       <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, width: 40 }}>HUE</Text>

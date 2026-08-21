@@ -44,6 +44,10 @@ export interface MidiTransport {
   openDestination(id: string): Promise<void>;
   /** Send raw bytes to the opened destination (LED feedback). */
   send(bytes: number[]): void;
+  /** Optional high-volume extension. Implementations that support timestamped
+   *  pacing can send an atomic controller transaction without flooding its
+   *  receive queue; callers fall back to send() when absent. */
+  sendBatch?(messages: number[][], spacingMs: number): void;
   addListener(event: 'midiMessage', cb: (e: MidiMessageEvent) => void): MidiUnsubscribe;
   addListener(event: 'endpointsChanged', cb: () => void): MidiUnsubscribe;
   /** Release ports + listeners. Idempotent. (Lifecycle helper — the 5-call

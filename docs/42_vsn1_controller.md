@@ -151,6 +151,24 @@ the app + engine follow. App-side page changes already drive the device.
 `feedbackChannel` 1, `modeChannel` 2, `slotBase` 32 (keys = note 32+k),
 `pageCc` 40, `sbNoteBase` 41, `helloCc` 41, `selectCc` 42, `viewCc` 43.
 
+### Direct-iPad layout updates
+
+The persistent device Lua is still installed through the serial
+`deploy_layout.cjs` path. Once that base receiver is installed, a VSN1 attached
+directly to CaptainPad through iPad CoreMIDI receives layout edits without a
+serial re-flash:
+
+- CC channel 13 carries eight fixed-width effect names.
+- CC channel 14 carries colors, toggle/trigger behavior, and the atomic commit.
+- CC channel 15 carries fixed-width mode labels and per-slot mode counts.
+
+`layout_rx.lua` applies fields to shared device globals and repaints only on the
+commit CC. The LCD emits a VM-ready hello after its baked globals and the
+receiver are initialized; CaptainPad answers by re-sending the complete active
+page layout followed by live active/value/mode feedback. This keeps the EAS
+Expo/iPad path independent of generated `CaptainPad/ios/` source and of the
+engine computer's USB serial port.
+
 ### UI lab — rapid on-device iteration
 
 `marsin_engine/tools/vsn1_utils/ui_lab.cjs` flashes experimental LCD screens

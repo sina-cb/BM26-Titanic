@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { resolveEndpoints, EndpointResolutionError } from './endpoints';
+import {
+  resolveEndpoints,
+  hasMatchingEndpoint,
+  EndpointResolutionError,
+} from './endpoints';
 import { MidiEndpoint } from './transport';
 import { DeviceDef } from './profile';
 
@@ -78,6 +82,41 @@ describe('resolveEndpoints — nameEquals exact pin', () => {
       { id: 'out-b', name: 'APC mini mk2', portIndex: 1, kind: 'destination' },
     ];
     expect(resolveEndpoints({ ...pinned, sourcePort: 1, destinationPort: 1 }, twins).sourceId).toBe('in-b');
+  });
+});
+
+describe('resolveEndpoints — exact platform-name aliases', () => {
+  const vsn1: DeviceDef = {
+    id: 'vsn1',
+    label: 'Intech VSN1',
+    nameContains: 'Intech Grid MIDI device',
+    nameEqualsAny: ['Intech Grid MIDI device', 'Grid'],
+    sourcePort: 0,
+    destinationPort: 0,
+  };
+
+  it.each(['Intech Grid MIDI device', 'Grid'])(
+    'accepts the observed exact driver name %s',
+    (name) => {
+      const platformEndpoints: MidiEndpoint[] = [
+        { id: 'in', name, portIndex: 0, kind: 'source' },
+        { id: 'out', name, portIndex: 0, kind: 'destination' },
+      ];
+      const resolved = resolveEndpoints(vsn1, platformEndpoints);
+      expect(resolved.sourceId).toBe('in');
+      expect(resolved.destinationId).toBe('out');
+      expect(hasMatchingEndpoint(vsn1, platformEndpoints)).toBe(true);
+    },
+  );
+
+  it('rejects a generic near-name instead of silently broadening to contains("Grid")', () => {
+    const wrongGrid: MidiEndpoint[] = [
+      { id: 'in', name: 'Grid Controller', portIndex: 0, kind: 'source' },
+      { id: 'out', name: 'Grid Controller', portIndex: 0, kind: 'destination' },
+    ];
+    expect(hasMatchingEndpoint(vsn1, wrongGrid)).toBe(false);
+    expect(() => resolveEndpoints(vsn1, wrongGrid)).toThrow(EndpointResolutionError);
+    expect(() => resolveEndpoints(vsn1, wrongGrid)).toThrow(/exactly matches one of/);
   });
 });
 

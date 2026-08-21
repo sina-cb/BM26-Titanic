@@ -14,7 +14,8 @@
 // invariant: line endings are a storage detail and must never reach the device.
 //
 // It also PRINTS per-template headroom, because the margin here is genuinely
-// thin — the encoder INIT sits at 904/909, five characters from the ceiling.
+// thin — several templates have historically sat within five characters of
+// the ceiling, so every new receiver must remain visible in this report.
 // The next person who adds a line of Lua to that template needs to see that
 // number, not discover it on the playa.
 //
@@ -71,10 +72,17 @@ const PROFILES = [
   { file: 'side_button.lua', subs: {} },
   { file: 'lcd_draw.lua', subs: {} },
   { file: 'system_init.lua', subs: {} },
+  { file: 'layout_rx.lua', subs: {} },
+  { file: 'value_rx.lua', subs: { __FCH__: MIDI_SUBS.__FCH__, __SB__: MIDI_SUBS.__SB__ } },
   {
     file: 'lcd_init.lua',
     // The shrink ladder's tightest rung: 6-char names, no mode tables.
-    subs: { __NAMES__: nameTable(8, 6), __COLORS__: colorTable(8), __MODES__: modeTable(8, true) },
+    subs: {
+      __NAMES__: nameTable(8, 6),
+      __COLORS__: colorTable(8),
+      __MODES__: modeTable(8, true),
+      __HCC__: MIDI_SUBS.__HCC__,
+    },
     label: 'lcd_init.lua (ladder floor)',
   },
 ];
@@ -168,13 +176,14 @@ test('every .lua template in the tree is covered by a budget profile', () => {
 test('the encoder INIT compiles to its known-good size, not the CRLF-bug size', () => {
   // Two hard numbers from the July-15 known-good device dump
   // (tools/vsn1_config/dumps/layout_engine_page0.json): a healthy encoder INIT
-  // is 904/909. Under the CRLF bug this same template produced 5960. Pinning
+  // is 806/909 after slot-value feedback moved to value_rx.lua. Under the CRLF
+  // bug the older template produced 5960. Pinning
   // the healthy number catches BOTH a silent regrowth and a stripping
   // regression, in one assertion.
   const raw = fs.readFileSync(path.join(TPL_DIR, 'encoder_init.lua'), 'utf8');
   const device = las.buildActionStringFromLua(gp, substitute(raw, MIDI_SUBS), maxLength);
-  assert.equal(device.length, 904,
-    `encoder INIT is ${device.length} chars; the known-good size is 904. If this ` +
+  assert.equal(device.length, 806,
+    `encoder INIT is ${device.length} chars; the known-good size is 806. If this ` +
     `grew deliberately, update this number AND check the headroom report — the ` +
     `ceiling is ${maxLength}.`);
 });

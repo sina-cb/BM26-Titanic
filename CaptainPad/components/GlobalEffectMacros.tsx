@@ -47,7 +47,11 @@ import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientat
 import { opError } from '@/utils/op_dialog';
 import { usePalette } from '@/hooks/use-theme';
 import { shadow } from '@/styles/globalStyles';
-import { notifyEffectsPanelLoaded } from '@/hooks/useMidiControl';
+import {
+  notifyEffectsPanelLoaded,
+  useMidiControllerConnected,
+} from '@/hooks/useMidiControl';
+import { vsn1LayoutRgb } from '@/utils/midi/vsn1_layout_feedback';
 import {
   fetchGlobalEffectSlots,
   fetchGlobalEffectSlotsStatus,
@@ -175,6 +179,7 @@ const EMPTY_STENCIL = Object.freeze({
 });
 
 export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange, variant = 'deck' }) => {
+  const vsn1Connected = useMidiControllerConnected('vsn1');
   const C = usePalette();
   // Orientation signal — same pattern as DeckTopBar / CPCControls. Portrait
   // panes are far narrower, so the deck grid drops to 3 columns and the mixer
@@ -795,11 +800,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       {error ? (
         <Text style={{ color: C.error, fontSize: 11, marginBottom: 4 }}>{error}</Text>
       ) : null}
-      {/* VSN1 layout deploy status strip — visible + dismissible (a silently
-          failed flash used to be invisible). `error` renders red; `offline`
-          renders neutral (no device attached is not a fault). A later
-          successful deploy clears it. */}
-      {deployError ? (
+      {/* VSN1-only deploy UI is absent when that controller is absent. Offline
+          notices are also intentionally invisible: "no VSN1" is ordinary and
+          should not add controller-specific chrome. A real failed deploy stays
+          visible while the VSN1 is connected. */}
+      {deployError?.kind === 'error' && vsn1Connected ? (
         <DeployErrorBanner banner={deployError} onDismiss={() => setDeployError(null)} />
       ) : null}
       {/* (The old `!isStrip`-gated "PLAY profile active" hint was REMOVED here:
@@ -848,6 +853,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               chipMetaPaddingTop={chipMetaPaddingTop}
               metaInsetTop={metaInsetTop}
               metaBadgeHeight={metaBadgeHeight}
+              matchVsn1Color={vsn1Connected}
               configurationVisible={surfacePolicy.configurationVisible}
               onPress={() => onPressSlot(slot)}
               onEdit={() => onPressEdit(slotId)}
@@ -1401,6 +1407,8 @@ const SlotButton: React.FC<{
   chipMetaPaddingTop?: number;
   metaInsetTop?: number;
   metaBadgeHeight?: number;
+  /** Mirror Grid's exact slot palette while the physical VSN1 is connected. */
+  matchVsn1Color: boolean;
   /** False in raw Performance mode: the chip is trigger-only. */
   configurationVisible: boolean;
   onPress: () => void;
@@ -1413,7 +1421,7 @@ const SlotButton: React.FC<{
   onResetIntensity: () => void;
   onCycleMode: () => void;
   onSetMode: (value: string | number | boolean) => void;
-}> = ({ slot, isOn, height, fontSize, minWidth, labelLines = 2, chipMetaPaddingTop = 14, metaInsetTop = 2, metaBadgeHeight = 12, configurationVisible, onPress, onEdit, onLockedTap, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
+}> = ({ slot, isOn, height, fontSize, minWidth, labelLines = 2, chipMetaPaddingTop = 14, metaInsetTop = 2, metaBadgeHeight = 12, matchVsn1Color, configurationVisible, onPress, onEdit, onLockedTap, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
   const C = usePalette();
   // PERFORMANCE MODE: rebinding/clearing a slot (the ⋯ swap sheet →
   // PATCH /global-effect-slots/:id) is a LAYOUT edit, 409-gated while a show
@@ -1441,15 +1449,35 @@ const SlotButton: React.FC<{
 
   const showOn = !isMomentary && isOn;
   const showAck = isMomentary && ackAt !== null;
-  const bg = showOn
-    ? C.primary
-    : showAck
-      ? C.surface
-      : C.surfaceContainerHigh;
+  const controllerRgb = matchVsn1Color
+    ? vsn1LayoutRgb(slot.slotId, slot.color, true)
+    : null;
+  const controllerColor = controllerRgb
+    ? `rgb(${controllerRgb[0]},${controllerRgb[1]},${controllerRgb[2]})`
+    : null;
+  const controllerTint = controllerRgb
+    ? `rgba(${controllerRgb[0]},${controllerRgb[1]},${controllerRgb[2]},0.24)`
+    : null;
+  const controllerContrast = controllerRgb
+    && ((controllerRgb[0] * 3) + (controllerRgb[1] * 6) + controllerRgb[2]) > 1280
+    ? '#101010'
+    : '#FFFFFF';
+  const highlighted = showOn || showAck;
+  const bg = controllerColor
+    ? (highlighted ? controllerColor : controllerTint!)
+    : showOn
+      ? C.primary
+      : showAck
+        ? C.surface
+        : C.surfaceContainerHigh;
   // `onPrimary`, not '#FFF': the dark themes use BRIGHT primaries (cyan,
   // amber) where white text washes out — onPrimary is each palette's
   // guaranteed-contrast pairing (2026-07 visual polish).
-  const fg = showOn ? C.onPrimary : C.text;
+  const fg = controllerColor && highlighted
+    ? controllerContrast
+    : showOn
+      ? C.onPrimary
+      : C.text;
 
   // flex:1 (share the bar) vs. fixed minWidth + flexGrow:0 (portrait scroll
   // strip — the chip must keep a width that fits its full label).
@@ -1473,7 +1501,7 @@ const SlotButton: React.FC<{
           flex: 1, paddingHorizontal: 6, borderRadius: 8,
           backgroundColor: bg,
           borderWidth: 1,
-          borderColor: showOn ? 'transparent' : C.ghostBorder,
+          borderColor: controllerColor ?? (showOn ? 'transparent' : C.ghostBorder),
           justifyContent: 'center', alignItems: 'center',
           // Two-band chip layout: the TOP band is reserved for meta — value/mode
           // badge (left) and the ⋯ edit affordance (right).
@@ -1525,7 +1553,7 @@ const SlotButton: React.FC<{
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold',
           fontSize: 12,
-          color: showOn ? C.onPrimary : C.text,
+          color: highlighted ? fg : C.text,
           lineHeight: 12,
         }}>⋯</Text>
       </TouchableOpacity>
@@ -1564,12 +1592,12 @@ const SlotButton: React.FC<{
           }}
         >
           {hasIntensity ? (
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: showOn ? C.onPrimary : C.secondary, lineHeight: 11 }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: highlighted ? fg : C.secondary, lineHeight: 11 }}>
               {Math.round((slot.intensity as number) * 100)}%
             </Text>
           ) : null}
           {hasMode ? (
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: showOn ? C.onPrimary : C.icon, lineHeight: 11 }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: highlighted ? fg : C.icon, lineHeight: 11 }}>
               {formatMode(slot.mode)}
             </Text>
           ) : null}

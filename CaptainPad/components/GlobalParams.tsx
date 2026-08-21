@@ -15,9 +15,11 @@ import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { ParamRow, ParamValueText } from '@/components/ui/param_row';
 import { MatchedChip, NotKnobMappedChip } from '@/components/ui/param_chips';
 import { paramDisplayName } from '@/components/param_row_layout';
+import { useMidiControllerConnected } from '@/hooks/useMidiControl';
 
 export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant?: 'deck' | 'mixer', channelId?: string, exports?: any[], wsRef?: unknown }) => {
   const C = usePalette();
+  const mftConnected = useMidiControllerConnected('mft');
   // Always read from the centralized engine-state hook so external
   // writers (PortWatch over LoRa, scripts hitting /control directly,
   // …) flow through to the UI without depending on per-tab WS state.
@@ -174,7 +176,9 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
             // AUDIO_MODULATION_V1 recommendation for this param); forwarding
             // it lets the row show the ♪ chip.
             exportItem={{ id: e.id, name: e.name, v0: e.v0, audioSuggestion: e.audioSuggestion }}
-            knobNumber={badge.knobNumber}
+            // The number is a physical MFT legend, not intrinsic parameter
+            // metadata. Hide it when that controller is unavailable.
+            knobNumber={mftConnected ? badge.knobNumber : null}
             onChangeBase={(val: number) => writeLocal(e.id, val)}
             playlistName={deckPlaylistName}
             entryId={deckEntryId}

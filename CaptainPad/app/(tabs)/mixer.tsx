@@ -34,7 +34,12 @@ import {
 import { engineEvents } from '@/utils/engineEvents';
 import { useActiveModel, useColorAutopilotFrame } from '@/hooks/useEngineState';
 import { ColorsWindow } from '@/components/deck/colors_window';
-import { setMidiActiveContext, setMidiFocus, useIsMidiFocused } from '@/hooks/useMidiControl';
+import {
+  setMidiActiveContext,
+  setMidiFocus,
+  useIsMidiFocused,
+  useMidiControllerConnected,
+} from '@/hooks/useMidiControl';
 import { MidiMapBadge, MidiMapPopover, useEntryMidiMappings, MIDI_VIOLET } from '@/components/MidiMap';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
@@ -270,6 +275,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
   disabled?: boolean;
 }) {
   const C = usePalette();
+  const mftConnected = useMidiControllerConnected('mft');
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const playlistName = channel.playlist?.name ?? null;
@@ -365,7 +371,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           <ParamRow
             key={exp.id}
             dimmed={knobExcluded}
-            knobNumber={badge.mapped ? badge.knobNumber : null}
+            knobNumber={mftConnected && badge.mapped ? badge.knobNumber : null}
             name={niceLabel}
             status={(
               <>
@@ -471,6 +477,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
 const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange, hidden, workspaceLayout, onOpenSection, onCloseSection, channelCardTrack }: any) => {
   const C = usePalette();
+  const mftConnected = useMidiControllerConnected('mft');
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   // Orientation drives the strip body layout (QA round1 #2): in PORTRAIT the
@@ -1136,7 +1143,9 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
               per-channel only — the global shifter was removed 2026-07).
               The badge follows focus so it always sits
               on the control the knob is live on (push = reset this to 0°). */}
-          {isFocused ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 4 }} /> : null}
+          {isFocused && mftConnected
+            ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 4 }} />
+            : null}
           <Text style={[styles.labelCaps, { width: 52, fontSize: 10 }]}>HUE</Text>
           {/* QA round 10 fix #4: the swatch is now a CIRCLE (was a rounded
               square that mimicked the destructive Blackout/Invert chips and

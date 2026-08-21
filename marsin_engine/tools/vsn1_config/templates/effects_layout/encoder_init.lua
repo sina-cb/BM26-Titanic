@@ -83,10 +83,9 @@ self.midirx_cb = function(self, h, e)
       return
     end
   elseif ch == __FCH__ and cmd == 176 then
-    if p1 >= __SB__ and p1 < __SB__ + 8 then
-      vals[base + p1 - __SB__ + 1] = p2
-      if p1 - __SB__ == sel and ebar ~= nil then ebar(p2) end
-    elseif p1 == __PCC__ then
+    -- Slot-value feedback lives on element 10's value_rx receiver, which
+    -- reconciles delayed engine echoes against the encoder's local prediction.
+    if p1 == __PCC__ then
       if p2 ~= page_current() then page_load(p2) end
     else
       return

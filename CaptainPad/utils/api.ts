@@ -2485,6 +2485,8 @@ export type GlobalEffectSlot = {
 
 export type GlobalEffectSlotStatus = GlobalEffectSlot & {
   active: boolean;
+  /** VSN1 layout color (RGB 0..255), null for the key-position palette. */
+  color?: [number, number, number] | null;
   safetyTier: string | null;
   resolveError: string | null;
   // Driver #3 (VSN1) intensity surface. The slot's current intensity (0..1),

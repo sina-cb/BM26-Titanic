@@ -120,6 +120,11 @@ device:
   id: vsn1
   label: "Intech VSN1"
   nameContains: "Intech Grid MIDI device"
+  # Exact, platform-specific USB driver names observed on the physical unit.
+  # Windows/Web MIDI uses the full product string; iPadOS/CoreMIDI shortens it
+  # to "Grid". This explicit allowlist stays deterministic — no generic
+  # contains("Grid") fallback that could silently bind another Grid module.
+  nameEqualsAny: ["Intech Grid MIDI device", "Grid"]
   sourcePort: 0
   destinationPort: 0
 
