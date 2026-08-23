@@ -19,10 +19,27 @@ export interface CaptainPadTabPolicy {
   subviewSummary?: string;
 }
 
+/** Fresh launches enter the operator's saved-plan LIVE surface. */
+export const CAPTAINPAD_DEFAULT_TAB = 'timeline' as const;
+
+/** Operator-facing sidebar order. The first five are the launch essentials. */
+export const CAPTAINPAD_RAIL_ORDER = [
+  'timeline',
+  'index',
+  'mixer',
+  'touch_control',
+  'audio',
+  'special_events',
+  'simulation',
+  'scheduler',
+  'dimmer_rack',
+  'config',
+] as const;
+
 export const CAPTAINPAD_TAB_POLICIES = Object.freeze({
-  index: { title: 'Deck', tabBarIconName: 'slider.vertical.3', tabBarGroup: 'Layers', showInPerformance: true },
-  mixer: { title: 'Mixer', tabBarIconName: 'slider.horizontal.3', tabBarGroup: 'Layers', showInPerformance: true },
-  touch_control: { title: 'Live Touch', tabBarIconName: 'square.grid.2x2', tabBarGroup: 'Layers', showInPerformance: true },
+  index: { title: 'Deck', tabBarIconName: 'slider.vertical.3', tabBarGroup: 'Default', showInPerformance: true },
+  mixer: { title: 'Mixer', tabBarIconName: 'slider.horizontal.3', tabBarGroup: 'Default', showInPerformance: true },
+  touch_control: { title: 'Live Touch', tabBarIconName: 'square.grid.2x2', tabBarGroup: 'Default', showInPerformance: true },
   // SPECIAL EVENTS (docs/52 §4). `showInPerformance: true` on purpose:
   // performance mode exists to freeze STRUCTURE during a live set, and a
   // special event IS the live set. Shows are read-only data authored
@@ -30,10 +47,10 @@ export const CAPTAINPAD_TAB_POLICIES = Object.freeze({
   // be able to reach the tab to arm one. The engine likewise does not
   // performance-gate `/special-events/*`.
   special_events: { title: 'Events', tabBarIconName: 'sparkles', tabBarGroup: 'Show', showInPerformance: true },
-  audio: { title: 'Audio', tabBarIconName: 'waveform', showInPerformance: false },
-  timeline: { title: 'Timeline', tabBarIconName: 'sun.max', showInPerformance: false },
-  scheduler: { title: 'Scheduler', tabBarIconName: 'calendar.badge.clock', showInPerformance: false },
-  dimmer_rack: { title: 'Dimmer Rack', tabBarIconName: 'lightbulb.fill', showInPerformance: false },
+  audio: { title: 'Audio', tabBarIconName: 'waveform', tabBarGroup: 'Default', showInPerformance: false },
+  timeline: { title: 'Timeline', tabBarIconName: 'sun.max', tabBarGroup: 'Default', showInPerformance: true },
+  scheduler: { title: 'Scheduler', tabBarIconName: 'calendar.badge.clock', tabBarGroup: 'Tools', showInPerformance: false },
+  dimmer_rack: { title: 'Dimmer Rack', tabBarIconName: 'lightbulb.fill', tabBarGroup: 'Tools', showInPerformance: false },
   // CONFIG SUB-VIEWS (operator ruling 2026-08-15). Three setup surfaces that
   // used to own a rail slot each and were almost never opened during a show.
   // They keep their routes — only the rail entry moves; CONFIG lists them as
@@ -84,7 +101,7 @@ export const CAPTAINPAD_TAB_POLICIES = Object.freeze({
     parentRoute: 'config',
     subviewSummary: 'Targets, link lifecycle and per-bike palette lease health.',
   },
-  config: { title: 'Config', tabBarIconName: 'gear', showInPerformance: false },
+  config: { title: 'Config', tabBarIconName: 'gear', tabBarGroup: 'Tools', showInPerformance: false },
   simulation: { title: '2D Simulator', tabBarIconName: 'square.grid.2x2', tabBarGroup: 'Tools', showInPerformance: false },
 } satisfies Record<string, CaptainPadTabPolicy>);
 
@@ -158,6 +175,14 @@ export function canMountCaptainPadRoute(routeName: string, globalPerformanceActi
 /** True for routes that own a slot in the sidebar rail (i.e. not parented). */
 export function isCaptainPadRailTab(routeName: string): boolean {
   return captainPadTabPolicy(routeName).parentRoute === undefined;
+}
+
+/** Stable operator-facing rank for a rail route. Missing entries fail loudly. */
+export function captainPadRailOrder(routeName: string): number {
+  captainPadTabPolicy(routeName);
+  const rank = (CAPTAINPAD_RAIL_ORDER as readonly string[]).indexOf(routeName);
+  if (rank < 0) throw new Error(`Missing CaptainPad rail order for route: ${routeName}`);
+  return rank;
 }
 
 /**

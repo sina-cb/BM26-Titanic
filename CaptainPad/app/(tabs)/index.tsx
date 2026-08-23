@@ -8,6 +8,7 @@ import { Radius, Space, Type } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
+import { EFFECTS_STRIP_HOST_HEIGHT } from '@/components/global_effect_macros_logic';
 import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
 import { GlobalParams } from '@/components/GlobalParams';
 import { ChannelSaveFeedback } from '@/components/channel_save_feedback';
@@ -358,7 +359,7 @@ export default function ControlDeckScreen() {
   // PlanIndicatorPill (globals row, top-right) reflects plan/lease/countdown;
   // the inline warning strip surfaces the live-plan takeover non-intrusively
   // (no modal — never block a live performance).
-  const { leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
+  const { leaseHeld, notifyInteraction } =
     useOperatorTakeover();
 
   // ── Soft PLAN lock (CONTRACT: globalsState.controlLock ∈ {null,'portwatch',
@@ -1195,12 +1196,12 @@ export default function ControlDeckScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: C.background }}>
+    <View style={{ flex: 1, minHeight: 0, backgroundColor: C.background }}>
       {/* Soft PLAN lock banner — low-key YELLOW, non-blocking (box-none), only
           mounts when controlLock === 'plan'. Navigation/viewing stay live; the
           deck's pattern selection is the only thing disabled (below). The full
           red portwatch lockout stays in the tab layout. */}
-      <PlanLockBanner />
+      <PlanLockBanner surface="DECK" />
       {/* Top bar: title + connection status + master fader. Matches the
           Marsin Mixer header layout, minus channel-add buttons. Under the soft
           PLAN lock (planGate) the MASTER fader + FADE/TO BLACK/UP group and
@@ -1214,7 +1215,7 @@ export default function ControlDeckScreen() {
           exactly how the deck overlay controls slipped through before. The
           floating PlanLockBanner (above, zIndex 1000) and the bottom global
           effects bar (a sibling BELOW this wrapper) stay OUTSIDE the scrim. */}
-      <View style={{ flex: 1, position: 'relative' }}>
+      <View style={{ flex: 1, minHeight: 0, position: 'relative' }}>
       <DeckTopBar isConnected={isConnected} disabled={planGate} />
       {/* ── docs/63 W3 — the view optimizer moves under GLOBALS ─────────────
           `DeckWorkspaceBar` ("the view optimizer") now renders INSIDE
@@ -1240,10 +1241,8 @@ export default function ControlDeckScreen() {
                     (pointerEvents 'none' + dim, below) — a tap does NOTHING, so the
                     old "A TOUCH TAKES OVER" copy was a lie under the full freeze the
                     operator requested. This SUBTLE inline chip just states the truth:
-                    controls are LOCKED. To edit, use DISABLE PLAN in the amber banner
-                    (pauses the plan) or take over from the MIXER's TAKE-OVER prompt.
-                    While a lease IS held (taken over via that prompt) it becomes the
-                    "plan resumes in M:SS" countdown + a one-tap RESUME affordance. */}
+                    controls are LOCKED. During takeover this chip disappears; the
+                    compact status tile is the one lease countdown authority. */}
                 {/* ONE PREDICATE. This chip claims "CONTROLS LOCKED", so it must be
                     driven by the SAME `planGate` that actually locks them — never by
                     a second, locally-derived plan-active flag. A chip that says
@@ -1252,14 +1251,9 @@ export default function ControlDeckScreen() {
                     guards against. Engine side: TimelineService._isPlanDrivingDeck
                     is the single source both `planActive` and the 'plan' controlLock
                     derive from, and it is false the instant the plan is disabled. */}
-                {/* Both chips are the ONE on-state recipe (docs/54 row 3): a
-                    translucent accent wash + accent border + accent ink. The plan
-                    chip's accent is the plan subsystem's cyan identity; the
-                    took-over chip's is the theme's `warning` amber (a caution, not
-                    a failure — and per-theme, because the loud amber is ~2:1 on the
-                    daylight palette). Rendered UNCONDITIONALLY (docs/63 §5 pin 6) —
-                    these are safety-relevant and never hideable, which is exactly
-                    why they live in `trailing`, outside the bar's chip ScrollView. */}
+                {/* The locked chip uses the standard on-state recipe. The former
+                    long amber takeover chip was redundant with PlanIndicatorPill
+                    and is intentionally absent. */}
                 {planGate ? (
                   <View style={{
                     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -1270,30 +1264,11 @@ export default function ControlDeckScreen() {
                       PLAN LIVE · CONTROLS LOCKED
                     </Text>
                   </View>
-                ) : leaseHeld ? (
-                  <View style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 8,
-                    paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.control,
-                    borderWidth: 1, ...accentWash(C.warning),
-                  }}>
-                    <Text style={{ ...Type.microCaps, textTransform: 'uppercase', letterSpacing: 0.6, color: C.warning }}>
-                      {`TOOK OVER · PLAN RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => { void resumeNow(); }}
-                      hitSlop={ICON_BTN_HIT_SLOP}
-                      accessibilityRole="button"
-                      accessibilityLabel="Resume the plan now"
-                    >
-                      <Text style={{ ...Type.microCaps, textTransform: 'uppercase', letterSpacing: 0.6, color: C.warning }}>
-                        RESUME NOW
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
                 ) : null}
                 {/* Compact plan-status glyph — RIGHTMOST in the globals row (request
                     #5). Matches the OscStatusPill idiom (48px tile, coloured
-                    border/dot/label). Tapping routes to the Timeline tab. */}
+                    border/dot/label). During a lease, tapping it reopens the
+                    dismissible RESUME NOW / GO TO PLAN notice. */}
                 <PlanIndicatorPill />
               </>
             }
@@ -1365,7 +1340,11 @@ export default function ControlDeckScreen() {
         onLayout={handleColumnsHostLayout}
         // paddingHorizontal 4 + each track's marginHorizontal 4 = an 8pt
         // gutter everywhere (R2 window rhythm — see `windowTrack`).
-        style={[globalStyles.container, { paddingHorizontal: 4 }, !isWide && { flexDirection: 'column' }]}
+        style={[
+          globalStyles.container,
+          { minHeight: 0, paddingHorizontal: 4 },
+          !isWide && { flexDirection: 'column' },
+        ]}
       >
         {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
             The one-and-only pattern list (active playlist) + the global rig HUE
@@ -1509,14 +1488,11 @@ export default function ControlDeckScreen() {
                 playlistLibrary={playlistLibrary}
                 splitRatio={deckSplitRatio}
                 secondaryBound={deckSecondaryBound}
-                // SPLIT AXIS follows the app's layout mode (operator order,
-                // report _225). WIDE = the windows sit in a row, so PATTERNS is
-                // a tall narrow column and DECK B stacks UNDER DECK A exactly
-                // as before. NARROW = the windows stack, so PATTERNS is a
-                // full-width band with height to spare only sideways — DECK B
-                // becomes a column to the RIGHT. Placement only; the ratio, the
-                // engine routes and DECK B's ✕ unbind are unchanged.
-                sideBySide={!isWide}
+                // Keep the outer PATTERNS window byte-identical; only divide its
+                // existing interior into two vertical columns so both playlists
+                // expose more pattern rows. The ratio, routes and DECK B's ✕
+                // unbind lifecycle are unchanged.
+                sideBySide
                 onSplitRelease={handleSplitRelease}
                 onCloseSecondary={handleCloseSecondary}
               />
@@ -1825,24 +1801,25 @@ export default function ControlDeckScreen() {
               countdownTargetMs={colorNextSwapAtMs}
             />
 
-            {/* ── DECK DYNAMIC VIEW OVERRIDES (engine #deck-overlays) ──────
-                View-scoped overlay decks layered OVER the main deck. Each
-                overlay is a CLEAN, self-contained, color-tagged card that
-                collapses to a one-line header and expands on tap; a single
-                shared header drives the unison auto-cycle cadence for the
-                whole group, and a "+ ADD OVERLAY" affordance (hidden at the
-                4-overlay cap) opens a view + playlist picker. Reads the
-                overlay list + shared autopilot off the same `deck` WS message
-                this tab already consumes; PlaylistPanel (role="deckOverlay")
-                drives each overlay's playlist. */}
+          </SectionHost>
+        </DeckWindow>
+
+        {/* OVERLAYS is a first-class Deck workspace window, separate from
+            automation. It stays mounted while hidden so its live Deck-message
+            reconciliation and expanded-card state survive every chip toggle.
+            It remains reachable in performance mode; only its mutating
+            controls respect the same offline/plan gate as before. */}
+        <DeckWindow id="overlays" open={workspace.isOpen('overlays')} style={[
+          ...windowTrack,
+          { padding: 0 },
+          isWide ? { flex: workspace.flexFor('overlays'), minWidth: 0 } : {},
+        ]}>
+          <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
+            {isConnected === false && <OfflineBanner error={connectionError} />}
             <DeckOverlayStack
               overlays={deckOverlays}
               overlayAutopilot={overlayAutopilot}
               playlistLibrary={playlistLibrary}
-              // Disabled while offline OR under the soft PLAN lock (planGate):
-              // overlay add/auto/shuffle/timer/per-overlay controls all change
-              // what's playing, which the plan owns until the operator takes
-              // over.
               disabled={isConnected === false || planGate}
             />
           </SectionHost>
@@ -1990,6 +1967,13 @@ const styles = StyleSheet.create({
   // at the call site — this screen reads the palette via usePalette, not
   // a StyleSheet factory.
   globalRigBar: {
+    flexShrink: 0,
+    // RigGlobals and GEM both use flex:1 to own the strip width. Without an
+    // explicit cross-axis size, Yoga can report a transient undersized
+    // intrinsic height when an attached tab is reactivated after a modal or
+    // orientation handoff; the final 20px then lands below the iPad viewport.
+    // Reserve the complete 44px target + host padding + top rule every pass.
+    height: EFFECTS_STRIP_HOST_HEIGHT,
     paddingHorizontal: 12,
     paddingTop: 4,
     paddingBottom: 6,

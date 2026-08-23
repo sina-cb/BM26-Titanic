@@ -84,6 +84,47 @@ async function post(h, url, body, headers = {}) {
   return { status: res.status, data };
 }
 
+test('manual Timeline special-event cue arms and starts the selected show', async () => {
+  const plan = buildE2EPlan(Date.now(), { name: 'event_cue', showInMin: 240 });
+  plan.cues.push({
+    id: 'c_manual_event',
+    label: 'Bench Event',
+    kind: 'program',
+    trigger: { type: 'manual', placementAt: '20:00' },
+    action: { type: 'special_event', showId: 'bench_event' },
+    durationMin: 30,
+    days: 'all',
+  });
+  const showsRoot = fs.mkdtempSync(path.join(
+    process.env.TMPDIR || process.env.TEMP || '/tmp', 'se-cue-'));
+  const showsDir = writeShows(showsRoot);
+  const h = createTimelineE2E({
+    prefix: 'special-events-cue',
+    plans: { event_cue: plan },
+    activePlan: 'event_cue',
+    extraEnv: {
+      MARSIN_SPECIAL_EVENTS_DIR: showsDir,
+      BM26_CAPTAINPAD_AUTH_REQUIRED: '0',
+    },
+  });
+
+  try {
+    await h.start();
+    const fired = await h.api('POST', '/timeline/cues/c_manual_event/fire');
+    assert.equal(fired.status, 200, JSON.stringify(fired.data));
+    const event = await until(() => eventState(h), state => state.status === 'running',
+      { what: 'manual cue to start the event' });
+    assert.equal(event.showId, 'bench_event');
+    assert.equal(event.stageId, 'tease');
+    await until(() => h.deck(), state => state.name === 'ambient', { what: 'event tease playlist' });
+    const timeline = await h.state();
+    assert.equal(timeline.mode, 'overridden', 'the staged event owns the rig after cue fire');
+  } finally {
+    await h.teardown();
+    fs.rmSync(showsRoot, { recursive: true, force: true });
+  }
+});
+
 test('timeline RESUME takes the rig back and the special event aborts with a restore', async () => {
   const plan = buildE2EPlan(Date.now(), { name: 'event_priority', showInMin: 240 });
   // The shows dir must exist before the engine boots, so build it on a path we

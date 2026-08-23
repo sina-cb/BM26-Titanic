@@ -412,6 +412,18 @@
         <div class="pc-title">THRESHOLDS
           <span class="pc-sub">APPLY = live now (runtime) · PERSIST = written into <code>config.yaml</code> → <code>party:</code></span>
         </div>
+        <div class="party-profiles-card">
+          <div class="mp-head">
+            <span class="mg-name">DETECTION PROFILES</span>
+            <span class="mp-sub">tap to load at runtime · selected profile survives restart</span>
+          </div>
+          <div class="mp-chips" id="pp-chips"></div>
+          <div class="mp-active" id="pp-active"></div>
+          <div class="mp-add">
+            <input id="pp-name" class="file-input" placeholder="new profile name" maxlength="40" />
+            <button id="pp-add-btn" class="primary">＋ Save current editors as new profile</button>
+          </div>
+        </div>
         <div id="party-editors" class="pe-grid"></div>
         <div class="pe-actions">
           <button id="party-apply" class="primary big">✓ APPLY (runtime)</button>

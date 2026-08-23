@@ -41,10 +41,10 @@ import { getApiBaseAsync } from './apiBase';
 
 /** Engine-computed handling state, when the GET provides it. */
 export type PartyEffectiveState =
-  | 'armed' | 'disabled' | 'no_plan' | 'manual' | 'in_session' | 'cooldown';
+  | 'armed' | 'disabled' | 'no_plan' | 'manual' | 'waiting_window' | 'in_session' | 'cooldown';
 
 const EFFECTIVE_STATES: PartyEffectiveState[] =
-  ['armed', 'disabled', 'no_plan', 'manual', 'in_session', 'cooldown'];
+  ['armed', 'disabled', 'no_plan', 'manual', 'waiting_window', 'in_session', 'cooldown'];
 
 export interface PartyConfig {
   enabled: boolean;
@@ -78,6 +78,8 @@ export interface PartyConfig {
   effectiveCooldownSec?: number;
   /** True while the RUNNING session is follow-the-music; null when idle. */
   sessionFollowsMusic?: boolean | null;
+  /** Operator-forced session ignores the detector until RETURN TO LIVE AUDIO. */
+  sessionForced?: boolean;
   /** Epoch ms a fixed-duration session ends; null when idle / follow-the-music. */
   sessionEndsAtMs?: number | null;
   /** Seconds left in the cooldown lockout; 0 when clear. */
@@ -86,8 +88,33 @@ export interface PartyConfig {
   planActive?: boolean;
   /** Today falls inside the plan's festival span. */
   inFestivalWindow?: boolean;
+  /** True only while the authored Party Window is open. */
+  partyWindowOpen?: boolean;
   /** Plan cue the party session fires (informational). */
   partyCueId?: string | null;
+  /** The exact hard signal Timeline consumes (`audioPartyStrong`). */
+  strongSignal?: boolean;
+  /** Seconds the hard signal has continuously held. */
+  sustainHeldSec?: number;
+  /** Required continuous hold before the cue may fire. */
+  sustainRequiredSec?: number;
+  /** Normalized 0..1 progress through the current sustain. */
+  sustainProgress?: number;
+  /** Seconds the debounced Party signal has been absent during a live session. */
+  signalLossHeldSec?: number;
+  /** Fixed grace period before a fixed-duration session ends early. */
+  signalLossRequiredSec?: number;
+  /** Normalized 0..1 progress through the signal-loss grace period. */
+  signalLossProgress?: number;
+  /** Engine-authored readiness facts; presentation never re-invents them. */
+  readiness?: {
+    enabled: boolean;
+    planActive: boolean;
+    partyWindowOpen: boolean;
+    planDriving: boolean;
+    triggerArmed: boolean | null;
+    cooldownClear: boolean;
+  };
 }
 
 /** Partial update body for PUT /party-config. */
@@ -140,6 +167,148 @@ export function formatMinutes(totalSec: number): string {
   return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)} min`;
 }
 
+export type PartyTimerTone = 'active' | 'ready' | 'waiting' | 'off';
+
+export interface PartyTimerReadout {
+  id: 'sustain' | 'party' | 'cooldown';
+  label: string;
+  value: string;
+  detail: string;
+  tone: PartyTimerTone;
+}
+
+/** Three mutually honest clocks: each counts only while that stage is live. */
+export function partyTimerReadouts(config: PartyConfig, nowMs: number): PartyTimerReadout[] {
+  const state = config.effectiveState;
+  const required = Math.max(0, config.sustainRequiredSec ?? config.minDwellSec);
+  const held = Math.min(required, Math.max(0, config.sustainHeldSec ?? 0));
+  const readiness = config.readiness;
+  const canSustain = state === 'armed'
+    && config.strongSignal === true
+    && readiness?.enabled === true
+    && readiness.planActive === true
+    && readiness.partyWindowOpen === true
+    && readiness.planDriving === true
+    && readiness.triggerArmed === true
+    && readiness.cooldownClear === true;
+
+  let sustain: PartyTimerReadout;
+  if (state === 'in_session') {
+    if (config.sessionForced === true) {
+      sustain = {
+        id: 'sustain',
+        label: 'LIVE AUDIO',
+        value: 'FORCED',
+        detail: 'SIGNAL IGNORED',
+        tone: 'active',
+      };
+    } else if (config.sessionFollowsMusic === true) {
+      sustain = {
+        id: 'sustain',
+        label: 'TIMELINE RELEASE',
+        value: 'FOLLOWS SIGNAL',
+        detail: 'AFTER COMPANION RELEASE',
+        tone: 'ready',
+      };
+    } else if (config.signalLossRequiredSec === undefined) {
+      sustain = {
+        id: 'sustain',
+        label: 'TIMELINE RELEASE',
+        value: 'UNAVAILABLE',
+        detail: 'ENGINE STATUS MISSING',
+        tone: 'off',
+      };
+    } else if (config.strongSignal === false) {
+      const releaseRemaining = Math.max(
+        0,
+        config.signalLossRequiredSec - (config.signalLossHeldSec ?? 0),
+      );
+      sustain = {
+        id: 'sustain',
+        label: 'TIMELINE RELEASE',
+        value: `${formatMinSec(releaseRemaining)} LEFT`,
+        detail: 'AFTER DETECTOR OFF',
+        tone: 'active',
+      };
+    } else {
+      sustain = {
+        id: 'sustain',
+        label: 'TIMELINE RELEASE',
+        value: 'READY',
+        detail: `${formatMinSec(config.signalLossRequiredSec)} AFTER DETECTOR`,
+        tone: 'ready',
+      };
+    }
+  } else if (canSustain) {
+    const remaining = Math.max(0, required - held);
+    sustain = {
+      id: 'sustain',
+      label: 'TIMELINE SUSTAIN',
+      value: remaining === 0 ? 'READY' : `${formatMinSec(remaining)} LEFT`,
+      detail: `${formatMinSec(held)} OF ${formatMinSec(required)}`,
+      tone: remaining === 0 ? 'ready' : 'active',
+    };
+  } else {
+    const detail = state === 'cooldown'
+      ? 'WAITS FOR COOLDOWN'
+      : readiness?.partyWindowOpen === false
+        ? 'WAITS FOR WINDOW'
+        : config.strongSignal !== true
+          ? 'WAITS FOR SIGNAL'
+          : 'NOT ARMED';
+    sustain = {
+      id: 'sustain',
+      label: 'TIMELINE SUSTAIN',
+      value: 'WAITING',
+      detail,
+      tone: 'waiting',
+    };
+  }
+
+  let party: PartyTimerReadout;
+  if (state !== 'in_session') {
+    party = { id: 'party', label: 'PARTY TIME', value: 'WAITING', detail: 'STARTS AFTER SUSTAIN', tone: 'waiting' };
+  } else if (config.sessionFollowsMusic === true) {
+    party = { id: 'party', label: 'PARTY TIME', value: 'LIVE', detail: 'FOLLOWS MUSIC', tone: 'active' };
+  } else {
+    const remainingSec = config.sessionEndsAtMs === null || config.sessionEndsAtMs === undefined
+      ? 0
+      : Math.max(0, Math.ceil((config.sessionEndsAtMs - nowMs) / 1000));
+    party = {
+      id: 'party',
+      label: 'PARTY TIME',
+      value: `${formatMinSec(remainingSec)} LEFT`,
+      detail: `${config.effectiveDurationMin ?? config.durationMin} MIN SESSION`,
+      tone: 'active',
+    };
+  }
+
+  const cooldownEnabled = config.effectiveCooldownEnabled ?? (
+    config.durationEnabled && config.cooldownEnabled
+  );
+  let cooldown: PartyTimerReadout;
+  if (!cooldownEnabled) {
+    cooldown = { id: 'cooldown', label: 'COOLDOWN', value: 'OFF', detail: 'NO LOCKOUT', tone: 'off' };
+  } else if (state === 'cooldown') {
+    cooldown = {
+      id: 'cooldown',
+      label: 'COOLDOWN',
+      value: `${formatMinSec(config.cooldownRemainingSec ?? 0)} LEFT`,
+      detail: 'NEXT PARTY LOCKED',
+      tone: 'active',
+    };
+  } else {
+    cooldown = {
+      id: 'cooldown',
+      label: 'COOLDOWN',
+      value: 'READY',
+      detail: `${formatMinSec(config.effectiveCooldownSec ?? config.cooldownSec)} AFTER PARTY`,
+      tone: 'ready',
+    };
+  }
+  return [sustain, party, cooldown];
+}
+
 const PATH = '/party-config';
 
 /**
@@ -190,14 +359,31 @@ export function parsePartyConfig(raw: unknown): PartyConfig {
   // Live-view additions: OPTIONAL (a pre-addition engine simply omits them),
   // but type-checked when present — a wrong-typed field is a loud contract
   // break, not something to shrug off.
-  for (const k of ['effectiveDurationMin', 'effectiveCooldownSec', 'cooldownRemainingSec'] as const) {
+  for (const k of [
+    'effectiveDurationMin',
+    'effectiveCooldownSec',
+    'cooldownRemainingSec',
+    'sustainHeldSec',
+    'sustainRequiredSec',
+    'sustainProgress',
+    'signalLossHeldSec',
+    'signalLossRequiredSec',
+    'signalLossProgress',
+  ] as const) {
     if (o[k] === undefined) continue;
     if (typeof o[k] !== 'number' || !Number.isFinite(o[k])) {
       throw new Error(`GET ${PATH}: '${k}' must be a finite number when present, got ${JSON.stringify(o[k])}`);
     }
     cfg[k] = o[k];
   }
-  for (const k of ['effectiveCooldownEnabled', 'planActive', 'inFestivalWindow'] as const) {
+  for (const k of [
+    'effectiveCooldownEnabled',
+    'planActive',
+    'inFestivalWindow',
+    'partyWindowOpen',
+    'strongSignal',
+    'sessionForced',
+  ] as const) {
     if (o[k] === undefined) continue;
     if (typeof o[k] !== 'boolean') {
       throw new Error(`GET ${PATH}: '${k}' must be a boolean when present, got ${JSON.stringify(o[k])}`);
@@ -222,6 +408,23 @@ export function parsePartyConfig(raw: unknown): PartyConfig {
       throw new Error(`GET ${PATH}: 'partyCueId' must be a string or null, got ${JSON.stringify(o.partyCueId)}`);
     }
     cfg.partyCueId = o.partyCueId;
+  }
+  if (o.readiness !== undefined) {
+    if (!o.readiness || typeof o.readiness !== 'object' || Array.isArray(o.readiness)) {
+      throw new Error(`GET ${PATH}: 'readiness' must be an object when present, got ${JSON.stringify(o.readiness)}`);
+    }
+    for (const key of ['enabled', 'planActive', 'partyWindowOpen', 'planDriving', 'cooldownClear'] as const) {
+      if (typeof o.readiness[key] !== 'boolean') {
+        throw new Error(`GET ${PATH}: 'readiness.${key}' must be a boolean, got ${JSON.stringify(o.readiness[key])}`);
+      }
+    }
+    if (o.readiness.triggerArmed !== null && typeof o.readiness.triggerArmed !== 'boolean') {
+      throw new Error(
+        `GET ${PATH}: 'readiness.triggerArmed' must be a boolean or null, got `
+        + JSON.stringify(o.readiness.triggerArmed),
+      );
+    }
+    cfg.readiness = { ...o.readiness };
   }
   return cfg;
 }
@@ -257,6 +460,24 @@ export async function setPartyConfig(patch: PartyConfigPatch): Promise<ApiResult
     return { ok: false, error: err?.message || 'Engine unreachable' };
   }
 }
+
+async function postPartyCommand(path: string): Promise<ApiResult<PartyConfig>> {
+  try {
+    const base = await getApiBaseAsync();
+    const res = await fetchWithTimeout(`${base}${path}`, { method: 'POST' });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      return { ok: false, error: (body && body.error) || `HTTP ${res.status}`, status: res.status };
+    }
+    return { ok: true, data: parsePartyConfig(body), status: res.status };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Engine unreachable' };
+  }
+}
+
+export const forcePartySession = () => postPartyCommand('/party/force');
+export const returnPartyToLiveAudio = () => postPartyCommand('/party/live-audio');
+export const resetPartyCooldown = () => postPartyCommand('/party/cooldown/reset');
 
 // ── Edit coalescing + optimistic view ────────────────────────────────────
 // PURE. The card accumulates edits into ONE pending patch and PUTs it after a
@@ -346,7 +567,7 @@ export function describeEffectiveNote(
 // "armed".
 
 export type PartyStatusTone =
-  | 'unknown' | 'off' | 'live' | 'cooldown' | 'armed' | 'noplan' | 'manual';
+  | 'unknown' | 'off' | 'live' | 'cooldown' | 'armed' | 'waiting' | 'noplan' | 'manual';
 
 export interface PartyStatus {
   tone: PartyStatusTone;
@@ -445,6 +666,12 @@ export function describePartyStatus(input: PartyStatusInput): PartyStatus {
     case 'disabled': return DISABLED;
     case 'no_plan': return noPlanStatus(input.inFestivalWindow);
     case 'manual': return MANUAL;
+    case 'waiting_window':
+      return {
+        tone: 'waiting',
+        label: 'WINDOW CLOSED',
+        detail: 'Party detection is enabled, but it cannot switch playlists until the timed Party Window opens.',
+      };
     case 'in_session': return inSessionStatus(input);
     case 'cooldown': return cooldownStatus(input.cooldownRemainingSec);
     case 'armed': return { tone: 'armed', label: 'ARMED', detail: 'Waiting for sustained party audio to trigger a session.' };

@@ -83,6 +83,12 @@ import {
 } from './party_tuning.js';
 import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
 import {
+  loadPartyProfiles,
+  savePartyProfiles,
+  uniquePartyProfileId,
+  validatePartyProfile,
+} from './party_profiles.js';
+import {
   NOISE_BANDS, formatGateSummary, resolveGateReadBack,
   verifyGateApply, formatApplyMessage,
 } from './noise_floor.js';
@@ -1215,6 +1221,48 @@ function applyProfile(prof) {
   } else {
     broadcast({ type: 'engineLink', connected: false, note: 'engine offline — profile applied locally only' });
   }
+}
+
+// ── PARTY detector profiles ─────────────────────────────────────────────────
+// Named detector-threshold snapshots are companion-owned and persisted
+// separately from config.yaml. Applying a profile is runtime-only; the PARTY
+// tab's explicit PERSIST button remains the sole config.yaml write path.
+const loadedPartyProfileState = loadPartyProfiles(__dirname);
+let partyProfileState = savePartyProfiles(
+  __dirname,
+  loadedPartyProfileState.profiles,
+  loadedPartyProfileState.activeId,
+);
+
+function findPartyProfile(id) {
+  return partyProfileState.profiles.find((profile) => profile.id === id) || null;
+}
+
+function savePartyProfileState(profiles, activeId) {
+  partyProfileState = savePartyProfiles(__dirname, profiles, activeId);
+}
+
+function broadcastPartyProfiles() {
+  broadcast({
+    type: 'partyProfiles',
+    profiles: partyProfileState.profiles,
+    activeId: partyProfileState.activeId,
+  });
+}
+
+function applyPartyProfile(profile) {
+  if (!profile) throw new Error('party profile is required');
+  validation.on = false;
+  validation.savedOnSustainMs = null;
+  derived.setPartyStrongParams(profile.params);
+  const params = derived.getPartyStrongParams();
+  broadcast({ type: 'partyParams', params });
+  broadcast({
+    type: 'partyProfileApplied',
+    profiles: partyProfileState.profiles,
+    activeId: partyProfileState.activeId,
+    params,
+  });
 }
 
 // ── Engine config link (single source of truth for SHARED audio TUNING) ──────
@@ -2843,6 +2891,65 @@ function handleMessage(ws, raw) {
       ws.send(JSON.stringify({ type: 'flash', text: `party persist: ${e.message}`, error: true }));
     }
   }
+  else if (m.type === 'applyPartyProfile') {
+    try {
+      const profile = findPartyProfile(m.id);
+      if (!profile) throw new Error(`no Party profile "${m.id}"`);
+      // Persist the selection before changing the live detector. A disk failure
+      // must not leave the UI claiming a selected profile that will disappear.
+      savePartyProfileState(partyProfileState.profiles, profile.id);
+      applyPartyProfile(profile);
+      broadcastPartyProfiles();
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `Party profile "${profile.name}" loaded at runtime`,
+      }));
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'flash', text: `load Party profile: ${e.message}`, error: true }));
+    }
+  }
+  else if (m.type === 'addPartyProfile') {
+    try {
+      const name = String(m.name || '').trim();
+      if (!name) throw new Error('profile needs a name');
+      const id = uniquePartyProfileId(
+        name,
+        new Set(partyProfileState.profiles.map((profile) => profile.id)),
+      );
+      const profile = validatePartyProfile({ id, name, params: m.params });
+      const profiles = [...partyProfileState.profiles, profile];
+      savePartyProfileState(profiles, id);
+      applyPartyProfile(profile);
+      broadcastPartyProfiles();
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `Party profile "${profile.name}" saved and loaded at runtime`,
+      }));
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'flash', text: `save new Party profile: ${e.message}`, error: true }));
+    }
+  }
+  else if (m.type === 'deletePartyProfile') {
+    try {
+      if (partyProfileState.profiles.length <= 1) {
+        throw new Error('keep at least one Party profile');
+      }
+      const profile = findPartyProfile(m.id);
+      if (!profile) throw new Error(`no Party profile "${m.id}"`);
+      const profiles = partyProfileState.profiles.filter((candidate) => candidate.id !== profile.id);
+      const deletingActive = partyProfileState.activeId === profile.id;
+      const activeId = deletingActive ? profiles[0].id : partyProfileState.activeId;
+      savePartyProfileState(profiles, activeId);
+      if (deletingActive) applyPartyProfile(findPartyProfile(activeId));
+      broadcastPartyProfiles();
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `Party profile "${profile.name}" deleted${deletingActive ? '; first profile loaded at runtime' : ''}`,
+      }));
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'flash', text: `delete Party profile: ${e.message}`, error: true }));
+    }
+  }
   // VALIDATION MODE toggle (runtime-only onSustainMs → 3 s).
   else if (m.type === 'setPartyValidationMode') {
     try {
@@ -3343,6 +3450,8 @@ wss.on('connection', (ws) => {
     // state, so the tab paints correctly on a reload mid-session.
     partyTunables: PARTY_TUNABLES,
     partyParams: derived.getPartyStrongParams(),
+    partyProfiles: partyProfileState.profiles,
+    activePartyProfileId: partyProfileState.activeId,
     partyOverride,
     partyValidationMode: validation.on,
     partyCaptures: partyCapResults,
@@ -3415,6 +3524,14 @@ function applyEngineConfig() {
     derived.setPartyStrongParams(cfg.party);
     console.log(`  🎉 party gate tunables applied from config.yaml (${Object.keys(cfg.party).length} keys)`);
   }
+  const bootPartyProfile = findPartyProfile(partyProfileState.activeId);
+  if (!bootPartyProfile) {
+    throw new Error(
+      `party_profiles: active profile "${partyProfileState.activeId}" is missing at boot`,
+    );
+  }
+  applyPartyProfile(bootPartyProfile);
+  console.log(`  🎉 Party detector profile "${bootPartyProfile.name}" loaded at runtime`);
   engineEndpoint = resolveEngineTarget();
   // BPM smoothing (operator request 2026-06-29). config.yaml
   // `companion.bpmSmoothing: { enabled, tauMs }` — absent ⇒ the BpmSmoother

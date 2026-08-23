@@ -715,7 +715,10 @@ test('Live Touch shows a compact dismissible Timeline lease notice', () => {
   const bannerPath = path.resolve(here, '../../../CaptainPad/components/PlanLockBanner.tsx');
   const screen = fs.readFileSync(screenPath, 'utf8');
   const banner = fs.readFileSync(bannerPath, 'utf8');
-  assert.match(screen, /<PlanLockBanner \/>/);
+  // The banner accepts an optional `surface` label so Timeline lease notices
+  // read differently on Deck vs Live Touch vs Mixer. Match either form so
+  // this contract survives the surface rename without going stale.
+  assert.match(screen, /<PlanLockBanner( surface="[^"]+")? \/>/);
   assert.match(banner, /leaseHeld && !leaseDismissed/);
   assert.match(banner, /setLeaseDismissed\(true\)/);
   assert.match(banner, /accessibilityLabel="Dismiss takeover lease notice"/);

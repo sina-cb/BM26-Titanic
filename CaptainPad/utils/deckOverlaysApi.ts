@@ -39,6 +39,8 @@ export const DECK_OVERLAY_MAX = 4;
 /** Only steady channel-blend modes are valid for an overlay (no trans_*). */
 export const DECK_OVERLAY_BLEND_MODES = ['blend_screen', 'blend_add', 'blend_over'] as const;
 export type DeckOverlayBlendMode = (typeof DECK_OVERLAY_BLEND_MODES)[number];
+export const DECK_OVERLAY_SOURCE_MODES = ['playlist', 'solid'] as const;
+export type DeckOverlaySourceMode = (typeof DECK_OVERLAY_SOURCE_MODES)[number];
 
 // ── Types ─────────────────────────────────────────────────────────────────
 // An overlay is serialized with the full channel shape (serializeChannel)
@@ -63,6 +65,11 @@ export interface DeckOverlay {
   hue?: number;
   viewSelection?: ViewSelection | null;
   playlist?: PlaylistAssignment | null;
+  sourceMode: DeckOverlaySourceMode;
+  /** Render colorization for the active playlist entry; null = native colors. */
+  playlistTint: string | null;
+  /** Rendered source color when sourceMode === 'solid'. */
+  solidColor: string;
   [key: string]: any;
 }
 
@@ -118,6 +125,9 @@ export async function addDeckOverlay(opts: {
   pattern?: string;
   mode?: DeckOverlayBlendMode | string;
   enabled?: boolean;
+  sourceMode?: DeckOverlaySourceMode;
+  playlistTint?: string | null;
+  solidColor?: string;
 }): Promise<ApiResult<any>> {
   try {
     const body: any = { viewSelection: opts.viewSelection };
@@ -125,6 +135,9 @@ export async function addDeckOverlay(opts: {
     if (opts.pattern !== undefined) body.pattern = opts.pattern;
     if (opts.mode !== undefined) body.mode = opts.mode;
     if (opts.enabled !== undefined) body.enabled = opts.enabled;
+    if (opts.sourceMode !== undefined) body.sourceMode = opts.sourceMode;
+    if (opts.playlistTint !== undefined) body.playlistTint = opts.playlistTint;
+    if (opts.solidColor !== undefined) body.solidColor = opts.solidColor;
     const res = await fetchWithTimeout(`${api_base}/deck/overlays`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -152,6 +165,9 @@ export async function patchDeckOverlay(
     color?: string | null;
     hue?: number;
     viewSelection?: ViewSelection;
+    sourceMode?: DeckOverlaySourceMode;
+    playlistTint?: string | null;
+    solidColor?: string;
   },
 ): Promise<ApiResult<any>> {
   try {

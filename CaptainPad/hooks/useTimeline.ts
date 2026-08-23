@@ -37,11 +37,14 @@ import {
   postTimelineTravel,
   TimelineState,
   TimelineTravelSpec,
+  TimelineTravelResult,
 } from '@/utils/timelineApi';
 
 export interface TimelineHookState {
   state: TimelineState | null;
   connected: boolean;
+  /** Local receipt time of the last authoritative REST/WS state. */
+  receivedAtMs: number | null;
   /** Last seed/action error surfaced for the offline banner / toast. */
   error: string | null;
 }
@@ -77,10 +80,19 @@ export interface TimelineActions {
   performTakeover: (cueId: string) => Promise<PerformTakeoverResult>;
   /**
    * EVENT ZOOM · TIME TRAVEL (_95 §3.4): enter (or retarget) a travel zoom.
-   * Returns the engine's error verbatim on failure (null on success).
+   * Returns a discriminated result:
+   *   `{ ok: true, result }`  — engine accepted the travel; `result` carries
+   *                            the applied zoom + resolved snapshot + steps.
+   *   `{ ok: false, error }`  — engine rejected the travel; `error` is the
+   *                            verbatim message ("no prev event…", "target
+   *                            outside window…"). Never softened.
    */
-  travel: (spec: TimelineTravelSpec) => Promise<string | null>;
+  travel: (spec: TimelineTravelSpec) => Promise<TravelOutcome>;
 }
+
+export type TravelOutcome =
+  | { ok: true; result: TimelineTravelResult }
+  | { ok: false; error: string };
 
 export type UseTimelineResult = TimelineHookState & TimelineActions;
 
@@ -98,7 +110,12 @@ export interface PerformTakeoverResult {
   error: string | null;
 }
 
-const EMPTY: TimelineHookState = { state: null, connected: false, error: null };
+const EMPTY: TimelineHookState = {
+  state: null,
+  connected: false,
+  receivedAtMs: null,
+  error: null,
+};
 
 let _cached: TimelineHookState = EMPTY;
 const _listeners = new Set<(s: TimelineHookState) => void>();
@@ -127,7 +144,12 @@ function _ensureInitialized() {
     // The engine sends the full state document inline on `timelineState`.
     const candidate = msg as unknown;
     if (!_isTimelineState(candidate)) return;
-    _emit({ state: candidate as TimelineState, connected: true, error: null });
+    _emit({
+      state: candidate as TimelineState,
+      connected: true,
+      receivedAtMs: Date.now(),
+      error: null,
+    });
   });
 
   // Mirror the bus connection status onto our banner. The control WS is shared
@@ -142,7 +164,12 @@ function _ensureInitialized() {
   fetchTimelineState()
     .then((r) => {
       if (r.ok && r.data) {
-        _emit({ state: r.data, connected: _cached.connected, error: null });
+        _emit({
+          state: r.data,
+          connected: _cached.connected,
+          receivedAtMs: Date.now(),
+          error: null,
+        });
       } else if (!_cached.state) {
         // Codex P0: surface the engine error verbatim, never a fallback.
         _emit({ ..._cached, error: r.error || 'Timeline unreachable' });
@@ -164,6 +191,7 @@ async function _reseedAfterAction({ preserveError = false } = {}) {
     _emit({
       state: r.data,
       connected: _cached.connected,
+      receivedAtMs: Date.now(),
       error: preserveError ? _cached.error : null,
     });
   }
@@ -370,18 +398,26 @@ async function _performTakeover(cueId: string): Promise<PerformTakeoverResult> {
   return { outcome: 'ok', error: null };
 }
 
-async function _travel(spec: TimelineTravelSpec): Promise<string | null> {
+async function _travel(spec: TimelineTravelSpec): Promise<TravelOutcome> {
   const r = await postTimelineTravel(spec);
   if (!r.ok) {
     // Codex P0: the engine's 400 is the message — "no prev event on 2026-09-04",
     // "target … is outside the festival window". Never soften it, never clamp.
     const msg = r.error || 'Failed to time travel';
     _emit({ ..._cached, error: msg });
-    return msg;
+    return { ok: false, error: msg };
+  }
+  // `postTimelineTravel` returns an `ApiResult` whose `data` is typed as
+  // possibly undefined. A 200 response is required to carry the travel body;
+  // if the engine somehow omits it we fail loudly (no fallback shape).
+  if (!r.data) {
+    const msg = 'Time travel succeeded but the engine returned no result body';
+    _emit({ ..._cached, error: msg });
+    return { ok: false, error: msg };
   }
   _zoomEnteredHere = true;
   await _reseedAfterAction();
-  return null;
+  return { ok: true, result: r.data };
 }
 
 async function _activity(): Promise<boolean> {
@@ -427,30 +463,6 @@ export function useTimeline(): UseTimelineResult {
     performTakeover: _performTakeover,
     travel: _travel,
   };
-}
-
-// ── EVENT ZOOM presence pings (_94 §3.2 "presence, not touch") ───────────
-//
-// A performer may watch the rig hands-off for minutes. The plain takeover's
-// touch-driven pings (useOperatorTakeover below) would let the 120 s lease lapse
-// mid-performance, so while the ZOOM BANNER is mounted and a zoom is held we
-// ping /timeline/activity on a fixed interval instead.
-//
-// This is deliberately NOT a "never expire" hack: the pings stop the moment the
-// banner unmounts (app backgrounded on web = the page is gone, iPad dead, WiFi
-// gone), the lease expires, and the plan auto-resumes. The "never stuck"
-// invariant survives every failure mode.
-const ZOOM_PRESENCE_PING_MS = 30_000;
-
-export function useZoomPresence(active: boolean): void {
-  useEffect(() => {
-    if (!active) return;
-    // Ping immediately on entry so a lease armed just before a slow render
-    // still gets its first refresh promptly, then every 30 s.
-    void _activity();
-    const t = setInterval(() => { void _activity(); }, ZOOM_PRESENCE_PING_MS);
-    return () => clearInterval(t);
-  }, [active]);
 }
 
 // ── Operator-takeover interaction hook (DECK/MIXER) ──────────────────────

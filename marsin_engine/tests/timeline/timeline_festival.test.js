@@ -125,11 +125,14 @@ test('buildOverview returns one entry per festival day with sun + cues + atLocal
     assert.ok(k in day0.sun, `sun has ${k}`);
     assert.match(day0.sun[k], /^\d{2}:\d{2}$/, `${k} is HH:MM`);
   }
-  // A sun cue resolves to an HH:MM atLocal; mood cue → null.
+  // A sun cue resolves to an HH:MM atLocal. The party-mood cue is authored
+  // with `whenPhase`, so buildOverview now surfaces its phase start as an
+  // operator-facing Party Window timing (a plain non-phase mood cue would
+  // still resolve to null — this one is the deliberate Party surface).
   const sunriseCue = day0.cues.find((c) => c.id === 'c_sunrise');
   assert.match(sunriseCue.atLocal, /^\d{2}:\d{2}$/);
   const moodCue = day0.cues.find((c) => c.id === 'c_mood_to_party');
-  assert.equal(moodCue.atLocal, null);
+  assert.match(moodCue.atLocal, /^\d{2}:\d{2}$/);
   // A phase cue → null (no resolved clock/sun time).
   const phaseCue = day0.cues.find((c) => c.id === 'c_party_start');
   assert.equal(phaseCue.atLocal, null);

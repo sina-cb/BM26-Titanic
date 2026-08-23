@@ -20,6 +20,7 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 // through.
 import { LockableScrollView } from '@/components/ui/lockable_scroll_view';
 import { RigGlobals } from '@/components/RigGlobals';
+import { EFFECTS_STRIP_HOST_HEIGHT } from '@/components/global_effect_macros_logic';
 import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
 import { mixerFocusMayActivate } from '@/utils/layer_settings';
 import {
@@ -47,7 +48,7 @@ import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 import { CPCControls } from '@/components/CPCControls';
-import { useDeckWorkspace, DeckWorkspaceBar } from '@/components/deck/deck_workspace';
+import { useDeckWorkspace } from '@/components/deck/deck_workspace';
 import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import {
@@ -3120,7 +3121,7 @@ export default function MixerScreen() {
           live; the channel ACTIVATION controls (fader/mute/solo/bump/params)
           are the only thing disabled (per ChannelStrip activationsLocked). The
           full red portwatch lockout stays in the tab layout. */}
-      <PlanLockBanner onTemporaryTakeOver={handleMixerTakeover} />
+      <PlanLockBanner surface="MIXER" onTemporaryTakeOver={handleMixerTakeover} />
       {/* ── Plan-lock content region ──────────────────────────────────
           Header + master strip + channel strips live inside this relative
           wrapper so the PlanLockScrim (bottom of the wrapper) hermetically
@@ -3318,15 +3319,6 @@ export default function MixerScreen() {
       <CPCControls
         screen="mixer"
         disabled={activationsLocked}
-        optimizerSlot={
-          <DeckWorkspaceBar
-            layout={deckWorkspace.layout}
-            onOpen={deckWorkspace.openWindow}
-            onClose={deckWorkspace.closeWindow}
-            perfActive={deckWorkspace.perfActive}
-            barsOnly={['audioBar']}
-          />
-        }
         hideAudioRow={!deckWorkspace.isBarShown('audioBar')}
         trailing={
           <TouchableOpacity
@@ -3373,6 +3365,9 @@ export default function MixerScreen() {
             channels={mixerBarChannels}
             onOpen={workspace.open}
             onClose={workspace.close}
+            audioBarOpen={deckWorkspace.isBarShown('audioBar')}
+            onAudioOpen={() => deckWorkspace.openWindow('audioBar')}
+            onAudioClose={() => deckWorkspace.closeWindow('audioBar')}
             perfActive={perfComposition}
             floorChannelId={floorChannelId}
           />
@@ -3759,6 +3754,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   return StyleSheet.create({
   container: {
     flex: 1,
+    minHeight: 0,
     backgroundColor: C.background,
   },
   header: {
@@ -3796,6 +3792,8 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   // width and floated it left; the inner GEM now sets flex:1 in
   // mixer-strip mode so it stretches edge-to-edge.
   globalRigBar: {
+    flexShrink: 0,
+    height: EFFECTS_STRIP_HOST_HEIGHT,
     backgroundColor: C.surfaceContainerLow,
     paddingHorizontal: 12,
     paddingTop: 4,

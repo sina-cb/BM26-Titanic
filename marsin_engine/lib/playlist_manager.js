@@ -7,6 +7,7 @@ import { validateMidiMapping } from './midi_mapping_engine.js';
 
 const VALID_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const VALID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}(\/[a-z0-9][a-z0-9_-]{0,63})?$/;
+const VALID_OVERLAY_TINT = /^#[0-9A-Fa-f]{6}$/;
 
 // Thrown by load() when a playlist file EXISTS but its YAML is corrupt.
 // Distinguishing "corrupt" from "missing" is a Codex P0 concern: the old
@@ -183,7 +184,17 @@ export class PlaylistManager {
         modulations: this._coerceModulations(name, entry),
         midiMappings: this._coerceMidiMappings(name, entry),
         notes: typeof entry.notes === 'string' ? entry.notes : null,
+        // Optional render tint consumed ONLY by Deck overlays. Main Deck and
+        // mixer playlist loads preserve but deliberately ignore this metadata.
+        overlayTint: typeof entry.overlayTint === 'string' && VALID_OVERLAY_TINT.test(entry.overlayTint)
+          ? entry.overlayTint.toUpperCase()
+          : null,
       };
+      if (entry.overlayTint !== undefined && entry.overlayTint !== null && coerced.overlayTint === null) {
+        console.warn(
+          `[Playlist] "${name}" entry ${coerced.id}: invalid overlayTint dropped (expected #RRGGBB)`,
+        );
+      }
       if (!this.patternExists(coerced.pattern)) coerced._missing = true;
       data.entries.push(coerced);
     }
@@ -259,6 +270,10 @@ export class PlaylistManager {
           seenMidiTargets.add(v.target.parameter);
           validatedMidi.push(v);
         }
+        if (e.overlayTint !== undefined && e.overlayTint !== null
+            && (typeof e.overlayTint !== 'string' || !VALID_OVERLAY_TINT.test(e.overlayTint))) {
+          throw new Error(`Entry ${e.id}: overlayTint must be null or a #RRGGBB color`);
+        }
         return {
           id: e.id,
           pattern: e.pattern,
@@ -267,6 +282,9 @@ export class PlaylistManager {
           modulations: validatedMods,
           midiMappings: validatedMidi,
           notes: e.notes || null,
+          ...(typeof e.overlayTint === 'string'
+            ? { overlayTint: e.overlayTint.toUpperCase() }
+            : {}),
         };
       }),
     };

@@ -261,10 +261,10 @@ describe('consumers of the effective performance face', () => {
     setLocalPerformanceView(true);
 
     expect(navLocked()).toBe(true);
-    // Report `_283`: CONFIG left the performance surface, so picking the
-    // performance face offline hides it exactly as a live show would.
+    // CONFIG remains hidden. Timeline is intentionally still reachable as the
+    // show-status surface; its mutations are locked while Performance is live.
     expect(canMountCaptainPadRoute('config', navLocked())).toBe(false);
-    expect(canMountCaptainPadRoute('timeline', navLocked())).toBe(false);
+    expect(canMountCaptainPadRoute('timeline', navLocked())).toBe(true);
   });
 
   it('gives a pad that never reached an engine its full navigation', () => {

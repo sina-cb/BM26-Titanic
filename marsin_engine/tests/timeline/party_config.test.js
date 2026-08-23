@@ -266,6 +266,124 @@ test('timing seeds ONCE from the plan cue, then party-config wins', async () => 
   h.svc.stop();
 });
 
+test('saving the active plan applies its PARTY cue settings without changing the live enable gate', async () => {
+  const h = setup();
+  await h.svc.start();
+  await h.svc.setPartyConfig({
+    enabled: false,
+    playlist: 'party_low',
+    minDwellSec: 15,
+    durationMin: 3,
+    cooldownSec: 60,
+  });
+
+  const edited = partyPlan();
+  edited.cues[0] = {
+    ...edited.cues[0],
+    durationMin: 20,
+    trigger: {
+      ...edited.cues[0].trigger,
+      minDwellSec: 45,
+      cooldownSec: 600,
+    },
+    action: {
+      type: 'playlist',
+      name: 'party_high',
+      target: { channel: 'deck', id: null },
+    },
+  };
+  await h.svc.savePlan(edited);
+
+  const cfg = h.svc.getPartyConfig();
+  assert.equal(cfg.enabled, false, 'saving a plan must not re-enable the live operator gate');
+  assert.equal(cfg.playlist, 'party_high');
+  assert.equal(cfg.minDwellSec, 45);
+  assert.equal(cfg.durationMin, 20);
+  assert.equal(cfg.cooldownSec, 600);
+  const onDisk = loadTimelineState(h.stateDir);
+  assert.equal(onDisk.partyPlaylist, 'party_high');
+  assert.equal(onDisk.partyMinDwellSec, 45);
+  assert.equal(onDisk.partyDurationMin, 20);
+  assert.equal(onDisk.partyCooldownSec, 600);
+  h.svc.stop();
+});
+
+test('activating a plan applies that plan party settings before catch-up', async () => {
+  const h = setup();
+  await h.svc.start();
+  await h.svc.setPartyConfig({ playlist: 'party_low', minDwellSec: 120 });
+  const incoming = partyPlan({ name: 'incoming_party' });
+  incoming.cues[0] = {
+    ...incoming.cues[0],
+    durationMin: 5,
+    trigger: { ...incoming.cues[0].trigger, minDwellSec: 30, cooldownSec: 90 },
+    action: { type: 'playlist', name: 'party_high', target: { channel: 'deck', id: null } },
+  };
+  saveShowPlan(incoming, path.join(h.sceneDir, 'incoming_party.yaml'));
+
+  await h.svc.activatePlan('incoming_party');
+
+  assert.deepEqual(
+    {
+      playlist: h.svc.getPartyConfig().playlist,
+      minDwellSec: h.svc.getPartyConfig().minDwellSec,
+      durationMin: h.svc.getPartyConfig().durationMin,
+      cooldownSec: h.svc.getPartyConfig().cooldownSec,
+    },
+    { playlist: 'party_high', minDwellSec: 30, durationMin: 5, cooldownSec: 90 },
+  );
+  h.svc.stop();
+});
+
+test('party status exposes strong-signal sustain progress and readiness facts', async () => {
+  const h = setup();
+  await h.svc.start();
+  await h.svc.setPartyConfig({ minDwellSec: 30 });
+  h.svc.state.currentMood = 'party';
+  h.svc.state.moodSince = IN_WINDOW - 12_000;
+
+  const status = h.svc.getPartyStatus();
+
+  assert.equal(status.strongSignal, true);
+  assert.equal(status.sustainHeldSec, 12);
+  assert.equal(status.sustainRequiredSec, 30);
+  assert.equal(status.sustainProgress, 0.4);
+  assert.deepEqual(status.readiness, {
+    enabled: true,
+    planActive: true,
+    partyWindowOpen: true,
+    planDriving: true,
+    triggerArmed: true,
+    cooldownClear: true,
+  });
+  h.svc.stop();
+});
+
+test('a day-targeted Party Window stays open and triggerable after midnight', async () => {
+  const afterMidnight = Date.UTC(2026, 7, 23, 7, 10, 0); // 00:10 PDT
+  const plan = partyPlan({
+    festival: { startDate: '2026-08-22', days: 2 },
+    phases: {
+      party_night: { start: { clock: '23:15' }, end: { clock: '06:15' } },
+    },
+  });
+  plan.cues[0] = {
+    ...plan.cues[0],
+    days: [0],
+    trigger: { ...plan.cues[0].trigger, whenPhase: 'party_night' },
+  };
+  const h = setup(plan, { now: afterMidnight });
+  await h.svc.start();
+
+  assert.equal(h.svc.getPartyStatus().partyWindowOpen, true);
+  assert.equal(
+    h.svc._runtimeCuesAt(afterMidnight, h.svc._sunEventsFor(afterMidnight))
+      .some((cue) => cue.id === 'c_mood_to_party'),
+    true,
+  );
+  h.svc.stop();
+});
+
 test('with no party cue in the plan, timing seeds from the shipped defaults', async () => {
   const plan = partyPlan({ cues: [] });
   const h = setup(plan);

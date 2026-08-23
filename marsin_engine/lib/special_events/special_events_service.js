@@ -1588,6 +1588,20 @@ export class SpecialEventsService {
       showLeaseRemainingSec: run && run.leaseExpiresAtMs !== null
         ? Math.max(0, Math.ceil((run.leaseExpiresAtMs - now) / 1000)) : null,
       timelineLeaseHeld: run ? run.leaseHeld : false,
+      // Toggle quick effects need a live state, not merely an "actionable"
+      // button. Pulse effects are deliberately absent: they self-release and
+      // are represented as READY in CaptainPad rather than pretending to be ON.
+      quickEffectStates: run && run.status === STATUS.RUNNING && show
+        ? Object.fromEntries(
+          show.stages[run.stageIndex].quickEffects
+            .filter((quick) => quick.actions.some(
+              (action) => action.type === 'effect' && action.toggle === true))
+            .map((quick) => [quick.id, quick.actions.some(
+              (action) => action.effectId === 'strobe' && action.toggle === true)
+              ? this._strobeFired
+              : false]),
+        )
+        : {},
       // The LIVE rotation controls for the stage holding the rig. `supported`
       // is what the tab gates the AUTOPILOT card on; `null` fields would make
       // the card guess, so the block is always complete and always honest.

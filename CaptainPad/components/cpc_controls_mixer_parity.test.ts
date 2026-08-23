@@ -1,7 +1,7 @@
 // cpc_controls_mixer_parity.test.ts — source-text guards for the mixer's
 // CPCControls wiring: the AUDIO SIGNALS row must hide/show via the SAME deck
-// workspace `audioBar` surface and `DeckWorkspaceBar` chip recipe as the deck
-// tab (docs/63 §3.1). vitest cannot render `CPCControls.tsx` or `mixer.tsx`
+// workspace `audioBar` state while its chip lives in the Mixer's ONE workspace
+// shown/hidden list. vitest cannot render `CPCControls.tsx` or `mixer.tsx`
 // (react-native + this config's globs admit pure `.ts` under `components/**`
 // only — see vitest.config.ts), so this file follows the same idiom as
 // `components/deck/colors_window_wiring.test.ts`: read the real source as text
@@ -31,9 +31,7 @@ const CPC_CODE = stripComments(CPC_SOURCE);
 const MIXER_CODE = stripComments(MIXER_SOURCE);
 const DECK_WORKSPACE_CODE = stripComments(DECK_WORKSPACE_SOURCE);
 
-describe('mixer CPCControls — AUDIO row uses the deck audioBar workspace surface', () => {
-  // Anchor on `hideAudioRow` so the capture survives the nested
-  // `<DeckWorkspaceBar ... />` self-closer inside `optimizerSlot`.
+describe('mixer CPCControls — AUDIO joins the Mixer workspace shown/hidden list', () => {
   const callMatch = MIXER_CODE.match(
     /<CPCControls\b[\s\S]*?hideAudioRow=\{!deckWorkspace\.isBarShown\('audioBar'\)\}[\s\S]*?\n\s*\/>/,
   );
@@ -49,19 +47,18 @@ describe('mixer CPCControls — AUDIO row uses the deck audioBar workspace surfa
     expect(callMatch![0]).toMatch(/hideAudioRow=\{!deckWorkspace\.isBarShown\('audioBar'\)\}/);
   });
 
-  it('passes `optimizerSlot` with `DeckWorkspaceBar` limited to the AUDIO bar only', () => {
+  it('does not render a second DeckWorkspaceBar inside CPCControls', () => {
     expect(callMatch).not.toBeNull();
-    expect(callMatch![0]).toMatch(/optimizerSlot=\{\s*\n\s*<DeckWorkspaceBar/);
-    expect(callMatch![0]).toMatch(/barsOnly=\{\['audioBar'\]\}/);
-    expect(callMatch![0]).toMatch(/layout=\{deckWorkspace\.layout\}/);
-    expect(callMatch![0]).toMatch(/onOpen=\{deckWorkspace\.openWindow\}/);
-    expect(callMatch![0]).toMatch(/onClose=\{deckWorkspace\.closeWindow\}/);
-    expect(callMatch![0]).toMatch(/perfActive=\{deckWorkspace\.perfActive\}/);
+    expect(callMatch![0]).not.toContain('optimizerSlot=');
+    expect(MIXER_CODE).not.toContain("barsOnly={['audioBar']}");
   });
 
-  it('imports `useDeckWorkspace` and `DeckWorkspaceBar` from the deck workspace module', () => {
-    expect(MIXER_CODE).toMatch(/import \{ useDeckWorkspace, DeckWorkspaceBar \} from '@\/components\/deck\/deck_workspace';/);
+  it('keeps deck audioBar state but routes its controls into MixerWorkspaceBar', () => {
+    expect(MIXER_CODE).toMatch(/import \{ useDeckWorkspace \} from '@\/components\/deck\/deck_workspace';/);
     expect(MIXER_CODE).toMatch(/const deckWorkspace = useDeckWorkspace\(\);/);
+    expect(MIXER_CODE).toMatch(/audioBarOpen=\{deckWorkspace\.isBarShown\('audioBar'\)\}/);
+    expect(MIXER_CODE).toMatch(/onAudioOpen=\{\(\) => deckWorkspace\.openWindow\('audioBar'\)\}/);
+    expect(MIXER_CODE).toMatch(/onAudioClose=\{\(\) => deckWorkspace\.closeWindow\('audioBar'\)\}/);
   });
 });
 

@@ -349,6 +349,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
 
   useEffect(() => {
     let alive = true;
+    const optimisticTimers = optimisticTimersRef.current;
     // Effects v2 WELCOME: the effects panel just loaded — send the VSN1 a hello
     // + full feedback re-sync (task: hello on effects load). No-op when no VSN1
     // is connected; the reconnect path carries the hello otherwise.
@@ -441,10 +442,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     return () => {
       alive = false;
       unsub();
-      const timers = optimisticTimersRef.current;
-      for (const k of Object.keys(timers)) {
-        clearTimeout(timers[Number(k)]);
-        delete timers[Number(k)];
+      for (const k of Object.keys(optimisticTimers)) {
+        clearTimeout(optimisticTimers[Number(k)]);
+        delete optimisticTimers[Number(k)];
       }
     };
     // Boot effect is intentionally mount-only — deps are routed
@@ -995,16 +995,21 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           }
           // Landscape: ONE flat flex row of all 8 — no scroll, no pager; the bar
           // is wide enough, and with single-line labels it is the stable single
-          // line the operator asked for.
+          // line the operator asked for. The slot group owns only the width left
+          // after fixed chrome (FX label / bank controls / BLACKOUT); without
+          // this bounded flex wrapper Yoga lets the eight flex chips measure
+          // against the whole row and crushes or clips the trailing controls.
           return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
+            <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap }}>
               {stripLabel}
               {bankBadgeEl}
               {/* Minimal add/delete bank controls (D5) — ride next to the badge on
                   the always-visible strip. Perf-lock-dimmed, delete confirm +
                   last-bank disabled are handled inside BankControls. */}
               {surfacePolicy.configurationVisible ? <BankControls /> : null}
-              {slotChips}
+              <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap }}>
+                {slotChips}
+              </View>
               {Divider}
               {blackoutCell}
             </View>

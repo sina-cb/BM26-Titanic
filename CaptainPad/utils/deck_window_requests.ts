@@ -21,7 +21,7 @@
 // Pure TypeScript, zero React / React Native imports — tested under the
 // `utils/*.test.ts` glob (vitest node environment), same as `op_dialog.ts`.
 
-export type DeckWindowRequestId = 'colors';
+export type DeckWindowRequestId = 'colors' | 'overlays';
 
 type DeckWindowRequestListener = (id: DeckWindowRequestId) => void;
 

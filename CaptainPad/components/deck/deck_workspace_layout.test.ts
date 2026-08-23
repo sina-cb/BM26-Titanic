@@ -75,10 +75,9 @@ describe('CaptainPad native landscape-only workspace', () => {
   });
 });
 
-/** Every subset of the closed set that the UI can actually produce (PATTERNS
- *  never closes → 2^4 = 16 reachable layouts once PIXELS joins). */
+/** Every subset of the closed set that the UI can actually produce. */
 function allReachableLayouts(): DeckWorkspaceLayout[] {
-  const closable: DeckWindowId[] = ['parameters', 'autopilot', 'colors', 'pixels'];
+  const closable: DeckWindowId[] = ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'];
   const out: DeckWorkspaceLayout[] = [];
   for (let mask = 0; mask < 1 << closable.length; mask += 1) {
     out.push({ closed: closable.filter((_, i) => (mask & (1 << i)) !== 0) });
@@ -87,10 +86,9 @@ function allReachableLayouts(): DeckWorkspaceLayout[] {
 }
 
 /** Every subset of the closed set across BOTH tiers (docs/63 §2.2): the six
- *  non-protected surfaces — 4 windows + 2 bars — give 2^6 = 64 reachable
- *  layouts once the bars join the workspace. */
+ *  non-protected surfaces — 5 windows + 2 bars. */
 function allReachableSurfaceLayouts(): DeckWorkspaceLayout[] {
-  const closable: DeckSurfaceId[] = ['parameters', 'autopilot', 'colors', 'pixels', 'audioBar', 'outputBar'];
+  const closable: DeckSurfaceId[] = ['parameters', 'autopilot', 'overlays', 'colors', 'pixels', 'audioBar', 'outputBar'];
   const out: DeckWorkspaceLayout[] = [];
   for (let mask = 0; mask < 1 << closable.length; mask += 1) {
     out.push({ closed: closable.filter((_, i) => (mask & (1 << i)) !== 0) });
@@ -100,16 +98,16 @@ function allReachableSurfaceLayouts(): DeckWorkspaceLayout[] {
 
 describe('Deck workspace — default layout', () => {
   it('boots with PATTERNS / PARAMETERS / AUTOPILOT open, COLORS + PIXELS on the rail', () => {
-    expect(DEFAULT_LAYOUT).toEqual({ closed: ['colors', 'pixels'] });
+    expect(DEFAULT_LAYOUT).toEqual({ closed: ['overlays', 'colors', 'pixels'] });
     expect(openWindows(DEFAULT_LAYOUT)).toEqual(['patterns', 'parameters', 'autopilot']);
-    expect(railWindows(DEFAULT_LAYOUT)).toEqual(['colors', 'pixels']);
+    expect(railWindows(DEFAULT_LAYOUT)).toEqual(['overlays', 'colors', 'pixels']);
   });
 
-  it('gives the 4/3/3/3/4 weights when every window is open', () => {
+  it('gives the 4/3/3/3/3/4 weights when every window is open', () => {
     const allOpen: DeckWorkspaceLayout = { closed: [] };
     const openIds = openWindows(allOpen);
-    expect(openIds).toEqual(['patterns', 'parameters', 'autopilot', 'colors', 'pixels']);
-    expect(openIds.map((id) => wideFlexFor(openIds, id))).toEqual([4, 3, 3, 3, 4]);
+    expect(openIds).toEqual(['patterns', 'parameters', 'autopilot', 'overlays', 'colors', 'pixels']);
+    expect(openIds.map((id) => wideFlexFor(openIds, id))).toEqual([4, 3, 3, 3, 3, 4]);
   });
 });
 
@@ -126,7 +124,7 @@ describe('Deck workspace — adding a window never disturbs a stored layout', ()
       expect(hydrated.closed).toContain('pixels');
       expect(openWindows(hydrated)).not.toContain('pixels');
       // …and every window he DID have an opinion about is untouched.
-      expect(hydrated.closed.filter((id) => id !== 'pixels')).toEqual(stored.closed);
+      expect(hydrated.closed.filter((id) => id !== 'pixels' && id !== 'overlays')).toEqual(stored.closed);
     }
   });
 
@@ -144,7 +142,7 @@ describe('Deck workspace — adding a window never disturbs a stored layout', ()
     expect(stored.known).toContain('pixels');
     // He knew about PIXELS and left it open → it stays open.
     expect(openWindows(normalizeLayout(stored)))
-      .toEqual(['patterns', 'parameters', 'autopilot', 'pixels']);
+      .toEqual(['patterns', 'parameters', 'autopilot', 'overlays', 'pixels']);
   });
 
   it('round-trips any reachable layout through serialize → JSON → normalize', () => {
@@ -193,7 +191,7 @@ describe('Deck workspace — adding a window never disturbs a stored layout', ()
 describe('Deck workspace — minimize', () => {
   it('minimizing PARAMETERS leaves PATTERNS + AUTOPILOT — PATTERNS absorbs the slack down to the floor', () => {
     const next = close(DEFAULT_LAYOUT, 'parameters');
-    expect(next.closed).toEqual(['colors', 'pixels', 'parameters']);
+    expect(next.closed).toEqual(['overlays', 'colors', 'pixels', 'parameters']);
     const openIds = openWindows(next);
     expect(openIds).toEqual(['patterns', 'autopilot']);
     // Raw sum 4+3=7 is below WIDE_FLEX_FLOOR (10), so PATTERNS absorbs the
@@ -207,7 +205,7 @@ describe('Deck workspace — minimize', () => {
   it('minimizing AUTOPILOT leaves PATTERNS + PARAMETERS', () => {
     const next = close(DEFAULT_LAYOUT, 'autopilot');
     expect(openWindows(next)).toEqual(['patterns', 'parameters']);
-    expect(railWindows(next)).toEqual(['colors', 'pixels', 'autopilot']);
+    expect(railWindows(next)).toEqual(['overlays', 'colors', 'pixels', 'autopilot']);
   });
 
   it('is idempotent and returns the same reference for a no-op', () => {
@@ -252,52 +250,40 @@ describe('Deck workspace — minimize', () => {
 // floor: any composition whose raw weight sum already reaches it is inert.
 
 describe('Deck workspace — the wide-flex denominator floor (wideFlexFor)', () => {
-  type FloorCase = {
-    mask: number;
-    closedSecondary: DeckWindowId[];
-    weights: Record<DeckWindowId, number>;
-    affected: boolean;
+  const rawWeight: Record<DeckWindowId, number> = {
+    patterns: 4,
+    parameters: 3,
+    autopilot: 3,
+    overlays: 3,
+    colors: 3,
+    pixels: 4,
   };
 
-  // Exhaustive 16-row regression fence, one row per reachable subset of the
-  // four optional windows (same mask convention as `allReachableLayouts`:
-  // bit0=parameters, bit1=autopilot, bit2=colors, bit3=pixels — set = CLOSED).
-  // Every weight is a LITERAL, not recomputed from the implementation. Rows
-  // marked `affected` are the five compositions this fix actually changes —
-  // patterns-alone plus each patterns+one-secondary pair; every other row is
-  // byte-identical to the pre-fix raw weights.
-  const table: FloorCase[] = [
-    { mask: 0, closedSecondary: [], weights: { patterns: 4, parameters: 3, autopilot: 3, colors: 3, pixels: 4 }, affected: false },
-    { mask: 1, closedSecondary: ['parameters'], weights: { patterns: 4, parameters: 0, autopilot: 3, colors: 3, pixels: 4 }, affected: false },
-    { mask: 2, closedSecondary: ['autopilot'], weights: { patterns: 4, parameters: 3, autopilot: 0, colors: 3, pixels: 4 }, affected: false },
-    { mask: 3, closedSecondary: ['parameters', 'autopilot'], weights: { patterns: 4, parameters: 0, autopilot: 0, colors: 3, pixels: 4 }, affected: false },
-    { mask: 4, closedSecondary: ['colors'], weights: { patterns: 4, parameters: 3, autopilot: 3, colors: 0, pixels: 4 }, affected: false },
-    { mask: 5, closedSecondary: ['parameters', 'colors'], weights: { patterns: 4, parameters: 0, autopilot: 3, colors: 0, pixels: 4 }, affected: false },
-    { mask: 6, closedSecondary: ['autopilot', 'colors'], weights: { patterns: 4, parameters: 3, autopilot: 0, colors: 0, pixels: 4 }, affected: false },
-    { mask: 7, closedSecondary: ['parameters', 'autopilot', 'colors'], weights: { patterns: 6, parameters: 0, autopilot: 0, colors: 0, pixels: 4 }, affected: true },
-    { mask: 8, closedSecondary: ['pixels'], weights: { patterns: 4, parameters: 3, autopilot: 3, colors: 3, pixels: 0 }, affected: false },
-    { mask: 9, closedSecondary: ['parameters', 'pixels'], weights: { patterns: 4, parameters: 0, autopilot: 3, colors: 3, pixels: 0 }, affected: false },
-    { mask: 10, closedSecondary: ['autopilot', 'pixels'], weights: { patterns: 4, parameters: 3, autopilot: 0, colors: 3, pixels: 0 }, affected: false },
-    { mask: 11, closedSecondary: ['parameters', 'autopilot', 'pixels'], weights: { patterns: 7, parameters: 0, autopilot: 0, colors: 3, pixels: 0 }, affected: true },
-    { mask: 12, closedSecondary: ['colors', 'pixels'], weights: { patterns: 4, parameters: 3, autopilot: 3, colors: 0, pixels: 0 }, affected: false }, // DEFAULT_LAYOUT
-    { mask: 13, closedSecondary: ['parameters', 'colors', 'pixels'], weights: { patterns: 7, parameters: 0, autopilot: 3, colors: 0, pixels: 0 }, affected: true },
-    { mask: 14, closedSecondary: ['autopilot', 'colors', 'pixels'], weights: { patterns: 7, parameters: 3, autopilot: 0, colors: 0, pixels: 0 }, affected: true },
-    { mask: 15, closedSecondary: ['parameters', 'autopilot', 'colors', 'pixels'], weights: { patterns: 10, parameters: 0, autopilot: 0, colors: 0, pixels: 0 }, affected: true },
-  ];
-
-  it('matches the exhaustive literal weight table for all 16 reachable subsets', () => {
-    for (const row of table) {
-      const layout: DeckWorkspaceLayout = { closed: row.closedSecondary };
+  it('matches the floor rule for all 32 reachable window subsets', () => {
+    for (const layout of allReachableLayouts()) {
       const openIds = openWindows(layout);
       for (const id of DECK_WINDOW_IDS) {
-        expect(wideFlexFor(openIds, id), `mask ${row.mask} / ${id}`).toBe(row.weights[id]);
+        if (!openIds.includes(id)) {
+          expect(wideFlexFor(openIds, id), id).toBe(0);
+          continue;
+        }
+        const rawOpenSum = openIds.reduce((sum, openId) => sum + rawWeight[openId], 0);
+        const expected = id === 'patterns'
+          ? rawWeight.patterns + Math.max(0, WIDE_FLEX_FLOOR - rawOpenSum)
+          : rawWeight[id];
+        expect(wideFlexFor(openIds, id), id).toBe(expected);
       }
     }
   });
 
-  it('exactly 5 rows are affected: PATTERNS-alone and each PATTERNS+one-secondary pair', () => {
-    const affectedMasks = table.filter((r) => r.affected).map((r) => r.mask).sort((a, b) => a - b);
-    expect(affectedMasks).toEqual([7, 11, 13, 14, 15]);
+  it('absorbs slack only for PATTERNS-alone and PATTERNS+one-secondary compositions', () => {
+    const affected = allReachableLayouts().filter((layout) => {
+      const openIds = openWindows(layout);
+      const rawOpenSum = openIds.reduce((sum, id) => sum + rawWeight[id], 0);
+      return rawOpenSum < WIDE_FLEX_FLOOR;
+    });
+    expect(affected).toHaveLength(6);
+    expect(affected.every((layout) => openWindows(layout).length <= 2)).toBe(true);
   });
 
   it('pin: default layout stays the operator-locked 4/3/3 (40/30/30) — byte-identical', () => {
@@ -308,21 +294,22 @@ describe('Deck workspace — the wide-flex denominator floor (wideFlexFor)', () 
     expect(wideFlexFor(openIds, 'autopilot')).toBe(3);
   });
 
-  it('pin: all-five-open stays 4/3/3/3/4 — byte-identical', () => {
+  it('pin: all-six-open stays 4/3/3/3/3/4', () => {
     const allOpen: DeckWorkspaceLayout = { closed: [] };
     const openIds = openWindows(allOpen);
-    expect(openIds.map((id) => wideFlexFor(openIds, id))).toEqual([4, 3, 3, 3, 4]);
+    expect(openIds.map((id) => wideFlexFor(openIds, id))).toEqual([4, 3, 3, 3, 3, 4]);
   });
 
   it('reopen-from-all-hidden: each window comes back at its SHIPPED DEFAULT share, PATTERNS holds the remainder', () => {
-    const allHidden: DeckWorkspaceLayout = { closed: ['parameters', 'autopilot', 'colors', 'pixels'] };
-    const expectedShare: { parameters: number; autopilot: number; colors: number; pixels: number } = {
+    const allHidden: DeckWorkspaceLayout = { closed: ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'] };
+    const expectedShare: Record<Exclude<DeckWindowId, 'patterns'>, number> = {
       parameters: 3 / 10,
       autopilot: 3 / 10,
+      overlays: 3 / 10,
       colors: 3 / 10,
       pixels: 4 / 10,
     };
-    for (const id of ['parameters', 'autopilot', 'colors', 'pixels'] as const) {
+    for (const id of ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'] as const) {
       const layout = open(allHidden, id);
       const openIds = openWindows(layout);
       // patterns always sorts first in canonical order, so a 2-open set is
@@ -337,7 +324,6 @@ describe('Deck workspace — the wide-flex denominator floor (wideFlexFor)', () 
   });
 
   it('sum invariant: total open weight is max(rawOpenSum, WIDE_FLEX_FLOOR) for every reachable layout', () => {
-    const rawWeight: Record<DeckWindowId, number> = { patterns: 4, parameters: 3, autopilot: 3, colors: 3, pixels: 4 };
     for (const layout of allReachableLayouts()) {
       const openIds = openWindows(layout);
       const rawOpenSum = openIds.reduce((sum, id) => sum + rawWeight[id], 0);
@@ -363,14 +349,14 @@ describe('Deck workspace — the wide-flex denominator floor (wideFlexFor)', () 
 
   it('persistence round trip: a STORED all-hidden layout reopens to the same shares as an in-session reopen', () => {
     const stored = {
-      closed: ['parameters', 'autopilot', 'colors', 'pixels'],
+      closed: ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'],
       known: [...DECK_SURFACE_IDS],
     };
     const hydrated = normalizeLayout(stored);
-    expect(hydrated).toEqual({ closed: ['parameters', 'autopilot', 'colors', 'pixels'] });
+    expect(hydrated).toEqual({ closed: ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'] });
 
-    const inSessionAllHidden: DeckWorkspaceLayout = { closed: ['parameters', 'autopilot', 'colors', 'pixels'] };
-    for (const id of ['parameters', 'autopilot', 'colors', 'pixels'] as const) {
+    const inSessionAllHidden: DeckWorkspaceLayout = { closed: ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'] };
+    for (const id of ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'] as const) {
       const fromStore = openWindows(open(hydrated, id));
       const inSession = openWindows(open(inSessionAllHidden, id));
       expect(fromStore.map((openId) => wideFlexFor(fromStore, openId)))
@@ -400,8 +386,8 @@ describe('Deck workspace — the wide-flex denominator floor (wideFlexFor)', () 
     // stay → raw sum 4+3+4=11 already clears the floor, so it is inert.
     const allOpen: DeckWorkspaceLayout = { closed: [] };
     const allOpenUnderPerf = effectiveOpenWindows(allOpen, true);
-    expect(allOpenUnderPerf).toEqual(['patterns', 'colors', 'pixels']);
-    expect(allOpenUnderPerf.map((id) => wideFlexFor(allOpenUnderPerf, id))).toEqual([4, 3, 4]);
+    expect(allOpenUnderPerf).toEqual(['patterns', 'overlays', 'colors', 'pixels']);
+    expect(allOpenUnderPerf.map((id) => wideFlexFor(allOpenUnderPerf, id))).toEqual([4, 3, 3, 4]);
   });
 });
 
@@ -409,21 +395,21 @@ describe('Deck workspace — restore', () => {
   it('keeps the rail in CLOSE order and restores deterministically', () => {
     let layout = close(DEFAULT_LAYOUT, 'autopilot');
     layout = close(layout, 'parameters');
-    expect(railWindows(layout)).toEqual(['colors', 'pixels', 'autopilot', 'parameters']);
+    expect(railWindows(layout)).toEqual(['overlays', 'colors', 'pixels', 'autopilot', 'parameters']);
 
     const afterAutopilot = open(layout, 'autopilot');
-    expect(railWindows(afterAutopilot)).toEqual(['colors', 'pixels', 'parameters']);
+    expect(railWindows(afterAutopilot)).toEqual(['overlays', 'colors', 'pixels', 'parameters']);
     expect(openWindows(afterAutopilot)).toEqual(['patterns', 'autopilot']);
 
     const afterColors = open(afterAutopilot, 'colors');
-    expect(railWindows(afterColors)).toEqual(['pixels', 'parameters']);
+    expect(railWindows(afterColors)).toEqual(['overlays', 'pixels', 'parameters']);
     // Tracks always render in CANONICAL order, whatever the restore order was.
     expect(openWindows(afterColors)).toEqual(['patterns', 'autopilot', 'colors']);
 
     // PIXELS restores like any other window, and lands in canonical order —
     // LAST, after COLORS, however late it was restored.
     const afterPixels = open(afterColors, 'pixels');
-    expect(railWindows(afterPixels)).toEqual(['parameters']);
+    expect(railWindows(afterPixels)).toEqual(['overlays', 'parameters']);
     expect(openWindows(afterPixels)).toEqual(['patterns', 'autopilot', 'colors', 'pixels']);
   });
 
@@ -433,8 +419,8 @@ describe('Deck workspace — restore', () => {
 
   it('resets to the default, and reset on the default is a no-op', () => {
     const layout = close(DEFAULT_LAYOUT, 'parameters');
-    expect(layoutReducer(layout, { type: 'reset' })).toEqual({ closed: ['colors', 'pixels'] });
-    const already: DeckWorkspaceLayout = { closed: ['colors', 'pixels'] };
+    expect(layoutReducer(layout, { type: 'reset' })).toEqual({ closed: ['overlays', 'colors', 'pixels'] });
+    const already: DeckWorkspaceLayout = { closed: ['overlays', 'colors', 'pixels'] };
     expect(layoutReducer(already, { type: 'reset' })).toBe(already);
   });
 });
@@ -526,7 +512,7 @@ describe('Deck workspace — normalizeLayout (untrusted hydrate)', () => {
   it('round-trips through JSON the way the AsyncStorage hydrate does', () => {
     const stored = JSON.stringify(serializeLayout(close(DEFAULT_LAYOUT, 'autopilot')));
     expect(normalizeLayout(JSON.parse(stored)))
-      .toEqual({ closed: ['colors', 'pixels', 'autopilot'] });
+      .toEqual({ closed: ['overlays', 'colors', 'pixels', 'autopilot'] });
   });
 });
 
@@ -563,7 +549,7 @@ describe('performance overlay — derived, never persisted', () => {
 
   it('hides PARAMETERS and AUTOPILOT, and ONLY those two', () => {
     expect(PERF_HIDDEN_WINDOWS).toEqual(['parameters', 'autopilot']);
-    expect(effectiveOpenWindows(allOpen, true)).toEqual(['patterns', 'colors', 'pixels']);
+    expect(effectiveOpenWindows(allOpen, true)).toEqual(['patterns', 'overlays', 'colors', 'pixels']);
   });
 
   it('leaves PIXELS alone during a show — it is a monitor, not a settings pane', () => {
@@ -587,9 +573,9 @@ describe('performance overlay — derived, never persisted', () => {
     // Open during the show…
     expect(effectiveOpenWindows(allOpen, true)).toContain('colors');
     // …and hidden during the show if that is how they left it.
-    const colorsHidden: DeckWorkspaceLayout = { closed: ['colors', 'pixels'] };
+    const colorsHidden: DeckWorkspaceLayout = { closed: ['overlays', 'colors', 'pixels'] };
     expect(effectiveOpenWindows(colorsHidden, true)).toEqual(['patterns']);
-    expect(effectiveRailWindows(colorsHidden, true)).toEqual(['colors', 'pixels']);
+    expect(effectiveRailWindows(colorsHidden, true)).toEqual(['overlays', 'colors', 'pixels']);
   });
 
   it('SUPPRESSES the two chips from the rail as well as the open row (D3)', () => {
@@ -671,13 +657,13 @@ describe('patternsFillsNarrow — PATTERNS fills only when it is ALONE', () => {
 
   it('engages via LAYOUT closures', () => {
     const layout: DeckWorkspaceLayout = {
-      closed: ['parameters', 'autopilot', 'colors', 'pixels'],
+      closed: ['parameters', 'autopilot', 'overlays', 'colors', 'pixels'],
     };
     expect(patternsFillsNarrow(effectiveOpenWindows(layout, false))).toBe(true);
   });
 
   it('engages via the PERFORMANCE OVERLAY too — a show with COLORS + PIXELS closed', () => {
-    const layout: DeckWorkspaceLayout = { closed: ['colors', 'pixels'] };
+    const layout: DeckWorkspaceLayout = { closed: ['overlays', 'colors', 'pixels'] };
     // Edit mode: PARAMETERS + AUTOPILOT are still open, so the pin stays.
     expect(patternsFillsNarrow(effectiveOpenWindows(layout, false))).toBe(false);
     // Performance mode hides both → PATTERNS is alone and fills.
@@ -685,7 +671,7 @@ describe('patternsFillsNarrow — PATTERNS fills only when it is ALONE', () => {
   });
 
   it('a show with PIXELS OPEN does not fill — the overlay never hides it', () => {
-    const layout: DeckWorkspaceLayout = { closed: ['colors'] };
+    const layout: DeckWorkspaceLayout = { closed: ['overlays', 'colors'] };
     expect(effectiveOpenWindows(layout, true)).toEqual(['patterns', 'pixels']);
     expect(patternsFillsNarrow(effectiveOpenWindows(layout, true))).toBe(false);
   });
@@ -711,9 +697,9 @@ describe('Deck workspace — bar types + titles', () => {
     expect(DECK_BAR_TITLES.outputBar).toBe('OUTPUT');
   });
 
-  it('DECK_SURFACE_IDS is windows-then-bars, all seven', () => {
+  it('DECK_SURFACE_IDS is windows-then-bars, all eight', () => {
     expect(DECK_SURFACE_IDS).toEqual([...DECK_WINDOW_IDS, ...DECK_BAR_IDS]);
-    expect(DECK_SURFACE_IDS).toHaveLength(7);
+    expect(DECK_SURFACE_IDS).toHaveLength(8);
   });
 
   it('isDeckSurfaceId accepts every window and bar, rejects junk', () => {
@@ -751,15 +737,18 @@ describe('Deck workspace — bars: the upgrade matrix (docs/63 §2.3)', () => {
       expectedShownBars: ['audioBar', 'outputBar'],
     },
     {
-      label: '5-id `known` (current shipping builds — post-_225, pre-bars)',
-      stored: { closed: ['colors'], known: [...DECK_WINDOW_IDS] },
+      label: '5-id `known` (pre-overlays build)',
+      stored: {
+        closed: ['colors'],
+        known: ['patterns', 'parameters', 'autopilot', 'colors', 'pixels'],
+      },
       expectedOpenWindows: ['patterns', 'parameters', 'autopilot', 'pixels'],
       expectedShownBars: ['audioBar', 'outputBar'],
     },
     {
-      label: '7-id `known` (this build), operator never touched the bars',
+      label: '8-id `known` (this build), operator deliberately opened overlays',
       stored: { closed: ['colors'], known: [...DECK_SURFACE_IDS] },
-      expectedOpenWindows: ['patterns', 'parameters', 'autopilot', 'pixels'],
+      expectedOpenWindows: ['patterns', 'parameters', 'autopilot', 'overlays', 'pixels'],
       expectedShownBars: ['audioBar', 'outputBar'],
     },
     {
@@ -784,10 +773,10 @@ describe('Deck workspace — bars: the upgrade matrix (docs/63 §2.3)', () => {
     }
   });
 
-  it('a 7-id `known` store that explicitly closed a bar keeps that bar closed', () => {
+  it('an 8-id `known` store that explicitly closed a bar keeps that bar closed', () => {
     const stored = { closed: ['colors', 'audioBar'], known: [...DECK_SURFACE_IDS] };
     const hydrated = normalizeLayout(stored);
-    expect(openWindows(hydrated)).toEqual(['patterns', 'parameters', 'autopilot', 'pixels']);
+    expect(openWindows(hydrated)).toEqual(['patterns', 'parameters', 'autopilot', 'overlays', 'pixels']);
     expect(shownBars(hydrated)).toEqual(['outputBar']);
     expect(hydrated.closed).toEqual(['colors', 'audioBar']);
   });
@@ -806,25 +795,25 @@ describe('Deck workspace — bars: the upgrade matrix (docs/63 §2.3)', () => {
     }
   });
 
-  it('stamps all seven surface ids as `known` on every write', () => {
+  it('stamps all eight surface ids as `known` on every write', () => {
     expect(serializeLayout(DEFAULT_LAYOUT).known).toEqual([...DECK_SURFACE_IDS]);
-    expect(serializeLayout(DEFAULT_LAYOUT).known).toHaveLength(7);
+    expect(serializeLayout(DEFAULT_LAYOUT).known).toHaveLength(8);
   });
 });
 
 describe('Deck workspace — bars: reducer + rail (docs/63 §2.2)', () => {
   it('closes and opens both bars like any non-protected surface', () => {
     let layout = close(DEFAULT_LAYOUT, 'audioBar');
-    expect(layout.closed).toEqual(['colors', 'pixels', 'audioBar']);
+    expect(layout.closed).toEqual(['overlays', 'colors', 'pixels', 'audioBar']);
     expect(shownBars(layout)).toEqual(['outputBar']);
 
     layout = close(layout, 'outputBar');
-    expect(layout.closed).toEqual(['colors', 'pixels', 'audioBar', 'outputBar']);
+    expect(layout.closed).toEqual(['overlays', 'colors', 'pixels', 'audioBar', 'outputBar']);
     expect(shownBars(layout)).toEqual([]);
 
     layout = open(layout, 'audioBar');
     expect(shownBars(layout)).toEqual(['audioBar']);
-    expect(railSurfaces(layout)).toEqual(['colors', 'pixels', 'outputBar']);
+    expect(railSurfaces(layout)).toEqual(['overlays', 'colors', 'pixels', 'outputBar']);
   });
 
   it('is idempotent and returns the same reference for a bar no-op', () => {
@@ -856,10 +845,10 @@ describe('Deck workspace — bars: reducer + rail (docs/63 §2.2)', () => {
     layout = close(layout, 'parameters');              // + parameters
     layout = close(layout, 'outputBar');                // + outputBar
     expect(railSurfaces(layout)).toEqual([
-      'colors', 'pixels', 'autopilot', 'audioBar', 'parameters', 'outputBar',
+      'overlays', 'colors', 'pixels', 'autopilot', 'audioBar', 'parameters', 'outputBar',
     ]);
     // railWindows narrows to windows only, in the same close order.
-    expect(railWindows(layout)).toEqual(['colors', 'pixels', 'autopilot', 'parameters']);
+    expect(railWindows(layout)).toEqual(['overlays', 'colors', 'pixels', 'autopilot', 'parameters']);
     // shownBars is empty — both bars are on the rail now.
     expect(shownBars(layout)).toEqual([]);
   });
@@ -938,7 +927,7 @@ describe('Deck workspace — PIXELS -> OUTPUT suppression (docs/63 §2.4)', () =
 describe('Deck workspace — bars are orthogonal to window-only rules (docs/63 §2.1, §2.5, §2.6)', () => {
   it('patternsFillsNarrow ignores bar state — closing both bars changes nothing it sees', () => {
     const allClosedIncludingBars: DeckWorkspaceLayout = {
-      closed: ['parameters', 'autopilot', 'colors', 'pixels', 'audioBar', 'outputBar'],
+      closed: ['parameters', 'autopilot', 'overlays', 'colors', 'pixels', 'audioBar', 'outputBar'],
     };
     expect(effectiveOpenWindows(allClosedIncludingBars, false)).toEqual(['patterns']);
     expect(patternsFillsNarrow(effectiveOpenWindows(allClosedIncludingBars, false))).toBe(true);
@@ -947,7 +936,7 @@ describe('Deck workspace — bars are orthogonal to window-only rules (docs/63 �
     // also closed — bars are simply not part of what this predicate reasons
     // about.
     const withColorsOpen: DeckWorkspaceLayout = {
-      closed: ['parameters', 'autopilot', 'pixels', 'audioBar', 'outputBar'],
+      closed: ['parameters', 'autopilot', 'overlays', 'pixels', 'audioBar', 'outputBar'],
     };
     expect(patternsFillsNarrow(effectiveOpenWindows(withColorsOpen, false))).toBe(false);
   });
@@ -996,10 +985,10 @@ describe('Deck workspace — bars are orthogonal to window-only rules (docs/63 �
   });
 });
 
-describe('Deck workspace — surface round trip is the identity (docs/63 §2.3, all 2^6 reachable sets)', () => {
-  it('round-trips every reachable 7-surface layout through serialize -> JSON -> normalize', () => {
+describe('Deck workspace — surface round trip is the identity (docs/63 §2.3, all 2^7 reachable sets)', () => {
+  it('round-trips every reachable 8-surface layout through serialize -> JSON -> normalize', () => {
     const layouts = allReachableSurfaceLayouts();
-    expect(layouts).toHaveLength(64);
+    expect(layouts).toHaveLength(128);
     for (const layout of layouts) {
       const wire = JSON.parse(JSON.stringify(serializeLayout(layout)));
       expect(normalizeLayout(wire)).toEqual(layout);

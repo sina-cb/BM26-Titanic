@@ -66,7 +66,12 @@ import { parsePatternDefaults } from './pattern_defaults.js';
 // the engine share it — never a second implementation). Pure, no I/O.
 import { parseAudioModSpec, audioSuggestionsBySlider } from '../tools/audio_mod_spec.mjs';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
-import { DECK_OVERLAY_MAX, compileViewSelectionMask } from './pattern_mixer.js';
+import {
+  DECK_OVERLAY_MAX,
+  DECK_OVERLAY_SOURCE_MODES,
+  compileViewSelectionMask,
+  normalizeDeckOverlayColor,
+} from './pattern_mixer.js';
 import { SessionParamCache } from './session_param_cache.js';
 import {
   DEFAULT_LAYER_TRANSITION_DURATION_MS,
@@ -2213,6 +2218,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         secondary: deckPlaylistSlots.secondary,
         splitRatio: deckPlaylistSlots.splitRatio,
       },
+      // Mirror the canonical color daemon config into deck_state.yaml so a
+      // captured Deck state is complete. The daemon's own runtime file remains
+      // its crash-recovery source; this field is the authored Deck snapshot.
+      colorAutopilot: ColorAutopilot.validate(colorAutopilot.state),
     };
   }
 
@@ -2576,6 +2585,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     channel.playlist.activeEntryId = entryId;
     channel.playlist.cursor = idx;
     channel.playlist.autopilot = channel.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    // Playlist tint metadata is intentionally role-scoped: the same entry may
+    // drive the main Deck or mixer unchanged, while a Deck overlay colorizes
+    // that entry inside its selected view only.
+    if (mixer.getDeckOverlay && mixer.getDeckOverlay(channel.id) === channel) {
+      channel.playlistTint = typeof entry.overlayTint === 'string' ? entry.overlayTint : null;
+    }
 
     // Auto-cycle baseline reset (round-2 #2): EVERY load through this choke —
     // whether an operator's manual entry tap OR an auto-cycle advance itself —
@@ -2755,6 +2770,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Individually-paused overlays don't advance, but the shared cadence is
       // unaffected (the anchor already moved above) so the rest stay in step.
       if (!overlay.enabled) continue;
+      if (overlay.sourceMode === 'solid') continue;
       if (overlay._autoCycleInFlight) continue;
       if (!overlay.playlist || !overlay.playlist.name) continue;
       const pl = playlistManager.load(overlay.playlist.name);
@@ -3224,10 +3240,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // load or compile failure so the deck-fallback wrapper can react; the mixer
   // path lets the throw bubble to restoreChannel's catch (degrade + warn).
   function buildChannelFromSaved(saved, role, pattern) {
-    const src = loadPattern(patternsDir, pattern);
-    const comp = wasmHost.compile(src);
-    if (!comp.ok) {
-      throw new Error(`Failed to compile saved ${role} channel '${pattern}': ${comp.error}`);
+    const sourceIsSolid = role === 'deckOverlay' && saved.sourceMode === 'solid';
+    let comp = { ok: true, handle: 0 };
+    if (!sourceIsSolid || (typeof pattern === 'string' && pattern.length > 0)) {
+      const src = loadPattern(patternsDir, pattern);
+      comp = wasmHost.compile(src);
+      if (!comp.ok) {
+        throw new Error(`Failed to compile saved ${role} channel '${pattern}': ${comp.error}`);
+      }
     }
     const config = {
       id: saved.id,
@@ -3290,6 +3310,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // re-link. The PatternChannel ctor types/clamps both defensively.
       followLeaderId: typeof saved.followLeaderId === 'string' ? saved.followLeaderId : null,
       followScale: typeof saved.followScale === 'number' ? saved.followScale : 1.0,
+      sourceMode: role === 'deckOverlay' && saved.sourceMode === 'solid' ? 'solid' : 'playlist',
+      playlistTint: role === 'deckOverlay' && typeof saved.playlistTint === 'string'
+        ? saved.playlistTint
+        : null,
+      solidColor: role === 'deckOverlay' && typeof saved.solidColor === 'string'
+        ? saved.solidColor
+        : '#FFFFFF',
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
@@ -3297,7 +3324,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         ? mixer.addDeckOverlay(config)
         : mixer.addMixerChannel(config);
     if (saved.playlist) ch.playlist = saved.playlist;
-    onChannelCompiled(ch);
+    if (ch.handle) onChannelCompiled(ch);
 
     // Restore order: playlist entry `defaults` first (the shared baseline an
     // explicit capture saved), then the channel's OWN saved localControls on
@@ -3308,6 +3335,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
     const entry = pl && ch.playlist.activeEntryId &&
       pl.entries.find(e => e.id === ch.playlist.activeEntryId);
+    if (role === 'deckOverlay' && entry) {
+      ch.playlistTint = typeof entry.overlayTint === 'string' ? entry.overlayTint : null;
+    }
     // Codex P0: a dangling activeEntryId (the entry was deleted from the
     // playlist since this state was saved) is a restore-time bomb — every
     // later "advance from current entry" lookup would silently no-op
@@ -3323,7 +3353,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         `clearing the stale activeEntryId.`);
       ch.playlist.activeEntryId = null;
     }
-    if (entry && !entry._missing) {
+    if (ch.handle && entry && !entry._missing) {
       playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
     }
     // CHANNEL-LOCAL params survive a restart for every channel role. Replay
@@ -3338,7 +3368,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     }
     // CPC gets the last word — latest color palette, speed, etc. always win
-    finalizeCpcValues(ch);
+    if (ch.handle) finalizeCpcValues(ch);
     return ch;
   }
 
@@ -4004,11 +4034,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // engine) serializes null / 1.0 = no follow.
       followLeaderId: typeof c.followLeaderId === 'string' ? c.followLeaderId : null,
       followScale: typeof c.followScale === 'number' ? c.followScale : 1.0,
+      ...(c.sourceMode !== undefined ? {
+        sourceMode: c.sourceMode === 'solid' ? 'solid' : 'playlist',
+        playlistTint: typeof c.playlistTint === 'string' ? c.playlistTint : null,
+        solidColor: typeof c.solidColor === 'string' ? c.solidColor : '#FFFFFF',
+      } : {}),
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
       // pre-split serializer for the May 2026 reasoning.
-      exports: annotateCodeDefaults(c, wasmHost.getExports(c.handle)
+      exports: annotateCodeDefaults(c, (c.sourceMode === 'solid' ? [] : wasmHost.getExports(c.handle))
         .filter(e => localControlKinds.has(e.kind))
         .map(e => {
           const cv = c.localControls[e.id];
@@ -4083,6 +4118,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
         ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
+      // The full color theme rides the Deck snapshot as well as the dedicated
+      // colorAutopilot event. Cues, fresh connects, and Deck-state capture now
+      // share one observable state shape.
+      colorAutopilot: colorAutopilotState(),
     };
   }
 
@@ -6085,6 +6124,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // Re-broadcast the next-swap time on every (re)schedule so the deck's
     // pattern-autopilot countdown stays accurate after each swap.
     () => broadcastAutopilot(),
+    // Absolute operator authority: the persisted/live deck channel mirror is
+    // what CaptainPad shows. OFF there vetoes every daemon timer and every
+    // event-driven profile advance, even if a stale runtime file says ON.
+    () => deckAutopilotState().active === true,
   );
 
   // ── Autopilot PROFILE management ─────────────────────────────────────
@@ -6544,7 +6587,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       seedColorAutopilotFromActiveSurface(colorAutopilot, paramCenter, liveTouchSession);
     }
     colorAutopilot.setState(validated);
+    saveAllState();
     broadcastColorAutopilot();
+    broadcastDeckState();
     return colorAutopilotState();
   }
 
@@ -6874,6 +6919,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     })
     : null;
 
+  let specialEventsService = null;
   let timelineService = null;
   if (timelineEnabled) {
     const sceneName = opts.modelName || 'default';
@@ -6949,6 +6995,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         },
         patchScheduledTask: (id, patch) => scheduledTaskService.patch(id, patch),
         fireScheduledTask: (id) => scheduledTaskService.fireNow(id),
+        startSpecialEvent: async (showId) => {
+          if (!specialEventsService) {
+            throw new Error('special-event runner is unavailable');
+          }
+          // A manual Timeline cue means START, not merely pre-arm: perform the
+          // same transactional ARM as the Events tab, then fire the runner's
+          // authoritative first armed stage. For Baby Reveal this enters TEASE;
+          // later reveal choices remain protected on the Events surface.
+          await specialEventsService.arm(showId);
+          const state = specialEventsService.getState();
+          if (!state.armedStageId) {
+            throw new Error(`special event "${showId}" armed with no fireable stage`);
+          }
+          await specialEventsService.fire(state.armedStageId);
+        },
         listMixerChannelIds: () => mixer.getMixerChannels().map(c => c.id),
         listPlaylists: () => playlistManager.list(),
         // docs/38 §16.9 deck knobs + mixer→deck output pin. Bound to the real
@@ -7074,7 +7135,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
-  const specialEventsService = new SpecialEventsService({
+  specialEventsService = new SpecialEventsService({
     scene: opts.modelName || 'default',
     showsDir: resolveSpecialEventsDir(path.join(patternsDir, '..'), opts.modelName || 'default'),
     stateDir,
@@ -9367,6 +9428,37 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    } else if (req.url === '/party/force' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      Promise.resolve(timelineService.forcePartySession()).then((status) => {
+        const payload = { ...status, availablePlaylists: timelineService.listAvailablePlaylists() };
+        broadcastWs({ type: 'partyConfig', ...payload });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      }).catch((e) => {
+        res.writeHead(409); res.end(JSON.stringify({ error: e.message }));
+      });
+    } else if (req.url === '/party/live-audio' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      Promise.resolve(timelineService.returnPartyToLiveAudio()).then((status) => {
+        const payload = { ...status, availablePlaylists: timelineService.listAvailablePlaylists() };
+        broadcastWs({ type: 'partyConfig', ...payload });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      }).catch((e) => {
+        res.writeHead(409); res.end(JSON.stringify({ error: e.message }));
+      });
+    } else if (req.url === '/party/cooldown/reset' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const status = timelineService.resetPartyCooldown();
+        const payload = { ...status, availablePlaylists: timelineService.listAvailablePlaylists() };
+        broadcastWs({ type: 'partyConfig', ...payload });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      } catch (e) {
+        res.writeHead(409); res.end(JSON.stringify({ error: e.message }));
+      }
 
     // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
     // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
@@ -9565,7 +9657,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       try {
         const q = new URL(req.url, 'http://localhost').searchParams;
         const spec = {};
-        for (const key of ['date', 'time', 'cueId']) {
+        // `planName` (optional) rehearses a NAMED saved plan without activating
+        // it — the resolver loads the plan, answers against it, and does not
+        // mutate the active plan's cue latches or session ring.
+        for (const key of ['date', 'time', 'cueId', 'planName']) {
           if (q.has(key)) spec[key] = q.get(key);
         }
         const payload = JSON.stringify(timelineService.resolveAt(spec));
@@ -13332,10 +13427,40 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           mode = data.mode;
         }
-        // Resolve playlist + pattern (mirror POST /mixer/channels).
+        const sourceMode = data.sourceMode === undefined ? 'playlist' : data.sourceMode;
+        if (!DECK_OVERLAY_SOURCE_MODES.includes(sourceMode)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `sourceMode must be one of ${DECK_OVERLAY_SOURCE_MODES.join(', ')}`,
+            code: 'DECK_OVERLAY_BAD_SOURCE',
+          }));
+        }
+        let solidColor = '#FFFFFF';
+        let playlistTint = null;
+        try {
+          if (data.solidColor !== undefined) {
+            solidColor = normalizeDeckOverlayColor(data.solidColor, 'solidColor');
+          }
+          if (data.playlistTint !== undefined) {
+            playlistTint = normalizeDeckOverlayColor(
+              data.playlistTint,
+              'playlistTint',
+              { nullable: true },
+            );
+          }
+        } catch (colorErr) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: colorErr.message,
+            code: 'DECK_OVERLAY_BAD_COLOR',
+          }));
+        }
+        // Resolve optional underlying playlist + pattern. Playlist mode
+        // requires one; solid mode may stand alone and retains any existing
+        // playlist pointer when toggled back later.
         let playlistName = data.playlist;
         let entryId = data.playlistEntryId;
-        let patternName;
+        let patternName = null;
         if (playlistName) {
           const pl = playlistManager.load(playlistName);
           if (!pl) { res.writeHead(400); return res.end(JSON.stringify({ error: `Playlist not found: ${playlistName}` })); }
@@ -13348,12 +13473,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           try { patternName = resolvePatternName(data.pattern); }
           catch (nameErr) { return badPatternName(res, nameErr); }
           playlistName = 'default';
-        } else {
+        } else if (sourceMode === 'playlist') {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
         }
-        const src = loadPattern(patternsDir, patternName);
-        const comp = wasmHost.compile(src);
-        if (!comp.ok) { res.writeHead(400); return res.end(JSON.stringify({ error: comp.error })); }
+        let comp = { ok: true, handle: 0 };
+        if (patternName) {
+          const src = loadPattern(patternsDir, patternName);
+          comp = wasmHost.compile(src);
+          if (!comp.ok) { res.writeHead(400); return res.end(JSON.stringify({ error: comp.error })); }
+        }
 
         let overlay;
         try {
@@ -13366,23 +13494,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             fader: data.fader !== undefined ? data.fader : 1.0,
             enabled: data.enabled !== undefined ? !!data.enabled : true,
             viewSelection: v.value,
+            sourceMode,
+            playlistTint,
+            solidColor,
           });
         } catch (addErr) {
           // Belt-and-braces (the API checks above should have caught these).
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: String(addErr.message || addErr) }));
         }
-        onChannelCompiled(overlay);
+        if (overlay.handle) onChannelCompiled(overlay);
         try {
           if (data.playlist) {
             loadPlaylistEntry(overlay, playlistName, entryId);
-          } else {
+          } else if (patternName) {
             overlay.playlist = { name: playlistName, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
           }
         } catch (e) {
           console.warn(`[DeckOverlay] Could not attach playlist ${playlistName} to new overlay:`, e.message);
         }
-        finalizeCpcValues(overlay);
+        if (overlay.handle) finalizeCpcValues(overlay);
         saveAllState();
         broadcastChannelPlaylistData(overlay);
         broadcastDeckState();
@@ -13567,6 +13698,53 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         const overlay = mixer.getDeckOverlay(id);
         if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        let nextSourceMode = overlay.sourceMode || 'playlist';
+        let nextSolidColor = overlay.solidColor || '#FFFFFF';
+        let nextPlaylistTint = overlay.playlistTint ?? null;
+        try {
+          if (data.sourceMode !== undefined) {
+            if (!DECK_OVERLAY_SOURCE_MODES.includes(data.sourceMode)) {
+              throw new TypeError(`sourceMode must be one of ${DECK_OVERLAY_SOURCE_MODES.join(', ')}`);
+            }
+            nextSourceMode = data.sourceMode;
+          }
+          if (data.solidColor !== undefined) {
+            nextSolidColor = normalizeDeckOverlayColor(data.solidColor, 'solidColor');
+          }
+          if (data.playlistTint !== undefined) {
+            nextPlaylistTint = normalizeDeckOverlayColor(
+              data.playlistTint,
+              'playlistTint',
+              { nullable: true },
+            );
+          }
+        } catch (sourceErr) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: sourceErr.message,
+            code: sourceErr.message.startsWith('sourceMode')
+              ? 'DECK_OVERLAY_BAD_SOURCE'
+              : 'DECK_OVERLAY_BAD_COLOR',
+          }));
+        }
+        if (nextSourceMode === 'playlist' && !overlay.handle) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'playlist source requires an assigned playlist or pattern',
+            code: 'DECK_OVERLAY_PLAYLIST_REQUIRED',
+          }));
+        }
+        if (data.playlistTint !== undefined) {
+          if (rejectIfPerformanceMode(req, res)) return;
+          if (rejectIfPrincipalReadonly(req, res, 'deck overlay playlist tint edit')) return;
+          if (!overlay.playlist?.name || !overlay.playlist?.activeEntryId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'playlistTint requires an active overlay playlist entry',
+              code: 'DECK_OVERLAY_ENTRY_REQUIRED',
+            }));
+          }
+        }
         if (data.name !== undefined) overlay.name = data.name;
         if (data.mode !== undefined) {
           // Overlays only accept steady channel-blend modes (no trans_*).
@@ -13643,6 +13821,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             console.warn(`[DeckOverlay] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
         }
+        if (data.playlistTint !== undefined) {
+          const playlist = playlistManager.load(overlay.playlist.name);
+          if (!playlist) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'overlay playlist not found' }));
+          }
+          const entry = playlist.entries.find(
+            (candidate) => candidate.id === overlay.playlist.activeEntryId,
+          );
+          if (!entry) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'active overlay playlist entry no longer exists',
+              code: 'DECK_OVERLAY_ENTRY_MISSING',
+            }));
+          }
+          if (nextPlaylistTint === null) delete entry.overlayTint;
+          else entry.overlayTint = nextPlaylistTint;
+          playlistManager.save(playlist);
+        }
+        overlay.sourceMode = nextSourceMode;
+        overlay.solidColor = nextSolidColor;
+        overlay.playlistTint = nextPlaylistTint;
         saveAllState();
         broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -14976,6 +15177,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } catch (_) { /* a stale marker only costs one spurious revert next boot */ }
   }
 
+  // Reconcile the daemon's private runtime file FROM the deck mirror before
+  // any timing profile is armed. Repeated UI deployments can restart the app
+  // without restarting the engine, while crash/restart cycles can leave the
+  // two persistence layers from different moments; the visible deck state is
+  // the authority. This update also clears any stale deadline when OFF.
+  {
+    const deckAp = deckAutopilotState();
+    autopilot.updateState({
+      active: deckAp.active === true,
+      delay_s: deckAp.delay_s !== undefined ? String(deckAp.delay_s) : '30',
+      shuffle: deckAp.shuffle === true,
+    });
+  }
   armAutopilotProfile(currentAutopilotProfileName());
 
   // ── CRASH BOOT POLICY ───────────────────────────────────────────────────

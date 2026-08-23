@@ -180,6 +180,62 @@ test('blend modes blend_screen / blend_add / blend_over each land distinctly', (
   }
 });
 
+test('playlist tint colorizes only the Deck overlay and only inside its selected view', () => {
+  const { mixer } = makeMixerWithDeck([80, 0, 0]);
+  mixer.addDeckOverlay({
+    id: 'do_tint',
+    pattern: 'white',
+    handle: painter(128, 128, 128),
+    mode: 'blend_over',
+    fader: 1,
+    enabled: true,
+    sourceMode: 'playlist',
+    playlistTint: '#00FF00',
+    viewSelection: { type: 'group', target: 'Wall' },
+  });
+
+  const out = mixer.renderAll6ch();
+  for (const i of [0, 1]) {
+    assert.equal(out[i * 6], 0, `pixel ${i} tinted red is zero`);
+    assert.equal(out[i * 6 + 1], 128, `pixel ${i} preserves brightness in green`);
+    assert.equal(out[i * 6 + 2], 0, `pixel ${i} tinted blue is zero`);
+  }
+  for (const i of [2, 3]) {
+    assert.equal(out[i * 6], 80, `pixel ${i} keeps the untinted main Deck`);
+    assert.equal(out[i * 6 + 1], 0);
+  }
+});
+
+test('solid source uses the overlay fader as brightness and preserves its playlist source', () => {
+  const { mixer } = makeMixerWithDeck([20, 0, 0]);
+  const overlay = mixer.addDeckOverlay({
+    id: 'do_solid',
+    pattern: 'blue',
+    handle: painter(0, 0, 200),
+    mode: 'blend_over',
+    fader: 0.5,
+    enabled: true,
+    sourceMode: 'solid',
+    solidColor: '#00FFFF',
+    viewSelection: { type: 'group', target: 'Wall' },
+  });
+  overlay.playlist = { name: 'kept', activeEntryId: 'entry_blue', cursor: 2 };
+  const playlistBefore = overlay.playlist;
+  const handleBefore = overlay.handle;
+
+  const solidOut = mixer.renderAll6ch();
+  assert.equal(solidOut[1], 128, 'solid green is blended at the overlay fader');
+  assert.equal(solidOut[2], 128, 'solid blue is blended at the overlay fader');
+  assert.equal(overlay.playlist, playlistBefore, 'solid mode does not replace the playlist');
+  assert.equal(overlay.handle, handleBefore, 'solid mode does not destroy its playlist handle');
+
+  overlay.sourceMode = 'playlist';
+  overlay.fader = 1;
+  const playlistOut = mixer.renderAll6ch();
+  assert.equal(playlistOut[2], 200, 'switching back restores the exact playlist pattern');
+  assert.equal(overlay.playlist, playlistBefore);
+});
+
 // ─── reorder permutation: bad set THROWS ──────────────────────────────
 
 test('reorderDeckOverlays throws on a bad permutation; valid reorder flips top', () => {
@@ -451,7 +507,8 @@ test('persistence: overlays + shared autopilot serialize → restore identical',
     mixer2.addDeckOverlay({
       id: s.id, name: s.name, pattern: s.pattern, handle: { fillFn: () => {} },
       mode: s.mode, fader: s.fader, enabled: s.enabled, hue: s.hue, color: s.color,
-      viewSelection: s.viewSelection,
+      viewSelection: s.viewSelection, sourceMode: s.sourceMode,
+      playlistTint: s.playlistTint, solidColor: s.solidColor,
     });
     const o = mixer2.getDeckOverlay(s.id);
     o.playlist = s.playlist;

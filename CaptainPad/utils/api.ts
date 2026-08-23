@@ -621,6 +621,9 @@ export type DeckFollowNoteConfig = {
 export type DeckColorAutopilotConfig = {
   active: boolean;
   palettes: ColorPaletteEntry[];
+  /** Palette behavior. Absent/'rotate' cycles; 'fixed' applies its single
+   * inline pair once when the cue fires and intentionally arms no timer. */
+  behavior?: 'rotate' | 'fixed';
   /** Hold between turns, in seconds. 0 == CONTINUOUS (no hold — the fades run
    *  back to back), which the engine only accepts with transitionMs >= 100. */
   delay_s: number;

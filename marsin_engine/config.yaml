@@ -341,7 +341,7 @@ party:
   ambientFloor: 0.09
   marginX: 2.5
   kickRateMin: 1.2
-  kickRateMax: 3.2
+  kickRateMax: 3.8
   kickRegMin: 0.45
   requireBpmLock: true
   shapeLowMin: 0.2

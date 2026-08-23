@@ -930,7 +930,14 @@ export function summarizeShow(show) {
       hint: stage.hint,
       kind: stage.kind,
       choices: (stage.choices || []).map((c) => ({ id: c.id, label: c.label, color: c.color })),
-      quickEffects: stage.quickEffects.map((q) => ({ id: q.id, label: q.label, color: q.color })),
+      quickEffects: stage.quickEffects.map((q) => ({
+        id: q.id,
+        label: q.label,
+        color: q.color,
+        mode: q.actions.some((action) => action.type === 'effect' && action.toggle === true)
+          ? 'toggle'
+          : 'pulse',
+      })),
       advance: { mode: stage.advance.mode, afterSec: stage.advance.afterSec },
       extend: stage.extend ? { label: stage.extend.label, kind: stage.extend.addSec ? 'time' : 'actions' } : null,
       // The AUTHORED rotation defaults. Carried on the summary (unlike action

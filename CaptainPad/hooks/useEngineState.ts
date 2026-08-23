@@ -46,8 +46,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
-import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel, testConnection } from '@/utils/api';
-import type { RenderHealth, DeckRestoreDegraded, AudioSuggestion, DeckColorAutopilotConfig } from '@/utils/api';
+import {
+  fetchDeckChannel,
+  fetchDeckColorAutopilot,
+  fetchDeckTransitionConfig,
+  fetchGlobalEffectSlotsStatus,
+  fetchMixerState,
+  fetchParamCenter,
+  fetchParamCenterSchema,
+  getAutopilot,
+  testConnection,
+} from '@/utils/api';
+import type {
+  AudioSuggestion,
+  DeckColorAutopilotConfig,
+  DeckRestoreDegraded,
+  DeckTransitionConfig,
+  RenderHealth,
+} from '@/utils/api';
 import { colorAutopilotFrame } from '@/utils/color_autopilot_frame';
 
 export interface SharedParamValue {
@@ -85,6 +101,25 @@ export interface MixerChannel {
   exports?: MixerChannelExport[];
   // Other fields are forwarded as-is — components only narrow what they need.
   [k: string]: unknown;
+}
+
+export interface PatternAutopilotStatus {
+  active: boolean;
+  delay_s: string;
+  shuffle: boolean;
+  groupMode: boolean;
+  groupSize: number | null;
+  groupDwell: number | null;
+  profile: string | null;
+  nextSwapAtMs: number | null;
+}
+
+export interface DeckOverlayGlobalStatus {
+  total: number;
+  enabled: number;
+  autopilotActive: boolean;
+  delay_s: number;
+  shuffle: boolean;
 }
 
 /**
@@ -266,6 +301,14 @@ export interface EngineLiveState {
    * field — the deck screen's own fetch already owns that on mount).
    */
   colorAutopilot: DeckColorAutopilotConfig | null;
+  /** App-wide mirror of the deck pattern-autopilot daemon. */
+  patternAutopilot: PatternAutopilotStatus | null;
+  /** App-wide mirror of the deck's soft-swap transition configuration. */
+  deckTransition: DeckTransitionConfig | null;
+  /** Number of currently active global effect slots. */
+  activeGlobalEffectCount: number;
+  /** Compact app-wide summary of Deck overlays and their shared cadence. */
+  deckOverlays: DeckOverlayGlobalStatus;
 }
 
 /**
@@ -343,6 +386,16 @@ const EMPTY_STATE: EngineLiveState = {
   activeModel: null,
   engineHealth: null,
   colorAutopilot: null,
+  patternAutopilot: null,
+  deckTransition: null,
+  activeGlobalEffectCount: 0,
+  deckOverlays: {
+    total: 0,
+    enabled: 0,
+    autopilotActive: false,
+    delay_s: 30,
+    shuffle: false,
+  },
 };
 
 let _cached: EngineLiveState = EMPTY_STATE;
@@ -497,6 +550,25 @@ function _seedLiveFromSchema(
   }
 }
 
+function patternAutopilotStatus(raw: Record<string, unknown>): PatternAutopilotStatus | null {
+  if (typeof raw.active !== 'boolean') return null;
+  const active = raw.active;
+  return {
+    active,
+    delay_s: raw.delay_s !== undefined ? String(raw.delay_s) : '30',
+    shuffle: raw.shuffle === true,
+    groupMode: raw.groupMode === true,
+    groupSize: typeof raw.groupSize === 'number' ? raw.groupSize : null,
+    groupDwell: typeof raw.groupDwell === 'number' ? raw.groupDwell : null,
+    profile: typeof raw.profile === 'string' ? raw.profile : null,
+    // Inactive is absolute authority in the UI too: never preserve or display
+    // a stale daemon deadline from a malformed/reordered startup frame.
+    nextSwapAtMs: active && typeof raw.nextSwapAtMs === 'number'
+      ? raw.nextSwapAtMs
+      : null,
+  };
+}
+
 function _onMessage(msg: EngineMessage) {
   if (msg.type === 'sharedParams') {
     const raw = msg as unknown as SharedParams & { type: string };
@@ -578,11 +650,30 @@ function _onMessage(msg: EngineMessage) {
     const rawDeck = (msg.channel as MixerChannel | null | undefined) ?? null;
     const blackout = msg.blackout === true;
     const master = typeof msg.master === 'number' ? msg.master : _cached.master;
+    const rawOverlays = Array.isArray(msg.overlays)
+      ? msg.overlays as Array<{ enabled?: unknown }>
+      : [];
+    const rawOverlayAutopilot = (
+      msg.overlayAutopilot !== null
+      && typeof msg.overlayAutopilot === 'object'
+      && !Array.isArray(msg.overlayAutopilot)
+    )
+      ? msg.overlayAutopilot as Record<string, unknown>
+      : {};
     _emit({
       ..._cached,
       deckChannel: rawDeck,
       blackout,
       master,
+      deckOverlays: {
+        total: rawOverlays.length,
+        enabled: rawOverlays.filter((overlay) => overlay.enabled !== false).length,
+        autopilotActive: rawOverlayAutopilot.active === true,
+        delay_s: typeof rawOverlayAutopilot.delay_s === 'number'
+          ? rawOverlayAutopilot.delay_s
+          : 30,
+        shuffle: rawOverlayAutopilot.shuffle === true,
+      },
     });
   } else if (msg.type === 'oscStats') {
     // OSC listener telemetry — one per second when enabled, plus a
@@ -677,6 +768,37 @@ function _onMessage(msg: EngineMessage) {
         lastKickMs: typeof msg.lastKickMs === 'number' ? msg.lastKickMs : 0,
       },
     });
+  } else if (msg.type === 'autopilot') {
+    const frame = patternAutopilotStatus(msg as unknown as Record<string, unknown>);
+    if (frame) _emit({ ..._cached, patternAutopilot: frame });
+  } else if (msg.type === 'deckTransitionConfig') {
+    const raw = msg as unknown as Record<string, unknown>;
+    if (
+      typeof raw.enabled === 'boolean'
+      && typeof raw.mode === 'string'
+      && typeof raw.durationMs === 'number'
+      && typeof raw.shuffle === 'boolean'
+    ) {
+      _emit({
+        ..._cached,
+        deckTransition: {
+          enabled: raw.enabled,
+          mode: raw.mode,
+          durationMs: raw.durationMs,
+          shuffle: raw.shuffle,
+        },
+      });
+    }
+  } else if (msg.type === 'globalEffectMacroStatus') {
+    const rawSlots = (msg as unknown as { slots?: unknown }).slots;
+    if (Array.isArray(rawSlots)) {
+      const activeGlobalEffectCount = rawSlots.filter((slot) => (
+        slot !== null
+        && typeof slot === 'object'
+        && (slot as { active?: unknown }).active === true
+      )).length;
+      _emit({ ..._cached, activeGlobalEffectCount });
+    }
   } else if (msg.type === 'colorAutopilot') {
     // App-wide read-only mirror (docs/61 §4.4, W4) — see the `colorAutopilot`
     // field doc on EngineLiveState. `colorAutopilotFrame` copies the
@@ -755,6 +877,42 @@ function _seedFromStatus() {
     .catch(() => undefined);
 }
 
+function _seedDeckGlobalStatus(): void {
+  getAutopilot()
+    .then((result) => {
+      if (!result.ok || !result.data) return;
+      const frame = patternAutopilotStatus(result.data as Record<string, unknown>);
+      if (frame) _emit({ ..._cached, patternAutopilot: frame });
+    })
+    .catch(() => undefined);
+
+  fetchDeckTransitionConfig()
+    .then((result) => {
+      if (!result.ok || !result.data) return;
+      _emit({ ..._cached, deckTransition: result.data });
+    })
+    .catch(() => undefined);
+
+  fetchDeckColorAutopilot()
+    .then((result) => {
+      if (!result.ok || !result.data) return;
+      const frame = colorAutopilotFrame({
+        type: 'colorAutopilot',
+        ...result.data,
+      });
+      if (frame) _emit({ ..._cached, colorAutopilot: frame });
+    })
+    .catch(() => undefined);
+
+  fetchGlobalEffectSlotsStatus()
+    .then((result) => {
+      if (!result.ok || !result.data?.slots) return;
+      const activeGlobalEffectCount = result.data.slots.filter((slot) => slot.active === true).length;
+      _emit({ ..._cached, activeGlobalEffectCount });
+    })
+    .catch(() => undefined);
+}
+
 function _ensureInitialized() {
   if (_initialized) return;
   _initialized = true;
@@ -766,7 +924,10 @@ function _ensureInitialized() {
   // (re)connect. The status event fires immediately with the current state,
   // so this also drives the initial seed once the socket is up.
   engineEvents.subscribeStatus((s) => {
-    if (s.connected) _seedFromStatus();
+    if (s.connected) {
+      _seedFromStatus();
+      _seedDeckGlobalStatus();
+    }
   });
   // Params plane (post-May-2026 topic split): the canonical CPC
   // updates (sharedParams) arrive here when operators turn knobs.
@@ -873,6 +1034,7 @@ function _ensureInitialized() {
   // — the header simply omits the model chip / health warning until a probe
   // lands (no warning == treated healthy until proven otherwise).
   _seedFromStatus();
+  _seedDeckGlobalStatus();
 }
 
 /**
@@ -1258,6 +1420,47 @@ export function useMaster(): number {
  */
 export function useColorAutopilotFrame(): DeckColorAutopilotConfig | null {
   return useEngineSlice<DeckColorAutopilotConfig | null>((s) => s.colorAutopilot);
+}
+
+export interface DeckGlobalStatusFrame {
+  patternAutopilot: PatternAutopilotStatus | null;
+  colorAutopilot: DeckColorAutopilotConfig | null;
+  deckTransition: DeckTransitionConfig | null;
+  deckOverlays: DeckOverlayGlobalStatus;
+  activeGlobalEffectCount: number;
+  master: number;
+  blackout: boolean;
+}
+
+/** One reference-stable app-wide Deck summary for the sidebar chips. */
+export function useDeckGlobalStatusFrame(): DeckGlobalStatusFrame {
+  return useEngineSlice<DeckGlobalStatusFrame>(useMemo(() => {
+    let previous: DeckGlobalStatusFrame | null = null;
+    return (state: EngineLiveState): DeckGlobalStatusFrame => {
+      if (
+        previous
+        && previous.patternAutopilot === state.patternAutopilot
+        && previous.colorAutopilot === state.colorAutopilot
+        && previous.deckTransition === state.deckTransition
+        && previous.deckOverlays === state.deckOverlays
+        && previous.activeGlobalEffectCount === state.activeGlobalEffectCount
+        && previous.master === state.master
+        && previous.blackout === state.blackout
+      ) {
+        return previous;
+      }
+      previous = {
+        patternAutopilot: state.patternAutopilot,
+        colorAutopilot: state.colorAutopilot,
+        deckTransition: state.deckTransition,
+        deckOverlays: state.deckOverlays,
+        activeGlobalEffectCount: state.activeGlobalEffectCount,
+        master: state.master,
+        blackout: state.blackout,
+      };
+      return previous;
+    };
+  }, []));
 }
 
 /**

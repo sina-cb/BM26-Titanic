@@ -775,6 +775,9 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .party-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
 .party-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
   display:flex;flex-direction:column;gap:11px}
+.party-profiles-card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px;
+  display:flex;flex-direction:column;gap:9px}
+.party-profiles-card .mp-active{background:var(--panel)}
 .pc-title{font-weight:700;letter-spacing:1px;font-size:11.5px;color:var(--text);display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .pc-sub{font-weight:500;letter-spacing:.2px;font-size:10.5px;color:var(--muted)}
 

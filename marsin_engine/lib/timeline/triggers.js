@@ -143,7 +143,7 @@ export function resolveDayTimes({ plan, now, sunEvents }) {
  * Whether `now` falls inside [startMs, endMs). Handles windows that cross
  * midnight (endMs < startMs) by treating the window as wrapping.
  */
-function phaseActiveAt(startMs, endMs, now) {
+export function phaseActiveAt(startMs, endMs, now) {
   if (startMs === null || endMs === null) return false;
   if (startMs <= endMs) return now >= startMs && now < endMs;
   // Wrapping window (e.g. sunset+2h .. sunrise-1h spans midnight).
@@ -334,7 +334,9 @@ export function evaluateTick({
         ? partyTiming.minDwellSec : (t.minDwellSec || 0);
       const cooldownSec = (useParty && typeof partyTiming.cooldownSec === 'number')
         ? partyTiming.cooldownSec : (t.cooldownSec || 0);
-      const phaseOk = t.whenPhase === undefined || phaseNow === t.whenPhase;
+      const gatedPhase = t.whenPhase === undefined ? null : dayTimes.phases[t.whenPhase];
+      const phaseOk = t.whenPhase === undefined
+        || !!(gatedPhase && phaseActiveAt(gatedPhase.startMs, gatedPhase.endMs, now));
       const dwellOk = now - next.moodSince >= minDwellSec * 1000;
       const last = next.moodLastFire[cue.id];
       const cooldownOk = last === undefined || last === null

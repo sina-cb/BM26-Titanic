@@ -228,6 +228,61 @@ test('P2 durationMin window elapsing → deck reverts to the defaultCue', async 
     'default cue fills the deck once the durationMin window elapses');
 });
 
+test('durationMin is a hard scheduled boundary and clamps LIVE remaining time', async () => {
+  const plan = basePlan({
+    defaultCue: { label: 'House', action: { type: 'look', look: 'house' } },
+    cues: [{
+      id: 'c_show', label: 'Show', kind: 'program',
+      trigger: { type: 'clock', at: '12:00' },
+      action: { type: 'playlist', name: 'show_pl', target: { channel: 'deck', id: null } },
+      hold: { min: 120 },
+      durationMin: 30,
+    }],
+  });
+  const { svc, calls, setNow } = setup(plan, { now: Date.UTC(2026, 7, 30, 18, 0, 0) });
+  await svc.start();
+
+  // A tick notices the cue one second late. Its end remains exactly 12:30,
+  // never 12:30:01, and the LIVE wire reports that hard boundary.
+  setNow(Date.UTC(2026, 7, 30, 19, 0, 1));
+  await svc._tick();
+  const live = svc.getState();
+  assert.equal(live.activeCue.untilMs, Date.UTC(2026, 7, 30, 19, 30, 0));
+  assert.equal(live.activeProgram.untilMs, Date.UTC(2026, 7, 30, 19, 30, 0));
+
+  calls.loadPlaylist.length = 0;
+  setNow(Date.UTC(2026, 7, 30, 19, 30, 0));
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.getState().activeCue, null, 'cue is no longer live at its half-open end');
+  assert.equal(svc.getState().activeProgram, null, 'longer HOLD cannot extend durationMin');
+  assert.ok(calls.loadPlaylist.some((call) => call.name === 'house_pl'));
+});
+
+test('durationMin releases to the autopilot baseline even without a default cue', async () => {
+  const plan = basePlan({
+    cues: [{
+      id: 'c_show', label: 'Show', kind: 'program',
+      trigger: { type: 'clock', at: '12:00' },
+      action: { type: 'playlist', name: 'show_pl', target: { channel: 'deck', id: null } },
+      hold: { min: 120 },
+      durationMin: 5,
+    }],
+  });
+  const { svc, calls, setNow } = setup(plan, { now: Date.UTC(2026, 7, 30, 18, 0, 0) });
+  await svc.start();
+  setNow(Date.UTC(2026, 7, 30, 19, 0, 0));
+  await svc._tick();
+  calls.loadPlaylist.length = 0;
+
+  setNow(Date.UTC(2026, 7, 30, 19, 5, 0));
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.getState().activeProgram, null);
+  assert.ok(calls.loadPlaylist.some((call) => call.name === 'baseline_pl'),
+    'expired cue releases to the plan baseline when no default cue exists');
+});
+
 test('P2 no-durationMin deck cue keeps today\'s behavior (default cue does NOT fill under it)', async () => {
   const plan = basePlan({
     defaultCue: { label: 'House', action: { type: 'look', look: 'house' } },

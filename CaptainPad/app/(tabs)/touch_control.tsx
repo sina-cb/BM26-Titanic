@@ -445,7 +445,7 @@ export default function TouchControlScreen() {
         fullscreen={spatialFullscreen}
         backgroundColor={palette.background}
       />
-      <PlanLockBanner />
+      <PlanLockBanner surface="LIVE TOUCH" />
       {bridgeError ? (
         <View
           pointerEvents="none"

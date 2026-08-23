@@ -2,8 +2,7 @@
  * DayOverviewStrip — the maker's backbone: a horizontally-scannable strip
  * of festival day-cards (docs/38 §15.3). Each card shows:
  *   - weekday + date,
- *   - a vertical 24h sun column: sunrise→sunset shaded "day", golden hour +
- *     civil dusk marked,
+ *   - a vertical nocturnal column: this sunset → the following sunrise,
  *   - cue markers placed by `atLocal` along the column, coloured by kind
  *     (program=amber, mood=cyan, ambient=grey); manual / time-less cues
  *     surface as chips below.
@@ -17,56 +16,49 @@ import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-nati
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { OverviewDay, OverviewCue } from '@/utils/timelineApi';
-import { hhmmToMinutes, hhmmTo12h, dayFraction, kindColor, KIND_LABEL, KIND_COLORS } from './timelineTemplate';
+import { hhmmToMinutes, hhmmTo12h, kindColor, KIND_LABEL, KIND_COLORS } from './timelineTemplate';
+import { CalendarLegend } from './calendar_legend';
+import { isPartyWindowCue } from './party_window_logic';
+import {
+  nightAxisFor,
+  nightCueEntries,
+  nightLeadInCueEntries,
+  nightNowDayOffset,
+  nightOffset,
+  nightPhaseEntries,
+  yForNightOffset,
+} from './night_calendar_logic';
 
 export const COLUMN_HEIGHT = 240;
-const CARD_WIDTH = 150;
-
-// 06:00 at top reads "morning up", midnight at bottom — but a simple 0–24
-// top-to-bottom is more intuitive on a strip. Top = 00:00, bottom = 24:00.
-// Exported so the day editor's NOW playhead reuses the exact same mapping.
-export function yForMinutes(mins: number | null): number | null {
-  const f = dayFraction(mins);
-  if (f === null) return null;
-  return f * COLUMN_HEIGHT;
-}
-const yFor = yForMinutes;
+const CARD_WIDTH = 210;
 
 function SunColumn({
-  day, nowMinutes, C, styles,
+  day, nextDay, nowMinutes, nowDayOffset, C, styles,
 }: {
   day: OverviewDay;
-  /** Minutes-of-day for the live NOW playhead (only set on today's card). */
+  nextDay: OverviewDay | null;
+  /** Minutes-of-day for the live NOW playhead when this NIGHT contains now. */
   nowMinutes: number | null;
+  nowDayOffset: 0 | 1 | null;
   C: Palette;
   styles: Styles;
 }) {
-  const sunriseY = yFor(hhmmToMinutes(day.sun.sunrise));
-  const sunsetY = yFor(hhmmToMinutes(day.sun.sunset));
-  const ghStartY = yFor(hhmmToMinutes(day.sun.goldenHourStart));
-  const civilDuskY = yFor(hhmmToMinutes(day.sun.civilDusk));
-  const noonY = yFor(hhmmToMinutes(day.sun.solarNoon));
-
-  // Day-shade band between sunrise and sunset.
-  const bandTop = sunriseY;
-  const bandHeight = sunriseY !== null && sunsetY !== null ? Math.max(0, sunsetY - sunriseY) : null;
+  const axis = nightAxisFor(day, nextDay);
+  if (!axis) {
+    return <Text style={styles.sunError}>SUNSET / SUNRISE DATA MISSING</Text>;
+  }
+  const yFor = (offset: number | null) => yForNightOffset(offset, COLUMN_HEIGHT, axis);
+  const cueEntries = nightCueEntries(day, nextDay, axis);
+  const partyWindows = nightPhaseEntries(day, nextDay, axis)
+    .filter((entry) => entry.phase.name.startsWith('pw_'));
+  const ghStartY = yFor(nightOffset(hhmmToMinutes(day.sun.goldenHourStart) ?? -1, 0, axis));
+  const civilDuskY = yFor(nightOffset(hhmmToMinutes(day.sun.civilDusk) ?? -1, 0, axis));
+  const sunsetY = yFor(nightOffset(hhmmToMinutes(day.sun.sunset) ?? -1, 0, axis));
+  const sunriseY = yFor(nightOffset(hhmmToMinutes(nextDay?.sun.sunrise) ?? -1, 1, axis));
 
   return (
     <View style={styles.column}>
-      {/* Day shade */}
-      {bandTop !== null && bandHeight !== null ? (
-        <View
-          style={[
-            styles.dayBand,
-            { top: bandTop, height: bandHeight, backgroundColor: C.sidebarActiveBackground },
-          ]}
-        />
-      ) : null}
-
-      {/* Solar noon hairline */}
-      {noonY !== null ? (
-        <View style={[styles.sunLine, { top: noonY, backgroundColor: C.primary, opacity: 0.5 }]} />
-      ) : null}
+      <View style={[styles.nightBand, { backgroundColor: '#5b6cf518' }]} />
 
       {/* Golden hour marker (amber tick) */}
       {ghStartY !== null ? (
@@ -78,64 +70,89 @@ function SunColumn({
         <View style={[styles.sunTick, { top: civilDuskY - 1, backgroundColor: '#5b6cf5' }]} />
       ) : null}
 
-      {/* Sunrise / sunset edge labels */}
-      {sunriseY !== null ? (
-        <Text style={[styles.edgeTime, { top: Math.max(0, sunriseY - 7), left: 2, color: C.secondary }]}>
-          ☀ {hhmmTo12h(day.sun.sunrise)}
-        </Text>
-      ) : null}
       {sunsetY !== null ? (
-        <Text style={[styles.edgeTime, { top: Math.min(COLUMN_HEIGHT - 14, sunsetY - 7), left: 2, color: C.secondary }]}>
-          ☾ {hhmmTo12h(day.sun.sunset)}
-        </Text>
+        <View style={[styles.sunTick, { top: sunsetY - 1, backgroundColor: '#5b6cf5' }]} />
       ) : null}
+      {sunriseY !== null ? (
+        <View style={[styles.sunTick, { top: sunriseY - 1, backgroundColor: '#f5a623' }]} />
+      ) : null}
+
+      {/* Stable operator day: 6 PM on this date through next-date 6 PM. */}
+      <Text style={[styles.edgeTime, { top: 3, left: 4, color: '#5b6cf5' }]}>
+        ☾ 6 PM
+      </Text>
+      <Text style={[styles.edgeTime, { bottom: 3, left: 4, color: '#f5a623' }]}>
+        6 PM +1
+      </Text>
+
+      {partyWindows.map((entry) => {
+        const topY = yFor(entry.fromOffset);
+        const endY = yFor(entry.toOffset);
+        if (topY === null || endY === null) return null;
+        return (
+          <View
+            key={entry.key}
+            style={[
+              styles.cueBlock,
+              {
+                top: topY,
+                height: Math.max(4, endY - topY),
+                backgroundColor: '#b56dff44',
+                borderColor: '#b56dff',
+                borderWidth: 1,
+              },
+            ]}
+          />
+        );
+      })}
 
       {/* Cue BLOCKS (timed + durationMin>0) — a filled bar in the cue's kind
           colour spanning start→start+duration, so the operator sees the
           "planned areas" (the deck-owned windows). A duration that runs past
           24:00 is clamped to the column bottom. Point cues (no duration) fall
           through to the marker pass below. */}
-      {day.cues.map((cue, i) => {
-        const startMins = hhmmToMinutes(cue.atLocal);
-        if (startMins === null) return null;
+      {cueEntries.map(({ cue, startOffset, endOffset, date }, i) => {
+        if (startOffset === null) return null;
         if (!(typeof cue.durationMin === 'number' && cue.durationMin > 0)) return null;
-        const topY = yFor(startMins);
+        const topY = yFor(startOffset);
         if (topY === null) return null;
-        const endY = yFor(Math.min(1440, startMins + cue.durationMin)) ?? COLUMN_HEIGHT;
+        const endY = yFor(endOffset) ?? COLUMN_HEIGHT;
         const h = Math.max(3, endY - topY); // keep short windows visible
-        const col = kindColor(cue.kind, C);
+        const col = isPartyWindowCue(cue) ? '#b56dff' : kindColor(cue.kind, C);
         return (
           <View
-            key={`${cue.id}:blk:${i}`}
+            key={`${date}:${cue.id}:blk:${i}`}
             style={[styles.cueBlock, { top: topY, height: h, backgroundColor: col }]}
           />
         );
       })}
 
       {/* Cue markers (timed, point cues only — duration cues render as blocks). */}
-      {day.cues.map((cue, i) => {
+      {cueEntries.map(({ cue, startOffset, date }, i) => {
         if (typeof cue.durationMin === 'number' && cue.durationMin > 0) return null;
-        const y = yFor(hhmmToMinutes(cue.atLocal));
+        const y = yFor(startOffset);
         if (y === null) return null;
-        const col = kindColor(cue.kind, C);
+        const col = isPartyWindowCue(cue) ? '#b56dff' : kindColor(cue.kind, C);
         return (
           <View
-            key={`${cue.id}:${i}`}
+            key={`${date}:${cue.id}:${i}`}
             style={[styles.cueMarker, { top: y - 4, backgroundColor: col, borderColor: C.surfaceContainerLowest }]}
           />
         );
       })}
 
-      {/* NOW playhead — only on today's card. A bright thin line + a dot at the
-          current local time (top=00:00, bottom=24:00), driven by a 1s ticker
-          in the parent. Reuses yFor() so it lines up with the sun + cue math. */}
-      {nowMinutes !== null && (() => {
-        const nowY = yFor(nowMinutes);
+      {/* NOW playhead — on whichever displayed 6 PM → 6 PM operator day
+          actually contains the current instant. The line and its left-edge
+          label are always red so NOW has one grammar across every calendar. */}
+      {nowMinutes !== null && nowDayOffset !== null && (() => {
+        const nowY = yFor(nightOffset(nowMinutes, nowDayOffset, axis));
         if (nowY === null) return null;
         return (
           <React.Fragment key="now-playhead">
             <View style={[styles.nowLine, { top: nowY, backgroundColor: C.error }]} />
-            <View style={[styles.nowDot, { top: nowY - 3, backgroundColor: C.error, borderColor: C.surfaceContainerLowest }]} />
+            <View style={[styles.nowLabel, { top: nowY - 8, backgroundColor: C.error }]}>
+              <Text style={styles.nowLabelText}>NOW</Text>
+            </View>
           </React.Fragment>
         );
       })()}
@@ -153,14 +170,16 @@ function themeBadgeFor(day: OverviewDay): string | null {
 }
 
 export function DayCard({
-  day, isToday, isSelected, nowMinutes, onPress, onOpen, C, styles,
+  day, nextDay, isToday, isSelected, nowMinutes, nowDayOffset, onPress, onOpen, C, styles,
 }: {
   day: OverviewDay;
+  nextDay: OverviewDay | null;
   isToday: boolean;
   /** Operator-selected day (drives the cue filter below the strip). */
   isSelected: boolean;
   /** Minutes-of-day for the NOW playhead — non-null only on today's card. */
   nowMinutes: number | null;
+  nowDayOffset: 0 | 1 | null;
   /** Single tap: ZOOM IN to this day (the FESTIVAL → DAY rung). */
   onPress: () => void;
   /**
@@ -173,14 +192,11 @@ export function DayCard({
   styles: Styles;
 }) {
   // Time-sorted cues for the agenda list: timed cues ascending, then timeless.
-  const sortedCues = [...day.cues].sort((a, b) => {
-    const am = hhmmToMinutes(a.atLocal);
-    const bm = hhmmToMinutes(b.atLocal);
-    if (am === null && bm === null) return 0;
-    if (am === null) return 1;
-    if (bm === null) return -1;
-    return am - bm;
-  });
+  const axis = nightAxisFor(day, nextDay);
+  const nightCues = axis ? nightCueEntries(day, nextDay, axis) : [];
+  const leadInCues = axis ? nightLeadInCueEntries(day, axis) : [];
+  const lightingCues = [...leadInCues, ...nightCues];
+  const sortedCues = lightingCues.map((entry) => entry.cue);
   // Selection ring takes precedence as the dominant border; today still tints
   // the background. The two may be different days.
   const borderColor = isSelected ? C.primary : (isToday ? C.tertiary : C.ghostBorder);
@@ -223,24 +239,31 @@ export function DayCard({
         );
       })()}
 
-      <SunColumn day={day} nowMinutes={nowMinutes} C={C} styles={styles} />
+      <SunColumn
+        day={day}
+        nextDay={nextDay}
+        nowMinutes={nowMinutes}
+        nowDayOffset={nowDayOffset}
+        C={C}
+        styles={styles}
+      />
 
       {/* Event agenda — the day's cues as a readable, time-sorted list
           (kind dot · time · name). The column above is the visual plot; this
           is the legible detail the narrow column can't hold. */}
       <View style={styles.cardFooter}>
-        <Text style={styles.cueCount}>{`${day.cues.length} cue${day.cues.length === 1 ? '' : 's'}`}</Text>
-        {sortedCues.slice(0, 6).map((c: OverviewCue, i) => (
+        <Text style={styles.cueCount}>{`${lightingCues.length} lighting cue${lightingCues.length === 1 ? '' : 's'}`}</Text>
+        {sortedCues.slice(0, 4).map((c: OverviewCue, i) => (
           <View key={`${c.id}:ev:${i}`} style={styles.eventRow}>
-            <View style={[styles.eventDot, { backgroundColor: kindColor(c.kind, C) }]} />
+            <View style={[styles.eventDot, { backgroundColor: isPartyWindowCue(c) ? '#b56dff' : kindColor(c.kind, C) }]} />
             <Text style={styles.eventTime}>{hhmmTo12h(c.atLocal, '· · ·')}</Text>
             <Text style={styles.eventName} numberOfLines={1} ellipsizeMode="tail">
               {c.label || KIND_LABEL[c.kind]}
             </Text>
           </View>
         ))}
-        {day.cues.length > 6 ? (
-          <Text style={styles.eventMore}>{`+${day.cues.length - 6} more`}</Text>
+        {lightingCues.length > 4 ? (
+          <Text style={styles.eventMore}>{`+${lightingCues.length - 4} more`}</Text>
         ) : null}
       </View>
 
@@ -279,25 +302,38 @@ export function DayOverviewStrip({
   }
 
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ gap: 10, paddingRight: 8, paddingVertical: 4 }}
-    >
-      {days.map((day) => (
-        <DayCard
-          key={day.index}
-          day={day}
-          isToday={todayIndex === day.index}
-          isSelected={selectedIndex === day.index}
-          nowMinutes={todayIndex === day.index ? nowMinutes : null}
-          onPress={() => onOpenDay(day.index)}
-          onOpen={() => onOpenDay(day.index)}
-          C={C}
-          styles={styles}
-        />
-      ))}
-    </ScrollView>
+    <View style={{ gap: 6 }}>
+      <CalendarLegend />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 10, paddingRight: 8, paddingVertical: 4 }}
+      >
+        {days.map((day, index) => {
+          const nextDay = days[index + 1] ?? null;
+          const axis = nightAxisFor(day, nextDay);
+          const nowDayOffset = axis
+            ? nightNowDayOffset(day, nextDay, todayIndex, nowMinutes, axis)
+            : null;
+          const containsNow = nowDayOffset !== null;
+          return (
+            <DayCard
+              key={day.index}
+              day={day}
+              nextDay={nextDay}
+              isToday={todayIndex === day.index}
+              isSelected={selectedIndex === day.index}
+              nowMinutes={containsNow ? nowMinutes : null}
+              nowDayOffset={nowDayOffset}
+              onPress={() => onOpenDay(day.index)}
+              onOpen={() => onOpenDay(day.index)}
+              C={C}
+              styles={styles}
+            />
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -307,7 +343,7 @@ function makeStyles(C: Palette) {
   return StyleSheet.create({
     empty: {
       fontFamily: 'Inter_400Regular',
-      fontSize: 12,
+      fontSize: 16,
       color: C.secondary,
       paddingVertical: 12,
     },
@@ -326,13 +362,13 @@ function makeStyles(C: Palette) {
     },
     cardDay: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 11,
+      fontSize: 16,
       letterSpacing: 0.4,
       color: C.text,
     },
     cardDate: {
       fontFamily: 'Inter_400Regular',
-      fontSize: 10,
+      fontSize: 14,
       color: C.secondary,
     },
     column: {
@@ -344,8 +380,10 @@ function makeStyles(C: Palette) {
       position: 'relative',
       overflow: 'hidden',
     },
-    dayBand: {
+    nightBand: {
       position: 'absolute',
+      top: 0,
+      bottom: 0,
       left: 0,
       right: 0,
     },
@@ -368,18 +406,26 @@ function makeStyles(C: Palette) {
       height: 2,
       opacity: 0.95,
     },
-    nowDot: {
+    nowLabel: {
       position: 'absolute',
-      left: -1,
-      width: 8,
-      height: 8,
+      left: 3,
+      height: 16,
+      minWidth: 30,
       borderRadius: 4,
-      borderWidth: 1,
+      paddingHorizontal: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    nowLabelText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 9,
+      letterSpacing: 0.7,
+      color: '#ffffff',
     },
     edgeTime: {
       position: 'absolute',
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 9,
+      fontSize: 13,
       letterSpacing: 0.2,
     },
     cueMarker: {
@@ -394,7 +440,8 @@ function makeStyles(C: Palette) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 5,
-      paddingVertical: 1,
+      minHeight: 28,
+      paddingVertical: 2,
     },
     eventDot: {
       width: 6,
@@ -403,30 +450,40 @@ function makeStyles(C: Palette) {
     },
     eventTime: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
+      fontSize: 14,
       letterSpacing: 0.2,
       color: C.secondary,
       fontVariant: ['tabular-nums'],
-      width: 62,
+      width: 78,
     },
     eventName: {
       flex: 1,
       fontFamily: 'Inter_400Regular',
-      fontSize: 11,
+      fontSize: 16,
       color: C.text,
     },
     eventMore: {
       fontFamily: 'Inter_400Regular',
-      fontSize: 10,
+      fontSize: 14,
       color: C.secondary,
       marginTop: 1,
     },
     cueBlock: {
       position: 'absolute',
       right: 4,
-      width: 30,
+      width: 42,
       borderRadius: 3,
       opacity: 0.85,
+    },
+    sunError: {
+      height: COLUMN_HEIGHT,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.error,
+      padding: 8,
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      color: C.error,
     },
     cardFooter: {
       gap: 2,
@@ -435,7 +492,7 @@ function makeStyles(C: Palette) {
     },
     cueCount: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
+      fontSize: 14,
       letterSpacing: 0.6,
       color: C.icon,
       textTransform: 'uppercase',
@@ -450,7 +507,7 @@ function makeStyles(C: Palette) {
     },
     timelessChipText: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 9,
+      fontSize: 13,
       letterSpacing: 0.5,
     },
     todayBadge: {
@@ -463,7 +520,7 @@ function makeStyles(C: Palette) {
     },
     todayBadgeText: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 8.5,
+      fontSize: 13,
       letterSpacing: 0.6,
     },
     editBtn: {
@@ -471,14 +528,14 @@ function makeStyles(C: Palette) {
       borderWidth: 1,
       borderColor: C.ghostBorder,
       borderRadius: 6,
-      paddingVertical: 6,
+      paddingVertical: 10,
       alignItems: 'center',
       justifyContent: 'center',
-      minHeight: 30,
+      minHeight: 48,
     },
     editBtnText: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
+      fontSize: 14,
       letterSpacing: 0.8,
       color: C.text,
     },

@@ -82,6 +82,25 @@ test('save round-trips entry defaults including HSV picker values', () => {
   assert.deepEqual(loaded.entries[0].defaults.baseColor, { h: 0.55, s: 1, v: 1 });
 });
 
+test('overlay tint metadata round-trips strictly without changing ordinary entries', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  const written = pm.save({
+    name: 'overlay_colors',
+    entries: [
+      { id: 'tinted', pattern: '13_sparkle', overlayTint: '#00ccff' },
+      { id: 'native', pattern: '08_ocean_liner' },
+    ],
+  });
+  assert.equal(written.entries[0].overlayTint, '#00CCFF');
+  assert.equal('overlayTint' in written.entries[1], false);
+  assert.equal(pm.load('overlay_colors').entries[0].overlayTint, '#00CCFF');
+  assert.throws(() => pm.save({
+    name: 'bad_overlay_color',
+    entries: [{ id: 'bad', pattern: '13_sparkle', overlayTint: 'cyan' }],
+  }), /overlayTint must be null or a #RRGGBB color/);
+});
+
 test('load flags missing patterns', () => {
   const { playlistsDir, patternsDir } = tmpdirs();
   const pm = new PlaylistManager(playlistsDir, patternsDir);

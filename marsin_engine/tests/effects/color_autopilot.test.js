@@ -250,6 +250,50 @@ test('validate REFUSES delay_s 0 with a too-short fade (zero+zero is a spin loop
     /delay_s 0 \(continuous\) requires transitionMs >= 100/);
 });
 
+test('fixed behavior accepts exactly one inline pair and arms no rotation timer', async () => {
+  const pair = { c1: 0.12, c2: 0.64 };
+  const out = ColorAutopilot.validate({
+    active: true,
+    mode: 'palettes',
+    behavior: 'fixed',
+    palettes: [pair],
+    delay_s: 0,
+    shuffle: false,
+    transitionMs: 0,
+  }, KNOWN);
+  assert.equal(out.behavior, 'fixed');
+
+  const applied = [];
+  const ca = new ColorAutopilot((entry) => { applied.push(entry); }, tmpCfg());
+  ca.setState(out);
+  assert.equal(ca.nextSwapAtMs, null);
+  await ca.triggerNext();
+  assert.deepEqual(applied, [pair]);
+  assert.equal(ca.nextSwapAtMs, null);
+});
+
+test('fixed behavior rejects ambiguous rotating or library-backed shapes', () => {
+  assert.throws(() => ColorAutopilot.validate({
+    active: true,
+    behavior: 'fixed',
+    palettes: [{ c1: 0.1, c2: 0.2 }, { c1: 0.2, c2: 0.1 }],
+    delay_s: 0,
+  }, KNOWN), /requires exactly one inline/);
+  assert.throws(() => ColorAutopilot.validate({
+    active: true,
+    behavior: 'fixed',
+    palettes: ['aurora'],
+    delay_s: 0,
+  }, KNOWN), /requires exactly one inline/);
+  assert.throws(() => ColorAutopilot.validate({
+    active: true,
+    behavior: 'fixed',
+    palettes: [{ c1: 0.1, c2: 0.2 }],
+    delay_s: 0,
+    shuffle: true,
+  }, KNOWN), /requires shuffle false/);
+});
+
 test('validate still rejects junk entries that are neither an id nor a pair', () => {
   assert.throws(
     () => ColorAutopilot.validate({ active: true, palettes: [42], delay_s: 4 }, KNOWN),

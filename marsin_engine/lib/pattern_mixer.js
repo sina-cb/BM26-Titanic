@@ -227,6 +227,54 @@ function applyPreviewMaskBlackout(buffer, pixelMask, pixelCount) {
 // DECK_OVERLAY_OVER_CAP at the API boundary; addDeckOverlay also throws as a
 // belt-and-braces fail-loud so a buggy callsite can't sneak past the cap.
 export const DECK_OVERLAY_MAX = 4;
+export const DECK_OVERLAY_SOURCE_MODES = Object.freeze(['playlist', 'solid']);
+const DECK_OVERLAY_HEX_RE = /^#[0-9A-Fa-f]{6}$/;
+
+export function normalizeDeckOverlayColor(value, field, { nullable = false } = {}) {
+  if (nullable && value === null) return null;
+  if (typeof value !== 'string' || !DECK_OVERLAY_HEX_RE.test(value)) {
+    throw new TypeError(`${field} must be ${nullable ? 'null or ' : ''}a #RRGGBB color`);
+  }
+  return value.toUpperCase();
+}
+
+function deckOverlayRgb(hex) {
+  return [
+    Number.parseInt(hex.slice(1, 3), 16),
+    Number.parseInt(hex.slice(3, 5), 16),
+    Number.parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+/** Colorize RGB by preserving each pixel's brightness envelope. */
+export function applyDeckOverlayTint6ch(buffer, pixelCount, hex) {
+  const [tr, tg, tb] = deckOverlayRgb(hex);
+  for (let i = 0; i < pixelCount; i++) {
+    const offset = i * 6;
+    const level = Math.max(buffer[offset], buffer[offset + 1], buffer[offset + 2]) / 255;
+    buffer[offset] = Math.round(tr * level);
+    buffer[offset + 1] = Math.round(tg * level);
+    buffer[offset + 2] = Math.round(tb * level);
+    // A selected tint means ONLY that color family should render. Native
+    // white/amber/UV channels would otherwise leak untinted light around it.
+    buffer[offset + 3] = 0;
+    buffer[offset + 4] = 0;
+    buffer[offset + 5] = 0;
+  }
+}
+
+export function fillDeckOverlaySolid6ch(buffer, pixelCount, hex) {
+  const [r, g, b] = deckOverlayRgb(hex);
+  for (let i = 0; i < pixelCount; i++) {
+    const offset = i * 6;
+    buffer[offset] = r;
+    buffer[offset + 1] = g;
+    buffer[offset + 2] = b;
+    buffer[offset + 3] = 0;
+    buffer[offset + 4] = 0;
+    buffer[offset + 5] = 0;
+  }
+}
 
 // Engine-side accent palette for deck overlays. The CaptainPad swatch list
 // (CHANNEL_COLOR_SWATCHES, index.tsx) is UI-only; the engine owns this copy
@@ -1601,6 +1649,16 @@ export class PatternMixer {
     if (this.deckOverlayViewTaken(vs, cfg.id || null)) {
       throw new Error(`a deck overlay already targets this view`);
     }
+    const sourceMode = cfg.sourceMode === undefined ? 'playlist' : cfg.sourceMode;
+    if (!DECK_OVERLAY_SOURCE_MODES.includes(sourceMode)) {
+      throw new TypeError(`deck overlay sourceMode must be one of ${DECK_OVERLAY_SOURCE_MODES.join(', ')}`);
+    }
+    const playlistTint = cfg.playlistTint === undefined
+      ? null
+      : normalizeDeckOverlayColor(cfg.playlistTint, 'playlistTint', { nullable: true });
+    const solidColor = cfg.solidColor === undefined
+      ? '#FFFFFF'
+      : normalizeDeckOverlayColor(cfg.solidColor, 'solidColor');
     const overlay = new PatternChannel({
       ...cfg,
       // Deck overlays only use steady channel-blend modes (blend_screen
@@ -1610,6 +1668,9 @@ export class PatternMixer {
       viewSelection: vs,
       color: (typeof cfg.color === 'string') ? cfg.color : this._pickDeckOverlayColor(),
     });
+    overlay.sourceMode = sourceMode;
+    overlay.playlistTint = playlistTint;
+    overlay.solidColor = solidColor;
     this.deckOverlays.push(overlay);
     this.recompileChannelMask(overlay);
     return overlay;
@@ -3408,7 +3469,7 @@ export class PatternMixer {
     // overlays (operator refinement #2: shared globals). forceRender=true so a
     // muted overlay still advances its phase (vis + ping-pong smoothness).
     for (const overlay of this.deckOverlays) {
-      if (renderDeck) {
+      if (renderDeck && overlay.sourceMode !== 'solid') {
         overlay.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(overlay));
       } else {
         overlay._lastPhaseElapsed = elapsedSeconds;
@@ -3683,7 +3744,22 @@ export class PatternMixer {
       if (effFader <= 0.001) continue;
 
       this.channelBuffer.fill(0);
-      overlay.renderInto(this.wasmHost, this.channelBuffer, true);
+      if (overlay.sourceMode === 'solid') {
+        fillDeckOverlaySolid6ch(
+          this.channelBuffer,
+          this.pixelCount,
+          normalizeDeckOverlayColor(overlay.solidColor, 'solidColor'),
+        );
+      } else {
+        overlay.renderInto(this.wasmHost, this.channelBuffer, true);
+        if (overlay.playlistTint !== null && overlay.playlistTint !== undefined) {
+          applyDeckOverlayTint6ch(
+            this.channelBuffer,
+            this.pixelCount,
+            normalizeDeckOverlayColor(overlay.playlistTint, 'playlistTint'),
+          );
+        }
+      }
 
       // Per-overlay hue rotation BEFORE blend (W/A/U untouched), gated on
       // non-zero so a hue=0 overlay pays nothing. Stacks additively with the

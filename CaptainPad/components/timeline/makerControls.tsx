@@ -154,13 +154,14 @@ export function Stepper({
 
 // ── Dropdown (modal list) ───────────────────────────────────────────────
 export function Dropdown({
-  value, options, onSelect, placeholder = 'Select…', emptyHint,
+  value, options, onSelect, placeholder = 'Select…', emptyHint, disabled = false,
 }: {
   value: string | null;
   options: { id: string; label: string; hint?: string }[];
   onSelect: (id: string) => void;
   placeholder?: string;
   emptyHint?: string;
+  disabled?: boolean;
 }) {
   const C = usePalette();
   const [open, setOpen] = useState(false);
@@ -169,8 +170,10 @@ export function Dropdown({
     <>
       <TouchableOpacity
         onPress={() => setOpen(true)}
+        disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={current ? current.label : placeholder}
+        accessibilityState={{ disabled }}
         style={{
           flexDirection: 'row',
           alignItems: 'center',
@@ -182,6 +185,7 @@ export function Dropdown({
           borderWidth: 1,
           borderColor: current ? C.primary : C.ghostBorder,
           backgroundColor: C.surfaceContainerHigh,
+          opacity: disabled ? 0.38 : 1,
         }}
       >
         <Text

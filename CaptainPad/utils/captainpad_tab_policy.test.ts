@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CAPTAINPAD_DEFAULT_TAB,
+  CAPTAINPAD_RAIL_ORDER,
   CAPTAINPAD_TAB_POLICIES,
   canMountCaptainPadRoute,
+  captainPadRailOrder,
   captainPadRailRouteName,
   captainPadRouteHref,
   captainPadSubviewRoutes,
@@ -13,11 +16,11 @@ import {
 } from './captainpad_tab_policy';
 
 describe('CaptainPad tab policy', () => {
-  it('exposes only Deck, Mixer, Live Touch and Events during global Performance', () => {
+  it('keeps the view-only Timeline operator surface reachable during Performance', () => {
     // docs/52 §4: SPECIAL EVENTS joined the performance nav. Performance mode
     // freezes STRUCTURE; a special event IS the live set, and the operator has
     // to be able to reach the tab to arm one.
-    const performanceRoutes = ['index', 'mixer', 'touch_control', 'special_events'];
+    const performanceRoutes = ['index', 'mixer', 'touch_control', 'timeline', 'special_events'];
     expect(performanceRoutes.every((route) => isCaptainPadTabVisible(route, true))).toBe(true);
     expect(Object.keys(CAPTAINPAD_TAB_POLICIES)
       .filter((route) => !performanceRoutes.includes(route))
@@ -50,9 +53,29 @@ describe('CaptainPad tab policy', () => {
   });
 
   it('still freezes the surfaces that are structural authoring, not diagnostics', () => {
-    for (const routeName of ['audio', 'timeline', 'scheduler', 'dimmer_rack', 'simulation']) {
+    for (const routeName of ['audio', 'scheduler', 'dimmer_rack', 'simulation']) {
       expect(isCaptainPadTabVisible(routeName, true)).toBe(false);
     }
+  });
+
+  it('declares Timeline as the fresh-launch tab without changing route hrefs', () => {
+    expect(CAPTAINPAD_DEFAULT_TAB).toBe('timeline');
+    expect(captainPadRouteHref(CAPTAINPAD_DEFAULT_TAB)).toBe('/timeline');
+    expect(captainPadRouteHref('index')).toBe('/');
+  });
+
+  it('puts the five default operator tabs first with Timeline above Deck', () => {
+    expect(CAPTAINPAD_RAIL_ORDER.slice(0, 5)).toEqual([
+      'timeline',
+      'index',
+      'mixer',
+      'touch_control',
+      'audio',
+    ]);
+    expect(CAPTAINPAD_RAIL_ORDER.slice(0, 5).map((route) => (
+      captainPadTabPolicy(route).tabBarGroup
+    ))).toEqual(Array(5).fill('Default'));
+    expect(captainPadRailOrder('timeline')).toBeLessThan(captainPadRailOrder('index'));
   });
 
   it('restores the complete edit navigation when global Performance is inactive', () => {
@@ -73,6 +96,10 @@ describe('CaptainPad tab policy', () => {
   it('requires every registered route to declare an explicit policy', () => {
     expect(() => captainPadTabPolicy('unregistered')).toThrow('Missing CaptainPad tab policy');
     expect(Object.keys(CAPTAINPAD_TAB_POLICIES)).toHaveLength(14);
+    expect(Object.keys(CAPTAINPAD_TAB_POLICIES)
+      .filter((route) => isCaptainPadRailTab(route))
+      .every((route) => (CAPTAINPAD_RAIL_ORDER as readonly string[]).includes(route))).toBe(true);
+    expect(() => captainPadRailOrder('studio')).toThrow('Missing CaptainPad rail order');
   });
 
   it('keeps setup surfaces off the sidebar rail as CONFIG sub-views', () => {

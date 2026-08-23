@@ -316,7 +316,8 @@ function ShowColumn({
           // thing on the glass (docs/52 §5).
           const dimmed = screen.ceremonyLive && !stage.ceremonial;
           const stagePaint = paintAccent(stage.accent, surface);
-          const liveEffects = stage.effects.filter((e) => e.enabled);
+          const readyEffects = stage.effects.filter((effect) => effect.enabled);
+          const activeEffects = stage.effects.filter((effect) => effect.active);
           return (
             <View key={stage.id}>
               <EventStageButton
@@ -332,31 +333,52 @@ function ShowColumn({
                   the engine says they can fire. */}
               {stage.effects.length === 0 ? null : (
                 <View style={{
-                  flexDirection: 'row',
-                  flexWrap: 'wrap',
-                  gap: 12,
                   marginTop: -4,
                   marginBottom: 18,
                   paddingLeft: 12,
                   opacity: dimmed ? 0.18 : 1,
                 }}>
-                  <Text style={{
-                    fontFamily: 'SpaceGrotesk_700Bold',
-                    fontSize: 11,
-                    letterSpacing: 1.4,
-                    color: C.secondary,
-                    alignSelf: 'center',
+                  <View style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: 8,
                   }}>
-                    {liveEffects.length > 0 ? 'QUICK EFFECTS' : 'QUICK EFFECTS · IDLE'}
-                  </Text>
-                  {stage.effects.map((effect) => (
-                    <EventEffectButton
-                      key={effect.id}
-                      effect={effect}
-                      paint={paintAccent(effect.accent, surface)}
-                      onPress={() => onEffectPress(effect.id)}
-                    />
-                  ))}
+                    <Text style={{
+                      fontFamily: 'SpaceGrotesk_700Bold',
+                      fontSize: 11,
+                      letterSpacing: 1.4,
+                      color: C.secondary,
+                    }}>
+                      QUICK EFFECTS
+                    </Text>
+                    <Text style={{
+                      fontFamily: 'SpaceGrotesk_700Bold',
+                      fontSize: 10,
+                      letterSpacing: 1.3,
+                      color: activeEffects.length > 0
+                        ? C.tertiary
+                        : readyEffects.length > 0
+                          ? C.primary
+                          : C.secondary,
+                    }}>
+                      {activeEffects.length > 0
+                        ? `● ${activeEffects.length} ON`
+                        : readyEffects.length > 0
+                          ? `○ ${readyEffects.length} READY`
+                          : '○ LOCKED'}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                    {stage.effects.map((effect) => (
+                      <EventEffectButton
+                        key={effect.id}
+                        effect={effect}
+                        paint={paintAccent(effect.accent, surface)}
+                        onPress={() => onEffectPress(effect.id)}
+                      />
+                    ))}
+                  </View>
                 </View>
               )}
 

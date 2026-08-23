@@ -157,17 +157,18 @@ export function EventChoiceButton({ choice, paint, onPress }: EventChoiceButtonP
   const C = usePalette();
   const fill = choice.enabled ? (paint ? paint.fill : C.primary) : C.surfaceContainerLow;
   const ink = choice.enabled ? (paint ? paint.ink : C.onPrimary) : C.secondary;
+  const stateLabel = choice.selected ? 'LIVE' : (choice.enabled ? 'ENABLED' : 'OFF');
   return (
     <TouchableOpacity
       onPress={onPress}
       disabled={!choice.enabled}
       activeOpacity={0.9}
       accessibilityRole="button"
-      accessibilityLabel={choice.label}
+      accessibilityLabel={`${choice.label} — ${stateLabel.toLowerCase()}`}
       accessibilityHint={choice.requiresConfirm
         ? 'Replaces the answer already on the rig — asks for confirmation'
         : 'Reveals this answer on the whole ship'}
-      accessibilityState={{ disabled: !choice.enabled }}
+      accessibilityState={{ disabled: !choice.enabled, selected: choice.selected }}
       style={{
         flex: 1,
         minHeight: choice.compact ? SMALL_MIN_HEIGHT : CEREMONY_MIN_HEIGHT,
@@ -181,6 +182,27 @@ export function EventChoiceButton({ choice, paint, onPress }: EventChoiceButtonP
         opacity: choice.enabled ? 1 : 0.4,
       }}
     >
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: choice.compact ? 4 : 10,
+      }}>
+        <View style={{
+          width: 8,
+          height: 8,
+          borderRadius: 4,
+          backgroundColor: choice.enabled ? ink : C.ghostBorder,
+        }} />
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold',
+          fontSize: choice.compact ? 10 : 12,
+          letterSpacing: 1.5,
+          color: ink,
+        }}>
+          {stateLabel}
+        </Text>
+      </View>
       <Text style={{
         fontFamily: 'SpaceGrotesk_700Bold',
         fontSize: choice.compact ? 16 : 40,
@@ -205,6 +227,12 @@ export interface EventEffectButtonProps {
 export function EventEffectButton({ effect, paint, onPress }: EventEffectButtonProps) {
   const C = usePalette();
   const accent = paint ? paint.fill : C.tertiary;
+  const stateLabel = !effect.enabled
+    ? 'LOCKED'
+    : effect.mode === 'toggle'
+      ? (effect.active ? 'ON' : 'OFF')
+      : 'READY';
+  const highlighted = effect.enabled && (effect.mode === 'pulse' || effect.active);
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -212,25 +240,52 @@ export function EventEffectButton({ effect, paint, onPress }: EventEffectButtonP
       activeOpacity={0.8}
       hitSlop={HIT_SLOP}
       accessibilityRole="button"
-      accessibilityLabel={`${effect.label} — quick effect`}
-      accessibilityState={{ disabled: !effect.enabled }}
+      accessibilityLabel={`${effect.label} — quick effect ${stateLabel.toLowerCase()}`}
+      accessibilityState={{ disabled: !effect.enabled, selected: effect.active }}
       style={{
+        flexGrow: 1,
+        flexBasis: 160,
         minHeight: SMALL_MIN_HEIGHT,
-        minWidth: 128,
+        minWidth: 160,
         paddingHorizontal: 18,
+        paddingVertical: 10,
         borderRadius: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: effect.enabled ? C.surfaceContainerHigh : C.surfaceContainerLow,
+        backgroundColor: effect.active ? C.secondaryContainer : (
+          effect.enabled ? C.surfaceContainerHigh : C.surfaceContainerLow
+        ),
         borderWidth: 2,
-        borderColor: effect.enabled ? accent : C.ghostBorder,
+        borderColor: highlighted ? accent : C.ghostBorder,
         opacity: effect.enabled ? 1 : 0.35,
       }}
     >
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 4,
+      }}>
+        <View style={{
+          width: 8,
+          height: 8,
+          borderRadius: 4,
+          backgroundColor: highlighted ? accent : C.ghostBorder,
+        }} />
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold',
+          fontSize: 10,
+          letterSpacing: 1.5,
+          color: highlighted ? accent : C.secondary,
+        }}>
+          {stateLabel}
+        </Text>
+      </View>
       <Text style={{
         fontFamily: 'SpaceGrotesk_700Bold',
         fontSize: 15,
         letterSpacing: 1,
+        textAlign: 'center',
         color: effect.enabled ? C.text : C.secondary,
       }}>
         {effect.label}

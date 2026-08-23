@@ -470,7 +470,7 @@ export class ColorAutopilot {
       // two disagree about what is running — and worse, would round-trip
       // through the broadcast as if both were live. The refusal names the
       // offending field so the fix is one deletion.
-      for (const forbidden of ['palettes', 'livePalettes', 'delay_s', 'transitionMs', 'shuffle']) {
+      for (const forbidden of ['palettes', 'livePalettes', 'delay_s', 'transitionMs', 'shuffle', 'behavior']) {
         if (obj[forbidden] !== undefined) {
           throw new Error(
             `colorAutopilot.mode 'followNote' does not take '${forbidden}' — that is a palettes-mode field. `
@@ -489,6 +489,15 @@ export class ColorAutopilot {
     // in is how you get a mode toggle that fails a week later.
     let followNote;
     if (obj.followNote !== undefined) followNote = validateFollowNote(obj.followNote);
+    let behavior;
+    if (obj.behavior !== undefined) {
+      if (obj.behavior !== 'rotate' && obj.behavior !== 'fixed') {
+        throw new Error(
+          `colorAutopilot.behavior must be one of rotate, fixed (or absent, meaning rotate), `
+          + `got ${JSON.stringify(obj.behavior)}`);
+      }
+      behavior = obj.behavior;
+    }
     if (!Array.isArray(obj.palettes) || obj.palettes.length === 0) {
       throw new Error('colorAutopilot.palettes must be a non-empty array of palette ids');
     }
@@ -523,6 +532,13 @@ export class ColorAutopilot {
     const livePalettes = obj.livePalettes === undefined
       ? undefined
       : validateLivePalettes(obj.livePalettes, palettes);
+    if (behavior === 'fixed') {
+      if (palettes.length !== 1 || typeof palettes[0] === 'string') {
+        throw new Error(
+          'colorAutopilot.behavior fixed requires exactly one inline {c1,c2} palette.',
+        );
+      }
+    }
     // delay_s >= 0 (docs/55 §3.1). 0 means CONTINUOUS: no hold at all, the
     // fades run back to back. Negative / NaN / non-number is an authoring
     // error → throw loud. The zero+zero spin-loop case is refused below, once
@@ -537,6 +553,9 @@ export class ColorAutopilot {
       }
       shuffle = obj.shuffle;
     }
+    if (behavior === 'fixed' && shuffle) {
+      throw new Error('colorAutopilot.behavior fixed requires shuffle false.');
+    }
     // transitionMs: optional, non-negative finite number. 0 == hard cut. A
     // negative / NaN / non-number value is an authoring error → throw loud.
     let transitionMs = DEFAULT_TRANSITION_MS;
@@ -550,12 +569,13 @@ export class ColorAutopilot {
     // timer resolution. That config must be UNREPRESENTABLE, not clamped
     // (codex P0: no silent correction) — so continuous mode requires a real
     // fade to occupy the cycle.
-    if (obj.delay_s === 0 && transitionMs < MIN_CONTINUOUS_TRANSITION_MS) {
+    if (behavior !== 'fixed' && obj.delay_s === 0 && transitionMs < MIN_CONTINUOUS_TRANSITION_MS) {
       throw new Error(
         `colorAutopilot.delay_s 0 (continuous) requires transitionMs >= ${MIN_CONTINUOUS_TRANSITION_MS}, `
         + `got ${JSON.stringify(obj.transitionMs)}`);
     }
     const out = { active: obj.active, mode: 'palettes', palettes, delay_s: obj.delay_s, shuffle, transitionMs };
+    if (behavior) out.behavior = behavior;
     if (livePalettes) out.livePalettes = livePalettes;
     if (followNote) out.followNote = followNote;
     return out;
@@ -658,6 +678,9 @@ export class ColorAutopilot {
         shuffle: newState.shuffle !== undefined ? newState.shuffle : false,
         transitionMs: newState.transitionMs !== undefined ? newState.transitionMs : DEFAULT_TRANSITION_MS,
       };
+      if (newState.behavior !== undefined) {
+        this.config.colorAutopilot.behavior = newState.behavior;
+      }
       if (newState.livePalettes !== undefined) {
         this.config.colorAutopilot.livePalettes = newState.livePalettes.map(
           state => state.map(channel => ({ ...channel })),
@@ -868,7 +891,8 @@ export class ColorAutopilot {
       this.cycleTimer = null;
     }
     const st = this.state;
-    if (!st.active || !this._rotationLength()) {
+    if (!st.active || !this._rotationLength()
+      || (colorAutopilotMode(st) === 'palettes' && st.behavior === 'fixed')) {
       this._nextSwapAtMs = null;
       this._holdStartedAtMs = null;
       if (this.onSchedule) this.onSchedule();
@@ -1187,7 +1211,7 @@ export class ColorAutopilot {
     if (!sparse || typeof sparse !== 'object' || Array.isArray(sparse)) {
       throw new Error('colorAutopilot patch must be an object of the fields to change');
     }
-    for (const takeover of ['active', 'mode']) {
+    for (const takeover of ['active', 'mode', 'behavior']) {
       if (sparse[takeover] !== undefined) {
         throw new Error(
           `colorAutopilot patch cannot change '${takeover}' — starting, stopping and switching mode are `
@@ -1220,6 +1244,7 @@ export class ColorAutopilot {
       // purely so the shared validator has a complete object to check.
       const probeBody = {
         active: true,
+        behavior: next.behavior,
         palettes: sparse.palettes === undefined ? next.palettes : sparse.palettes,
         delay_s: next.delay_s,
         transitionMs: next.transitionMs,
@@ -1250,7 +1275,8 @@ export class ColorAutopilot {
       }
       next.shuffle = sparse.shuffle;
     }
-    if (mode === 'palettes' && next.delay_s === 0 && Number(next.transitionMs) < MIN_CONTINUOUS_TRANSITION_MS) {
+    if (mode === 'palettes' && next.behavior !== 'fixed'
+      && next.delay_s === 0 && Number(next.transitionMs) < MIN_CONTINUOUS_TRANSITION_MS) {
       // The spin-loop rule is checked against the MERGED pair, not the patched
       // field alone: retuning HOLD to CONT while the fade is still a hard cut
       // is exactly the config a full POST refuses, and a patch must not be a

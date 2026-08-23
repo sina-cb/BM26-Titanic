@@ -16,14 +16,15 @@
 //     "M:SS" countdown to when the plan auto-resumes. This is the
 //     plan-active-takeover case (distinct from the program-pending overlay).
 //
-// Tapping routes to the Timeline tab (a status glyph that's also a shortcut).
-// NEVER blocks the live performance — there is no modal here.
+// Tapping the amber lease state reopens the dismissible takeover notice with
+// RESUME NOW / GO TO PLAN. Other states remain shortcuts to Timeline.
 
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { usePalette } from '@/hooks/use-theme';
 import { useOperatorTakeover } from '@/hooks/useTimeline';
+import { requestPlanLeaseNotice } from '@/utils/plan_lease_notice_requests';
 
 // Timeline accent (cyan) — the same accent the timeline surfaces use, so the
 // "plan is live" tile reads as part of the timeline system at a glance.
@@ -78,13 +79,21 @@ export function PlanIndicatorPill({ compact = false }: Props) {
     };
   }, [leaseHeld, planActive, leaseRemainingSec, C.ghostBorder, C.secondary]);
 
+  const handlePress = () => {
+    if (leaseHeld) {
+      requestPlanLeaseNotice();
+      return;
+    }
+    router.push('/timeline');
+  };
+
   return (
     <TouchableOpacity
-      onPress={() => router.push('/timeline')}
+      onPress={handlePress}
       accessibilityRole="button"
       accessibilityLabel={
         leaseHeld
-          ? `Plan taken over, resumes in ${formatMSS(leaseRemainingSec)}. Open timeline.`
+          ? `Plan taken over, resumes in ${formatMSS(leaseRemainingSec)}. Open takeover controls.`
           : planActive
             ? 'Plan is active and driving the rig. Open timeline.'
             : 'No plan active. Open timeline.'

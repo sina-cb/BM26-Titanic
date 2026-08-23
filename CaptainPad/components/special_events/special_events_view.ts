@@ -79,6 +79,8 @@ export interface ChoiceViewModel {
   /** Show-data accent, or `null` to use the theme. */
   accent: string | null;
   enabled: boolean;
+  /** This answer is the one currently live on the rig. */
+  selected: boolean;
   /** True when pressing re-runs an already-made choice (asks first). */
   requiresConfirm: boolean;
   /** The answer is already live: collapse the ceremony buttons into compact,
@@ -91,6 +93,9 @@ export interface EffectViewModel {
   label: string;
   accent: string | null;
   enabled: boolean;
+  mode: 'toggle' | 'pulse';
+  /** Engine-owned state; meaningful only for toggle effects. */
+  active: boolean;
 }
 
 export interface ExtendViewModel {
@@ -214,6 +219,7 @@ function buildChoices(
     label: c.label,
     accent: c.color,
     enabled,
+    selected: placement === 'current' && state.choiceId === c.id,
     requiresConfirm: enabled && placement === 'current',
     compact: placement === 'current' && state.choiceId !== null,
   }));
@@ -299,6 +305,8 @@ export function describeEventScreen(state: SpecialEventsState | null): EventScre
           label: e.label,
           accent: e.color,
           enabled: effectEnabled(isCurrent, state),
+          mode: e.mode,
+          active: e.mode === 'toggle' && state.quickEffectStates[e.id] === true,
         })),
         extend: buildExtend(stage, placement, state),
       });

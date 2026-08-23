@@ -102,6 +102,8 @@ export interface EventQuickEffect {
   label: string;
   /** Show-data accent. `null` → the stage/theme accent is used. */
   color: string | null;
+  /** Toggle effects expose ON/OFF; pulse effects expose READY while actionable. */
+  mode: 'toggle' | 'pulse';
 }
 
 /** One variant button of a CHOICE stage (the ceremonial pink / blue pair). */
@@ -283,6 +285,8 @@ export interface SpecialEventsState {
   error: string | null;
   /** True while the runner holds the timeline's operator lease. */
   leaseHeld: boolean;
+  /** Engine-owned ON/OFF state for toggle quick effects on the current stage. */
+  quickEffectStates: Record<string, boolean>;
   /** Live pattern rotation for the stage holding the rig. */
   autopilot: EventAutopilotState;
   /** The show library, carried on every frame (see the header). */
@@ -345,10 +349,14 @@ function readArray(o: Record<string, unknown>, key: string, path: string): unkno
 
 function parseQuickEffect(raw: unknown, path: string): EventQuickEffect {
   const o = readObject(raw, path, 'a quick effect');
+  if (o.mode !== 'toggle' && o.mode !== 'pulse') {
+    fail(path, `'mode' must be toggle|pulse, got ${JSON.stringify(o.mode)}`);
+  }
   return {
     id: readString(o, 'id', path),
     label: readString(o, 'label', path),
     color: readOptionalColor(o, 'color', path),
+    mode: o.mode,
   };
 }
 
@@ -644,6 +652,18 @@ export function parseSpecialEventsState(
   if (o.timelineLeaseHeld !== undefined && typeof o.timelineLeaseHeld !== 'boolean') {
     fail(path, `'timelineLeaseHeld' must be a boolean, got ${JSON.stringify(o.timelineLeaseHeld)}`);
   }
+  const quickEffectStatesRaw = readObject(
+    o.quickEffectStates ?? {},
+    `${path}.quickEffectStates`,
+    'a quick-effect state map',
+  );
+  const quickEffectStates: Record<string, boolean> = {};
+  for (const [id, active] of Object.entries(quickEffectStatesRaw)) {
+    if (typeof active !== 'boolean') {
+      fail(path, `'quickEffectStates.${id}' must be a boolean, got ${JSON.stringify(active)}`);
+    }
+    quickEffectStates[id] = active;
+  }
 
   return {
     status: status as EventRunStatus,
@@ -657,6 +677,7 @@ export function parseSpecialEventsState(
     endedDetail: nullableString('endedDetail'),
     error: nullableString('lastError'),
     leaseHeld: o.timelineLeaseHeld === true,
+    quickEffectStates,
     autopilot: parseAutopilotState(o.autopilot, path),
     catalog: parseEventCatalog(o, path),
   };

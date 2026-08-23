@@ -28,11 +28,15 @@ function slugifyPlanName(raw: string): string {
 }
 
 export function PlanPickerSheet({
-  visible, plans, activePlan, draftName, onLoad, onActivate, onDuplicate, onDelete, onNewTemplate, onNewBlank, onClose,
+  visible, plans, activePlan, planActive, inFestivalWindow, draftName, onLoad, onActivate, onDuplicate, onDelete, onNewTemplate, onNewBlank, onClose,
 }: {
   visible: boolean;
   plans: string[];
   activePlan: string | null;
+  /** True only when the selected active plan is inside its schedule and driving. */
+  planActive: boolean;
+  /** False only when authoritative engine time is outside the plan span. */
+  inFestivalWindow: boolean | null;
   draftName: string | null;
   onLoad: (name: string) => void;
   onActivate: (name: string) => void;
@@ -91,7 +95,10 @@ export function PlanPickerSheet({
       >
         <Pressable onPress={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '80%' }}>
           <View style={styles.sheet}>
-            <Text style={styles.title}>PLANS</Text>
+            <Text style={styles.title}>SAVED PLANS</Text>
+            <Text style={styles.help}>
+              New plans save immediately as drafts. They never control the rig until you tap ACTIVATE.
+            </Text>
 
             <View style={styles.newRow}>
               <TouchableOpacity
@@ -100,7 +107,7 @@ export function PlanPickerSheet({
                 accessibilityLabel="New plan from BRC template"
               >
                 <IconSymbol name="plus.circle" size={18} color={C.onPrimary} />
-                <Text style={styles.newBtnText}>FROM BRC TEMPLATE</Text>
+                <Text style={styles.newBtnText}>NEW FROM TEMPLATE</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => setNaming('blank')}
@@ -108,7 +115,7 @@ export function PlanPickerSheet({
                 accessibilityLabel="New blank plan from scratch"
               >
                 <IconSymbol name="plus.circle" size={18} color={C.text} />
-                <Text style={styles.newBtnGhostText}>FROM SCRATCH</Text>
+                <Text style={styles.newBtnGhostText}>NEW EMPTY PLAN</Text>
               </TouchableOpacity>
             </View>
 
@@ -173,8 +180,16 @@ export function PlanPickerSheet({
                       >
                         <Text style={[styles.rowName, isDraft && { color: C.primary }]} numberOfLines={1}>{name}</Text>
                         <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
-                          {isActive ? <Text style={styles.tagActive}>● ACTIVE</Text> : null}
-                          {isDraft ? <Text style={styles.tagDraft}>EDITING</Text> : null}
+                          {isActive ? (
+                            <Text style={styles.tagActive}>
+                              {planActive
+                                ? '● DRIVING NOW'
+                                : inFestivalWindow === false
+                                  ? 'ACTIVE · OUT OF WINDOW'
+                                  : 'ACTIVE · WAITING'}
+                            </Text>
+                          ) : null}
+                          {isDraft ? <Text style={styles.tagDraft}>EDITING DRAFT</Text> : null}
                         </View>
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -184,8 +199,9 @@ export function PlanPickerSheet({
                       >
                         <Text style={styles.actionBtnText}>DUPLICATE</Text>
                       </TouchableOpacity>
-                      {/* ACTIVATE — hidden for the ACTIVE plan (it's already
-                          running; the ● ACTIVE tag says so). */}
+                      {/* ACTIVATE — hidden for the selected ACTIVE plan. A
+                          dormant active plan needs its festival dates changed,
+                          not another activation request. */}
                       {isActive ? null : (
                         <TouchableOpacity
                           onPress={() => onActivate(name)}
@@ -246,6 +262,13 @@ function makeStyles(C: Palette) {
       letterSpacing: 1,
       color: C.text,
       textTransform: 'uppercase',
+      marginBottom: 14,
+    },
+    help: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 14,
+      lineHeight: 20,
+      color: C.secondary,
       marginBottom: 14,
     },
     newRow: {

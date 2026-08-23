@@ -94,6 +94,8 @@ const S = {
   partyTunables: [],   // [{key,kind,label,unit,min,max,step,hint}] from the server
   partyParams: null,   // live detector thresholds (server truth)
   partyEdits: {},      // operator's un-applied editor values (key → value)
+  partyProfiles: [],
+  activePartyProfileId: null,
   partyState: null,    // 10 Hz meter snapshot
   partyOverride: 'auto',
   partyValidation: false,
@@ -255,6 +257,10 @@ function connect() {
       // PARTY page seed (report 20260725_19).
       if (Array.isArray(m.partyTunables)) S.partyTunables = m.partyTunables;
       if (m.partyParams) { S.partyParams = m.partyParams; S.partyEdits = { ...m.partyParams }; }
+      if (Array.isArray(m.partyProfiles)) {
+        S.partyProfiles = m.partyProfiles;
+        S.activePartyProfileId = m.activePartyProfileId || null;
+      }
       if (m.partyOverride) S.partyOverride = m.partyOverride;
       S.partyValidation = !!m.partyValidationMode;
       if (m.partyCaptures) S.partyCaptures = m.partyCaptures;
@@ -290,6 +296,20 @@ function connect() {
         if (S.partyEdits[k] === undefined) S.partyEdits[k] = m.params[k];
       }
       if (S.page === 'party') { renderPartyEditors(); renderPartyDirty(); }
+    } else if (m.type === 'partyProfiles') {
+      S.partyProfiles = m.profiles || [];
+      S.activePartyProfileId = m.activeId || null;
+      if (S.page === 'party') renderPartyProfiles();
+    } else if (m.type === 'partyProfileApplied') {
+      S.partyProfiles = m.profiles || [];
+      S.activePartyProfileId = m.activeId || null;
+      S.partyParams = m.params;
+      S.partyEdits = { ...m.params };
+      if (S.page === 'party') {
+        renderPartyProfiles();
+        renderPartyEditors();
+        renderPartyDirty();
+      }
     } else if (m.type === 'partyOverride') {
       S.partyOverride = m.mode;
       if (S.page === 'party') renderPartyOverride();
@@ -2236,6 +2256,20 @@ function buildPartyPage() {
       if (S.partyParams) S.partyEdits = { ...S.partyParams };
       renderPartyEditors(); renderPartyDirty();
     };
+    $('pp-add-btn').onclick = () => {
+      const input = $('pp-name');
+      const name = input.value.trim();
+      if (!name) {
+        flash('Party profile needs a name', true);
+        input.focus();
+        return;
+      }
+      send({ type: 'addPartyProfile', name, params: partyEditPayload() });
+      input.value = '';
+    };
+    $('pp-name').onkeydown = (event) => {
+      if (event.key === 'Enter') $('pp-add-btn').click();
+    };
     $('party-validation').onchange = () => {
       send({ type: 'setPartyValidationMode', on: $('party-validation').checked });
     };
@@ -2260,6 +2294,7 @@ function buildPartyPage() {
     };
     S.partyBuilt = true;
   }
+  renderPartyProfiles();
   renderPartyEditors();
   renderPartyDirty();
   renderPartyOverride();
@@ -2282,6 +2317,48 @@ function partyEditPayload() {
 function startCapture(kind) {
   const seconds = Number($('party-cap-sec').value);
   send({ type: 'startPartyCapture', kind, seconds });
+}
+
+function renderPartyProfiles() {
+  const chips = $('pp-chips');
+  const detail = $('pp-active');
+  if (!chips || !detail) return;
+  chips.replaceChildren();
+  for (const profile of S.partyProfiles) {
+    const active = profile.id === S.activePartyProfileId;
+    const chip = el('button', `mp-chip${active ? ' active' : ''}`);
+    chip.textContent = profile.name;
+    chip.title = `load "${profile.name}" into the live detector`;
+    chip.setAttribute('aria-pressed', active ? 'true' : 'false');
+    chip.onclick = () => send({ type: 'applyPartyProfile', id: profile.id });
+    chips.appendChild(chip);
+  }
+
+  detail.replaceChildren();
+  const active = S.partyProfiles.find((profile) => profile.id === S.activePartyProfileId);
+  if (!active) {
+    const empty = el('span', 'mp-active-vals');
+    empty.textContent = 'no Party profile selected';
+    detail.appendChild(empty);
+    return;
+  }
+  const name = el('span', 'mp-active-name');
+  name.textContent = `▶ ${active.name}`;
+  detail.appendChild(name);
+  const values = el('span', 'mp-active-vals');
+  values.textContent = `level ×${active.params.marginX} · kicks ${active.params.kickRateMin}–${active.params.kickRateMax}/s`
+    + ` · regularity ${active.params.kickRegMin} · shape ${active.params.shapeLowMin}/${active.params.shapeHighMin}`
+    + ` · ON ${fmtMs(active.params.onSustainMs)} · OFF ${fmtMs(active.params.offConfirmMs)}`;
+  detail.appendChild(values);
+  const remove = el('button', 'mp-del', '× delete');
+  remove.disabled = S.partyProfiles.length <= 1;
+  remove.title = `delete "${active.name}"`;
+  remove.onclick = () => confirmModal(
+    `Delete Party detector profile "${active.name}"?`,
+    () => send({ type: 'deletePartyProfile', id: active.id }),
+    'Delete',
+  );
+  detail.appendChild(remove);
 }
 
 function renderPartyEditors() {

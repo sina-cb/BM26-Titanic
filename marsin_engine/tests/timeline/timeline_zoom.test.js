@@ -390,6 +390,46 @@ test('travel {cueId} targets that cue fire instant; retarget is idempotent', asy
   await assert.rejects(svc.travel({ cueId: 'c_nope' }), /no resolvable time/);
 });
 
+test('travel {cueId} targets the start of a phase-gated Party Window', async () => {
+  const { svc, plan } = await setup();
+  const partyPlan = validateShowPlan({
+    ...plan,
+    phases: {
+      ...plan.phases,
+      pw_c_party: { start: { clock: '23:00' }, end: { clock: '02:00' } },
+    },
+    cues: [
+      ...plan.cues,
+      {
+        id: 'pwb_c_party',
+        label: 'Party Window baseline',
+        kind: 'ambient',
+        trigger: { type: 'phase', phase: 'pw_c_party' },
+        action: { type: 'look', look: 'ambient' },
+        days: 'all',
+      },
+      {
+        id: 'c_party',
+        label: 'Party 1',
+        kind: 'mood',
+        trigger: {
+          type: 'mood', from: 'calm', to: 'party', minDwellSec: 30,
+          cooldownSec: 120, whenPhase: 'pw_c_party',
+        },
+        action: { type: 'look', look: 'evening' },
+        durationMin: 12,
+        days: 'all',
+      },
+    ],
+  });
+  await svc.savePlan(partyPlan);
+
+  const result = await svc.travel({ cueId: 'c_party', date: '2026-09-04' });
+  assert.equal(result.zoom.cueId, 'c_party');
+  assert.equal(result.zoom.targetLocal, '23:00');
+  assert.equal(result.zoom.targetDate, '2026-09-04');
+});
+
 test('travel {step} walks the day events and fails loud at the ends', async () => {
   const { svc } = await setup();
   await svc.travel({ cueId: 'c_evening', date: '2026-09-04' });   // 19:00
@@ -556,6 +596,45 @@ test('REHEARSAL: travel works while the plan is dormant, and survives the tick',
   assert.equal(deck.playlist, 'evening_pl', 'and must not clobber the rehearsal look');
   assert.equal(svc.state.activeProgram, null, 'the PLAN still owns nothing');
   assert.equal(svc.state.controller, 'manual');
+});
+
+test('NAMED REHEARSAL: resolves, travels, and steps without activating the selected plan', async () => {
+  const { svc, plan, sceneDir, deck } = await setup();
+  const rehearsal = {
+    ...plan,
+    name: 'selected_plan',
+    looks: {
+      ...plan.looks,
+      evening: { ...plan.looks.evening, playlist: 'selected_evening' },
+      show: { ...plan.looks.show, playlist: 'selected_show' },
+    },
+  };
+  saveShowPlan(rehearsal, path.join(sceneDir, 'selected_plan.yaml'));
+
+  const preview = svc.resolveAt({
+    cueId: 'c_evening',
+    date: '2026-09-02',
+    planName: 'selected_plan',
+  });
+  assert.equal(preview.playlist, 'selected_evening');
+  assert.equal(preview.rehearsingPlan, 'selected_plan');
+  assert.equal(svc.activePlan, 'zoom_plan', 'preview must not activate the selected plan');
+
+  const travelled = await svc.travel({
+    cueId: 'c_evening',
+    date: '2026-09-02',
+    planName: 'selected_plan',
+  });
+  assert.equal(deck.playlist, 'selected_evening');
+  assert.equal(travelled.rehearsingPlan, 'selected_plan');
+  assert.equal(travelled.zoom.rehearsingPlan, 'selected_plan');
+  assert.equal(svc.activePlan, 'zoom_plan', 'travel must not activate the selected plan');
+
+  const stepped = await svc.travel({ step: 'next' });
+  assert.equal(deck.playlist, 'selected_show');
+  assert.equal(stepped.rehearsingPlan, 'selected_plan');
+  assert.equal(stepped.zoom.rehearsingPlan, 'selected_plan');
+  assert.equal(svc.activePlan, 'zoom_plan', 'step must stay inside named rehearsal');
 });
 
 test('REHEARSAL: exiting a dormant travel returns the plan to dormancy', async () => {

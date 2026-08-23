@@ -125,6 +125,7 @@ function identityColorFor(id: DeckSurfaceId, C: Palette): string {
     case 'patterns': return C.primary;
     case 'parameters': return MIDI_ACCENT;
     case 'autopilot': return C.tertiary;
+    case 'overlays': return C.warning;
     case 'pixels': return C.secondary;
     // Never rendered — the COLORS chip draws <ColorsIdentityDot> instead.
     // Kept total so a future surface id cannot silently fall through.

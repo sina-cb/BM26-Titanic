@@ -22,6 +22,7 @@ import { computeSunEvents } from './sun.js';
 import { anchorToMs, dateClockToEpochMs } from './triggers.js';
 import { festivalDateFor } from './festival.js';
 import { DECK_TRANSITION_MODES } from '../transition_modes.js';
+import { ColorAutopilot } from '../color_autopilot.js';
 
 // Sun events a sun anchor / sun trigger may reference (mirrors sun.js output).
 export const SUN_EVENTS = Object.freeze([
@@ -48,11 +49,11 @@ export const CUE_TRANSITION_MODES = DECK_TRANSITION_MODES;
 // disable (turn ALL deck overlays off). Absent → no change (docs/38 §16.9).
 const CUE_OVERLAY_MODES = Object.freeze(['enable', 'disable']);
 
-// A playlist action's optional `colorAutopilot` block (docs/39) — a DECK-ONLY knob
-// that configures the engine's palette-cycling daemon when the cue fires. Wire
-// shape: { active, palettes: string[](>=1), delay_s: number>0, shuffle?: bool }.
+// A playlist action's optional `colorAutopilot` block is the SAME contract as
+// the live Deck daemon: palette rings (saved or inline) and Follow Note.
 export const CUE_COLOR_AUTOPILOT_KEYS = Object.freeze([
-  'active', 'palettes', 'delay_s', 'shuffle', 'transitionMs',
+  'active', 'mode', 'behavior', 'palettes', 'livePalettes', 'delay_s', 'shuffle',
+  'transitionMs', 'followNote',
 ]);
 
 // ── small validators (all throw-style; first arg is a context label) ──────────
@@ -349,8 +350,16 @@ function validateTrigger(trigger, label, phaseNames) {
       }
       return out;
     }
-    case 'manual':
-      return { type: 'manual' };
+    case 'manual': {
+      const out = { type: 'manual' };
+      // Optional operator-day placement is PRESENTATION metadata only. It lets
+      // a human-fired cue occupy a clear calendar slot without converting it
+      // into a clock trigger; evaluateTick still never auto-fires manual cues.
+      if (trigger.placementAt !== undefined) {
+        out.placementAt = assertClock(trigger.placementAt, `${label}.placementAt`);
+      }
+      return out;
+    }
     default:
       throw new Error(`${label}.type must be one of clock, sun, phase, mood, manual, got ${JSON.stringify(trigger.type)}`);
   }
@@ -386,35 +395,20 @@ function validateCueTransition(transition, label) {
  * A 'playlist' action's optional `colorAutopilot` block (docs/39) — configures the
  * engine's palette-cycling daemon when this deck cue fires. THROW-style. The wire
  * shape MUST match the engine ColorAutopilot + the deck REST route:
- *   { active: bool, palettes: string[](>=1), delay_s: number>0, shuffle?: bool,
- *     transitionMs?: number>=0 }
- * Palette ids are validated for SHAPE here (non-empty strings); membership in the
- * rig's colorPalettes config is enforced at apply time (the plan validator has no
- * palette catalog). `transitionMs` (optional, default 0 = hard cut) is the
- * crossfade duration on a palette switch. Returns a normalized
- * { active, palettes, delay_s, shuffle, transitionMs }.
+ * Delegates to ColorAutopilot.validate so cue authoring cannot drift from the
+ * live Deck contract. Palette ids are validated for SHAPE here; membership in
+ * the rig's catalog remains an apply-time check because a show plan does not
+ * own that catalog.
  */
 function validateCueColorAutopilot(ca, label) {
   if (!isPlainObject(ca)) {
-    throw new Error(`${label} must be an object { active, palettes, delay_s, shuffle?, transitionMs? }`);
+    throw new Error(`${label} must be a color autopilot object`);
   }
-  assertBool(ca.active, `${label}.active`);
-  if (!Array.isArray(ca.palettes) || ca.palettes.length === 0) {
-    throw new Error(`${label}.palettes must be a non-empty array of palette ids`);
+  try {
+    return ColorAutopilot.validate(ca);
+  } catch (error) {
+    throw new Error(`${label}: ${error.message}`);
   }
-  const palettes = ca.palettes.map((id, i) => assertString(id, `${label}.palettes[${i}]`));
-  if (typeof ca.delay_s !== 'number' || Number.isNaN(ca.delay_s) || ca.delay_s <= 0) {
-    throw new Error(`${label}.delay_s must be a number > 0, got ${JSON.stringify(ca.delay_s)}`);
-  }
-  const shuffle = ca.shuffle !== undefined ? assertBool(ca.shuffle, `${label}.shuffle`) : false;
-  let transitionMs = 0;
-  if (ca.transitionMs !== undefined) {
-    if (typeof ca.transitionMs !== 'number' || !Number.isFinite(ca.transitionMs) || ca.transitionMs < 0) {
-      throw new Error(`${label}.transitionMs must be a number >= 0, got ${JSON.stringify(ca.transitionMs)}`);
-    }
-    transitionMs = ca.transitionMs;
-  }
-  return { active: ca.active, palettes, delay_s: ca.delay_s, shuffle, transitionMs };
 }
 
 function validateAction(action, label, lookNames, depth = 0) {
@@ -548,8 +542,16 @@ function validateAction(action, label, lookNames, depth = 0) {
       }
       return out;
     }
+    case 'special_event':
+      if (depth > 0) {
+        throw new Error(`${label}: special_event cannot run inside a sequence`);
+      }
+      return {
+        type: 'special_event',
+        showId: assertSlug(action.showId, `${label}.showId`),
+      };
     default:
-      throw new Error(`${label}.type must be one of playlist, sequence, look, scene, globals, tasks, effect, got ${JSON.stringify(action.type)}`);
+      throw new Error(`${label}.type must be one of playlist, sequence, look, scene, globals, tasks, effect, special_event, got ${JSON.stringify(action.type)}`);
   }
 }
 
@@ -668,6 +670,9 @@ function validateCue(cue, index, phaseNames, lookNames, seenIds, festival) {
   out.catchUp = cue.catchUp !== undefined ? assertBool(cue.catchUp, `${label}.catchUp`) : true;
   out.trigger = validateTrigger(cue.trigger, `${label}.trigger`, phaseNames);
   out.action = validateAction(cue.action, `${label}.action`, lookNames);
+  if (out.action.type === 'special_event' && out.trigger.type !== 'manual') {
+    throw new Error(`${label}.action special_event requires trigger.type "manual"`);
+  }
   // kind: explicit must be one of program | mood | ambient; default inference is
   // mood-trigger→'mood', everything else→'program' (docs/38 §14.3). We normalize
   // the default here so downstream (arbiter) always sees an explicit kind.
