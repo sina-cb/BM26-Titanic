@@ -33,6 +33,13 @@ import {
   forceConfirmPhrase,
   forceFleetVerdict,
   jobOutcomeModel,
+  runTimelineModel,
+  reReleaseConfirmPhrase,
+  reReleaseFleetVerdict,
+  ASSETS_CANONICAL,
+  ASSETS_RESIDUE,
+  TIMELINE_DONE,
+  TIMELINE_FAILED,
   VERDICT_SAFE_TO_KILL,
 } from '../src/dmx/smokestack_mode.js';
 
@@ -69,9 +76,12 @@ if (action === 'status') {
   console.log('rope_a             YES    SWARM-native');
   process.exit(0);
 }
+// The canonical run is the exact four, in the CLI's own registry order, so the
+// timeline parser sees real controller ids and real per-board lines.
+const FLEET = ['ss_left_right', 'ss_left_left', 'ss_right_right', 'ss_right_left'];
 console.log('=== smokestack ' + action + ' ===');
-const rows = targeted ? names : ['rope_a'];
-const target = names.length > 0 ? names[names.length - 1] : 'rope_a';
+const rows = targeted ? names : FLEET;
+const target = names.length > 0 ? names[names.length - 1] : FLEET[0];
 if (flags.includes('--dry-run')) {
   for (const name of rows) {
     if (action === 'to-swarm' && names.length === 2 && name === names[0]) {
@@ -85,7 +95,9 @@ if (flags.includes('--dry-run')) {
   process.exit(0);
 }
 if (flags.includes('--yes')) {
-  if (!flags.includes('--rollback-on-failure')) {
+  // A re-release has no previous mode to restore, so it never carries the
+  // mode path's rollback flag. Every other apply must.
+  if (!flags.includes('--rollback-on-failure') && action !== 're-release') {
     console.log('VERDICT: NOT SAFE - stub expected --rollback-on-failure');
     process.exit(1);
   }
@@ -108,7 +120,33 @@ if (flags.includes('--yes')) {
     console.log('VERDICT: NOT SAFE - 1 board(s) failed; transaction rollback OK');
     process.exit(1);
   }
-  for (const name of rows) console.log(name + '  OK  ->' + (action === 'to-dmx' ? 'dmx' : 'swarm'));
+  if (action === 're-release') {
+    for (const name of rows) console.log(name + '  PASS  assets->canonical  restored');
+    console.log('VERDICT: OK');
+    process.exit(0);
+  }
+  // The real CLI's phase markers, verbatim, so the panel's timeline parser is
+  // exercised against the exact strings it claims to anchor on.
+  if (!targeted) {
+    console.log('pre-flight: parallel read-only plan sweep across all boards');
+    for (const name of rows) console.log('  [' + name + '] pre-flight OK');
+    console.log('  [' + rows[0] + '] POST /api/config');
+    console.log('  [' + rows[0] + '] needs-reboot - queued for readiness polling');
+    console.log('followers: parallel mutation POST across 3 board(s)');
+    console.log('followers: parallel readiness wait across 3 board(s)');
+    console.log('followers: parallel verification across 3 board(s)');
+    if (action === 'to-swarm') {
+      console.log('  [' + rows[1] + '] reboot-survival already proven: skipping the ' +
+        'redundant terminal reboot');
+    }
+    console.log('terminal: independent canonical 4/4 asset/runtime readback');
+    const arrow = action === 'to-dmx' ? 'SWARM->DMX' : 'DMX->SWARM';
+    for (const name of rows) console.log(name + '  PASS  ' + arrow + '  verified');
+  } else {
+    for (const name of rows) {
+      console.log(name + '  OK  ->' + (action === 'to-dmx' ? 'dmx' : 'swarm'));
+    }
+  }
   console.log(action === 'to-swarm' ? 'VERDICT: SAFE TO KILL NETWORK' : 'VERDICT: OK');
   process.exit(0);
 }
@@ -707,4 +745,164 @@ test('force: BM refuses a fingerprint-less apply even where the OLD CLI would no
   assert.equal(applyJob.exitCode, 0, applyJob.output);
   assert.deepEqual(applyJob.args.slice(-2), ['--plan-fingerprint', 'b'.repeat(64)]);
   assert.equal(applyJob.verdictLine, 'VERDICT: OK');
+});
+
+// ── Run timeline + panel/CLI verdict parity (report _354 §1.5) ──────────────
+
+test('timeline: a real-shape apply log walks PREFLIGHT→VERDICT with four PASS chips',
+  async () => {
+    const port = servers.provisioned.port;
+    const targets = SMOKESTACK_CONTROLLER_IDS.map((controllerId, index) => ({
+      id: index + 1, controllerId,
+    }));
+
+    const dryStart = await request(port, 'POST', '/smokestack/run', { action: 'to-swarm' });
+    const dryJob = await pollJobDone(port, JSON.parse(dryStart.body).job.id);
+    // A dry-run models exactly two steps and yields the 64-hex fingerprint.
+    const dryTimeline = runTimelineModel(dryJob, targets);
+    assert.deepEqual(dryTimeline.steps.map((step) => step.key), ['PREFLIGHT', 'PLAN']);
+    assert.equal(dryTimeline.planFingerprint, 'b'.repeat(64));
+
+    const applyStart = await request(port, 'POST', '/smokestack/run', {
+      action: 'to-swarm', apply: true,
+      confirm: MODEL_CONFIRM_PHRASES['to-swarm'], dryRunJobId: dryJob.id });
+    const applyJob = await pollJobDone(port, JSON.parse(applyStart.body).job.id);
+
+    const timeline = runTimelineModel(applyJob, targets);
+    assert.deepEqual(timeline.steps.map((step) => step.key), [
+      'PREFLIGHT', 'CANARY', 'PARALLEL', 'REBOOT WAIT', 'VERIFY', 'COHERENCE',
+      'READBACK', 'VERDICT',
+    ]);
+    for (const step of timeline.steps) {
+      assert.equal(step.state, TIMELINE_DONE, `${step.key} must be done`);
+    }
+    assert.equal(timeline.rolledBack, false);
+    // All four boards settled with an explicit PASS row — no UNKNOWN, and no
+    // chip left showing mid-flight progress.
+    for (const controllerId of SMOKESTACK_CONTROLLER_IDS) {
+      assert.equal(timeline.chips.get(controllerId).text, 'PASS', controllerId);
+      assert.equal(timeline.chips.get(controllerId).cls, 'smk-transition-ok');
+    }
+    assert.ok(timeline.elapsedMs >= 0);
+
+    // PANEL/CLI PARITY: the timeline's verdict, the job's extracted verdict and
+    // the outcome model's trusted line are the SAME bytes the CLI printed.
+    const cliLine = applyJob.output.split(/\r?\n/).map((line) => line.trim())
+      .filter((line) => line.startsWith('VERDICT: ')).pop();
+    assert.equal(timeline.verdictLine, cliLine);
+    assert.equal(applyJob.verdictLine, cliLine);
+    assert.equal(cliLine, VERDICT_SAFE_TO_KILL);
+    assert.equal(jobOutcomeModel(applyJob).safeToKillNetwork, true);
+  });
+
+test('timeline: a rolled-back apply fails its step and never reports READBACK done',
+  async () => {
+    const port = servers.rollback.port;
+    const targets = SMOKESTACK_CONTROLLER_IDS.map((controllerId, index) => ({
+      id: index + 1, controllerId,
+    }));
+    const dryStart = await request(port, 'POST', '/smokestack/run', { action: 'to-swarm' });
+    const dryJob = await pollJobDone(port, JSON.parse(dryStart.body).job.id);
+    const applyStart = await request(port, 'POST', '/smokestack/run', {
+      action: 'to-swarm', apply: true,
+      confirm: MODEL_CONFIRM_PHRASES['to-swarm'], dryRunJobId: dryJob.id });
+    const applyJob = await pollJobDone(port, JSON.parse(applyStart.body).job.id);
+    assert.equal(applyJob.exitCode, 1);
+
+    const timeline = runTimelineModel(applyJob, targets);
+    // The stub's rollback wording is not one of the anchored phase lines, so
+    // the parser refuses to claim ANY later phase completed.
+    assert.notEqual(
+      timeline.steps.find((step) => step.key === 'READBACK').state, TIMELINE_DONE);
+    assert.notEqual(
+      timeline.steps.find((step) => step.key === 'VERDICT').state, TIMELINE_FAILED);
+    // Every board is UNKNOWN — the run printed no result row for any of them.
+    for (const controllerId of SMOKESTACK_CONTROLLER_IDS) {
+      assert.equal(timeline.chips.get(controllerId).text, 'UNKNOWN', controllerId);
+    }
+    assert.equal(jobOutcomeModel(applyJob).safeToKillNetwork, false);
+    assert.equal(applyJob.verdictLine,
+      'VERDICT: NOT SAFE - 1 board(s) failed; transaction rollback OK');
+  });
+
+// ── Asset re-release, end to end through the real server ────────────────────
+
+test('re-release: the full asset-repair chain runs the CLI subcommand and verifies honestly',
+  async () => {
+    const port = servers.patched.port;
+    const targetIds = ['ss_left_left', 'ss_right_right'];
+
+    const dryStart = await request(port, 'POST', '/smokestack/run',
+      { action: 're-release', targetIds });
+    assert.equal(dryStart.status, 200, dryStart.body);
+    const dryJob = await pollJobDone(port, JSON.parse(dryStart.body).job.id);
+    assert.equal(dryJob.exitCode, 0);
+    assert.deepEqual(dryJob.args,
+      ['re-release', '--names', 'ss_left_left,ss_right_right', '--dry-run']);
+    assert.deepEqual(dryJob.targetIds, targetIds);
+    assert.equal(dryJob.planFingerprint, 'b'.repeat(64));
+
+    // The multi-board phrase is required; the single-board one cannot arm it.
+    const wrongPhrase = await request(port, 'POST', '/smokestack/run', {
+      action: 're-release', apply: true, targetIds,
+      confirm: 'RE-RELEASE ss_left_left', dryRunJobId: dryJob.id });
+    assert.equal(wrongPhrase.status, 403);
+    assert.equal(JSON.parse(wrongPhrase.body).code, 'confirm_mismatch');
+
+    const applyStart = await request(port, 'POST', '/smokestack/run', {
+      action: 're-release', apply: true, targetIds,
+      confirm: 'RE-RELEASE ALL', dryRunJobId: dryJob.id });
+    assert.equal(applyStart.status, 200, applyStart.body);
+    const applyJob = await pollJobDone(port, JSON.parse(applyStart.body).job.id);
+    assert.equal(applyJob.exitCode, 0);
+    // The asset subcommand, fingerprint-bound, WITHOUT the mode path's flags.
+    assert.deepEqual(applyJob.args, ['re-release', '--names', 'ss_left_left,ss_right_right',
+      '--yes', '--plan-fingerprint', 'b'.repeat(64)]);
+    assert.equal(applyJob.args.includes('--rollback-on-failure'), false);
+    assert.equal(applyJob.verdictLine, 'VERDICT: OK');
+
+    const outcome = jobOutcomeModel(applyJob);
+    assert.equal(outcome.kind, 're_release_ok');
+    // Exit 0 is HALF the evidence: the panel still says "pending readback".
+    assert.equal(outcome.safeToKillNetwork, false);
+    assert.match(outcome.headline, /pending independent readback/);
+
+    // The independent readback is what decides. Still-residue ⇒ not verified.
+    const canonical = SMOKESTACK_CONTROLLER_IDS.map((controllerId) =>
+      ({ controllerId, assets: ASSETS_CANONICAL }));
+    assert.match(reReleaseFleetVerdict(targetIds, canonical), /^ASSETS RESTORED/);
+    assert.match(reReleaseFleetVerdict(targetIds, canonical.map((row) =>
+      row.controllerId === 'ss_left_left' ? { ...row, assets: ASSETS_RESIDUE } : row)),
+    /^ASSETS NOT VERIFIED — ss_left_left/);
+  });
+
+test('re-release: a fingerprint-less apply is refused by BM before the CLI ever runs',
+  async () => {
+    const port = servers.patched.port;
+    // No dry-run at all ⇒ nothing to bind to.
+    const noPlan = await request(port, 'POST', '/smokestack/run', {
+      action: 're-release', apply: true, targetIds: ['ss_left_left'],
+      confirm: 'RE-RELEASE ss_left_left' });
+    assert.equal(noPlan.status, 409);
+    assert.equal(JSON.parse(noPlan.body).code, 'dry_run_required');
+
+    // A mode dry-run can never arm an asset apply, and vice versa.
+    const modeDry = await request(port, 'POST', '/smokestack/run', { action: 'to-dmx' });
+    const modeDryJob = await pollJobDone(port, JSON.parse(modeDry.body).job.id);
+    const crossed = await request(port, 'POST', '/smokestack/run', {
+      action: 're-release', apply: true, targetIds: ['ss_left_left'],
+      confirm: 'RE-RELEASE ss_left_left', dryRunJobId: modeDryJob.id });
+    assert.equal(crossed.status, 409);
+    assert.equal(JSON.parse(crossed.body).code, 'dry_run_required');
+  });
+
+test('re-release: model and server derive the SAME confirm phrase for every target shape', () => {
+  const shapes = [
+    ['ss_left_left'], ['ss_left_right'], ['ss_right_right'], ['ss_right_left'],
+    ['ss_left_left', 'ss_right_right'], SMOKESTACK_CONTROLLER_IDS.slice(),
+  ];
+  for (const ids of shapes) {
+    assert.equal(serverConfirmPhraseFor('re-release', ids), reReleaseConfirmPhrase(ids),
+      ids.join(','));
+  }
 });

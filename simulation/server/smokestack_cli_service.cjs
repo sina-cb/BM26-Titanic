@@ -45,7 +45,14 @@
  *      through `--names` — and the CLI's asset/identity contract is never
  *      weakened by any of this.
  *
- * Applies always pass `--rollback-on-failure`, so a board that fails its
+ *   6. ASSET RE-RELEASE (`re-release`) — restores a board to the frozen
+ *      canonical release so the switch flow's asset contract can pass again.
+ *      Same two-step as everything else (dry-run → 64-hex fingerprint → typed
+ *      `RE-RELEASE <id>` / `RE-RELEASE ALL` → apply), same frozen-target-set
+ *      rule as the targeted repair. It never changes a board's MODE, and it
+ *      never earns a fleet verdict of any kind.
+ *
+ * Mode applies always pass `--rollback-on-failure`, so a board that fails its
  * post-change verification is restored to its pre-change snapshot by the CLI.
  *
  * Output handling: stdout+stderr are captured verbatim (arrival order) up to
@@ -68,9 +75,18 @@ const DEFAULT_PYTHON = 'python';
 const ACTION_REPAIR_TO_DMX = 'repair-to-dmx';
 const ACTION_FORCE_TO_DMX = 'force-to-dmx';
 const ACTION_FORCE_TO_SWARM = 'force-to-swarm';
+// Restore a board's ON-BOARD ASSETS to the frozen canonical release. It is a
+// MUTATING action (it deletes and uploads files and reboots the board) but it
+// never touches identity, roles, universes, wifi, firmware — or MODE.
+const ACTION_RE_RELEASE = 're-release';
 const FORCE_ACTIONS = Object.freeze([ACTION_FORCE_TO_DMX, ACTION_FORCE_TO_SWARM]);
-const ACTIONS = ['status', 'to-dmx', 'to-swarm', ACTION_REPAIR_TO_DMX, ...FORCE_ACTIONS];
-const MUTATING_ACTIONS = ['to-dmx', 'to-swarm', ACTION_REPAIR_TO_DMX, ...FORCE_ACTIONS];
+const ACTIONS = ['status', 'to-dmx', 'to-swarm', ACTION_REPAIR_TO_DMX, ACTION_RE_RELEASE,
+  ...FORCE_ACTIONS];
+const MUTATING_ACTIONS = ['to-dmx', 'to-swarm', ACTION_REPAIR_TO_DMX, ACTION_RE_RELEASE,
+  ...FORCE_ACTIONS];
+/** Actions whose exact target set is frozen at dry-run and re-checked at apply. */
+const TARGETED_ACTIONS = Object.freeze([ACTION_REPAIR_TO_DMX, ACTION_RE_RELEASE,
+  ...FORCE_ACTIONS]);
 const TITANIC_TARGET_IDS = Object.freeze([
   'ss_left_left',
   'ss_left_right',
@@ -102,6 +118,13 @@ const CONFIRM_PHRASES = {
  * pins all 8 combinations plus the 3 fleet ones).
  */
 function confirmPhraseFor(action, targetIds) {
+  if (action === ACTION_RE_RELEASE) {
+    // MUST equal the browser model's reReleaseConfirmPhrase (routes test pins
+    // both). One board names itself; a multi-board run confirms the SET, whose
+    // exact membership is separately frozen and re-checked byte-for-byte.
+    if (!Array.isArray(targetIds) || targetIds.length === 0) return null;
+    return targetIds.length === 1 ? `RE-RELEASE ${targetIds[0]}` : 'RE-RELEASE ALL';
+  }
   if (!FORCE_ACTIONS.includes(action)) return CONFIRM_PHRASES[action];
   if (!Array.isArray(targetIds) || targetIds.length !== 1) return null;
   return `${action === ACTION_FORCE_TO_DMX ? 'FORCE DMX' : 'FORCE SWARM'} ${targetIds[0]}`;
@@ -131,6 +154,20 @@ function extractVerdictLine(output) {
   return matches && matches.length > 0 ? matches[matches.length - 1].trim() : null;
 }
 
+/**
+ * The CLI's first `WOULD REFUSE:` line, or null. It appears INSIDE the plan
+ * table's row (after the BOARD/RESULT/MODE columns) as well as on continuation
+ * lines, so this must search the line rather than anchor at its start.
+ */
+function firstWouldRefuse(output) {
+  if (typeof output !== 'string') return null;
+  for (const line of output.split(/\r?\n/)) {
+    const index = line.indexOf('WOULD REFUSE:');
+    if (index >= 0) return line.slice(index).trim();
+  }
+  return null;
+}
+
 /** Last exact SHA-256 plan fingerprint emitted by a completed dry-run. */
 function extractPlanFingerprint(output) {
   if (typeof output !== 'string') return null;
@@ -153,16 +190,16 @@ function validateTargetIds(action, targetIds) {
     }
     return { ok: true, targetIds: Object.freeze([targetId]) };
   }
-  if (action !== ACTION_REPAIR_TO_DMX) {
+  if (action !== ACTION_REPAIR_TO_DMX && action !== ACTION_RE_RELEASE) {
     if (targetIds !== undefined) {
       return { ok: false, code: 'bad_targets',
-        error: `targetIds is only valid for '${ACTION_REPAIR_TO_DMX}'` };
+        error: `targetIds is only valid for ${TARGETED_ACTIONS.join(', ')}` };
     }
     return { ok: true, targetIds: null };
   }
   if (!Array.isArray(targetIds) || targetIds.length === 0) {
     return { ok: false, code: 'bad_targets',
-      error: `'${ACTION_REPAIR_TO_DMX}' requires a non-empty targetIds array` };
+      error: `'${action}' requires a non-empty targetIds array` };
   }
   const seen = new Set();
   for (const targetId of targetIds) {
@@ -420,6 +457,15 @@ function createSmokestackCliService(opts = {}) {
           error: 'the referenced dry-run has no exact SHA-256 plan fingerprint — ' +
             're-run it before applying' };
       }
+      // The CLI's dry-run exits 0 and prints its ordinary no-write verdict even
+      // when it refused boards on the asset/identity contract — the refusals
+      // live in the plan table. Spawning the apply would just burn a pre-flight
+      // rejection, so refuse here and hand back the CLI's own first reason.
+      const refusal = firstWouldRefuse(dryRun.output);
+      if (refusal) {
+        return { ok: false, code: 'dry_run_failed',
+          error: `the referenced dry-run's plan was REFUSED by the CLI — ${refusal}` };
+      }
       // A dry-run is single-use. The moment an apply is accepted against it,
       // it is consumed — a job id lying around in the panel can never arm a
       // second write, and neither can its fingerprint (which is only ever
@@ -434,7 +480,7 @@ function createSmokestackCliService(opts = {}) {
           error: `the referenced dry-run is older than ${Math.round(freshMs / 60000)} ` +
             'minutes — re-run it so the plan reflects the fleet now' };
       }
-      if ((action === ACTION_REPAIR_TO_DMX || isForce) &&
+      if (TARGETED_ACTIONS.includes(action) &&
           !sameTargetIds(dryRun.targetIds, targets.targetIds)) {
         return { ok: false, code: 'dry_run_target_mismatch',
           error: 'apply targetIds must exactly match the frozen targetIds from the dry-run' };
@@ -469,6 +515,13 @@ function createSmokestackCliService(opts = {}) {
         '--names', context.cliNames.join(','),
         ...(apply ? ['--yes', '--rollback-on-failure', '--plan-fingerprint',
           validatedDryRun.planFingerprint] : ['--dry-run'])];
+    } else if (action === ACTION_RE_RELEASE) {
+      // The CLI's own asset subcommand. It carries no --rollback-on-failure:
+      // a re-release has no previous mode to restore, and the CLI reports a
+      // failed board loudly in its result table instead.
+      args = ['re-release', '--names', targets.targetIds.join(','),
+        ...(apply ? ['--yes', '--plan-fingerprint', validatedDryRun.planFingerprint]
+          : ['--dry-run'])];
     } else if (action === ACTION_REPAIR_TO_DMX) {
       args = ['to-dmx', '--names', targets.targetIds.join(','),
         ...(apply ? ['--yes', '--rollback-on-failure', '--plan-fingerprint',
@@ -572,9 +625,11 @@ module.exports = {
   ENV_PYTHON,
   ACTIONS,
   ACTION_REPAIR_TO_DMX,
+  ACTION_RE_RELEASE,
   ACTION_FORCE_TO_DMX,
   ACTION_FORCE_TO_SWARM,
   FORCE_ACTIONS,
+  TARGETED_ACTIONS,
   TITANIC_TARGET_IDS,
   TITANIC_LEADER_ID,
   CONFIRM_PHRASES,
@@ -586,6 +641,7 @@ module.exports = {
   CLI_NO_WRITE_LINE,
   extractVerdictLine,
   extractPlanFingerprint,
+  firstWouldRefuse,
   validateTargetIds,
   validateForceContext,
   createSmokestackCliService,

@@ -32,9 +32,20 @@ import {
   forceConfirmPhrase,
   forceFleetVerdict,
   preflightDigest,
+  fleetVerdictRows,
+  fleetFixList,
+  dmxFeedModel,
+  assetsState,
+  runTimelineModel,
+  smokestackReReleaseModel,
+  reReleaseConfirmPhrase,
+  reReleaseFleetVerdict,
+  ASSETS_CANONICAL,
+  VERDICT_GOOD,
   ACTION_TO_DMX,
   ACTION_TO_SWARM,
   ACTION_REPAIR_TO_DMX,
+  ACTION_RE_RELEASE,
   ACTION_FORCE_TO_DMX,
   ACTION_FORCE_TO_SWARM,
   FORCE_ACTIONS,
@@ -82,8 +93,20 @@ let flow = null;
 let flowError = null;        // last /smokestack/run refusal (rendered inline)
 let pollTimer = null;
 const postJobReadbacks = new Set();
+// The last COMPLETED dry-run's captured output, kept so the board table can
+// show which boards the CLI itself refused on the asset contract even after
+// the flow is dismissed. Never used to infer board state — only refusals.
+let lastDryRunOutput = null;
+// Ticks the run timeline's elapsed counter without repainting the section
+// (a full repaint mid-run would tear down the operator's confirm textbox).
+let elapsedTimer = null;
 
 const JOB_POLL_MS = 1200;
+const ELAPSED_TICK_MS = 250;
+/** Past this, the readback line turns `smk-stale` and the card says so. */
+const READBACK_STALE_MS = 30000;
+// One literal so the two direction buttons cannot drift apart in styling.
+const SWITCH_BTN_CLASS = 'cm-btn smk-switch-btn smk-switch-primary';
 
 function sameTargetIds(left, right) {
   return Array.isArray(left) && Array.isArray(right)
@@ -196,13 +219,25 @@ function queuePostJobReadback(job) {
   afterCurrentSweep.then(() => refreshSmokestackStatuses({ readbackJobId: job.id }));
 }
 
+/** Every board's mode right now, keyed by controllerId — the baseline a
+ * re-release must not change. */
+function snapshotModes() {
+  const modes = {};
+  for (const target of lastTargets) {
+    modes[target.controllerId] = smokestackBoardModel(
+      target, statusResults.get(target.id) || null).mode;
+  }
+  return modes;
+}
+
 function startRun(action, { apply = false, targetIds = null, force = null } = {}) {
   const payload = { action, apply };
   let frozenTargetIds = null;
-  if (action === ACTION_REPAIR_TO_DMX) {
+  if (action === ACTION_REPAIR_TO_DMX || action === ACTION_RE_RELEASE) {
     const sourceIds = apply && flow ? flow.targetIds : targetIds;
     if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
-      flowError = 'repair refused: exact controller target set is missing';
+      flowError = `${action === ACTION_RE_RELEASE ? 're-release' : 'repair'} refused: exact ` +
+        'controller target set is missing';
       repaint();
       return Promise.resolve();
     }
@@ -240,7 +275,7 @@ function startRun(action, { apply = false, targetIds = null, force = null } = {}
       if (!body || body.ok !== true) {
         throw new Error((body && body.error) || 'run refused with no reason');
       }
-      if ((action === ACTION_REPAIR_TO_DMX || FORCE_ACTIONS.includes(action))
+      if (frozenTargetIds !== null
           && !sameTargetIds(body.job && body.job.targetIds, frozenTargetIds)) {
         throw new Error('run refused: server job target set does not match the frozen plan');
       }
@@ -257,6 +292,10 @@ function startRun(action, { apply = false, targetIds = null, force = null } = {}
           controllerId: forceContext ? forceContext.controllerId : null,
           force: forceContext,
           preUptimeMs: forceContext ? forceContext.preUptimeMs : null,
+          // An asset re-release must leave every board's MODE exactly where it
+          // found it. Snapshot the modes now so the final readback can prove
+          // that, instead of assuming it.
+          preModes: snapshotModes(),
           dryRunJob: body.job,
           applyJob: null,
           typed: '',
@@ -296,6 +335,9 @@ function schedulePoll() {
         if (body.job.state === 'done') {
           clearInterval(pollTimer);
           pollTimer = null;
+          // Keep a refused dry-run's own words: the board table uses them to
+          // flag exactly which boards the CLI's asset contract rejected.
+          if (!body.job.apply) lastDryRunOutput = body.job.output || null;
           // Exactly one bounded readback follows EVERY completed job, including
           // a refused dry-run. Exit status never substitutes for saved/runtime
           // state on the four exact controllers.
@@ -321,6 +363,10 @@ function el(tag, className, text) {
 
 function actionLabel(action) {
   if (action === ACTION_REPAIR_TO_DMX) return 'repair selected controllers to DMX';
+  if (action === ACTION_RE_RELEASE) {
+    const ids = flow && Array.isArray(flow.targetIds) ? flow.targetIds : [];
+    return `re-release canonical assets on ${ids.length > 0 ? ids.join(', ') : 'the flagged boards'}`;
+  }
   if (action === ACTION_FORCE_TO_DMX) {
     return `FORCE ${flow && flow.controllerId ? flow.controllerId : 'one controller'} to DMX`;
   }
@@ -342,58 +388,127 @@ function formatPoint(point) {
   return `(${point.x}, ${point.y}, ${point.z})`;
 }
 
+/**
+ * The board table (report _354 §1.1-2): one line per controller, no wrapping,
+ * answering "which board is bad and what do I do about it" without scrolling
+ * or opening anything.
+ */
+// The controller pane is narrow. Nine columns on one line clipped the two that
+// matter most — the verdict and the remedy — off the right edge behind a
+// horizontal scrollbar, which is precisely the information this card exists to
+// deliver. So each board is a small stack instead:
+//
+//   line 1  operator label · id     [MODE]   [VERDICT]
+//   line 2  role · follow · assets · fw · reach          (detail, secondary)
+//   line 3  the one-line remedy                          (only when non-GOOD)
+//   line 4  the live transaction line                    (only during a job)
+//
+// Nothing clips, nothing scrolls sideways, and the eye lands on the chips.
 function createCompactRows(targets) {
-  const rows = el('div', 'smk-rows');
+  const rows = el('div', 'smk-rows smk-board-table');
   const refs = new Map();
+
   for (const target of targets) {
-    const row = el('div', 'smk-row');
+    const row = el('div', 'smk-row smk-board-row');
     row.dataset.controllerId = target.controllerId;
     row.dataset.filterTags = target.filterTag;
 
-    const name = el('span', 'smk-row-name', target.operatorLabel);
-    row.appendChild(name);
-
-    const identity = el('span', 'smk-row-identity', target.controllerId);
-    row.appendChild(identity);
-
+    const name = el('span', 'smk-bc-name');
+    name.appendChild(el('span', 'smk-row-name', target.operatorLabel));
+    name.appendChild(el('span', 'smk-row-identity', target.controllerId));
+    const modeCell = el('span', 'smk-bc-mode');
     const mode = el('span', 'smk-chip');
-    row.appendChild(mode);
+    modeCell.appendChild(mode);
+    const verdictCell = el('span', 'smk-bc-verdict');
+    const verdict = el('span', 'smk-verdict-chip');
+    verdictCell.appendChild(verdict);
+    row.append(name, modeCell, verdictCell);
 
-    const state = el('span', 'smk-row-state');
-    const readiness = el('span', 'smk-readiness');
-    state.appendChild(readiness);
-    const transition = el('span', 'smk-transition');
-    state.appendChild(transition);
+    const detail = el('span', 'smk-bc-detail');
+    const role = el('span', 'smk-bc-role');
+    const follow = el('span', 'smk-bc-follow');
+    const assets = el('span', 'smk-bc-assets');
+    const fw = el('span', 'smk-bc-fw');
+    const reach = el('span', 'smk-bc-reach');
+    detail.append(role, follow, assets, fw, reach);
+    row.appendChild(detail);
+
+    const action = el('span', 'smk-bc-action smk-row-action');
+    row.appendChild(action);
+
+    // The live transaction line spans the row beneath it while a job runs.
+    const transition = el('span', 'smk-transition smk-board-transition');
+    transition.hidden = true;
+    row.appendChild(transition);
     const repair = el('span', 'smk-repair-badge');
     repair.hidden = true;
-    state.appendChild(repair);
-    row.appendChild(state);
+    row.appendChild(repair);
+
     rows.appendChild(row);
-    refs.set(target.controllerId, { row, mode, readiness, transition, repair });
+    refs.set(target.controllerId, {
+      row, mode, role, follow, assets, fw, reach, verdict, action, transition, repair,
+    });
   }
   return { rows, refs };
 }
 
-function updateCompactRows(targets, refs, repairModel) {
+/** `active` · `FOLLOWING 0.8 s` · `DETACHED` · `OFF` · `—` (DMX). */
+function followText(target, status, board) {
+  if (board.mode === MODE_DMX) return '—';
+  if (board.mode !== MODE_SWARM) return '?';
+  const sw = (status && status.swarm) || {};
+  if (target.expectedLeader) return sw.isLeader === true ? 'active' : 'LEADER OFF';
+  if (sw.isLeader === true) return 'CLAIMS LEADER';
+  const state = sw.followState || 'OFF';
+  return state === 'FOLLOWING' && Number.isFinite(sw.lastBeaconMsAgo)
+    ? `FOLLOWING ${(sw.lastBeaconMsAgo / 1000).toFixed(1)} s` : state;
+}
+
+function updateCompactRows(targets, refs, repairModel, verdictRows) {
   const job = flow && (flow.applyJob || flow.dryRunJob);
   const readback = flow && flow.readback;
+  const byId = new Map(verdictRows.map((row) => [row.target.controllerId, row]));
   for (const target of targets) {
     const status = statusResults.get(target.id) || null;
-    const model = smokestackBoardModel(target, status);
+    const row = byId.get(target.controllerId);
+    const model = row ? row.board : smokestackBoardModel(target, status);
     const ref = refs.get(target.controllerId);
-    if (!ref) continue;
+    if (!ref || !row) continue;
+    const pending = statusSweeping && !statusResults.has(target.id);
     ref.row.title = model.detail;
     ref.mode.className = `smk-chip ${model.modeCls}`;
-    ref.mode.textContent = statusSweeping && !statusResults.has(target.id)
-      ? '⋯' : model.modeLabel;
-    ref.readiness.className = `smk-readiness${model.roleOk ? ' smk-readiness-ok' : ''}`;
-    ref.readiness.textContent = model.readinessLabel;
+    ref.mode.textContent = pending ? '⋯' : model.modeLabel;
+    // The detail line carries its own labels — there is no column header to
+    // read them against.
+    ref.role.textContent = target.expectedLeader ? 'leader' : 'follower';
+    ref.follow.textContent = pending ? '⋯' : followText(target, status, model);
+    ref.assets.textContent = pending ? '⋯' : `assets ${row.assets}`;
+    ref.assets.className = `smk-bc-assets smk-assets-${row.assets}`;
+    ref.fw.textContent = `fw ${(status && status.firmwareTag) || '?'}`;
+    // The DMX leg's pass criterion lives right here, beside the mode: a board
+    // in DMX with no engine feed is NOT a working DMX board.
+    const feed = dmxFeedModel(status);
+    ref.reach.textContent = !status || status.reachable !== true ? 'OFFLINE'
+      : model.mode === MODE_DMX
+        ? (feed.seen ? `ok · feed ${(feed.ageMs / 1000).toFixed(1)} s` : 'ok · NO FEED')
+        : 'ok';
+    ref.reach.className = `smk-bc-reach${(!status || status.reachable !== true)
+      || (model.mode === MODE_DMX && !feed.seen) ? ' smk-reach-bad' : ''}`;
+    ref.reach.title = model.mode === MODE_DMX && !feed.seen ? feed.reason : '';
+    ref.verdict.textContent = pending ? '⋯' : row.verdict;
+    ref.verdict.className = `smk-verdict-chip ${row.cls}`;
+    ref.verdict.title = row.note || '';
+    // Only a row that needs something says anything in this column.
+    ref.action.textContent = row.verdict === VERDICT_GOOD
+      ? (row.note || '') : row.action;
+    ref.action.hidden = ref.action.textContent.length === 0;
+
     const readbackStatus = readback && readback.state === 'done'
       && !readback.resultIds.has(target.id) ? null : status;
     const transition = smokestackControllerTransitionModel(
       target, job || null, readbackStatus, readback || null,
-      { preUptimeMs: flow && flow.preUptimeMs });
-    ref.transition.className = `smk-transition ${transition.cls}`;
+      { preUptimeMs: flow && flow.preUptimeMs, preModes: flow && flow.preModes });
+    ref.transition.className = `smk-transition smk-board-transition ${transition.cls}`;
     ref.transition.textContent = transition.label;
     ref.transition.hidden = transition.label.length === 0;
     const repair = repairModel && repairModel.rows.get(target.controllerId);
@@ -414,6 +529,7 @@ function updateJobBanner(refs, targets) {
       refs.phase.textContent = 'RUN REFUSED';
       refs.headline.textContent = flowError;
       refs.verdict.textContent = 'Trusted verdict: NONE';
+      refs.cliLine.textContent = 'CLI: (the run never started)';
       refs.readback.textContent = 'Final four-controller readback: not started';
       refs.progress.className = 'smk-job-progress';
       refs.progress.textContent = 'Operation did not start';
@@ -431,8 +547,10 @@ function updateJobBanner(refs, targets) {
   const direction = job.action === ACTION_FORCE_TO_DMX ? `FORCE TO DMX ${forceId}`
     : job.action === ACTION_FORCE_TO_SWARM ? `FORCE TO SWARM ${forceId}`
       : job.action === ACTION_TO_SWARM ? 'TO SWARM'
-        : job.action === ACTION_REPAIR_TO_DMX ? 'REPAIR TO DMX' : 'TO DMX';
+        : job.action === ACTION_RE_RELEASE ? 'RE-RELEASE ASSETS'
+          : job.action === ACTION_REPAIR_TO_DMX ? 'REPAIR TO DMX' : 'TO DMX';
   const isForce = FORCE_ACTIONS.includes(job.action);
+  const isReRelease = job.action === ACTION_RE_RELEASE;
   // A dry-run's completed readback must never be mistaken for the active
   // APPLY's final readback. Final evaluation starts only after THIS job ends
   // and queues its own bounded sweep.
@@ -446,12 +564,22 @@ function updateJobBanner(refs, targets) {
   const expectedMode = job.action === ACTION_TO_SWARM || job.action === ACTION_FORCE_TO_SWARM
     ? MODE_SWARM : MODE_DMX;
   const readbackFailures = readbackBoards.filter(({ target, board }) => {
-    const targeted = (job.action !== ACTION_REPAIR_TO_DMX && !isForce)
+    const targeted = (job.action !== ACTION_REPAIR_TO_DMX && !isForce && !isReRelease)
       || (Array.isArray(job.targetIds) && job.targetIds.includes(target.controllerId));
-    return (
-    board.mode === MODE_UNREACHABLE || board.mode === MODE_UNKNOWN || board.mode === MODE_INVALID
-    || (job.apply && targeted && board.mode !== expectedMode)
-    || (job.apply && job.action === ACTION_TO_SWARM && !board.roleOk));
+    if (board.mode === MODE_UNREACHABLE || board.mode === MODE_UNKNOWN
+        || board.mode === MODE_INVALID) {
+      return true;
+    }
+    if (!job.apply) return false;
+    if (isReRelease) {
+      // Judged on ASSETS, and on the mode NOT having moved.
+      const priorMode = flow && flow.preModes ? flow.preModes[target.controllerId] : null;
+      if (priorMode && board.mode !== priorMode) return true;
+      return targeted && assetsState(statusResults.get(target.id) || null,
+        [...statusResults.values()]) !== ASSETS_CANONICAL;
+    }
+    return (targeted && board.mode !== expectedMode)
+      || (job.action === ACTION_TO_SWARM && !board.roleOk);
   });
   const readbackComplete = !!(readback && readback.state === 'done'
     && readback.resultIds.size === targets.length);
@@ -478,6 +606,14 @@ function updateJobBanner(refs, targets) {
         controllerId: target.controllerId, mode: board.mode,
       })))}${readbackFailures.length > 0
         ? ` · ${readbackFailures.length} controller(s) failed the final readback` : ''}`
+    // A re-release speaks only about ASSETS, and only from the independent
+    // readback. It never claims anything about mode or fleet safety.
+    : isReRelease && job.apply && readbackComplete
+      ? reReleaseFleetVerdict(job.targetIds || [], readbackBoards.map(({ target }) => ({
+        controllerId: target.controllerId,
+        assets: assetsState(statusResults.get(target.id) || null,
+          [...statusResults.values()]),
+      })))
     : readbackFailures.length > 0
     ? trusted
       ? `TRUSTED CLI VERDICT CONTRADICTED by independent final readback on ` +
@@ -488,9 +624,12 @@ function updateJobBanner(refs, targets) {
   // `--names` run skips the canonical asset contract, and a leader-only
   // to-swarm legitimately prints the fleet kill verdict. Show what the CLI
   // said, never endorse it.
-  refs.verdict.textContent = trusted && !isForce
+  refs.verdict.textContent = trusted && !isForce && !isReRelease
     ? `Trusted verdict: ${job.verdictLine}`
     : `Trusted verdict: NONE${job.verdictLine ? ` · CLI said ${job.verdictLine}` : ''}`;
+  // Verbatim, always — this is the line the operator compares against the
+  // terminal when they want to know whether the panel is telling the truth.
+  refs.cliLine.textContent = `CLI: ${job.verdictLine || '(no verdict line yet)'}`;
   refs.readback.textContent = !readback || readback.jobId !== job.id
     ? 'Final four-controller readback: waiting for job completion'
     : readback.state === 'done'
@@ -532,9 +671,82 @@ function updateJobBanner(refs, targets) {
   }
 }
 
+// ── Run timeline ────────────────────────────────────────────────────────────
+//
+// Parsed from the CLI's OWN lines (runTimelineModel). It never guesses: a
+// phase the CLI did not announce stays `pending`, and a run that ends without
+// reaching it renders `skipped`, not `done`.
+
+function createTimeline() {
+  const wrap = el('div', 'smk-timeline');
+  wrap.hidden = true;
+  const head = el('div', 'smk-timeline-head');
+  head.appendChild(el('span', 'smk-timeline-title', 'Run timeline'));
+  const elapsed = el('span', 'smk-elapsed');
+  elapsed.setAttribute('role', 'status');
+  elapsed.setAttribute('aria-live', 'off'); // ticks 4×/s — never announce it
+  head.appendChild(elapsed);
+  wrap.appendChild(head);
+  const steps = el('div', 'smk-timeline-steps');
+  wrap.appendChild(steps);
+  const chips = el('div', 'smk-timeline-chips');
+  wrap.appendChild(chips);
+  return { wrap, elapsed, steps, chips };
+}
+
+function formatElapsed(ms) {
+  return `elapsed ${(ms / 1000).toFixed(1)} s`;
+}
+
+function updateTimeline(refs, targets) {
+  const job = flow && (flow.applyJob || flow.dryRunJob);
+  const model = runTimelineModel(job || null, targets);
+  refs.wrap.hidden = !model.visible;
+  if (!model.visible) {
+    stopElapsedTicker();
+    return;
+  }
+  refs.elapsed.textContent = formatElapsed(model.elapsedMs);
+  refs.steps.textContent = '';
+  for (const step of model.steps) {
+    const node = el('span', `smk-timeline-step smk-timeline-step-${step.state}`, step.label);
+    node.title = `${step.label}: ${step.state}`;
+    refs.steps.appendChild(node);
+  }
+  refs.chips.textContent = '';
+  for (const target of targets) {
+    const chip = model.chips.get(target.controllerId);
+    if (!chip) continue;
+    refs.chips.appendChild(el('span', `smk-timeline-chip ${chip.cls}`,
+      `${target.controllerId} ${chip.text}`));
+  }
+  if (model.running) startElapsedTicker(); else stopElapsedTicker();
+}
+
+function startElapsedTicker() {
+  if (elapsedTimer !== null) return;
+  elapsedTimer = setInterval(() => {
+    const job = flow && (flow.applyJob || flow.dryRunJob);
+    if (!job || !sectionRefs || !containerEl || !containerEl.isConnected) {
+      stopElapsedTicker();
+      return;
+    }
+    // Text-only mutation: a full repaint here would blow away a half-typed
+    // confirmation phrase four times a second.
+    sectionRefs.timelineRefs.elapsed.textContent =
+      formatElapsed(runTimelineModel(job, lastTargets).elapsedMs);
+  }, ELAPSED_TICK_MS);
+}
+
+function stopElapsedTicker() {
+  if (elapsedTimer === null) return;
+  clearInterval(elapsedTimer);
+  elapsedTimer = null;
+}
+
 // ── Advanced Recovery (force ONE controller) ────────────────────────────────
 
-function createRecoverySection(targets) {
+function createRecoverySection(targets, repairRow) {
   const details = el('details', 'smk-recovery');
   details.open = recoveryOpen;
   details.addEventListener('toggle', () => { recoveryOpen = details.open; });
@@ -542,6 +754,9 @@ function createRecoverySection(targets) {
     '⚠ Advanced Recovery — force ONE controller'));
 
   const content = el('div', 'smk-recovery-content');
+  // The contextual "Repair N controller(s) to DMX" row is recovery, not
+  // routine — it is the first thing in here rather than clutter in the body.
+  if (repairRow) content.appendChild(repairRow);
   content.appendChild(el('div', 'smk-recovery-intro',
     'The fleet toggle above acts on all four ropes and is bound by the deploy CLI\'s ' +
     'canonical asset/identity contract. When that contract legitimately refuses the whole ' +
@@ -934,11 +1149,19 @@ function renderFlow(body, logBody) {
   if (!flow) return;
   const action = flow.action;
 
-  // Dry-run console + outcome.
+  // Dry-run console + outcome. The raw log always goes under Advanced details;
+  // the plan gets its own one-click disclosure right here in the flow.
   logBody.appendChild(renderConsole(flow.dryRunJob, `DRY-RUN: ${actionLabel(action)}`));
   const dryOutcome = jobOutcomeModel(flow.dryRunJob);
   if (flow.dryRunJob.state === 'done' && !flow.applyJob) {
     body.appendChild(renderVerdict(dryOutcome));
+    const plan = el('details', 'smk-plan');
+    // Open automatically ONLY when the dry-run was refused — then the plan's
+    // text is the next action, not reference material.
+    plan.open = dryOutcome.kind !== 'dry_run_ok';
+    plan.appendChild(el('summary', 'smk-plan-summary', 'show plan'));
+    plan.appendChild(renderConsole(flow.dryRunJob, `PLAN: ${actionLabel(action)}`));
+    body.appendChild(plan);
   }
 
   // Apply console + verdict. A nominal CLI success is not rendered as safe
@@ -956,11 +1179,21 @@ function renderFlow(body, logBody) {
       const readbackOk = readbackComplete && lastTargets.every((target) => {
         const status = readback.resultIds.has(target.id) ? statusResults.get(target.id) : null;
         const board = smokestackBoardModel(target, status || null);
-        const targeted = action !== ACTION_REPAIR_TO_DMX
+        const targeted = (action !== ACTION_REPAIR_TO_DMX && action !== ACTION_RE_RELEASE)
           || (Array.isArray(flow.applyJob.targetIds)
             && flow.applyJob.targetIds.includes(target.controllerId));
-        return board.mode !== MODE_UNREACHABLE && board.mode !== MODE_UNKNOWN
-          && board.mode !== MODE_INVALID && (!targeted || board.mode === expectedMode)
+        if (board.mode === MODE_UNREACHABLE || board.mode === MODE_UNKNOWN
+            || board.mode === MODE_INVALID) {
+          return false;
+        }
+        if (action === ACTION_RE_RELEASE) {
+          // Assets restored, and the mode exactly where the run found it.
+          const priorMode = flow.preModes ? flow.preModes[target.controllerId] : null;
+          if (priorMode && board.mode !== priorMode) return false;
+          return !targeted || assetsState(status || null,
+            [...statusResults.values()]) === ASSETS_CANONICAL;
+        }
+        return (!targeted || board.mode === expectedMode)
           && (action !== ACTION_TO_SWARM || board.roleOk);
       });
       if (!trustedKind) {
@@ -987,8 +1220,18 @@ function renderFlow(body, logBody) {
   // inside the Advanced Recovery section, next to the context it needs.
   if (FORCE_ACTIONS.includes(action)) return;
   if (flow.dryRunJob.state === 'done' && dryOutcome.kind === 'dry_run_ok') {
+    // The exact plan this apply is bound to, in full — the same 64 characters
+    // the CLI printed and the same ones it will be handed back.
+    const fingerprint = el('div', 'smk-fingerprint',
+      flow.dryRunJob.planFingerprint || '(none — the dry-run printed no SHA-256)');
+    fingerprint.title = 'PLAN FINGERPRINT — the apply is refused unless the CLI re-derives '
+      + 'exactly this from the fleet as it is at apply time.';
+    body.appendChild(fingerprint);
+
     const confirmRow = el('div', 'smk-confirm-row');
-    const phrase = CONFIRM_PHRASES[action];
+    const phrase = action === ACTION_RE_RELEASE
+      ? reReleaseConfirmPhrase(flow.dryRunJob.targetIds || flow.targetIds || [])
+      : CONFIRM_PHRASES[action];
 
     const inputId = `smk-confirm-${action}`;
     const inputLabel = el('label', 'smk-confirm-label', `Type ${phrase} to arm apply`);
@@ -1017,13 +1260,22 @@ function renderFlow(body, logBody) {
         && sectionRefs.repairModel && sectionRefs.repairModel.enabled
         && sameTargetIds(sectionRefs.repairModel.targetIds, flow.targetIds)
         && sameTargetIds(flow.dryRunJob.targetIds, flow.targetIds);
-      const fleetGate = action !== ACTION_REPAIR_TO_DMX && sectionRefs
-        && sectionRefs.fleetToggle && sectionRefs.fleetToggle.enabled
+      // The re-release set must STILL be exactly the boards the fresh readback
+      // flags — a board that healed (or broke differently) invalidates the plan.
+      const reReleaseGate = action === ACTION_RE_RELEASE && sectionRefs
+        && sectionRefs.reReleaseModel && sectionRefs.reReleaseModel.enabled
+        && sameTargetIds(sectionRefs.reReleaseModel.targetIds, flow.targetIds)
+        && sameTargetIds(flow.dryRunJob.targetIds, flow.targetIds);
+      const fleetGate = action !== ACTION_REPAIR_TO_DMX && action !== ACTION_RE_RELEASE
+        && sectionRefs && sectionRefs.fleetToggle && sectionRefs.fleetToggle.enabled
         && sectionRefs.fleetToggle.action === action;
-      const liveGate = repairGate || fleetGate;
+      const liveGate = repairGate || reReleaseGate || fleetGate;
       applyBtn.disabled = !gate.allowed || !readbackReady || !liveGate;
       gateNote.textContent = gate.allowed && readbackReady && liveGate
-        ? 'Armed. APPLY writes to the real boards (canary-first, rollback on a failed verify).'
+        ? action === ACTION_RE_RELEASE
+          ? `Armed. APPLY rewrites ON-BOARD ASSETS on ${flow.targetIds.join(', ')} and reboots ` +
+            'them. Modes, identity, roles and output maps are untouched.'
+          : 'Armed. APPLY writes to the real boards (canary-first, rollback on a failed verify).'
         : !gate.allowed ? gate.reason
           : !readbackReady ? 'wait for the final four-controller dry-run readback'
             : 'fleet readback no longer matches this plan — re-run the dry-run';
@@ -1073,6 +1325,13 @@ function createSection(group, targets) {
 
   head.appendChild(el('span', 'cm-group-spacer'));
 
+  // How old is the state every chip below is derived from? Without this the
+  // card looks equally confident about a reading from 2 seconds ago and one
+  // from before the last reboot.
+  const readbackAge = el('span', 'smk-readback-age');
+  readbackAge.setAttribute('role', 'status');
+  head.appendChild(readbackAge);
+
   const refreshBtn = el('button', 'cm-btn smk-refresh');
   refreshBtn.title = 'Read each rope board\'s mode now (GET /api/status + /api/config via the ' +
     'sim server). Read-only — nothing is written.';
@@ -1081,21 +1340,49 @@ function createSection(group, targets) {
   group.appendChild(head);
 
   const body = el('div', 'smk-body');
-  const switchRow = el('div', 'smk-switch-row');
-  const switchBtn = el('button', 'cm-btn smk-switch-btn smk-switch-primary');
-  switchBtn.onclick = () => {
+
+  // ── Board table first: state at a glance, before any button. ──
+  const compact = createCompactRows(targets);
+  body.appendChild(compact.rows);
+
+  // ── Primary actions: both directions always visible, exactly one armed. ──
+  // A button can NEVER start a direction the fleet model did not derive — it
+  // only fires when smokestackFleetToggleModel already chose that action.
+  const startFleetAction = (action) => {
     const fleetToggle = sectionRefs && sectionRefs.fleetToggle;
-    if (fleetToggle && fleetToggle.enabled && fleetToggle.action) {
-      startRun(fleetToggle.action);
-    }
+    if (fleetToggle && fleetToggle.enabled && fleetToggle.action === action) startRun(action);
   };
-  switchRow.appendChild(switchBtn);
+  const switchRow = el('div', 'smk-switch-row');
+  const switchBtn = el('button', SWITCH_BTN_CLASS, 'SWITCH TO DMX');
+  switchBtn.onclick = () => startFleetAction(ACTION_TO_DMX);
+  const switchSwarmBtn = el('button', SWITCH_BTN_CLASS, 'SWITCH TO SWARM');
+  switchSwarmBtn.onclick = () => startFleetAction(ACTION_TO_SWARM);
+  switchRow.append(switchBtn, switchSwarmBtn);
   body.appendChild(switchRow);
 
   const switchReason = el('div', 'smk-switch-refusal');
   switchReason.setAttribute('role', 'status');
   body.appendChild(switchReason);
 
+  // ── Asset repair: the fix for a NEEDS RE-RELEASE row, on the card. ──
+  // This is the usual reason a fleet switch is refused, so it lives in the
+  // main body rather than behind a disclosure.
+  const reReleaseRow = el('div', 'smk-rerelease-row');
+  reReleaseRow.hidden = true;
+  const reReleaseBtn = el('button', 'cm-btn cm-danger smk-rerelease-btn');
+  reReleaseBtn.onclick = () => {
+    const model = sectionRefs && sectionRefs.reReleaseModel;
+    if (model && model.enabled) {
+      startRun(model.action, { targetIds: [...model.targetIds] });
+    }
+  };
+  const reReleaseReason = el('div', 'smk-rerelease-reason');
+  reReleaseReason.setAttribute('role', 'status');
+  reReleaseRow.append(reReleaseBtn, reReleaseReason);
+  body.appendChild(reReleaseRow);
+
+  // The old contextual "Repair to DMX" row now lives inside Advanced Recovery
+  // (report _354 §1.1-3) — built here, mounted there.
   const repairRow = el('div', 'smk-repair-row');
   repairRow.hidden = true;
   const repairBtn = el('button', 'cm-btn cm-danger smk-repair-btn');
@@ -1108,7 +1395,9 @@ function createSection(group, targets) {
   const repairReason = el('div', 'smk-repair-reason');
   repairReason.setAttribute('role', 'status');
   repairRow.append(repairBtn, repairReason);
-  body.appendChild(repairRow);
+
+  const timelineRefs = createTimeline();
+  body.appendChild(timelineRefs.wrap);
 
   const jobBanner = el('div', 'smk-job-banner');
   jobBanner.hidden = true;
@@ -1118,6 +1407,9 @@ function createSection(group, targets) {
   const jobPhase = el('div', 'smk-job-phase');
   const jobHeadline = el('div', 'smk-job-headline');
   const jobVerdict = el('div', 'smk-job-verdict');
+  // The CLI's own verdict line, verbatim, in EVERY case — so panel-vs-CLI
+  // parity is visible on screen instead of taken on trust.
+  const jobCliLine = el('div', 'smk-job-cli-line');
   const jobReadback = el('div', 'smk-job-readback');
   const jobProgress = el('div', 'smk-job-progress');
   const jobSegments = el('div', 'smk-job-segments');
@@ -1128,16 +1420,14 @@ function createSection(group, targets) {
     jobSegments.appendChild(segment);
     jobSegmentRefs.set(target.controllerId, segment);
   }
-  jobBanner.append(jobPhase, jobHeadline, jobVerdict, jobReadback, jobProgress, jobSegments);
-  body.appendChild(jobBanner);
-
-  const compact = createCompactRows(targets);
-  body.appendChild(compact.rows);
+  jobBanner.append(jobPhase, jobHeadline, jobVerdict, jobCliLine, jobReadback, jobProgress,
+    jobSegments);
 
   const flowHost = el('div', 'smk-flow-boundary');
   body.appendChild(flowHost);
+  body.appendChild(jobBanner);
 
-  const recovery = createRecoverySection(targets);
+  const recovery = createRecoverySection(targets, repairRow);
   body.appendChild(recovery.details);
 
   const advanced = createAdvancedDetails(targets);
@@ -1148,18 +1438,25 @@ function createSection(group, targets) {
     groupTitle,
     toggleBtn,
     fleetStatus,
+    readbackAge,
     refreshBtn,
     body,
     switchBtn,
+    switchSwarmBtn,
     switchReason,
+    reReleaseRow,
+    reReleaseBtn,
+    reReleaseReason,
     repairRow,
     repairBtn,
     repairReason,
+    timelineRefs,
     jobBannerRefs: {
       banner: jobBanner,
       phase: jobPhase,
       headline: jobHeadline,
       verdict: jobVerdict,
+      cliLine: jobCliLine,
       readback: jobReadback,
       progress: jobProgress,
       segments: jobSegmentRefs,
@@ -1172,6 +1469,8 @@ function createSection(group, targets) {
     recoveryRefs: recovery,
     fleetToggle: null,
     repairModel: null,
+    reReleaseModel: null,
+    verdictRows: [],
   };
 }
 
@@ -1194,8 +1493,16 @@ function updateSection(targets) {
     ...latestStatusReadback,
     sweeping: statusSweeping,
   });
+  const verdictRows = fleetVerdictRows(targets, statusResults,
+    lastDryRunOutput ? { output: lastDryRunOutput } : null);
+  const reReleaseModel = smokestackReReleaseModel(verdictRows, {
+    ...latestStatusReadback,
+    sweeping: statusSweeping,
+  });
   sectionRefs.fleetToggle = fleetToggle;
   sectionRefs.repairModel = repairModel;
+  sectionRefs.reReleaseModel = reReleaseModel;
+  sectionRefs.verdictRows = verdictRows;
 
   sectionRefs.groupTitle.textContent = `Smokestack SWARM (${targets.length})`;
   sectionRefs.toggleBtn.textContent = collapsed ? '▸' : '▾';
@@ -1209,8 +1516,24 @@ function updateSection(targets) {
   sectionRefs.refreshBtn.textContent = statusSweeping ? '🛰 checking…' : '🛰 Refresh';
   sectionRefs.refreshBtn.disabled = statusSweeping;
 
-  sectionRefs.switchBtn.textContent = fleetToggle.label;
-  sectionRefs.switchBtn.disabled = !provisioned || running || !fleetToggle.enabled;
+  const readbackAgeMs = latestStatusReadback.sweptAt > 0
+    ? Math.max(0, Date.now() - latestStatusReadback.sweptAt) : null;
+  sectionRefs.readbackAge.textContent = statusSweeping ? 'reading…'
+    : readbackAgeMs === null ? 'never read'
+      : `${Math.round(readbackAgeMs / 1000)} s ago`;
+  sectionRefs.readbackAge.className = `smk-readback-age${!statusSweeping
+    && readbackAgeMs !== null && readbackAgeMs > READBACK_STALE_MS ? ' smk-stale' : ''}`;
+
+  // Both directions are always on screen; exactly one can ever be armed, and
+  // only the one smokestackFleetToggleModel derived from the readback.
+  const armDirection = (button, action, fallbackLabel) => {
+    const isDerived = fleetToggle.action === action;
+    button.textContent = isDerived && fleetToggle.label ? fleetToggle.label : fallbackLabel;
+    button.disabled = !provisioned || running || !fleetToggle.enabled || !isDerived;
+    button.classList.toggle('smk-switch-armed', !button.disabled);
+  };
+  armDirection(sectionRefs.switchBtn, ACTION_TO_DMX, 'SWITCH TO DMX');
+  armDirection(sectionRefs.switchSwarmBtn, ACTION_TO_SWARM, 'SWITCH TO SWARM');
   let shortReason = '';
   if (provisionError) {
     shortReason = 'Switch unavailable — provisioning status could not be read.';
@@ -1223,10 +1546,25 @@ function updateSection(targets) {
   } else if (statusError) {
     shortReason = statusError;
   }
+  // ONE line, never a list: the operator needs the next move, not an audit.
   sectionRefs.switchReason.textContent = shortReason;
   sectionRefs.switchReason.hidden = shortReason.length === 0;
-  sectionRefs.switchBtn.title = shortReason ||
+  const switchTitle = shortReason ||
     `Run a guarded ${fleetToggle.action} dry-run for all four controllers.`;
+  sectionRefs.switchBtn.title = switchTitle;
+  sectionRefs.switchSwarmBtn.title = switchTitle;
+
+  sectionRefs.reReleaseRow.hidden = !reReleaseModel.visible;
+  sectionRefs.reReleaseBtn.textContent = reReleaseModel.label;
+  sectionRefs.reReleaseBtn.disabled = !provisioned || running || !reReleaseModel.enabled;
+  const reReleaseReason = !provisioned
+    ? 'Asset repair unavailable — deployment source not provisioned.'
+    : reReleaseModel.reason
+      || `Restores the frozen release on ${reReleaseModel.targetIds.join(', ')}. Modes, ` +
+        'identity, roles and output maps are left exactly as they are.';
+  sectionRefs.reReleaseReason.textContent = reReleaseReason;
+  sectionRefs.reReleaseReason.hidden = reReleaseReason.length === 0;
+  sectionRefs.reReleaseBtn.title = reReleaseReason;
 
   sectionRefs.repairRow.hidden = !repairModel.visible;
   sectionRefs.repairBtn.textContent = repairModel.label;
@@ -1239,7 +1577,8 @@ function updateSection(targets) {
   sectionRefs.repairBtn.title = repairReason
     || `Dry-run exact repair targets: ${repairModel.targetIds.join(', ')}`;
 
-  updateCompactRows(targets, sectionRefs.rowRefs, repairModel);
+  updateCompactRows(targets, sectionRefs.rowRefs, repairModel, verdictRows);
+  updateTimeline(sectionRefs.timelineRefs, targets);
   updateJobBanner(sectionRefs.jobBannerRefs, targets);
   updateRecoverySection(targets, sectionRefs.recoveryRefs, fleetToggle);
   updateAdvancedWarnings(targets, sectionRefs.warningRefs);

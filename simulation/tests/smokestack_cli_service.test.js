@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 
 import {
   FORCE_DRY_RUN_FRESH_MS as MODEL_FORCE_DRY_RUN_FRESH_MS,
+  reReleaseConfirmPhrase as modelReReleaseConfirmPhrase,
 } from '../src/dmx/smokestack_mode.js';
 
 const require = createRequire(import.meta.url);
@@ -32,6 +33,7 @@ const {
   CONFIRM_PHRASES,
   OUTPUT_MAX_BYTES,
   ACTION_REPAIR_TO_DMX,
+  ACTION_RE_RELEASE: RE_RELEASE,
   TITANIC_TARGET_IDS,
   confirmPhraseFor,
   DRY_RUN_FRESH_MS,
@@ -709,4 +711,154 @@ test('force and fleet plans share ONE freshness window; the digest is the real d
   assert.equal(FORCE_DRY_RUN_FRESH_MS, 15 * 60 * 1000);
   assert.equal(MODEL_FORCE_DRY_RUN_FRESH_MS, FORCE_DRY_RUN_FRESH_MS,
     'the browser model and the server must age a force plan identically');
+});
+
+// ── Asset re-release ────────────────────────────────────────────────────────
+//
+// A mutating action that rewrites on-board FILES. It is gated exactly like the
+// targeted repair — frozen target set, two-step, fingerprint-bound apply — and
+// it must never acquire the mode path's flags or leader context.
+
+test('re-release: dry-run and apply spawn the CLI asset subcommand and nothing else', () => {
+  const { service, spawned, clock } = makeService();
+  const dry = service.startJob({ action: RE_RELEASE, targetIds: ['ss_right_right'] });
+  assert.equal(dry.ok, true);
+  assert.deepEqual(spawned[0].args,
+    [CLI_PATH, 're-release', '--names', 'ss_right_right', '--dry-run']);
+  assert.deepEqual(dry.job.targetIds, ['ss_right_right']);
+  finish(spawned[0], {
+    output: `VERDICT: DRY RUN - no changes made\nPLAN FINGERPRINT: ${PLAN_FINGERPRINT}\n` });
+
+  clock.t += 1000;
+  const apply = service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_right_right'], confirm: 'RE-RELEASE ss_right_right',
+    dryRunJobId: dry.job.id });
+  assert.equal(apply.ok, true, apply.error);
+  assert.deepEqual(spawned[1].args, [CLI_PATH, 're-release', '--names', 'ss_right_right',
+    '--yes', '--plan-fingerprint', PLAN_FINGERPRINT]);
+  // A re-release has no previous mode to restore, so it must NOT inherit the
+  // mode path's rollback flag.
+  assert.equal(spawned[1].args.includes('--rollback-on-failure'), false);
+  // …and it must never become a mode switch by accident.
+  assert.equal(spawned[1].args.includes('to-dmx'), false);
+  assert.equal(spawned[1].args.includes('to-swarm'), false);
+});
+
+test('re-release: a multi-board set is sorted, deduped and passed as one --names list', () => {
+  const { service, spawned } = makeService();
+  const r = service.startJob({ action: RE_RELEASE,
+    targetIds: ['ss_right_right', 'ss_left_left'] });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.job.targetIds, ['ss_left_left', 'ss_right_right']);
+  assert.deepEqual(spawned[0].args,
+    [CLI_PATH, 're-release', '--names', 'ss_left_left,ss_right_right', '--dry-run']);
+});
+
+test('re-release: unsafe target shapes are refused before anything is spawned', () => {
+  const { service, spawned } = makeService();
+  for (const targetIds of [undefined, [], ['ss_left_left', 'ss_left_left'],
+    ['192.0.2.61'], ['LeftLeftRopes'], [13], ['ss_left_left', 'nope'], 'ss_left_left']) {
+    const r = service.startJob({ action: RE_RELEASE, targetIds });
+    assert.equal(r.ok, false, JSON.stringify(targetIds));
+    assert.equal(r.code, 'bad_targets');
+  }
+  assert.equal(spawned.length, 0, 'a refused target set never reaches the CLI');
+});
+
+test('re-release: leader context is meaningless here and is refused outright', () => {
+  const { service, spawned } = makeService();
+  const r = service.startJob({ action: RE_RELEASE, targetIds: ['ss_left_left'],
+    leaderContext: 'ss_left_right' });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'force_leader_context');
+  assert.equal(spawned.length, 0);
+});
+
+test('re-release: the phrase is per-set, and the frozen set must survive to apply', () => {
+  assert.equal(confirmPhraseFor(RE_RELEASE, ['ss_left_left']), 'RE-RELEASE ss_left_left');
+  assert.equal(confirmPhraseFor(RE_RELEASE, ['ss_left_left', 'ss_right_right']),
+    'RE-RELEASE ALL');
+  assert.equal(confirmPhraseFor(RE_RELEASE, []), null);
+  // Server and browser model must derive the SAME phrase for every shape.
+  for (const ids of [['ss_left_left'], ['ss_left_right'], ['ss_right_right'],
+    ['ss_right_left'], ['ss_left_left', 'ss_right_left'], TITANIC_TARGET_IDS.slice()]) {
+    assert.equal(confirmPhraseFor(RE_RELEASE, ids), modelReReleaseConfirmPhrase(ids),
+      ids.join(','));
+  }
+
+  const { service, spawned, clock } = makeService();
+  const dry = service.startJob({ action: RE_RELEASE,
+    targetIds: ['ss_left_left', 'ss_right_right'] });
+  finish(spawned[0], {
+    output: `VERDICT: DRY RUN - no changes made\nPLAN FINGERPRINT: ${PLAN_FINGERPRINT}\n` });
+  clock.t += 1000;
+
+  // The single-board phrase cannot arm a two-board plan.
+  assert.equal(service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_left_left', 'ss_right_right'], confirm: 'RE-RELEASE ss_left_left',
+    dryRunJobId: dry.job.id }).code, 'confirm_mismatch');
+  // Nor can the fleet phrase.
+  assert.equal(service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_left_left', 'ss_right_right'], confirm: 'SWITCH',
+    dryRunJobId: dry.job.id }).code, 'confirm_mismatch');
+  // Narrowing the set at apply time is refused even with a matching phrase.
+  assert.equal(service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_left_left'], confirm: 'RE-RELEASE ss_left_left',
+    dryRunJobId: dry.job.id }).code, 'dry_run_target_mismatch');
+  assert.equal(spawned.length, 1, 'no refused apply ever spawned the CLI');
+
+  const ok = service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_right_right', 'ss_left_left'], confirm: 'RE-RELEASE ALL',
+    dryRunJobId: dry.job.id });
+  assert.equal(ok.ok, true, ok.error);
+});
+
+test('re-release: a stale, dirty, unfingerprinted or reused dry-run can never arm it', () => {
+  const arm = (mutate = () => {}, applyOverrides = {}) => {
+    const { service, spawned, clock } = makeService();
+    const dry = service.startJob({ action: RE_RELEASE, targetIds: ['ss_left_left'] });
+    mutate({ spawned, clock });
+    clock.t += 1000;
+    return service.startJob({ action: RE_RELEASE, apply: true, targetIds: ['ss_left_left'],
+      confirm: 'RE-RELEASE ss_left_left', dryRunJobId: dry.job.id, ...applyOverrides });
+  };
+  const clean = ({ spawned }) => finish(spawned[0], {
+    output: `VERDICT: DRY RUN - no changes made\nPLAN FINGERPRINT: ${PLAN_FINGERPRINT}\n` });
+
+  assert.equal(arm(clean).ok, true);
+  assert.equal(arm(({ spawned }) => finish(spawned[0], { code: 1 })).code, 'dry_run_failed');
+  assert.equal(arm(({ spawned }) => finish(spawned[0], {
+    output: 'VERDICT: DRY RUN - no changes made\n' })).code, 'dry_run_failed',
+  'no fingerprint ⇒ no apply');
+  assert.equal(arm(({ spawned }) => finish(spawned[0], {
+    output: `VERDICT: OK\nPLAN FINGERPRINT: ${PLAN_FINGERPRINT}\n` })).code, 'dry_run_failed');
+  assert.equal(arm(({ spawned, clock }) => {
+    clean({ spawned });
+    clock.t += DRY_RUN_FRESH_MS + 1;
+  }).code, 'dry_run_stale');
+
+  // Single-use: the same clean dry-run can never arm a second apply.
+  const { service, spawned, clock } = makeService();
+  const dry = service.startJob({ action: RE_RELEASE, targetIds: ['ss_left_left'] });
+  clean({ spawned });
+  clock.t += 1000;
+  const first = service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_left_left'], confirm: 'RE-RELEASE ss_left_left', dryRunJobId: dry.job.id });
+  assert.equal(first.ok, true);
+  finish(spawned[1], { output: 'VERDICT: OK\n' });
+  assert.equal(service.startJob({ action: RE_RELEASE, apply: true,
+    targetIds: ['ss_left_left'], confirm: 'RE-RELEASE ss_left_left',
+    dryRunJobId: dry.job.id }).code, 'dry_run_consumed');
+});
+
+test('re-release: it is one job at a time with everything else, and never a status action', () => {
+  const { service, spawned } = makeService();
+  service.startJob({ action: RE_RELEASE, targetIds: ['ss_left_left'] });
+  const busy = service.startJob({ action: 'to-dmx' });
+  assert.equal(busy.ok, false);
+  assert.equal(busy.code, 'busy');
+  assert.equal(spawned.length, 1);
+  // The mode actions still refuse a targetIds array of their own.
+  assert.equal(service.startJob({ action: 'to-swarm', targetIds: ['ss_left_left'] }).code,
+    'bad_targets');
 });

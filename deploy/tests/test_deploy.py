@@ -70,6 +70,23 @@ class RobocopyContractTest(unittest.TestCase):
         self.assertIn('do not use /ZB', message)
         self.assertIn(denied_path, message)
 
+    def test_force_fast_mirror_uses_more_workers_without_weakening_contract(self) -> None:
+        """Prod force keeps /MIR and exclusions while increasing parallelism."""
+        source = r'C:\design\BM26-Titanic'
+        destination = r'\\show-server\titanic\BM26-Titanic'
+        command = DEPLOY.robocopy_cmd(
+            source,
+            destination,
+            list_only=False,
+            force_fast=True,
+        )
+        excluded = command[command.index('/XD') + 1:command.index('/XF')]
+        self.assertIn('/MIR', command)
+        self.assertIn('/MT:64', command)
+        self.assertNotIn('/L', command)
+        self.assertIn(source + r'\.git', excluded)
+        self.assertIn(destination + r'\.git', excluded)
+
 
 class RuntimeSecretPreflightTest(unittest.TestCase):
     """Pin the persistent, redacted BM26_SECRETS gate before stack stop."""
@@ -282,6 +299,99 @@ class ProductionPipelineTest(unittest.TestCase):
                 'verify',
             ],
         )
+
+    def test_prod_force_skips_preview_and_uses_fast_authoritative_mirror(self) -> None:
+        """Prod force removes only the duplicate preview, never the safety gates."""
+        args = types.SimpleNamespace(
+            scene=None,
+            restart_only=False,
+            dry_run=False,
+            force=True,
+        )
+        entry = {'scene': 'titanic', 'profile': 'prod'}
+        events = []
+
+        def mark(name, result=None):
+            return lambda *_args, **_kwargs: events.append(name) or result
+
+        with (
+            mock.patch.object(
+                DEPLOY,
+                'git_info',
+                return_value={'head': 'abc1234', 'branch': 'feat/test', 'dirty_count': 0},
+            ),
+            mock.patch.object(DEPLOY, 'secrets_path', side_effect=mark('local', Path('s'))),
+            mock.patch.object(DEPLOY, 'preflight_ssh', side_effect=mark('ssh')),
+            mock.patch.object(
+                DEPLOY, 'resolve_shortcut_plan', side_effect=mark('plan', SHORTCUT_PLAN)),
+            mock.patch.object(
+                DEPLOY, 'provision_runtime_secrets', side_effect=mark('provision')),
+            mock.patch.object(
+                DEPLOY, 'preflight_smb', side_effect=mark('smb', r'\\show\prod')),
+            mock.patch.object(DEPLOY, 'show_sync_preview') as preview,
+            mock.patch.object(DEPLOY, 'stop_stack', side_effect=mark('stop')),
+            mock.patch.object(DEPLOY, 'sync_prod', side_effect=mark('sync')) as sync,
+            mock.patch.object(DEPLOY, 'ship_manifest', side_effect=mark('manifest')),
+            mock.patch.object(
+                DEPLOY, 'install_desktop_shortcuts', side_effect=mark('shortcuts')),
+            mock.patch.object(DEPLOY, 'apply_overlay', side_effect=mark('overlay')),
+            mock.patch.object(DEPLOY, 'stamp_deploy_info', side_effect=mark('stamp')),
+            mock.patch.object(
+                DEPLOY, 'capture_server_time', side_effect=mark('clock', 'server-time')),
+            mock.patch.object(DEPLOY, 'start_stack', side_effect=mark('start')),
+            mock.patch.object(DEPLOY, 'verify_prod', side_effect=mark('verify')),
+        ):
+            DEPLOY.deploy_prod('example', entry, args)
+        preview.assert_not_called()
+        sync.assert_called_once_with(r'\\show\prod', force_fast=True)
+        self.assertEqual(
+            events,
+            [
+                'local',
+                'ssh',
+                'plan',
+                'provision',
+                'smb',
+                'stop',
+                'sync',
+                'manifest',
+                'overlay',
+                'shortcuts',
+                'stamp',
+                'clock',
+                'start',
+                'verify',
+            ],
+        )
+
+    def test_parser_accepts_force_for_production(self) -> None:
+        """The operator-facing flag parses on the default prod target."""
+        args = DEPLOY.build_parser().parse_args(
+            ['deploy', '--machine', 'titanic-ext', '--scene', 'titanic', '--force']
+        )
+        self.assertEqual(args.target, 'prod')
+        self.assertTrue(args.force)
+
+    def test_prod_force_refuses_non_sync_combinations_before_manifest_access(self) -> None:
+        """Force must mean one real sync, never dry-run or restart-only."""
+        for incompatible in ('--dry-run', '--restart-only'):
+            with self.subTest(incompatible=incompatible):
+                argv = [
+                    'deploy.py',
+                    'deploy',
+                    '--machine',
+                    'titanic-ext',
+                    '--force',
+                    incompatible,
+                ]
+                error = io.StringIO()
+                with (
+                    mock.patch.object(DEPLOY.sys, 'argv', argv),
+                    contextlib.redirect_stderr(error),
+                    self.assertRaises(SystemExit),
+                ):
+                    DEPLOY.main()
+                self.assertIn('--force', error.getvalue())
 
 
 class FetchMigrationTest(unittest.TestCase):

@@ -51,6 +51,32 @@ import {
   forceConfirmPhrase,
   forceFleetVerdict,
   preflightDigest,
+  assetsState,
+  firmwareMajorityTag,
+  dryRunAssetRefusals,
+  dryRunRefusalLines,
+  boardVerdictModel,
+  fleetVerdictRows,
+  fleetFixList,
+  reReleaseTargetIds,
+  dmxFeedModel,
+  runTimelineModel,
+  smokestackReReleaseModel,
+  reReleaseConfirmPhrase,
+  reReleaseFleetVerdict,
+  SMOKESTACK_CANONICAL_ASSETS,
+  ASSETS_CANONICAL,
+  ASSETS_RESIDUE,
+  ASSETS_UNREAD,
+  VERDICT_GOOD,
+  VERDICT_NEEDS_RE_RELEASE,
+  VERDICT_NEEDS_REFLASH,
+  VERDICT_UNREACHABLE,
+  DMX_FEED_MAX_AGE_MS,
+  TIMELINE_DONE,
+  TIMELINE_FAILED,
+  TIMELINE_SKIPPED,
+  ACTION_RE_RELEASE,
   REPAIR_READBACK_MAX_AGE_MS,
   CONFIRM_PHRASES,
   VERDICT_SAFE_TO_KILL,
@@ -1877,3 +1903,676 @@ test('panel: Advanced Recovery is its own labelled, distinct section that never 
     assert.ok(block.length > 0);
     assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(block), false, 'recovery CSS must use var() tokens');
   });
+
+// ── Assets, verdicts, fix list, DMX feed and the run timeline (report _354) ──
+//
+// The promises pinned here:
+//   - a field the board did not report is NEVER read as agreement;
+//   - `lastPacketAgeMs: -1` ("never received one") is NEVER a fresh feed;
+//   - a step the CLI did not announce is `skipped`, never `done`;
+//   - an unrecognised result token is UNKNOWN, never green;
+//   - a DETACHED follower is GOOD, because the DMX leg clears it.
+
+const CANONICAL_ASSETS = Object.freeze({
+  activePattern: '/patterns/titanic_swarm_pattern.js',
+  activeMap: '/models/swarm_titanic_rop_b5fc8e9e.json',
+  activeMapHash: '130aa205',
+});
+const RESIDUE_ASSETS = Object.freeze({
+  activePattern: '/patterns/titanic_swarm_pattern.js',
+  activeMap: '/models/pushed_map.json',
+  activeMapHash: '1cfc9081',
+});
+const FLEET_IDS = Object.freeze([
+  ['ss_left_left', 13], ['ss_left_right', 15],
+  ['ss_right_right', 24], ['ss_right_left', 25],
+]);
+
+/** Four healthy, canonical, uniformly-SWARM boards; override any by id. */
+function fleetStatuses(overridesByControllerId = {}) {
+  const map = new Map();
+  for (const [controllerId, id] of FLEET_IDS) {
+    const isLeader = controllerId === SMOKESTACK_LEADER_CONTROLLER_ID;
+    map.set(id, healthySwarmStatus({
+      id,
+      controllerId,
+      swarm: {
+        enabled: true,
+        isLeader,
+        followState: isLeader ? null : 'FOLLOWING',
+        lastBeaconMsAgo: isLeader ? null : 800,
+      },
+      assets: { ...CANONICAL_ASSETS },
+      sacn: { enabled: false, lastPacketAgeMs: -1, perOutput: null },
+      ...(overridesByControllerId[controllerId] || {}),
+    }));
+  }
+  return map;
+}
+
+function freshReadback(now = Date.now()) {
+  return { sweptAt: now, sweeping: false, resultIds: new Set(FLEET_IDS.map(([, id]) => id)) };
+}
+
+const ropeTargets = () => smokestackTargets(ropeRegistry());
+const verdictFor = (rows, controllerId) =>
+  rows.find((row) => row.target.controllerId === controllerId);
+
+test('assets: canonical needs the exact pattern, the frozen map prefix AND fleet parity', () => {
+  const statuses = fleetStatuses();
+  const all = [...statuses.values()];
+  for (const status of all) {
+    assert.equal(assetsState(status, all), ASSETS_CANONICAL);
+  }
+  // The prefix is the frozen release's, and the constant is the one shipped.
+  assert.equal(SMOKESTACK_CANONICAL_ASSETS.pattern, '/patterns/titanic_swarm_pattern.js');
+  assert.ok(CANONICAL_ASSETS.activeMap.startsWith(SMOKESTACK_CANONICAL_ASSETS.mapPrefix));
+
+  // A pushed-map board is residue…
+  const drifted = fleetStatuses({ ss_left_left: { assets: { ...RESIDUE_ASSETS } } });
+  const driftedAll = [...drifted.values()];
+  assert.equal(assetsState(drifted.get(13), driftedAll), ASSETS_RESIDUE);
+  // …and it breaks parity, so the boards that are otherwise fine are residue
+  // too. The CLI refuses the whole fleet on this; neither side may look green.
+  assert.equal(assetsState(drifted.get(25), driftedAll), ASSETS_RESIDUE);
+});
+
+test('assets: a wrong pattern is residue; an unreported or unreachable board is unread', () => {
+  const wrongPattern = healthySwarmStatus({
+    assets: { ...CANONICAL_ASSETS, activePattern: '/patterns/default.js' } });
+  assert.equal(assetsState(wrongPattern, [wrongPattern]), ASSETS_RESIDUE);
+
+  const wrongMap = healthySwarmStatus({
+    assets: { ...CANONICAL_ASSETS, activeMap: '/models/line.json' } });
+  assert.equal(assetsState(wrongMap, [wrongMap]), ASSETS_RESIDUE);
+
+  assert.equal(assetsState(healthySwarmStatus(), []), ASSETS_UNREAD,
+    'a board that reported no asset fields is unread, never canonical');
+  assert.equal(assetsState(healthySwarmStatus({
+    assets: { activePattern: null, activeMap: null, activeMapHash: null } }), []), ASSETS_UNREAD);
+  assert.equal(assetsState(healthySwarmStatus({ reachable: false }), []), ASSETS_UNREAD);
+  assert.equal(assetsState(null, []), ASSETS_UNREAD);
+  // A sibling that never reported a hash cannot break parity by its silence.
+  const quiet = healthySwarmStatus({ id: 99, controllerId: 'ss_right_left' });
+  const good = healthySwarmStatus({ assets: { ...CANONICAL_ASSETS } });
+  assert.equal(assetsState(good, [good, quiet]), ASSETS_CANONICAL);
+});
+
+test('firmware majority: a clear majority judges the odd board; a tie judges nobody', () => {
+  const statuses = [...fleetStatuses().values()];
+  assert.equal(firmwareMajorityTag(statuses), '1.2.5');
+  const split = [...fleetStatuses({
+    ss_left_left: { firmwareTag: '1.2.4' },
+    ss_left_right: { firmwareTag: '1.2.4' },
+  }).values()];
+  assert.equal(firmwareMajorityTag(split), null, '2-2 is not a majority — judge nobody');
+  assert.equal(firmwareMajorityTag([]), null);
+  const odd = [...fleetStatuses({ ss_left_left: { firmwareTag: '1.2.4' } }).values()];
+  assert.equal(firmwareMajorityTag(odd), '1.2.5');
+});
+
+test('board verdict: a healthy canonical fleet is four GOOD rows with nothing to do', () => {
+  const rows = fleetVerdictRows(ropeTargets(), fleetStatuses());
+  assert.deepEqual(rows.map((row) => row.verdict), Array(4).fill(VERDICT_GOOD));
+  assert.deepEqual(rows.map((row) => row.action), Array(4).fill(''));
+  assert.deepEqual(fleetFixList(rows), []);
+  assert.deepEqual(reReleaseTargetIds(rows), []);
+});
+
+test('board verdict: a DETACHED follower is GOOD — the DMX leg clears it', () => {
+  const rows = fleetVerdictRows(ropeTargets(), fleetStatuses({
+    ss_left_left: { swarm: { enabled: true, isLeader: false, followState: 'DETACHED',
+      lastBeaconMsAgo: 800 } },
+  }));
+  const row = verdictFor(rows, 'ss_left_left');
+  assert.equal(row.verdict, VERDICT_GOOD);
+  assert.equal(row.action, '');
+  assert.match(row.note, /detached · cleared by the DMX leg/);
+  // …and it is still a live topology failure for the SWARM direction.
+  assert.equal(row.board.roleOk, false);
+});
+
+test('board verdict: precedence is unreachable › reflash › re-release › good', () => {
+  const targets = ropeTargets();
+
+  // Unreachable beats everything, including bad assets.
+  const offline = fleetVerdictRows(targets, fleetStatuses({
+    ss_left_left: { reachable: false, assets: { ...RESIDUE_ASSETS } },
+  }));
+  assert.equal(verdictFor(offline, 'ss_left_left').verdict, VERDICT_UNREACHABLE);
+  assert.match(verdictFor(offline, 'ss_left_left').action, /power\/LAN — then Refresh/);
+
+  // Identity mismatch is a reflash, even with residue assets present.
+  const wrongIdentity = fleetVerdictRows(targets, fleetStatuses({
+    ss_left_left: { controllerId: 'ss_right_left', assets: { ...RESIDUE_ASSETS } },
+  }));
+  assert.equal(verdictFor(wrongIdentity, 'ss_left_left').verdict, VERDICT_NEEDS_REFLASH);
+  assert.match(verdictFor(wrongIdentity, 'ss_left_left').action,
+    /reflash ss_left_left \(USB, registry-locked\)/);
+
+  for (const [name, override] of [
+    ['no per-output DMX', { capabilities: { perOutputDmx: false } }],
+    ['dual-enabled mode', { dmxEnabled: true }],
+    ['odd firmware', { firmwareTag: '1.2.4' }],
+    ['non-MarsinLED answer', { controllerId: '' }],
+  ]) {
+    const rows = fleetVerdictRows(targets, fleetStatuses({ ss_left_left: override }));
+    assert.equal(verdictFor(rows, 'ss_left_left').verdict, VERDICT_NEEDS_REFLASH,
+      `${name} must be a reflash`);
+  }
+
+  for (const [name, override] of [
+    ['residue assets', { assets: { ...RESIDUE_ASSETS } }],
+    ['staged config', { health: { configSource: 'primary', stagedPending: true, uptimeMs: 1 } }],
+    ['degraded config source',
+      { health: { configSource: 'lastKnownGood', stagedPending: false, uptimeMs: 1 } }],
+    ['unread assets', { assets: { activePattern: null, activeMap: null, activeMapHash: null } }],
+  ]) {
+    const rows = fleetVerdictRows(targets, fleetStatuses({ ss_left_left: override }));
+    const row = verdictFor(rows, 'ss_left_left');
+    assert.equal(row.verdict, VERDICT_NEEDS_RE_RELEASE, `${name} must be a re-release`);
+    assert.match(row.action, /re-release assets on ss_left_left/);
+  }
+});
+
+test('board verdict: the last dry-run\'s own asset refusals flag the boards it named', () => {
+  const output = [
+    'dry-run: read-only plan sweep across all boards',
+    '  [ss_left_left] pre-flight REFUSED',
+    'WOULD REFUSE: ss_left_left: activeMap is \'/models/pushed_map.json\', expected ' +
+      '\'/models/swarm_titanic_rop_b5fc8e9e.json\'',
+    'WOULD REFUSE: ss_right_right: model allowlist mismatch (5 files vs the frozen 4)',
+    'VERDICT: DRY RUN - no changes made',
+  ].join('\n');
+  const refused = dryRunAssetRefusals(output);
+  assert.deepEqual([...refused].sort(), ['ss_left_left', 'ss_right_right']);
+
+  // A refusal with no asset cause, or naming no approved board, is ignored.
+  assert.deepEqual([...dryRunAssetRefusals(
+    'WOULD REFUSE: ss_left_left: board is unreachable')], []);
+  assert.deepEqual([...dryRunAssetRefusals('WOULD REFUSE: activeMap is wrong')], []);
+  assert.deepEqual([...dryRunAssetRefusals(null)], []);
+
+  // A board whose live readback looks fine but which the CLI refused is still
+  // flagged — the CLI's own words outrank our optimism.
+  const rows = fleetVerdictRows(ropeTargets(), fleetStatuses(), { output });
+  assert.equal(verdictFor(rows, 'ss_left_left').verdict, VERDICT_NEEDS_RE_RELEASE);
+  assert.equal(verdictFor(rows, 'ss_right_right').verdict, VERDICT_NEEDS_RE_RELEASE);
+  assert.equal(verdictFor(rows, 'ss_right_left').verdict, VERDICT_GOOD);
+});
+
+test('fix list: canonical order, one remedy per bad row, healthy rows absent', () => {
+  const rows = fleetVerdictRows(ropeTargets(), fleetStatuses({
+    ss_left_left: { assets: { ...RESIDUE_ASSETS } },
+    ss_right_right: { reachable: false },
+  }));
+  const fixes = fleetFixList(rows);
+  // ss_left_right and ss_right_left are dragged into residue by the parity
+  // break, which is exactly what the CLI does — so three re-releases + one
+  // unreachable, in canonical controller order.
+  assert.deepEqual(fixes.map((fix) => fix.id),
+    ['ss_left_left', 'ss_left_right', 'ss_right_right', 'ss_right_left']);
+  assert.equal(fixes.find((fix) => fix.id === 'ss_right_right').verdict, VERDICT_UNREACHABLE);
+  for (const fix of fixes) assert.ok(fix.action.length > 0, `${fix.id} needs a remedy`);
+  assert.deepEqual(reReleaseTargetIds(rows),
+    ['ss_left_left', 'ss_left_right', 'ss_right_left']);
+});
+
+test('dmx feed: a board that has NEVER seen a packet is not a fed board', () => {
+  const fed = healthySwarmStatus({ dmxEnabled: true,
+    sacn: { enabled: true, lastPacketAgeMs: 120, perOutput: null } });
+  assert.deepEqual(dmxFeedModel(fed), { seen: true, ageMs: 120, reason: '' });
+
+  // THE guard: the firmware reports -1 for "never". A naive `age < 2000`
+  // would call that a live feed.
+  const never = healthySwarmStatus({ dmxEnabled: true,
+    sacn: { enabled: true, lastPacketAgeMs: -1, perOutput: null } });
+  assert.equal(dmxFeedModel(never).seen, false);
+  assert.match(dmxFeedModel(never).reason, /no sACN packet has ever arrived/);
+
+  const stale = healthySwarmStatus({ dmxEnabled: true,
+    sacn: { enabled: true, lastPacketAgeMs: DMX_FEED_MAX_AGE_MS, perOutput: null } });
+  assert.equal(dmxFeedModel(stale).seen, false, 'the threshold is exclusive');
+  assert.equal(dmxFeedModel(healthySwarmStatus({ dmxEnabled: true,
+    sacn: { enabled: true, lastPacketAgeMs: DMX_FEED_MAX_AGE_MS - 1, perOutput: null } })).seen,
+  true);
+
+  assert.equal(dmxFeedModel(healthySwarmStatus({
+    sacn: { enabled: false, lastPacketAgeMs: 10, perOutput: null } })).seen, false);
+  assert.equal(dmxFeedModel(healthySwarmStatus({ reachable: false })).seen, false);
+  assert.equal(dmxFeedModel(null).seen, false);
+  assert.equal(dmxFeedModel(healthySwarmStatus()).seen, false,
+    'a board that reported no sacn block has no feed');
+});
+
+// ── Run timeline ────────────────────────────────────────────────────────────
+
+const SWARM_APPLY_LOG = [
+  'pre-flight: parallel read-only plan sweep across all boards',
+  '  [ss_left_left] pre-flight OK',
+  '  [ss_left_right] pre-flight OK',
+  '  [ss_right_right] pre-flight OK',
+  '  [ss_right_left] pre-flight OK',
+  '  [ss_left_right] POST /api/config',
+  '  [ss_left_right] needs-reboot - queued for readiness polling',
+  'followers: parallel mutation POST across 3 board(s)',
+  '  [ss_left_left] POST /api/config',
+  '  [ss_right_right] POST /api/config',
+  '  [ss_right_left] POST /api/config',
+  'followers: parallel readiness wait across 3 board(s)',
+  'followers: parallel verification across 3 board(s)',
+  '  [ss_left_left] reboot-survival already proven: skipping the redundant terminal reboot',
+  'terminal: independent canonical 4/4 asset/runtime readback',
+  '',
+  '=== smokestack to-swarm ===',
+  'BOARD                  RESULT MODE             DETAIL',
+  'ss_left_left           PASS   DMX->SWARM       verified',
+  'ss_left_right          PASS   DMX->SWARM       verified',
+  'ss_right_right         PASS   DMX->SWARM       verified',
+  'ss_right_left          PASS   DMX->SWARM       verified',
+  '',
+  'VERDICT: SAFE TO KILL NETWORK',
+].join('\n');
+
+function applyJob(overrides = {}) {
+  return {
+    id: '7', action: ACTION_TO_SWARM, apply: true, state: 'done', exitCode: 0,
+    startedAt: 1000, endedAt: 62000, output: SWARM_APPLY_LOG,
+    targetIds: null, ...overrides,
+  };
+}
+
+const stepState = (model, key) =>
+  (model.steps.find((step) => step.key === key) || {}).state;
+
+test('timeline: a clean to-swarm apply walks every phase to VERDICT with real elapsed', () => {
+  const targets = ropeTargets();
+  const model = runTimelineModel(applyJob(), targets);
+  assert.equal(model.visible, true);
+  assert.equal(model.running, false);
+  assert.equal(model.elapsedMs, 61000);
+  assert.deepEqual(model.steps.map((step) => step.key), [
+    'PREFLIGHT', 'CANARY', 'PARALLEL', 'REBOOT WAIT', 'VERIFY', 'COHERENCE',
+    'READBACK', 'VERDICT',
+  ]);
+  for (const step of model.steps) assert.equal(step.state, TIMELINE_DONE, `${step.key} done`);
+  // The canary and the fan-out width come from the CLI's own words.
+  assert.equal(model.steps.find((step) => step.key === 'CANARY').label,
+    'CANARY ss_left_right');
+  assert.equal(model.steps.find((step) => step.key === 'PARALLEL').label, 'PARALLEL (3)');
+  assert.equal(model.verdictLine, 'VERDICT: SAFE TO KILL NETWORK');
+  assert.equal(model.rolledBack, false);
+  for (const [controllerId] of FLEET_IDS) {
+    assert.equal(model.chips.get(controllerId).text, 'PASS');
+    assert.equal(model.chips.get(controllerId).cls, 'smk-transition-ok');
+  }
+});
+
+test('timeline: to-dmx has no COHERENCE step at all — DMX has no follower dependency', () => {
+  const model = runTimelineModel(
+    applyJob({ action: ACTION_TO_DMX, output: SWARM_APPLY_LOG.replace('to-swarm', 'to-dmx') }),
+    ropeTargets());
+  assert.equal(model.steps.some((step) => step.key === 'COHERENCE'), false);
+  assert.equal(stepState(model, 'VERDICT'), TIMELINE_DONE);
+});
+
+test('timeline: a dry-run is PREFLIGHT then PLAN, and yields the 64-hex fingerprint', () => {
+  const output = [
+    'dry-run: read-only plan sweep across all boards',
+    '  [ss_right_left] pre-flight OK',
+    '  [ss_left_left] pre-flight REFUSED',
+    'ss_right_left           PLAN   SWARM->DMX       ss_right_left: WOULD POST /api/config',
+    'VERDICT: DRY RUN - no changes made',
+    `PLAN FINGERPRINT: ${'a'.repeat(64)}`,
+  ].join('\n');
+  const model = runTimelineModel({ id: '1', action: ACTION_TO_DMX, apply: false, state: 'done',
+    exitCode: 0, startedAt: 0, endedAt: 5200, output }, ropeTargets());
+  assert.deepEqual(model.steps.map((step) => step.key), ['PREFLIGHT', 'PLAN']);
+  assert.deepEqual(model.steps.map((step) => step.state), [TIMELINE_DONE, TIMELINE_DONE]);
+  assert.equal(model.planFingerprint, 'a'.repeat(64));
+  assert.equal(model.elapsedMs, 5200);
+  assert.equal(model.chips.get('ss_left_left').text, 'preflight REFUSED');
+  assert.equal(model.chips.get('ss_left_left').cls, 'smk-transition-danger');
+  assert.equal(model.chips.get('ss_right_left').text, 'PLAN');
+  // A dry-run never manufactures UNKNOWN chips for boards it did not name.
+  assert.equal(model.chips.has('ss_left_right'), false);
+});
+
+test('timeline: a rollback fails the step it happened in and never reads as done', () => {
+  const output = [
+    'pre-flight: parallel read-only plan sweep across all boards',
+    '  [ss_left_right] POST /api/config',
+    'followers: parallel mutation POST across 3 board(s)',
+    'followers: parallel readiness wait across 3 board(s)',
+    'followers: parallel verification across 3 board(s)',
+    '  [ss_right_right] ROLLBACK - restoring pre-change snapshot',
+    'transaction ROLLBACK: whole fleet restored',
+    'ss_right_right         FAIL   DMX->SWARM       verify failed',
+    'VERDICT: NOT SAFE - ss_right_right failed verification',
+  ].join('\n');
+  const model = runTimelineModel(applyJob({ output, exitCode: 1 }), ropeTargets());
+  assert.equal(model.rolledBack, true);
+  assert.equal(stepState(model, 'VERIFY'), TIMELINE_FAILED);
+  // Phases the run never reached are SKIPPED — not silently green.
+  assert.equal(stepState(model, 'COHERENCE'), TIMELINE_SKIPPED);
+  assert.equal(stepState(model, 'READBACK'), TIMELINE_SKIPPED);
+  assert.equal(model.chips.get('ss_right_right').text, 'FAIL');
+  assert.equal(model.chips.get('ss_right_right').cls, 'smk-transition-danger');
+});
+
+test('timeline: an unrecognised result token is UNKNOWN, and silence is UNKNOWN too', () => {
+  const output = SWARM_APPLY_LOG
+    .replace('ss_left_left           PASS   DMX->SWARM       verified',
+      'ss_left_left           WEIRD  DMX->SWARM       ???')
+    .replace('ss_right_left          PASS   DMX->SWARM       verified', '');
+  const model = runTimelineModel(applyJob({ output }), ropeTargets());
+  // A token the CLI never promised must not be green…
+  assert.notEqual(model.chips.get('ss_left_left').cls, 'smk-transition-ok');
+  // …and a board the apply never mentioned at all is UNKNOWN, not absent.
+  assert.equal(model.chips.get('ss_right_left').text, 'UNKNOWN');
+  assert.equal(model.chips.get('ss_right_left').cls, 'smk-transition-danger');
+});
+
+test('timeline: a running job reports running with no endedAt, and no job is invisible', () => {
+  const running = runTimelineModel(applyJob({ state: 'running', endedAt: null }), ropeTargets(),
+    41000);
+  assert.equal(running.running, true);
+  assert.equal(running.elapsedMs, 40000);
+  assert.equal(runTimelineModel(null, ropeTargets()).visible, false);
+  // A line the contract does not name is ignored, never inferred into a step.
+  const noise = runTimelineModel(applyJob({
+    state: 'running', endedAt: null,
+    output: 'verifying something\nrebooting maybe\napplying now' }), ropeTargets(), 2000);
+  for (const step of noise.steps) assert.notEqual(step.state, TIMELINE_DONE);
+});
+
+// ── Asset re-release ────────────────────────────────────────────────────────
+
+test('re-release phrase: one board names itself, a set confirms ALL, junk throws', () => {
+  assert.equal(reReleaseConfirmPhrase(['ss_left_left']), 'RE-RELEASE ss_left_left');
+  assert.equal(reReleaseConfirmPhrase(['ss_left_left', 'ss_left_right']), 'RE-RELEASE ALL');
+  assert.throws(() => reReleaseConfirmPhrase([]), /at least one controller id/);
+  assert.throws(() => reReleaseConfirmPhrase(['192.0.2.61']), /not one of the four approved/);
+  assert.throws(() => reReleaseConfirmPhrase(['SS_LEFT_LEFT']), /not one of the four approved/);
+});
+
+test('re-release model: offered only for flagged boards, from a complete fresh readback', () => {
+  const targets = ropeTargets();
+  const now = 1000000;
+
+  // Nothing to do on a clean fleet.
+  const clean = smokestackReReleaseModel(
+    fleetVerdictRows(targets, fleetStatuses()), freshReadback(now), now);
+  assert.equal(clean.visible, false);
+  assert.equal(clean.enabled, false);
+  assert.deepEqual(clean.targetIds, []);
+
+  // One residue board drags the fleet out of parity: all four flagged.
+  const rows = fleetVerdictRows(targets,
+    fleetStatuses({ ss_left_left: { assets: { ...RESIDUE_ASSETS } } }));
+  const model = smokestackReReleaseModel(rows, freshReadback(now), now);
+  assert.equal(model.visible, true);
+  assert.equal(model.enabled, true);
+  assert.equal(model.action, ACTION_RE_RELEASE);
+  assert.deepEqual(model.targetIds,
+    ['ss_left_left', 'ss_left_right', 'ss_right_left', 'ss_right_right']);
+  assert.match(model.label, /REPAIR ASSETS…/);
+
+  // A stale or running readback blocks it — the plan fingerprint is bound to
+  // the census, so a stale census only produces a plan the CLI will refuse.
+  assert.equal(smokestackReReleaseModel(rows,
+    { ...freshReadback(now), sweeping: true }, now).enabled, false);
+  assert.equal(smokestackReReleaseModel(rows,
+    freshReadback(now - REPAIR_READBACK_MAX_AGE_MS - 1), now).enabled, false);
+  assert.equal(smokestackReReleaseModel(rows,
+    { ...freshReadback(now), resultIds: new Set([13, 15]) }, now).enabled, false);
+});
+
+test('re-release model: a board that needs a REFLASH blocks it — assets are not its fault', () => {
+  const now = 1000000;
+  const rows = fleetVerdictRows(ropeTargets(), fleetStatuses({
+    ss_left_left: { assets: { ...RESIDUE_ASSETS } },
+    ss_right_right: { capabilities: { perOutputDmx: false } },
+  }));
+  const model = smokestackReReleaseModel(rows, freshReadback(now), now);
+  assert.equal(model.visible, true);
+  assert.equal(model.enabled, false, 'never paper over a flash-class fault with an upload');
+  assert.match(model.reason, /needs a REFLASH/);
+  assert.equal(model.targetIds.includes('ss_right_right'), false);
+
+  const offline = smokestackReReleaseModel(fleetVerdictRows(ropeTargets(), fleetStatuses({
+    ss_left_left: { assets: { ...RESIDUE_ASSETS } },
+    ss_right_left: { reachable: false },
+  })), freshReadback(now), now);
+  assert.equal(offline.enabled, false);
+  assert.match(offline.reason, /unreachable/);
+});
+
+test('re-release gate: the phrase comes from the dry-run OWN frozen target set', () => {
+  const base = {
+    action: ACTION_RE_RELEASE, apply: false, state: 'done', exitCode: 0,
+    timedOut: false, outputTruncated: false, verdictLine: VERDICT_DRY_RUN,
+    planFingerprint: 'c'.repeat(64), targetIds: ['ss_left_left'],
+  };
+  assert.equal(applyGateModel(base, ACTION_RE_RELEASE, 'RE-RELEASE ss_left_left').allowed, true);
+  // The fleet phrase, another board's phrase, and the multi-board phrase all
+  // fail against a single-board plan.
+  for (const wrong of ['SWITCH', 'RE-RELEASE ALL', 'RE-RELEASE ss_left_right',
+    're-release ss_left_left', '']) {
+    assert.equal(applyGateModel(base, ACTION_RE_RELEASE, wrong).allowed, false, wrong);
+  }
+  const many = { ...base, targetIds: ['ss_left_left', 'ss_right_right'] };
+  assert.equal(applyGateModel(many, ACTION_RE_RELEASE, 'RE-RELEASE ALL').allowed, true);
+  assert.equal(applyGateModel(many, ACTION_RE_RELEASE, 'RE-RELEASE ss_left_left').allowed, false);
+  // No frozen set at all ⇒ nothing can arm.
+  assert.equal(applyGateModel({ ...base, targetIds: [] }, ACTION_RE_RELEASE,
+    'RE-RELEASE ALL').allowed, false);
+  assert.equal(applyGateModel({ ...base, targetIds: ['nope'] }, ACTION_RE_RELEASE,
+    'RE-RELEASE ALL').allowed, false);
+  // Every pre-existing dry-run term still applies.
+  assert.equal(applyGateModel({ ...base, exitCode: 1 }, ACTION_RE_RELEASE,
+    'RE-RELEASE ss_left_left').allowed, false);
+  assert.equal(applyGateModel({ ...base, planFingerprint: 'C'.repeat(64) }, ACTION_RE_RELEASE,
+    'RE-RELEASE ss_left_left').allowed, false);
+});
+
+test('re-release outcome + verdict: never a mode claim, never trusted before the readback', () => {
+  const job = { action: ACTION_RE_RELEASE, apply: true, state: 'done', exitCode: 0,
+    timedOut: false, outputTruncated: false, verdictLine: VERDICT_DMX_OK,
+    targetIds: ['ss_left_left'] };
+  const ok = jobOutcomeModel(job);
+  assert.equal(ok.kind, 're_release_ok');
+  assert.equal(ok.safeToKillNetwork, false);
+  assert.match(ok.headline, /pending independent readback/);
+  // Even the CLI's loudest line cannot make a re-release a fleet-safety claim.
+  const spoof = jobOutcomeModel({ ...job, verdictLine: VERDICT_SAFE_TO_KILL });
+  assert.equal(spoof.kind, 're_release_failed');
+  assert.equal(spoof.safeToKillNetwork, false);
+  assert.equal(jobOutcomeModel({ ...job, exitCode: 1,
+    verdictLine: 'VERDICT: NOT SAFE - upload failed' }).kind, 're_release_failed');
+
+  const canonical = FLEET_IDS.map(([controllerId]) =>
+    ({ controllerId, assets: ASSETS_CANONICAL }));
+  assert.match(reReleaseFleetVerdict(['ss_left_left'], canonical),
+    /ASSETS RESTORED — all four boards read the frozen release/);
+  const stillBad = canonical.map((row) => row.controllerId === 'ss_left_left'
+    ? { ...row, assets: ASSETS_RESIDUE } : row);
+  assert.match(reReleaseFleetVerdict(['ss_left_left'], stillBad),
+    /ASSETS NOT VERIFIED — ss_left_left still reads off the frozen release/);
+  assert.match(reReleaseFleetVerdict(['ss_left_left'], canonical.slice(0, 2)),
+    /ASSETS NOT VERIFIED — the final four-controller readback is incomplete \(2\/4\)/);
+  for (const verdict of [reReleaseFleetVerdict(['ss_left_left'], canonical),
+    reReleaseFleetVerdict(['ss_left_left'], stillBad)]) {
+    assert.equal(/SAFE TO KILL|DMX|SWARM/.test(verdict), false,
+      'an asset verdict never makes a mode or fleet-safety claim');
+  }
+});
+
+test('re-release transitions: judged on assets, and a MODE CHANGE is a failure', () => {
+  const targets = ropeTargets();
+  const target = targets[0];
+  const job = { id: '9', action: ACTION_RE_RELEASE, apply: true, state: 'done', exitCode: 0,
+    targetIds: ['ss_left_left'], output: '' };
+  const readback = { jobId: '9', state: 'done', resultIds: new Set([13, 15, 24, 25]) };
+  const preModes = { ss_left_left: MODE_SWARM };
+  const canonical = fleetStatuses().get(13);
+
+  assert.match(smokestackControllerTransitionModel(target, job, canonical, readback,
+    { preModes }).label, /assets canonical · mode SWARM unchanged/);
+  assert.equal(smokestackControllerTransitionModel(target, job, canonical, readback,
+    { preModes }).cls, 'smk-transition-ok');
+
+  // Assets still wrong ⇒ the run did not do its job.
+  const residue = fleetStatuses({ ss_left_left: { assets: { ...RESIDUE_ASSETS } } }).get(13);
+  assert.equal(smokestackControllerTransitionModel(target, job, residue, readback,
+    { preModes }).cls, 'smk-transition-danger');
+
+  // A re-release must NEVER move a board's mode; if it did, that is the story.
+  const flipped = fleetStatuses({ ss_left_left: { dmxEnabled: true,
+    swarm: { enabled: false, isLeader: false, followState: null, lastBeaconMsAgo: null } } })
+    .get(13);
+  const moved = smokestackControllerTransitionModel(target, job, flipped, readback, { preModes });
+  assert.match(moved.label, /MODE CHANGED · was SWARM, reads DMX/);
+  assert.equal(moved.cls, 'smk-transition-danger');
+
+  // Untargeted rows are excluded, never claimed as verified.
+  assert.match(smokestackControllerTransitionModel(targets[1], job,
+    fleetStatuses().get(15), readback, { preModes }).label, /^excluded · /);
+});
+
+test('panel: both directions are always on screen and only the derived one can fire', () => {
+  const source = fs.readFileSync(SMOKESTACK_PANEL_PATH, 'utf8');
+  // Two buttons, one shared class literal so they cannot drift apart.
+  assert.match(source, /const SWITCH_BTN_CLASS = 'cm-btn smk-switch-btn smk-switch-primary'/);
+  assert.equal((source.match(/el\('button', SWITCH_BTN_CLASS/g) || []).length, 2,
+    'SWITCH TO DMX and SWITCH TO SWARM are both always rendered');
+  // Neither button can start a direction the fleet model did not derive.
+  assert.match(source,
+    /fleetToggle && fleetToggle\.enabled && fleetToggle\.action === action\) startRun\(action\)/);
+  assert.match(source, /armDirection\(sectionRefs\.switchBtn, ACTION_TO_DMX/);
+  assert.match(source, /armDirection\(sectionRefs\.switchSwarmBtn, ACTION_TO_SWARM/);
+  // The card renders the new evidence columns, the timeline and the CLI line.
+  for (const marker of ['fleetVerdictRows(targets, statusResults', 'smk-verdict-chip',
+    'smk-row-action', 'dmxFeedModel(status)', 'updateTimeline(sectionRefs.timelineRefs',
+    'runTimelineModel(job', 'smk-elapsed', 'refs.cliLine.textContent = `CLI: $']) {
+    assert.ok(source.includes(marker), `panel must render ${marker}`);
+  }
+  // The elapsed ticker must never repaint the section — that would destroy a
+  // half-typed confirmation phrase four times a second.
+  const tickerStart = source.indexOf('function startElapsedTicker(');
+  const tickerEnd = source.indexOf('function stopElapsedTicker(');
+  assert.ok(tickerStart >= 0 && tickerEnd > tickerStart);
+  assert.doesNotMatch(source.slice(tickerStart, tickerEnd), /repaint\(\)|updateSection\(/);
+
+  const style = fs.readFileSync(STYLE_PATH, 'utf8');
+  for (const rule of ['.smk-board-table', '.smk-board-row', '.smk-verdict-chip',
+    '.smk-verdict-chip-ok', '.smk-verdict-chip-warn', '.smk-verdict-chip-danger',
+    '.smk-row-action', '.smk-timeline', '.smk-timeline-step-active',
+    '.smk-timeline-step-done', '.smk-timeline-step-failed', '.smk-timeline-step-skipped',
+    '.smk-elapsed', '.smk-readback-age', '.smk-rerelease-row', '.smk-job-cli-line',
+    '.smk-plan']) {
+    assert.ok(style.includes(rule), `style.css must define ${rule}`);
+  }
+  const block = style.slice(style.indexOf('/* ── Board table'),
+    style.indexOf('/* ── Advanced Recovery'));
+  assert.ok(block.length > 0);
+  assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(block), false,
+    'the new card CSS must use var() tokens, never hard-coded hex');
+
+  // `display: grid` beats the UA stylesheet's `[hidden] { display: none }`.
+  // Every block the panel toggles with the `hidden` PROPERTY must therefore
+  // carry its own `[hidden]` rule — without it the job banner sat on screen
+  // showing four idle controller chips with no job running.
+  for (const cls of ['.smk-job-banner', '.smk-repair-row', '.smk-rerelease-row',
+    '.smk-timeline']) {
+    const rule = new RegExp(`\\${cls}\\s*\\{[^}]*display:\\s*(grid|flex|block)`);
+    if (!rule.test(style)) continue;
+    assert.ok(style.includes(`${cls}[hidden]`),
+      `${cls} sets display, so it needs a ${cls}[hidden] rule or it never hides`);
+  }
+  // …and the table itself must never need a sideways scroll to be read.
+  assert.match(style, /\.smk-board-table\s*\{[^}]*overflow-x:\s*hidden/);
+});
+
+// ── A dry-run the CLI already refused is NOT a reviewed plan ────────────────
+//
+// Found while capturing screenshots against a stub reproducing the live
+// fleet: the deploy CLI's canonical dry-run exits **0** and prints its
+// ordinary `VERDICT: DRY RUN - no changes made` even when it refused three of
+// four boards on the asset contract — the refusals appear only inside the plan
+// table. Judged on exit code + verdict alone that read as "plan reviewed, go
+// ahead": the panel said "Dry-run passed", APPLY armed, and the CLI then
+// rejected the whole transaction at pre-flight. Nothing unsafe was written,
+// but the card told the operator the opposite of the truth.
+
+const REFUSED_DRY_RUN = [
+  'dry-run: read-only plan sweep across all boards',
+  '  [ss_right_left] pre-flight OK',
+  '  [ss_left_left] pre-flight REFUSED',
+  '',
+  '=== smokestack to-dmx ===',
+  'BOARD                  RESULT MODE             DETAIL',
+  '-----------------------------------------------------',
+  'ss_left_left           PLAN   SWARM->DMX       WOULD REFUSE: ss_left_left: activeMap is ' +
+    "'/models/pushed_map.json', expected '/models/swarm_titanic_rop_b5fc8e9e.json'",
+  '                                               WOULD REFUSE: ss_left_left: model allowlist ' +
+    'mismatch (22 files vs the frozen 4)',
+  'ss_right_left          PLAN   SWARM->DMX       ss_right_left: WOULD POST /api/config',
+  '',
+  'VERDICT: DRY RUN - no changes made',
+  `PLAN FINGERPRINT: ${'d'.repeat(64)}`,
+].join('\n');
+
+function refusedDryRunJob(overrides = {}) {
+  return {
+    action: ACTION_TO_DMX, apply: false, state: 'done', exitCode: 0,
+    timedOut: false, outputTruncated: false, verdictLine: VERDICT_DRY_RUN,
+    planFingerprint: 'd'.repeat(64), output: REFUSED_DRY_RUN, ...overrides,
+  };
+}
+
+test('refusal lines: found mid-row as well as on continuation lines', () => {
+  const lines = dryRunRefusalLines(REFUSED_DRY_RUN);
+  assert.equal(lines.length, 2);
+  // THE bug this guards: the CLI's first and most important refusal for each
+  // board is printed INSIDE the result-table row, after the columns. Anchoring
+  // the match at the start of the line silently dropped it.
+  assert.match(lines[0], /^WOULD REFUSE: ss_left_left: activeMap is/);
+  assert.match(lines[1], /^WOULD REFUSE: ss_left_left: model allowlist mismatch/);
+  assert.deepEqual(dryRunRefusalLines('nothing to refuse here'), []);
+  assert.deepEqual(dryRunRefusalLines(null), []);
+  // The board-level extractor sees it too, not just the continuation line.
+  assert.deepEqual([...dryRunAssetRefusals(REFUSED_DRY_RUN)], ['ss_left_left']);
+});
+
+test('outcome: a dry-run carrying WOULD REFUSE is refused, not "passed"', () => {
+  const outcome = jobOutcomeModel(refusedDryRunJob());
+  assert.equal(outcome.kind, 'dry_run_refused');
+  assert.match(outcome.headline, /the CLI would REFUSE this plan/);
+  // The operator gets the CLI's OWN first cause, not a summary of it.
+  assert.match(outcome.headline, /activeMap is '\/models\/pushed_map\.json'/);
+  assert.equal(outcome.safeToKillNetwork, false);
+  // …and a genuinely clean plan is still green.
+  assert.equal(jobOutcomeModel(refusedDryRunJob({
+    output: `ss_right_left: WOULD POST /api/config\nVERDICT: DRY RUN - no changes made\n` +
+      `PLAN FINGERPRINT: ${'d'.repeat(64)}` })).kind, 'dry_run_ok');
+});
+
+test('apply gate: a plan the CLI would refuse can never arm APPLY', () => {
+  const gate = applyGateModel(refusedDryRunJob(), ACTION_TO_DMX, CONFIRM_PHRASES[ACTION_TO_DMX]);
+  assert.equal(gate.allowed, false);
+  assert.match(gate.reason, /the CLI would REFUSE this plan/);
+  // Every other action's gate refuses on the same evidence.
+  assert.equal(applyGateModel(refusedDryRunJob({ action: ACTION_TO_SWARM }), ACTION_TO_SWARM,
+    CONFIRM_PHRASES[ACTION_TO_SWARM]).allowed, false);
+  assert.equal(applyGateModel(refusedDryRunJob({ action: ACTION_REPAIR_TO_DMX,
+    targetIds: ['ss_left_left'] }), ACTION_REPAIR_TO_DMX,
+  CONFIRM_PHRASES[ACTION_REPAIR_TO_DMX]).allowed, false);
+  assert.equal(applyGateModel(refusedDryRunJob({ action: ACTION_FORCE_TO_DMX,
+    targetIds: ['ss_left_left'], endedAt: Date.now(),
+    preflightDigest: 'x' }), ACTION_FORCE_TO_DMX, 'FORCE DMX ss_left_left',
+  { controllerId: 'ss_left_left', preflightDigest: 'x' }).allowed, false);
+  assert.equal(applyGateModel(refusedDryRunJob({ action: ACTION_RE_RELEASE,
+    targetIds: ['ss_left_left'] }), ACTION_RE_RELEASE,
+  'RE-RELEASE ss_left_left').allowed, false);
+});

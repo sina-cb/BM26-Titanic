@@ -192,7 +192,7 @@ windows, so the launcher must not race it with duplicates.
 ## `--dev-no-auth` (development only)
 
 Explicit opt-in bypass for CaptainPad privileged auth on **`dev` and
-`dev-lite` only**. Without the private `BM26_SECRETS` repository, a contributor
+`dev-lite` only**. Without an external `BM26_SECRETS` source, a contributor
 can still exercise Performance enter/exit and Edit mode locally:
 
 ```bash
@@ -316,39 +316,62 @@ launcher's lock lives at `~/tmp/bm26_titanic_launcher.lock.json`.
 ## 📦 Deploying to the Show Box
 
 The show servers are managed from the laptop with `deploy/deploy.py`. Machine
-addresses and credentials live in the **private BM26-Firmware-Deployment
-repo** (`machines.yaml` via `$BM26_MACHINES`, plus `$BM26_SECRETS` /
-`$BM26_DEPLOY_REGISTRY`) — never in this public repo. Test suites and agent
-worktrees are excluded from the sync.
+details and secrets come from an external/private deployment source through
+`$BM26_MACHINES` and `$BM26_SECRETS`; they never live in this public repo.
+Dedicated engine, simulation, and deployment test trees, agent worktrees,
+runtime state, scene backups, and local-only reports are excluded from the
+production mirror. CaptainPad's colocated test sources may be copied but remain
+inert because production serves the built web export and never runs Vitest.
 
 The distilled checklist (exterior-lights box = machine key `titanic-ext`):
 
-```bash
-# 1. Build the CaptainPad export — prod refuses to start without it
-node launcher.js rebuild-pad
-
-# 2. Confirm reachability + node parity (node_modules ship as-is)
-ssh titanic@<show-box> hostname && ssh titanic@<show-box> node --version
-
-# 3. Dry run — changes nothing; preview must NOT mention tests\, .claude\worktrees\,
-#    marsin_engine\states\ or reports_local
-cd deploy && python deploy.py deploy --machine titanic-ext --dry-run
-
-# 4. Real deploy: stops the stack (engine sends its blackout frame first — lights
-#    go OFF), robocopy /MIR sync, manifest + overlay, restarts the boot task, verifies
-python deploy.py deploy --machine titanic-ext
+```powershell
+# From the repository root. The real deploy includes its own mandatory
+# list-only preview before it stops or mirrors the stack.
+python deploy\deploy.py deploy --machine titanic-ext --scene titanic
 ```
+
+For the production fast lane, add `--force`:
+
+```powershell
+python deploy\deploy.py deploy --machine titanic-ext --scene titanic --force
+```
+
+Production `--force` skips the duplicate list-only preview and raises the real
+mirror from 16 to 64 workers. It still validates the target, Node version,
+secrets, SMB access, and scene; performs the safe stop; runs the authoritative
+`/MIR`; applies the manifest/shortcuts; restarts; and verifies the live scene
+and supervisor. Because it omits the preview, remote overwrites and deletions
+are not shown before they happen. Use it only when this laptop checkout is
+known to be authoritative.
+
+Before running it, `$BM26_MACHINES` and `$BM26_SECRETS` must resolve to the
+external deployment inputs, the registered SSH identity must work, the SMB
+credential must exist, and the laptop/server Node versions must match. The
+command validates those preconditions, securely refreshes the protected
+Machine-scope secret, previews the mirror, stops the stack, mirrors the current
+working tree, installs the selected scene/manifest and shortcuts, restarts the
+boot task, and verifies the scene and supervisor stability. A separate
+`--dry-run` is optional, not required. The launcher validates and rebuilds a
+missing or stale CaptainPad export from the shipped offline dependencies.
+With `--force`, the preview sentence is replaced by a loud fast-path banner;
+all remaining phases are unchanged.
+
+The production stamp records the current commit, branch, and dirty-file count.
+Uncommitted code/content is therefore deployable, but excluded runtime and
+local-only paths are never mirrored. Server-side edits to included paths are
+overwritten or deleted because the laptop is authoritative.
 
 **Verify** after a deploy: `:6969/simulation/` answers · `:6968/status` shows
 the right scene · `:6967/` loads CaptainPad · `:6966/` answers ·
 `node launcher.js status` on the box shows every row ✅ with frames > 0 · the
 engine log shows `priority 150`.
 
-**Rollback**: `python deploy.py deploy --machine titanic-ext --restart-only`
+**Restart without syncing**: `python deploy\deploy.py deploy --machine titanic-ext --restart-only`
 (stop + start + verify, touches no files — clears a bad runtime state). Full
 rollback: restore the last known-good tree on the laptop and re-deploy —
 `/MIR` makes the server match the laptop. Lights off now:
-`python deploy.py stop --machine titanic-ext`.
+`python deploy\deploy.py stop --machine titanic-ext`.
 
 Server bring-up from bare Windows, SSH keys, autologon, boot task:
 [`deploy/CHEATSHEET.md`](deploy/CHEATSHEET.md) ·

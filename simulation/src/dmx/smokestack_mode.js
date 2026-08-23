@@ -519,6 +519,13 @@ export function smokestackFleetModel(boards) {
 export const ACTION_TO_DMX = 'to-dmx';
 export const ACTION_TO_SWARM = 'to-swarm';
 export const ACTION_REPAIR_TO_DMX = 'repair-to-dmx';
+/**
+ * Restore a board's ON-BOARD ASSETS to the frozen canonical release. It never
+ * touches identity, roles, universes, wifi or firmware, and it never changes
+ * the board's MODE — it exists so a `NEEDS RE-RELEASE` row can be repaired
+ * from this card instead of a separate manual deploy step.
+ */
+export const ACTION_RE_RELEASE = 're-release';
 export const REPAIR_READBACK_MAX_AGE_MS = 30000;
 
 // ── Advanced Recovery: force ONE controller ────────────────────────────────
@@ -731,6 +738,7 @@ export const CONFIRM_PHRASES = {
  */
 export const TRUSTED_APPLY_OUTCOME_KINDS = Object.freeze([
   'safe_to_kill', 'dmx_ok', 'repair_ok', 'force_dmx_ok', 'force_swarm_ok',
+  're_release_ok',
 ]);
 export const TRUSTED_OUTCOME_KINDS = Object.freeze([
   'dry_run_ok', ...TRUSTED_APPLY_OUTCOME_KINDS,
@@ -817,6 +825,36 @@ export function smokestackJobPhase(job) {
 export function smokestackControllerTransitionModel(target, job, status, readback = null,
   options = {}) {
   if (!job) return { label: '', cls: 'smk-transition-idle' };
+  if (job.action === ACTION_RE_RELEASE) {
+    // An asset re-release is judged on ASSETS, never on mode: the run must
+    // leave every board's mode exactly where it found it, so a mode change
+    // here is a failure, not a success.
+    if (!Array.isArray(job.targetIds)) {
+      return { label: 're-release target set missing', cls: 'smk-transition-danger' };
+    }
+    const board = smokestackBoardModel(target, status || null);
+    if (!job.targetIds.includes(target.controllerId)) {
+      return { label: `excluded · ${board.modeLabel}`, cls: 'smk-transition-idle' };
+    }
+    const settled = readback && readback.jobId === job.id && readback.state === 'done';
+    if (!settled) {
+      return job.state === 'done'
+        ? { label: 'CLI done · asset readback pending', cls: 'smk-transition-running' }
+        : { label: 're-releasing assets', cls: 'smk-transition-running' };
+    }
+    const priorMode = options.preModes && options.preModes[target.controllerId];
+    if (priorMode && board.mode !== priorMode) {
+      return { label: `MODE CHANGED · was ${priorMode.toUpperCase()}, reads ${board.modeLabel}`,
+        cls: 'smk-transition-danger' };
+    }
+    const assets = assetsState(status || null, []);
+    if (assets !== ASSETS_CANONICAL) {
+      return { label: `assets ${assets} · still off the frozen release`,
+        cls: 'smk-transition-danger' };
+    }
+    return { label: `assets canonical · mode ${board.modeLabel} unchanged`,
+      cls: 'smk-transition-ok' };
+  }
   const isForce = FORCE_ACTIONS.includes(job.action);
   if (job.action === ACTION_REPAIR_TO_DMX || isForce) {
     if (!Array.isArray(job.targetIds)) {
@@ -1037,6 +1075,28 @@ export function jobOutcomeModel(job) {
       cls: 'smk-verdict-danger', safeToKillNetwork: false, reason,
     };
   }
+  if (job.apply && job.action === ACTION_RE_RELEASE) {
+    // An asset re-release never changes a board's MODE and never earns a fleet
+    // kill verdict — it only restores the frozen release so the canonical
+    // switch contract can pass. The independent readback decides whether it
+    // actually did; this is only the CLI's half of the evidence.
+    const count = Array.isArray(job.targetIds) ? job.targetIds.length : 0;
+    if (!failureReason && job.verdictLine === VERDICT_DMX_OK) {
+      return {
+        kind: 're_release_ok',
+        headline: `${count} controller(s) re-released by the CLI — asset verdict pending ` +
+          'independent readback',
+        cls: 'smk-verdict-plan', safeToKillNetwork: false, reason: '',
+      };
+    }
+    const reason = failureReason
+      || (job.verdictLine ? job.verdictLine : 'the CLI printed no verdict line');
+    return {
+      kind: 're_release_failed',
+      headline: `Asset re-release NOT verified — ${reason}`,
+      cls: 'smk-verdict-danger', safeToKillNetwork: false, reason,
+    };
+  }
   if (job.apply && job.action === ACTION_REPAIR_TO_DMX) {
     if (!failureReason && job.verdictLine === VERDICT_DMX_OK) {
       const count = Array.isArray(job.targetIds) ? job.targetIds.length : 0;
@@ -1055,13 +1115,20 @@ export function jobOutcomeModel(job) {
   // Dry-run (and the CLI `status` sub-command, if ever surfaced). Exit zero is
   // not enough: the exact dry-run verdict proves the captured output is intact
   // and that the run actually followed the no-write path.
+  const refusals = dryRunRefusalLines(job.output);
   const dryRunVerdictFailure = !failureReason && job.verdictLine !== VERDICT_DRY_RUN
     ? (job.verdictLine
       ? `unexpected dry-run verdict '${job.verdictLine}'`
       : 'the CLI printed no dry-run verdict line')
     : !failureReason && !/^[0-9a-f]{64}$/.test(job.planFingerprint || '')
       ? 'the CLI printed no exact SHA-256 plan fingerprint'
-      : null;
+      // A plan the CLI already said it would refuse is NOT a reviewed plan.
+      // Exit 0 and the no-write verdict only mean the dry-run itself ran
+      // cleanly; the refusals are in the table, and the apply would be
+      // rejected at pre-flight with nothing written.
+      : !failureReason && refusals.length > 0
+        ? `the CLI would REFUSE this plan — ${refusals[0]}`
+        : null;
   if (!failureReason && !dryRunVerdictFailure) {
     return {
       kind: 'dry_run_ok',
@@ -1113,6 +1180,14 @@ export function applyGateModel(dryRunJob, action, typedPhrase, options = {}) {
     return { allowed: false, reason: 'the dry-run has no exact trusted no-write verdict — ' +
       're-run it before applying' };
   }
+  const refusals = dryRunRefusalLines(dryRunJob.output);
+  if (refusals.length > 0) {
+    // The CLI exits 0 on a dry-run it fully intends to refuse — the refusals
+    // are in the plan table, not the exit code. Arming here would send the
+    // operator into a pre-flight rejection with nothing written and no idea
+    // why. Name the first cause instead.
+    return { allowed: false, reason: `the CLI would REFUSE this plan — ${refusals[0]}` };
+  }
   if (!/^[0-9a-f]{64}$/.test(dryRunJob.planFingerprint || '')) {
     return { allowed: false, reason: 'the dry-run has no exact SHA-256 plan fingerprint — ' +
       're-run it before applying' };
@@ -1141,6 +1216,25 @@ export function applyGateModel(dryRunJob, action, typedPhrase, options = {}) {
         allowed: false,
         reason: `type ${forceConfirmPhrase(action, controllerId)} exactly to arm the apply step`,
       };
+    }
+    return { allowed: true, reason: '' };
+  }
+  if (action === ACTION_RE_RELEASE) {
+    // The phrase is derived from the dry-run's OWN frozen target set, so a
+    // phrase typed against a different (e.g. narrower) set can never arm this
+    // plan. The server re-derives the same phrase from the same frozen set.
+    const frozen = dryRunJob.targetIds;
+    if (!Array.isArray(frozen) || frozen.length === 0) {
+      return { allowed: false, reason: 'the dry-run froze no controller target set — re-run it' };
+    }
+    let phrase;
+    try {
+      phrase = reReleaseConfirmPhrase(frozen);
+    } catch (err) {
+      return { allowed: false, reason: 'the dry-run froze an unapproved controller set' };
+    }
+    if (typedPhrase !== phrase) {
+      return { allowed: false, reason: `type ${phrase} exactly to arm the apply step` };
     }
     return { allowed: true, reason: '' };
   }
@@ -1476,4 +1570,632 @@ export function forceFleetVerdict(action, controllerId, boards) {
     ? 'TARGET RECOVERED TO DMX — FLEET NOW ALL DMX (re-run the fleet readback before any ' +
       'fleet action)'
     : 'TARGET RECOVERED TO DMX — FLEET REMAINS MIXED';
+}
+
+// ── Assets, board verdicts and the fix list ─────────────────────────────────
+//
+// The deploy CLI's canonical asset contract is what actually refuses most
+// fleet switches (report _352 §A4): a board running the wrong active map, or
+// carrying files outside the frozen allowlist, is refused for BOTH directions.
+// Before this block the operator only discovered that by pressing a button and
+// reading a wall of `WOULD REFUSE:` lines. Now the card says it up front.
+
+/** The frozen release the four rope controllers must be running. */
+export const SMOKESTACK_CANONICAL_ASSETS = Object.freeze({
+  pattern: '/patterns/titanic_swarm_pattern.js',
+  mapPrefix: '/models/swarm_titanic_rop_',
+});
+
+export const ASSETS_CANONICAL = 'canonical';
+export const ASSETS_RESIDUE = 'residue';
+export const ASSETS_UNREAD = 'unread';
+
+/**
+ * Which release is this board actually running?
+ *
+ *   canonical  the exact frozen pattern + a `swarm_titanic_rop_*` map, AND the
+ *              same activeMapHash as every other reachable board that reported
+ *              one (fleet parity — the CLI checks it, so we do too).
+ *   residue    it answered, and it does not match.
+ *   unread     it did not report the fields at all. NEVER treated as agreement.
+ *
+ * @param {Object|null} status this board's /smokestack/status row
+ * @param {Iterable<Object>|Map} fleetStatuses every board's row (for parity)
+ * @returns {'canonical'|'residue'|'unread'}
+ */
+export function assetsState(status, fleetStatuses = []) {
+  const assets = status && status.assets;
+  if (!status || status.reachable !== true || !assets) return ASSETS_UNREAD;
+  const { activePattern, activeMap, activeMapHash } = assets;
+  if (typeof activePattern !== 'string' || typeof activeMap !== 'string'
+      || typeof activeMapHash !== 'string') {
+    return ASSETS_UNREAD;
+  }
+  if (activePattern !== SMOKESTACK_CANONICAL_ASSETS.pattern) return ASSETS_RESIDUE;
+  if (!activeMap.startsWith(SMOKESTACK_CANONICAL_ASSETS.mapPrefix)) return ASSETS_RESIDUE;
+  const others = fleetStatuses instanceof Map
+    ? [...fleetStatuses.values()] : [...(fleetStatuses || [])];
+  for (const other of others) {
+    if (!other || other === status || other.reachable !== true) continue;
+    const otherHash = other.assets && other.assets.activeMapHash;
+    if (typeof otherHash !== 'string') continue;
+    // A hash disagreement is a fleet-parity break. The CLI refuses the whole
+    // fleet on it, so neither board may claim `canonical`.
+    if (otherHash !== activeMapHash) return ASSETS_RESIDUE;
+  }
+  return ASSETS_CANONICAL;
+}
+
+/**
+ * The firmware tag the majority of reachable boards report. A board that
+ * disagrees with the majority is a reflash candidate — an odd-one-out board is
+ * exactly what a half-finished OTA leaves behind. Returns null when there is
+ * no clear majority to judge against (never invents one).
+ */
+export function firmwareMajorityTag(statuses) {
+  const rows = statuses instanceof Map ? [...statuses.values()] : [...(statuses || [])];
+  const counts = new Map();
+  for (const status of rows) {
+    if (!status || status.reachable !== true) continue;
+    const tag = status.firmwareTag;
+    if (typeof tag !== 'string' || tag.length === 0) continue;
+    counts.set(tag, (counts.get(tag) || 0) + 1);
+  }
+  let best = null;
+  let bestCount = 0;
+  let tied = false;
+  for (const [tag, count] of counts) {
+    if (count > bestCount) { best = tag; bestCount = count; tied = false; }
+    else if (count === bestCount) tied = true;
+  }
+  return tied || best === null ? null : best;
+}
+
+export const VERDICT_GOOD = 'GOOD';
+export const VERDICT_NEEDS_RE_RELEASE = 'NEEDS RE-RELEASE';
+export const VERDICT_NEEDS_REFLASH = 'NEEDS REFLASH';
+export const VERDICT_UNREACHABLE = 'UNREACHABLE';
+
+/**
+ * Pull the set of controller ids a dry-run refused on ASSET-CONTRACT grounds
+ * out of the CLI's captured output. Line-anchored and conservative: only the
+ * CLI's own `WOULD REFUSE:` lines count, and only when they name one of the
+ * four approved ids and an asset/allowlist/manifest/parity cause. Anything
+ * else is ignored rather than guessed at.
+ *
+ * @param {string|null} output
+ * @returns {Set<string>}
+ */
+export function dryRunAssetRefusals(output) {
+  const refused = new Set();
+  if (typeof output !== 'string') return refused;
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    // The CLI prints the FIRST refusal inside its result-table row (after the
+    // BOARD/RESULT/MODE columns) and the rest as continuation lines, so this
+    // must match anywhere in the line — anchoring at the start would silently
+    // miss every board's first and most important refusal.
+    if (!line.includes('WOULD REFUSE:')) continue;
+    if (!/activeMap|activePattern|allowlist|manifest|parity|dataFingerprint/i.test(line)) continue;
+    for (const controllerId of SMOKESTACK_CONTROLLER_IDS) {
+      if (line.includes(controllerId)) refused.add(controllerId);
+    }
+  }
+  return refused;
+}
+
+/**
+ * Every `WOULD REFUSE:` line a dry-run printed, verbatim.
+ *
+ * This matters more than it looks. The deploy CLI's canonical dry-run exits
+ * **0** and prints its ordinary `VERDICT: DRY RUN - no changes made` even when
+ * it refused three of the four boards — the refusals live only in the plan
+ * table. Judged on exit code and verdict alone (which is all the gate used to
+ * do) that reads as "plan reviewed, go ahead", the operator arms APPLY, and
+ * the CLI then refuses the whole transaction at pre-flight. Nothing unsafe
+ * happens, but the panel told them the opposite of the truth.
+ *
+ * @param {string|null} output
+ * @returns {string[]}
+ */
+export function dryRunRefusalLines(output) {
+  if (typeof output !== 'string') return [];
+  const lines = [];
+  for (const rawLine of output.split(/\r?\n/)) {
+    const index = rawLine.indexOf('WOULD REFUSE:');
+    if (index >= 0) lines.push(rawLine.slice(index).trim());
+  }
+  return lines;
+}
+
+/**
+ * The one-word verdict + one-line remedy for a single board row. Precedence is
+ * fixed and FIRST MATCH WINS (report _354 §1.3): unreachable beats reflash
+ * beats re-release beats good, because that is the order the operator has to
+ * fix them in.
+ *
+ * A DETACHED follower is deliberately GOOD: `to-dmx` has no leader/follower
+ * dependency at all, so the DMX leg clears it. Flagging it would send the
+ * operator hunting for a fault that the very next button press fixes.
+ *
+ * @param {Object} target one smokestackTargets row
+ * @param {Object|null} status its /smokestack/status row
+ * @param {{assets?: string, firmwareMajority?: string|null,
+ *          dryRunRefusedIds?: Set<string>}} [context]
+ * @returns {{verdict, action, assets, note, cls}}
+ */
+export function boardVerdictModel(target, status, context = {}) {
+  const board = smokestackBoardModel(target, status);
+  const assets = context.assets || assetsState(status, []);
+  const id = target.controllerId;
+  const make = (verdict, action, note = '') => ({
+    verdict,
+    action,
+    assets,
+    note,
+    cls: verdict === VERDICT_GOOD ? 'smk-verdict-chip-ok'
+      : verdict === VERDICT_NEEDS_RE_RELEASE ? 'smk-verdict-chip-warn'
+        : 'smk-verdict-chip-danger',
+  });
+
+  if (!status || status.reachable !== true) {
+    return make(VERDICT_UNREACHABLE, 'power/LAN — then Refresh');
+  }
+  // ── reflash class: nothing short of firmware/identity work fixes these ──
+  const reflash = `reflash ${id} (USB, registry-locked)`;
+  if (typeof status.controllerId !== 'string' || status.controllerId.length === 0) {
+    return make(VERDICT_NEEDS_REFLASH, reflash, 'board did not answer with a MarsinLED identity');
+  }
+  if (status.controllerId !== id) {
+    return make(VERDICT_NEEDS_REFLASH, reflash,
+      `reports '${status.controllerId}', this card expects '${id}'`);
+  }
+  if (board.mode === MODE_INVALID) {
+    return make(VERDICT_NEEDS_REFLASH, reflash, 'DMX and SWARM are both enabled or both off');
+  }
+  if (!status.capabilities || status.capabilities.perOutputDmx !== true) {
+    return make(VERDICT_NEEDS_REFLASH, reflash, 'firmware lacks per-output DMX');
+  }
+  const majority = context.firmwareMajority === undefined ? null : context.firmwareMajority;
+  if (majority && status.firmwareTag && status.firmwareTag !== majority) {
+    return make(VERDICT_NEEDS_REFLASH, reflash,
+      `firmware ${status.firmwareTag} vs fleet ${majority}`);
+  }
+  // ── re-release class: assets/config state, fixable without a flash ──
+  const reRelease = `re-release assets on ${id}`;
+  if (assets !== ASSETS_CANONICAL) {
+    return make(VERDICT_NEEDS_RE_RELEASE, reRelease, assets === ASSETS_UNREAD
+      ? 'the board did not report its active pattern/map'
+      : 'off the frozen release (active map, allowlist or fleet parity)');
+  }
+  const health = status.health || {};
+  if (health.stagedPending === true) {
+    return make(VERDICT_NEEDS_RE_RELEASE, reRelease, 'a STAGED config is pending');
+  }
+  if (health.configSource && health.configSource !== 'primary') {
+    return make(VERDICT_NEEDS_RE_RELEASE, reRelease,
+      `running on a degraded configSource '${health.configSource}'`);
+  }
+  const refused = context.dryRunRefusedIds;
+  if (refused instanceof Set && refused.has(id)) {
+    return make(VERDICT_NEEDS_RE_RELEASE, reRelease,
+      'the last dry-run refused this board on the asset contract');
+  }
+  // ── good ──
+  const followState = status.swarm && status.swarm.followState;
+  if (board.mode === MODE_SWARM && followState === 'DETACHED') {
+    return make(VERDICT_GOOD, '', 'detached · cleared by the DMX leg');
+  }
+  return make(VERDICT_GOOD, '');
+}
+
+/**
+ * Every board's verdict from ONE readback, with the shared context (asset
+ * state, firmware majority, last dry-run refusals) computed once so the four
+ * rows are judged against each other rather than in isolation.
+ *
+ * @param {Array} targets
+ * @param {Map} statuses target.id → status row
+ * @param {{output?: string}|null} [lastDryRun]
+ * @returns {Array<{target, status, board, verdict, action, assets, note, cls}>}
+ */
+export function fleetVerdictRows(targets, statuses, lastDryRun = null) {
+  const list = Array.isArray(targets) ? targets : [];
+  const byId = statuses instanceof Map ? statuses : new Map();
+  const rows = list.map((target) => ({ target, status: byId.get(target.id) || null }));
+  const allStatuses = rows.map((row) => row.status).filter(Boolean);
+  const firmwareMajority = firmwareMajorityTag(allStatuses);
+  const dryRunRefusedIds = dryRunAssetRefusals(lastDryRun && lastDryRun.output);
+  return rows.map(({ target, status }) => {
+    const assets = assetsState(status, allStatuses);
+    const verdict = boardVerdictModel(target, status,
+      { assets, firmwareMajority, dryRunRefusedIds });
+    return {
+      target,
+      status,
+      board: smokestackBoardModel(target, status),
+      ...verdict,
+    };
+  });
+}
+
+/**
+ * The ordered fix list for the operator (and the census table in the report):
+ * every non-GOOD row, in canonical controller order, with the one thing to do
+ * about it. An all-GOOD fleet returns [].
+ */
+export function fleetFixList(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => row && row.verdict !== VERDICT_GOOD)
+    .map((row) => ({
+      id: row.target ? row.target.controllerId : row.controllerId,
+      verdict: row.verdict,
+      action: row.action,
+      note: row.note || '',
+    }));
+}
+
+/** The ids of every row that a `re-release` run could actually repair. */
+export function reReleaseTargetIds(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => row && row.verdict === VERDICT_NEEDS_RE_RELEASE)
+    .map((row) => (row.target ? row.target.controllerId : row.controllerId))
+    .sort();
+}
+
+/**
+ * How fresh must the engine's sACN feed be for a DMX leg to count as proven?
+ * The engine runs at 40 fps, so 2 s is ~80 missed frames — generous, and still
+ * far short of "the feed died a minute ago".
+ */
+export const DMX_FEED_MAX_AGE_MS = 2000;
+
+/**
+ * Is the engine actually feeding this board right now? The DMX-leg pass
+ * criterion (_354 §2c).
+ *
+ * The firmware reports `lastPacketAgeMs: -1` when it has NEVER received a
+ * packet. A naive `age < 2000` would read that as a fresh feed — the exact
+ * fail-open this model must not have — so a negative or absent age is `seen:
+ * false`, always.
+ *
+ * @param {Object|null} status
+ * @returns {{seen: boolean, ageMs: number|null, reason: string}}
+ */
+export function dmxFeedModel(status) {
+  const sacn = (status && status.sacn) || {};
+  const ageMs = Number.isFinite(sacn.lastPacketAgeMs) ? sacn.lastPacketAgeMs : null;
+  if (!status || status.reachable !== true) {
+    return { seen: false, ageMs: null, reason: 'board unreachable' };
+  }
+  if (sacn.enabled !== true) {
+    return { seen: false, ageMs, reason: 'sACN listener is not enabled' };
+  }
+  if (ageMs === null || ageMs < 0) {
+    return { seen: false, ageMs, reason: 'no sACN packet has ever arrived' };
+  }
+  if (ageMs >= DMX_FEED_MAX_AGE_MS) {
+    return { seen: false, ageMs, reason: `last sACN packet ${(ageMs / 1000).toFixed(1)} s ago` };
+  }
+  return { seen: true, ageMs, reason: '' };
+}
+
+// ── Run timeline (parsed from the CLI's own lines) ──────────────────────────
+//
+// Report _354 §1.5. Line-anchored, exact, fail-closed: every rule below
+// matches a literal CLI string. An unmatched line is IGNORED — never used to
+// infer a step. The old regex-soup `outputPhase` heuristics survive only as
+// the raw-console fallback label under Details.
+
+export const TIMELINE_PENDING = 'pending';
+export const TIMELINE_ACTIVE = 'active';
+export const TIMELINE_DONE = 'done';
+export const TIMELINE_FAILED = 'failed';
+export const TIMELINE_SKIPPED = 'skipped';
+
+const STEP_PREFLIGHT = 'PREFLIGHT';
+const STEP_PLAN = 'PLAN';
+const STEP_CANARY = 'CANARY';
+const STEP_PARALLEL = 'PARALLEL';
+const STEP_REBOOT_WAIT = 'REBOOT WAIT';
+const STEP_VERIFY = 'VERIFY';
+const STEP_COHERENCE = 'COHERENCE';
+const STEP_READBACK = 'READBACK';
+const STEP_VERDICT = 'VERDICT';
+
+function timelineStepKeys(job) {
+  if (!job) return [];
+  if (!job.apply) return [STEP_PREFLIGHT, STEP_PLAN];
+  if (job.action === ACTION_RE_RELEASE) {
+    // The asset re-release is canary-first per board, not a fan-out, and its
+    // per-board log wording is the CLI's own. Only the steps whose literal
+    // lines are pinned below are modelled; nothing is inferred.
+    return [STEP_PREFLIGHT, STEP_VERIFY, STEP_VERDICT];
+  }
+  const swarm = job.action === ACTION_TO_SWARM || job.action === ACTION_FORCE_TO_SWARM;
+  return [
+    STEP_PREFLIGHT, STEP_CANARY, STEP_PARALLEL, STEP_REBOOT_WAIT, STEP_VERIFY,
+    // `to-dmx` has no coherence phase at all — DMX has no leader/follower
+    // dependency, so the step is absent rather than perpetually pending.
+    ...(swarm ? [STEP_COHERENCE] : []),
+    STEP_READBACK, STEP_VERDICT,
+  ];
+}
+
+const RESULT_ROW = /^(\S+)\s+(PASS|FAIL|SKIP|PLAN|OK)\s+(\S+->\S+)\s+(.*)$/;
+const BOARD_LINE = /^\[([a-z0-9_]+)\]\s+(.*)$/;
+
+/**
+ * Parse one job's captured CLI output into timeline steps + per-board chips.
+ *
+ * @param {Object|null} job the public job shape
+ * @param {Array} targets the four semantic targets
+ * @param {number} [now]
+ * @returns {{visible, steps, chips: Map, elapsedMs, running, verdictLine,
+ *            planFingerprint, rolledBack}}
+ */
+export function runTimelineModel(job, targets = [], now = Date.now()) {
+  const keys = timelineStepKeys(job);
+  const empty = {
+    visible: false, steps: [], chips: new Map(), elapsedMs: 0, running: false,
+    verdictLine: null, planFingerprint: null, rolledBack: false,
+  };
+  if (!job || keys.length === 0) return empty;
+
+  const ids = new Set(SMOKESTACK_CONTROLLER_IDS);
+  const chips = new Map();
+  // Which boards the CLI gave a FINAL result-table row to. A progress chip
+  // ("POSTED", "rebooting") is not an outcome: if the run ended without a
+  // result row for a board, that board's state is UNKNOWN, however far it got.
+  const settled = new Set();
+  const setChip = (id, text, cls) => {
+    if (ids.has(id)) chips.set(id, { id, text, cls });
+  };
+  const state = new Map(keys.map((key) => [key, TIMELINE_PENDING]));
+  const labels = new Map(keys.map((key) => [key, key]));
+  let current = null;
+  let failedStep = null;
+  let rolledBack = false;
+  let sawFollowerFanout = false;
+  let canaryId = null;
+  let planFingerprint = null;
+  let verdictLine = null;
+
+  const enter = (key, label) => {
+    if (!state.has(key)) return;
+    // Everything before this step in the fixed order is settled.
+    for (const earlier of keys) {
+      if (earlier === key) break;
+      if (state.get(earlier) === TIMELINE_ACTIVE) state.set(earlier, TIMELINE_DONE);
+    }
+    if (state.get(key) !== TIMELINE_FAILED) state.set(key, TIMELINE_ACTIVE);
+    if (label) labels.set(key, label);
+    current = key;
+  };
+
+  for (const rawLine of String(job.output || '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+
+    if (line.startsWith('dry-run: read-only plan sweep across all boards')) {
+      enter(STEP_PREFLIGHT);
+      continue;
+    }
+    if (line.startsWith('pre-flight: parallel read-only plan sweep across all boards')) {
+      enter(STEP_PREFLIGHT);
+      continue;
+    }
+    if (line.startsWith('followers: parallel mutation POST across ')) {
+      sawFollowerFanout = true;
+      const count = /across (\d+) board/.exec(line);
+      enter(STEP_PARALLEL, count ? `${STEP_PARALLEL} (${count[1]})` : STEP_PARALLEL);
+      continue;
+    }
+    if (line.startsWith('followers: parallel readiness wait across ')) {
+      sawFollowerFanout = true;
+      enter(STEP_REBOOT_WAIT);
+      continue;
+    }
+    if (line.startsWith('followers: parallel verification across ')) {
+      sawFollowerFanout = true;
+      enter(STEP_VERIFY);
+      continue;
+    }
+    if (line.startsWith('terminal: independent canonical 4/4 asset/runtime readback')) {
+      enter(STEP_READBACK);
+      continue;
+    }
+    if (line.startsWith('transaction ROLLBACK:') || line.startsWith('transaction INTERRUPTED:')) {
+      rolledBack = true;
+      failedStep = current;
+      if (current) state.set(current, TIMELINE_FAILED);
+      continue;
+    }
+    if (/^PLAN FINGERPRINT: [0-9a-f]{64}$/.test(line)) {
+      planFingerprint = line.slice('PLAN FINGERPRINT: '.length);
+      enter(STEP_PLAN);
+      continue;
+    }
+    if (line.startsWith('VERDICT: ')) {
+      verdictLine = line;
+      if (job.apply) enter(STEP_VERDICT);
+      else enter(STEP_PLAN);
+      continue;
+    }
+
+    const board = BOARD_LINE.exec(line);
+    if (board && ids.has(board[1])) {
+      const [, id, rest] = board;
+      if (/^pre-flight OK/.test(rest)) {
+        enter(STEP_PREFLIGHT);
+        setChip(id, 'preflight ok', 'smk-transition-plan');
+      } else if (/^pre-flight REFUSED/.test(rest)) {
+        enter(STEP_PREFLIGHT);
+        setChip(id, 'preflight REFUSED', 'smk-transition-danger');
+      } else if (/^POST \/api\/config/.test(rest)) {
+        if (!sawFollowerFanout && canaryId === null) {
+          canaryId = id;
+          enter(STEP_CANARY, `${STEP_CANARY} ${id}`);
+        }
+        setChip(id, 'POSTED', 'smk-transition-running');
+      } else if (/^needs-reboot - queued for readiness polling/.test(rest)) {
+        setChip(id, 'rebooting', 'smk-transition-running');
+      } else if (/^reboot-survival (already proven|canary):/.test(rest)) {
+        enter(STEP_COHERENCE);
+        setChip(id, 'coherence', 'smk-transition-running');
+      } else if (/^ROLLBACK - restoring pre-change snapshot/.test(rest)) {
+        rolledBack = true;
+        failedStep = current;
+        if (current) state.set(current, TIMELINE_FAILED);
+        setChip(id, 'restoring', 'smk-transition-plan');
+      }
+      continue;
+    }
+
+    const result = RESULT_ROW.exec(line);
+    if (result && ids.has(result[1])) {
+      const [, id, token] = result;
+      // Any token the CLI did not promise is UNKNOWN — never green.
+      const cls = token === 'PASS' || token === 'OK' ? 'smk-transition-ok'
+        : token === 'PLAN' ? 'smk-transition-plan'
+          : 'smk-transition-danger';
+      setChip(id, token, cls);
+      settled.add(id);
+    } else if (result) {
+      // A result-shaped row naming something that is not one of the four.
+      continue;
+    }
+  }
+
+  // A finished APPLY must account for all four boards. Anything the CLI did
+  // not give a final result row — silence, or a board left showing a
+  // mid-flight "POSTED" — is UNKNOWN, never carried forward as progress.
+  if (job.state === 'done' && job.apply) {
+    for (const target of targets || []) {
+      const id = target && target.controllerId;
+      if (!id || settled.has(id)) continue;
+      chips.set(id, { id, text: 'UNKNOWN', cls: 'smk-transition-danger' });
+    }
+  }
+
+  const done = job.state === 'done';
+  if (done) {
+    for (const key of keys) {
+      const value = state.get(key);
+      if (value === TIMELINE_ACTIVE) state.set(key, TIMELINE_DONE);
+      // Steps the run never reached did not "fail" — they never happened.
+      else if (value === TIMELINE_PENDING) state.set(key, TIMELINE_SKIPPED);
+    }
+    if (failedStep) state.set(failedStep, TIMELINE_FAILED);
+  }
+
+  const startedAt = Number.isFinite(job.startedAt) ? job.startedAt : null;
+  const endedAt = Number.isFinite(job.endedAt) ? job.endedAt : null;
+  const elapsedMs = startedAt === null ? 0 : Math.max(0, (endedAt ?? now) - startedAt);
+
+  return {
+    visible: true,
+    steps: keys.map((key) => ({ key, label: labels.get(key), state: state.get(key) })),
+    chips,
+    elapsedMs,
+    running: !done,
+    verdictLine,
+    planFingerprint,
+    rolledBack,
+  };
+}
+
+// ── Asset re-release (repair a NEEDS RE-RELEASE row from this card) ─────────
+
+/**
+ * The exact typed phrase an asset re-release apply requires. One board names
+ * itself so a phrase armed for one row can never arm another; a multi-board
+ * run confirms the SET, whose exact membership is frozen into the dry-run and
+ * re-checked byte-for-byte by the server.
+ */
+export function reReleaseConfirmPhrase(targetIds) {
+  const ids = Array.isArray(targetIds) ? targetIds : [];
+  if (ids.length === 0) {
+    throw new Error('[Smokestack Re-release] a re-release needs at least one controller id');
+  }
+  for (const id of ids) {
+    if (!SMOKESTACK_CONTROLLER_IDS.includes(id)) {
+      throw new Error(`[Smokestack Re-release] '${id}' is not one of the four approved ` +
+        `smokestack controller IDs (${SMOKESTACK_CONTROLLER_IDS.join(', ')})`);
+    }
+  }
+  return ids.length === 1 ? `RE-RELEASE ${ids[0]}` : 'RE-RELEASE ALL';
+}
+
+/**
+ * May the card offer an asset re-release, and for which boards?
+ *
+ * It is offered ONLY from a complete, fresh four-controller readback — the
+ * same bound the repair flow uses — because the run's plan fingerprint is
+ * bound to the census it was made from, and a stale census produces a plan the
+ * CLI will refuse anyway.
+ *
+ * @param {Array} rows fleetVerdictRows output
+ * @param {{sweptAt?, sweeping?, resultIds?}} readback
+ * @param {number} [now]
+ */
+export function smokestackReReleaseModel(rows, readback = {}, now = Date.now()) {
+  const list = Array.isArray(rows) ? rows : [];
+  const resultIds = readback.resultIds instanceof Set ? readback.resultIds : new Set();
+  const targetIds = reReleaseTargetIds(list);
+  const blockers = [];
+  const ageMs = Number.isFinite(readback.sweptAt) ? Math.max(0, now - readback.sweptAt) : Infinity;
+
+  if (readback.sweeping === true) blockers.push('status readback is still running');
+  else if (ageMs > REPAIR_READBACK_MAX_AGE_MS) blockers.push('status readback is stale — refresh');
+  for (const row of list) {
+    if (!resultIds.has(row.target.id)) {
+      blockers.push(`${row.target.operatorLabel} is missing from the readback`);
+    } else if (row.verdict === VERDICT_UNREACHABLE) {
+      blockers.push(`${row.target.operatorLabel} is unreachable — fix power/LAN first`);
+    } else if (row.verdict === VERDICT_NEEDS_REFLASH) {
+      // Re-releasing assets onto a board that needs a flash hides the real
+      // fault behind a run that will verify and still leave the fleet broken.
+      blockers.push(`${row.target.operatorLabel} needs a REFLASH — assets are not its problem`);
+    }
+  }
+
+  return {
+    visible: targetIds.length > 0,
+    enabled: targetIds.length > 0 && blockers.length === 0,
+    action: ACTION_RE_RELEASE,
+    targetIds,
+    label: targetIds.length === 1
+      ? `REPAIR ASSETS… ${targetIds[0]}`
+      : `REPAIR ASSETS… ${targetIds.length} boards`,
+    reason: blockers[0] || '',
+    blockers,
+    ageMs,
+  };
+}
+
+/**
+ * The fleet sentence a finished re-release is allowed to print, from the
+ * INDEPENDENT readback — never from the CLI's exit status. It can never
+ * contain a mode claim: a re-release does not change any board's mode.
+ */
+export function reReleaseFleetVerdict(targetIds, rowsAfterReadback) {
+  const ids = Array.isArray(targetIds) ? targetIds : [];
+  const rows = Array.isArray(rowsAfterReadback) ? rowsAfterReadback : [];
+  if (rows.length !== SMOKESTACK_CONTROLLER_IDS.length) {
+    return 'ASSETS NOT VERIFIED — the final four-controller readback is incomplete ' +
+      `(${rows.length}/${SMOKESTACK_CONTROLLER_IDS.length})`;
+  }
+  const missed = ids.filter((id) => {
+    const row = rows.find((candidate) => candidate.target
+      ? candidate.target.controllerId === id : candidate.controllerId === id);
+    return !row || row.assets !== ASSETS_CANONICAL;
+  });
+  if (missed.length > 0) {
+    return `ASSETS NOT VERIFIED — ${missed.join(', ')} still reads off the frozen release`;
+  }
+  const fleetCanonical = rows.every((row) => row.assets === ASSETS_CANONICAL);
+  return fleetCanonical
+    ? 'ASSETS RESTORED — all four boards read the frozen release (fleet asset parity restored)'
+    : `ASSETS RESTORED on ${ids.join(', ')} — other boards are still off the frozen release`;
 }

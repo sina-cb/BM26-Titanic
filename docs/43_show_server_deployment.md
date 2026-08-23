@@ -3,8 +3,8 @@
 **Status:** Draft v1. Phase 1 bring-up scripts are implemented
 (`deploy/server_setup.ps1` + `deploy/setup/*.ps1`, `deploy/create_titanic_user.ps1`,
 `deploy/verify_server.ps1`). The supervisor `deploy/boot_server.ps1`, the
-machine manifest `machines.yaml` (private — `$BM26_MACHINES` in the
-BM26-Firmware-Deployment repo, shipped to the server at deploy time), and the
+machine manifest (supplied through the external/private `$BM26_MACHINES`
+contract and shipped to the server at deploy time), and the
 boot-scene command `deploy/set_boot.ps1` now exist too, so the boot task
 launches the real stack.
 **Phase 2 is implemented**: `deploy/deploy.py` on the laptop does the full
@@ -52,7 +52,7 @@ an isolated LAN. No internet is used at deploy time or boot time.
 |---|---|
 | **Design station** | Sina's laptop (this machine). The single source of truth for code. Deploys are always laptop → server, never sideways. |
 | **Show server** | A Windows machine on the playa LAN running the stack unattended. First one: **`titanic-int`** (interior/rooms lighting). Later: exterior, spares. |
-| **Machine manifest** | `machines.yaml` — one entry per server: host, scene, profile, notes. **Private** (real hostnames/IPs/shares): lives in the BM26-Firmware-Deployment repo, exported as `$BM26_MACHINES`, shipped to each server at deploy time. Public shape reference: `deploy/machines.yaml.example`. |
+| **Machine manifest** | One entry per server: host, scene, profile, notes. **Private** and supplied only through `$BM26_MACHINES`; shipped to each server at deploy time. Public shape reference: `deploy/machines.yaml.example`. |
 | **Overlay** | `deploy/overlays/<machine>/…` — per-machine config **override fragments** (chiefly `marsin_engine/config.yaml`), deep-merged over the tracked tree at deploy time. Minimal diff only, never a full copy; a machine that needs no changes carries no overlay and runs the tracked default. Checked in. |
 | **Boot task** | The Windows Scheduled Task on the server that starts the supervisor at logon. |
 | **Supervisor** | `deploy/boot_server.ps1` on the server — reads the machine's manifest entry, runs `node launcher.js prod --scene <scene> --no-launch`, relaunches it loudly if it ever exits. |
@@ -186,10 +186,9 @@ truth and on the machine.
 
 ## Machine manifest
 
-The manifest is **private** and does not live in this repo: it is
-`machines.yaml` in the BM26-Firmware-Deployment repo, exported as
-`$BM26_MACHINES` by that repo's `setup_env` scripts, and shipped to each
-server's `deploy\machines.yaml` by `deploy.py` at deploy time. `deploy.py`
+The manifest is **private** and does not live in this repo: it is supplied
+through `$BM26_MACHINES` by an external/private deployment source and shipped
+to each server by `deploy.py` at deploy time. `deploy.py`
 fails loudly if `$BM26_MACHINES` is unset — there is no repo-local fallback.
 The shape (placeholder values only) is in `deploy/machines.yaml.example`:
 
@@ -208,7 +207,7 @@ machines:
     share_root: C:\titanic         # dest must live under this (dest_unc maps it)
     scratch_dest: C:\Users\tech\workspace\BM26-Titanic  # on-server dev tree
     ssh_user: titanic
-    notes: placeholder — real values live in the private repo
+    notes: placeholder — real values come from the external/private source
 ```
 
 Overlay layout mirrors the repo tree (each `.yaml` is a MINIMAL override
@@ -226,17 +225,17 @@ port-shuffling.)
 
 ## The deploy pipeline — `deploy/deploy.py`
 
-`python deploy/deploy.py deploy --machine titanic-int [--scene <scene>] [--restart-only] [--dry-run]`
+`python deploy/deploy.py deploy --machine titanic-int [--scene <scene>] [--force|--restart-only|--dry-run]`
 
 The prod pipeline prints **eight** loud phases (`1/8`…`8/8`); the exact
 sequence and phase names below are what `deploy_prod` emits:
 
 | Phase | What happens | Fails loudly when |
 |---|---|---|
-| 1/8 preflight | Manifest entry exists; SSH reaches the right host; remote `node --version` == local (v24.18.0 today); the laptop's external `$BM26_SECRETS` YAML validates; the exact three-shortcut URL plan is derived and printed from the selected scene, launcher profile, and effective machine overlay/config; a real deploy securely provisions its protected remote secret copy outside prod, persists its Machine-scope path, removes any stale User-scope override, and verifies read access with redacted output; `--dry-run` only probes and describes remote actions; `--scene` (if given) validates NOW while the stack is still up; SMB reachable + a `robocopy /L` diff summary of what will change | host down, wrong box, node mismatch, invalid launcher/lighting profile or port config, local secret invalid, secure copy/ACL/persistence/read verification failure, share missing, bad `--scene` |
+| 1/8 preflight | Manifest entry exists; SSH reaches the right host; remote `node --version` == local (v24.18.0 today); the laptop's external `$BM26_SECRETS` YAML validates; the exact three-shortcut URL plan is derived and printed from the selected scene, launcher profile, and effective machine overlay/config; a real deploy securely provisions its protected remote secret copy outside prod, persists its Machine-scope path, removes any stale User-scope override, and verifies read access with redacted output; `--dry-run` only probes and describes remote actions; `--scene` (if given) validates NOW while the stack is still up; SMB must be reachable; normal mode prints a `robocopy /L` diff, while prod `--force` prints a fast-path banner and skips that duplicate traversal | host down, wrong box, node mismatch, invalid launcher/lighting profile or port config, local secret invalid, secure copy/ACL/persistence/read verification failure, share missing, bad `--scene` |
 | 2/8 stop stack | `ssh … "schtasks /End /TN BM26TitanicStack"` then `node launcher.js stop` for stragglers, then confirm both ports go quiet | stack won't die (orphaned port) |
 | 3/8 sync working tree | `robocopy <repo> <share> /MIR` with the exclusion list below | any robocopy error class ≥ 8 |
-| 4/8 boot scene + manifest | If `--scene`, write it into the private `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`); ship that manifest | scene missing its files or manifest unparseable/unwritable |
+| 4/8 boot scene + manifest | If `--scene`, write it into the external/private manifest (`$BM26_MACHINES`, same validation as `set_boot.ps1`); ship that manifest | scene missing its files or manifest unparseable/unwritable |
 | 5/8 apply overlay + operator shortcuts | Deep-merge each `deploy/overlays/<machine>/` `.yaml` override fragment over the tracked file at the same path; then reconcile exactly three localhost `.url` shortcuts on the registered show user's Known Folder desktop from the deployed profile/config, remove retired BM26 shortcut duplicates, and create/verify distinct offline icons in the stable operator-assets directory outside prod | malformed overlay, wrong SSH user, desktop unavailable, URL plan mismatch, stale shortcut removal failure, or icon/shortcut verification mismatch |
 | 6/8 stamp deploy_info.yaml | Write `deploy_info.yaml` at the destination root: git HEAD, branch, dirty-file count, timestamp, source hostname | — |
 | 7/8 start stack | Capture the server wall clock, verify the deployed boot script contains the exact `node launcher.js <profile> --scene <scene> --no-launch` argument contract, then `ssh … "schtasks /Run /TN BM26TitanicStack"` (runs in the logged-on session, so audio/devices work — never start the stack directly from SSH) | no-launch contract missing or task missing |
@@ -256,6 +255,15 @@ laptop owns code:
   seeded to the server by hand (there is no state-seeding flag).
 - `simulation/.scene_backups/`, `.agent_renders/`, `deploy_info.yaml`,
   `machines.yaml`, supervisor logs/status.
+- Dedicated engine, simulation, and deployment test trees, agent worktrees, and
+  `.agent/reports_local/` are laptop-only and excluded from production.
+- CaptainPad's colocated test sources may be copied but are inert: production
+  serves `CaptainPad/dist` and never runs Vitest.
+- Installed `node_modules` trees and `CaptainPad/dist` are deliberately
+  included so production stays fully offline.
+- Included production files come directly from the current working tree, even
+  when dirty. The deployment stamp records the commit, branch, and dirty-file
+  count; excluded runtime/local-only paths are never mirrored.
 - Overlay-managed files are synced normally, then overwritten in phase 5.
 
 The phase-5 shortcuts are ordinary InternetShortcut files. Their exact URLs
@@ -273,6 +281,9 @@ path and always invokes launcher.js with `--no-launch`.
 `--restart-only` skips phases 3–6 (fast path for "same code, new scene" — but
 `--scene` needs a sync so it cannot combine with `--restart-only`).
 `--dry-run` runs phase 1 + the robocopy `/L` listing and stops.
+Prod `--force` skips the `/L` listing, raises the real mirror from 16 to 64
+workers, and otherwise runs every real-deploy phase unchanged. It is mutually
+exclusive with `--dry-run` and `--restart-only`.
 
 ## Edges
 
@@ -381,8 +392,8 @@ session on the server can do it; L = from the laptop.
    (read/write for the deploy user).
 6. **(A) Firewall**: allow inbound TCP 6966–6972 and UDP 5568 (LAN scope)
    plus SSH 22 / SMB 445.
-7. **(O/L) Network**: static IP on the show LAN; record it in the private
-   `machines.yaml` (`$BM26_MACHINES`, BM26-Firmware-Deployment repo).
+7. **(O/L) Network**: static IP on the show LAN; record it in the
+   external/private manifest (`$BM26_MACHINES`).
 8. **(L) Seed**: first robocopy of the working tree (node_modules
    included), then apply the titanic-int overlay by hand until Phase 2 lands.
 9. **(A) Boot task**: create `BM26TitanicStack` (at logon, highest

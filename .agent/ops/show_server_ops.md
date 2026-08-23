@@ -5,11 +5,10 @@ This spec defines how agents operate the show-server deployment tooling
 before claiming the tooling merge-ready. The laptop is the ONLY machine with
 git/GitHub access; show servers never touch GitHub.
 
-Machine facts (hosts, paths, scenes) live in the PRIVATE show-server manifest —
-`machines.yaml` in the BM26-Firmware-Deployment repo, exported as
-`$BM26_MACHINES` by its `setup_env` scripts (real hostnames/IPs/shares are never
-committed to this public repo). `deploy.py` requires `$BM26_MACHINES` and fails
-loudly if it is unset; at deploy time it ships the file to each server's
+Machine facts (hosts, paths, scenes) come from the external/private
+show-server manifest through `$BM26_MACHINES` (real hostnames/IPs/shares are
+never committed to this public repo). `deploy.py` requires `$BM26_MACHINES`
+and fails loudly if it is unset; at deploy time it ships the file to each server's
 `deploy\machines.yaml`. Never hardcode machine facts. Shape reference:
 `deploy/machines.yaml.example`. Human-facing walkthrough: `deploy/README.md`.
 Server-side bring-up: `deploy/interior1_agent_brief.md`.
@@ -26,7 +25,7 @@ Server-side bring-up: `deploy/interior1_agent_brief.md`.
 ```powershell
 python deploy\deploy.py fetch  --machine <name> [--source scratch] [--state]
 python deploy\deploy.py deploy --machine <name> --target scratch [--force]
-python deploy\deploy.py deploy --machine <name> [--scene <scene>] [--dry-run|--restart-only]
+python deploy\deploy.py deploy --machine <name> [--scene <scene>] [--force|--dry-run|--restart-only]
 python deploy\deploy.py stop   --machine <name>                    # park it: stop the stack (lights OFF)
 python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it back + verify the scene is live
 ```
@@ -48,6 +47,11 @@ python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it ba
   unsupported and may be stale; durable server-side commits belong in the
   **scratch** tree (`fetch` collects them), never in prod. `/ZB` and broad ACL
   repair are not sanctioned workarounds.
+  Production `--force` is the operator-authorized fast lane: it skips only the
+  duplicate `/L` preview and runs the real authoritative `/MIR` with 64 workers
+  instead of 16. Secrets, identity, Node parity, SMB reachability, exclusions,
+  safe stop, scene/shortcut application, restart, and verification remain
+  mandatory. It cannot combine with `--dry-run` or `--restart-only`.
   Before SMB preview or stack stop, a real deploy validates the laptop's
   `$BM26_SECRETS` YAML, copies it over encrypted SCP into a protected stable
   location outside prod, sets protected least-privilege ACLs, persists only
@@ -175,11 +179,13 @@ phase ends with the engine on the expected scene and the supervisor stable
 - **Engine hot-reload gap**: a deploy that changes output universes needs
   the full stack restart the pipeline already does — never "deploy without
   restart" for universe changes.
-- **`BM26_MACHINES` unset after `setup_env`**: a long-running app (IDE/editor)
-  gives its terminals a stale env from before setup ran. `deploy.py` reads the
+- **`BM26_MACHINES` unset after external setup**: a long-running app
+  (IDE/editor) gives its terminals a stale env from before setup ran.
+  `deploy.py` reads the
   persisted User-scope value from the registry (`HKCU\Environment`) itself and
-  prints a `note:`, so this only fails if `setup_env` never ran — restart the
-  IDE to silence the note. Detail: `deploy/README.md` §Troubleshooting.
+  prints a `note:`, so this only fails if setup never established the variable.
+  Restart the IDE to silence the note. Detail: `deploy/README.md`
+  §Troubleshooting.
 - **Prod preflight says runtime-secret provisioning/verification failed**:
   confirm the laptop's external `$BM26_SECRETS` source is valid and the
   registered SSH identity can administer its private deployment root. Do not

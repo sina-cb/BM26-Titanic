@@ -665,3 +665,109 @@ against the operator's live ports.
 - First force apply is operator-attended, watching the board.
 - Ruling wanted: whether the single-board `to-swarm` kill-verdict wording
   should change in the CLI (B2 item 3d) or stay downgraded by BM only.
+
+---
+
+## Speed wave — fleet switch parallelised
+
+Implemented (not just planned) in the **private MarsinLED deploy CLI**. The
+goal was operator-set: a four-board fleet switch must take well under two
+minutes, not five-plus. Nothing in BM26 changed; nothing was copied out of
+the private repo.
+
+### What changed
+
+| File : function | Change |
+|---|---|
+| `lib/smokestack/runner.py` : `_apply_followers_parallel` (replaces `_apply_swarm_followers`) | Every non-canary board now runs **at once**, in three barriered phases — all mutation POSTs together, all reboot polling together, all verification together. Used by **both** `to-dmx` and `to-swarm`. The barrier between phases keeps a board from being verified while a sibling is still down. |
+| `lib/smokestack/runner.py` : `_run_mode_impl` | Both follower branches call the new fan-out. The `to-dmx` branch's strictly-serial `apply_board` loop is gone (its own comment already said DMX has no leader/follower dependency). Canary-first gating, the follower freshness sweep, `skipped (canary failed)`, the journal entries, the fingerprint binding and whole-transaction rollback are all unchanged. |
+| `lib/smokestack/runner.py` : `_terminal_swarm_verification` | New `rebooted_names` argument. The extra reboot-survival reboot of `followers[0]` is **skipped** when that board already rebooted during its own mutation and verified after coming back — same proof, already paid for. It still runs when the mutation live-applied without a reboot (or the board was already in target mode). One log line says which case applied. The coherence sweep, the committed-config sweep and the canonical 4/4 readback are untouched. |
+| `lib/smokestack/runner.py` : `BoardResult`, `_finish_mutation_wait` | New `BoardResult.rebooted` flag, set only after a real down-and-back poll succeeded. That flag is what feeds `rebooted_names`. |
+| `lib/smokestack/client.py` : `Timing.settle` | `5.0 → 2.0` s. Paid twice per board (uptime-monotonic sampling). |
+| `smokestack_mode.py` : `--settle` | Default `5.0 → 2.0`; the flag stays, so the old value is one argument away. |
+| `lib/smokestack/transaction.py` : `mark_mutated`, `mark_rollback` | Added a `threading.Lock`. Mutation POSTs now land from several threads; an unguarded append racing a `json.dump` of the same list loses journal entries, and the journal is all crash recovery has. |
+| `SMOKESTACK_MODE.md` | Execution-order prose, the survival-canary bullet and the `--settle` default row rewritten to match. |
+
+Deliberately **not** touched: `reboot_wait` (90 s cap), `poll_interval`, the
+plan fingerprint logic, the refusal/coherence gates, and every other
+`SAFE TO KILL NETWORK` criterion.
+
+### Measured, on the mock harness
+
+Test suite: **121 passed / 0 failed** (`test_smokestack_mode_runner`,
+`_plan`, `_transaction`, `_mock`, `_identity_migration`,
+`test_bm26_titanic_swarm_contract`) — 99 pre-existing plus 6 new, and the
+16-test swarm contract file. New tests cover: `to-dmx` follower concurrency,
+`to-swarm` follower concurrency, survival canary skipped when the follower
+rebooted during its mutation, survival canary still run when it live-applied,
+deterministic row order under scrambled completion order, and whole-fleet
+rollback when a board fails inside the parallel phase.
+
+Concurrency is asserted two ways: wall clock, and the spread between sibling
+mutation-POST timestamps (serial cannot put two follower writes closer
+together than one full reboot). Measured spread across three followers:
+**0.015 s** (`to-dmx`) and **0.000 s** (`to-swarm`).
+
+Four mock boards, production timing (`--pace` 0.5, poll 1.5 s,
+`--reboot-wait` 90), simulated ESP32 reboot 9 s, each board really rewriting
+`dmx.*` and really rebooting:
+
+| Run | Before | After | Saved |
+|---|---|---|---|
+| `to-dmx`, 4 boards | 71.4 s | **30.3 s** | 41.1 s (2.36×) |
+| `to-swarm`, 4 boards | 88.2 s | **35.3 s** | 52.9 s (2.50×) |
+
+"Before" is the same binary with the serial follower ladder restored,
+`--settle 5`, and the terminal reboot forced on — i.e. the old shape, not a
+recollection of it.
+
+### Estimated live fleet time
+
+The four rope controllers reboot slower than the 9 s model and the canonical
+run adds a final asset/parity readback sweep, so scale up but keep the shape:
+the switch is now **canary + one overlapped follower batch** instead of four
+sequential reboots, and `to-swarm` drops one whole extra reboot cycle on top.
+Expect roughly **45–75 s** for a clean canonical switch, against the
+~5 minutes observed before — comfortably inside the two-minute target, with
+the 90 s per-board reboot cap untouched as the worst-case guard.
+
+### Read-only live proof (nothing written)
+
+Ran against the real fleet with the read path only:
+
+- `status` — 4/4 `REACH YES`, `MACOK YES`, fw 1.2.5, all `SWARM-native`,
+  fps 61–63. `ss_left_right` leader `active`; `ss_right_right` and
+  `ss_right_left` `FOLLOWING`; **`ss_left_left` still `DETACHED`** —
+  unchanged from the `_352` diagnosis, not introduced here.
+- `to-dmx --dry-run` — full plan sweep, per-board refusal table and a 64-char
+  fingerprint all render correctly. **3 of 4 boards still refuse on the
+  canonical asset contract** (`activeMap` is the pushed map, model/pattern
+  allowlist mismatch, activeMapHash + dataFingerprint parity) exactly as
+  `_352` §B7 describes. Only `ss_right_left` would post.
+
+So the read path is intact, and the canonical apply is still blocked by the
+**asset re-release**, not by this wave.
+
+### First timed live run — exact operator command
+
+Only after the asset re-release makes the canonical dry-run pass. Two steps,
+from the private deploy repo root, with `$BM26_DEPLOY_REGISTRY` and
+`$BM26_SECRETS` exported:
+
+```powershell
+# 1. review the plan, copy the 64-char PLAN FINGERPRINT it prints
+python deploy/smokestack_mode.py to-dmx --dry-run
+
+# 2. the timed apply, bound to that exact plan
+$t = Get-Date
+python deploy/smokestack_mode.py to-dmx --yes --rollback-on-failure `
+    --plan-fingerprint <paste-the-64-char-fingerprint>
+"elapsed: {0:n1}s" -f ((Get-Date) - $t).TotalSeconds
+```
+
+Same two steps with `to-swarm` for the return leg; that one must end on
+`VERDICT: SAFE TO KILL NETWORK`. Watch for the new line
+`reboot-survival already proven … skipping the redundant terminal reboot` on
+`to-swarm` — a DMX→SWARM switch rewrites `dmx.*`, so the follower always
+reboots during its own mutation and that skip is the expected case. Attended,
+watching the boards, as `_352` §B6 requires.

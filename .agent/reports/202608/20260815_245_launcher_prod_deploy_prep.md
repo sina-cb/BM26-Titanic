@@ -170,7 +170,7 @@ Mechanism (unchanged, re-read this session): `deploy/deploy.py deploy --machine
 `robocopy /MIR` of the working tree over SMB → boot scene → ship the private
 manifest → overlay → stamp → `schtasks /Run` the boot task → verify from the
 laptop. The private manifest lives at
-`C:\Users\Titanic's End\workspace\BM26-Firmware-Deployment\machines.yaml`
+the external/private `$BM26_MACHINES` source (local path redacted)
 (resolved via `$BM26_MACHINES`; **its contents are not reproduced here**). The
 exterior-lights entry is the machine key **`titanic-ext`**; it boots
 `profile: prod`, scene `test_bench`, pattern `00_golden_hour_wash`, with

@@ -144,7 +144,7 @@ Contract pins (so tracks run in parallel): slot IDs 1–32; page = engine
 
 ## Links
 
-- **Plans:** party plan (private repo) `BM26-Firmware-Deployment/.agent/plans/20260707_party_plan_20260711.md` — tracked there as the active B18 successor task
+- **Plans:** party plan in the external/private deployment source — tracked there as the active B18 successor task
 - **Reports:** `../reports/202607/20260708_4..8_*.md` (foundations)
 - **Branches:** `feat/party_integration_20260711`
 

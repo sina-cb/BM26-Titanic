@@ -13,12 +13,13 @@ human path.
 ## TL;DR — day-to-day commands (run on the laptop)
 
 ```powershell
-python deploy\deploy.py deploy --machine titanic-int --dry-run          # preview, touches nothing
-python deploy\deploy.py deploy --machine titanic-int --restart-only     # bounce the stack
-python deploy\deploy.py deploy --machine titanic-int --scene <scene>    # full deploy + set boot scene
-python deploy\deploy.py stop   --machine titanic-int                    # park it (lights OFF until start/reboot/deploy)
-python deploy\deploy.py start  --machine titanic-int                    # bring it back + verify (add --no-verify to skip the poll)
-python deploy\deploy.py fetch  --machine titanic-int --state            # collect scratch work + prod state snapshot
+python deploy\deploy.py deploy --machine titanic-ext --scene titanic --force ## USE THIS FAST LANE DEPLOY
+python deploy\deploy.py deploy --machine titanic-int --dry-run               # preview, touches nothing
+python deploy\deploy.py deploy --machine titanic-int --restart-only          # bounce the stack
+python deploy\deploy.py deploy --machine titanic-int --scene <scene>         # full deploy + set boot scene
+python deploy\deploy.py stop   --machine titanic-int                         # park it (lights OFF until start/reboot/deploy)
+python deploy\deploy.py start  --machine titanic-int                         # bring it back + verify (add --no-verify to skip the poll)
+python deploy\deploy.py fetch  --machine titanic-int --state                 # collect scratch work + prod state snapshot
 ```
 
 Details in ["Deploying from the laptop"](#deploying-from-the-laptop-deploypy)
@@ -70,9 +71,9 @@ at five handshake points:
 
 After that, day-to-day is laptop-only: `deploy.py` (below) ships code,
 bounces the stack, and verifies it -- the server is never touched by hand.
-Server details (host, paths, scene) always come from the private show-server
-manifest (`$BM26_MACHINES` -> `machines.yaml` in the BM26-Firmware-Deployment
-repo), never hardcoded and never checked into this public repo.
+Server details (host, paths, scene) always come through the external/private
+`$BM26_MACHINES` contract, never hardcoded and never checked into this public
+repo.
 
 ## Step 0 -- get the code
 
@@ -314,12 +315,11 @@ Steps 2-4 of the server bring-up). Hostnames and addresses live in the private
 machine's `host` value from the manifest.
 
 1. **Clone the repo** and check out the working branch.
-2. **Private manifest + secrets**: clone the private **BM26-Firmware-Deployment**
-   repo and run its `setup_env.ps1` (Windows) or `source setup_env.sh`
-   (macOS/Linux), then open a NEW terminal. That exports `$BM26_MACHINES`
-   pointing at the private `machines.yaml` (real hostnames/IPs/shares/scenes).
-   `deploy.py` requires this var and fails loudly if it is unset - there is no
-   repo-local manifest. (`deploy/machines.yaml.example` shows the shape only.)
+2. **Private manifest + secrets**: establish `$BM26_MACHINES` and
+   `$BM26_SECRETS` from the external/private deployment source, then open a new
+   terminal. `deploy.py` requires both and fails loudly when either is unset;
+   there is no repo-local fallback. (`deploy/machines.yaml.example` documents
+   only the public placeholder shape.)
 3. **Runtimes**: Node **exactly matching the servers** (`ssh` in and run
    `node --version` to see theirs - a mismatch hard-fails the deploy
    preflight on purpose), plus Git and Python 3.11+.
@@ -334,7 +334,7 @@ machine's `host` value from the manifest.
 5. **Install the public key on each server**: hand `id_ed25519_titanic.pub`
    to the server's config pass (`setup\install_ssh_key.ps1`, or
    `server_setup.ps1 -SshPublicKey <path>`).
-6. **Keep `$BM26_SECRETS` available on the deploy laptop**: the private setup
+6. **Keep `$BM26_SECRETS` available on the deploy laptop**: the external setup
    in step 2 exports this path. Every real prod deploy validates that local
    YAML without printing its path or values, copies it over encrypted SCP,
    and converges an ACL-protected stable file **outside the deployed repo**.
@@ -369,23 +369,52 @@ machine's `host` value from the manifest.
 ```powershell
 python deploy\deploy.py deploy --machine titanic-int                  # ship current tree
 python deploy\deploy.py deploy --machine titanic-int --scene titanic  # ship + set boot scene
+python deploy\deploy.py deploy --machine titanic-int --scene titanic --force  # prod fast lane
 python deploy\deploy.py deploy --machine titanic-int --dry-run        # preview only
 python deploy\deploy.py deploy --machine titanic-int --restart-only   # bounce stack, no files
 python deploy\deploy.py stop  --machine titanic-int                   # park it safely (lights OFF) - e.g. before generator work
 python deploy\deploy.py start --machine titanic-int                   # bring it back + verify (--no-verify skips the poll)
 ```
 
+For the exterior Titanic stack, run this from the repository root:
+
+```powershell
+python deploy\deploy.py deploy --machine titanic-ext --scene titanic
+```
+
+The real deploy always performs the same list-only Robocopy preview used by
+`--dry-run` before it stops the stack. A separate dry-run is optional. Expect a
+full production deploy to interrupt output while the stack is stopped and
+restarted. Re-running the command is safe and convergent if a transfer is
+interrupted or local files change during a mirror.
+
+Add `--force` for the production fast lane:
+
+```powershell
+python deploy\deploy.py deploy --machine titanic-ext --scene titanic --force
+```
+
+On prod, `--force` skips the separate list-only preview and runs the real
+authoritative `/MIR` with 64 workers instead of 16. It does **not** bypass
+manifest/secret validation, SSH identity, Node parity, SMB reachability, scene
+validation, safe shutdown, exclusions, shortcut reconciliation, restart, or
+health verification. It also does not turn the mirror into an unsafe copy:
+included remote extras are still deleted and included remote edits are still
+overwritten. The tradeoff is that those changes are no longer listed before
+the stack stops. `--force` cannot combine with `--dry-run` or `--restart-only`.
+
 Eight loud phases: preflight (manifest, SSH identity, **node version must
 match the laptop**, validated local secrets plus secure provisioning and a
 redacted persistent/readable remote `BM26_SECRETS` check, SMB, robocopy `/L`
-preview of every path that would
-change) -> stop stack (`schtasks /End` + `launcher.js stop`) -> robocopy
+preview of every path that would change; prod `--force` replaces only that
+preview with a loud fast-path banner) -> stop stack (`schtasks /End` +
+`launcher.js stop`) -> robocopy
 `/MIR` (excludes `.git\`, `marsin_engine\states\**`,
 `simulation\.scene_backups\`, `.agent_renders\`, `deploy_info.yaml`,
 `machines.yaml`; **includes `node_modules`** - offline playa rule) -> optional
 `--scene` written into the
-*private* `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`)
-then that private manifest shipped to `<dest>\deploy\machines.yaml` on the
+external/private manifest (`$BM26_MACHINES`, same validation as `set_boot.ps1`)
+then that manifest shipped to `<dest>\deploy\machines.yaml` on the
 server -> overlay override fragments deep-merged over the dest (missing/empty
 overlay dir = OK; the tracked config is the operator-blessed default) -> three
 verified desktop URL shortcuts reconciled for the registered show account
@@ -403,6 +432,14 @@ and fails on **any change** between reads — a *rise* is a launcher crash loop,
 a *fall* means the supervisor itself restarted (the count resets with a fresh
 supervisor lifetime) — both unhealthy. A stable nonzero count with the engine
 up on the right scene is healthy.
+
+The mirror includes the current working-tree version of production code and
+content, including uncommitted changes. It deliberately excludes test suites,
+agent worktrees, `.git`, `marsin_engine/states/**`, scene backups, local-only
+reports, render evidence, the source manifest, and server-owned deployment
+state. Installed `node_modules` and `CaptainPad/dist` remain included for
+offline operation. The deploy stamp records the commit, branch, and dirty-file
+count so operators can identify exactly what class of checkout was shipped.
 
 A deploy **overwrites/deletes server-side edits to synced paths by design**
 (laptop is the single source of truth) - the `/L` preview names every such
@@ -601,12 +638,13 @@ registry write) -- so the step reports **WARN** until it is applied, meaning
 "access is unblocked now, but not yet reboot-durable." Set the policy once
 via `secpol.msc` on the box to close it.
 
-**`deploy.py` says `BM26_MACHINES` is not set even after `setup_env.ps1`.**
+**`deploy.py` says `BM26_MACHINES` is not set after external setup.**
 A long-running app (an IDE or editor like Antigravity, VS Code) hands every
-terminal it spawns a **stale environment captured before `setup_env` ran**, so
+terminal it spawns a **stale environment captured before setup completed**, so
 `os.environ` lacks the var even though it was persisted. `deploy.py` reads the
 persisted User-scope value straight from the registry (`HKCU\Environment`), so
-this only truly fails if `setup_env` never ran — it prints a one-line `note:`
+this only truly fails if external setup did not establish the variable — it
+prints a one-line `note:`
 that it fell back to the registry because the terminal is stale. Restart the
 IDE (so its children inherit a fresh environment) to silence the note.
 
@@ -631,9 +669,8 @@ you only need to finish its config, run `setup\setup_smb_share.ps1` and
 **Where's the rest of the stack?** `boot_server.ps1` (the supervisor) ships in
 this folder, so the boot task actually launches the lighting stack and the
 boot-task step reports DONE (no more "boot_server.ps1 missing" WARN). The
-per-machine scene manifest `machines.yaml` is NOT in this repo -- it is private
-(`$BM26_MACHINES`, BM26-Firmware-Deployment repo) and `deploy.py` ships it to
-`<dest>\deploy\machines.yaml` on the server at deploy time. Still Phase 2:
+per-machine scene manifest is NOT in this repo; it arrives through
+`$BM26_MACHINES`, and `deploy.py` ships it to the server at deploy time. Still Phase 2:
 `deploy.py`, the one-command laptop-to-server sync that seeds the code tree +
 `node_modules`. Until that lands, the supervisor runs but the launcher needs
 the tree present to bring the stack fully up. docs/43 tracks the plan.

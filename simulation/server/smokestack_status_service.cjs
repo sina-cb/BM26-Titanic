@@ -14,9 +14,19 @@
  *   swarm          {enabled, isLeader, followState, lastBeaconMsAgo}
  *   health         {configSource, stagedPending, uptimeMs}
  *   capabilities   {perOutputDmx} — the only capability the switch flow gates on
- *   sacn           {perOutput} — the board's RUNTIME per-strand sACN origins,
- *                  or null when it reported none (Advanced Recovery renders
- *                  a missing array as UNVERIFIED, never as agreement)
+ *   sacn           {enabled, lastPacketAgeMs, perOutput} — the board's RUNTIME
+ *                  sACN state: whether it is listening, how long ago the last
+ *                  packet landed (the board reports -1 for "never"), and the
+ *                  per-strand origins, or null when it reported none (Advanced
+ *                  Recovery renders a missing array as UNVERIFIED, never as
+ *                  agreement)
+ *   assets         {activePattern, activeMap, activeMapHash} — which pattern
+ *                  and map the board is actually running. The deploy CLI's
+ *                  canonical asset contract gates every fleet switch on these,
+ *                  so the panel shows them BEFORE the operator presses a
+ *                  button instead of discovering the refusal in a dry-run.
+ *                  Any field the board did not report is `null` — never a
+ *                  guessed or inherited value.
  *   controllerId / firmwareTag / fps — the board's own identity + vitals
  *
  * ZERO MUTATION, ever. This service has no POST path at all — the mode SWITCH
@@ -112,12 +122,27 @@ async function smokestackBoardStatus(target, opts = {}) {
       uptimeMs: health.uptimeMs,
     },
     capabilities: { perOutputDmx: caps.perOutputDmx === true },
+    // Which assets the board is ACTUALLY running. Absent ⇒ null: the panel's
+    // assets chip renders `unread`, never `canonical` (codex P0 — a field we
+    // did not read is not evidence of agreement).
+    assets: {
+      activePattern: typeof statusJson.activePattern === 'string'
+        ? statusJson.activePattern : null,
+      activeMap: typeof statusJson.activeMap === 'string' ? statusJson.activeMap : null,
+      activeMapHash: typeof statusJson.activeMapHash === 'string'
+        ? statusJson.activeMapHash : null,
+    },
     // Runtime sACN origins the board reports per ENABLED strand
     // ({index, universe, startAddress, enabled}) — the same array the deploy
     // CLI's verify ladder compares against the saved strand origins. `null`
     // means the board did not report the array at all; the force-recovery
     // model renders that as UNVERIFIED, never as agreement.
     sacn: {
+      // Is the board listening for sACN right now, and how stale is the feed?
+      // The firmware reports `lastPacketAgeMs: -1` when it has never received
+      // one — a negative age is NOT a fresh feed, and dmxFeedModel refuses it.
+      enabled: typeof sacn.enabled === 'boolean' ? sacn.enabled : null,
+      lastPacketAgeMs: Number.isFinite(sacn.lastPacketAgeMs) ? sacn.lastPacketAgeMs : null,
       perOutput: Array.isArray(sacn.perOutput)
         ? sacn.perOutput.map((entry) => ({
           index: Number.isInteger(entry && entry.index) ? entry.index : null,

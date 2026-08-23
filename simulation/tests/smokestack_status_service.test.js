@@ -164,3 +164,82 @@ test('sweep: empty / non-array targets yield an empty result set', async () => {
   assert.deepEqual((await smokestackStatusSweep([], {})).results, []);
   assert.deepEqual((await smokestackStatusSweep(undefined, {})).results, []);
 });
+
+// ── Asset + sACN-feed pass-through (report _354 §1.4) ───────────────────────
+//
+// The card's `assets` chip and its DMX-leg pass criterion are built from these
+// fields. The rule is the same one the rest of this service follows: a field
+// the board did not report comes through as `null`, never as a default that
+// would read like agreement.
+
+test('assets + sacn feed: reported fields pass through verbatim from /api/status', async () => {
+  const calls = [];
+  const result = await smokestackBoardStatus({ id: 13, name: 'LeftLeftRopes', ip: ROPE_IP }, {
+    io: fakeIo({
+      '/api/status': { status: 200, json: marsinStatusBody({
+        activePattern: '/patterns/titanic_swarm_pattern.js',
+        activeMap: '/models/swarm_titanic_rop_b5fc8e9e.json',
+        activeMapHash: '130aa205',
+        sacn: { enabled: true, lastPacketAgeMs: 42, rxPackets: 900,
+          perOutput: [{ index: 0, universe: 30, startAddress: 1, enabled: true }] },
+      }) },
+      '/api/config': { status: 200, json: { dmx: { enabled: true } } },
+    }, calls),
+  });
+  assert.deepEqual(result.assets, {
+    activePattern: '/patterns/titanic_swarm_pattern.js',
+    activeMap: '/models/swarm_titanic_rop_b5fc8e9e.json',
+    activeMapHash: '130aa205',
+  });
+  assert.equal(result.sacn.enabled, true);
+  assert.equal(result.sacn.lastPacketAgeMs, 42);
+  assert.deepEqual(result.sacn.perOutput,
+    [{ index: 0, universe: 30, startAddress: 1, enabled: true }]);
+  // Still exactly two GETs — the new fields cost no extra board traffic.
+  assert.deepEqual(calls.map((call) => call.urlPath), ['/api/status', '/api/config']);
+});
+
+test('assets + sacn feed: anything the board did not report comes through as null', async () => {
+  const result = await smokestackBoardStatus({ id: 13, name: 'LeftLeftRopes', ip: ROPE_IP }, {
+    io: fakeIo({
+      // A board that reports no asset fields and no sacn block at all.
+      '/api/status': { status: 200, json: marsinStatusBody() },
+      '/api/config': { status: 200, json: { dmx: { enabled: false } } },
+    }),
+  });
+  assert.deepEqual(result.assets,
+    { activePattern: null, activeMap: null, activeMapHash: null });
+  assert.equal(result.sacn.enabled, null);
+  assert.equal(result.sacn.lastPacketAgeMs, null);
+  assert.equal(result.sacn.perOutput, null);
+});
+
+test('assets + sacn feed: wrong-typed fields are null, and -1 survives as -1', async () => {
+  const result = await smokestackBoardStatus({ id: 13, name: 'LeftLeftRopes', ip: ROPE_IP }, {
+    io: fakeIo({
+      '/api/status': { status: 200, json: marsinStatusBody({
+        activePattern: 42,
+        activeMap: { path: '/models/x.json' },
+        activeMapHash: null,
+        // -1 is the firmware's "no sACN packet has EVER arrived". It must
+        // reach the model intact so dmxFeedModel can refuse it — a service
+        // that coerced it to null or 0 would hide a dead feed.
+        sacn: { enabled: false, lastPacketAgeMs: -1, perOutput: null },
+      }) },
+      '/api/config': { status: 200, json: { dmx: { enabled: true } } },
+    }),
+  });
+  assert.deepEqual(result.assets,
+    { activePattern: null, activeMap: null, activeMapHash: null });
+  assert.equal(result.sacn.enabled, false);
+  assert.equal(result.sacn.lastPacketAgeMs, -1);
+});
+
+test('assets + sacn feed: an unreachable board carries no asset claim at all', async () => {
+  const result = await smokestackBoardStatus({ id: 13, name: 'LeftLeftRopes', ip: ROPE_IP }, {
+    io: fakeIo({ '/api/status': errWithCode('EHOSTUNREACH') }),
+  });
+  assert.equal(result.reachable, false);
+  assert.equal('assets' in result, false, 'a board we could not read makes no asset claim');
+  assert.equal('sacn' in result, false);
+});

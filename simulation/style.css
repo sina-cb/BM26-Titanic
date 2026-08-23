@@ -4345,6 +4345,266 @@ body.edit-mode-active #engine-params-panel {
   display: none;
 }
 
+/* ── Board table: fleet state at a glance ──────────────────────────────────
+   One line per controller — mode, role, follow, assets, firmware, reach, the
+   one-word verdict and the one thing to do about it. Nine columns is a lot for
+   a narrow pane, so the table scrolls sideways inside its own box rather than
+   wrapping a row into an unreadable block. */
+/* `display: grid` beats the UA stylesheet's `[hidden] { display: none }`, so
+   every block below that the panel toggles with the `hidden` PROPERTY needs
+   this or it is never actually hidden. Two of these (the job banner and the
+   repair row) were showing their idle state with no job running because of
+   exactly that. */
+.smk-job-banner[hidden],
+.smk-repair-row[hidden],
+.smk-rerelease-row[hidden],
+.smk-timeline[hidden] {
+  display: none;
+}
+
+.smk-board-table {
+  /* Rows grow downward, never sideways — nothing here may need a horizontal
+     scrollbar to be read. */
+  overflow-x: hidden;
+}
+
+/* Each board is a small stack, not a wide row: the pane is narrow, and a
+   ninth column would push the verdict and the remedy off the right edge —
+   exactly the two things this card exists to say. */
+.smk-board-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 3px 6px;
+  min-width: 0;
+}
+
+.smk-board-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smk-bc-name {
+  display: grid;
+  gap: 0;
+}
+
+/* Line 2: the supporting detail, self-labelled, middot-separated. */
+.smk-bc-detail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 5px;
+  overflow: visible;
+  white-space: normal;
+}
+
+.smk-bc-detail > span + span::before {
+  content: '·';
+  margin-right: 5px;
+  color: var(--secondary);
+  opacity: 0.6;
+}
+
+.smk-bc-role,
+.smk-bc-follow,
+.smk-bc-fw,
+.smk-bc-reach {
+  color: var(--secondary);
+  font: 8.5px/1.2 var(--font-mono);
+}
+
+.smk-reach-bad {
+  color: var(--error);
+}
+
+.smk-bc-assets {
+  font: 8.5px/1.2 var(--font-mono);
+  font-weight: 700;
+}
+
+.smk-assets-canonical { color: var(--ok); }
+.smk-assets-residue { color: var(--caution); }
+.smk-assets-unread { color: var(--secondary); }
+
+/* The one-word answer. Colour is the whole point: a green row needs nothing,
+   an amber row needs assets, a red row needs hands on the board. */
+.smk-verdict-chip {
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.smk-verdict-chip-ok { color: var(--ok); }
+.smk-verdict-chip-warn { color: var(--caution); }
+.smk-verdict-chip-danger { color: var(--error); }
+
+/* Line 3: the remedy, in the operator's imperative, on its own full-width
+   line so it is never truncated. Blank on a GOOD row. */
+.smk-row-action {
+  grid-column: 1 / -1;
+  color: var(--text);
+  font-size: 8.5px;
+  white-space: normal;
+}
+
+.smk-row-action:empty,
+.smk-row-action[hidden] {
+  display: none;
+}
+
+.smk-board-transition {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+}
+
+.smk-board-row > .smk-repair-badge {
+  grid-column: 1 / -1;
+}
+
+.smk-readback-age {
+  color: var(--secondary);
+  font: 8.5px/1.2 var(--font-mono);
+  white-space: nowrap;
+}
+
+.smk-readback-age.smk-stale {
+  color: var(--caution);
+  font-weight: 700;
+}
+
+.smk-switch-armed {
+  outline: 1px solid var(--primary);
+}
+
+/* ── Asset re-release ──────────────────────────────────────────────────────
+   The usual reason a fleet switch is refused, and now the fix for it, so it
+   lives in the body rather than behind a disclosure. */
+.smk-rerelease-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  min-width: 0;
+  padding: 3px 0;
+}
+
+.smk-rerelease-btn {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+}
+
+.smk-rerelease-reason {
+  min-width: 0;
+  color: var(--caution);
+  font-size: 8.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ── Run timeline ──────────────────────────────────────────────────────────
+   Parsed from the CLI's own lines. A step the CLI never announced renders
+   `skipped`, never `done`. */
+.smk-timeline {
+  display: grid;
+  gap: 4px;
+  padding: 5px 6px;
+  margin: 4px 0;
+  border: 1px solid var(--ghost-border);
+  border-radius: 4px;
+  background: var(--panel-header-bg);
+}
+
+.smk-timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.smk-timeline-title {
+  color: var(--secondary);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.smk-elapsed {
+  color: var(--text);
+  font: 700 10px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.smk-timeline-steps,
+.smk-timeline-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.smk-timeline-step {
+  padding: 1px 6px 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--secondary);
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.smk-timeline-step-pending { opacity: 0.5; }
+.smk-timeline-step-active { color: var(--warning); }
+.smk-timeline-step-done { color: var(--ok); }
+.smk-timeline-step-failed { color: var(--error); }
+
+.smk-timeline-step-skipped {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.smk-timeline-chip {
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font: 700 8px/1.3 var(--font-mono);
+}
+
+/* The CLI's own verdict line, verbatim, beneath every banner. */
+.smk-job-cli-line {
+  color: var(--secondary);
+  font: 8.5px/1.3 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The plan, one click away — opened automatically only when it was refused. */
+.smk-plan {
+  margin: 3px 0;
+  border: 1px solid var(--ghost-border);
+  border-radius: 3px;
+}
+
+.smk-plan-summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 3px 6px;
+  color: var(--secondary);
+  font-size: 9px;
+}
+
 /* ── Advanced Recovery — force ONE controller ───────────────────────────── */
 /* Visibly distinct from the fleet toggle: its own error-toned frame, so it
    can never be mistaken for the ordinary all-four action above it. */
