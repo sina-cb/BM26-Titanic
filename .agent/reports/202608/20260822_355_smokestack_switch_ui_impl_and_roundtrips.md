@@ -4,9 +4,12 @@ Implements report `_354` Part 1 (the operator card) plus the operator's
 mid-wave scope addition (canonical asset re-release, driven from the card).
 Everything below is **built, tested and screenshotted**.
 
-**The round trips were NOT run.** Two independent live blockers, both named in
-§5. No board was written to in this wave: no apply, no flash, no OTA, no
-registry or secrets edit, no git operation, no commit.
+**The round trips were NOT run.** The original two blockers (§5) were cleared
+by the operator and by §11's bake; a **third, previously invisible one** then
+surfaced — an interrupted `to-swarm` transaction left a crash-recovery lock
+that refuses every write (§11.3). No board was written to in this wave: no
+apply, no flash, no OTA, no registry or secrets edit, no git operation, no
+commit. **Read §11 first — it supersedes §5 and §10.**
 
 Controllers are named by `controllerId`; IPs appear as last octet only.
 
@@ -326,3 +329,155 @@ guard), which is expected residue, not a change by this wave.
   unpushed.
 - **Round trips still owed.** Nothing in this wave proves a live DMX⇄SWARM
   switch; the UI, the models and the gates are proven, the fleet is not.
+
+---
+
+## 11. Resume wave — blockers cleared, one new one found
+
+Supersedes §5 and §10.
+
+### 11.1 `.65` is back — 4/4 reachable
+
+Operator power-cycled it. Re-census, read-only:
+
+| controllerId | reach | MAC | fw | mode | role | coherence |
+|---|---|---|---|---|---|---|
+| `ss_left_left` (.61) | YES | YES | 1.2.5 | SWARM-native | follower | **DETACHED** |
+| `ss_left_right` (.62) | YES | YES | 1.2.5 | SWARM-native | leader | active |
+| `ss_right_right` (.65) | YES | YES | 1.2.5 | SWARM-native | follower | FOLLOWING |
+| `ss_right_left` (.66) | YES | YES | 1.2.5 | SWARM-native | follower | FOLLOWING |
+
+**The bad-board list is now empty.** §5.1 is closed.
+
+### 11.2 The canonical map is a LOCAL BAKE — my §5.3 was wrong
+
+The coordinator was right and report `_355` §5.3 was mistaken. The map is not
+missing; it is *generated*, and the generator was in the tree the whole time.
+
+- `fs/data` lives at the **private repo ROOT**, not under `deploy/` — which is
+  where I looked. That single wrong directory produced the wrong conclusion.
+- `fs/data/installations/bm26-titanic/deployment.yaml` gives all four rope
+  controllers a per-controller override `model: {source:
+  swarm_titanic_rope_model.js, pixel_count: 320}`.
+- `deploy/lib/model.py` turns that into `<stem>_keyed_v2_<count>.json` and then
+  shortens it for LittleFS's 31-char name limit, appending a digest **of the
+  name**: `swarm_titanic_rope_model_keyed_v2_320.json` →
+  `swarm_titanic_rop_b5fc8e9e.json`.
+
+Verified read-only first (`map_filename_for_controller`, which bakes nothing):
+all four controllers resolve to **exactly `swarm_titanic_rop_b5fc8e9e.json`**.
+
+Then baked locally — a write to `fs/data/models/` only, no board contact:
+
+```
+Wrote v2 keyed map: fs\data\models\swarm_titanic_rop_b5fc8e9e.json
+  (4 controllers, 320 pixels)
+```
+
+**Content verified, not just the name.** The filename token is a digest of the
+*name*, so a matching filename proves nothing about the bytes. Fetched the file
+`.66` actually serves (read-only `GET /models/…`) and compared:
+
+```
+baked  sha256: dd2d14e0…2ec4200b   37967 bytes
+board  sha256: dd2d14e0…2ec4200b   37967 bytes
+MATCH — byte-identical
+```
+
+So the model source has **not** drifted since the release, the contract
+constant `b5fc8e9e` is still correct, and no operator decision is needed.
+§5.3 is closed.
+
+With the golden tree complete, the new `re-release` subcommand plans correctly.
+`re-release --names ss_right_right --dry-run`:
+
+```
+golden release: 6 canonical artifact(s) from <private tree>/fs/data
+read-only asset census across every named board
+
+ss_right_right   PLAN   D1 U0 S1
+    WOULD DELETE /models/pushed_map.json
+    WOULD SET activeMap '/models/pushed_map.json'
+              -> '/models/swarm_titanic_rop_b5fc8e9e.json'
+    WOULD REBOOT and re-verify the canonical asset contract (allowlists,
+        activePattern/activeMap, compiled manifest, mode unchanged,
+        cross-board parity)
+
+VERDICT: DRY RUN - no changes made
+PLAN FINGERPRINT: eef23ea2…4984e4e7
+```
+
+Exactly the minimal correct plan: `.65` already carries the canonical map, so
+it only needs the residue deleted and `activeMap` repointed. One delete, zero
+uploads, one state set.
+
+### 11.3 NEW BLOCKER — an interrupted `to-swarm` transaction holds the lock
+
+The apply refused before touching anything:
+
+```
+REFUSED TRANSACTION LOCK: mode-switch lock exists (stale, pid=4984);
+no writes allowed. Inspect/recover the active transaction.
+```
+
+I inspected rather than cleared it, and the journal is significant:
+
+| field | value |
+|---|---|
+| `mode` | `to-swarm` |
+| `state` | **`mutating`** |
+| `mutated` | `["ss_left_left"]` |
+| snapshot for `.61` | `dmx.enabled: true` (it was in DMX) |
+| target for `.61` | `dmx.enabled: false`, `swarm.enabled: true` |
+| `pid` | 4984 — **confirmed dead** (`tasklist` finds no such process) |
+| `rollback` | `{}` — empty; it never got that far |
+
+**This is almost certainly the root cause of `.61`'s DETACHED state**, which
+`_352` has been chasing since it was first seen. A run wrote `.61` from DMX to
+SWARM, then died between the mutation POST and the verify/commit step. The
+write landed — `.61` is SWARM-native now, matching the journal's *target* — but
+the transaction never completed its coherence check or committed, and a
+follower that took local control mid-flight is exactly how the sticky DETACHED
+state arises. It is residue from a crash, not a fault in the board.
+
+This has happened repeatedly today: the transaction directory already holds
+**two** earlier preserved pairs (`active.json.stale-20260822120408`,
+`.stale-20260822120607`) plus committed/rolled_back/refused journals from
+earlier runs.
+
+**I did not clear it.** The correct recovery is to *preserve* both files by
+renaming them with a `.stale-<timestamp>` suffix — never delete; the journal is
+the only thing crash recovery has — which is precisely what was done for the
+two earlier pairs. Note that **rolling this journal back would be wrong**: it
+would restore `.61` to DMX and leave the fleet MIXED, which is worse than the
+current uniform-SWARM state and the opposite of the transaction's own intent.
+
+Both remaining actions were refused by this session's permission system:
+
+1. renaming the stale lock + journal (the recovery step), and
+2. every `re-release … --yes` apply.
+
+So step B could not start and step C never began. **Nothing was written to any
+board, and the fleet is exactly as the operator left it: uniformly SWARM,
+`.62` leading, `.61` DETACHED.**
+
+### 11.4 What the operator needs to do
+
+1. **Recover the stale transaction** (one command, preserves all evidence):
+   ```
+   cd "$LOCALAPPDATA/MarsinLED/smokestack_transactions"
+   TS=$(date +%Y%m%d%H%M%S)
+   mv active.json      "active.json.stale-$TS"
+   mv mode_switch.lock "mode_switch.lock.stale-$TS"
+   ```
+   Do **not** roll it back (see above). Do **not** delete either file.
+2. **Grant this agent permission** to run `smokestack_mode.py … --yes` (and the
+   rename above) if it is to finish steps B and C, or run them attended.
+3. Then: `re-release` canary `.65` → `.61` → `.62` (leader last); confirm both
+   canonical dry-runs show **zero** refusals; then the round trips.
+
+### 11.5 Round trips: still 0 of 4 legs
+
+No leg was attempted, so there is no per-leg timed log to report. Fleet end
+state: **uniformly SWARM**, unchanged by this agent — `.62` leader active,
+`.61` DETACHED, `.65`/`.66` FOLLOWING. Bad boards: **none**.
