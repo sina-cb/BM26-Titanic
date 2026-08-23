@@ -1,0 +1,9 @@
+views:
+  groupBits:
+    Module 1: 1
+    Module 2: 2
+    Module 3: 4
+    Module 4: 8
+    Module 5: 16
+    Module 6: 32
+  custom: []

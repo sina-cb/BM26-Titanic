@@ -28,16 +28,21 @@ import {
   LED_GAMMA_STEP,
   DEFAULT_GAMMA_TRANSPORT,
   activeGammaPresetKey,
+  commitGammaRefresh,
   commitGammaPush,
+  fleetGammaSourcePlan,
   formatGamma,
   gammaCurvePath,
   gammaEquals,
+  gammaRefreshState,
   parseGammaField,
   pushGammaFleet,
   pushGammaToController,
   quantizeGamma,
   readGammaMirror,
+  refreshGammaFromController,
   setGammaMirror,
+  validateGammaMirror,
 } from '../dmx/led/led_gamma.js';
 import { isLedController, isValidIp } from '../dmx/controller_registry.js';
 
@@ -54,6 +59,16 @@ function commitThroughCtx(ctx, label) {
     let thrown = null;
     ctx.mutate(label(controller), () => {
       try { commitGammaPush(controller, result); } catch (err) { thrown = err; }
+    });
+    if (thrown) throw thrown;
+  };
+}
+
+function commitRefreshThroughCtx(ctx) {
+  return (controller, result) => {
+    let thrown = null;
+    ctx.mutateInPlace(null, () => {
+      try { commitGammaRefresh(controller, result); } catch (err) { thrown = err; }
     });
     if (thrown) throw thrown;
   };
@@ -186,29 +201,31 @@ export function renderGammaSection(ctx, controller) {
   const validIp = isValidIp(controller.ip);
   const pushBtn = el('button', 'cm-btn cm-led-gamma-push', '⬆ Push gamma');
   if (validIp) {
-    pushBtn.title = 'Back up the controller\'s full config, write ONLY the gamma keys, read them ' +
-      'back, and mirror the verified values here. No reboot unless the device asks for one.';
-    pushBtn.onclick = () => runSingleGammaPush(ctx, controller, pushBtn);
+    pushBtn.title = 'Back up the controller\'s full config, write the four gamma keys only ' +
+      '(plus a device-name repair only when required), read saved config back, and mirror the ' +
+      'verified values here. DMX / SWARM mode is never changed.';
+    pushBtn.onclick = () => runSingleGammaPush(ctx, controller, pushBtn,
+      validateGammaMirror({ ...draft }, `controller '${controller.name}' visible gamma`));
   } else {
     pushBtn.disabled = true;
     pushBtn.title = 'set the device IP first';
   }
   head.appendChild(pushBtn);
 
+  const refreshBtn = el('button', 'cm-btn cm-led-gamma-push', '↻ Refresh gamma');
+  refreshBtn.disabled = !validIp;
+  refreshBtn.title = validIp
+    ? 'Read gamma once from the controller saved config. No polling and no write.'
+    : 'set the device IP first';
+  refreshBtn.onclick = validIp
+    ? () => runGammaRefresh(ctx, controller, refreshBtn, true, applyRefreshResult)
+    : null;
+  head.appendChild(refreshBtn);
+
   const dev = controller.device;
   const stamp = dev && dev.lastGammaPush;
-  if (stamp) {
-    const inSync = gammaEquals(stamp.gamma, readGammaMirror(controller));
-    const prov = el('span', 'cm-led-gamma-prov' + (inSync ? '' : ' cm-led-gamma-drift'),
-      inSync
-        ? `✓ hardware ${formatGamma(stamp.gamma)} · ${new Date(stamp.at).toLocaleString()}`
-        : `▲ hardware ${formatGamma(stamp.gamma)} ≠ mirror — push to apply`);
-    prov.title = `Last verified on the controller: ${formatGamma(stamp.gamma)} ` +
-      `(${stamp.outcome}) at ${stamp.at}`;
-    head.appendChild(prov);
-  } else {
-    head.appendChild(el('span', 'cm-led-gamma-prov', '○ never pushed'));
-  }
+  const prov = el('span', 'cm-led-gamma-prov');
+  head.appendChild(prov);
   section.appendChild(head);
 
   // ── Row 2: curve plot + the four sliders ──────────────────────────────────
@@ -309,16 +326,66 @@ export function renderGammaSection(ctx, controller) {
     }
   }
 
+  function repaintProvenance() {
+    const refreshed = gammaRefreshState(controller);
+    prov.className = 'cm-led-gamma-prov';
+    if (refreshed && refreshed.state === 'ok') {
+      prov.textContent = `✓ saved config ${formatGamma(refreshed.gamma)} · ` +
+        new Date(refreshed.at).toLocaleString();
+      prov.title = 'Latest bounded read from controller saved config; runtime status is not used.';
+    } else if (refreshed) {
+      prov.className += ' cm-led-gamma-drift';
+      prov.textContent = `✋ gamma refresh ${refreshed.state}`;
+      prov.title = refreshed.detail;
+    } else if (stamp) {
+      const inSync = gammaEquals(stamp.gamma, readGammaMirror(controller));
+      if (!inSync) prov.className += ' cm-led-gamma-drift';
+      prov.textContent = inSync
+        ? `✓ hardware ${formatGamma(stamp.gamma)} · ${new Date(stamp.at).toLocaleString()}`
+        : `▲ hardware ${formatGamma(stamp.gamma)} ≠ mirror — push to apply`;
+      prov.title = `Last verified on the controller: ${formatGamma(stamp.gamma)} ` +
+        `(${stamp.outcome}) at ${stamp.at}`;
+    } else {
+      prov.textContent = '○ gamma not read this session';
+      prov.title = 'A single saved-config read starts when this gamma section opens.';
+    }
+  }
+
+  function applyRefreshResult(result) {
+    if (result.state === 'ok') {
+      draft = readGammaMirror(controller);
+      repaint();
+    }
+    repaintProvenance();
+  }
+
   repaint();
+  repaintProvenance();
+  if (validIp) void runGammaRefresh(ctx, controller, refreshBtn, false, applyRefreshResult);
   return section;
 }
 
-async function runSingleGammaPush(ctx, controller, pushBtn) {
+async function runGammaRefresh(ctx, controller, button, force, onResult) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = '… reading';
+  const result = await refreshGammaFromController(controller, DEFAULT_GAMMA_TRANSPORT,
+    commitRefreshThroughCtx(ctx), { force });
+  button.disabled = false;
+  button.textContent = label;
+  if (result.state !== 'ok' && !result.cached) {
+    ctx.showToast(`✋ '${controller.name}' gamma refresh ${result.state}: ${result.detail}`,
+      { error: true, ttl: 10000 });
+  }
+  if (onResult) onResult(result);
+}
+
+async function runSingleGammaPush(ctx, controller, pushBtn, gammaSnapshot) {
   const label = pushBtn.textContent;
   pushBtn.disabled = true;
   pushBtn.textContent = '… pushing';
   const result = await pushGammaToController(controller, DEFAULT_GAMMA_TRANSPORT,
-    commitThroughCtx(ctx, (c) => `Pushed gamma to '${c.name}'`));
+    commitThroughCtx(ctx, (c) => `Pushed gamma to '${c.name}'`), { gamma: gammaSnapshot });
   pushBtn.disabled = false;
   pushBtn.textContent = label;
   if (result.state === 'ok') {
@@ -357,6 +424,7 @@ export function startFleetGammaPush(ctx) {
     return;
   }
   const pushable = leds.filter((c) => isValidIp(c.ip));
+  let sourcePlan = fleetGammaSourcePlan(leds);
 
   const overlay = el('div', 'vm-modal-overlay');
   const card = el('div', 'vm-modal-card led-push-card');
@@ -364,9 +432,29 @@ export function startFleetGammaPush(ctx) {
   card.appendChild(el('div', 'vm-modal-title',
     `Push gamma to ALL LED controllers (${pushable.length})`));
   card.appendChild(el('div', 'led-push-warn',
-    `⚠ Each controller's own gamma fields are written to its hardware, SEQUENTIALLY: full-config ` +
-    'backup → gamma-only write → read-back verify. Gamma normally applies live; a controller ' +
-    'that asks for a reboot gets one and is re-verified after it comes back.'));
+    `⚠ ONE curve is sent identically to every valid LED controller, SEQUENTIALLY: full-config ` +
+    'backup → four-channel gamma-only write (plus a device-name repair only when required) → ' +
+    'saved-config read-back. DMX / SWARM mode is never changed.'));
+
+  const sourceLine = el('div', 'led-push-status');
+  card.appendChild(sourceLine);
+  let sourceSelect = null;
+  if (sourcePlan.requiresSelection) {
+    const sourceLabel = el('label', 'cm-led-gamma-link');
+    sourceLabel.appendChild(el('span', undefined, 'Source curve:'));
+    sourceSelect = el('select');
+    const placeholder = el('option', undefined, 'Select one displayed controller…');
+    placeholder.value = '';
+    sourceSelect.appendChild(placeholder);
+    for (const choice of sourcePlan.choices) {
+      const option = el('option', undefined,
+        `${choice.controller.name} — ${formatGamma(choice.gamma)}`);
+      option.value = choice.sourceId;
+      sourceSelect.appendChild(option);
+    }
+    sourceLabel.appendChild(sourceSelect);
+    card.appendChild(sourceLabel);
+  }
 
   const rows = new Map();
   const list = el('div', 'led-push-diff');
@@ -375,12 +463,12 @@ export function startFleetGammaPush(ctx) {
     const state = el('span', 'led-gamma-row-state',
       isValidIp(c.ip) ? STATE_LABEL.pending : STATE_LABEL.skipped);
     row.appendChild(state);
-    row.appendChild(el('span', 'led-gamma-row-name',
-      ` ${c.name} (${c.ip || 'no IP'}) — ${formatGamma(readGammaMirror(c))}`));
+    const preview = el('span', 'led-gamma-row-name');
+    row.appendChild(preview);
     const detail = el('span', 'led-gamma-row-detail');
     row.appendChild(detail);
     list.appendChild(row);
-    rows.set(c.id, { state, detail });
+    rows.set(c.id, { state, detail, preview, controller: c });
   }
   card.appendChild(list);
 
@@ -391,8 +479,31 @@ export function startFleetGammaPush(ctx) {
   const cancelBtn = el('button', 'vm-modal-btn', 'Cancel');
   cancelBtn.onclick = () => overlay.remove();
   const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Push gamma to all');
-  confirmBtn.disabled = pushable.length === 0;
+  const repaintSource = () => {
+    const selected = sourcePlan.gamma ? formatGamma(sourcePlan.gamma) : 'select a source above';
+    sourceLine.textContent = sourcePlan.gamma
+      ? `Source: ${sourcePlan.sourceLabel} — ${selected}`
+      : '✋ Displayed controller curves differ. Select one explicit source before confirming.';
+    for (const row of rows.values()) {
+      const ip = row.controller.ip || 'no IP';
+      row.preview.textContent = ` ${row.controller.name} (${ip}) — ` +
+        (isValidIp(row.controller.ip) ? `will receive ${selected}` : `skipped; selected ${selected}`);
+    }
+    confirmBtn.disabled = pushable.length === 0 || !sourcePlan.gamma;
+  };
+  if (sourceSelect) {
+    sourceSelect.onchange = () => {
+      sourcePlan = fleetGammaSourcePlan(leds, sourceSelect.value);
+      repaintSource();
+    };
+  }
+  repaintSource();
   confirmBtn.onclick = async () => {
+    const gammaSnapshot = sourcePlan.gamma && Object.freeze({ ...sourcePlan.gamma });
+    if (!gammaSnapshot) {
+      statusLine.textContent = '✋ Select one displayed source curve before confirming.';
+      return;
+    }
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
     statusLine.className = 'led-push-status';
@@ -410,8 +521,9 @@ export function startFleetGammaPush(ctx) {
     };
     markRunning();
 
-    const results = await pushGammaFleet(registry.controllers, DEFAULT_GAMMA_TRANSPORT, {
+    const results = await pushGammaFleet(leds, DEFAULT_GAMMA_TRANSPORT, {
       commit: commitThroughCtx(ctx, (c) => `Pushed gamma to '${c.name}'`),
+      gammaSnapshot,
       onResult: (record) => {
         const row = rows.get(record.id);
         if (row) {
@@ -430,7 +542,7 @@ export function startFleetGammaPush(ctx) {
     const failed = results.filter((r) => r.state === 'failed');
     const unreachable = results.filter((r) => r.state === 'unreachable');
     const skipped = results.filter((r) => r.state === 'skipped');
-    const bad = failed.length + unreachable.length;
+    const bad = failed.length + unreachable.length + skipped.length;
     statusLine.className = 'led-push-status' + (bad ? ' led-push-error' : ' led-push-ok');
     statusLine.textContent =
       `done — ${ok.length} ok · ${failed.length} failed · ${unreachable.length} unreachable · ` +

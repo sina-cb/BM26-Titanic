@@ -77,6 +77,13 @@ export const CAPTAINPAD_TAB_POLICIES = Object.freeze({
     parentRoute: 'config',
     subviewSummary: 'OSC listener — enable, port/host, allowed senders and live metrics.',
   },
+  bike_link: {
+    title: 'Bike Link',
+    tabBarIconName: 'network',
+    showInPerformance: false,
+    parentRoute: 'config',
+    subviewSummary: 'Targets, link lifecycle and per-bike palette lease health.',
+  },
   config: { title: 'Config', tabBarIconName: 'gear', showInPerformance: false },
   simulation: { title: '2D Simulator', tabBarIconName: 'square.grid.2x2', tabBarGroup: 'Tools', showInPerformance: false },
 } satisfies Record<string, CaptainPadTabPolicy>);

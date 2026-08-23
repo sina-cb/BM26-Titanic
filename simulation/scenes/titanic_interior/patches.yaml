@@ -1,0 +1,133 @@
+patches:
+  Module 1:
+    controllerIp: 10.1.1.69
+    controllerId: 1
+    dmxUniverse: 1
+    dmxAddress: 1
+    pixelCount: 330
+    outputIndex: 0
+    endUniverse: 3
+    endChannel: 296
+    segments:
+      - universe: 1
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 2
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 3
+        startChannel: 1
+        endChannel: 296
+        pixelCount: 74
+  Module 2:
+    controllerIp: 10.1.1.69
+    controllerId: 1
+    dmxUniverse: 4
+    dmxAddress: 1
+    pixelCount: 330
+    outputIndex: 1
+    endUniverse: 6
+    endChannel: 296
+    segments:
+      - universe: 4
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 5
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 6
+        startChannel: 1
+        endChannel: 296
+        pixelCount: 74
+  Module 3:
+    controllerIp: 10.1.1.69
+    controllerId: 1
+    dmxUniverse: 7
+    dmxAddress: 1
+    pixelCount: 330
+    outputIndex: 2
+    endUniverse: 9
+    endChannel: 296
+    segments:
+      - universe: 7
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 8
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 9
+        startChannel: 1
+        endChannel: 296
+        pixelCount: 74
+  Module 4:
+    controllerIp: 10.1.1.70
+    controllerId: 2
+    dmxUniverse: 11
+    dmxAddress: 1
+    pixelCount: 330
+    outputIndex: 0
+    endUniverse: 13
+    endChannel: 296
+    segments:
+      - universe: 11
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 12
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 13
+        startChannel: 1
+        endChannel: 296
+        pixelCount: 74
+  Module 5:
+    controllerIp: 10.1.1.70
+    controllerId: 2
+    dmxUniverse: 14
+    dmxAddress: 1
+    pixelCount: 330
+    outputIndex: 1
+    endUniverse: 16
+    endChannel: 296
+    segments:
+      - universe: 14
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 15
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 16
+        startChannel: 1
+        endChannel: 296
+        pixelCount: 74
+  Module 6:
+    controllerIp: 10.1.1.70
+    controllerId: 2
+    dmxUniverse: 17
+    dmxAddress: 1
+    pixelCount: 330
+    outputIndex: 2
+    endUniverse: 19
+    endChannel: 296
+    segments:
+      - universe: 17
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 18
+        startChannel: 1
+        endChannel: 512
+        pixelCount: 128
+      - universe: 19
+        startChannel: 1
+        endChannel: 296
+        pixelCount: 74

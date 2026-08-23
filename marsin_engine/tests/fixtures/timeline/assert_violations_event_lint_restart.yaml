@@ -1,0 +1,119 @@
+# assert_violations_event_lint_restart.yaml — deliberately violating fixture
+# for class 5 (event-resume coverage), class 7 (lint clean) and class 8
+# (restart/resume probes). See
+# assert_violations_event_lint_restart_spec.yaml for the eventCues override
+# and restartProbes/restartExpect that trip the class-8 findings.
+#
+# Deliberately has NO cue covering 00:00-sunrise-20 (no midnight bridge) so a
+# restart probe at 00:30 resumes ownerless, and c_event_no_hold has no `hold`
+# block so its default fire+60min release lands in the day_off dead zone
+# (09:00-19:xx, when nothing has fired yet) for the sunrise+90 representative
+# fire time.
+schemaVersion: 2
+name: assert_violations_event_lint_restart
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases: {}
+looks:
+  ambient_look:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    target:
+      channel: deck
+      id: null
+defaultCue:
+  label: Ambient default
+  action:
+    type: look
+    look: ambient_look
+cues:
+  - id: c_sunrise_bloom
+    label: Sunrise bloom
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: -20
+    action:
+      type: look
+      look: ambient_look
+    kind: program
+    hold:
+      min: 80
+    days: all
+  - id: c_morning_watch
+    label: Morning watch
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: 60
+    action:
+      type: look
+      look: ambient_look
+    kind: program
+    hold:
+      until:
+        clock: '09:00'
+    days: all
+  - id: c_day_off
+    label: Day off
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '09:00'
+    action:
+      type: globals
+      set:
+        master: 0
+      target:
+        channel: deck
+        id: null
+    kind: program
+    days: all
+  - id: c_event_no_hold
+    label: Event cue with no hold block
+    enabled: true
+    catchUp: false
+    trigger:
+      type: manual
+    action:
+      type: look
+      look: ambient_look
+    kind: program
+    days: all
+  # LINT VIOLATION: kind:program, action type playlist, NO autopilot block —
+  # lintShowPlan flags this as program_action_no_autopilot (docs/38 §1.1).
+  - id: c_no_autopilot_program
+    label: Program cue that forgot its autopilot block
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '15:00'
+    action:
+      type: playlist
+      name: default
+      target:
+        channel: deck
+        id: null
+    kind: program
+    days: all

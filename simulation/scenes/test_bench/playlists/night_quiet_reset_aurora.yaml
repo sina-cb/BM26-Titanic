@@ -1,0 +1,61 @@
+schemaVersion: 1
+name: night_quiet_reset_aurora
+entries:
+  - id: e_night_quiet_reset_aurora_01_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.87
+      sliderKick: 0.13
+      sliderBreathDepth: 0.69
+      sliderBreathShape: 0.23
+      sliderBloom: 0.94
+      sliderRibbing: 0.19
+      sliderSparkle: 0.37
+      sliderWhiteGlow: 0.69
+      sliderFieldDetail: 0.91
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_quiet_reset_aurora_02_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_quiet_reset_aurora_03_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.24
+      sliderLevel: 0.22
+      sliderKick: 0
+      sliderRadius: 1
+      sliderDetail: 0.86
+      sliderFrondDensity: 0.68
+      sliderTipGlow: 0.34
+      sliderBaseDarkness: 0.68
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_quiet_reset_aurora_04_ambient_extra_07_keel_glow
+    pattern: ambient_extra/07_keel_glow
+    label: Keel Glow
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderKeelWidth: 0.38
+      sliderLift: 0.34
+      sliderTraceLength: 0.54
+      sliderOrganGlow: 0.38
+      sliderLevel: 0.62
+      sliderSafetyFloor: 0.32
+    modulations: []
+    midiMappings: []
+    notes: null

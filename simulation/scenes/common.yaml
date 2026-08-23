@@ -105,7 +105,7 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: full
+    value: 2d_pixels
     label: 💡 Lighting Profile
     options:
       - edit
@@ -220,10 +220,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -37.9133
-    'y': 14.7715
-    z: 69.1989
+    x: -37.7996
+    'y': 13.4718
+    z: 57.5613
   target:
-    x: -17.5807
-    'y': 6.9131
-    z: 6.4614
+    x: -19.647
+    'y': 7.5537
+    z: 6.9459

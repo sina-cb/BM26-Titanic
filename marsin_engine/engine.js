@@ -25,7 +25,7 @@ import fs from 'fs';
 import { WasmHost } from './lib/wasm_host.js';
 import { PatternMixer } from './lib/pattern_mixer.js';
 import { ChannelParamRouter } from './lib/channel_param_router.js';
-import { startApiServer } from './lib/api_server.js';
+import { startApiServer, activeColorParamCenter } from './lib/api_server.js';
 import { ModulationController } from './lib/modulation_controller.js';
 import { IntensityController } from './lib/intensity_controller.js';
 import { sameModelGroupSections } from './lib/live_brightness_controller.js';
@@ -39,6 +39,7 @@ import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } fro
 import { ParamCenter } from './lib/param_center.js';
 import { OscListener } from './lib/osc_listener.js';
 import { FireSyncListener } from './lib/fire_sync_listener.js';
+import { BikeColorShare } from './lib/bike_color_share.js';
 import { AudioCapture } from './audio/capture/audio_capture.js';
 import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
@@ -579,8 +580,9 @@ async function loadModel(modelName, bustCache = false) {
   // group-bit budget. Names already owned by a base group / declared
   // preset are skipped (the base group already provides that view), and a
   // STRUCTURAL band whose pixels exactly equal an authored view's is retired
-  // in favour of the authored name — on titanic that is WALLS ≡ `Hull Canvas`
-  // and AUDITORIUM ≡ `Auditoriums` (operator ruling, report 20260804_148).
+  // in favour of the authored name — on titanic that is WALLS ≡ `Hull Canvas`.
+  // AUDITORIUM remains distinct: auditorium PARs plus both complete TE signs
+  // (operator ruling, report 20260804_148 plus corrected fixture membership).
   // The append sequence itself lives in lib/view_catalog.js so the offline
   // harnesses build a BYTE-EQUIVALENT catalog from the same code instead of
   // a hand-mirrored copy that can drift (report 20260804_147).
@@ -2866,6 +2868,50 @@ async function main() {
     console.log('  🔥 fire-sync disabled (config.yaml: fire_sync.enabled: false)');
   }
 
+  // 7f. BIKE COLOR SHARE (BM26 bikes). Mirrors the operator-visible active
+  // palette out to the MarsinLED bike controllers over their firmware HTTP
+  // API. Same non-fatal precedent as fire-sync/OSC: a bad config or a busy
+  // scan target must disable this feature alone, never take the rig down.
+    // Bike Link is deliberately tied to the SHARED global Color 1/2 controls,
+    // never a Live Touch session-private palette.
+    let bikePaletteUnsubscribe = null;
+  try {
+    const bcs = new BikeColorShare({
+      getPalette: () => {
+        return {
+          color1: paramCenter.get('colorPalette1'),
+          color2: paramCenter.get('colorPalette2'),
+        };
+      },
+    });
+    engineCore.bikeColorShare = bcs;
+    let lastBikePalette = {
+      color1: { ...paramCenter.get('colorPalette1') },
+      color2: { ...paramCenter.get('colorPalette2') },
+    };
+    bikePaletteUnsubscribe = paramCenter.subscribe(({ changedKeys }) => {
+      if (!changedKeys.includes('colorPalette1') && !changedKeys.includes('colorPalette2')) return;
+      const nextPalette = {
+        color1: paramCenter.get('colorPalette1'),
+        color2: paramCenter.get('colorPalette2'),
+      };
+      const actuallyChanged = ['color1', 'color2'].some((key) => {
+        return ['h', 's', 'v'].some((field) => nextPalette[key][field] !== lastBikePalette[key][field]);
+      });
+      if (!actuallyChanged) return;
+      lastBikePalette = {
+        color1: { ...nextPalette.color1 },
+        color2: { ...nextPalette.color2 },
+      };
+      bcs.notifyPaletteChanged();
+    });
+    // start() itself logs the "disabled" one-liner when config
+    // bike_color_share.enabled is false — no separate branch needed here.
+    bcs.start();
+  } catch (err) {
+    console.error(`  ⚠️  bike-color-share DISABLED: ${err && err.message}`);
+  }
+
   // 8. Graceful shutdown
   //
   // `afterClose` lets a caller (the scene-switch path) run AFTER every
@@ -2893,6 +2939,16 @@ async function main() {
     if (fireSyncState.listener) {
       try { fireSyncState.listener.stop(); } catch (_) { /* ignore */ }
       fireSyncState.listener = null;
+    }
+    // Bike color share's timers are unref'd already, but stop() also aborts
+    // any in-flight fetch to a bike — release it before exit like every
+    // other external-facing handle above.
+    if (bikePaletteUnsubscribe) {
+      try { bikePaletteUnsubscribe(); } catch (_) { /* ignore */ }
+      bikePaletteUnsubscribe = null;
+    }
+    if (engineCore.bikeColorShare) {
+      try { engineCore.bikeColorShare.stop(); } catch (_) { /* ignore */ }
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
     // Close the model hot-reload watcher and cancel its debounce (report _30

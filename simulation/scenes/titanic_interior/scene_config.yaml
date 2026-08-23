@@ -1,0 +1,178 @@
+modelTransform:
+  _section:
+    label: 📦 Model Transform
+    collapsed: true
+  modelX:
+    value: 0
+    label: Pos X
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelY:
+    value: 0
+    label: Pos Y
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelZ:
+    value: 0
+    label: Pos Z
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  rotX:
+    value: 0
+    label: Rot X °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotY:
+    value: 0
+    label: Rot Y °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotZ:
+    value: 0
+    label: Rot Z °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+parLights:
+  _section:
+    label: 🔌 DMX Fixtures
+    type: fixtureArray
+    collapsed: false
+  parsEnabled:
+    value: true
+    label: Master Enabled
+  masterExposure:
+    value: 0.2
+    label: Sim Exposure (Preview Only)
+    min: 0
+    max: 2
+    step: 0.05
+  simBrightness:
+    value: 1
+    label: Sim Brightness (Preview Only)
+    min: 0
+    max: 2
+    step: 0.05
+  maxSpotlights:
+    value: 60
+    label: Max Spotlights
+    min: 1
+    max: 200
+    step: 1
+  fixtures: []
+ledStrands:
+  _section:
+    label: 🔌 LED Fixtures
+    type: ledStrandArray
+    collapsed: false
+  strandsEnabled:
+    value: true
+    label: Master Enabled
+  strands:
+    - name: Module 1
+      startX: -5.5
+      startY: 2
+      startZ: -2
+      endX: 5.5
+      endY: 2
+      endZ: -2
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 330
+      group: Module 1
+      sectionId: 1
+      fixtureId: 1
+      haloScale: 1
+      viewMask: 0
+      viewMaskHi: 0
+    - name: Module 2
+      startX: -5.5
+      startY: 2
+      startZ: -1.2
+      endX: 5.5
+      endY: 2
+      endZ: -1.2
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 330
+      group: Module 2
+      sectionId: 2
+      fixtureId: 2
+      haloScale: 1
+      viewMask: 0
+      viewMaskHi: 0
+    - name: Module 3
+      startX: -5.5
+      startY: 2
+      startZ: -0.4
+      endX: 5.5
+      endY: 2
+      endZ: -0.4
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 330
+      group: Module 3
+      sectionId: 3
+      fixtureId: 3
+      haloScale: 1
+      viewMask: 0
+      viewMaskHi: 0
+    - name: Module 4
+      startX: -5.5
+      startY: 2
+      startZ: 0.4
+      endX: 5.5
+      endY: 2
+      endZ: 0.4
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 330
+      group: Module 4
+      sectionId: 4
+      fixtureId: 4
+      haloScale: 1
+      viewMask: 0
+      viewMaskHi: 0
+    - name: Module 5
+      startX: -5.5
+      startY: 2
+      startZ: 1.2
+      endX: 5.5
+      endY: 2
+      endZ: 1.2
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 330
+      group: Module 5
+      sectionId: 5
+      fixtureId: 5
+      haloScale: 1
+      viewMask: 0
+      viewMaskHi: 0
+    - name: Module 6
+      startX: -5.5
+      startY: 2
+      startZ: 2
+      endX: 5.5
+      endY: 2
+      endZ: 2
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 330
+      group: Module 6
+      sectionId: 6
+      fixtureId: 6
+      haloScale: 1
+      viewMask: 0
+      viewMaskHi: 0

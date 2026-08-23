@@ -121,6 +121,7 @@ export function writeBlackHoledConfig(dir, timelinePatch = {}) {
 
   // WALL 3 — no listeners, no device traffic, no port squatting.
   cfg.osc = { ...(cfg.osc || {}), enabled: false };
+  cfg.fire_sync = { ...(cfg.fire_sync || {}), enabled: false };
   cfg.web_client = { ...(cfg.web_client || {}), enabled: false };
   cfg.audio = { ...(cfg.audio || {}), enabled: false };
   cfg.vsn1 = { ...(cfg.vsn1 || {}), deployLayout: false, deployOnBoot: false };

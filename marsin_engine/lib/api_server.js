@@ -4303,6 +4303,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return true;
   }
 
+  // Validate both the public shape and the model-specific target before a
+  // channel PATCH mutates anything. setChannelViewSelection() deliberately
+  // compiles again at commit time so PatternMixer remains the single owner of
+  // viewSelection + compiledPixelMask assignment.
+  function preflightViewSelection(rawViewSelection) {
+    const validation = validateViewSelection(rawViewSelection);
+    if (!validation.ok) return validation;
+    try {
+      compileViewSelectionMask({
+        pixels: mixer.pixels,
+        pixelCount: mixer.pixelCount,
+        viewSelection: validation.value,
+        viewMasks: mixer.viewMasks,
+        maskRegistry: mixer.maskRegistry,
+      });
+    } catch (error) {
+      return { ok: false, error: String(error.message || error) };
+    }
+    return validation;
+  }
+
   // ══ PERFORMANCE-MODE OPERATOR PASSCODE GATES ═══════════════════════════════
   //
   // While a show is live, seizing the rig FROM a running plan, leaving the show
@@ -9982,6 +10003,34 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.end(JSON.stringify({ error: e && e.message ? e.message : String(e) }));
         }
       });
+    } else if (req.method === 'GET' && req.url === '/bikes') {
+      // BM26 bike registry + stats (docs: lib/bike_color_share.js). No UI
+      // consumes this yet this wave — it exists so the feature is
+      // observable/debuggable from curl the moment it's enabled.
+      if (engineCore.bikeColorShare) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(engineCore.bikeColorShare.snapshot()));
+      } else {
+        sendJsonError(res, 503, { error: 'bike color share unavailable' });
+      }
+    } else if (req.method === 'POST' && req.url === '/bikes/config') {
+      // PATCH-style merge, same shape as POST /deck/color-autopilot: the
+      // posted body is merged over the current config, validated STRICTLY,
+      // applied live, then persisted to the runtime file (never config.yaml).
+      if (!engineCore.bikeColorShare) {
+        sendJsonError(res, 503, { error: 'bike color share unavailable' });
+      } else {
+        readBody(data => {
+          try {
+            const config = engineCore.bikeColorShare.setConfig(data);
+            engineCore.bikeColorShare.saveConfig();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, config }));
+          } catch (e) {
+            sendJsonError(res, 400, { error: e && e.message ? e.message : String(e) });
+          }
+        });
+      }
     }
     // ---- MODEL METADATA ----
     // Lightweight enumeration of the model's view-selection targets
@@ -11256,15 +11305,131 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
         const channel = mixer.getMixerChannel(id);
         if (!channel) { res.writeHead(404); return res.end(); }
-        if (data.name !== undefined) channel.name = data.name;
-        if (data.mode !== undefined) {
-          if (!isValidBlendMode(data.mode)) {
+
+        // Request atomicity: complete every request-level validation before
+        // changing the channel or cancelling one of its transitions. A mixed
+        // PATCH must never apply early fields and then report that a later
+        // field was rejected.
+        if (data.mode !== undefined && !isValidBlendMode(data.mode)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `Invalid blend mode '${data.mode}' (expected one of ` +
+              `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+          }));
+        }
+        let nextFader;
+        if (data.fader !== undefined) {
+          nextFader = validateFader(data.fader);
+          if (!nextFader.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextFader.error }));
+          }
+        }
+        let nextFaderMax;
+        if (data.faderMax !== undefined) {
+          nextFaderMax = validateFader(data.faderMax);
+          if (!nextFaderMax.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextFaderMax.error.replace('fader', 'faderMax') }));
+          }
+        }
+        if (data.color !== undefined && data.color !== null && typeof data.color !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+        }
+        let nextHue;
+        if (data.hue !== undefined) {
+          nextHue = validateHue(data.hue);
+          if (!nextHue.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextHue.error }));
+          }
+        }
+        let nextFollowLeaderId;
+        if (data.followLeaderId !== undefined) {
+          if (data.followLeaderId === null || data.followLeaderId === '') {
+            nextFollowLeaderId = null;
+          } else if (typeof data.followLeaderId !== 'string') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({
-              error: `Invalid blend mode '${data.mode}' (expected one of ` +
-                `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+              error: `followLeaderId must be a channel id string or null, got ${typeof data.followLeaderId}`,
+            }));
+          } else {
+            nextFollowLeaderId = data.followLeaderId;
+            if (!mixer.getChannel(nextFollowLeaderId)) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `follow leader '${nextFollowLeaderId}' not found`,
+                code: 'FOLLOW_LEADER_NOT_FOUND',
+              }));
+            }
+            if (mixer.wouldCreateFollowCycle(id, nextFollowLeaderId)) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: nextFollowLeaderId === id
+                  ? `channel '${id}' cannot follow itself`
+                  : `following '${nextFollowLeaderId}' would create a follow cycle`,
+                code: 'FOLLOW_CYCLE',
+              }));
+            }
+          }
+        }
+        let nextFollowScale;
+        if (data.followScale !== undefined) {
+          nextFollowScale = validateFollowScale(data.followScale);
+          if (!nextFollowScale.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextFollowScale.error }));
+          }
+        }
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
+        let nextViewSelection;
+        if (data.viewSelection !== undefined) {
+          nextViewSelection = preflightViewSelection(data.viewSelection);
+          if (!nextViewSelection.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextViewSelection.error }));
+          }
+        }
+        let nextPatternName;
+        let nextPatternSource;
+        if (data.pattern !== undefined && data.pattern !== channel.pattern) {
+          try { nextPatternName = resolvePatternName(data.pattern); }
+          catch (nameErr) { return badPatternName(res, nameErr); }
+          nextPatternSource = loadPattern(patternsDir, nextPatternName);
+        }
+        let nextAutoCycleDelay;
+        if (data.autopilot !== undefined) {
+          if (data.autopilot === null || typeof data.autopilot !== 'object') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'autopilot must be an object {active?,delay_s?,shuffle?}, got ' +
+                `${data.autopilot === null ? 'null' : typeof data.autopilot}`,
+              code: 'AUTOCYCLE_BAD_PAYLOAD',
             }));
           }
+          if (!channel.playlist || !channel.playlist.name) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `channel '${id}' has no playlist assigned; cannot enable auto-cycle`,
+              code: 'AUTOCYCLE_NO_PLAYLIST',
+            }));
+          }
+          if (data.autopilot.delay_s !== undefined) {
+            const delayValidation = validateAutoCycleDelay(data.autopilot.delay_s);
+            if (!delayValidation.ok) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: delayValidation.error,
+                code: 'AUTOCYCLE_BAD_DELAY',
+              }));
+            }
+            nextAutoCycleDelay = delayValidation.value;
+          }
+        }
+
+        if (data.name !== undefined) channel.name = data.name;
+        if (data.mode !== undefined) {
           // PATCH-driven mode change: clear any scripted-transition
           // restore so the operator's pick is sticky. Mirrors the WS
           // setChannelMode logic — see that handler for rationale.
@@ -11278,11 +11443,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // BEFORE the fader-lock check — a malformed value is a client
           // bug regardless of lock state, and must never reach the render
           // loop. A finite out-of-range value is clamped to [0,1].
-          const fv = validateFader(data.fader);
-          if (!fv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: fv.error }));
-          }
           // Fader-lock: reject the fader portion silently (no-op) but
           // still process other fields in this PATCH. We do NOT 4xx
           // because operators bulk-PATCH multiple fields at once and a
@@ -11293,7 +11453,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // Manual fader writes ALWAYS cancel any in-flight transition
             // for that channel — mirrors WS setChannelFader (see above).
             mixer.cancelChannelTransition(id);
-            channel.fader = fv.value;
+            channel.fader = nextFader.value;
           }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
@@ -11310,21 +11470,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // fader (finite, clamped to [0,1]); non-finite ⇒ 400 (Codex P0,
         // no silent coercion). Applied as a hard cap at the composite.
         if (data.faderMax !== undefined) {
-          const fm = validateFader(data.faderMax);
-          if (!fm.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') }));
-          }
-          channel.faderMax = fm.value;
+          channel.faderMax = nextFaderMax.value;
         }
         // F-D: per-channel color metadata. Pure metadata (no render effect);
         // accept a string (e.g. hex) or null to clear. A non-string/non-null
         // value is a malformed payload ⇒ 400 (fail loud).
         if (data.color !== undefined) {
-          if (data.color !== null && typeof data.color !== 'string') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
-          }
           channel.color = data.color === null ? null : data.color;
         }
         // WAVE 15: solo-safe toggle — pure boolean rig-config (never gated
@@ -11340,12 +11491,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // RGB BEFORE blend (W/A/U untouched). Stacks additively with the
         // global hue. The render loop gates on non-zero, so hue=0 = no-op.
         if (data.hue !== undefined) {
-          const hv = validateHue(data.hue);
-          if (!hv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: hv.error }));
-          }
-          channel.hue = hv.value;
+          channel.hue = nextHue.value;
         }
         // F-phase #4: opt this channel in/out of the global tap-tempo. Pure
         // boolean flag (coerced via !! like soloSafe/faderLocked). The render
@@ -11363,77 +11509,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // malformed payload ⇒ 400. Validated BEFORE mutation so a bad payload
         // never half-applies.
         if (data.followLeaderId !== undefined) {
-          if (data.followLeaderId === null || data.followLeaderId === '') {
-            channel.followLeaderId = null;
-          } else if (typeof data.followLeaderId !== 'string') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-              error: `followLeaderId must be a channel id string or null, got ${typeof data.followLeaderId}`,
-            }));
-          } else {
-            const leaderId = data.followLeaderId;
-            // Leader must exist (mixer overlay OR the deck channel).
-            if (!mixer.getChannel(leaderId)) {
-              res.writeHead(404, { 'Content-Type': 'application/json' });
-              return res.end(JSON.stringify({
-                error: `follow leader '${leaderId}' not found`,
-                code: 'FOLLOW_LEADER_NOT_FOUND',
-              }));
-            }
-            // Self-follow + cycle rejection (walks the existing chain at PATCH
-            // time so the live follow graph can never contain a loop).
-            if (mixer.wouldCreateFollowCycle(id, leaderId)) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              return res.end(JSON.stringify({
-                error: leaderId === id
-                  ? `channel '${id}' cannot follow itself`
-                  : `following '${leaderId}' would create a follow cycle`,
-                code: 'FOLLOW_CYCLE',
-              }));
-            }
-            channel.followLeaderId = leaderId;
-          }
+          channel.followLeaderId = nextFollowLeaderId;
         }
         // FOLLOW/LINK scale: validateFollowScale — non-finite ⇒ 400 (Codex
         // P0); a finite value is clamped to [0,2]. Independent of
         // followLeaderId (an operator can pre-set the scale before linking).
         if (data.followScale !== undefined) {
-          const fsv = validateFollowScale(data.followScale);
-          if (!fsv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: fsv.error }));
-          }
-          channel.followScale = fsv.value;
+          channel.followScale = nextFollowScale.value;
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
-        // PERFORMANCE MODE: viewSelection is a structural (view-mask) change —
-        // gate ONLY that field while live; sibling fields in the same PATCH
-        // (fader, mode, hue, enabled, lock) stay allowed.
-        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
         // View-selection update: validate first so a typo can't brick
         // the render loop. The mixer recompiles the channel's
         // compiledPixelMask synchronously; the next frame composites
         // through the new mask.
         if (data.viewSelection !== undefined) {
-          const v = validateViewSelection(data.viewSelection);
-          if (!v.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: v.error }));
-          }
-          // validateViewSelection only checks SHAPE. An unknown view-mask
-          // NAME is caught later, when the mixer compiles the mask against
-          // the model's MaskRegistry (codex P0 hard error, report
-          // 20260618_2 §6). Wrap it so the operator sees the real
-          // "Unknown viewMask name ... Known viewMasks: [...]" message
-          // instead of readBody's generic "Invalid JSON" — same reasoning
-          // as the addMixerChannel wrap above.
-          try {
-            mixer.setChannelViewSelection(id, v.value);
-          } catch (vsErr) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: String(vsErr.message || vsErr) }));
-          }
+          mixer.setChannelViewSelection(id, nextViewSelection.value);
         }
         if (data.locked !== undefined) {
           channel.locked = !!data.locked;
@@ -11445,11 +11536,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         // Pattern swap: recompile WASM, swap handle, preserve channel ID
         if (data.pattern !== undefined && data.pattern !== channel.pattern) {
-          let patternName;
-          try { patternName = resolvePatternName(data.pattern); }
-          catch (nameErr) { return badPatternName(res, nameErr); }
-          const src = loadPattern(patternsDir, patternName);
-          const comp = wasmHost.compile(src);
+          const comp = wasmHost.compile(nextPatternSource);
           if (comp.ok) {
             // SESSION PARAM RETENTION: a DIRECT pattern swap (the entry pointer
             // is unchanged, only the pattern changes), so key by PATTERN NAME
@@ -11460,16 +11547,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // Destroy old handle
             if (channel.handle) wasmHost.destroy(channel.handle);
             channel.handle = comp.handle;
-            channel.pattern = patternName;
+            channel.pattern = nextPatternName;
             channel.localControls = {};
             onChannelCompiled(channel);
             finalizeCpcValues(channel);
             // Overlay this pattern's session tuning (last word), then reset the
             // touched set so the overlay isn't recorded as fresh operator intent.
-            applySessionParamOverlay(channel, patternName);
+            applySessionParamOverlay(channel, nextPatternName);
             if (channel._touchedControlIds) channel._touchedControlIds.clear();
           } else {
-            console.warn(`[Mixer] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
+            console.warn(`[Mixer] Pattern swap FAILED: ${nextPatternName} compile error:`, comp.error);
           }
         }
         // AUTO-CYCLE (round-2 #2, docs/39 §auto-cycle): merge a partial
@@ -11487,35 +11574,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // (opt-in), so a mission-critical channel never auto-changes unless an
         // operator explicitly flips it here.
         if (data.autopilot !== undefined) {
-          if (data.autopilot === null || typeof data.autopilot !== 'object') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-              error: `autopilot must be an object {active?,delay_s?,shuffle?}, got ${data.autopilot === null ? 'null' : typeof data.autopilot}`,
-              code: 'AUTOCYCLE_BAD_PAYLOAD',
-            }));
-          }
-          if (!channel.playlist || !channel.playlist.name) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-              error: `channel '${id}' has no playlist assigned; cannot enable auto-cycle`,
-              code: 'AUTOCYCLE_NO_PLAYLIST',
-            }));
-          }
-          // Validate delay_s FIRST (before mutating) so an invalid delay can't
-          // half-apply active/shuffle.
-          let nextDelay;
-          if (data.autopilot.delay_s !== undefined) {
-            const dv = validateAutoCycleDelay(data.autopilot.delay_s);
-            if (!dv.ok) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              return res.end(JSON.stringify({ error: dv.error, code: 'AUTOCYCLE_BAD_DELAY' }));
-            }
-            nextDelay = dv.value;
-          }
           const ap = channel.playlist.autopilot = channel.playlist.autopilot
             || { active: false, delay_s: 30, shuffle: false };
           if (data.autopilot.active !== undefined) ap.active = !!data.autopilot.active;
-          if (nextDelay !== undefined) ap.delay_s = nextDelay;
+          if (nextAutoCycleDelay !== undefined) ap.delay_s = nextAutoCycleDelay;
           if (data.autopilot.shuffle !== undefined) ap.shuffle = !!data.autopilot.shuffle;
           // PATTERN-GROUP LOCALITY (feat/optimize_channels): groupMode/groupSize
           // /groupDwell mirror `shuffle` — booleans coerce via !!, ints clamp at
@@ -13617,15 +13679,56 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         const channel = mixer.getDeckChannel();
         if (!channel) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+
+        // Request atomicity: reject the whole PATCH before changing any deck
+        // field or transition when one requested field is invalid or locked.
+        if (data.mode !== undefined && !isValidBlendMode(data.mode)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `Invalid blend mode '${data.mode}' (expected one of ` +
+              `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+          }));
+        }
+        let nextFader;
+        if (data.fader !== undefined) {
+          nextFader = validateFader(data.fader);
+          if (!nextFader.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextFader.error }));
+          }
+        }
+        let nextFaderMax;
+        if (data.faderMax !== undefined) {
+          nextFaderMax = validateFader(data.faderMax);
+          if (!nextFaderMax.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextFaderMax.error.replace('fader', 'faderMax') }));
+          }
+        }
+        if (data.color !== undefined && data.color !== null && typeof data.color !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+        }
+        let nextHue;
+        if (data.hue !== undefined) {
+          nextHue = validateHue(data.hue);
+          if (!nextHue.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextHue.error }));
+          }
+        }
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
+        let nextViewSelection;
+        if (data.viewSelection !== undefined) {
+          nextViewSelection = preflightViewSelection(data.viewSelection);
+          if (!nextViewSelection.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: nextViewSelection.error }));
+          }
+        }
+
         if (data.name !== undefined) channel.name = data.name;
         if (data.mode !== undefined) {
-          if (!isValidBlendMode(data.mode)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-              error: `Invalid blend mode '${data.mode}' (expected one of ` +
-                `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
-            }));
-          }
           if (channel._savedMode) delete channel._savedMode;
           mixer.cancelChannelTransition(channel.id);
           channel.mode = data.mode;
@@ -13633,15 +13736,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         if (data.fader !== undefined) {
           // Codex P0: reject non-finite, clamp finite (see validateFader).
-          const fv = validateFader(data.fader);
-          if (!fv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: fv.error }));
-          }
           // Fader-lock: same silent-skip semantics as the mixer PATCH.
           if (!channel.faderLocked) {
             mixer.cancelChannelTransition(channel.id);
-            channel.fader = fv.value;
+            channel.fader = nextFader.value;
           }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
@@ -13650,30 +13748,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // drives the mission-critical exterior — a clamp here caps its own
         // contribution; same validation as the mixer PATCH.)
         if (data.faderMax !== undefined) {
-          const fm = validateFader(data.faderMax);
-          if (!fm.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') }));
-          }
-          channel.faderMax = fm.value;
+          channel.faderMax = nextFaderMax.value;
         }
         // F-D: per-channel color metadata on the deck channel.
         if (data.color !== undefined) {
-          if (data.color !== null && typeof data.color !== 'string') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
-          }
           channel.color = data.color === null ? null : data.color;
         }
         // F-hue: per-channel hue on the deck channel. Same validation +
         // semantics as the mixer PATCH (docs/39 §F-hue).
         if (data.hue !== undefined) {
-          const hv = validateHue(data.hue);
-          if (!hv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: hv.error }));
-          }
-          channel.hue = hv.value;
+          channel.hue = nextHue.value;
         }
         // F-phase #4 on the deck channel — tap-tempo opt-in, same semantics
         // as the mixer PATCH (docs/39 §F-phase).
@@ -13684,23 +13768,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           channel.locked = !!data.locked;
           clearChannelDirty(channel);
         }
-        // PERFORMANCE MODE: gate ONLY the viewSelection field on the deck
-        // channel while live; other fields in the same PATCH stay allowed.
-        if (data.viewSelection !== undefined && rejectIfPerformanceMode(req, res)) return;
         if (data.viewSelection !== undefined) {
-          const v = validateViewSelection(data.viewSelection);
-          if (!v.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: v.error }));
-          }
-          // Unknown view-mask NAME (vs shape) hard-errors at mask compile —
-          // surface the real message rather than readBody's "Invalid JSON".
-          try {
-            mixer.setChannelViewSelection(channel.id, v.value);
-          } catch (vsErr) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: String(vsErr.message || vsErr) }));
-          }
+          mixer.setChannelViewSelection(channel.id, nextViewSelection.value);
         }
         saveAllState();
         broadcastMixerState();

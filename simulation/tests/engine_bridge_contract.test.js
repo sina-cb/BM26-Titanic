@@ -48,7 +48,7 @@
  *     ORDINARY per-universe relay, live from BOOT (no arm needed), and is
  *     the simpler, more general path the catalog's G-4 spec actually
  *     describes ("engine byte -> bridge relay byte identical"). Universe 30
- *     -> 10.1.1.60 is titanic's own real relay route (scene-data read, not
+ *     -> 10.1.1.61 is titanic's own real relay route (scene-data read, not
  *     invented) and is also one of the engine's real `ALL_SOURCES`
  *     universes, so it doubles as a live pacing/sequence test subject.
  */
@@ -91,12 +91,13 @@ after(() => {
 });
 
 // Universe 30 is one of titanic's real, boot-time-live relay routes
-// (10.1.1.60 — confirmed via `openSenders()` at harness boot) AND one of the
+// (10.1.1.61, LeftLeftRopes / ss_left_left since the smokestack-rope
+// repatch — confirmed via `openSenders()` at harness boot) AND one of the
 // engine's ALL_SOURCES universes — so one real engine sender covers both a
 // route this suite can assert against and the shared-sequence semantics
 // `engineFrame()` models.
 const RELAY_UNIVERSE = 30;
-const RELAY_HOST = '10.1.1.60';
+const RELAY_HOST = '10.1.1.61';
 assert.ok(ALL_SOURCES.includes(RELAY_UNIVERSE), 'sanity: U30 must be a real engine source universe');
 assert.ok(h.openSenders().includes(h.routeKey(RELAY_UNIVERSE, RELAY_HOST)),
   `sanity: U${RELAY_UNIVERSE}->${RELAY_HOST} must be a live boot-time relay route`);

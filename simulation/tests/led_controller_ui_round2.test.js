@@ -98,14 +98,14 @@ function strandDev(enabled, count, pinData) {
 function deviceConfig() {
   return {
     strands: [strandDev(true, 40, 35), strandDev(false, 40, 36)],
-    dmx: { enabled: true, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
+    dmx: { enabled: false, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
     deviceName: 'Titanic-XXX', firmwareSHA: 'be2fcc1b5f6f',
   };
 }
 
 /**
- * A /api/status body. `perOutput` seeds the confirmed read-back; `perOutputDmx`
- * false models firmware too old for per-output DMX.
+ * A /api/status body. `perOutput` seeds runtime receiver status;
+ * `perOutputDmx` false models firmware too old for per-output DMX.
  */
 function deviceStatus(controllerId, perOutput = [], perOutputDmx = true) {
   return {
@@ -150,10 +150,12 @@ function makeMockIo(devices, calls) {
       const universeByOutputIndex = plan.universeByOutputIndex;
       d.pushed = universeByOutputIndex;
       d.pushedPlan = plan;
-      // The device reports the plan back UNLESS configured to mismatch on verify.
+      // The saved config reads the plan back UNLESS configured to mismatch on verify.
       if (!d.verifyMismatch) {
-        d.status.sacn.perOutput = Object.entries(universeByOutputIndex)
-          .map(([index, universe]) => ({ index: Number(index), universe, startAddress: 1, enabled: true }));
+        for (const [index, universe] of Object.entries(universeByOutputIndex)) {
+          d.config.strands[Number(index)].dmxUniverse = universe;
+          d.config.strands[Number(index)].dmxStartAddress = 1;
+        }
       }
       return { outcome: 'needs-reboot', reboot: true };
     },
@@ -396,7 +398,7 @@ async function withFetch(stub, fn) {
 function board(enabledFlags) {
   return {
     strands: enabledFlags.map((on, i) => strandDev(on, 40, 35 + i)),
-    dmx: { enabled: true, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
+    dmx: { enabled: false, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
     deviceName: 'LeftLeftFront',
   };
 }
@@ -425,8 +427,13 @@ const OUT_COUNTS = new Map([['sA', 40], ['sB', 40]]);
 
 async function syncOf(reg, enabledFlags, perOutput) {
   const card = reg.controllers[0];
+  const config = board(enabledFlags);
+  for (const output of perOutput) {
+    config.strands[output.index].dmxUniverse = output.universe;
+    config.strands[output.index].dmxStartAddress = output.startAddress;
+  }
   return withFetch(async (url) => {
-    if (url === 'http://10.0.0.60/api/config') return jsonResponse(board(enabledFlags));
+    if (url === 'http://10.0.0.60/api/config') return jsonResponse(config);
     if (url === 'http://10.0.0.60/api/status') return jsonResponse(boardStatus(enabledFlags, perOutput));
     throw new Error(`unexpected fetch ${url}`);
   }, () => computeSyncState(makeCtx(reg, OUT_COUNTS), card));

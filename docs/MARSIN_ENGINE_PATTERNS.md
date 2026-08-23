@@ -660,9 +660,8 @@ not empty selections:
   `LEFT` / `RIGHT` (optionally `&&` an instrument view).
 - `BAND_LOW`, `BAND_MID`, `BAND_HIGH`, every `<base>_BOTH` name, `@RAW` →
   removed outright (report `_145`); `@RAW`'s pixels are now `Strands`.
-- `WALLS`, `AUDITORIUM` → removed (report `_148`) as exact duplicates of the
-  authored `Hull Canvas` / `Auditoriums`; use those. `DECKS` and `CHIMNEYS`
-  never existed on titanic.
+- `WALLS` → removed (report `_148`) as an exact duplicate of the authored
+  `Hull Canvas`; use that. `DECKS` and `CHIMNEYS` never existed on titanic.
 
 **Exact spelling is mandatory.** `inView()` matches the authored string
 verbatim — case, spaces, underscores and all. A near-miss is a compile error,
@@ -691,6 +690,7 @@ touches one. They are the same list CaptainPad's view picker shows.
 | `RIGHT` | 482 | current runtime compatibility half: world **X > 0**; operator **LEFT** when facing FRONT |
 | `FRONT` | 388 | groups carrying a `Front` token |
 | `BACK` | 388 | groups carrying a `Back` token |
+| `AUDITORIUM` | 164 | `Left Auditorium` + `Right Auditorium` PARs, plus both complete TE signs |
 | `Strands` | 320 | fixture role `FIX_RAW_LED` — the eight rope runs |
 | `TE Signs` | 148 | fixture role `FIX_TE_SIGN` — both signs |
 | `@BAR` | 360 | fixture role `FIX_BAR_18` |
@@ -716,16 +716,18 @@ instrument view, and it is the one `COLOR_THEORY.md` §2 is written against.
 `@BAR` is the same idea one level down: fixture-**capability** targeting (every
 18-cell bar), which happens to be the same 360 pixels as `Hull Canvas` today.
 
-**There are no structural views on `titanic`.** The generator's
-`WALLS`/`DECKS`/`CHIMNEYS`/`AUDITORIUM` family derives from a group-name token,
-and on this ship `WALLS` came out byte-identical to the authored `Hull Canvas`
-and `AUDITORIUM` byte-identical to `Auditoriums` — two picker rows and two
-spellings for one pixel set. Both were **removed** by operator ruling (report
-`_148`); `inView("WALLS")` and `inView("AUDITORIUM")` are now hard compile
-errors. Use **`Hull Canvas`** and **`Auditoriums`**. (`DECKS`/`CHIMNEYS` never
-existed here — titanic carries no `Deck`/`Chimney` group token.) The rule is
-membership-driven, not titanic-specific: a scene whose structural band has no
-byte-identical authored twin still gets the derived view.
+The generator's `WALLS`/`DECKS`/`CHIMNEYS` family derives from group-name
+tokens. On this ship `WALLS` is byte-identical to the authored `Hull Canvas`,
+so `WALLS` remains **removed** by operator ruling (report `_148`) and
+`inView("WALLS")` is a hard compile error. (`DECKS`/`CHIMNEYS` never existed
+here — titanic carries no `Deck`/`Chimney` group token.) `AUDITORIUM` is the
+exact union of the 16 PAR pixels in the authored `Left Auditorium` and
+`Right Auditorium` groups plus all 148 `FIX_TE_SIGN` pixels. The other 24
+PARs belong to smokestacks and stay excluded, so this remains distinct from
+both the authored PAR-only `Auditoriums` composite and the typed `@PAR` view.
+The dedup rule remains membership-driven: a generated structural view whose
+members exactly match an authored view is retired in favour of the authored
+name.
 
 ### 7.4 Fixture-type constants (`FIX_*`) — when capability is the real distinction
 

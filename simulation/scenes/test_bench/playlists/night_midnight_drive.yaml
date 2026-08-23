@@ -1,0 +1,927 @@
+schemaVersion: 1
+name: night_midnight_drive
+entries:
+  - id: e_night_midnight_drive_01_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.26
+      sliderLevel: 0.68
+      sliderDetail: 0.9
+      sliderKick: 0.86
+      sliderJewelryWhite: 0.82
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.68
+          - 0.82
+        curve: easeOut
+      - id: mod_sliderDetail_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDetail
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.9
+          - 1
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.86
+          - 0.96
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_02_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.85
+          - 1
+        curve: easeOut
+      - id: mod_sliderShimmer_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderShimmer
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.82
+          - 0.94
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.26
+          - 0.39
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_03_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.86
+          - 1
+        curve: easeOut
+      - id: mod_sliderUvLevel_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderUvLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.45
+          - 0.59
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.31
+          - 0.43
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_04_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderLevel: 0.87
+      sliderKick: 0.12
+      sliderDetail: 0.89
+      sliderPortholeWhite: 0.87
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.87
+          - 1
+        curve: easeOut
+      - id: mod_sliderDetail_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDetail
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.89
+          - 1
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.12
+          - 0.28
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_05_118_grand_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.72
+      sliderRingWidth: 0.26
+      sliderOrbitTilt: 0.83
+      sliderContrast: 0.89
+      sliderSafetyFloor: 0.05
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.72
+          - 0.84
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.16
+        curve: easeIn
+      - id: mod_sliderRingWidth_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderRingWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.26
+          - 0.34
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_06_119_bow_stern_tidal_push
+    pattern: 119_bow_stern_tidal_push
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderLevel: 0.55
+      sliderWaveWidth: 0.42
+      sliderRecoil: 0.92
+      sliderContrast: 0.84
+      sliderSafetyFloor: 0.09
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.55
+          - 0.7
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.14
+        curve: easeIn
+      - id: mod_sliderWaveWidth_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderWaveWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.42
+          - 0.5
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_07_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.79
+      sliderSpiralWidth: 0.78
+      sliderTurns: 0.8
+      sliderWakeContrast: 0.85
+      sliderSafetyFloor: 0.14
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.79
+          - 0.88
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.12
+        curve: easeIn
+      - id: mod_sliderSpiralWidth_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderSpiralWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.78
+          - 0.84
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_08_123_mirrored_broadside_call
+    pattern: 123_mirrored_broadside_call
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.36
+      sliderLevel: 0.85
+      sliderWallWidth: 0.49
+      sliderExpansion: 0.26
+      sliderContrast: 0.85
+      sliderSafetyFloor: 0.12
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.85
+          - 0.92
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.1
+        curve: easeIn
+      - id: mod_sliderExpansion_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderExpansion
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.26
+          - 0.34
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_09_126_cathedral_rib_wave
+    pattern: 126_cathedral_rib_wave
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderLevel: 0.51
+      sliderRibCount: 0.67
+      sliderRibWidth: 0.74
+      sliderBow: 0.9
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.51
+          - 0.66
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.14
+        curve: easeIn
+      - id: mod_sliderBow_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderBow
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.9
+          - 0.96
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_10_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.39
+      sliderKick: 0.29
+      sliderRadius: 0.85
+      sliderDetail: 0.24
+      sliderFocus: 0.67
+      sliderTrailBlend: 0.11
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.39
+          - 0.56
+        curve: easeOut
+      - id: mod_sliderDetail_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDetail
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.24
+          - 0.39
+        curve: linear
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.29
+          - 0.41
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_11_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
+    modulations:
+      - id: mod_sliderBeam_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBeam
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.15
+          - 0.36
+        curve: linear
+      - id: mod_sliderWidth_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.3
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_12_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.65
+      sliderBeamWidth: 0.32
+      sliderCrossing: 0.83
+      sliderAfterglow: 0.66
+      sliderSafetyFloor: 0.16
+      sliderFlash: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.65
+          - 0.78
+        curve: linear
+      - id: mod_sliderFlash_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderFlash
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.14
+        curve: easeIn
+      - id: mod_sliderCrossing_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderCrossing
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.83
+          - 0.9
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_13_33_aurora_breath
+    pattern: 33_aurora_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.66
+      sliderLevel: 0.17
+      sliderShimmer: 0.76
+      sliderBreathRate: 0.21
+      sliderBreathDepth: 0.41
+      sliderRibbons: 0.14
+      sliderSoft: 0.58
+      sliderBase: 0.06
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.17
+          - 0.32
+        curve: easeOut
+      - id: mod_sliderShimmer_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderShimmer
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.76
+          - 0.84
+        curve: easeIn
+      - id: mod_sliderBreathDepth_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderBreathDepth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.41
+          - 0.5
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_14_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderSwell: 0.45
+      sliderSparkle: 0.75
+      sliderKick: 0.01
+      sliderUvGlow: 0.81
+      sliderBase: 0.16
+    modulations:
+      - id: mod_sliderSwell_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderSwell
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.45
+          - 0.54
+        curve: linear
+      - id: mod_sliderSparkle_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderSparkle
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.75
+          - 0.8
+        curve: easeIn
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.01
+          - 0.68
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_15_122_breathing_horizon
+    pattern: 122_breathing_horizon
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderLevel: 0.48
+      sliderHorizonWidth: 0.7
+      sliderBreathDepth: 0.81
+      sliderAfterglow: 0.63
+      sliderSafetyFloor: 0.17
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.48
+          - 0.62
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.12
+        curve: easeIn
+      - id: mod_sliderBreathDepth_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderBreathDepth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.81
+          - 0.88
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_night_midnight_drive_16_124_aurora_crown
+    pattern: 124_aurora_crown
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderLevel: 0.65
+      sliderCrownHeight: 0.81
+      sliderArcWidth: 0.92
+      sliderCurl: 0.73
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.65
+          - 0.78
+        curve: linear
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.12
+        curve: easeIn
+      - id: mod_sliderCrownHeight_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderCrownHeight
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.81
+          - 0.88
+        curve: easeOut
+    midiMappings: []
+    notes: null

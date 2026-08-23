@@ -3371,3 +3371,135 @@ export async function fetchPlaylistByName(name: string): Promise<ApiResult<any>>
     return { ok: false, error: err.message };
   }
 }
+
+// ── Bike color link (config tab status card) ───────────────────────────────
+// Wire shape mirrors marsin_engine/lib/bike_color_share.js `snapshot()`.
+// GET /bikes is a read-only registry — no partial/optimistic writes here, the
+// engine's discovery + push loops own every field. POST /bikes/config is the
+// ONE writable surface: a partial merge over the live config, same posture as
+// setDeckColorAutopilot (strict validation, 400 on rejection).
+export type BikeLinkState = 'DISCOVERED' | 'LINKED' | 'UNSUPPORTED' | 'STALE' | 'GONE';
+
+export interface BikeShareConfig {
+  enabled: boolean;
+  targets: string;
+  port: number;
+  scanIntervalMs: number;
+  probeTimeoutMs: number;
+  probeStaggerMs: number;
+  pushIntervalMs: number;
+  pushTimeoutMs: number;
+  staleAfterFailures: number;
+  goneAfterMs: number;
+  dropAfterMs: number;
+}
+
+export interface BikePushStats {
+  ok: number;
+  failed: number;
+  consecutiveFailures: number;
+  lastPushMs: number | null;
+}
+
+export interface BikeSnapshot {
+  controllerId: string;
+  address: string;
+  ip: string;
+  port: number;
+  state: BikeLinkState;
+  firmwareTag: string | null;
+  activePattern: string | null;
+  mac: string | null;
+  lastSeenMs: number | null;
+  leaseMsRemaining: number | null;
+  pushStats: BikePushStats;
+}
+
+export interface BikeShareStats {
+  sweeps: number;
+    pushCycles: number;
+    changePushCycles: number;
+    pushCycleOverruns: number;
+  pushesOk: number;
+  pushesFailed: number;
+    paletteErrors: number;
+    paletteChangeNotifications: number;
+    paletteChangeNotificationsCoalesced: number;
+  }
+
+export interface BikesSnapshot {
+  enabled: boolean;
+  config: BikeShareConfig;
+  stats: BikeShareStats;
+  bikes: BikeSnapshot[];
+}
+
+/**
+ * Discriminated fetch result the caller (bike_link_logic's derivePanelState)
+ * switches on directly:
+ *   - `status: 404` — this ENGINE BUILD predates the bike link feature
+ *     entirely (no /bikes route registered at all). The body on a bare 404
+ *     from an old build is not guaranteed to be JSON, so this branch is
+ *     decided from `res.status` alone, never from a parsed body — unlike
+ *     `fetchEngineSettings`, a 404 here is a real, distinct signal and must
+ *     never be read as "zero bikes".
+ *   - `ok:false` with no distinguishing status — 503 (feature module missing
+ *     engine-side) or any other rejection / network failure. `error` carries
+ *     the engine's `{error}` body when present, else a status/transport string.
+ */
+export type FetchBikesResult =
+  | { ok: true; data: BikesSnapshot }
+  | { ok: false; status: 404 }
+  | { ok: false; status?: number; error: string };
+
+export async function fetchBikes(): Promise<FetchBikesResult> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/bikes`);
+    if (res.status === 404) {
+      // Pre-feature engine build: body shape is not guaranteed, so never
+      // attempt res.json() on this branch.
+      return { ok: false, status: 404 };
+    }
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body && typeof body.error === 'string') message = body.error;
+      } catch {
+        // Non-JSON error body — keep the HTTP-status fallback.
+      }
+      return { ok: false, status: res.status, error: message };
+    }
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('fetch-bikes', 'Fetch bikes failed:', err);
+    return { ok: false, error: err.message || 'Fetch bikes failed' };
+  }
+}
+
+/**
+ * PATCH-style merge over the live bike_color_share config. Mirrors
+ * setEngineSettings's fail-loud posture: a non-ok response surfaces the
+ * engine's `{error}` body (or an HTTP-status fallback), never a silently
+ * accepted value the engine never confirmed.
+ */
+export async function setBikesConfig(
+  patch: Partial<Pick<BikeShareConfig, 'enabled' | 'targets'>>,
+): Promise<ApiResult<BikeShareConfig>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/bikes/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, status: res.status };
+    }
+    return { ok: true, data: data?.config };
+  } catch (err: any) {
+    warnThrottled('set-bikes-config', 'Set bikes config failed:', err);
+    return { ok: false, error: err.message };
+  }
+}

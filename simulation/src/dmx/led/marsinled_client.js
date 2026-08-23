@@ -49,12 +49,9 @@ const DEFAULT_BATCH_SIZE = 64;          // 254 IPs / 64 ≈ 4 Promise.all batche
 // still fails fast on a genuinely dead host.
 export const DEFAULT_HTTP_TIMEOUT_MS = 8000;
 
-// POST /api/config carrying a per-output plan. The firmware persists the new
-// strand table to flash and then reboots — and on the live rig it reboots
-// BEFORE flushing the HTTP reply, so the socket simply goes quiet. This budget
-// gives a slow flash commit room to answer, and costs nothing when the reply is
-// lost: it overlaps the ~11 s reboot, so the reboot poll that follows finds a
-// device that is already back.
+// POST /api/config carrying a per-output mapping. Mapping changes may reboot the
+// device, and a reboot can drop the HTTP reply. This budget gives the persist
+// room to answer and overlaps the reboot when the reply is lost.
 export const PER_OUTPUT_WRITE_TIMEOUT_MS = 12000;
 
 // Overall budget for "the device is rebooting — wait for it to answer again".
@@ -88,8 +85,6 @@ export const DEVICE_NAME_RULE_TEXT = `1-${DEVICE_NAME_MAX} chars, letters/digits
 const DMX_UNIVERSE_SIZE = 512;          // channels 1–512 in one universe
 const PER_OUTPUT_START_ADDRESS = 1;     // convention: always 1 per output
 const PER_OUTPUT_SPAN_MAX = 16;         // (maxUniverse − minUniverse + 1) ≤ 16
-const PER_OUTPUT_PROTOCOL_SACN = 0;     // per-output rejects ArtNet (sACN only)
-const DMX_HOLD_TIMEOUT_MS = 3000;       // hold-then-blackout while a source streams
 
 // Keys the sim's patch flow must NEVER write (docs/41 §4.1, plan P1). A push
 // payload carrying any of these is a bug — refuse it loudly rather than risk
@@ -609,6 +604,36 @@ export function readPerOutput(status) {
 }
 
 /**
+ * Read the SAVED per-output mapping from a GET /api/config document. Mapping
+ * pushes verify this surface, not the receiver's boot-runtime status.
+ */
+export function readConfiguredPerOutput(config) {
+  if (!config || !Array.isArray(config.strands)) {
+    throw new Error('[MarsinLED] readConfiguredPerOutput: config.strands must be an array');
+  }
+  return config.strands.map((strand, index) => ({
+    index,
+    universe: strand.dmxUniverse,
+    startAddress: strand.dmxStartAddress,
+    enabled: strand.enabled === true,
+  }));
+}
+
+/**
+ * Generic mapping writes are mode-neutral. A controller already in (or saved
+ * for) DMX mode must use the guarded show-mode workflow before its mapping can
+ * be changed.
+ */
+export function assertMappingPushAllowed(status, config) {
+  const runtimeDmx = status && status.dmxOwnsOutput === true;
+  const desiredDmx = config && config.dmx && config.dmx.enabled === true;
+  if (runtimeDmx || desiredDmx) {
+    throw new Error('[MarsinLED] mapping push refused while DMX mode is active or configured — ' +
+      'switch modes through the guarded Smokestack / mass_deploy show-mode workflow first');
+  }
+}
+
+/**
  * Normalize an output→universe assignment to a `Map<number, number>`. Accepts a
  * `Map` or a plain object keyed by the (0-based) strand slot index.
  */
@@ -798,14 +823,14 @@ export function applyPerOutputPlan(strands, plan) {
  *     ALL-OR-NONE / only-enabled-carry-a-universe / span / no-overlap rules are
  *     checked against what the device will actually hold. Validating the
  *     pre-push array could not express an enable and would refuse a legal plan.
- *  4. POST { strands, dmx:{enabled:true, protocol:0, timeoutMs:3000} } — plus
- *     `deviceName` IFF the device's stored name is invalid and therefore makes
+ *  4. POST { strands } without changing show mode — plus `deviceName` IFF the
+ *     device's stored name is invalid and therefore makes
  *     the firmware reject every write (`deviceNameRepairForPush`; the repaired
  *     value is `plan.controllerName` verbatim, and an unusable card name is a
  *     loud refusal BEFORE the POST, not a mangled name).
  *
- * The device REBOOTS on success ({outcome:"needs-reboot", reboot:true}); the
- * caller runs `awaitReboot` then `readPerOutput(getStatus)`.
+ * A changed mapping may reboot on success ({outcome:"needs-reboot", reboot:true});
+ * the caller waits when requested, then verifies the saved config.
  *
  * PHASE BUDGETS (report 20260725_69): the read and the write are timed
  * SEPARATELY — the write spans a reboot, the read does not. A flat `timeoutMs`
@@ -838,12 +863,10 @@ export async function pushPerOutputUniverses(ip, { plan, opts = {} } = {}) {
   if (!config || !Array.isArray(config.strands)) {
     throw new Error(`[MarsinLED] pushPerOutputUniverses: ${ip} GET /api/config returned no strands[]`);
   }
+  assertMappingPushAllowed(null, config);
   const strands = applyPerOutputPlan(config.strands, plan);
   validatePerOutputPlan(strands, plan.universeByOutputIndex);
-  const body = {
-    strands,
-    dmx: { enabled: true, protocol: PER_OUTPUT_PROTOCOL_SACN, timeoutMs: DMX_HOLD_TIMEOUT_MS },
-  };
+  const body = { strands };
   // A device carrying an invalid stored deviceName rejects THIS body too (the
   // firmware validates the merged config, not the patch) — repair it with the
   // card's own name, or refuse loudly. `plan.controllerName` comes from

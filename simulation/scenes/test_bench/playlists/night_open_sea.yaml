@@ -1,0 +1,168 @@
+schemaVersion: 1
+name: night_open_sea
+entries:
+  - id: e_night_open_sea_01_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderLevel: 0.87
+      sliderKick: 0.12
+      sliderDetail: 0.89
+      sliderPortholeWhite: 0.87
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_02_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_03_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_04_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderLevel: 0.71
+      sliderKick: 0.17
+      sliderRadius: 0.23
+      sliderDetail: 0.64
+      sliderDensity: 0.39
+      sliderUvGlow: 0.89
+      sliderWhiteLevel: 0.89
+      sliderWhiteSpeed: 0.48
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_05_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderSwell: 0.75
+      sliderFoam: 0.12
+      sliderSpan: 0.76
+      sliderDepth: 0.6
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_06_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_07_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.65
+      sliderBeamWidth: 0.32
+      sliderCrossing: 0.83
+      sliderAfterglow: 0.66
+      sliderSafetyFloor: 0.16
+      sliderFlash: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_08_ambient_extra_01_harbor_glass
+    pattern: ambient_extra/01_harbor_glass
+    label: Harbor Glass
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCellSize: 0.5
+      sliderBorderWidth: 0.28
+      sliderDrift: 0.35
+      sliderRefraction: 0.42
+      sliderJewelryGlint: 0.22
+      sliderSafetyFloor: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_09_ambient_extra_10_chart_lines
+    pattern: ambient_extra/10_chart_lines
+    label: Chart Lines
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLineCount: 0.48
+      sliderLineWidth: 0.36
+      sliderRelief: 0.42
+      sliderDrift: 0.38
+      sliderJewelryMark: 0.2
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_10_ambient_extra_02_brass_compass
+    pattern: ambient_extra/02_brass_compass
+    label: Brass Compass
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderDialRadius: 0.6
+      sliderNeedleWidth: 0.28
+      sliderTickGlow: 0.3
+      sliderLevel: 0.58
+      sliderSafetyFloor: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_11_ambient_extra_05_open_gate
+    pattern: ambient_extra/05_open_gate
+    label: Open Gate
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderAperture: 0.58
+      sliderEdgeWidth: 0.24
+      sliderHold: 0.46
+      sliderDepth: 0.56
+      sliderLevel: 0.66
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_open_sea_12_ambient_extra_07_keel_glow
+    pattern: ambient_extra/07_keel_glow
+    label: Keel Glow
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderKeelWidth: 0.38
+      sliderLift: 0.34
+      sliderTraceLength: 0.54
+      sliderOrganGlow: 0.38
+      sliderLevel: 0.62
+      sliderSafetyFloor: 0.32
+    modulations: []
+    midiMappings: []
+    notes: null

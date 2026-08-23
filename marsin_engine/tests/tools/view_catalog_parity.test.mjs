@@ -136,35 +136,31 @@ test('titanic carries its full derived catalog, not just the bit-backed views', 
     `are the whole point (got ${names.length})`);
   // The names the docs steer pattern authors at (docs/MARSIN_ENGINE_PATTERNS
   // §7.3.2). Every one of these was an offline COMPILE_FAIL before _147.
-  for (const name of ['LEFT', 'RIGHT', 'FRONT', 'BACK', 'Strands', 'TE Signs', '@BAR']) {
+  for (const name of ['LEFT', 'RIGHT', 'FRONT', 'BACK', 'AUDITORIUM', 'Strands', 'TE Signs', '@BAR']) {
     assert.ok(name in viewTable, `titanic's catalog must carry the derived view "${name}"`);
     assert.equal(viewTable[name].bit, 0, `"${name}" is Tier-A — bit-free until promoted`);
   }
 });
 
-test('the structural duplicates WALLS / AUDITORIUM are retired on titanic', async () => {
+test('WALLS is retired but the distinct AUDITORIUM view remains on titanic', async () => {
   const loaded = await loadModelForGauge('titanic');
   const { viewTable, autoViews } = buildViewCatalog(loaded);
 
-  // 58 = 24 base groups + 7 authored composites + 27 auto-views.
-  assert.equal(Object.keys(viewTable).length, 58,
-    "titanic's catalog is 58 names after the _148 structural dedup");
-  for (const gone of ['WALLS', 'AUDITORIUM']) {
-    assert.ok(!(gone in viewTable), `"${gone}" duplicates an authored view and must be gone`);
-    assert.ok(!loaded.viewMasks.some((vm) => vm.name === gone),
-      `"${gone}" must not be registered as a selectable mask either`);
-  }
+  // 59 = 24 base groups + 7 authored composites + 28 auto-views.
+  assert.equal(Object.keys(viewTable).length, 59,
+    "titanic's catalog is 59 names after the structural dedup");
+  assert.ok(!('WALLS' in viewTable), 'WALLS duplicates an authored view and must be gone');
+  assert.ok('AUDITORIUM' in viewTable,
+    'the distinct auditorium-PAR + TE-sign view must remain selectable');
   // The survivors are the authored names, at the same pixel counts.
   for (const name of ['Hull Canvas', 'Auditoriums']) {
     assert.ok(name in viewTable, `the authored "${name}" is canonical and must remain`);
   }
   // The drop is reported, never silent — and it names its twin.
   assert.deepEqual(autoViews.deduped.map((d) => [d.name, d.twin, d.pixels]),
-    [['WALLS', 'Hull Canvas', 360], ['AUDITORIUM', 'Auditoriums', 16]]);
-  for (const twin of ['Hull Canvas', 'Auditoriums']) {
-    assert.ok(autoViews.warnings.some((w) => w.includes(`'${twin}'`)),
-      `the dedup of "${twin}"'s duplicate must surface in warnings`);
-  }
+    [['WALLS', 'Hull Canvas', 360]]);
+  assert.ok(autoViews.warnings.some((w) => w.includes("'Hull Canvas'")),
+    'the Hull Canvas dedup must surface in warnings');
   // Fixture-capability targeting is NOT deduped, even though @BAR covers the
   // same 360 pixels as Hull Canvas — operator ruling, report _148.
   assert.ok('@BAR' in viewTable, '@BAR stays as fixture-capability targeting');

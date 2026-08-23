@@ -1,0 +1,33 @@
+version: 1
+views:
+  - id: modules
+    label: Modules
+    panels:
+      - id: main
+        select:
+          - kind: led
+        layout: spatial
+        label: Module 1-6
+        projection: top
+    placements: {}
+    typeStyles:
+      LedStrand:
+        sizeX: 5
+        sizeY: 5
+    framing:
+      zoom: 0.892857142857143
+      panX: -161.68829158400013
+      panY: -41.93690372022854
+  - id: module_lanes
+    label: Module Lanes
+    panels:
+      - id: main
+        select:
+          - kind: led
+        layout: lanes
+        label: Module 1-6 (one lane each)
+    placements: {}
+    typeStyles:
+      LedStrand:
+        sizeX: 5
+        sizeY: 5

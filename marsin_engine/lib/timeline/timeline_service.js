@@ -340,6 +340,15 @@ export class TimelineService {
     // it never re-fired) — the night's whole shape depended on whether music
     // ever happened. Runtime-only; re-derived by catchUp on a restart.
     this._displacedDeckOwnerCueId = null;
+    // G1 follow-up (report _338 addendum, items 2+4). Both are TRANSIENT,
+    // call-scoped signals into `_applyPhaseResolvedDefault` — never persisted:
+    //   • `_phaseResumeExcludeCueId` — the scheduled program the operator JUST
+    //     ended (endProgram); the phase-aware fill must not resurrect it.
+    //   • `_tickDispatchCueIds` — the cue ids the CURRENT tick's arbitrated
+    //     action list dispatches; a phase-aware restore that resolves to one
+    //     of them coalesces into that cue's own fire (no double reload).
+    this._phaseResumeExcludeCueId = null;
+    this._tickDispatchCueIds = null;
     // FIX 4 (report `_98`): authoring findings from `lintShowPlan` for the ACTIVE
     // plan. Surfaced loudly on load and on `getState().planWarnings` — never a
     // silent freeze.
@@ -1022,6 +1031,154 @@ export class TimelineService {
     return result;
   }
 
+  // Whether the active plan opted into PHASE-AWARE default-cue resolution
+  // (docs/77 §5.1 / §11 G1, show_plan.js validateDefaultCue). Absent/false →
+  // every release path below falls straight through to the legacy
+  // `_applyDefaultCue` (bit-for-bit unchanged behavior).
+  _phaseAwareDefault() {
+    return !!(this.plan && this.plan.defaultCue && this.plan.defaultCue.phaseAware === true);
+  }
+
+  /**
+   * G1 — phase-aware default-cue resolution (docs/77 §5.1 / §11).
+   *
+   * On release (event/program end, hold expiry, durationMin window elapse, no
+   * owning cue) the LEGACY behavior always falls to the plan's single static
+   * `defaultCue`, regardless of what time of night it is. With `defaultCue.
+   * phaseAware: true` authored, this resolves the cue that OWNS the CURRENT
+   * moment via the SAME selection core `_catchUp` uses on boot/resume
+   * (`resolveDeckStateAt`, resolve_deck_state.js) and re-applies THAT cue
+   * instead — the authored `defaultCue` stays the loud last resort for when
+   * no cue owns the moment (e.g. before the first cue of the night).
+   *
+   * Every call site below passes its own `reason` through unchanged, so the
+   * event log / lastError text is identical to today's whether or not the
+   * flag is set.
+   */
+  async _applyPhaseResolvedDefault(reason) {
+    if (!this._phaseAwareDefault()) return this._applyDefaultCue(reason);
+    const now = this.nowFn();
+    const sunEvents = this._sunEventsFor(now);
+    // EXCLUSION SEED (follow-up to _338, item 2): a scheduled program the
+    // operator JUST ended (endProgram sets the transient below) is still
+    // "programLive" to the pure resolver — without the exclusion this fill
+    // would re-apply the very program the operator ended one call ago
+    // (END SHOW resurrection). Runtime-scoped and one-shot by design: a later
+    // reboot's _catchUp deliberately still restores that cue (plan semantics —
+    // the plan says it owns the window; the operator's end is runtime intent).
+    const excluded = new Set();
+    if (this._phaseResumeExcludeCueId) excluded.add(this._phaseResumeExcludeCueId);
+    // WALK-BACK (follow-up to _338, item 3): the selection core picks THE
+    // LATEST passed restorable cue. When that cue no longer owns (its hold
+    // expired / its durationMin elapsed) the pure resolver's honest answer is
+    // "defaultCue" — the right answer for BOOT (a reboot into that gap has no
+    // runtime memory), but a live RELEASE must resume the show's actual
+    // background: the most recent cue that STILL owns the moment. Disable the
+    // dead restorable and re-resolve until a live owner (or nothing) remains.
+    // Bounded by the cue count; each pass removes one cue.
+    let resolved = null;
+    for (let guard = 0; guard <= this.plan.cues.length; guard += 1) {
+      const scopedPlan = excluded.size === 0 ? this.plan : {
+        ...this.plan,
+        cues: this.plan.cues.map((c) => (excluded.has(c.id) ? { ...c, enabled: false } : c)),
+      };
+      resolved = resolveDeckStateAt({ plan: scopedPlan, atMs: now, sunEvents });
+      if (resolved.owner && resolved.owner.kind === 'cue') break;
+      if (resolved.restored && !excluded.has(resolved.restored.cueId)) {
+        excluded.add(resolved.restored.cueId);   // dead restorable → walk past it
+        continue;
+      }
+      break;                                     // nothing restorable left
+    }
+    // Nothing owns "now" (e.g. release before the first cue of the night, or
+    // the walk-back exhausted every passed cue) → the authored defaultCue is
+    // the loud last resort, exactly like legacy.
+    if (!resolved || !resolved.owner || resolved.owner.kind !== 'cue') {
+      return this._applyDefaultCue(reason);
+    }
+    const cue = this.plan.cues.find((c) => c.id === resolved.owner.cueId);
+    // The resolver answered with a cueId that is not in THIS in-memory plan —
+    // that is a corrupt resolver/plan mismatch, never silent (codex P0).
+    if (!cue) {
+      throw new Error(
+        `_applyPhaseResolvedDefault: resolver owner "${resolved.owner.cueId}" not in active plan`,
+      );
+    }
+    // COALESCE (follow-up to _338, item 4 — the 21:30 boundary double
+    // dispatch): when a hold expires at the EXACT instant the next cue's own
+    // clock/sun trigger fires (aligned anchors, e.g. ignition's hold ending on
+    // the early-night cue's start), this tick's action list already carries
+    // the resolved cue's OWN fire. Applying it here too would reload the same
+    // playlist twice in one tick — an operator-visible flicker at a show
+    // boundary. Skip the apply and let the cue's own dispatch be the single
+    // writer; only the ownership latches are set (the resume handler cleared
+    // them before calling here, and the cue's own dispatch may have run
+    // BEFORE this action in the same list — either order must end latched).
+    if (this._tickDispatchCueIds && this._tickDispatchCueIds.has(cue.id)) {
+      this._defaultCueActive = false;
+      this._deckWindowCueId = cue.id;
+      this._deckWindowUntilMs = (typeof resolved.windowUntilMs === 'number') ? resolved.windowUntilMs : null;
+      console.log(`  🌗 [timeline] phase-aware default (${reason}) coalesced into "${cue.id}"'s own fire this tick`);
+      return { steps: [`phase-aware resume coalesced into "${cue.id}" own fire`] };
+    }
+    // Mirror _catchUp's FIX 2 disarm order (~2160): the baseline autopilot must
+    // be disarmed BEFORE the restored program's action is applied, or the
+    // program's own autopilot request gets cancelled right behind it.
+    if (resolved.restored && resolved.restored.programLive) {
+      await this._disarmBaselineAutopilot();
+    }
+    let result;
+    try {
+      result = await this._applyAction(cue.action, { cueId: cue.id });
+    } catch (e) {
+      // F4-style latch (mirrors _applyDefaultCue): a throwing resolved cue must
+      // not retry every tick. NEVER silently fall back to the static defaultCue
+      // when the resolved cue's OWN apply throws — that would mask the real
+      // failure behind a look the operator didn't ask for.
+      this.lastError = `phase-aware default (${reason}): ${e && e.message}`;
+      if (this._defaultCueFailKey !== this._defaultCueKey()) {
+        console.warn(`  ⚠ [timeline] phase-aware default (${reason}) failed — backing off: ${e && e.message}`);
+        this._defaultCueFailKey = this._defaultCueKey();
+      }
+      this._defaultCueActive = true;
+      throw e;
+    }
+    this._defaultCueFailKey = null;
+    // Latch ownership to mirror the resolver's answer (the same re-anchor
+    // _catchUp does at its own restore, ~2169) — NOT a fresh window opened at
+    // `now`: the resolver already re-anchored windowUntilMs to the cue's TRUE
+    // fire time, so an already-elapsed durationMin lets the next reconcile
+    // yield the deck immediately instead of granting a full new window.
+    this._defaultCueActive = false;
+    this._deckWindowCueId = cue.id;
+    this._deckWindowUntilMs = (typeof resolved.windowUntilMs === 'number') ? resolved.windowUntilMs : null;
+    this._displacedDeckOwnerCueId = null;
+    this._baselineArmed = true;
+    // Re-establish the program/controller exactly like _catchUp (~2142): the
+    // resolver already applied the "genuinely still inside a real (future)
+    // hold window" rule, so `resolved.restored.programLive` is the honest
+    // answer to "does this cue still own the deck as a program right now".
+    //
+    // NOTE: this helper never resurrects the cue we are releasing FROM — an
+    // expired program hold reports `holdExpired` and an elapsed durationMin
+    // window reports `windowLive: false`, and the WALK-BACK above then skips
+    // past that dead restorable to the most recent cue that still owns (or to
+    // the authored defaultCue); an operator-ENDED program is additionally
+    // excluded outright via `_phaseResumeExcludeCueId`. This helper can only
+    // ever land on a DIFFERENT, still-owning cue or the authored defaultCue.
+    if (resolved.restored && resolved.restored.programLive) {
+      this.state.activeProgram = {
+        cueId: cue.id, startedAtMs: resolved.restored.fireMs, untilMs: resolved.restored.holdUntilMs,
+      };
+      this.state.controller = 'program';
+    } else if (this.state.autopilotEnabled !== false) {
+      this.state.controller = 'autopilot';
+    }
+    this._recordFire(cue.id, reason, 'auto', cue.label || cue.id);
+    console.log(`  🌗 [timeline] phase-aware default resumed "${cue.id}" (${reason}): ${result.steps.join('; ')}`);
+    return result;
+  }
+
   // Reconcile the DEFAULT CUE against the deck-ownership window (docs/38 §16.11).
   // When the plan is driving the deck under AUTOPILOT (not a held program) and no
   // cue currently owns the deck window, the default cue fills the deck:
@@ -1093,13 +1250,13 @@ export class TimelineService {
       // FIX 5 (report `_98`): before the defaultCue fills, give the OPEN-ENDED
       // AMBIENT owner this timed window punched through its deck back.
       if (await this._restoreDisplacedDeckOwner(now)) return;
-      await this._applyDefaultCue('window-elapsed');
+      await this._applyPhaseResolvedDefault('window-elapsed');
       return;
     }
     // No owning cue at all → fill the deck with the default cue (plan has no cue
     // driving the deck right now). Idempotent: only apply once.
     if (!this._defaultCueActive) {
-      await this._applyDefaultCue('no-owning-cue');
+      await this._applyPhaseResolvedDefault('no-owning-cue');
     }
   }
 
@@ -1946,10 +2103,11 @@ export class TimelineService {
       this._defaultCueActive = false;
       this._displacedDeckOwnerCueId = null;
       if (this.plan && this.plan.defaultCue) {
-        // _applyDefaultCue records its own `__default_cue__` fire (reason
+        // _applyPhaseResolvedDefault (G1) records its own fire (reason
         // 'hold-expired'), arms the baseline latch and pins the deck — so the
         // synthetic "Autopilot resumed" line would be a second, misleading entry.
-        return this._applyDefaultCue('hold-expired');
+        // Legacy plans (no phaseAware) fall straight through to _applyDefaultCue.
+        return this._applyPhaseResolvedDefault('hold-expired');
       }
       const result = await this._applyAutopilotBaseline();
       // Autopilot-resume is a synthetic cue id — give it a readable label so the
@@ -2034,7 +2192,7 @@ export class TimelineService {
         && !(typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs <= now);
       if (this.plan && this.plan.defaultCue && !liveOwner
           && !(typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs > now)) {
-        await this._applyDefaultCue(reason);
+        await this._applyPhaseResolvedDefault(reason);
       }
     } catch (e) {
       this.bootError = `autopilot baseline (${reason}): ${e && e.message}`;
@@ -2232,7 +2390,7 @@ export class TimelineService {
           // baseline step above may have filled it): one apply, never a flash.
           if (this._isPlanDrivingDeck() && !this._defaultCueActive) {
             try {
-              await this._applyDefaultCue('resume-owner-gone');
+              await this._applyPhaseResolvedDefault('resume-owner-gone');
             } catch (e) {
               console.warn(`  ⚠ [timeline] resume: default cue failed: ${e && e.message}`);
             }
@@ -2264,7 +2422,7 @@ export class TimelineService {
           // Only write the deck when the default cue is not already on it.
           if (this._isPlanDrivingDeck() && !this._defaultCueActive) {
             try {
-              await this._applyDefaultCue('party-not-resumed');
+              await this._applyPhaseResolvedDefault('party-not-resumed');
             } catch (e) {
               console.warn(`  ⚠ [timeline] party resume-end: default cue failed: ${e && e.message}`);
             }
@@ -2553,17 +2711,28 @@ export class TimelineService {
         );
       }
 
-      for (const act of actions) {
-        try {
-          await this._dispatchArbitratedAction(act, reasonByCue.get(act.cueId) || 'auto');
-          this.lastError = null;
-        } catch (e) {
-          this.cueErrors[act.cueId] = `${e && e.message}`;
-          this.lastError = `cue "${act.cueId}": ${e && e.message}`;
-          console.warn(`  ⚠ [timeline] cue "${act.cueId}" failed: ${e && e.message}`);
-          // Never crash the loop on a dispatch failure (codex P0 fail loud, but
-          // keep ticking — the failure is surfaced, not fatal).
+      // COALESCE CONTEXT (report _338 addendum, item 4): expose THIS tick's
+      // dispatched cue ids to `_applyPhaseResolvedDefault` for the duration of
+      // the loop. When a hold expiry's phase-aware restore resolves to a cue
+      // whose OWN fire is in this very list (aligned anchors — the 21:30
+      // ignition→early-night seam), the restore coalesces into that fire
+      // instead of reloading the same playlist twice in one tick.
+      this._tickDispatchCueIds = dispatchedCues;
+      try {
+        for (const act of actions) {
+          try {
+            await this._dispatchArbitratedAction(act, reasonByCue.get(act.cueId) || 'auto');
+            this.lastError = null;
+          } catch (e) {
+            this.cueErrors[act.cueId] = `${e && e.message}`;
+            this.lastError = `cue "${act.cueId}": ${e && e.message}`;
+            console.warn(`  ⚠ [timeline] cue "${act.cueId}" failed: ${e && e.message}`);
+            // Never crash the loop on a dispatch failure (codex P0 fail loud, but
+            // keep ticking — the failure is surfaced, not fatal).
+          }
         }
+      } finally {
+        this._tickDispatchCueIds = null;
       }
 
       // Sync the engine baseline autopilot to the final controller (freeze on
@@ -3518,10 +3687,36 @@ export class TimelineService {
       `Program ended: ${this._cueLabelFor(this.state.activeProgram.cueId)}`,
       'program-end', { cueId: this.state.activeProgram.cueId, source: 'manual' },
     );
+    const endedCueId = this.state.activeProgram.cueId;
     this.state.activeProgram = null;
+    // G1 (docs/77 §5.1/§8.1 dust-storm release semantics): with phaseAware
+    // authored, an ended program must not leave its OWN ownership latch
+    // standing across the baseline re-establish below — that latch would read
+    // as "a live no-duration cue owns the deck" and block the phase-aware fill
+    // inside _establishBaselineIfActive from re-deriving the owner for "now".
+    // Clear it BEFORE that call so the fill sees an open deck. Legacy plans
+    // (no phaseAware) are untouched — this block is a no-op for them.
+    if (this._phaseAwareDefault() && this._deckWindowCueId === endedCueId) {
+      this._deckWindowCueId = null;
+      this._deckWindowUntilMs = null;
+      this._defaultCueActive = false;
+    }
     try {
       if (this.state.autopilotEnabled !== false && this.state.mode !== 'overridden') {
-        await this._establishBaselineIfActive('program/end');
+        // NO-RESURRECTION (report _338 addendum, item 2): a SCHEDULED clock/sun
+        // program ended early is still inside its authored hold window, so the
+        // pure resolver would answer "that program still owns now" and the
+        // phase-aware fill would re-apply the very show the operator just
+        // ended. Exclude it for exactly this one re-derivation (transient,
+        // cleared in finally). Deliberately runtime-scoped: a later reboot's
+        // _catchUp still restores the cue — the PLAN says it owns the window;
+        // the operator's END SHOW is runtime intent, not a plan edit.
+        this._phaseResumeExcludeCueId = endedCueId;
+        try {
+          await this._establishBaselineIfActive('program/end');
+        } finally {
+          this._phaseResumeExcludeCueId = null;
+        }
       } else {
         this.state.controller = 'manual';
       }

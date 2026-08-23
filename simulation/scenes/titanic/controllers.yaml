@@ -1,4 +1,4 @@
-nextControllerId: 25
+nextControllerId: 26
 nextUniverse: 842
 controllers:
   - id: 3
@@ -26,42 +26,6 @@ controllers:
         chain:
           - fixture: Left Front Wall 5
             at: 1
-  - id: 4
-    name: LeftLeftRopes
-    ip: 10.1.1.60
-    type: LED
-    protocol: sACN
-    ports:
-      - port: 1
-        universe: 30
-        startAddress: 1
-        chain:
-          - Left_Front_Left
-        output: 1
-      - port: 2
-        universe: 31
-        startAddress: 1
-        chain:
-          - Left_Back_Left
-        output: 2
-    led:
-      baseUniverse: 0
-      startAddr: 1
-      order: RGBW
-      stride: 4
-      whiteMode: native
-    device:
-      vendor: marsinled
-      controllerId: testbench
-      boardId: angio4-old
-      lastPush:
-        at: '2026-08-03T21:28:07.602Z'
-        outcome: applied
-        firmwareSHA: f94b27b39f9f
-        configHash: 230e6a8e7d7d047d17e9a796d29929d3c9765a306a4513a043b2b7d1a719f095
-    parkedOutputs:
-      - output: 3
-        universe: 42
   - id: 5
     name: LeftFrontDeck
     ip: 10.1.1.11
@@ -172,8 +136,70 @@ controllers:
           - fixture: Left SmokeStack 8
             at: 31
   - id: 13
-    name: LeftRightRopes
+    name: LeftLeftRopes
     ip: 10.1.1.61
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 30
+        startAddress: 1
+        chain:
+          - Left_Front_Left
+        output: 1
+      - port: 2
+        universe: 31
+        startAddress: 1
+        chain:
+          - Left_Back_Left
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb: &ref_0
+          - 0.9
+          - 0.6
+          - 0
+        controllerGamma:
+          r: 2.599999905
+          g: 2.599999905
+          b: 2.599999905
+          w: 1
+        controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      controllerId: ss_left_left
+      boardId: angio4-new
+      lastPush:
+        at: '2026-08-23T03:04:10.205Z'
+        outcome: applied
+        firmwareSHA: e046e8842986
+        configHash: 20fca5427b2aabcc39397b39cc1c6045f8caef51f84d6bddbfa7951cc21bdd17
+  - id: 14
+    name: LeftSmallSmokeStack
+    ip: 10.1.1.15
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 14
+        chain:
+          - fixture: Left Small SmokeStack 1
+            at: 1
+          - fixture: Left Small SmokeStack 2
+            at: 11
+          - fixture: Left Small SmokeStack 3
+            at: 21
+          - fixture: Left Small SmokeStack 4
+            at: 31
+  - id: 15
+    name: LeftRightRopes
+    ip: 10.1.1.62
     type: LED
     protocol: sACN
     ports:
@@ -195,54 +221,24 @@ controllers:
       order: RGBW
       stride: 4
       whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb: *ref_0
+        controllerGamma:
+          r: 2.599999905
+          g: 2.599999905
+          b: 2.599999905
+          w: 1
+        controllerWhite: fold_extract
     device:
       vendor: marsinled
-      controllerId: leftside_stack_a
+      controllerId: ss_left_right
       boardId: angio4-new
-  - id: 14
-    name: LeftSmallSmokeStack
-    ip: 10.1.1.15
-    type: DMX
-    protocol: sACN
-    ports:
-      - port: 1
-        universe: 14
-        chain:
-          - fixture: Left Small SmokeStack 1
-            at: 1
-          - fixture: Left Small SmokeStack 2
-            at: 11
-          - fixture: Left Small SmokeStack 3
-            at: 21
-          - fixture: Left Small SmokeStack 4
-            at: 31
-  - id: 15
-    name: RightLeftRopes
-    ip: 10.1.1.62
-    type: LED
-    protocol: sACN
-    ports:
-      - port: 1
-        universe: 34
-        startAddress: 1
-        chain:
-          - Right_Front_Left
-        output: 1
-      - port: 2
-        universe: 35
-        startAddress: 1
-        chain:
-          - Right_Back_Left
-        output: 2
-    led:
-      baseUniverse: 0
-      startAddr: 1
-      order: RGBW
-      stride: 4
-      whiteMode: native
-    device:
-      vendor: marsinled
-      provisional: true
+      lastPush:
+        at: '2026-08-23T03:04:12.147Z'
+        outcome: applied
+        firmwareSHA: e046e8842986
+        configHash: 00f12caf5d78f6049de74aafdcf1f9c68563c15898a74d0ca1d326d998374afb
   - id: 16
     name: RightFrontWall
     ip: 10.1.1.16
@@ -395,8 +391,62 @@ controllers:
           - fixture: Right Small SmokeStack 4
             at: 31
   - id: 22
-    name: RightRightRopes
+    name: RightTESign
     ip: 10.1.1.63
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 40
+        chain:
+          - fixture: TE Sign 2 V3 A
+            at: 1
+        output: 1
+      - port: 2
+        universe: 41
+        chain:
+          - fixture: TE Sign 2 V3 B
+            at: 1
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      provisional: true
+  - id: 23
+    name: LeftTeSign
+    ip: 10.1.1.64
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 38
+        chain:
+          - fixture: TE Sign V3 A
+            at: 1
+        output: 1
+      - port: 2
+        universe: 39
+        chain:
+          - fixture: TE Sign V3 B
+            at: 1
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      provisional: true
+  - id: 24
+    name: RightRightRopes
+    ip: 10.1.1.65
     type: LED
     protocol: sACN
     ports:
@@ -432,59 +482,52 @@ controllers:
         controllerWhite: fold_extract
     device:
       vendor: marsinled
-      provisional: true
-  - id: 23
-    name: LeftTeSign
-    ip: 10.1.1.64
-    type: LED
-    protocol: sACN
-    ports:
-      - port: 1
-        universe: 38
-        chain:
-          - fixture: TE Sign V3 A
-            at: 1
-        output: 1
-      - port: 2
-        universe: 39
-        chain:
-          - fixture: TE Sign V3 B
-            at: 1
-        output: 2
-    led:
-      baseUniverse: 0
-      startAddr: 1
-      order: RGBW
-      stride: 4
-      whiteMode: native
-    device:
-      vendor: marsinled
-      provisional: true
-  - id: 24
-    name: RightTESign
-    ip: 10.1.1.65
-    type: LED
-    protocol: sACN
-    ports:
-      - port: 1
-        universe: 40
-        chain:
-          - fixture: TE Sign 2 V3 A
-            at: 1
-        output: 1
-      - port: 2
-        universe: 41
-        chain:
-          - fixture: TE Sign 2 V3 B
-            at: 1
-        output: 2
-    led:
-      baseUniverse: 0
-      startAddr: 1
-      order: RGBW
-      stride: 4
-      whiteMode: native
-    device:
-      vendor: marsinled
-      controllerId: rightside_stack_a
+      controllerId: ss_right_right
       boardId: angio4-new
+      lastPush:
+        at: '2026-08-23T03:04:30.507Z'
+        outcome: applied
+        firmwareSHA: e046e8842986
+        configHash: e9098153cebd2b50fc9d3075342dfa376fab1cffa272b3962e712e87f22a4bfe
+  - id: 25
+    name: RightLeftRopes
+    ip: 10.1.1.66
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 34
+        startAddress: 1
+        chain:
+          - Right_Front_Left
+        output: 1
+      - port: 2
+        universe: 35
+        startAddress: 1
+        chain:
+          - Right_Back_Left
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb: *ref_0
+        controllerGamma:
+          r: 1
+          g: 1
+          b: 1
+          w: 1
+        controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      controllerId: ss_right_left
+      boardId: angio4-new
+      lastPush:
+        at: '2026-08-23T03:04:31.755Z'
+        outcome: applied
+        firmwareSHA: e046e8842986
+        configHash: eb6433b23c89467f255f7d24ea0eb11638b921f4cf7b1d13a712b10109bcb592

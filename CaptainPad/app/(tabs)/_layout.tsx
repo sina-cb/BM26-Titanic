@@ -293,6 +293,10 @@ export default function TabLayout() {
             options={captainPadTabOptions('midi') as any}
           />
           <Tabs.Screen
+            name="bike_link"
+            options={captainPadTabOptions('bike_link') as any}
+          />
+          <Tabs.Screen
             name="config"
             options={captainPadTabOptions('config') as any}
           />

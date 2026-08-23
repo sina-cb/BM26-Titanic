@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import {
   deviceSupportsPerOutput,
   readPerOutput,
+  readConfiguredPerOutput,
+  assertMappingPushAllowed,
   validatePerOutputPlan,
   applyPerOutputPlan,
   pushPerOutputUniverses,
@@ -159,6 +161,25 @@ test('readPerOutput — [] in legacy, parses the reported entries otherwise', ()
   assert.throws(() => readPerOutput({ sacn: { perOutput: 'nope' } }), /must be an array/);
 });
 
+test('readConfiguredPerOutput — reads the saved strand mapping while DMX is off', () => {
+  const cfg = config202();
+  cfg.strands[0].dmxUniverse = 3;
+  cfg.strands[0].dmxStartAddress = 1;
+  assert.deepEqual(readConfiguredPerOutput(cfg)[0],
+    { index: 0, universe: 3, startAddress: 1, enabled: true });
+});
+
+test('mapping push refuses active or desired DMX mode', () => {
+  assert.throws(() => assertMappingPushAllowed({ dmxOwnsOutput: true }, config202()),
+    /mapping push refused.*show-mode workflow/);
+  const desired = config202();
+  desired.dmx.enabled = true;
+  assert.throws(() => assertMappingPushAllowed({ dmxOwnsOutput: false }, desired),
+    /mapping push refused.*show-mode workflow/);
+  assert.doesNotThrow(() =>
+    assertMappingPushAllowed({ dmxOwnsOutput: false }, config202()));
+});
+
 // ── derivePerOutputPlan (from port.universe, S4) ─────────────────────────────
 
 test('derivePerOutputPlan — enabled outputs take their port.universe, start=1', () => {
@@ -295,7 +316,7 @@ test('applyPerOutputPlan — sets fields on enabled, leaves disabled UNTOUCHED',
 
 // ── pushPerOutputUniverses (full RMW against a mocked device) ────────────────
 
-test('pushPerOutputUniverses — GET config, RMW, POST text/plain (202 out1→U3,out2→U4)', async () => {
+test('pushPerOutputUniverses — mapping POST is mode-neutral (202 out1→U3,out2→U4)', async () => {
   let posted = null;
   await withFetch(async (url, opts) => {
     if (url === 'http://10.1.1.202/api/config' && (!opts || opts.method !== 'POST')) {
@@ -329,8 +350,8 @@ test('pushPerOutputUniverses — GET config, RMW, POST text/plain (202 out1→U3
       { type: 'WS281X_RGBW', count: 40, pinData: 38, pinClock: 0, colorOrder: 'RGBW',
         rgbwMode: 'exact', enabled: false, deadPixels: 0, deadPixelIndices: [] },
     ],
-    dmx: { enabled: true, protocol: 0, timeoutMs: 3000 },
   });
+  assert.equal('dmx' in posted, false, 'a mapping push must never change show mode');
 });
 
 // ── deviceName repair (report 20260725_124) ─────────────────────────────────
@@ -418,7 +439,7 @@ test('_124: pushPerOutputUniverses — an empty stored deviceName is REPAIRED in
     });
     assert.equal(posted.deviceName, 'LeftLeftRopes');
     // The rest of the body is untouched by the repair.
-    assert.deepEqual(posted.dmx, { enabled: true, protocol: 0, timeoutMs: 3000 });
+    assert.equal('dmx' in posted, false);
     assert.equal(posted.strands.length, 4);
     assert.equal(posted.strands[0].dmxUniverse, 3);
   });
@@ -510,6 +531,15 @@ function config60() {
   const cfg = config202();
   cfg.strands[2].enabled = true;
   cfg.deviceName = 'LeftLeftFront';
+  return cfg;
+}
+
+function config60WithMapping(mapping = {}) {
+  const cfg = config60();
+  for (const [index, universe] of Object.entries(mapping)) {
+    cfg.strands[Number(index)].dmxUniverse = universe;
+    cfg.strands[Number(index)].dmxStartAddress = 1;
+  }
   return cfg;
 }
 
@@ -687,7 +717,10 @@ function makeGateIo(calls) {
           ({ index: Number(index), universe, startAddress: 1, enabled: true }))
         : []);
     },
-    getConfig: async (ip) => { calls.push(`getConfig:${ip}`); return config60(); },
+    getConfig: async (ip) => {
+      calls.push(`getConfig:${ip}`);
+      return config60WithMapping(calls.lastPlan || {});
+    },
     pushPerOutputUniverses: async (ip, { plan }) => {
       calls.push(`push:${ip}`);
       calls.lastPlan = plan.universeByOutputIndex;
@@ -720,6 +753,31 @@ test('S2: a registry-free card still pushes (the gate only blocks real collision
   assert.deepEqual(calls.lastPlan, { 0: 21, 1: 22, 2: 24 });
 });
 
+test('mapping fleet refuses active or desired DMX before repairing the card or writing', async () => {
+  for (const mode of ['active', 'desired']) {
+    const registry = liveReproRegistry();
+    const card = registry.controllers[1];
+    card.ports[0].universe = 0;
+    const calls = [];
+    const config = config60();
+    config.dmx.enabled = mode === 'desired';
+    const io = {
+      getStatus: async () => {
+        calls.push('getStatus');
+        return { ...status60(), dmxOwnsOutput: mode === 'active' };
+      },
+      getConfig: async () => { calls.push('getConfig'); return config; },
+      pushPerOutputUniverses: async () => { calls.push('push'); },
+    };
+
+    const results = await pushAllLedControllers(makeGateCtx(registry), io);
+    assert.equal(results[0].state, 'failed');
+    assert.match(results[0].detail, /mapping push refused.*show-mode workflow/);
+    assert.equal(calls.includes('push'), false);
+    assert.equal(card.ports[0].universe, 0, 'mode refusal must happen before plan repair');
+  }
+});
+
 // ── S2: the sync chip derives with the SAME claims as the push ───────────────
 
 test('S2: the sync chip does NOT false-drift — same claims ⇒ same plan as the push', async () => {
@@ -732,7 +790,9 @@ test('S2: the sync chip does NOT false-drift — same claims ⇒ same plan as th
     { index: 2, universe: 24, startAddress: 1, enabled: true },
   ];
   await withFetch(async (url) => {
-    if (url === 'http://10.0.0.60/api/config') return jsonResponse(config60());
+    if (url === 'http://10.0.0.60/api/config') {
+      return jsonResponse(config60WithMapping({ 0: 21, 1: 22, 2: 24 }));
+    }
     if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
     throw new Error(`unexpected fetch ${url}`);
   }, async () => {
@@ -759,7 +819,9 @@ test('_102: the sync chip stays IN-SYNC on a shared universe but CARRIES the war
     { index: 2, universe: 22, startAddress: 1, enabled: true },
   ];
   await withFetch(async (url) => {
-    if (url === 'http://10.0.0.60/api/config') return jsonResponse(config60());
+    if (url === 'http://10.0.0.60/api/config') {
+      return jsonResponse(config60WithMapping({ 0: 21, 1: 23, 2: 22 }));
+    }
     if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
     throw new Error(`unexpected fetch ${url}`);
   }, async () => {
@@ -834,7 +896,10 @@ function makeS1Io(calls, {
       return status60(Object.entries(calls.lastPlan || {}).map(([index, universe]) =>
         ({ index: Number(index), universe, startAddress: 1, enabled: true })));
     },
-    getConfig: async () => { calls.push('getConfig'); return config60(); },
+    getConfig: async () => {
+      calls.push('getConfig');
+      return config60WithMapping(calls.lastPlan || {});
+    },
     persistScene: async () => { calls.push('persistScene'); return answer(save); },
     notifyBridge: async () => { calls.push('notifyBridge'); return answer(notify); },
     confirmBridgeRoutes: async (expectations) => {
@@ -1188,7 +1253,10 @@ function makeLostReplyIo(calls, {
       return status60(Object.entries(plan).map(([index, universe]) =>
         ({ index: Number(index), universe, startAddress: 1, enabled: true })));
     },
-    getConfig: async () => { calls.push('getConfig'); return config60(); },
+    getConfig: async () => {
+      calls.push('getConfig');
+      return config60WithMapping(readBackPlan || calls.lastPlan || {});
+    },
     persistScene: async () => { calls.push('persistScene'); return save; },
     notifyBridge: async () => { calls.push('notifyBridge'); return notify; },
     confirmBridgeRoutes: async () => { calls.push('confirmRoutes'); return confirm; },
@@ -1233,6 +1301,8 @@ test('_69: a LOST write reply is settled by the read-back, never declared a fail
   assert.equal(ui.cancelBtn.textContent, 'Done');
   assert.equal(toasts[0].error, false);
   assert.match(toasts[0].msg, /the write reply was lost — the read-back confirmed it/);
+  assert.equal(calls.filter((call) => call === 'push').length, 1,
+    'an ambiguous write is read back, never retried');
 });
 
 test('_69: the dialog names the phase and its budget while the device reboots', async () => {
@@ -1248,7 +1318,7 @@ test('_69: the dialog names the phase and its budget while the device reboots', 
   assert.ok(history.some(
     (t) => /device rebooting — waiting up to 45s for it to answer \(3s elapsed\)/.test(t)));
   // Phase 3 runs only after the device answered.
-  assert.ok(history.some((t) => /reading confirmed mapping/.test(t)));
+  assert.ok(history.some((t) => /reading confirmed saved mapping/.test(t)));
 });
 
 test('_69: a device unreachable through the WHOLE budget is red, and never saves', async () => {
@@ -1686,7 +1756,10 @@ function makeVerifyIo(calls, { readBack = null, lostReply = false } = {}) {
       return status60(Object.entries(map).map(([index, universe]) =>
         ({ index: Number(index), universe, startAddress: 1, enabled: true })));
     },
-    getConfig: async () => { calls.push('getConfig'); return config60(); },
+    getConfig: async () => {
+      calls.push('getConfig');
+      return config60WithMapping(readBack || calls.lastPlan || {});
+    },
     persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
     notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
     confirmBridgeRoutes: async (expectations) => {
@@ -1766,12 +1839,11 @@ test('_71 (19): a read-back MISSING the enable transition fails, and never saves
     enableOutputIndices: [1],
   });
   const io = makeVerifyIo(calls, { lostReply: true });
-  io.getStatus = async () => {
-    calls.push('getStatus');
-    return status60([
-      { index: 0, universe: 21, startAddress: 1, enabled: true },
-      { index: 1, universe: 22, startAddress: 1, enabled: false },   // never enabled
-    ]);
+  io.getConfig = async () => {
+    calls.push('getConfig');
+    const config = config60WithMapping({ 0: 21, 1: 22 });
+    config.strands[1].enabled = false;   // never enabled
+    return config;
   };
   await runPerOutputPush(ctx, card, planWithEnable, io, ui);
   assert.match(ui.statusLine.textContent,

@@ -1,0 +1,66 @@
+# assert_violations_solar.yaml — deliberately violating fixture for class 6
+# (solar-drift sweep). c_clock_1930 fires at a FIXED 19:30; c_sunset_0 fires
+# at sunset+0. At BRC coordinates, sunset drifts from ~19:49 (2026-08-20) to
+# ~18:44 (2026-09-29) — empirically verified (see the assertions test file):
+# on day 0 the clock cue fires BEFORE sunset (sunset ~19:49 > 19:30), but by
+# early September sunset has drifted under 19:30, so the sun cue now fires
+# FIRST — a genuine day-over-day seam inversion, exactly what class 6 exists
+# to catch. See assert_violations_solar_spec.yaml for the sweep window.
+schemaVersion: 2
+name: assert_violations_solar
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases: {}
+looks:
+  ambient_look:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    target:
+      channel: deck
+      id: null
+defaultCue:
+  label: Ambient default
+  action:
+    type: look
+    look: ambient_look
+cues:
+  - id: c_clock_1930
+    label: Fixed 19:30 cue
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '19:30'
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all
+  - id: c_sunset_0
+    label: Sunset-anchored cue
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 0
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all

@@ -18,7 +18,7 @@
 // `tools/pattern_derived_harness.mjs`, `tools/param_truth/render_context.js`)
 // hand-mirrored step 2 and skipped step 1 entirely — `loadModelForGauge()`
 // does not derive auto-views — so an offline table held 31 names on titanic
-// where the engine held its whole catalog (60 then, 58 after the `_148`
+// where the engine held its whole catalog (60 then, 59 after the `_148`
 // structural dedup below), and `inView("LEFT")` was a COMPILE_FAIL offline
 // and a perfectly good view on the rig (report 20260804_146 §4). Reports
 // `_140`/`_142` killed exactly that class of bug for the injection PASSES; a
@@ -36,12 +36,13 @@
 // ── STRUCTURAL DEDUPLICATION (operator ruling, report 20260804_148) ──────
 //
 // Report `_145` §5.2 measured the catalog's exact-membership alias map and
-// left the call to the operator. The ruling: the derived STRUCTURAL views
-// `WALLS` and `AUDITORIUM` are byte-identical to the authored composites
-// `Hull Canvas` and `Auditoriums`, so they are two picker rows for one pixel
-// set and one more spelling for a pattern author to get wrong. They go; the
-// authored names are canonical. `@BAR` stays (fixture-capability targeting),
-// and so do `Strands` / `TE Signs` — the operator's typed handles.
+// left the call to the operator. The ruling retired derived STRUCTURAL views
+// that duplicate authored composites. `WALLS` remains byte-identical to
+// `Hull Canvas`, so the authored name wins. `AUDITORIUM` combines the
+// authored auditorium PAR subset and every TE sign, so it remains distinct
+// from the authored PAR-only `Auditoriums` composite. `@BAR`
+// stays (fixture-capability targeting), as do `Strands` / `TE Signs` — the
+// operator's typed handles.
 //
 // The rule is therefore scoped to the STRUCTURAL family, and it is
 // membership-driven rather than name-driven, so it applies to every scene
@@ -65,9 +66,9 @@
 //              happens to name a group the same way must not cost the
 //              operator their primary handle.
 //
-// Structural band names (`WALLS`/`DECKS`/`CHIMNEYS`/`AUDITORIUM`) are the one
-// family that is a pure generated token with no operator provenance, which is
-// exactly why an authored name that means the same pixels wins over it.
+// Structural view names (`WALLS`/`DECKS`/`CHIMNEYS`/`AUDITORIUM`) are the one
+// family that is purely generated, which is exactly why an authored name that
+// means the same pixels wins over it.
 //
 // Every drop is REPORTED, never silent: it is appended to `result.warnings`,
 // which all four callers already print to stderr — so stdout stays byte-stable

@@ -1,0 +1,380 @@
+schemaVersion: 1
+name: flow_sound
+entries:
+  - id: e_flow_sound_0_134_surge
+    pattern: 134_surge
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.72
+      sliderSurge: 0
+      sliderWidth: 0.3
+      sliderStagger: 0.4
+      sliderWhiteFoam: 0.55
+    modulations:
+      - id: mod_sliderSurge_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSurge
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_sliderWidth_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.8
+        curve: linear
+      - id: mod_sliderLocalSpeed_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderLocalSpeed
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.7
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_1_143_logistic_drip
+    pattern: 143_logistic_drip
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderChaos: 0.3
+      sliderTail: 0.5
+      sliderSplash: 0.2
+      sliderWhiteFoam: 0.4
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.45
+    modulations:
+      - id: mod_sliderChaos_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderChaos
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.9
+        curve: linear
+      - id: mod_sliderSplash_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSplash
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 1
+        curve: easeIn
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_2_131_river_run
+    pattern: 131_river_run
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.42
+      sliderDirection: 0.72
+      sliderLevel: 0.45
+      sliderCohesion: 0.55
+      sliderTurbulence: 0.3
+      sliderWhiteFoam: 0.35
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.45
+          - 0.85
+        curve: easeOut
+      - id: mod_sliderTurbulence_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderTurbulence
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.8
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_3_145_vortex_street
+    pattern: 145_vortex_street
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderDirection: 0.72
+      sliderShedRate: 0.3
+      sliderDecay: 0.45
+      sliderWhiteFoam: 0.3
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.45
+    modulations:
+      - id: mod_sliderShedRate_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderShedRate
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.8
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_4_136_curl_drift
+    pattern: 136_curl_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderDirection: 0.72
+      sliderScale: 0.42
+      sliderDensity: 0.4
+      sliderCohesion: 0.35
+      sliderWhiteFoam: 0.3
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.45
+    modulations:
+      - id: mod_sliderDensity_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderDensity
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.4
+          - 0.85
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_5_133_counter_current
+    pattern: 133_counter_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderDirection: 0.72
+      sliderDensity: 0.3
+      sliderTail: 0.55
+      sliderCohesion: 0.3
+      sliderWhiteFoam: 0.3
+    modulations:
+      - id: mod_sliderDensity_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderDensity
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.9
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_6_138_gerstner_swell
+    pattern: 138_gerstner_swell
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderDirection: 0.74
+      sliderSteepness: 0.3
+      sliderWavelength: 0.45
+      sliderCohesion: 0.3
+      sliderWhiteFoam: 0.38
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.45
+    modulations:
+      - id: mod_sliderSteepness_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderSteepness
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.8
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_7_134_surge
+    pattern: 134_surge
+    label: surge_unison
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.72
+      sliderSurge: 0
+      sliderWidth: 0.3
+      sliderStagger: 0
+      sliderWhiteFoam: 0.55
+    modulations:
+      - id: mod_sliderSurge_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSurge
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
+      - id: mod_sliderWidth_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderWidth
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.8
+        curve: linear
+      - id: mod_sliderLocalSpeed_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderLocalSpeed
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 0.7
+        curve: linear
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_8_141_lissajous_interference
+    pattern: 141_lissajous_interference
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderDirection: 0.7
+      sliderDetune: 0.45
+      sliderStanding: 0.2
+      sliderCohesion: 0.4
+      sliderWhiteFoam: 0.32
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.45
+    modulations:
+      - id: mod_sliderStanding_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderStanding
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.7
+        curve: easeOut
+    midiMappings: []
+    notes: null
+  - id: e_flow_sound_9_132_tide_pools
+    pattern: 132_tide_pools
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderFill: 0.62
+      sliderSpillGain: 0.3
+      sliderStagger: 0.7
+      sliderWhiteFoam: 0.28
+    modulations:
+      - id: mod_sliderSpillGain_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSpillGain
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.3
+          - 1
+        curve: easeIn
+    midiMappings: []
+    notes: null

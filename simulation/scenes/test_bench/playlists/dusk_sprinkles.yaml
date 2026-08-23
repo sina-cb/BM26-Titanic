@@ -1,0 +1,248 @@
+schemaVersion: 1
+name: dusk_sprinkles
+entries:
+  - id: e_dusk_sprinkles_01_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.58
+      sliderEvenness: 0.42
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.18
+      sliderWarmth: 0.14
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_02_white_only_02_moon_breath
+    pattern: white_only/02_moon_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBreathDepth: 0.55
+      sliderRibbing: 0.45
+      sliderFieldDetail: 0.65
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_03_white_only_03_silver_current
+    pattern: white_only/03_silver_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCurrentWidth: 0.5
+      sliderShimmer: 0.75
+      sliderDetail: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_04_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_05_white_only_16_frosted_panes
+    pattern: white_only/16_frosted_panes
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderPaneSize: 0.5
+      sliderSeamWidth: 0.34
+      sliderDrift: 0.4
+      sliderSeamGlow: 0.62
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_06_white_only_10_marble_caustics
+    pattern: white_only/10_marble_caustics
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.5
+      sliderRipple: 0.35
+      sliderDepth: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_07_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_08_white_only_12_porthole_liner
+    pattern: white_only/12_porthole_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDetail: 0.5
+      sliderFlare: 0.35
+      sliderLevel: 0.65
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_09_white_only_17_moon_pearls
+    pattern: white_only/17_moon_pearls
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderPearlCount: 0.48
+      sliderPearlSize: 0.36
+      sliderLinkGlow: 0.45
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_10_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_11_white_only_07_ivory_wake
+    pattern: white_only/07_ivory_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSpiralWidth: 0.5
+      sliderWakeContrast: 0.32
+      sliderLevel: 0.75
+      sliderPulse: 0.3
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_12_white_only_01_ivory_cathedral
+    pattern: white_only/01_ivory_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderRadius: 0.5
+      sliderSharpness: 0.5
+      sliderCount: 0.5
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_13_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderSwell: 0.75
+      sliderFoam: 0.12
+      sliderSpan: 0.76
+      sliderDepth: 0.6
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_14_white_only_09_rib_vault
+    pattern: white_only/09_rib_vault
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderRibCount: 0.5
+      sliderRibWidth: 0.52
+      sliderBow: 0.48
+      sliderLevel: 0.68
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_15_white_only_15_ivory_louvers
+    pattern: white_only/15_ivory_louvers
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderSlatCount: 0.48
+      sliderOpen: 0.5
+      sliderEdgeGlow: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_16_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderLevel: 0.71
+      sliderKick: 0.17
+      sliderRadius: 0.23
+      sliderDetail: 0.64
+      sliderDensity: 0.39
+      sliderUvGlow: 0.89
+      sliderWhiteLevel: 0.89
+      sliderWhiteSpeed: 0.48
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_17_white_only_08_horizon_breath
+    pattern: white_only/08_horizon_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderHorizonWidth: 0.42
+      sliderBreathDepth: 0.55
+      sliderAfterglow: 0.55
+      sliderLevel: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_18_white_only_06_lighthouse_watch
+    pattern: white_only/06_lighthouse_watch
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderWidth: 0.5
+      sliderSafetyFloor: 0.5
+      sliderLevel: 0.72
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dusk_sprinkles_19_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.17
+      sliderDirection: 0.16
+      sliderLevel: 0.73
+      sliderKick: 0.08
+      sliderRadius: 0.92
+      sliderSharpness: 0.83
+      sliderCount: 0.59
+    modulations: []
+    midiMappings: []
+    notes: null

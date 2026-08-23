@@ -451,6 +451,7 @@ module.exports = {
   validateTimeoutMs,
   clearProbeCache,
   getCachedProbe,
+  httpGetJson,
   isValidIp,
   probeController,
   probeControllers,

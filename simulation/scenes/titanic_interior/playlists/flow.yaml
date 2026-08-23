@@ -1,0 +1,182 @@
+schemaVersion: 1
+name: flow
+entries:
+  - id: e_flow_0_131_river_run
+    pattern: 131_river_run
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.42
+      sliderDirection: 0.72
+      sliderLevel: 0.62
+      sliderCohesion: 0.8
+      sliderTurbulence: 0.4
+      sliderWhiteFoam: 0.35
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_1_136_curl_drift
+    pattern: 136_curl_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderDirection: 0.72
+      sliderScale: 0.42
+      sliderDensity: 0.4
+      sliderCohesion: 0.35
+      sliderWhiteFoam: 0.3
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_2_132_tide_pools
+    pattern: 132_tide_pools
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderFill: 0.88
+      sliderSpillGain: 0.95
+      sliderStagger: 0.52
+      sliderWhiteFoam: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_3_138_gerstner_swell
+    pattern: 138_gerstner_swell
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderDirection: 0.74
+      sliderSteepness: 0.3
+      sliderWavelength: 0.45
+      sliderCohesion: 0.3
+      sliderWhiteFoam: 0.38
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_4_140_voronoi_cells
+    pattern: 140_voronoi_cells
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderDirection: 0.7
+      sliderCells: 0.55
+      sliderEdge: 0.3
+      sliderWhiteFoam: 0.3
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_5_133_counter_current
+    pattern: 133_counter_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderDirection: 0.33
+      sliderDensity: 0.8
+      sliderTail: 0.71
+      sliderCohesion: 1
+      sliderWhiteFoam: 0.3
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_6_142_warped_current
+    pattern: 142_warped_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderDirection: 0.72
+      sliderWarp: 0.3
+      sliderScale: 0.45
+      sliderWhiteFoam: 0.3
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_7_137_reaction_ripple
+    pattern: 137_reaction_ripple
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderFeed: 0.48
+      sliderStir: 0.35
+      sliderContrast: 0.45
+      sliderWhiteFoam: 0.24
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_8_131_river_run
+    pattern: 131_river_run
+    label: river_wild
+    defaults:
+      sliderLocalSpeed: 0.42
+      sliderDirection: 0.72
+      sliderLevel: 0.62
+      sliderCohesion: 0.2
+      sliderTurbulence: 0.7
+      sliderWhiteFoam: 0.35
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_9_144_soliton_train
+    pattern: 144_soliton_train
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.42
+      sliderDirection: 0.74
+      sliderAmplitude: 0.35
+      sliderSpacing: 0.45
+      sliderCohesion: 0
+      sliderWhiteFoam: 0.34
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_10_139_kuramoto_glow
+    pattern: 139_kuramoto_glow
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.42
+      sliderCoupling: 0.45
+      sliderSpread: 0.4
+      sliderCohesion: 0.35
+      sliderWhiteFoam: 0.26
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_11_141_lissajous_interference
+    pattern: 141_lissajous_interference
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderDirection: 0.7
+      sliderDetune: 0.45
+      sliderStanding: 0.2
+      sliderCohesion: 0.6
+      sliderWhiteFoam: 0.32
+      sliderModuleHueShift: 0.5
+      sliderHueShiftFreq: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_flow_12_135_bilge_glow
+    pattern: 135_bilge_glow
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.28
+      sliderLevel: 0.35
+      sliderShimmer: 0.55
+      sliderGlintRate: 0.3
+      sliderWhiteFoam: 0.22
+    modulations: []
+    midiMappings: []
+    notes: null

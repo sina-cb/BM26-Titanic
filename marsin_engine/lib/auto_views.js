@@ -19,16 +19,19 @@
 //                          A Left_*/Right_* group token must AGREE with the
 //                          x-sign; a disagreement THROWS.
 //     FRONT / BACK       — Front/Back token in the group name.
-//   Structural bands (group-name token):
-//     WALLS / DECKS / CHIMNEYS / AUDITORIUM
+//   Structural bands:
+//     WALLS / DECKS / CHIMNEYS — group-name token.
+//     AUDITORIUM               — PAR pixels in groups carrying the semantic
+//                                `Auditorium` token, plus every FIX_TE_SIGN
+//                                pixel. An Auditorium-named non-PAR throws.
 //     NOTE: a structural band whose pixel set is byte-identical to an
 //     already-authored view is RETIRED at registration in favour of the
 //     authored name — operator ruling, report 20260804_148. That rule lives
 //     in lib/view_catalog.js `appendAutoViews` (the shared engine+tools
 //     path), NOT here, so this module stays a pure derivation of what the
 //     model's metadata says exists. On titanic it drops WALLS (≡ the
-//     authored `Hull Canvas`) and AUDITORIUM (≡ `Auditoriums`); on a scene
-//     with no authored twin the band still registers.
+//     authored `Hull Canvas`); on a scene with no authored twin the band
+//     still registers.
 //   Typed views (fixtureType → FIX_* role, report 20260618_1 §5.2):
 //     one view per fixture ROLE present on the model. Roles the operator
 //     named read as that name (`Strands`, `TE Signs`); the rest keep the
@@ -93,8 +96,14 @@ function bandFromGroupName(name) {
   if (/(^|[ _])Wall([ _]|$)/.test(name)) return 'WALLS';
   if (/(^|[ _])Deck([ _]|$)/.test(name)) return 'DECKS';
   if (/(^|[ _])Chimney([ _]|$)/.test(name)) return 'CHIMNEYS';
-  if (/(^|[ _])Auditorium([ _]|$)/.test(name)) return 'AUDITORIUM';
   return null;
+}
+
+// The Titanic scene catalog names its physical auditorium PAR groups
+// `Left Auditorium` and `Right Auditorium`. Match the semantic token (not
+// the generic PAR role), so PARs assigned to smokestacks remain excluded.
+function isAuditoriumGroupName(name) {
+  return typeof name === 'string' && /(^|[ _])Auditorium([ _]|$)/.test(name);
 }
 
 // ── Entry helpers ───────────────────────────────────────────────────────
@@ -247,15 +256,37 @@ export function deriveAutoViews(pixels, existingMaskNames = new Set()) {
   for (const w of strand.warnings) warnings.push(w);
   for (const e of strand.entries) push({ ...e, _autoView: true }, 'strand');
 
-  // ── 4. Structural band views (WALLS/DECKS/CHIMNEYS/AUDITORIUM) ─────────
-  const bandGroups = { WALLS: new Set(), DECKS: new Set(), CHIMNEYS: new Set(), AUDITORIUM: new Set() };
+  // ── 4. Structural views ─────────────────────────────────────────────────
+  const bandGroups = { WALLS: new Set(), DECKS: new Set(), CHIMNEYS: new Set() };
   for (const px of pixels) {
     if (!px || typeof px.group !== 'string' || px.group.length === 0) continue;
     const band = bandFromGroupName(px.group);
     if (band) bandGroups[band].add(px.group);
   }
-  for (const name of ['WALLS', 'DECKS', 'CHIMNEYS', 'AUDITORIUM']) {
+  for (const name of ['WALLS', 'DECKS', 'CHIMNEYS']) {
     push(groupsEntry(name, [...bandGroups[name]], existing), 'structural');
+  }
+
+  const auditoriumParIdx = [];
+  const teSignIdx = [];
+  for (let i = 0; i < pixels.length; i++) {
+    const px = pixels[i];
+    if (!px) continue;
+    const role = roleForId(fixtureTypeId(px.fixtureType));
+    const auditoriumPar = isAuditoriumGroupName(px.group);
+    if (auditoriumPar && role !== 'FIX_PAR') {
+      throw new Error(`deriveAutoViews: pixel ${i} group '${px.group}' is marked Auditorium ` +
+        `but fixtureType '${px.fixtureType}' resolves to '${role ?? 'no canonical role'}', not ` +
+        `FIX_PAR — auditorium fixture identity is ambiguous; fix the scene metadata`);
+    }
+    if (auditoriumPar) auditoriumParIdx.push(i);
+    if (role === 'FIX_TE_SIGN') teSignIdx.push(i);
+  }
+  // A scene with signs but no semantically identified auditorium PARs does
+  // not acquire a sign-only structural view. That would invent auditorium
+  // membership from fixture capability alone.
+  if (auditoriumParIdx.length > 0) {
+    push(indexEntry('AUDITORIUM', [...auditoriumParIdx, ...teSignIdx], existing), 'structural');
   }
 
   // ── 5. Typed views (Strands / TE Signs / @PAR / @BAR / @VINTAGE) ──────

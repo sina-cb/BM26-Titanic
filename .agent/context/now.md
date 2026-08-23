@@ -1,9 +1,32 @@
 # now.md — State of Play
 
-> Updated 2026-08-17. Keep this file under one screen; history belongs in
+> Updated 2026-08-20. Keep this file under one screen; history belongs in
 > project dossiers and reports.
 
 ## Hot
+
+- **MUST-HAVE program: all four advanced to operator gates (2026-08-20 EOD;
+  dossier top section is canonical).** (1) Party split proposal `_337` waits
+  on ChatGPT JOB 1/2 tables → implementation wave. (2) Night arc: engine
+  plumbing + follow-up fixes landed (`_338`); external author's arc content
+  is IN-TREE and FOREIGN-OWNED (2 plans + 16 playlists — never touch); two
+  content findings bounced to the author (derivation pass, assert-spec);
+  UI-redesign mock awaits operator direction. (3) Bike link: engine `_336`
+  + pad panel `_340` landed, awaiting live test. (4) Smokestack: CLI in
+  MarsinLED, scene repatch `_339` re-landed, registry diff awaiting review.
+  Branch at `65f8e058` (operator MIDI commit); day's work UNCOMMITTED by
+  rule; operator checklist = report `_341`. Launcher bounce still owed.
+  Open art rulings: `12_uv_rain` vs `15_violet_breathing`;
+  `18_uv_ink_plumes`; eyeball `08_quiet_signal` + `05_breathing_violet_horizon`.
+- **Next wave: engine-side bike color link.** Design lives in the PRIVATE
+  MarsinLED repo (`.agent/designs/32_bm26_engine_color_share.md` + `33_…`) —
+  never copy firmware internals into this public repo. Engine work: new
+  `lib/bike_color_share.js` + `GET /bikes`, colors-only push (rendered
+  palette) as `hsvPickerColor1/2` + `showLink`, ~30 s keepalive with
+  pre-push `showLink` readback (`RIDER_OVERRIDE` on 0), auto IP-range
+  discovery bound by controllerId, LINKED/STALE/GONE lifecycle, never
+  blocks the 40 fps loop. Firmware/pattern/UI side is the MarsinLED agent's
+  (prompt already handed to the operator).
 
 - **Live Touch is offline-green; physical-iPad acceptance remains open**
   (`01a011f5-2ed6-72a1-bd3b-52613b5e8cfd`, report `_331`). Pattern switching,

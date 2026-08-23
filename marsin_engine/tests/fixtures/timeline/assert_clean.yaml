@@ -1,0 +1,230 @@
+# assert_clean.yaml — synthetic plan that PASSES all 8 timeline_assertions.mjs
+# classes (see assert_clean_spec.yaml). Modeled on dryrun_bench.yaml (no
+# festival block, so it is always in-window and any --date works) but shaped
+# to exercise every assertion class:
+#   - full clock/sun coverage from ignition through day_off, INCLUDING a
+#     midnight-bridging cue (c_midnight_refresh) — resolveDeckStateAt resolves
+#     cue times per CALENDAR DAY, so without a cue anchored at/after 00:00 the
+#     small hours of every night fall out of the "passed cues" set on the new
+#     calendar day and read as ownerless (class 1).
+#   - c_ignition / c_morning_watch / c_day_off author globals.master (class 2).
+#   - c_mood_to_party gates on a real, non-empty whenPhase (class 3).
+#   - c_ignition / c_first_color / c_morning_watch pin autopilot shuffle:false
+#     (class 4).
+#   - c_event_test is a manual/program event cue with a hold that always
+#     resumes owned (class 5).
+#   - every timed cue's day-to-day relative order is stable at these BRC
+#     coordinates over the swept span (class 6).
+#   - every kind:program cue's action/look carries an autopilot block
+#     (class 7).
+#   - the plan resolves owned at both restart probes, every night (class 8).
+schemaVersion: 2
+name: assert_clean
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  party_window:
+    start:
+      clock: '21:30'
+    end:
+      sun: sunrise
+      offsetMin: -120
+looks:
+  white_look:
+    playlist: white_only
+    autopilot:
+      active: true
+      delay_s: 120
+      shuffle: false
+    globals:
+      master: 0.8
+    target:
+      channel: deck
+      id: null
+  dusk_look:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: false
+    target:
+      channel: deck
+      id: null
+  ambient_look:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    target:
+      channel: deck
+      id: null
+  morning_look:
+    playlist: white_only
+    autopilot:
+      active: false
+      delay_s: 90
+      shuffle: false
+    globals:
+      master: 0.4
+    target:
+      channel: deck
+      id: null
+defaultCue:
+  label: Ambient default
+  action:
+    type: look
+    look: ambient_look
+cues:
+  - id: c_ignition
+    label: Ignition white
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: -30
+    action:
+      type: look
+      look: white_look
+    kind: program
+    hold:
+      min: 60
+    days: all
+  - id: c_first_color
+    label: First color sprinkles
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 30
+    action:
+      type: look
+      look: dusk_look
+    kind: ambient
+    days: all
+  - id: c_early_night
+    label: Early night
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '21:30'
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all
+  - id: c_deep_block
+    label: Deep night block
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '23:30'
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all
+  - id: c_midnight_refresh
+    label: Midnight bridge
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '00:00'
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all
+  - id: c_sunrise_bloom
+    label: Sunrise bloom
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: -20
+    action:
+      type: look
+      look: white_look
+    kind: program
+    hold:
+      min: 80
+    days: all
+  - id: c_morning_watch
+    label: Morning watch
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: 60
+    action:
+      type: look
+      look: morning_look
+    kind: program
+    hold:
+      until:
+        clock: '09:00'
+    days: all
+  - id: c_day_off
+    label: Day off
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '09:00'
+    action:
+      type: globals
+      set:
+        master: 0
+      target:
+        channel: deck
+        id: null
+    kind: program
+    days: all
+  - id: c_mood_to_party
+    label: 'Party session: sustained real music -> party'
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 20
+      cooldownSec: 120
+      whenPhase: party_window
+    action:
+      type: look
+      look: ambient_look
+    kind: mood
+    days: all
+  - id: c_event_test
+    label: Placeholder event
+    enabled: true
+    catchUp: false
+    trigger:
+      type: manual
+    action:
+      type: look
+      look: ambient_look
+    kind: program
+    hold:
+      min: 20
+    days: all

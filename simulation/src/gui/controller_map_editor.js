@@ -70,6 +70,7 @@ import {
   getDeviceOutputs,
   startPushAll,
   attemptFirstContactPromote,
+  syncChipModel,
 } from './led_discovery_panel.js';
 import {
   controllerProbeTargets,
@@ -77,6 +78,7 @@ import {
   mergeProbeResults,
   shouldAttemptFirstContact,
 } from '../dmx/controller_status.js';
+import { renderSmokestackSection } from './smokestack_panel.js';
 import { saveHttpUrl } from '../core/save_endpoint.js';
 import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
 import {
@@ -308,10 +310,12 @@ function ledCtx() {
   return {
     registry,
     mutate,
+    mutateInPlace,
     strandLedCounts,
     claimedUniverses: claimedUniversesFor,
     addressMergePlan: addressMergePlanNow,
     refresh: renderIfOpen,
+    refreshReadState: paintControllerReadState,
     showToast,
     activeScene: () => window.__activeScene || 'default',
   };
@@ -489,6 +493,14 @@ function mutate(toastMessage, fn) {
   fn();
   recomputeAndMark();
   renderIfOpen();
+  if (toastMessage) showToast(toastMessage, { undoSnapshot: snapshot });
+}
+
+/** Mark an async read-through update dirty without replacing the open panel DOM. */
+function mutateInPlace(toastMessage, fn) {
+  const snapshot = snapshotRegistry();
+  fn();
+  recomputeAndMark();
   if (toastMessage) showToast(toastMessage, { undoSnapshot: snapshot });
 }
 
@@ -1026,6 +1038,11 @@ function render() {
   const ledControllers = reg.controllers.filter(c => isLedController(c));
   main.appendChild(renderControllerGroup('DMX', 'DMX Controllers', dmxControllers, proj));
   main.appendChild(renderControllerGroup('LED', `${LED_TYPE_LABEL} Controllers`, ledControllers, proj));
+  // Smokestack DMX ⇄ swarm section — only for scenes that actually carry the
+  // rope controllers (smokestack_panel returns null otherwise). Its async
+  // status/job updates repaint the section in place, never this whole pane.
+  const smokestackSection = renderSmokestackSection(reg);
+  if (smokestackSection) main.appendChild(smokestackSection);
   // …and the third state: attached to NOTHING. Rendered as its own quiet card so
   // it is visible and actionable in the same place as the real cards.
   if (unmappedTotal > 0) main.appendChild(renderNoControllerCard(unmapped, unmappedStrands));
@@ -1138,7 +1155,7 @@ export function applyControllerProbeResults(response) {
     // raises the reconcile dialog. Never auto-picks a side (codex P0).
     attemptFirstContactPromote(ledCtx(), controller, probe.device, { interactive: true });
   }
-  renderIfOpen();
+  paintControllerReadState();
 }
 
 /**
@@ -1154,7 +1171,7 @@ export function refreshControllerStatuses({ force = false } = {}) {
     return Promise.resolve(null);
   }
   probeSweeping = true;
-  renderIfOpen();
+  paintControllerReadState();
   return fetch(saveHttpUrl('/controllers/probe'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1192,7 +1209,7 @@ export function refreshControllerStatuses({ force = false } = {}) {
       } else {
         showToast(`✋ controller status sweep failed: ${err.message}`, { error: true, ttl: 8000 });
       }
-      renderIfOpen();
+      paintControllerReadState();
       return null;
     });
 }
@@ -1217,7 +1234,7 @@ function toggleProbeAuto() {
     console.error('[Controllers] persist controller-status auto pref', err);
   }
   syncProbeTimer();
-  renderIfOpen();
+  paintControllerReadState();
 }
 
 // ── Controllers section head + hide/show ────────────────────────────────
@@ -1244,27 +1261,72 @@ function renderControllersSectionHead(controllerCount) {
   // ── Reachability controls ────────────────────────────────────────────
   const statusBtn = document.createElement('button');
   statusBtn.className = 'cm-btn cm-status-sweep';
-  statusBtn.textContent = probeSweeping ? '🛰 checking…' : '🛰 Check status';
-  statusBtn.disabled = probeSweeping;
-  statusBtn.title = 'Probe every controller now (parallel, ~1 s ceiling each) and refresh the ' +
-    'ONLINE / OFFLINE / UNKNOWN dots.\n\n' +
-    'LED cards are probed over HTTP GET /api/status (MarsinLED boards do not answer ICMP); ' +
-    'DMX gateways by TCP connect, where even a refused connection proves the box is on the ' +
-    'network.\n\nReachability only — it does NOT prove sACN frames are arriving.';
   statusBtn.onclick = () => refreshControllerStatuses({ force: true });
   head.appendChild(statusBtn);
 
   const autoBtn = document.createElement('button');
-  autoBtn.className = 'cm-btn cm-status-auto' + (probeAuto ? ' cm-status-auto-on' : '');
-  autoBtn.textContent = probeAuto ? 'auto ✓' : 'auto ✕';
-  autoBtn.title = probeAuto
-    ? `Auto-sweep is ON — every ${Math.round(PROBE_INTERVAL_MS / 1000)} s while this pane is ` +
-      'open. Click to stop probing the network.'
-    : 'Auto-sweep is OFF — dots only update when you press "Check status". Click to re-enable.';
   autoBtn.onclick = toggleProbeAuto;
   head.appendChild(autoBtn);
+  paintProbeControls(statusBtn, autoBtn);
 
   return head;
+}
+
+function paintProbeControls(statusBtn, autoBtn) {
+  if (statusBtn) {
+    statusBtn.textContent = probeSweeping ? '🛰 checking…' : '🛰 Check status';
+    statusBtn.disabled = probeSweeping;
+    statusBtn.title = 'Probe every controller now (parallel, ~1 s ceiling each) and refresh the ' +
+      'ONLINE / OFFLINE / UNKNOWN dots.\n\n' +
+      'LED cards are probed over HTTP GET /api/status (MarsinLED boards do not answer ICMP); ' +
+      'DMX gateways by TCP connect, where even a refused connection proves the box is on the ' +
+      'network.\n\nReachability only — it does NOT prove sACN frames are arriving.';
+  }
+  if (autoBtn) {
+    autoBtn.className = 'cm-btn cm-status-auto' + (probeAuto ? ' cm-status-auto-on' : '');
+    autoBtn.textContent = probeAuto ? 'auto ✓' : 'auto ✕';
+    autoBtn.title = probeAuto
+      ? `Auto-sweep is ON — every ${Math.round(PROBE_INTERVAL_MS / 1000)} s while this pane is ` +
+        'open. Click to stop probing the network.'
+      : 'Auto-sweep is OFF — dots only update when you press "Check status". Click to re-enable.';
+  }
+}
+
+/**
+ * Paint read-only controller verdicts without replacing #cm-body or .cm-main.
+ * Reachability auto-sweeps and panel-open sync reads can resolve while the
+ * operator is working near the bottom of the pane; replacing the parent here
+ * used to reset its scroll position once per response.
+ */
+function paintControllerReadState(controllerId = null) {
+  if (!bodyEl || !panelEl || panelEl.classList.contains('hidden')) return;
+  paintProbeControls(
+    bodyEl.querySelector('.cm-status-sweep'),
+    bodyEl.querySelector('.cm-status-auto'),
+  );
+  const controllers = new Map(registry().controllers.map((controller) => [controller.id, controller]));
+  for (const statusDot of bodyEl.querySelectorAll('.cm-status-dot[data-cm-controller-id]')) {
+    const id = statusDot.dataset.cmControllerId;
+    if (controllerId !== null && id !== controllerId) continue;
+    const controller = controllers.get(id);
+    if (!controller) continue;
+    const status = controllerStatusModel(controller, probeResults.get(id) || null,
+      { sweeping: probeSweeping });
+    statusDot.className = `cm-status-dot ${status.cls}`;
+    statusDot.textContent = status.dot;
+    statusDot.title = `${status.label}\n\n${status.title}`;
+    statusDot.dataset.cmStatus = status.state;
+  }
+  for (const chip of bodyEl.querySelectorAll('.led-sync-chip[data-cm-controller-id]')) {
+    const id = chip.dataset.cmControllerId;
+    if (controllerId !== null && id !== controllerId) continue;
+    const controller = controllers.get(id);
+    if (!controller || !controller.device) continue;
+    const model = syncChipModel(ledCtx(), id, !!controller.device.lastPush);
+    chip.className = model.className;
+    chip.textContent = model.label;
+    chip.title = model.title;
+  }
 }
 
 function paintControllersToggle() {
@@ -1343,14 +1405,13 @@ function renderControllerGroup(kind, title, controllers, proj) {
     pushAllBtn.onclick = () => startPushAll(ledCtx());
     head.appendChild(pushAllBtn);
 
-    // Fleet gamma: write EVERY LED controller's gamma curve to its hardware,
-    // sequentially, with a per-controller result. Independent of the mapping
-    // push above — gamma normally applies live, no reboot.
+    // Fleet gamma: choose ONE displayed curve and write it identically to every
+    // LED controller, with a per-controller result. Independent of mapping.
     const gammaAllBtn = document.createElement('button');
     gammaAllBtn.className = 'cm-btn cm-push-all-gamma';
     gammaAllBtn.textContent = '⬆ Push gamma to all';
-    gammaAllBtn.title = 'Push every LED controller\'s gamma curve sequentially ' +
-      '(backup → gamma-only write → read-back verify), with a per-controller result';
+    gammaAllBtn.title = 'Choose one displayed gamma curve, then send those exact RGBW values ' +
+      'to every valid LED controller sequentially, with saved-config verification per controller';
     gammaAllBtn.disabled = controllers.filter((c) => isValidIp(c.ip)).length === 0;
     gammaAllBtn.onclick = () => startFleetGammaPush(ledCtx());
     head.appendChild(gammaAllBtn);
@@ -1513,6 +1574,7 @@ function renderController(controller, proj) {
   statusDot.textContent = status.dot;
   statusDot.title = `${status.label}\n\n${status.title}`;
   statusDot.dataset.cmStatus = status.state;
+  statusDot.dataset.cmControllerId = controller.id;
 
   const idRow = document.createElement('div');
   idRow.className = 'cm-controller-head-row cm-controller-id-row';

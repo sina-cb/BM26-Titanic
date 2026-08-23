@@ -1,0 +1,10 @@
+# assert_violations_solar_spec.yaml — a 40-day sweep from 2026-08-20 crosses
+# the BRC sunset-under-19:30 threshold in early September, inverting
+# c_clock_1930 vs c_sunset_0's day-0 order (see assert_violations_solar.yaml).
+# expectedOrder also mismatches on the same later days.
+solarSweep:
+  startDate: '2026-08-20'
+  days: 40
+expectedOrder:
+  - c_clock_1930
+  - c_sunset_0

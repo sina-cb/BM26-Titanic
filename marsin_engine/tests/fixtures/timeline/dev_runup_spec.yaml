@@ -1,0 +1,73 @@
+# dev_runup_spec.yaml — the --assert-spec whitelist for the bench run-up plan
+# `simulation/scenes/test_bench/timeline/dev_runup.yaml`.
+#
+# dev_runup is the first in-tree plan that asserts ALL EIGHT dry-run classes
+# with none skipped: classes 2 (master-authorship) and 4 (shuffle-pinning)
+# loud-SKIP without a whitelist, so both are spelled out here, together with
+# every optional sub-check (masterZeroCue, eligibility, eventCues,
+# expectedOrder, restartExpect).
+#
+# Run it from `marsin_engine/`:
+#   node tools/timeline_dryrun.mjs --scene test_bench --plan dev_runup \
+#     --date 2025-08-24 --days 4 --step 5 --events-only \
+#     --assert --assert-spec tests/fixtures/timeline/dev_runup_spec.yaml
+
+# Class 2 — every cue allowed to author globals.master.
+# d_fastlane_1 is the explicit RESTORE writer that lifts the deck back out of
+# d_lights_out's master 0; without it the demo hour would run dark.
+masterWriters:
+  - d_fastlane_1
+  - d_ignition
+  - d_morning_hold
+  - d_lights_out
+  - d_beacon
+masterZeroCue: d_lights_out
+
+# Class 4 — the directed cues, which must pin autopilot.shuffle:false so a
+# curated order is never shuffled.
+directedCues:
+  - d_ignition
+  - d_quiet_reset
+  - d_morning_hold
+  - d_lights_out
+
+# Class 3 — the eligibility window every mood cue's whenPhase must resolve to,
+# exactly. Same shape as the show plan's.
+eligibility:
+  start:
+    clock: '21:30'
+  end:
+    sun: sunrise
+    offsetMin: -120
+
+# Class 5 — the manual program cues whose release must resume onto an owned cue.
+eventCues:
+  - d_show_slot
+  - d_beacon
+  - d_bounded_party
+
+# Class 6 — sweep the whole festival span at the plan's own coordinates.
+solarSweep:
+  startDate: '2025-08-24'
+  days: 5
+
+# Class 6 (optional) — the exact firing order of every timed cue, every day.
+# Cues absent from a given day (d_carry on day 0, d_day3_special off day 2) are
+# filtered out of the comparison by the harness.
+expectedOrder:
+  - d_carry
+  - d_morning_hold
+  - d_lights_out
+  - d_fastlane_1
+  - d_fastlane_2
+  - d_fastlane_3
+  - d_ignition
+  - d_day3_special
+  - d_chapter_one
+  - d_quiet_reset
+  - d_chapter_two
+
+# Class 8 — a restart at either probe must come back owned, on the exact cue.
+restartExpect:
+  '02:00': d_carry
+  '07:30': d_morning_hold

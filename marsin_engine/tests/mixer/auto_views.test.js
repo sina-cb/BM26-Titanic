@@ -131,6 +131,31 @@ test('deriveAutoViews: typed views select exactly the pixels of that type', () =
   check('Strands', ''); // empty fixtureType → raw LED strand (was '@RAW')
 });
 
+test('deriveAutoViews: AUDITORIUM is exactly auditorium PARs plus every TE sign', () => {
+  const px = shipPixels();
+  px.push(
+    { i: px.length, type: 'led', fixtureType: 'TeSignV3A40', group: 'TE Sign',
+      x: -15, y: 8, z: 8, cId: 0 },
+    { i: px.length + 1, type: 'led', fixtureType: 'TeSignV3B34', group: 'TE Sign 2',
+      x: 15, y: 8, z: 8, cId: 0 },
+  );
+  const auditorium = registryFor(px).get('AUDITORIUM').members;
+  const expected = new Set([8, 9, 12, 13]);
+  for (let i = 0; i < px.length; i++) {
+    assert.equal(auditorium[i], expected.has(i) ? 1 : 0,
+      `AUDITORIUM[${i}] must include only auditorium PARs and TE signs`);
+  }
+  assert.equal(auditorium[4], 0, 'non-auditorium left deck PAR stays excluded');
+  assert.equal(auditorium[5], 0, 'non-auditorium right deck PAR stays excluded');
+});
+
+test('deriveAutoViews: an Auditorium-named non-PAR fixture fails loudly', () => {
+  const px = shipPixels();
+  px[8] = { ...px[8], fixtureType: 'ShehdsBar' };
+  assert.throws(() => deriveAutoViews(px, existingFor(px)),
+    /marked Auditorium.*not FIX_PAR.*fixture identity is ambiguous/);
+});
+
 test('deriveAutoViews: the TE signs are their own typed view, disjoint from Strands', () => {
   const px = shipPixels();
   px.push({ i: px.length, type: 'led', fixtureType: 'TeSignV3A40', group: 'TE Sign', x: -15, y: 8, z: 8, cId: 0 });
@@ -248,14 +273,15 @@ test('deriveAutoViews: a centreline pixel WITH a side token takes the token', ()
 
 // ── model-agnostic: minimal rig with no L/R or front/back tokens ───────
 
-test('deriveAutoViews: minimal rig — halves from geometry, typed + controller, no ends/structure', () => {
+test('deriveAutoViews: a generic PAR rig does not invent auditorium membership', () => {
   const px = [
     { i: 0, type: 'dmx', fixtureType: 'UkingPar', group: 'ParLights', x: 1, y: 0, z: 0, cId: 1 },
     { i: 1, type: 'dmx', fixtureType: 'ShehdsBar', group: 'BarLights', x: 1, y: 5, z: 0, cId: 1 },
   ];
   const { families } = deriveAutoViews(px, existingFor(px));
   assert.deepEqual(families.spatial, ['RIGHT'], 'both pixels are x>0 — no empty LEFT mask');
-  assert.equal(families.structural.length, 0, 'no structural bands without tokens');
+  assert.deepEqual(families.structural, [],
+    'a generic PAR role is not evidence of physical auditorium membership');
   assert.deepEqual(families.typed.sort(), ['@BAR', '@PAR']);
   assert.deepEqual(families.controller, ['CTRL_1']);
 });

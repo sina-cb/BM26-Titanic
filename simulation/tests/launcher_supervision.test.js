@@ -45,6 +45,28 @@ const SCRATCH_LOCK = path.join(os.tmpdir(), `bm26_wa_lock_${process.pid}.json`);
 process.env.BM26_LAUNCHER_LOCK = SCRATCH_LOCK;
 const sup = require('../start.js');       // module mode — does NOT boot
 const launcher = require('../../launcher.js'); // module mode — does NOT run main()
+
+test('launcher local env handoff fills missing values without overriding the shell', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm26-launcher-local-env-'));
+  const envFile = path.join(dir, '.env');
+  const key = 'BM26_TEST_LOCAL_ENV_HANDOFF';
+  const previous = process.env[key];
+  try {
+    fs.writeFileSync(envFile, `${key}="from-file"\n`, 'utf8');
+    delete process.env[key];
+    assert.deepEqual(launcher.loadLocalLaunchEnv(envFile), { loaded: true, path: envFile });
+    assert.equal(process.env[key], 'from-file');
+
+    process.env[key] = 'from-shell';
+    fs.writeFileSync(envFile, `${key}="different-file-value"\n`, 'utf8');
+    launcher.loadLocalLaunchEnv(envFile);
+    assert.equal(process.env[key], 'from-shell');
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 const portCleanup = require('../../tools/port_cleanup.cjs'); // the ARM-interlocked killer
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

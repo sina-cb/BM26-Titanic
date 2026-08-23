@@ -625,11 +625,15 @@ function validateCueDays(days, label, festival) {
  * The optional plan-level DEFAULT CUE (docs/38 §16.11) — the deck FALLBACK the
  * rig reverts to outside any cue's owning window (and when the plan has cues but
  * none currently own the deck). It is NOT a trigger cue: it has no id / trigger /
- * kind / hold / days — just an optional label and a normal cue ACTION targeting
- * the DECK. THROW-style. The action reuses validateAction (looks resolvable
- * against the plan's looks); a non-deck target on the default-cue action is an
- * authoring error → throw (the default cue fills the DECK). Returns a normalized
- * { label?, action } or undefined when absent.
+ * kind / hold / days — just an optional label, a normal cue ACTION targeting
+ * the DECK, and an optional `phaseAware` flag. THROW-style. The action reuses
+ * validateAction (looks resolvable against the plan's looks); a non-deck
+ * target on the default-cue action is an authoring error → throw (the default
+ * cue fills the DECK). `phaseAware` (docs/77 §5.1/§11 G1) opts a plan into
+ * resolving the CURRENT phase's owning cue on release instead of always
+ * falling to this static action — absent/false preserves today's behavior
+ * bit-for-bit. Returns a normalized { label?, action, phaseAware? } or
+ * undefined when absent.
  */
 function validateDefaultCue(defaultCue, label, lookNames) {
   if (defaultCue === undefined || defaultCue === null) return undefined;
@@ -643,6 +647,12 @@ function validateDefaultCue(defaultCue, label, lookNames) {
     throw new Error(`${label}.action must target the deck (got channel "${action.target.channel}")`);
   }
   out.action = action;
+  // phaseAware (opt-in, docs/77 G1): must be a strict boolean when authored.
+  // Only included in the normalized output when the author set it, so plans
+  // without the flag hash/serialize identically to today's normalized shape.
+  if (defaultCue.phaseAware !== undefined) {
+    out.phaseAware = assertBool(defaultCue.phaseAware, `${label}.phaseAware`);
+  }
   return out;
 }
 
