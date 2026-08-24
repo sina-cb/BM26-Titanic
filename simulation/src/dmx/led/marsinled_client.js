@@ -14,12 +14,17 @@
  *    parses as JSON carrying `controllerId` AND `boardId` AND `strands`.
  *  - `probeDevice` returns `null` on a miss — that is the DESIGNED result of
  *    sweeping 254 IPs where most never answer, NOT a swallowed error. Every
- *    other call (getConfig/getStatus/pushConfig/rebootDevice) targets a device
- *    the operator chose, so it THROWS on any failure.
- *  - `pushConfig` refuses to write wifi/deviceName/boardType/swarm/network keys
- *    (assert before POST), client-validates the docs/41 §4.2 bounds before the
- *    POST, and on HTTP 400 throws an Error carrying the device's `{field,
- *    detail}` verbatim.
+ *    other call (getConfig/getStatus/pushForcedConfig/pushDmxToggle/
+ *    rebootDevice) targets a device the operator chose, so it THROWS on any
+ *    failure.
+ *  - There are exactly TWO writers — the narrowed forced push
+ *    (`buildForcedConfigBody` → `pushForcedConfig`) and the DMX toggle
+ *    (`buildDmxToggleBody` → `pushDmxToggle`). Both build their body from ONE
+ *    `GET /api/config` snapshot and both post it through the single
+ *    `postConfigBody` seam, which refuses wifi/boardType/swarm/network/identity
+ *    keys and surfaces an HTTP 400's `{field, detail}` verbatim. (The generic
+ *    partial-body `pushConfig` + `validatePushPayload` path was DELETED once
+ *    per-output became the only push style — nothing called it.)
  *  - No polling loops except the explicit `awaitReboot`.
  */
 
@@ -60,16 +65,30 @@ export const PER_OUTPUT_WRITE_TIMEOUT_MS = 12000;
 export const REBOOT_WAIT_TIMEOUT_MS = 45000;
 export const REBOOT_POLL_INTERVAL_MS = 1000;
 
+// ── Post-reboot READ retry (live evidence, seen twice on 4 real boards) ──────
+// `awaitReboot` returns the moment ONE `/api/status` probe answers. On real
+// hardware that first answer is not the same thing as "the board is serving
+// reads again": the WiFi re-association finishes AFTER the first reply, and for
+// a few seconds the board drops further requests. The verify's `getStatus` +
+// `getConfig` each got a single 8 s attempt, so they timed out and the push
+// declared a FALSE FAIL over a write that had in fact applied (proven by a
+// later read-back).
+//
+// So the READ side — and ONLY the read side — retries on TIMEOUT. This never
+// re-builds and never re-POSTs a body: the one-snapshot rule is untouched, and
+// a device that ANSWERED (any non-2xx) is still a definite, immediate failure.
+export const VERIFY_READ_ATTEMPTS = 4;
+export const VERIFY_READ_BUDGET_MS = 30000;
+export const VERIFY_READ_RETRY_DELAY_MS = 1500;
+
 // docs/41 §4.2 validation bounds — mirrored client-side so a bad payload is
 // rejected before it ever leaves the browser (loud, with the offending field).
+// Only the bounds the SURVIVING writers check are kept: the per-output plan
+// validator (universe range, colorOrder, count) and the deviceName repair. The
+// strand-array / globalBrightness / maxMilliamps bounds went out with the
+// generic `pushConfig` path this repo no longer has (nothing built those keys).
 const SACN_UNIVERSE_MIN = 1;
 const SACN_UNIVERSE_MAX = 63999;
-const DMX_START_ADDRESS_MIN = 1;
-const DMX_START_ADDRESS_MAX = 512;
-const STRANDS_MIN = 1;
-const STRANDS_MAX = 16;
-const GLOBAL_BRIGHTNESS_MAX = 255;
-const MAX_MILLIAMPS_MAX = 65535;
 const DEVICE_NAME_MAX = 32;
 const COLOR_ORDER_RE = /^[RGBWA]{3,5}$/;
 
@@ -90,11 +109,21 @@ const PER_OUTPUT_SPAN_MAX = 16;         // (maxUniverse − minUniverse + 1) ≤
 // payload carrying any of these is a bug — refuse it loudly rather than risk
 // re-homing the network or renaming the device from the sim.
 //
-// ONE declared exception, and it is not a rename: `pushPerOutputUniverses` adds
-// `deviceName` when the device's STORED name is invalid, because such a board
+// The list is ASSERTED at the single write seam (`postConfigBody`), so it
+// covers every body this module can post.
+//
+// ONE declared exception, and it is neither a rename nor a re-home:
+// `deviceName`, when the device's STORED name is invalid, because such a board
 // rejects every config write until it is fixed (see the deviceName section
-// below). It never goes through `validatePushPayload`, and every other path —
-// `pushConfig` included — still refuses the key outright.
+// below). Both writers (`buildForcedConfigBody` / `buildDmxToggleBody`) add it
+// only through `deviceNameRepairForPush`.
+//
+// `swarm` is NOT an exception any more (report `_363` §2.1, operator rulings
+// 6/7 — `_362`'s Q1 is WITHDRAWN). NOTHING in this module writes a `swarm`
+// key: the board's swarm config survives byte-for-byte because it is simply
+// never mentioned, and swarm is managed by the operator on the controller's
+// own web UI. `wifi` is NOT written either — the board's AP stays up after a
+// push, which is cosmetic, not output ownership.
 const DENIED_PUSH_KEYS = [
   'wifi', 'deviceName', 'boardType', 'boardTypes', 'swarm',
   'networkMode', 'enableMesh', 'controllerId',
@@ -198,8 +227,19 @@ function buildDiscoveredDevice(ip, status) {
   };
 }
 
-/** True iff a parsed /api/status body carries the 3-field MarsinLED fingerprint. */
-function isMarsinLedStatus(status) {
+/**
+ * True iff a parsed `/api/status` body carries the 3-field MarsinLED
+ * fingerprint (docs/41 §2): a non-empty `controllerId`, a non-empty `boardId`
+ * and a `strands` array.
+ *
+ * THE fingerprint — there is exactly one implementation. The server-side
+ * reachability probe (`server/controller_probe_service.cjs`) kept a byte-for-
+ * byte copy of it; that copy is gone and the CJS service now `require(esm)`s
+ * this export, the same bridge `led_gamma_service.cjs` uses for the deviceName
+ * doctrine. Two definitions of "is this a MarsinLED" is exactly the kind of
+ * drift that makes the browser and the server disagree about the same board.
+ */
+export function isMarsinLedStatus(status) {
   return !!status
     && typeof status.controllerId === 'string' && status.controllerId.length > 0
     && typeof status.boardId === 'string' && status.boardId.length > 0
@@ -308,108 +348,90 @@ export async function getConfig(ip, opts = {}) {
   return res.json();
 }
 
+/**
+ * Run a READ (or a read pair) and retry it, but ONLY when it TIMED OUT.
+ *
+ * WHY THIS EXISTS (live evidence, 2026-08-23, hit twice on real boards). After a
+ * needs-reboot write, `awaitReboot` succeeds as soon as ONE `/api/status` probe
+ * answers — but the board finishes re-associating to WiFi after that first
+ * reply, and for a few seconds it drops further reads. The verify's
+ * `getStatus`/`getConfig` had one 8 s attempt each, so they timed out and the
+ * push reported a FALSE FAIL over a write that HAD applied.
+ *
+ * The contract, deliberately narrow:
+ *  - retries ONLY a rejection carrying `err.timedOut === true` (the marker
+ *    `fetchWithTimeout` sets when OUR abort timer fired). A device that
+ *    ANSWERED — 400, 409, 500, anything — is a definite failure and is
+ *    re-thrown IMMEDIATELY, never retried. So is any other rejection shape
+ *    (connection refused, non-JSON, a thrown assert): fail loud, don't paper
+ *    over an unknown error class with a retry loop.
+ *  - it retries READS. It never re-builds a body and never re-POSTs one — the
+ *    one-snapshot rule (`_362` §2.3-3) is untouched by design: this helper only
+ *    ever receives a read closure.
+ *  - it is BOUNDED twice over: at most `attempts` tries, and a new attempt only
+ *    starts while the wall-clock budget still has room for it, so a wedged
+ *    board can never hold the UI forever (codex P0 — no infinite spinner).
+ *  - exhaustion THROWS, carrying `timedOut` (still true — every attempt timed
+ *    out) plus `readRetriesExhausted` and the attempt count, so the caller's
+ *    failure text can say how hard it tried.
+ *
+ * @param {Function} read - `() => Promise<any>`; the read to run (a PAIR of
+ *   reads is fine — the whole closure is the retried unit).
+ * @param {{attempts?: number, budgetMs?: number, retryDelayMs?: number,
+ *          label?: string, onRetry?: Function}} [opts]
+ *   `onRetry({attempt, attempts, elapsedMs, message})` fires after each timeout
+ *   that will be retried, so a dialog can say "the board is still coming back".
+ * @returns {Promise<any>} the read's value.
+ */
+export async function readWithRetryOnTimeout(read, opts = {}) {
+  if (typeof read !== 'function') {
+    throw new Error('[MarsinLED] readWithRetryOnTimeout: `read` must be a function returning a ' +
+      'promise — this helper retries READS, never writes');
+  }
+  const attempts = opts.attempts ?? VERIFY_READ_ATTEMPTS;
+  const budgetMs = opts.budgetMs ?? VERIFY_READ_BUDGET_MS;
+  const retryDelayMs = opts.retryDelayMs ?? VERIFY_READ_RETRY_DELAY_MS;
+  const label = opts.label || 'read';
+  const onRetry = opts.onRetry;
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error(`[MarsinLED] readWithRetryOnTimeout: attempts must be a positive integer ` +
+      `(got ${JSON.stringify(opts.attempts)})`);
+  }
+  const started = Date.now();
+  const deadline = started + budgetMs;
+  let lastTimeout = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await read();
+    } catch (err) {
+      // ANSWERED failures (and every non-timeout rejection) propagate verbatim,
+      // on the FIRST attempt. Only a timeout is ambiguous enough to be worth
+      // asking again.
+      if (!err || err.timedOut !== true) throw err;
+      lastTimeout = err;
+      const elapsedMs = Date.now() - started;
+      if (attempt >= attempts) break;
+      if (Date.now() + retryDelayMs >= deadline) break;
+      if (onRetry) onRetry({ attempt, attempts, elapsedMs, message: err.message });
+      await delay(retryDelayMs);
+    }
+  }
+  const elapsedMs = Date.now() - started;
+  const err = new Error(`[MarsinLED] ${label} timed out on every attempt ` +
+    `(${Math.round(elapsedMs / 1000)}s, budget ${Math.round(budgetMs / 1000)}s): ` +
+    `${lastTimeout.message}`);
+  err.timedOut = true;
+  err.readRetriesExhausted = true;
+  err.cause = lastTimeout;
+  throw err;
+}
+
 // ── Client-side validation (docs/41 §4.2) — reject before any POST ──────────
 
 function assertInt(value, min, max, field) {
   if (!Number.isInteger(value) || value < min || value > max) {
     throw new Error(`[MarsinLED] validation: ${field} must be an integer in ` +
       `${min}–${max} (got ${JSON.stringify(value)})`);
-  }
-}
-
-function validateStrands(strands) {
-  if (!Array.isArray(strands)) {
-    throw new Error('[MarsinLED] validation: strands must be an array');
-  }
-  if (strands.length < STRANDS_MIN || strands.length > STRANDS_MAX) {
-    throw new Error(`[MarsinLED] validation: strands must have ${STRANDS_MIN}–${STRANDS_MAX} ` +
-      `entries (got ${strands.length})`);
-  }
-  let enabledCount = 0;
-  const seenPins = new Set();
-  strands.forEach((s, i) => {
-    if (!s || typeof s !== 'object') {
-      throw new Error(`[MarsinLED] validation: strands[${i}] must be an object`);
-    }
-    if (s.enabled === true) enabledCount += 1;
-    assertInt(s.count, 1, Number.MAX_SAFE_INTEGER, `strands[${i}].count`);
-    if (typeof s.type !== 'string' || s.type.length === 0) {
-      throw new Error(`[MarsinLED] validation: strands[${i}].type must be a non-empty string`);
-    }
-    if (typeof s.colorOrder !== 'string' || !COLOR_ORDER_RE.test(s.colorOrder)) {
-      throw new Error(`[MarsinLED] validation: strands[${i}].colorOrder '${s.colorOrder}' must ` +
-        'match RGBWA letters, length 3–5');
-    }
-    if (typeof s.rgbwMode !== 'string' || s.rgbwMode.length === 0) {
-      throw new Error(`[MarsinLED] validation: strands[${i}].rgbwMode must be a non-empty string`);
-    }
-    if (s.pinData !== undefined) {
-      if (seenPins.has(s.pinData)) {
-        throw new Error(`[MarsinLED] validation: duplicate pinData ${s.pinData} across strands`);
-      }
-      seenPins.add(s.pinData);
-    }
-    if (s.deadPixels !== undefined) {
-      assertInt(s.deadPixels, 0, s.count, `strands[${i}].deadPixels`);
-    }
-    if (s.deadPixelIndices !== undefined) {
-      if (!Array.isArray(s.deadPixelIndices)) {
-        throw new Error(`[MarsinLED] validation: strands[${i}].deadPixelIndices must be an array`);
-      }
-      s.deadPixelIndices.forEach((idx, k) => {
-        assertInt(idx, 0, s.count - 1, `strands[${i}].deadPixelIndices[${k}]`);
-      });
-    }
-  });
-  if (enabledCount < 1) {
-    throw new Error('[MarsinLED] validation: at least one strand must be enabled');
-  }
-}
-
-function validateDmx(dmx) {
-  if (!dmx || typeof dmx !== 'object') {
-    throw new Error('[MarsinLED] validation: dmx must be an object');
-  }
-  if (dmx.enabled !== undefined && typeof dmx.enabled !== 'boolean') {
-    throw new Error('[MarsinLED] validation: dmx.enabled must be a boolean');
-  }
-  if (dmx.protocol !== undefined) assertInt(dmx.protocol, 0, 1, 'dmx.protocol');
-  if (dmx.universe !== undefined) {
-    assertInt(dmx.universe, SACN_UNIVERSE_MIN, SACN_UNIVERSE_MAX, 'dmx.universe');
-  }
-  if (dmx.startAddress !== undefined) {
-    assertInt(dmx.startAddress, DMX_START_ADDRESS_MIN, DMX_START_ADDRESS_MAX, 'dmx.startAddress');
-  }
-  if (dmx.timeoutMs !== undefined) assertInt(dmx.timeoutMs, 0, Number.MAX_SAFE_INTEGER, 'dmx.timeoutMs');
-}
-
-/**
- * Validate a partial push payload against docs/41 §4.2 and the sim write-scope
- * rules. THROWS on the first violation (with the offending field). Exported so
- * the UI can pre-flight a payload before the confirm dialog.
- */
-export function validatePushPayload(partial) {
-  if (!partial || typeof partial !== 'object') {
-    throw new Error('[MarsinLED] push payload must be an object');
-  }
-  for (const key of DENIED_PUSH_KEYS) {
-    if (key in partial) {
-      throw new Error(`[MarsinLED] refusing to push key '${key}' — the sim never writes ` +
-        `wifi/deviceName/boardType/swarm/network config (docs/41 §4.1)`);
-    }
-  }
-  const keys = Object.keys(partial);
-  if (keys.length === 0) {
-    throw new Error('[MarsinLED] push payload is empty — nothing to write');
-  }
-  if ('strands' in partial) validateStrands(partial.strands);
-  if ('dmx' in partial) validateDmx(partial.dmx);
-  if ('globalBrightness' in partial) {
-    assertInt(partial.globalBrightness, 0, GLOBAL_BRIGHTNESS_MAX, 'globalBrightness');
-  }
-  if ('maxMilliamps' in partial) assertInt(partial.maxMilliamps, 0, MAX_MILLIAMPS_MAX, 'maxMilliamps');
-  if ('maxMilliampsEnabled' in partial && typeof partial.maxMilliampsEnabled !== 'boolean') {
-    throw new Error('[MarsinLED] validation: maxMilliampsEnabled must be a boolean');
   }
 }
 
@@ -490,25 +512,19 @@ export function deviceNameRepairForPush({ ip, storedName, controllerName } = {})
 // ── Write ────────────────────────────────────────────────────────────────────
 
 /**
- * POST /api/config with a PARTIAL body (only the keys being changed).
- * Refuses forbidden keys and client-validates §4.2 bounds BEFORE the POST.
+ * Low-level POST /api/config with a fully-formed body object. THE ONLY WRITE
+ * SEAM in this module — `pushForcedConfig` (the narrowed push) and
+ * `pushDmxToggle` both go through it, so the CORS + 400-surfacing logic lives
+ * in ONE place. Callers are responsible for validating the body first (their
+ * builders do).
  *
- * @returns {Promise<{status?: string, outcome: string, reboot: boolean,
- *   message?: string}>} the device's apply/reboot reply on success.
- * @throws on HTTP 400 an Error whose `.field` / `.detail` / `.deviceError`
- *   carry the device's validation response verbatim (no swallowing); on any
- *   other non-2xx a plain loud error.
- */
-export async function pushConfig(ip, partial, opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-  validatePushPayload(partial);
-  return postConfigBody(ip, partial, timeoutMs);
-}
-
-/**
- * Low-level POST /api/config with a fully-formed body object. Shared by the
- * legacy pushConfig and the per-output push/revert — the CORS + 400-surfacing
- * logic lives in ONE place. Caller is responsible for validating the body first.
+ * The write-scope doctrine is enforced HERE, at that one seam (see
+ * DENIED_PUSH_KEYS): no body this module posts may carry a `wifi`, `swarm`,
+ * `boardType`, `controllerId` or network key, and `deviceName` only under the
+ * §4.1.1 repair. It used to be checked in `validatePushPayload`, on the generic
+ * `pushConfig` path — which the narrowed push and the toggle never used and
+ * which is now deleted, so the guard moved to where every write actually
+ * passes rather than being deleted with its old caller.
  *
  * Content-Type text/plain (not application/json) keeps this a CORS "simple
  * request" so the browser does NOT send an OPTIONS preflight. The MarsinLED
@@ -525,6 +541,21 @@ export async function pushConfig(ip, partial, opts = {}) {
  *   non-2xx a plain loud error.
  */
 async function postConfigBody(ip, body, timeoutMs) {
+  // The write-scope guard, at the one seam every write passes through. It is an
+  // ASSERT on this module's own builders, not operator input — tripping it means
+  // a body was constructed that would re-home the network, rename a working
+  // device or overwrite the operator's swarm config, and the correct answer is
+  // to refuse before the socket opens (codex P0).
+  for (const key of DENIED_PUSH_KEYS) {
+    if (!(key in body)) continue;
+    // `deviceName` is the ONE declared exception (docs/41 §4.1.1, report
+    // 20260725_124): a board storing an invalid name rejects EVERY config
+    // write, so the push repairs it with the card's name, verbatim.
+    if (key === 'deviceName') continue;
+    throw new Error(`[MarsinLED] refusing to POST key '${key}' to ${ip} — the sim never writes ` +
+      'wifi/boardType/swarm/network/identity config (docs/41 §4.1); this body should never have ' +
+      'been built');
+  }
   const res = await fetchWithTimeout(`http://${ip}/api/config`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
@@ -617,20 +648,6 @@ export function readConfiguredPerOutput(config) {
     startAddress: strand.dmxStartAddress,
     enabled: strand.enabled === true,
   }));
-}
-
-/**
- * Generic mapping writes are mode-neutral. A controller already in (or saved
- * for) DMX mode must use the guarded show-mode workflow before its mapping can
- * be changed.
- */
-export function assertMappingPushAllowed(status, config) {
-  const runtimeDmx = status && status.dmxOwnsOutput === true;
-  const desiredDmx = config && config.dmx && config.dmx.enabled === true;
-  if (runtimeDmx || desiredDmx) {
-    throw new Error('[MarsinLED] mapping push refused while DMX mode is active or configured — ' +
-      'switch modes through the guarded Smokestack / mass_deploy show-mode workflow first');
-  }
 }
 
 /**
@@ -756,86 +773,185 @@ export function validatePerOutputPlan(strands, universeByOutputIndex) {
 function assertPerOutputPlan(plan, where) {
   if (!plan || typeof plan !== 'object' || !plan.universeByOutputIndex) {
     throw new Error(`[MarsinLED] ${where}: a per-output PLAN is required ` +
-      '({universeByOutputIndex, enables, parked, …} from derivePerOutputPlan) — a bare universe ' +
-      'map cannot express which outputs the push must enable');
+      '({universeByOutputIndex, assignments, …} from derivePerOutputPlan) — a bare universe ' +
+      'map cannot express which outputs the push must enable and which it must disable');
   }
   return plan;
 }
 
 /**
- * Read-modify-write helper: return a NEW strands array carrying the plan.
+ * Read-modify-write helper: return a NEW strands array carrying the FORCED plan.
  *
- *  - every output in `plan.enables` (a port drives it, but the board has it
- *    DISABLED) gets `enabled: true` + `count` = the port's mapped pixel count.
- *    This is the ONE asymmetric write (report 20260725_70 §2.3): the push may
- *    switch an output ON, NEVER off, so it can never dark a strand somebody
- *    wired outside the sim;
- *  - every key of `plan.universeByOutputIndex` (assigned AND parked) gets
- *    `dmxUniverse` + `dmxStartAddress: 1`;
- *  - `count` on an ALREADY-enabled output is never touched — the physical strand
- *    length is hardware truth and the sim's model is a belief. A mismatch is a
- *    warning from the derive, never a write;
- *  - every other strand, and every other field, is copied through untouched (the
- *    array is replaced wholesale on the device).
+ * FORCE SEMANTICS (operator ruling, report `_362` §2.1). The sim's controller
+ * panel is the SINGLE SOURCE OF TRUTH for what a board's outputs do, so this
+ * transform is one-way and TOTAL: every output slot is written, none is passed
+ * through untouched.
+ *
+ *  - HARDWARE TRUTH is copied from the board's own `GET /api/config` strand —
+ *    `type`, `pinData`, `pinClock`, `colorOrder`, `rgbwMode`, `deadPixels` /
+ *    `deadPixelIndices` and anything else the firmware stores there. docs/41
+ *    §4.1(a) forbids inventing pins (the `angio4` pins are locked) and the sim
+ *    does not model these fields; copying them is not "merging board tweaks",
+ *    it is refusing to invent hardware identity.
+ *  - An output the plan ASSIGNS gets `enabled: true`, `count` = the port's
+ *    mapped pixel count, `dmxUniverse` = the plan's universe and
+ *    `dmxStartAddress: 1`. The count is FORCED IN BOTH DIRECTIONS — this
+ *    supersedes the older "count on an already-enabled output is hardware truth
+ *    and is never rewritten" rule (report 20260725_70); the confirm dialog
+ *    lists every count change before the write.
+ *  - Every OTHER output gets `enabled: false`. This supersedes the older "the
+ *    push NEVER writes enabled:false" ruling. No `dmxUniverse` /
+ *    `dmxStartAddress` is written onto a disabled output — the sim states no
+ *    universe for an output it is darkening.
  *
  * Pure (no I/O). The caller validates the APPLIED array — not the device's —
  * because only the applied array expresses the post-push enable state.
+ *
+ * @param {Array<Object>} strands - the device's `/api/config` strands array.
+ * @param {Object} plan - `derivePerOutputPlan`'s result.
  */
-export function applyPerOutputPlan(strands, plan) {
-  assertPerOutputPlan(plan, 'applyPerOutputPlan');
+export function applyForcedPlan(strands, plan) {
+  if (!Array.isArray(strands)) {
+    throw new Error('[MarsinLED] applyForcedPlan: strands must be an array');
+  }
+  assertPerOutputPlan(plan, 'applyForcedPlan');
   const uni = normalizeUniverseMap(plan.universeByOutputIndex);
-  const enableByIndex = new Map();
-  for (const entry of plan.enables || []) {
-    if (!Number.isInteger(entry.outputIndex) || entry.outputIndex < 0) {
-      throw new Error(`[MarsinLED] applyPerOutputPlan: enables[].outputIndex ` +
-        `'${entry.outputIndex}' must be a non-negative integer`);
+  const countByIndex = new Map();
+  for (const entry of plan.assignments || []) {
+    if (!entry || !Number.isInteger(entry.outputIndex) || entry.outputIndex < 0) {
+      throw new Error('[MarsinLED] applyForcedPlan: assignments[].outputIndex ' +
+        `'${entry && entry.outputIndex}' must be a non-negative integer`);
     }
-    assertInt(entry.count, 1, Number.MAX_SAFE_INTEGER,
-      `enables[output ${entry.outputIndex}].count`);
-    enableByIndex.set(entry.outputIndex, entry.count);
+    assertInt(entry.pixelCount, 1, Number.MAX_SAFE_INTEGER,
+      `assignments[output ${entry.outputIndex}].pixelCount`);
+    countByIndex.set(entry.outputIndex, entry.pixelCount);
+  }
+  for (const index of uni.keys()) {
+    if (index >= strands.length) {
+      throw new Error(`[MarsinLED] applyForcedPlan: the plan assigns output ${index}, but the ` +
+        `device reports only ${strands.length} output(s)`);
+    }
+    if (!countByIndex.has(index)) {
+      throw new Error(`[MarsinLED] applyForcedPlan: output ${index} carries a universe but no ` +
+        'assignment with a pixel count — a forced push writes count, universe and enable ' +
+        'together, so a universe with no count is an incoherent plan');
+    }
   }
   return strands.map((s, i) => {
     const next = { ...(s || {}) };
-    if (enableByIndex.has(i)) {
+    if (uni.has(i)) {
       next.enabled = true;
-      next.count = enableByIndex.get(i);
-    }
-    if (next.enabled === true && uni.has(i)) {
+      next.count = countByIndex.get(i);
       next.dmxUniverse = uni.get(i);
       next.dmxStartAddress = PER_OUTPUT_START_ADDRESS;
+    } else {
+      next.enabled = false;
+      // A darkened output states NO universe. The board may have carried one
+      // (it was enabled a moment ago), and leaving it on a disabled strand
+      // violates the firmware's ALL-OR-NONE rule — "only enabled outputs may
+      // carry a per-output universe" — which is a 400 on exactly the rope-board
+      // case this force push exists for.
+      delete next.dmxUniverse;
+      delete next.dmxStartAddress;
     }
     return next;
   });
 }
 
 /**
- * Push a per-output universe plan (full read-modify-write). Feature-detect with
- * `deviceSupportsPerOutput` BEFORE calling this — it never re-checks capability
- * (a device that lacks per-output must take the legacy path instead).
+ * Read the board's OWN saved `dmx` object out of a `GET /api/config` snapshot,
+ * or THROW. Every MarsinLED config carries the block; a snapshot without it is
+ * a shape this module refuses to reason about, because the alternative —
+ * inventing a `dmx` object — would write blackout timeouts and a protocol
+ * nobody chose onto the operator's board (codex P0: no fallbacks).
  *
- *  1. GET /api/config.
- *  2. APPLY the plan to the live strands (`applyPerOutputPlan`): enable the
- *     outputs a port drives that the board has off (with their pixel count), and
- *     stamp `dmxUniverse` + `dmxStartAddress:1` on every assigned AND parked
- *     output. Nothing is ever disabled.
- *  3. Validate the APPLIED array (`validatePerOutputPlan`), not the device's —
- *     the applied array is the intended POST-push state, so the firmware's
- *     ALL-OR-NONE / only-enabled-carry-a-universe / span / no-overlap rules are
- *     checked against what the device will actually hold. Validating the
- *     pre-push array could not express an enable and would refuse a legal plan.
- *  4. POST { strands } without changing show mode — plus `deviceName` IFF the
- *     device's stored name is invalid and therefore makes
- *     the firmware reject every write (`deviceNameRepairForPush`; the repaired
- *     value is `plan.controllerName` verbatim, and an unusable card name is a
- *     loud refusal BEFORE the POST, not a mangled name).
+ * Both writers (`buildForcedConfigBody`, `buildDmxToggleBody`) merge INTO this
+ * object rather than sending a sparse `{enabled:…}`: the firmware merges the
+ * partial body into the stored config and re-validates the whole document, and
+ * sending the full block sidesteps every ambiguity about partial nested-object
+ * merges.
+ */
+function requireSnapshotDmx(snapshot, where) {
+  const dmx = snapshot && snapshot.dmx;
+  if (!dmx || typeof dmx !== 'object' || Array.isArray(dmx)) {
+    throw new Error(`[MarsinLED] ${where}: the snapshot carries no dmx object ` +
+      `(got ${JSON.stringify(dmx)}) — every MarsinLED config has one, and this write merges ` +
+      'into the board\'s own block rather than inventing it');
+  }
+  return dmx;
+}
+
+/**
+ * Build the ONE `POST /api/config` body a forced push sends. PURE (no I/O), so
+ * the confirm dialog previews the EXACT object that will be posted — the
+ * payload shown and the payload written are the same value, not two
+ * constructions of it.
  *
- * A changed mapping may reboot on success ({outcome:"needs-reboot", reboot:true});
- * the caller waits when requested, then verifies the saved config.
+ * NARROWED by operator ruling 6 (report `_363` §2.1): the push forces exactly
+ * three things — strand counts+enables, the per-output universes, and DMX ON.
+ * It carries, and only carries:
  *
- * PHASE BUDGETS (report 20260725_69): the read and the write are timed
- * SEPARATELY — the write spans a reboot, the read does not. A flat `timeoutMs`
- * covering both is the bug this function was fixed for, so passing one is
- * refused rather than silently half-honoured.
+ *  - `strands` — the full array, read-modify-WRITE per entry (`applyForcedPlan`),
+ *    validated against the firmware's per-output rules (`validatePerOutputPlan`)
+ *    BEFORE any POST so a bad plan never earns a device 400. An assigned output
+ *    gets `enabled:true`, the mapped `count`, its `dmxUniverse` and
+ *    `dmxStartAddress: 1`; an unassigned output gets `enabled:false` with
+ *    `dmxUniverse`/`dmxStartAddress` DELETED (D1 — the firmware's all-or-none
+ *    per-output rule 400s on a disabled strand carrying a universe). EVERY
+ *    other key of the entry — `type`, `colorOrder`, `rgbwMode`, pins,
+ *    dead-pixel fields, any future key — passes through UNTOUCHED. Strand type
+ *    and color order are explicitly NOT pushed: the operator manages chip type
+ *    and color order on the controller itself.
+ *  - `dmx` — `{...snapshot.dmx, enabled: true, protocol: 0}`. `enabled` is the
+ *    third forced thing; `protocol: 0` is forced because the per-output
+ *    universes being written are sACN-only by firmware rule (docs/41 §3.5), so
+ *    a body stating ArtNet alongside them would be incoherent. `timeoutMs` and
+ *    every other `dmx` key are PRESERVED from the board.
+ *  - `deviceName` — ONLY when the stored name is invalid and therefore makes
+ *    the firmware reject every write (`deviceNameRepairForPush`; the repaired
+ *    value is `plan.controllerName` verbatim, and an unusable card name is a
+ *    loud refusal BEFORE the POST, not a mangled name).
+ *
+ * NEVER carried: `swarm` (the board's swarm config is operator-managed and
+ * survives byte-for-byte because it is never mentioned) and `gamma` (gone from
+ * the sim's push surface entirely — ruling 7).
+ *
+ * @param {{snapshot: Object, plan: Object, ip?: string}} params
+ *   `snapshot` is the GET /api/config document the plan was derived from — the
+ *   SAME read, never a second one (that read-twice window is the drift bug this
+ *   closes). `ip` only sharpens the deviceName refusal text.
+ * @returns {Object} the body to POST.
+ */
+export function buildForcedConfigBody({ snapshot, plan, ip } = {}) {
+  if (!snapshot || typeof snapshot !== 'object' || !Array.isArray(snapshot.strands)) {
+    throw new Error('[MarsinLED] buildForcedConfigBody: snapshot must be a GET /api/config ' +
+      'document with a strands[] array');
+  }
+  const snapshotDmx = requireSnapshotDmx(snapshot, 'buildForcedConfigBody');
+  assertPerOutputPlan(plan, 'buildForcedConfigBody');
+  const strands = applyForcedPlan(snapshot.strands, plan);
+  validatePerOutputPlan(strands, plan.universeByOutputIndex);
+  const body = { strands, dmx: { ...snapshotDmx, enabled: true, protocol: 0 } };
+  const nameRepair = deviceNameRepairForPush({
+    ip, storedName: snapshot.deviceName, controllerName: plan.controllerName,
+  });
+  if (nameRepair) body.deviceName = nameRepair.to;
+  return body;
+}
+
+/**
+ * POST a forced-push body. TRANSPORT ONLY — it validates nothing beyond
+ * `body.strands` being an array (the builder already validated everything) and
+ * it does NO internal GET: the body was built from the same snapshot the plan
+ * was derived from, and a second read here would reopen the drift window
+ * between "what we planned against" and "what we applied to".
+ *
+ * Feature-detect with `deviceSupportsPerOutput` BEFORE calling this — it never
+ * re-checks capability.
+ *
+ * A forced write always changes strand fields, so the device reboots on success
+ * ({outcome:"needs-reboot", reboot:true}); the caller waits, then verifies with
+ * `diffForcedConfig`.
  *
  * AMBIGUOUS WRITES: if the POST produces no ANSWER (our timeout, or a socket the
  * rebooting device dropped) the returned rejection carries
@@ -843,38 +959,483 @@ export function applyPerOutputPlan(strands, plan) {
  * firmware persists the config and reboots, and on the live rig it reboots
  * before flushing the reply. The caller must wait out the reboot and read the
  * device back to find out. A device that ANSWERED (400 or any other non-2xx)
- * definitively did not apply the plan and is never flagged.
+ * definitively did not apply the body and is never flagged.
  *
  * @param {string} ip
- * @param {{plan: Object,
- *          opts?: {readTimeoutMs?: number, writeTimeoutMs?: number}}} params
- *   `plan` is `derivePerOutputPlan`'s result and is REQUIRED.
+ * @param {Object} body - a `buildForcedConfigBody` result.
+ * @param {{writeTimeoutMs?: number}} [opts]
  * @returns {Promise<Object>} the device's apply/reboot reply.
  */
-export async function pushPerOutputUniverses(ip, { plan, opts = {} } = {}) {
+export async function pushForcedConfig(ip, body, opts = {}) {
   if (opts.timeoutMs !== undefined) {
-    throw new Error('[MarsinLED] pushPerOutputUniverses: one flat timeoutMs cannot cover ' +
-      'both the read and the reboot-spanning write — pass {readTimeoutMs, writeTimeoutMs}');
+    throw new Error('[MarsinLED] pushForcedConfig: pass {writeTimeoutMs} — the write spans the ' +
+      'device reboot and gets its own budget (report 20260725_69)');
   }
-  assertPerOutputPlan(plan, 'pushPerOutputUniverses');
-  const readTimeoutMs = opts.readTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+  if (!body || typeof body !== 'object' || !Array.isArray(body.strands)) {
+    throw new Error('[MarsinLED] pushForcedConfig: body must be a buildForcedConfigBody() result ' +
+      'with a strands[] array — this transport validates nothing else, the builder did');
+  }
   const writeTimeoutMs = opts.writeTimeoutMs ?? PER_OUTPUT_WRITE_TIMEOUT_MS;
-  const config = await getConfig(ip, { timeoutMs: readTimeoutMs });
-  if (!config || !Array.isArray(config.strands)) {
-    throw new Error(`[MarsinLED] pushPerOutputUniverses: ${ip} GET /api/config returned no strands[]`);
+  try {
+    return await postConfigBody(ip, body, writeTimeoutMs);
+  } catch (err) {
+    if (err.httpStatus !== undefined) throw err;   // the device answered — definite failure
+    err.writeResponseLost = true;                  // no answer at all — the read-back decides
+    throw err;
   }
-  assertMappingPushAllowed(null, config);
-  const strands = applyPerOutputPlan(config.strands, plan);
-  validatePerOutputPlan(strands, plan.universeByOutputIndex);
-  const body = { strands };
-  // A device carrying an invalid stored deviceName rejects THIS body too (the
-  // firmware validates the merged config, not the patch) — repair it with the
-  // card's own name, or refuse loudly. `plan.controllerName` comes from
-  // derivePerOutputPlan; the UI declares the repair in the confirm dialog.
+}
+
+/**
+ * The informational (NON-failing) swarm note of the narrowed verify (report
+ * `_363` §2.2). PURE. The push does not touch swarm, so a board reporting
+ * `swarm.enabled === true` after a push is NOT a mismatch — but it IS worth
+ * saying out loud, because such a board runs DMX and SWARM at once and the
+ * operator owns that decision on the controller's own UI.
+ *
+ * Deliberately NOT part of `diffForcedConfig`'s return value: that array is the
+ * pass/fail verdict, and a note that rode inside it would turn an intended
+ * state into a failure. Callers render it beside the outcome line.
+ *
+ * @param {Object} verifyConfig - post-reboot GET /api/config.
+ * @returns {string|null} the note, or null when the board reports no swarm.
+ */
+export function swarmEnabledNote(verifyConfig) {
+  const swarm = verifyConfig && verifyConfig.swarm;
+  if (!swarm || typeof swarm !== 'object' || swarm.enabled !== true) return null;
+  return 'ℹ board also reports SWARM enabled — swarm is operator-managed; the sim does not ' +
+    'touch it';
+}
+
+/**
+ * The post-push verify — NARROWED to exactly what the push wrote (report
+ * `_363` §2.2, superseding `_362` §2.4). PURE: hand it the read-back pair and
+ * the body that was POSTed, get back the list of human-readable mismatches
+ * ([] ⇒ the device confirmed everything the push claimed).
+ *
+ * ASSERTED:
+ *  1. every index of the pushed `strands` array: `enabled` matches; on the
+ *     enabled ones `count`, `dmxUniverse` and `dmxStartAddress: 1` match; on
+ *     the disabled ones the read-back carries NO integer `dmxUniverse` (D1
+ *     proven on the device — the firmware's all-or-none rule);
+ *  2. the SAVED show mode: `dmx.enabled === true`, `dmx.protocol === 0`;
+ *  3. the RUNTIME receiver: `status.sacn.enabled === true` (the saved config and
+ *     the running receiver can diverge). `dmxOwnsOutput` is asserted only when
+ *     the firmware reports it — an absent field is never read as agreement;
+ *  4. identity: the board still answers with the controllerId it had before the
+ *     push, when the caller states one (bind-by-controllerId, docs/41 §2).
+ *
+ * NOT ASSERTED (ruling 6.2 — the push does not write these, so it judges
+ * nothing about them): strand `type` / `colorOrder` / pins, `dmx.timeoutMs`
+ * (preserved, not forced), `swarm.*` (untouched — see `swarmEnabledNote` for
+ * the informational surface) and `gamma` (gone from the sim entirely).
+ *
+ * @param {Object} verifyConfig - post-reboot GET /api/config.
+ * @param {Object} verifyStatus - post-reboot GET /api/status.
+ * @param {Object} body - the `buildForcedConfigBody` result that was POSTed.
+ * @param {{controllerId?: string}} [expected] - pre-push identity to hold to.
+ * @returns {string[]} mismatch sentences; empty ⇒ verified.
+ */
+export function diffForcedConfig(verifyConfig, verifyStatus, body, expected = {}) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.strands)) {
+    throw new Error('[MarsinLED] diffForcedConfig: body must be the buildForcedConfigBody() ' +
+      'result that was POSTed');
+  }
+  if (!verifyConfig || typeof verifyConfig !== 'object' || !Array.isArray(verifyConfig.strands)) {
+    throw new Error('[MarsinLED] diffForcedConfig: verifyConfig must be a GET /api/config ' +
+      'document with a strands[] array');
+  }
+  if (!verifyStatus || typeof verifyStatus !== 'object') {
+    throw new Error('[MarsinLED] diffForcedConfig: verifyStatus must be a GET /api/status document');
+  }
+  const mismatches = [];
+
+  // 1 — the FULL strands array, every index, both directions.
+  if (verifyConfig.strands.length !== body.strands.length) {
+    mismatches.push(`device reports ${verifyConfig.strands.length} output(s), the push wrote ` +
+      `${body.strands.length}`);
+  }
+  body.strands.forEach((want, i) => {
+    const got = verifyConfig.strands[i];
+    if (!got || typeof got !== 'object') {
+      mismatches.push(`output ${i}: device reported no strand entry`);
+      return;
+    }
+    const wantEnabled = want.enabled === true;
+    if ((got.enabled === true) !== wantEnabled) {
+      mismatches.push(`output ${i}: device enabled=${got.enabled} ≠ wanted enabled=${wantEnabled}`);
+      return;
+    }
+    if (!wantEnabled) {
+      // D1 read-back: the push DELETED the universe keys on this output, so a
+      // board still reporting one never applied the all-or-none rule — the exact
+      // state that 400s the NEXT write.
+      if (Number.isInteger(got.dmxUniverse)) {
+        mismatches.push(`output ${i}: device still reports U${got.dmxUniverse} on a DISABLED ` +
+          'output — the push wrote no universe there (firmware all-or-none)');
+      }
+      return;
+    }
+    if (got.count !== want.count) {
+      mismatches.push(`output ${i}: device count ${got.count} px ≠ wanted ${want.count} px`);
+    }
+    if (got.dmxUniverse !== want.dmxUniverse) {
+      mismatches.push(`output ${i}: device U${got.dmxUniverse} ≠ wanted U${want.dmxUniverse}`);
+    }
+    if (got.dmxStartAddress !== PER_OUTPUT_START_ADDRESS) {
+      mismatches.push(`output ${i}: device startAddress ${got.dmxStartAddress} ≠ ` +
+        `${PER_OUTPUT_START_ADDRESS}`);
+    }
+  });
+
+  // 2 — the SAVED show mode: the push's whole point is a DMX-driven board.
+  // `dmx.timeoutMs` (and every other dmx key) was PRESERVED from the board, not
+  // forced, so it is not judged here.
+  const dmx = verifyConfig.dmx;
+  if (!dmx || dmx.enabled !== true) {
+    mismatches.push(`dmx.enabled=${dmx && dmx.enabled} ≠ true — the board is NOT DMX-driven`);
+  }
+  if (!dmx || dmx.protocol !== 0) {
+    mismatches.push(`dmx.protocol=${dmx && dmx.protocol} ≠ 0 (sACN)`);
+  }
+
+  // 3 — the RUNTIME receiver. Saved config and running receiver can diverge.
+  const sacn = verifyStatus.sacn;
+  if (!sacn || sacn.enabled !== true) {
+    mismatches.push(`sacn.enabled=${sacn && sacn.enabled} ≠ true — the sACN receiver is not ` +
+      'listening');
+  }
+  if (verifyStatus.dmxOwnsOutput !== undefined && verifyStatus.dmxOwnsOutput !== true) {
+    mismatches.push(`dmxOwnsOutput=${verifyStatus.dmxOwnsOutput} ≠ true — DMX does not own the ` +
+      'outputs');
+  }
+
+  // 4 — identity (bind-by-controllerId): same board before and after.
+  if (expected && expected.controllerId !== undefined
+      && verifyStatus.controllerId !== expected.controllerId) {
+    mismatches.push(`controllerId '${verifyStatus.controllerId}' ≠ the pre-push ` +
+      `'${expected.controllerId}' — this is not the same board`);
+  }
+
+  return mismatches;
+}
+
+// ── The DMX ON/OFF toggle (report `_363` §3 — the anti-switch) ──────────────
+//
+// DMX on/off is a FIELD of the `dmx` block of /api/config; the firmware offers
+// no lighter runtime endpoint for it (pinned at source + docs/MARSINLED_API.md).
+// Any `dmx` change is reboot-to-apply; writing the value the board already
+// holds answers `applied` with no reboot (idempotent). After the reboot,
+// `status.sacn.enabled` mirrors the saved flag.
+//
+// One button, one write, one read-back: no fleet toggle, no status sweep, no
+// DMX⇄SWARM mode model, no swarm writes, no polling, no cache.
+
+/**
+ * Build the ONE `POST /api/config` body a DMX toggle sends. PURE (no I/O).
+ *
+ * `{ dmx: {...snapshot.dmx, enabled} }` — the board's FULL stored `dmx` object
+ * with only `enabled` flipped (the same sidestep-partial-merge rule as the
+ * push), plus `deviceName` under the unchanged repair. Nothing else: the toggle
+ * claims nothing about strands, swarm or gamma.
+ *
+ * @param {{snapshot: Object, enabled: boolean, controllerName?: string,
+ *          ip?: string}} params
+ * @returns {Object} the body to POST.
+ */
+export function buildDmxToggleBody({ snapshot, enabled, controllerName, ip } = {}) {
+  if (typeof enabled !== 'boolean') {
+    throw new Error('[MarsinLED] buildDmxToggleBody: `enabled` must be a boolean (got ' +
+      `${JSON.stringify(enabled)}) — the toggle states the target state explicitly`);
+  }
+  if (!snapshot || typeof snapshot !== 'object') {
+    throw new Error('[MarsinLED] buildDmxToggleBody: snapshot must be a GET /api/config document');
+  }
+  const snapshotDmx = requireSnapshotDmx(snapshot, 'buildDmxToggleBody');
+  const body = { dmx: { ...snapshotDmx, enabled } };
   const nameRepair = deviceNameRepairForPush({
-    ip, storedName: config.deviceName, controllerName: plan.controllerName,
+    ip, storedName: snapshot.deviceName, controllerName,
   });
   if (nameRepair) body.deviceName = nameRepair.to;
+  return body;
+}
+
+/**
+ * Verify a DMX toggle. PURE: the read-back pair plus the state that was asked
+ * for, back comes the mismatch list ([] ⇒ confirmed).
+ *
+ *  1. `config.dmx.enabled === enabled` — the SAVED flag;
+ *  2. `status.sacn.enabled === enabled` — the RUNTIME receiver (saved config and
+ *     running receiver can diverge);
+ *  3. identity: the board still answers with the controllerId it had before,
+ *     when the caller states one.
+ *
+ * Nothing else is asserted — the toggle wrote nothing else.
+ *
+ * @param {Object} verifyConfig - post-reboot GET /api/config.
+ * @param {Object} verifyStatus - post-reboot GET /api/status.
+ * @param {boolean} enabled - the state the toggle asked for.
+ * @param {{controllerId?: string}} [expected] - pre-write identity to hold to.
+ * @returns {string[]} mismatch sentences; empty ⇒ verified.
+ */
+export function diffDmxToggle(verifyConfig, verifyStatus, enabled, expected = {}) {
+  if (typeof enabled !== 'boolean') {
+    throw new Error('[MarsinLED] diffDmxToggle: `enabled` must be the boolean the toggle asked ' +
+      `for (got ${JSON.stringify(enabled)})`);
+  }
+  if (!verifyConfig || typeof verifyConfig !== 'object') {
+    throw new Error('[MarsinLED] diffDmxToggle: verifyConfig must be a GET /api/config document');
+  }
+  if (!verifyStatus || typeof verifyStatus !== 'object') {
+    throw new Error('[MarsinLED] diffDmxToggle: verifyStatus must be a GET /api/status document');
+  }
+  const mismatches = [];
+  const dmx = verifyConfig.dmx;
+  if (!dmx || dmx.enabled !== enabled) {
+    mismatches.push(`dmx.enabled=${dmx && dmx.enabled} ≠ ${enabled} — the board did not take the ` +
+      'DMX flag');
+  }
+  const sacn = verifyStatus.sacn;
+  if (!sacn || sacn.enabled !== enabled) {
+    mismatches.push(`sacn.enabled=${sacn && sacn.enabled} ≠ ${enabled} — the running sACN ` +
+      'receiver does not match the saved flag');
+  }
+  if (expected && expected.controllerId !== undefined
+      && verifyStatus.controllerId !== expected.controllerId) {
+    mismatches.push(`controllerId '${verifyStatus.controllerId}' ≠ the pre-write ` +
+      `'${expected.controllerId}' — this is not the same board`);
+  }
+  return mismatches;
+}
+
+/**
+ * POST a DMX-toggle body. TRANSPORT ONLY — the exact mirror of
+ * `pushForcedConfig`: it validates nothing beyond `body.dmx` being an object
+ * (the builder already validated everything), it does NO internal GET (the body
+ * was built from ONE snapshot; a second read here would reopen the drift
+ * window), and it never retries.
+ *
+ * A `dmx` change is reboot-to-apply, so the device reboots on success
+ * ({outcome:"needs-reboot", reboot:true}) and can drop the HTTP reply doing it:
+ * an unanswered POST rejects with `err.writeResponseLost === true`, which is
+ * AMBIGUOUS, never proof of failure — the caller waits out the reboot and reads
+ * the device back (`diffDmxToggle`). A device that ANSWERED — a 400, the 409 the
+ * firmware returns during an active staged-config confirm window, or any other
+ * non-2xx — definitively did not apply the body and is a loud failure, never
+ * flagged ambiguous (D2).
+ *
+ * @param {string} ip
+ * @param {Object} body - a `buildDmxToggleBody` result.
+ * @param {{writeTimeoutMs?: number}} [opts]
+ * @returns {Promise<Object>} the device's apply/reboot reply.
+ */
+export async function pushDmxToggle(ip, body, opts = {}) {
+  if (opts.timeoutMs !== undefined) {
+    throw new Error('[MarsinLED] pushDmxToggle: pass {writeTimeoutMs} — the write spans the ' +
+      'device reboot and gets its own budget (report 20260725_69)');
+  }
+  if (!body || typeof body !== 'object' || !body.dmx || typeof body.dmx !== 'object'
+      || Array.isArray(body.dmx)) {
+    throw new Error('[MarsinLED] pushDmxToggle: body must be a buildDmxToggleBody() result with ' +
+      'a dmx object — this transport validates nothing else, the builder did');
+  }
+  const writeTimeoutMs = opts.writeTimeoutMs ?? PER_OUTPUT_WRITE_TIMEOUT_MS;
+  try {
+    return await postConfigBody(ip, body, writeTimeoutMs);
+  } catch (err) {
+    if (err.httpStatus !== undefined) throw err;   // the device answered — definite failure
+    err.writeResponseLost = true;                  // no answer at all — the read-back decides
+    throw err;
+  }
+}
+
+// ── The GAMMA push (report `_363` §11 — PUSH ONLY, no pull, ever) ───────────
+//
+// Gamma is a key of the SAME /api/config document the narrowed push and the DMX
+// toggle write, so it rides exactly the same machinery: one snapshot → one
+// body → one POST → read-back verify. Two things make it its own shape:
+//
+//  1. LIVE-APPLY. A gamma change does NOT reboot the board (pinned at firmware
+//     source, docs/MARSINLED_API.md): the reply is `{outcome:"applied"}` and
+//     the curve takes effect immediately. The caller still HONORS a
+//     `needs-reboot` reply if a future firmware ever asks for one — believing
+//     the device is not the same thing as assuming it.
+//  2. FLOAT32 read-back. The firmware stores each exponent as a float32, so a
+//     pushed 2.2 reads back as 2.200000047683716. The verify therefore compares
+//     per channel at GAMMA_VERIFY_EPSILON, never with `===`.
+//
+// There is NO read direction here and there never will be (operator ruling,
+// unconditional): no `getGamma`, no refresh, no cache, no mirror-from-device.
+// The curve pushed is the curve the operator set in the sim; the device is only
+// ever asked to CONFIRM it.
+
+export const GAMMA_CHANNELS = Object.freeze(['r', 'g', 'b', 'w']);
+
+// The controller's own accepted range, mirrored client-side so a bad curve is
+// refused before it leaves the browser. led_gamma.js (the scene mirror) and
+// led_wire.js agree on the same 1.0–3.0 window; a divergence between the three
+// would be a bug, not a preference.
+export const GAMMA_MIN = 1.0;
+export const GAMMA_MAX = 3.0;
+
+// The firmware stores gamma as float32: 2.2 → 2.200000047683716 (error ~5e-8).
+// 1e-3 is three orders of magnitude above that noise and two below the slider's
+// 0.05 grid, so it accepts every honest read-back and rejects every real change.
+export const GAMMA_VERIFY_EPSILON = 1e-3;
+
+/**
+ * Validate + normalize a gamma curve to `{r,g,b,w}` finite numbers in
+ * 1.0–3.0. PURE. THROWS naming the offending channel — a curve the sim cannot
+ * state exactly must never reach a board (codex P0, no fallbacks: nothing here
+ * clamps, rounds or substitutes a default).
+ *
+ * A missing channel is an error: the curve is always complete, because a
+ * partial `gamma` object merged into the stored config would leave the operator
+ * guessing which channels the board kept.
+ *
+ * @param {*} raw
+ * @param {string} [label] - what to call it in the error text.
+ * @returns {{r:number,g:number,b:number,w:number}} a fresh, plain object.
+ */
+export function validateGammaCurve(raw, label = 'gamma') {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`[MarsinLED] ${label} must be an object with r/g/b/w exponents ` +
+      `(got ${JSON.stringify(raw)})`);
+  }
+  for (const key of Object.keys(raw)) {
+    if (!GAMMA_CHANNELS.includes(key)) {
+      throw new Error(`[MarsinLED] ${label} has unknown key '${key}' (expected r, g, b, w)`);
+    }
+  }
+  const out = {};
+  for (const ch of GAMMA_CHANNELS) {
+    const v = raw[ch];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < GAMMA_MIN || v > GAMMA_MAX) {
+      const err = new Error(`[MarsinLED] ${label}.${ch} ${JSON.stringify(raw[ch])} must be a ` +
+        `finite number in ${GAMMA_MIN}–${GAMMA_MAX} (1.0 = curve off) — the range the LED ` +
+        'controller accepts');
+      err.channel = ch;
+      throw err;
+    }
+    out[ch] = v;
+  }
+  return out;
+}
+
+/**
+ * Build the ONE `POST /api/config` body a gamma push sends. PURE (no I/O).
+ *
+ * `{ gamma: {r,g,b,w} }` — nothing else — plus `deviceName` under the unchanged
+ * §4.1.1 repair (a board whose STORED name is invalid rejects EVERY config
+ * write, gamma included; that is exactly how the quirk was found — report
+ * 20260725_124's proof case was a no-op gamma write).
+ *
+ * The snapshot is required even though no key of it is copied into the body:
+ * it is where `deviceName` is read from, and demanding it keeps the gamma push
+ * on the same one-snapshot discipline as the other two writers rather than
+ * letting it POST blind.
+ *
+ * @param {{snapshot: Object, gamma: Object, controllerName?: string,
+ *          ip?: string}} params
+ * @returns {Object} the body to POST.
+ */
+export function buildGammaPushBody({ snapshot, gamma, controllerName, ip } = {}) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    throw new Error('[MarsinLED] buildGammaPushBody: snapshot must be a GET /api/config document ' +
+      '— the gamma push reads the board once before it writes, like every other writer here');
+  }
+  const clean = validateGammaCurve(gamma, 'buildGammaPushBody: gamma');
+  const body = { gamma: clean };
+  const nameRepair = deviceNameRepairForPush({
+    ip, storedName: snapshot.deviceName, controllerName,
+  });
+  if (nameRepair) body.deviceName = nameRepair.to;
+  return body;
+}
+
+/**
+ * Verify a gamma push. PURE: the read-back pair plus the curve that was asked
+ * for, back comes the mismatch list ([] ⇒ confirmed).
+ *
+ *  1. `config.gamma` carries all four channels, each within
+ *     GAMMA_VERIFY_EPSILON of what was pushed (float32 storage — see above);
+ *  2. identity: the board still answers with the controllerId it had before the
+ *     write, when the caller states one.
+ *
+ * Nothing else is asserted — the gamma push wrote nothing else. In particular
+ * it claims NOTHING about strands, dmx or swarm, and it never treats an absent
+ * `config.gamma` as agreement: a firmware that does not report the block back
+ * is a board this push cannot confirm, so it is a loud mismatch.
+ *
+ * @param {Object} verifyConfig - post-write GET /api/config.
+ * @param {Object} verifyStatus - post-write GET /api/status.
+ * @param {Object} expectedGamma - the curve that was POSTed (`body.gamma`).
+ * @param {{controllerId?: string}} [expected] - pre-write identity to hold to.
+ * @returns {string[]} mismatch sentences; empty ⇒ verified.
+ */
+export function diffGammaPush(verifyConfig, verifyStatus, expectedGamma, expected = {}) {
+  if (!verifyConfig || typeof verifyConfig !== 'object') {
+    throw new Error('[MarsinLED] diffGammaPush: verifyConfig must be a GET /api/config document');
+  }
+  if (!verifyStatus || typeof verifyStatus !== 'object') {
+    throw new Error('[MarsinLED] diffGammaPush: verifyStatus must be a GET /api/status document');
+  }
+  const want = validateGammaCurve(expectedGamma, 'diffGammaPush: expectedGamma');
+  const mismatches = [];
+  const got = verifyConfig.gamma;
+  if (!got || typeof got !== 'object' || Array.isArray(got)) {
+    mismatches.push(`the board reports no gamma block (${JSON.stringify(got)}) — the push ` +
+      'cannot be confirmed');
+  } else {
+    for (const ch of GAMMA_CHANNELS) {
+      const v = got[ch];
+      if (typeof v !== 'number' || !Number.isFinite(v)) {
+        mismatches.push(`gamma.${ch}=${JSON.stringify(v)} is not a number in the read-back`);
+        continue;
+      }
+      if (Math.abs(v - want[ch]) > GAMMA_VERIFY_EPSILON) {
+        mismatches.push(`gamma.${ch}=${v} ≠ pushed ${want[ch]} (tolerance ` +
+          `${GAMMA_VERIFY_EPSILON})`);
+      }
+    }
+  }
+  if (expected && expected.controllerId !== undefined
+      && verifyStatus.controllerId !== expected.controllerId) {
+    mismatches.push(`controllerId '${verifyStatus.controllerId}' ≠ the pre-write ` +
+      `'${expected.controllerId}' — this is not the same board`);
+  }
+  return mismatches;
+}
+
+/**
+ * POST a gamma-push body. TRANSPORT ONLY — the exact mirror of `pushDmxToggle`:
+ * it validates nothing beyond `body.gamma` being an object (the builder already
+ * validated the curve), it does NO internal GET (the body was built from ONE
+ * snapshot), and it never retries.
+ *
+ * Gamma is LIVE-APPLY, so the expected reply is `{outcome:"applied"}` with no
+ * reboot and the POST normally answers. The lost-reply arbitration is kept
+ * anyway and means the same thing it does everywhere else: an unanswered POST
+ * rejects with `err.writeResponseLost === true`, which is AMBIGUOUS and settled
+ * by the read-back — never proof of failure. A device that ANSWERED non-2xx (a
+ * 400, the staged-config 409, anything) definitively did not apply the body and
+ * is a loud failure, never flagged ambiguous (D2).
+ *
+ * @param {string} ip
+ * @param {Object} body - a `buildGammaPushBody` result.
+ * @param {{writeTimeoutMs?: number}} [opts]
+ * @returns {Promise<Object>} the device's apply reply.
+ */
+export async function pushGammaPush(ip, body, opts = {}) {
+  if (opts.timeoutMs !== undefined) {
+    throw new Error('[MarsinLED] pushGammaPush: pass {writeTimeoutMs} — every /api/config write ' +
+      'in this module carries its own budget (report 20260725_69)');
+  }
+  if (!body || typeof body !== 'object' || !body.gamma || typeof body.gamma !== 'object'
+      || Array.isArray(body.gamma)) {
+    throw new Error('[MarsinLED] pushGammaPush: body must be a buildGammaPushBody() result with ' +
+      'a gamma object — this transport validates nothing else, the builder did');
+  }
+  const writeTimeoutMs = opts.writeTimeoutMs ?? PER_OUTPUT_WRITE_TIMEOUT_MS;
   try {
     return await postConfigBody(ip, body, writeTimeoutMs);
   } catch (err) {

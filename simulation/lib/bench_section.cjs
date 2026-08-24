@@ -325,7 +325,7 @@ function checkSourceIntegrity(source) {
 // ── Derivation ──────────────────────────────────────────────────────────────
 
 const CONTROLLER_KEY_ORDER = ['name', 'sourceName', 'ip', 'type', 'protocol', 'ports',
-  'parkedOutputs', 'led', 'device'];
+  'led', 'device'];
 // `output` = the physical board output an LED port drives (report 20260725_70).
 // orderKeys drops undefined keys, so a DMX port (or a pre-selector LED port)
 // emits exactly what it did before.

@@ -132,27 +132,38 @@ function makeCtx(registry, addressMergePlan) {
 /** The device: ONE enabled output on U21, per-output-capable firmware. */
 const deviceConfig = () => ({
   deviceName: 'LeftLeftFront',
-  strands: [{ index: 0, enabled: true, count: 40, universe: 21, startAddress: 1 }],
+  strands: [{ type: 'WS281X_RGBW', count: 40, pinData: 35, pinClock: 0, colorOrder: 'RGBW',
+    rgbwMode: 'exact', enabled: true, dmxUniverse: 21, dmxStartAddress: 1 }],
+  dmx: { enabled: false, protocol: 0, timeoutMs: 3000 },
 });
 
 function makeIo(calls) {
+  const confirmed = () => {
+    const cfg = deviceConfig();
+    if (!calls.lastBody) return cfg;
+    return {
+      ...cfg,
+      strands: calls.lastBody.strands.map((strand) => ({ ...strand })),
+      dmx: { ...calls.lastBody.dmx },
+    };
+  };
   return {
     getStatus: async () => ({
       controllerId: 'titanic_60', boardId: 'angio4', firmwareSHA: 'aa11bb22cc33',
-      strands: deviceConfig().strands,
+      strands: confirmed().strands,
       capabilitiesExt: { perOutputDmx: true },
       sacn: {
         enabled: true,
-        perOutput: calls.lastPlan
-          ? Object.entries(calls.lastPlan).map(([index, universe]) =>
-            ({ index: Number(index), universe, startAddress: 1, enabled: true }))
-          : [],
+        perOutput: confirmed().strands
+          .map((strand, index) => ({ index, universe: strand.dmxUniverse,
+            startAddress: strand.dmxStartAddress, enabled: strand.enabled === true }))
+          .filter((entry) => entry.enabled),
       },
     }),
-    getConfig: async () => deviceConfig(),
-    pushPerOutputUniverses: async (ip, { plan }) => {
+    getConfig: async () => confirmed(),
+    pushForcedConfig: async (ip, body) => {
       calls.push(`push:${ip}`);
-      calls.lastPlan = plan.universeByOutputIndex;
+      calls.lastBody = body;
       return { outcome: 'needs-reboot', reboot: true };
     },
     awaitReboot: async () => {},

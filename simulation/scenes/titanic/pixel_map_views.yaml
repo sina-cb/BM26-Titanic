@@ -36,9 +36,9 @@ views:
         sizeX: 16
         sizeY: 16
     framing:
-      zoom: 1.2544000000000013
-      panX: 653.0394090365528
-      panY: 209.97581167669932
+      zoom: 0.797193877551021
+      panX: -36.14946871924576
+      panY: -147.9054122367461
     offsets:
       Left Auditorium 5:
         dx: 104
@@ -104,8 +104,8 @@ views:
         dx: 48
         dy: -16
       Left_Back_Left:
-        dx: 48
-        dy: -8
+        dx: 216
+        dy: 88
       Left Small SmokeStack 1:
         dx: 64
         dy: 16
@@ -240,6 +240,10 @@ views:
         sizeX: 18
         sizeY: 60
         effect: upwash
+    framing:
+      zoom: 1
+      panX: -4
+      panY: -113
     offsets:
       Left SmokeStack 4:
         dx: -64

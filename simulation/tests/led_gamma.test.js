@@ -1,7 +1,7 @@
-// Tests for the LED controller GAMMA feature (report 20260725_29):
-// the scene mirror (controllers.yaml → led.wire.controllerGamma), its
-// validation, the mirror↔hardware sync discipline, and the sequential fleet
-// push with per-controller results.
+// Tests for the LED controller GAMMA feature (report 20260725_29), as it
+// stands after the operator's rulings (report 20260823_364): the scene mirror
+// (controllers.yaml → led.wire.controllerGamma), its validation, the DORMANT
+// push machinery, and the DISABLED per-card UI.
 //
 // The contract under test:
 //   - a curve outside the controller's accepted 1.0–3.0 range is refused
@@ -10,13 +10,17 @@
 //     device.lastGammaPush — mirror and hardware can never silently diverge;
 //   - a FAILED push leaves the mirror untouched and names the controller;
 //   - a fleet push is sequential, reports every controller (ok / failed /
-//     unreachable / skipped), and one failure never aborts the rest.
+//     unreachable / skipped), and one failure never aborts the rest;
+//   - there is NO gamma pull anywhere: no refresh, no TTL cache, no fleet
+//     source harvest, no read transport — and the gamma UI section renders
+//     fully disabled with no handler and no network call.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 import {
+  DEFAULT_GAMMA_TRANSPORT,
   GAMMA_CURVE_GEOMETRY,
   LED_GAMMA_MIN,
   LED_GAMMA_MAX,
@@ -24,21 +28,16 @@ import {
   LED_GAMMA_RECOMMENDED,
   LED_GAMMA_STEP,
   activeGammaPresetKey,
-  clearGammaRefreshCache,
-  commitGammaRefresh,
   commitGammaPush,
-  fleetGammaSourcePlan,
   formatGamma,
   gammaCurvePath,
   gammaEquals,
   gammaPushRequestBody,
-  gammaRefreshState,
   parseGammaField,
   pushGammaFleet,
   pushGammaToController,
   quantizeGamma,
   readGammaMirror,
-  refreshGammaFromController,
   setGammaMirror,
   summarizeFleetResults,
   validateGammaMirror,
@@ -300,38 +299,15 @@ test('a different saved-config read-back is refused before the scene mirror chan
   assert.equal(controller.device.lastGammaPush, undefined);
 });
 
-test('fleet source auto-resolves only when every displayed curve is identical', () => {
-  const a = boundLedController({ id: 1, name: 'A' });
-  const b = boundLedController({ id: 2, name: 'B' });
-  const shared = { r: 2.1, g: 2.2, b: 2.3, w: 1 };
-  setGammaMirror(a, shared);
-  setGammaMirror(b, shared);
-  const plan = fleetGammaSourcePlan([a, b]);
-  assert.equal(plan.requiresSelection, false);
-  assert.deepEqual(plan.gamma, shared);
-  assert.match(plan.sourceLabel, /shared by every displayed/);
-});
-
-test('differing fleet curves refuse until one displayed source is explicit', () => {
-  const a = boundLedController({ id: 1, name: 'A' });
-  const b = boundLedController({ id: 2, name: 'B' });
-  setGammaMirror(a, { r: 2.1, g: 2.1, b: 2.1, w: 1 });
-  setGammaMirror(b, { r: 2.6, g: 2.6, b: 2.6, w: 1 });
-  const refused = fleetGammaSourcePlan([a, b]);
-  assert.equal(refused.requiresSelection, true);
-  assert.equal(refused.gamma, null);
-  const chosen = fleetGammaSourcePlan([a, b], b.id);
-  assert.deepEqual(chosen.gamma, readGammaMirror(b));
-  assert.match(chosen.sourceLabel, /^B /);
-});
-
-test('one frozen source curve reaches every controller despite later source mutation', async () => {
+test('one frozen curve reaches every controller despite later mirror mutation', async () => {
   const a = boundLedController({ id: 1, name: 'A', ip: '10.0.0.5' });
   const b = boundLedController({ id: 2, name: 'B', ip: '10.0.0.6' });
   const chosen = { r: 2.1, g: 2.2, b: 2.3, w: 1 };
   setGammaMirror(a, chosen);
   setGammaMirror(b, { r: 2.8, g: 2.8, b: 2.8, w: 1 });
-  const gammaSnapshot = Object.freeze({ ...fleetGammaSourcePlan([a, b], a.id).gamma });
+  // The confirmed curve is stated ONCE and frozen. (It is no longer harvested
+  // from a "source" card — fleet source selection went with the pull side.)
+  const gammaSnapshot = Object.freeze({ ...chosen });
   setGammaMirror(a, { r: 3, g: 3, b: 3, w: 1 });
 
   const transport = okTransport(gammaSnapshot);
@@ -382,105 +358,96 @@ test('a controller without a usable IP is skipped, never pushed', async () => {
   assert.equal(transport.calls.length, 0);
 });
 
-// ── Bounded saved-config refresh ────────────────────────────────────────────
+// ── No pull, anywhere (operator ruling: "only push, not pull") ──────────────
+//
+// The saved-config refresh (bounded read + TTL cache + mirror-from-device
+// commit), its manual refresh button and the fleet SOURCE harvest are deleted
+// permanently. These guard the absence so a future edit cannot quietly reopen
+// a read path.
 
-function gammaReadResult(gamma = { r: 2.2, g: 2.3, b: 2.4, w: 1 }, overrides = {}) {
-  return {
-    gamma,
-    controllerId: 'bench_1',
-    deviceName: 'Bench-1',
-    boardId: 'angio4-old',
-    firmwareSHA: 'sha-1',
-    ...overrides,
-  };
-}
-
-test('panel-open refresh is one GET; concurrent/rerender calls coalesce within TTL', async () => {
-  const controller = boundLedController();
-  clearGammaRefreshCache(controller);
-  let reads = 0;
-  let resolveRead;
-  const transport = {
-    readGamma: () => {
-      reads += 1;
-      return new Promise((resolve) => { resolveRead = resolve; });
-    },
-  };
-  let clock = 1000;
-  const options = { now: () => clock, ttlMs: 100 };
-  const commit = (c, result) => commitGammaRefresh(c, result);
-  const first = refreshGammaFromController(controller, transport, commit, options);
-  const concurrent = refreshGammaFromController(controller, transport, commit, options);
-  assert.equal(first, concurrent);
-  assert.equal(reads, 1);
-  resolveRead(gammaReadResult());
-  await Promise.all([first, concurrent]);
-
-  clock = 1050;
-  const cached = await refreshGammaFromController(controller, transport, commit, options);
-  assert.equal(cached.cached, true);
-  assert.equal(reads, 1);
-  assert.deepEqual(readGammaMirror(controller), gammaReadResult().gamma);
+test('the gamma transport has a push leg and NO read leg', () => {
+  assert.equal(typeof DEFAULT_GAMMA_TRANSPORT.pushGamma, 'function');
+  assert.deepEqual(Object.keys(DEFAULT_GAMMA_TRANSPORT), ['pushGamma']);
 });
 
-test('TTL expiry and manual refresh each issue exactly one new GET', async () => {
-  const controller = boundLedController();
-  clearGammaRefreshCache(controller);
-  let reads = 0;
-  let clock = 1000;
-  const transport = { readGamma: async () => { reads += 1; return gammaReadResult(); } };
-  const commit = (c, result) => commitGammaRefresh(c, result);
-  const options = { now: () => clock, ttlMs: 100 };
-  await refreshGammaFromController(controller, transport, commit, options);
-  clock = 1200;
-  await refreshGammaFromController(controller, transport, commit, options);
-  await refreshGammaFromController(controller, transport, commit, { ...options, force: true });
-  assert.equal(reads, 3);
-});
-
-test('verified push primes refresh cache, so rerender performs zero GETs', async () => {
-  const controller = boundLedController();
-  clearGammaRefreshCache(controller);
-  const gamma = { r: 2.2, g: 2.3, b: 2.4, w: 1 };
-  await pushGammaToController(controller, okTransport(gamma),
-    (c, result) => commitGammaPush(c, result), { gamma });
-  let reads = 0;
-  const refreshed = await refreshGammaFromController(controller, {
-    readGamma: async () => { reads += 1; return gammaReadResult(gamma); },
-  }, (c, result) => commitGammaRefresh(c, result));
-  assert.equal(refreshed.cached, true);
-  assert.equal(reads, 0);
-  assert.deepEqual(gammaRefreshState(controller).gamma, gamma);
-});
-
-test('identity or malformed saved gamma refuses mirror update and caches the failure', async () => {
-  for (const response of [
-    gammaReadResult(undefined, { controllerId: 'other' }),
-    gammaReadResult({ r: '2.2', g: 2.2, b: 2.2, w: 1 }),
+test('led_gamma.js exports no refresh / cache / fleet-source symbol', () => {
+  const source = fs.readFileSync(new URL('../src/dmx/led/led_gamma.js', import.meta.url), 'utf8');
+  for (const symbol of [
+    'refreshGammaFromController', 'commitGammaRefresh', 'gammaRefreshState',
+    'clearGammaRefreshCache', 'GAMMA_REFRESH_TTL_MS', 'gammaRefreshCache',
+    'fleetGammaSourcePlan', 'readGamma:', '/led/gamma?',
   ]) {
-    const controller = boundLedController();
-    clearGammaRefreshCache(controller);
-    const before = readGammaMirror(controller);
-    let reads = 0;
-    const transport = { readGamma: async () => { reads += 1; return response; } };
-    const first = await refreshGammaFromController(controller, transport,
-      (c, result) => commitGammaRefresh(c, result));
-    const second = await refreshGammaFromController(controller, transport,
-      (c, result) => commitGammaRefresh(c, result));
-    assert.equal(first.state, 'failed');
-    assert.equal(second.cached, true);
-    assert.equal(reads, 1);
-    assert.deepEqual(readGammaMirror(controller), before);
+    assert.ok(!source.includes(symbol),
+      `${symbol} must not survive the gamma pull removal`);
   }
 });
 
-test('startup gamma refresh updates in place and never calls the parent refresh', () => {
+// The `_364` DISABLED-UI assertions are REPLACED, not deleted: the operator
+// re-enabled the PUSH side once the config push was live-validated on four real
+// boards. What must still hold is the half that never comes back — the PULL.
+
+test('the gamma UI section is PUSH-enabled and still reaches no device itself', () => {
   const source = fs.readFileSync(new URL('../src/gui/led_gamma_ui.js', import.meta.url), 'utf8');
-  const body = source.match(/async function runGammaRefresh[\s\S]*?\n}/);
-  assert.ok(body, 'runGammaRefresh must exist');
-  assert.doesNotMatch(body[0], /ctx\.refresh\(/);
-  assert.match(source, /ctx\.mutateInPlace\(null/);
-  assert.match(source, /failed\.length \+ unreachable\.length \+ skipped\.length/);
+
+  // The controls are live: sliders/presets edit the curve, ⬆ Push states it.
+  assert.match(source, /slider\.onchange = /, 'the sliders are the curve source again');
+  assert.match(source, /chip\.onclick = /, 'the preset chips set the curve');
+  assert.match(source, /pushBtn\.onclick = /, 'the push button is live');
+  assert.match(source, /pushGammaToDevice/,
+    'the push rides the panel flow (identity gate + retried read-back + provenance)');
+  // The push button is inert ONLY for a card with no usable device IP.
+  assert.match(source, /pushBtn\.disabled = !pushable/);
+
+  // The module still owns NO transport of its own — every device hop goes
+  // through led_discovery_panel.js, so there is exactly one gamma write path.
+  for (const reach of ['fetch(', 'saveHttpUrl', 'DEFAULT_GAMMA_TRANSPORT',
+    'pushGammaToController', 'pushGammaFleet']) {
+    assert.ok(!source.includes(reach),
+      `the gamma section must not carry its own transport (${reach})`);
+  }
+  // …and NO pull, in any form. This is the permanent half of the ruling.
+  // (`readGammaMirror` is a SCENE read and stays — `_364` §4. The symbols below
+  // are the DEVICE-read ones.)
+  for (const pull of ['refreshGammaFromController', 'startFleetGammaPush', 'Refresh gamma',
+    'readGamma(', 'getGamma', 'cacheVerifiedGamma']) {
+    assert.ok(!source.includes(pull), `gamma PULL must never come back (${pull})`);
+  }
+  assert.match(source, /never reads gamma back off a device/);
+});
+
+test('the fleet gamma entry is LIVE, and still has no source selection', () => {
+  const source = fs.readFileSync(
+    new URL('../src/gui/controller_map_editor.js', import.meta.url), 'utf8');
+  assert.match(source, /gammaAllBtn\.onclick = \(\) => startGammaPushAll\(ledCtx\(\)\)/);
+  assert.match(source, /gammaAllBtn\.disabled = controllers\.length === 0/);
+  // The fleet SOURCE harvest (one card's curve sent everywhere) went with the
+  // pull side and never returns — each board gets its OWN card's curve.
+  assert.doesNotMatch(source, /startFleetGammaPush/);
+  assert.doesNotMatch(source, /fleetGammaSourcePlan/);
+  assert.match(source, /ITS OWN card's curve/);
+});
+
+test('the fleet DMX-off entry sits beside Push all and is wired to the panel', () => {
+  const source = fs.readFileSync(
+    new URL('../src/gui/controller_map_editor.js', import.meta.url), 'utf8');
+  assert.match(source, /dmxOffAllBtn\.textContent = '⏻ DMX all: off'/);
+  assert.match(source, /dmxOffAllBtn\.onclick = \(\) => startDmxOffAll\(ledCtx\(\)\)/);
+  // It says what it does and what it does NOT touch.
+  assert.match(source, /Swarm and the mapping are NOT touched/);
+});
+
+test('no server route or service function reads gamma off a device', () => {
+  const saveServer = fs.readFileSync(
+    new URL('../server/save-server.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(saveServer, /pathname === '\/led\/gamma'/);
+  assert.doesNotMatch(saveServer, /ledGamma\.readGamma/);
+  // The push route survives, dormant.
+  assert.match(saveServer, /pathname === '\/led\/gamma-push'/);
+
+  const service = fs.readFileSync(
+    new URL('../server/led_gamma_service.cjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(service, /^async function readGamma\(/m);
+  assert.doesNotMatch(service, /^ {2}readGamma,$/m);
 });
 
 // ── Fleet push ──────────────────────────────────────────────────────────────

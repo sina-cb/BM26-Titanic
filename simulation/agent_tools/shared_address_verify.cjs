@@ -154,7 +154,6 @@ const injectOverlap = ({ ipLow, ipHigh, universe, sameIp }) => {
     // — a hand-built partial one projects strands with a NaN span.
     led: { order: 'RGBW', startAddr: 1, stride: 4, baseUniverse: 0, whiteMode: 'native' },
     ports: [{ port: 1, output: 1, universe, startAddress: 1, chain: [`__probe_${name}`] }],
-    parkedOutputs: [],
   });
   const a = mk('ProbeLowIp', ipLow);
   const b = mk('ProbeHighIp', sameIp ? ipLow : ipHigh);

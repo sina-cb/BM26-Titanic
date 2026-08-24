@@ -4,10 +4,10 @@
  * notify.
  *
  * Covers, at the seams:
- *   1. the pure expectation builder (enabled outputs + enables in, spill
- *      universes included, PARKED universes as must-be-absent claims),
+ *   1. the pure expectation builder (every ASSIGNED output, spill universes
+ *      included — an output the forced push DISABLES makes no route claim),
  *   2. the pure snapshot assessment (relay / engine-direct / bench-mirror
- *      ownership / missing / parked-present) and the exact sentences,
+ *      ownership / missing) and the exact sentences,
  *   3. the bounded confirm poll (success, mismatch after N reads, transport
  *      failure fails IMMEDIATELY — never a "probably fine"),
  *   4. the bridge's snapshot wire shape (lib/bridge_routing.cjs
@@ -46,14 +46,13 @@ const IP = '10.1.1.60';
 function plan(extra = {}) {
   return {
     controllerName: 'LeftLeftRopes',
-    universeByOutputIndex: { 0: 30, 1: 31, 2: 42 },
+    universeByOutputIndex: { 0: 30, 1: 31 },
     assignments: [
       { outputIndex: 0, portNum: 1, universe: 30, pixelCount: 40 },
       { outputIndex: 1, portNum: 2, universe: 31, pixelCount: 40 },
     ],
-    parked: [{ outputIndex: 2, universe: 42, reused: true }],
-    enables: [],
-    enableOutputIndices: [],
+    disables: [{ outputIndex: 2, deviceCount: 40, deviceUniverse: 42 }],
+    countChanges: [],
     warnings: [],
     collisions: [],
     ...extra,
@@ -67,12 +66,26 @@ function snapshot({ routes = [], engineOwned = [], mirrorOwned = [] } = {}) {
 
 // ── 1. buildRouteExpectation ─────────────────────────────────────────────────
 
-test('_127: the expectation carries enabled universes, and parked as must-be-absent', () => {
+test('_362: the expectation carries exactly the ASSIGNED universes', () => {
   const exp = buildRouteExpectation({ plan: plan(), ip: IP, stride: 4 });
   assert.deepEqual(exp.expected, [30, 31]);
-  assert.deepEqual(exp.parkedAbsent, [42]);
+  assert.equal('parkedAbsent' in exp, false, 'parking is retired — the key is GONE, not empty');
   assert.equal(exp.ip, IP);
   assert.equal(exp.controllerName, 'LeftLeftRopes');
+});
+
+test('_362: an output the push DISABLES makes no route claim', () => {
+  // The plan disables output 2 (the board holds it on U42 today). A disabled
+  // output receives nothing by construction — it is not asserted either way.
+  const exp = buildRouteExpectation({ plan: plan(), ip: IP, stride: 4 });
+  assert.equal(exp.expected.includes(42), false);
+  const result = assessRouteReadback({
+    expectations: [exp],
+    snapshot: snapshot({ routes: [
+      { universe: 30, ip: IP }, { universe: 31, ip: IP }, { universe: 42, ip: IP },
+    ] }),
+  });
+  assert.equal(result.ok, true);
 });
 
 test('_127: a spilling strand claims EVERY universe its walk occupies', () => {
@@ -80,19 +93,6 @@ test('_127: a spilling strand claims EVERY universe its walk occupies', () => {
   const exp = buildRouteExpectation({
     plan: plan({
       assignments: [{ outputIndex: 0, portNum: 1, universe: 30, pixelCount: 200 }],
-      parked: [],
-    }),
-    ip: IP, stride: 4,
-  });
-  assert.deepEqual(exp.expected, [30, 31]);
-});
-
-test('_127: an ENABLE transition claims its universe too', () => {
-  const exp = buildRouteExpectation({
-    plan: plan({
-      assignments: [{ outputIndex: 0, portNum: 1, universe: 30, pixelCount: 40 }],
-      enables: [{ outputIndex: 1, portNum: 2, universe: 31, count: 40 }],
-      parked: [],
     }),
     ip: IP, stride: 4,
   });
@@ -110,20 +110,16 @@ test('_127: the expectation builder refuses what it cannot state', () => {
     plan: plan({ assignments: [{ outputIndex: 0, universe: 0, pixelCount: 40 }] }),
     ip: IP, stride: 4,
   }), /no valid universe/);
-  // A plan that both routes and parks U30 contradicts itself.
+  // Nothing routed: the empty-expectation refusal stays (a push that cannot
+  // state what it expects must refuse BEFORE the write, not tick blindly after).
   assert.throws(() => buildRouteExpectation({
-    plan: plan({ parked: [{ outputIndex: 2, universe: 30, reused: false }] }),
-    ip: IP, stride: 4,
-  }), /parked U30 is ALSO an expected route/);
-  // Nothing routed AND nothing parked: nothing to confirm.
-  assert.throws(() => buildRouteExpectation({
-    plan: plan({ assignments: [], parked: [] }), ip: IP, stride: 4,
+    plan: plan({ assignments: [] }), ip: IP, stride: 4,
   }), /nothing to confirm/);
 });
 
 // ── 2. assessment + sentences ────────────────────────────────────────────────
 
-test('_127: all expected pairs present and parked absent → ok, named per IP', () => {
+test('_127: all expected pairs present → ok, named per IP', () => {
   const exp = buildRouteExpectation({ plan: plan(), ip: IP, stride: 4 });
   const result = assessRouteReadback({
     expectations: [exp],
@@ -163,33 +159,6 @@ test('_127: a missing expected route fails, naming exactly the missing pair', ()
   assert.match(text, /check the sACN bridge log/);
 });
 
-test('_127: a PARKED universe found routed to this controller is a FAILURE', () => {
-  const exp = buildRouteExpectation({ plan: plan(), ip: IP, stride: 4 });
-  const result = assessRouteReadback({
-    expectations: [exp],
-    snapshot: snapshot({ routes: [
-      { universe: 30, ip: IP }, { universe: 31, ip: IP },
-      { universe: 42, ip: IP },              // the parked output is being fed!
-    ] }),
-  });
-  assert.equal(result.ok, false);
-  assert.deepEqual(result.parkedPresent, [{ universe: 42, ip: IP }]);
-  assert.match(describeRouteMismatch(result, snapshot(), 1),
-    new RegExp(`parked U42→${IP} IS routed \\(a parked output must stay dark\\)`));
-});
-
-test('_127: parked routed to ANOTHER controller is fine — the claim is scoped to this IP', () => {
-  const exp = buildRouteExpectation({ plan: plan(), ip: IP, stride: 4 });
-  const result = assessRouteReadback({
-    expectations: [exp],
-    snapshot: snapshot({ routes: [
-      { universe: 30, ip: IP }, { universe: 31, ip: IP },
-      { universe: 42, ip: '10.1.1.99' },     // another box legitimately owns U42
-    ] }),
-  });
-  assert.equal(result.ok, true);
-});
-
 test('_127: a bench-mirror-owned pair is a one-writer CONFLICT, never a ✓', () => {
   const exp = buildRouteExpectation({ plan: plan(), ip: IP, stride: 4 });
   const result = assessRouteReadback({
@@ -205,16 +174,8 @@ test('_127: a bench-mirror-owned pair is a one-writer CONFLICT, never a ✓', ()
     new RegExp(`U30→${IP} owned by the bench mirror \\(another writer\\)`));
 });
 
-test('_127: a parked-only expectation confirms by ABSENCE, and says so', () => {
-  const exp = buildRouteExpectation({
-    plan: plan({ assignments: [] }), ip: IP, stride: 4,
-  });
-  assert.deepEqual(exp.expected, []);
-  assert.deepEqual(exp.parkedAbsent, [42]);
-  const result = assessRouteReadback({ expectations: [exp], snapshot: snapshot() });
-  assert.equal(result.ok, true);
-  assert.equal(describeConfirmedRoutes(result),
-    'no routed universes expected — parked universes confirmed absent');
+test('_362: describeConfirmedRoutes refuses to render a green tick over nothing', () => {
+  assert.throws(() => describeConfirmedRoutes({ confirmed: [] }), /nothing was confirmed/);
 });
 
 // ── 3. the bounded confirm poll ──────────────────────────────────────────────

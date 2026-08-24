@@ -402,9 +402,6 @@ export function computeLedUniverseClaims(boundFields, genericFields) {
  *    is what turns the row red before anyone presses Push.
  *  - `led_output_out_of_card_range`: a port declares an output outside
  *    1…LED_MAX_OUTPUTS (only reachable on an object that bypassed the loader).
- *  - `led_parked_output_conflict`: a persisted `parkedOutputs` entry names an
- *    output a port row already drives — the park is stale and the next push
- *    re-derives it.
  *
  * @param {Object} registry - the controller registry.
  * @param {Map|Object} strandCounts - strand name → ledCount.
@@ -474,17 +471,6 @@ export function validateLedManualUniverses(registry, strandCounts, dmxUniverseMa
         port: ports[0],
         message: `ports ${ports.map((n) => `P${n}`).join(' and ')} both drive output ${output} — ` +
           'one physical output cannot take two universes; give each port its own output',
-      });
-    }
-    for (const parked of controller.parkedOutputs || []) {
-      if (!byOutput.has(parked.output)) continue;
-      warnings.push({
-        code: 'led_parked_output_conflict',
-        controllerId: controller.id,
-        port: byOutput.get(parked.output)[0],
-        message: `output ${parked.output} is parked on U${parked.universe} but ` +
-          `P${byOutput.get(parked.output)[0]} drives it — the park is stale; the next push ` +
-          'drops it',
       });
     }
   }

@@ -19,14 +19,22 @@ import {
   normalizeSubnetPrefix,
   deviceSupportsPerOutput,
   readConfiguredPerOutput,
-  assertMappingPushAllowed,
-  pushPerOutputUniverses,
-  validatePerOutputPlan,
-  applyPerOutputPlan,
+  buildForcedConfigBody,
+  pushForcedConfig,
+  diffForcedConfig,
+  swarmEnabledNote,
+  buildDmxToggleBody,
+  diffDmxToggle,
+  pushDmxToggle,
+  buildGammaPushBody,
+  diffGammaPush,
+  pushGammaPush,
+  readWithRetryOnTimeout,
   deviceNameRepairForPush,
   PER_OUTPUT_WRITE_TIMEOUT_MS,
   REBOOT_WAIT_TIMEOUT_MS,
 } from '../dmx/led/marsinled_client.js';
+import { readGammaMirror, formatGamma } from '../dmx/led/led_gamma.js';
 import {
   derivePerOutputPlan,
 } from '../dmx/led/device_config_mapper.js';
@@ -47,13 +55,11 @@ import {
   controllerBoundToDeviceId,
   unbindControllerDevice,
   recordDevicePush,
+  recordDeviceGammaPush,
   ledOutputIndexForPort,
   entryFixtureName,
-  setParkedUniverse,
-  clearParkedUniverse,
   LED_DEVICE_VENDOR_MARSINLED,
   LED_MAX_OUTPUTS,
-  nextFreeUniverse,
   noteUniverseUsed,
   isValidIp,
 } from '../dmx/controller_registry.js';
@@ -152,6 +158,70 @@ export function getDeviceOutputs(ctx, controllerId) {
   return deviceOutputsCache.get(cacheKey(ctx, controllerId)) || null;
 }
 
+// ── DMX flag label state (display-only; NEVER persisted, NEVER polled) ───────
+// key → the board's `dmx.enabled` as LAST OBSERVED. Written ONLY from reads the
+// panel already performs (the sync sweep, the push verify, the toggle's own
+// read-back) — report `_363` §3: "a plain last-observation label", no polling,
+// no timer, no TTL, no background sweep. An absent entry is the honest `?`: the
+// panel has not read this board in this scene yet and refuses to guess.
+const dmxStateCache = new Map();
+
+function noteDmxState(ctx, controllerId, enabled) {
+  if (typeof enabled !== 'boolean') return;
+  dmxStateCache.set(cacheKey(ctx, controllerId), enabled);
+}
+
+/** Forget the label — every toggle FAILURE lands here (the read-back is the only truth). */
+function clearDmxState(ctx, controllerId) {
+  dmxStateCache.delete(cacheKey(ctx, controllerId));
+}
+
+/** The board's last-observed `dmx.enabled`, or null when it was never read. */
+export function getDmxState(ctx, controllerId) {
+  const key = cacheKey(ctx, controllerId);
+  return dmxStateCache.has(key) ? dmxStateCache.get(key) : null;
+}
+
+/** Seed the label from any `GET /api/config` document the panel already read. */
+function noteDmxStateFromConfig(ctx, controllerId, config) {
+  if (!config || typeof config !== 'object' || !config.dmx || typeof config.dmx !== 'object') return;
+  noteDmxState(ctx, controllerId, config.dmx.enabled === true);
+}
+
+const DMX_TOGGLE_TOOLTIP =
+  'writes the board\'s DMX flag and reboots it (~11 s)';
+
+/**
+ * The per-card DMX ⏻ control's model. PURE (no DOM, no I/O) so the label rule is
+ * asserted without a browser (report `_363` §3).
+ *
+ * The label states the LAST CONFIRMED observation and nothing else — `DMX: on`,
+ * `DMX: off`, or `DMX: ?` before this scene ever read the board (or after a
+ * failed toggle). The click target is the OPPOSITE of a known state; from `?` it
+ * asks for ON, because that is the state a show needs and the same state the
+ * config push forces — never a silent guess about what the board holds, since
+ * the toggle re-reads the board before it writes anything.
+ */
+export function dmxToggleModel(ctx, controller) {
+  const state = getDmxState(ctx, controller.id);
+  const known = state === true || state === false;
+  const label = `⏻ DMX: ${known ? (state ? 'on' : 'off') : '?'}`;
+  const target = state === true ? false : true;
+  const intent = state === true
+    ? 'Click to switch DMX (sACN) input OFF on this board.'
+    : (state === false
+      ? 'Click to switch DMX (sACN) input ON on this board.'
+      : 'The board\'s DMX flag has not been read in this scene yet — clicking switches it ON.');
+  return {
+    state: known ? state : null,
+    label,
+    target,
+    className: `cm-btn led-device-dmx-toggle led-dmx-${known ? (state ? 'on' : 'off') : 'unknown'}`,
+    title: `${intent} It ${DMX_TOGGLE_TOOLTIP}. Nothing else is written — strands, swarm and ` +
+      'gamma are untouched.',
+  };
+}
+
 /**
  * The port row's output-selector model. PURE (no DOM) so the uniqueness rule and
  * the range rule are unit-testable without a browser.
@@ -185,10 +255,21 @@ export function outputSelectorOptions(controller, port, deviceOutputs) {
     if (owner !== undefined) {
       label = `${n} — taken by P${owner}`;
     } else if (dev) {
-      label = dev.enabled
-        ? `${n} — enabled${dev.count !== null ? `, ${dev.count} px` : ''}` +
-          `${dev.universe !== null ? `, U${dev.universe}` : ''}`
-        : `${n} — disabled (push will enable it)`;
+      // FORCE semantics (report `_362`): a push enables exactly the outputs a
+      // port maps and DISABLES every other one. `owner === undefined` here means
+      // no OTHER port row drives output n, so the only question left is whether
+      // THIS row does.
+      const devDesc = `${dev.count !== null ? `, ${dev.count} px` : ''}` +
+        `${dev.universe !== null ? `, U${dev.universe}` : ''}`;
+      if (dev.enabled) {
+        label = port.output === n
+          ? `${n} — enabled${devDesc}`
+          : `${n} — enabled${devDesc} · push will DISABLE it`;
+      } else {
+        label = port.output === n
+          ? `${n} — disabled · push will ENABLE it`
+          : `${n} — disabled`;
+      }
     }
     options.push({
       value: n,
@@ -243,7 +324,14 @@ async function sha256Hex(text) {
 // experiments on that hardware). Production callers use DEFAULT_DEVICE_IO.
 const DEFAULT_DEVICE_IO = {
   getConfig, getStatus, awaitReboot,
-  pushPerOutputUniverses,
+  pushForcedConfig,
+  // The DMX ⏻ toggle's transport (report `_363` §3) — the same injectable seam,
+  // so the toggle tests drive it against a mock board too.
+  pushDmxToggle,
+  // The gamma push's transport (report `_363` §11) — PUSH ONLY. There is no
+  // gamma READ member here and there never will be: the sim states the curve,
+  // the board confirms it, and nothing ever mirrors a curve back off a device.
+  pushGammaPush,
   // ── Slice S1: the two steps that make a push EFFECTIVE ────────────────────
   // A device write moves ONE of the six state layers (report 20260725_58 §1).
   // The sACN feed the device actually receives is produced from FILES ON DISK —
@@ -269,8 +357,8 @@ const DEFAULT_DEVICE_IO = {
   // ── _127: the third check is a MEASUREMENT ────────────────────────────────
   // "✓ bridge notified — routes follow" trusted the notify; this reads the
   // bridge's ACTIVE route table back over the same WS the notify travelled and
-  // renders ✓ only when the expected (universe → controller IP) pairs exist —
-  // and the parked ones do NOT. Injectable like the other steps.
+  // renders ✓ only when the expected (universe → controller IP) pairs exist.
+  // Injectable like the other steps.
   confirmBridgeRoutes: (expectations) => {
     if (!window.sacnInput || typeof window.sacnInput.queryRoutes !== 'function') {
       throw new Error('window.sacnInput.queryRoutes is not installed — the bridge route table ' +
@@ -345,24 +433,58 @@ export function deriveLayoutPreview(controller, strandCounts) {
 // ── Per-output universe repair (whole-universe, monotonic) ──────────────────
 
 /**
- * Ensure every port carries a valid universe (Slice D: the base is the first
- * enabled output's port.universe, and each output declares its own). Create-
- * from-device already gives every port a fresh universe via addPort, so this is
- * only a repair path for a port left at ≤0. Allocates monotonically through
- * nextFreeUniverse; never rewrites an already-valid manual universe.
+ * The port-universe repairs a DERIVED PLAN implies: one entry per port whose
+ * registry universe is invalid (≤0) and which the plan nevertheless assigned a
+ * universe to (`derivePerOutputPlan`'s auto-assign leg, which skips every
+ * universe claimed across the registry). PURE — it reads, it never writes.
+ *
+ * WHY THIS SHAPE (this slice; the old `ensurePortUniverses` is gone). The
+ * repair used to run inside `startPush` / `pushAllLedControllers` BEFORE the
+ * operator confirmed anything, so opening the confirm dialog and pressing
+ * Cancel left the registry mutated (and the scene dirty) for a push that never
+ * happened. Deriving it from the plan instead means:
+ *
+ *  1. the PREVIEW is pure — the dialog's payload is computed from the card as
+ *     it stands, and the plan's own auto-assign leg is what repairs an invalid
+ *     universe, exactly as it always did for the sync chip;
+ *  2. the COMMIT happens only on FORCE (`commitPlanPortUniverses`), and it
+ *     writes the SAME universe the previewed body carries — the old path could
+ *     hand the port `nextFreeUniverse(registry)` while the plan independently
+ *     chose "max used + 1, skipping claims", i.e. the registry could end up
+ *     stating a universe the board was never told about.
+ *
+ * A port the plan did NOT assign (it maps no pixels, so the push disables its
+ * output) is deliberately NOT repaired: allocating a universe to an output
+ * about to go dark is a claim on the rig that nothing is streaming to.
  */
-function ensurePortUniverses(ctx, controller) {
-  const bad = (controller.ports || []).filter(
-    (p) => !Number.isInteger(p.universe) || p.universe < 1);
-  if (bad.length === 0) return;
+function planPortUniverseRepairs(controller, plan) {
+  const repairs = [];
+  for (const assignment of plan.assignments || []) {
+    const port = (controller.ports || []).find((p) => p.port === assignment.portNum);
+    if (!port) continue;
+    if (Number.isInteger(port.universe) && port.universe >= 1) continue;   // manual value stands
+    repairs.push({ port, portNum: assignment.portNum, universe: assignment.universe });
+  }
+  return repairs;
+}
+
+/**
+ * COMMIT the repairs above onto the registry. Call this ONLY on the accept path
+ * — after the operator pressed FORCE, before the write — never while merely
+ * previewing a plan. Returns the repairs it applied (empty when there were
+ * none, in which case the registry is not touched and no undo entry is made).
+ */
+function commitPlanPortUniverses(ctx, controller, plan) {
+  const repairs = planPortUniverseRepairs(controller, plan);
+  if (repairs.length === 0) return repairs;
   const registry = ctx.registry();
   ctx.mutate(`Allocated universe(s) for ${controller.name}`, () => {
-    for (const port of bad) {
-      const u = nextFreeUniverse(registry);
-      port.universe = u;
-      noteUniverseUsed(registry, u);
+    for (const repair of repairs) {
+      repair.port.universe = repair.universe;
+      noteUniverseUsed(registry, repair.universe);
     }
   });
+  return repairs;
 }
 
 // ── Registry-wide universe claims (per-output plan gate, slice S2) ──────────
@@ -384,7 +506,7 @@ function ensurePortUniverses(ctx, controller) {
  * The old `universe_owned` lead ("universe collision") is GONE with the kind
  * itself (operator order 2026-07-31): a shared universe is a warning now, and
  * every collision that remains is structural — a duplicate output, an
- * out-of-range output, an exhausted park window, a board with nothing enabled.
+ * out-of-range output, a card that would leave every output dark.
  */
 function describeCollisions(collisions) {
   return `push REFUSED — ${collisions.map((c) => c.message).join('; ')}`;
@@ -758,10 +880,11 @@ const SYNC_LABELS = {
  * `patches.yaml` + a notified bridge can move (report 20260725_58 §3).
  */
 const SYNC_CHIP_MEANING =
-  'Measures the DEVICE against the per-output plan this page would push (device ≡ plan) — ' +
-  'which outputs are enabled, and the universe on each, including the PARKED outputs no port ' +
-  'drives — NOT the sACN feed: green does not prove frames are reaching the strands, which ' +
-  'needs the scene saved (patches.yaml) and the sACN bridge notified.';
+  'Measures the DEVICE against the FORCED plan this page would push (device ≡ plan) — which ' +
+  'outputs would be enabled and on which universe, which would be DISABLED, which counts would ' +
+  'be rewritten, and whether the board is DMX-driven at all — NOT the sACN feed: green does ' +
+  'not prove frames are reaching the strands, which needs the scene saved (patches.yaml) and ' +
+  'the sACN bridge notified.';
 
 /**
  * Build the sync chip's tooltip: the meaning line first, then whatever this
@@ -822,6 +945,7 @@ export async function computeSyncState(ctx, controller) {
   const status = await getStatus(controller.ip);
   setLiveMac(ctx, controller.id, status.mac); // display-only — never persisted
   setDeviceOutputs(ctx, controller.id, snapshot.strands); // feeds the output selector
+  noteDmxStateFromConfig(ctx, controller.id, snapshot); // seeds the ⏻ label — ZERO new reads
   // Per-output DMX is the only supported mapping. Firmware without it is stale —
   // report drift so the operator updates it (no silent legacy fallback, codex P0).
   if (!deviceSupportsPerOutput(status)) {
@@ -844,6 +968,22 @@ export async function computeSyncState(ctx, controller) {
   }
   const reported = readConfiguredPerOutput(snapshot);
   const changes = perOutputChanges(reported, plan);
+  // MODE DRIFT, NARROWED (report `_363` §2.3-3, superseding `_362` §2.3-9). The
+  // push forces `dmx.enabled:true`, so a board that is not DMX-driven still reads
+  // drift — that IS a pending change the operator must see before pressing Push.
+  //
+  // The `_362` swarm clause is GONE: the narrowed push never mentions swarm, so a
+  // swarm-enabled board with a correct mapping and DMX on is genuinely IN SYNC
+  // (swarm is operator-managed on the controller's own UI, ruling 6/7). Claiming
+  // drift there would promise a push that changes something — and this push
+  // would change nothing.
+  if (!snapshot.dmx || snapshot.dmx.enabled !== true) {
+    return {
+      state: 'drift',
+      detail: 'board is not DMX-driven — push will force DMX ON',
+      changes,
+    };
+  }
   if (changes.length) return { state: 'drift', changes };
   // A SHARED universe does not make the device differ from the plan, so the chip
   // stays IN-SYNC — that is exactly what it measures. It still carries the
@@ -1055,14 +1195,30 @@ export function renderDeviceBindingSection(ctx, controller) {
   // usable IP. Pushing an unbound card that answers will bind it on success.
   const pushBtn = el('button', 'cm-btn led-device-push', '⬆ Push to controller');
   if (validIp) {
-    pushBtn.title = 'Read device status, derive and push the saved per-output mapping without ' +
-      'changing show mode, then save the scene and notify the sACN bridge';
+    pushBtn.title = "FORCE the sim panel's settings onto the board: strands + per-output " +
+      'universes as mapped here, every unmapped output DISABLED, and the board switched to ' +
+      'DMX-driven (sACN). Then save the scene and notify the sACN bridge.';
     pushBtn.onclick = () => startPush(ctx, controller);
   } else {
     pushBtn.disabled = true;
     pushBtn.title = 'set the device IP first';
   }
   section.appendChild(pushBtn);
+
+  // The DMX ⏻ toggle (report `_363` §3) — right next to ⬆ Push, because it is
+  // the manual lever BETWEEN pushes (the push forces DMX ON; this switches it
+  // either way without touching anything else). NO confirm dialog by operator
+  // ruling; the tooltip carries the whole contract, including the reboot.
+  const dmxModel = dmxToggleModel(ctx, controller);
+  const dmxBtn = el('button', dmxModel.className, dmxModel.label);
+  if (validIp) {
+    dmxBtn.title = dmxModel.title;
+    dmxBtn.onclick = () => toggleDmx(ctx, controller, dmxModel.target, DEFAULT_DEVICE_IO, dmxBtn);
+  } else {
+    dmxBtn.disabled = true;
+    dmxBtn.title = 'set the device IP first';
+  }
+  section.appendChild(dmxBtn);
 
   const bindBtn = el('button', 'cm-btn led-device-rebind',
     verified ? 'Re-bind…' : '🔍 Discover / bind device');
@@ -1212,9 +1368,41 @@ export function showProvisionalReconcileDialog(ctx, controller, result, device) 
   keepBtn.focus();
 }
 
+// ── Pre-write identity gate (report `_363` §2.3-1) ──────────────────────────
+
+/**
+ * The refusal sentence for a bound card whose board answers as a DIFFERENT
+ * controllerId, or null when there is nothing to refuse. PURE.
+ *
+ * Closes `docs/MARSINLED_API.md` "Known integration gaps" item 1: every write in
+ * this panel (the forced push and the DMX toggle) is preceded by this gate, so a
+ * card whose IP now belongs to another board can never be written before the
+ * post-write identity assert notices — the write would already have landed on
+ * the wrong hardware.
+ *
+ * An UNBOUND card is not gated: pushing it is how it binds (addendum #3), and it
+ * claims no identity to contradict.
+ */
+export function identityGateRefusal(controller, status) {
+  const bound = controller && controller.device && controller.device.controllerId;
+  if (!bound) return null;
+  const live = status && status.controllerId;
+  if (live === bound) return null;
+  return `'${controller.name}' is bound to board '${bound}', but ${controller.ip} answers as ` +
+    `'${live === undefined || live === null ? 'no controllerId' : live}' — REFUSED before any ` +
+    'write. Nothing was sent to the device: re-bind this card to the board that actually ' +
+    'answers, or fix the IP.';
+}
+
 // ── Push flow (per-output DMX is the ONLY supported push style) ──────────────
 
-async function startPush(ctx, controller) {
+/**
+ * The single-card ⬆ Push entry point. Reads the board ONCE (config + status),
+ * applies the pre-write identity gate, then hands off to the per-output confirm
+ * dialog. Exported for the unit tests — the gate must be provable to refuse
+ * BEFORE any POST exists.
+ */
+export async function startPush(ctx, controller) {
   if (!isValidIp(controller.ip)) {
     ctx.showToast(`✋ ${controller.name}: set a valid device IP before pushing`, { error: true, ttl: 7000 });
     return;
@@ -1231,17 +1419,28 @@ async function startPush(ctx, controller) {
     return;
   }
 
-  try {
-    assertMappingPushAllowed(status, snapshot);
-  } catch (err) {
-    ctx.showToast(`✋ '${controller.name}': ${err.message}`, { error: true, ttl: 14000 });
-    setSyncState(ctx, controller.id, { state: 'drift', detail: err.message });
+  noteDmxStateFromConfig(ctx, controller.id, snapshot); // seeds the ⏻ label — ZERO new reads
+
+  // PRE-WRITE IDENTITY GATE (report `_363` §2.3-1) — after the reads, BEFORE the
+  // dialog. A bound card whose IP now answers as a different board must never
+  // reach a confirm dialog: the operator would be approving a write aimed at
+  // hardware this card does not describe.
+  const identityRefusal = identityGateRefusal(controller, status);
+  if (identityRefusal) {
+    ctx.showToast(`✋ ${identityRefusal}`, { error: true, ttl: 15000 });
+    setSyncState(ctx, controller.id, { state: 'drift', detail: identityRefusal });
     ctx.refresh();
     return;
   }
 
-  // Repair any port left without a universe only after the device mode gate.
-  ensurePortUniverses(ctx, controller);
+  // NO MODE GATE (report `_362` §2.3-2). A push targets ANY reachable per-output
+  // MarsinLED in ANY show mode — the narrowed push simply never mentions swarm
+  // (ruling 6/7), so a swarm board is written without being switched.
+  //
+  // NOTHING IS MUTATED ON THIS PATH. The port-universe repair that used to run
+  // here now rides on the plan and is committed only when the operator presses
+  // FORCE (`commitPlanPortUniverses`) — cancelling the dialog must leave the
+  // registry exactly as it was.
 
   // Per-output DMX is the only push style. Firmware without it is too old — LOUD
   // refusal, never a legacy fallback (operator decision + codex P0).
@@ -1258,74 +1457,138 @@ async function startPush(ctx, controller) {
 // ── Per-output DMX push flow (firmware advertises capabilitiesExt.perOutputDmx) ─
 
 /**
- * Compare the device's saved strand mapping to the plan we pushed — the
- * read-back that ARBITRATES a lost write reply (report 20260725_69 §3).
- *
- * It asserts over `plan.universeByOutputIndex`, which since report 20260725_70
- * covers the WHOLE post-push output map: the assigned outputs, the PARKED ones,
- * and the ones this push enabled. Outputs OUTSIDE the plan are not asserted —
- * the push made no claim about them (it never disables anything).
- *
- * Returns an array of human-readable mismatch strings ([] ⇒ the device confirmed
- * the plan).
- */
-function diffPerOutput(reported, plan) {
-  const mismatches = [];
-  const byIndex = new Map();
-  for (const entry of reported || []) byIndex.set(Number(entry.index), entry);
-  const enabledByPush = new Set(plan.enableOutputIndices || []);
-  for (const [indexStr, universe] of Object.entries(plan.universeByOutputIndex)) {
-    const index = Number(indexStr);
-    const got = byIndex.get(index);
-    if (!got) {
-      mismatches.push(`output ${index}: device reported no per-output entry (wanted U${universe})`);
-      continue;
-    }
-    if (got.universe !== universe) {
-      mismatches.push(`output ${index}: device U${got.universe} ≠ wanted U${universe}`);
-    }
-    if (got.startAddress !== 1) {
-      mismatches.push(`output ${index}: device startAddress ${got.startAddress} ≠ 1`);
-    }
-    if (got.enabled !== true) {
-      mismatches.push(enabledByPush.has(index)
-        ? `output ${index}: this push should have ENABLED it, device reports enabled=${got.enabled}`
-        : `output ${index}: device reports enabled=${got.enabled}`);
-    }
-  }
-  return mismatches;
-}
-
-/**
- * Structured drift between the device's saved strand mapping and the plan, for
+ * Structured drift between the device's saved strands and the FORCED plan, for
  * the sync-chip tooltip. Each change is `{path:'output N', from, to}`.
  *
- * The chip compares the FULL output map — assigned, PARKED and pending-enable —
- * with the same claims and the same derive as the push, so the chip and the push
- * can never disagree (report 20260725_70 §5.4). Consequence to expect: a device
- * carrying a stale extra universe on a portless enabled output reads ▲ Drift
- * until one push re-parks it. That is the landmine becoming visible.
+ * The chip compares the FULL forced array — every output the push would enable,
+ * every output it would DISABLE, and every count it would rewrite — with the
+ * same claims and the same derive as the push, so the chip and the push can
+ * never disagree (report `_362` §2.3-9). Consequence to expect: a board carrying
+ * an enabled output no port maps reads ▲ Drift (`enabled · U27 → disabled`)
+ * until one push darkens it. That is the pending change becoming visible.
  */
 function perOutputChanges(reported, plan) {
   const byIndex = new Map();
   for (const entry of reported || []) byIndex.set(Number(entry.index), entry);
-  const enabledByPush = new Set(plan.enableOutputIndices || []);
   const changes = [];
   for (const [indexStr, universe] of Object.entries(plan.universeByOutputIndex)) {
     const index = Number(indexStr);
     const got = byIndex.get(index);
-    if (enabledByPush.has(index)) {
-      // A pending ENABLE is drift by definition — say it in those words rather
-      // than as a universe diff against an output that is off today.
-      changes.push({ path: `output ${index}`, from: 'disabled', to: `enabled · U${universe}` });
-      continue;
-    }
-    const matches = got && got.universe === universe && got.startAddress === 1 && got.enabled === true;
+    const matches = got && got.universe === universe && got.startAddress === 1
+      && got.enabled === true;
     if (matches) continue;
-    const from = got && Number.isInteger(got.universe) ? `U${got.universe}` : 'unset';
-    changes.push({ path: `output ${index}`, from, to: `U${universe}` });
+    const from = !got || got.enabled !== true
+      ? 'disabled'
+      : `enabled · ${Number.isInteger(got.universe) ? `U${got.universe}` : 'unset'}`;
+    changes.push({ path: `output ${index}`, from, to: `enabled · U${universe}` });
+  }
+  // Outputs the push will DARKEN — the half the old chip was blind to.
+  for (const entry of plan.disables || []) {
+    const got = byIndex.get(entry.outputIndex);
+    changes.push({
+      path: `output ${entry.outputIndex}`,
+      from: `enabled · ${got && Number.isInteger(got.universe) ? `U${got.universe}` : 'unset'}`,
+      to: 'disabled',
+    });
+  }
+  // Counts the push will rewrite (forced, both directions).
+  for (const entry of plan.countChanges || []) {
+    changes.push({
+      path: `output ${entry.outputIndex} count`,
+      from: `${entry.from} px`,
+      to: `${entry.to} px`,
+    });
   }
   return changes;
+}
+
+/**
+ * The COMPACT per-output receipt persisted with a push (`device.lastPush
+ * .perOutput`). PURE.
+ *
+ * Built from the device's own post-reboot read-back — never from the plan — so
+ * the receipt states what the BOARD confirmed, not what the sim intended. One
+ * entry per output: `{index, enabled}` always, plus `universe` and `count` on
+ * the enabled ones (a disabled output carries neither: the push deleted its
+ * universe keys, D1). `startAddress` is dropped — it is 1 on every enabled
+ * output by contract, and a receipt is not the place to restate a constant.
+ *
+ * WHY IT IS KEPT AT ALL (this slice, gap 5's companion): the push already
+ * hashed the full body into `configHash`, which proves *that* a push happened
+ * but says nothing a human or a later session can read. When a fleet push
+ * leaves part of the rig written and the scene deliberately UNSAVED, this is
+ * the record of which boards carry which universes and counts — the difference
+ * between recovering a partial fleet and re-reading every board by hand.
+ *
+ * @param {Object} verifyConfig - post-reboot GET /api/config (the count source).
+ * @param {Array} reported - `readConfiguredPerOutput(verifyConfig)`.
+ */
+function pushReceiptOutputs(verifyConfig, reported) {
+  return reported.map((output) => {
+    const entry = { index: output.index, enabled: output.enabled === true };
+    if (!entry.enabled) return entry;
+    if (Number.isInteger(output.universe)) entry.universe = output.universe;
+    const strand = verifyConfig.strands[output.index];
+    if (strand && Number.isInteger(strand.count)) entry.count = strand.count;
+    return entry;
+  });
+}
+
+// ── The retrying READ pair (the verify-race fix) ────────────────────────────
+//
+// LIVE EVIDENCE (2026-08-23, hit TWICE while the operator pushed 4 real boards):
+// after a needs-reboot write, `awaitReboot` returns as soon as ONE /api/status
+// probe answers — but the board finishes re-associating to WiFi AFTER that
+// first reply and drops reads for a few seconds. The verify's getStatus +
+// getConfig had ONE 8 s attempt each, so they timed out and the push (and the
+// fleet's per-board verify, and the per-board snapshot reads a fleet run opens
+// with) declared a FALSE FAIL over a write that had applied — proven by a later
+// manual read-back.
+//
+// The fix is deliberately the smallest one that can be true: retry the READ
+// PAIR, and only on a TIMEOUT. Nothing about the write changes — the body is
+// never rebuilt, the POST is never repeated, and the one-snapshot rule stands.
+// An ANSWERED failure (400/409/5xx) is still an immediate loud failure.
+//
+// Both reads are retried as ONE unit: they are a matched pair (the identity in
+// the status and the config it describes), and re-reading both is cheaper to
+// reason about than half-fresh evidence.
+
+/**
+ * `getStatus` + `getConfig` for one board as ONE retried unit.
+ *
+ * `io.readRetry` is an optional injected override of the client's
+ * `{attempts, budgetMs, retryDelayMs}` — the unit tests set `retryDelayMs: 0`
+ * so a retry case does not sleep. Production `DEFAULT_DEVICE_IO` carries no
+ * `readRetry`, so it runs on the client's measured defaults.
+ *
+ * @returns {Promise<{status: Object, config: Object}>}
+ */
+async function readVerifyPair(io, ip, { label = 'read-back', onRetry } = {}) {
+  return readRetrying(io, `${label} of ${ip}`, async () => {
+    const status = await io.getStatus(ip);
+    const config = await io.getConfig(ip);
+    return { status, config };
+  }, onRetry);
+}
+
+/**
+ * One read (or read pair), retried on TIMEOUT only, with the panel's phase copy.
+ * The single place `io.readRetry` is threaded into the client helper.
+ */
+function readRetrying(io, label, read, onRetry) {
+  return readWithRetryOnTimeout(read, {
+    ...(io.readRetry || {}),
+    label,
+    onRetry: ({ attempt, attempts, message }) => {
+      // The operator must see WHY a read is taking longer than the reboot wait
+      // implied — a silent retry would look identical to a hang.
+      if (onRetry) {
+        onRetry(`the board is not serving reads yet (${message}) — re-reading, attempt ` +
+          `${attempt + 1} of ${attempts}…`);
+      }
+    },
+  });
 }
 
 /**
@@ -1347,15 +1610,45 @@ function controllerIsLive(ctx, controller) {
 const WRITE_BUDGET_SECONDS = Math.round(PER_OUTPUT_WRITE_TIMEOUT_MS / 1000);
 const REBOOT_WAIT_SECONDS = Math.round(REBOOT_WAIT_TIMEOUT_MS / 1000);
 
+// The ONE paragraph both push dialogs lead with (report `_362` §2.5, rewritten to
+// the NARROWED truth by `_363` §2.3-2 — binding copy). It states exactly what the
+// push overwrites, what goes dark, what it deliberately LEAVES ALONE, and how
+// long it is willing to wait. Singular for one board, pluralized for the fleet.
+// Exported so the copy is asserted in ONE place (same rule as the sync-chip
+// tooltip) and can never drift from what the push actually writes.
+export const FORCE_PUSH_WARNING =
+  '⚠ FORCE push — the sim panel is the source of truth for the mapping. This overwrites the ' +
+  'board\'s strand counts, enables and per-output DMX universes: outputs P-mapped here are ' +
+  'enabled with the mapped counts and universes, every other output is DISABLED, and DMX input ' +
+  '(sACN) is switched ON. Strand type, color order, swarm and gamma settings are NOT touched. ' +
+  `The device reboots (~11 s); the push waits up to ${REBOOT_WAIT_SECONDS} s and reads the ` +
+  'config back before calling it done.';
+
+export const FORCE_PUSH_ALL_WARNING =
+  '⚠ FORCE push — the sim panel is the source of truth for the mapping. This overwrites each ' +
+  'board\'s strand counts, enables and per-output DMX universes: outputs P-mapped here are ' +
+  'enabled with the mapped counts and universes, every other output is DISABLED, and DMX input ' +
+  '(sACN) is switched ON. Strand type, color order, swarm and gamma settings are NOT touched. ' +
+  `Each device reboots (~11 s); the push waits up to ${REBOOT_WAIT_SECONDS} s per board and ` +
+  'reads the config back before calling it done.';
+
 /**
- * Shared per-output push core (single-push + push-all use the SAME path). POST
- * the per-output plan (full read-modify-write), wait out any reboot, then VERIFY
- * by re-reading the saved config strands and asserting they match the plan, and record
+ * Shared FORCED push core (single-push + push-all use the SAME path). POST the
+ * ONE body the confirm dialog previewed, wait out the reboot, then VERIFY the
+ * FULL contract by re-reading config + status (`diffForcedConfig`), and record
  * push provenance through the undo pipeline. THROWS on any failure (fail loud): a
  * network/device error propagates verbatim; a verify mismatch throws an Error
  * carrying `.perOutputMismatch` so the caller can render the drift. Takes an
  * injectable `io` bag so tests mock the device. `onStatus(msg)` is an optional
- * progress sink (single-push status line; push-all passes null).
+ * progress sink — BOTH paths now pass one (push-all renders it on that
+ * controller's own line, report `_362` §2.3-6).
+ *
+ * ONE READ PER ATTEMPT: the body was built from the SAME `getConfig` snapshot the
+ * plan was derived from, and the transport does no GET of its own — the old
+ * derive-from-A / apply-to-B window is closed. The PLAN is deliberately not a
+ * parameter: everything this function writes or verifies comes from `body` (the
+ * exact object the dialog previewed) or from the device's own read-back, so a
+ * plan argument could only ever disagree with the body and never be believed.
  *
  * THREE PHASES, THREE BUDGETS (report 20260725_69):
  *  1. write — POST /api/config, PER_OUTPUT_WRITE_TIMEOUT_MS;
@@ -1371,16 +1664,19 @@ const REBOOT_WAIT_SECONDS = Math.round(REBOOT_WAIT_TIMEOUT_MS / 1000);
  * read-back is the arbiter: matching plan ⇒ success (flagged `responseLost`),
  * different plan or a device that never answers ⇒ loud failure.
  *
- * @returns {Promise<{needsReboot, reply, reported, responseLost, writeError}>}
+ * @returns {Promise<{needsReboot, reply, reported, responseLost, writeError,
+ *   swarmNote: (string|null)}>} `swarmNote` is the NON-failing informational
+ *   line for a board that also reports SWARM enabled (`_363` §2.2).
  */
-async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
+async function pushPerOutputVerifyRecord(ctx, controller, body, io, onStatus) {
   const report = onStatus || (() => {});
-  report(`pushing saved per-output mapping… (the device may take up to ${WRITE_BUDGET_SECONDS}s to ` +
-    'answer the write)');
+  const prePushControllerId = controller.device && controller.device.controllerId;
+  report(`forcing the sim's config onto the board… (the device may take up to ` +
+    `${WRITE_BUDGET_SECONDS}s to answer the write)`);
   let reply = null;
   let writeError = null;
   try {
-    reply = await io.pushPerOutputUniverses(controller.ip, { plan });
+    reply = await io.pushForcedConfig(controller.ip, body);
   } catch (err) {
     // `writeResponseLost` = the device gave us NO answer (timeout / dropped
     // socket). Anything else — a 400, any other HTTP status, a rejected plan, a
@@ -1388,9 +1684,17 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
     if (!err.writeResponseLost) throw err;
     writeError = err;
   }
-  if (reply && (reply.outcome === 'deferred' || reply.suppressedBy === 'dmx')) {
-    throw new Error('mapping write was deferred by DMX mode — use the guarded Smokestack / ' +
-      'mass_deploy show-mode workflow before mapping; the write will not be retried');
+  // Any outcome other than applied / needs-reboot is a HARD failure quoting the
+  // device verbatim — a MISSING outcome included, because a 2xx body the sim
+  // cannot read is not agreement. There is no deferred path any more: a forced
+  // push owns the board's show mode, so nothing can legitimately suppress it.
+  if (reply && reply.outcome !== 'applied' && reply.outcome !== 'needs-reboot') {
+    throw new Error(`the device refused the forced write — it answered ` +
+      (reply.outcome === undefined ? 'a 2xx body with NO outcome field'
+        : `outcome='${reply.outcome}'`) +
+      (reply.suppressedBy ? ` (suppressedBy='${reply.suppressedBy}')` : '') +
+      (reply.message ? `: ${reply.message}` : '') +
+      '. The write is NOT retried; read the board\'s own web UI before pushing again.');
   }
   const needsReboot = !!writeError || reply.reboot === true || reply.outcome === 'needs-reboot';
   if (needsReboot) {
@@ -1417,17 +1721,27 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
     }
   }
 
-  report('reading confirmed saved mapping…');
-  const verifyStatus = await io.getStatus(controller.ip);
-  const verifyConfig = await io.getConfig(controller.ip);
-  assertMappingPushAllowed(verifyStatus, verifyConfig);
+  report('reading the full saved config back…');
+  // RETRIED READS (the verify-race fix). A board that just answered the reboot
+  // probe can still drop reads while its WiFi re-associates; one 8 s attempt
+  // per read turned that into a FALSE FAIL twice on the live rig. Timeouts are
+  // retried, answered errors are not, and NOTHING is re-written.
+  const { status: verifyStatus, config: verifyConfig } =
+    await readVerifyPair(io, controller.ip, { label: 'post-write read-back', onRetry: report });
   setDeviceOutputs(ctx, controller.id, verifyConfig.strands); // feeds the output selector
+  noteDmxStateFromConfig(ctx, controller.id, verifyConfig);   // seeds the ⏻ label — ZERO new reads
+  // The NON-failing informational note (report `_363` §2.2): the push does not
+  // touch swarm, so a board that also reports SWARM enabled is not a mismatch —
+  // it is a fact the operator owns on the controller's own UI, and it rides on
+  // the outcome line instead of the verdict array.
+  const swarmNote = swarmEnabledNote(verifyConfig);
   const reported = readConfiguredPerOutput(verifyConfig);
-  const mismatches = diffPerOutput(reported, plan);
+  const mismatches = diffForcedConfig(verifyConfig, verifyStatus, body,
+    prePushControllerId !== undefined ? { controllerId: prePushControllerId } : {});
   if (mismatches.length) {
     const lostNote = writeError
-      ? 'the device did not answer the write AND the read-back shows a DIFFERENT mapping — ' : '';
-    const err = new Error(`${lostNote}device mapping mismatch — ${mismatches.join('; ')}`);
+      ? 'the device did not answer the write AND the read-back shows a DIFFERENT config — ' : '';
+    const err = new Error(`${lostNote}device config mismatch — ${mismatches.join('; ')}`);
     err.perOutputMismatch = mismatches;
     throw err;
   }
@@ -1459,24 +1773,13 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
     }
   }
 
-  const configHash = await sha256Hex(JSON.stringify(plan.universeByOutputIndex));
+  // Provenance hashes the FULL body (report `_362` §2.4) — under the narrowed
+  // contract that is strands + dmx + the deviceName repair, and nothing else
+  // (`_363` §2.1: no swarm key is ever carried) — not just the universe map, so
+  // a receipt can never claim a push that wrote something else.
+  const configHash = await sha256Hex(JSON.stringify(body));
   const firmwareSHA = verifyStatus.firmwareSHA;
-  ctx.mutate(`Pushed per-output mapping to '${controller.name}'`, () => {
-    // STICKY PARKING (report 20260725_70 §2.2). The park the device just
-    // confirmed is persisted on the card so the NEXT derive reuses the same
-    // number. A re-derived park would move whenever any other controller took a
-    // universe, and the sync chip — which compares device ≡ plan — would then
-    // report drift on a card nobody touched and "fix" it with a reboot nobody
-    // asked for. Noting it against the registry's monotonic high-water mark
-    // keeps it from ever being handed to real gear later.
-    const registry = ctx.registry();
-    for (const entry of plan.parked || []) {
-      setParkedUniverse(controller, entry.outputIndex, entry.universe);
-      if (registry) noteUniverseUsed(registry, entry.universe);
-    }
-    // An output a port now drives is no longer parked — drop the stale entry so
-    // the card never carries two claims on one output.
-    for (const entry of plan.assignments || []) clearParkedUniverse(controller, entry.outputIndex);
+  ctx.mutate(`Forced config onto '${controller.name}'`, () => {
     // Pushing an UNBOUND card binds it: adopt the device identity from the
     // confirmed status so provenance + sync chips work from now on (addendum #3).
     // A PROVISIONAL card is the same story one grade up — the push IS first
@@ -1496,11 +1799,11 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
       outcome: needsReboot ? 'needs-reboot' : (reply.outcome || 'applied'),
       firmwareSHA,
       configHash,
-      perOutput: reported,
+      perOutput: pushReceiptOutputs(verifyConfig, reported),
     });
   });
   setLiveMac(ctx, controller.id, verifyStatus.mac); // display-only — never persisted
-  return { needsReboot, reply, reported, responseLost: !!writeError, writeError };
+  return { needsReboot, reply, reported, responseLost: !!writeError, writeError, swarmNote };
 }
 
 /**
@@ -1613,6 +1916,65 @@ export async function persistAndNotifyAfterPush(io, routeExpectations) {
   return steps;
 }
 
+// ── The FLEET SAVE GATE (known gap 5) ───────────────────────────────────────
+
+/**
+ * PURE: may a fleet push save the scene? Only when NO board failed.
+ *
+ * THE DEFECT THIS CLOSES. `startPushAll` ran the completion (save → notify →
+ * route read-back) unconditionally after the loop, so a fleet where one board
+ * failed still wrote patches.yaml + the engine model for the WHOLE registry and
+ * told the bridge to stream it. The hardware and the saved mapping then
+ * disagreed on exactly the board that failed, and nothing on disk recorded
+ * which one — the split the whole push campaign exists to prevent.
+ *
+ * SKIPPED boards do not block: a card with no valid IP was never attempted, so
+ * it can neither agree nor disagree with the file. A FAILED board did have a
+ * conversation with hardware that did not end where the sim thinks it did.
+ *
+ * There is deliberately NO "save anyway" override (codex P0 — fail loud, and
+ * keep the recovery one obvious action): fix the board and push all again.
+ *
+ * @param {Array} results - `pushAllLedControllers`' return value.
+ * @returns {{allowed: boolean, failed: Array, reason: (string|null)}}
+ */
+export function fleetSaveGate(results) {
+  if (!Array.isArray(results)) {
+    throw new Error('[LedPanel] fleetSaveGate: results must be pushAllLedControllers\' array');
+  }
+  const failed = results.filter((r) => r && r.state === 'failed');
+  if (failed.length === 0) return { allowed: true, failed, reason: null };
+  return {
+    allowed: false,
+    failed,
+    reason: `✋ the scene was NOT saved and the sACN bridge was NOT notified — ` +
+      `${failed.length} board(s) FAILED (${failed.map((f) => f.name).join(', ')}). The boards ` +
+      'that DID take the push are written and cannot be rolled back, but saving now would put a ' +
+      'mapping on disk that only PART of the fleet carries. Fix the failed board(s) from their ' +
+      'reasons above and push all again — a clean run saves.',
+  };
+}
+
+/**
+ * The fleet push's completion, GATED (gap 5). Runs the save + notify + route
+ * read-back ONLY when every attempted board passed; otherwise it runs nothing
+ * and hands back the refusal sentence. Exported so the gate is provable without
+ * a DOM — the dialog below only renders what this returns.
+ *
+ * @returns {Promise<{saved: boolean, steps: (Object|null), gate: Object}>}
+ */
+export async function completeFleetPush(io, results) {
+  const gate = fleetSaveGate(results);
+  if (!gate.allowed) return { saved: false, steps: null, gate };
+  // The route read-back (_127) checks the UNION of every pushed controller's
+  // expectation; a fleet where nothing pushed passes [] — an explicit
+  // "nothing to confirm", never a silent skip.
+  const expectations = results
+    .filter((r) => r.state === 'pushed' && r.expectation)
+    .map((r) => r.expectation);
+  return { saved: true, steps: await persistAndNotifyAfterPush(io, expectations), gate };
+}
+
 /**
  * Render the per-step truth of a completed push. Pure — the dialog, the toast and
  * the tests all read the same sentence.
@@ -1676,9 +2038,9 @@ export function describePushCompletion(steps, {
  *
  * A SHARED universe is no longer one of these (operator order 2026-07-31) — it
  * warns and proceeds. What still lands here: two port rows on ONE physical
- * output, a port driving an output the board does not have, an exhausted park
- * window, a board left with nothing enabled, and an overlap the higher-IP rule
- * cannot rank (same IP / no usable IP).
+ * output, a port driving an output the board does not have, a card that would
+ * leave every output dark, and an overlap the higher-IP rule cannot rank (same
+ * IP / no usable IP).
  */
 function showPerOutputCollisionRefusal(ctx, controller, collisions) {
   const overlay = el('div', 'vm-modal-overlay');
@@ -1688,10 +2050,12 @@ function showPerOutputCollisionRefusal(ctx, controller, collisions) {
     `✋ Push refused — invalid per-output plan on '${controller.name}'`));
   card.appendChild(el('div', 'led-push-warn',
     'The device was NOT written. Each line below is a plan this card cannot push: two port rows ' +
-    'driving ONE physical output, a port driving an output this board does not have, no free ' +
-    'universe left to park an unmapped output on, or two claims on the same channels that the ' +
-    'higher-IP rule cannot rank. (Sharing an address with another controller is ALLOWED — that ' +
-    'one is a warning, not this dialog.) Fix the card, then push again.'));
+    'driving ONE physical output, a port driving an output this board does not have, a card ' +
+    'that maps nothing at all (a MarsinLED needs at least one enabled output), a port chaining ' +
+    'a strand the sim cannot size next to one it can (the pushed count would be short and the ' +
+    'rest of the rope would go dark), or two claims on the same channels that the higher-IP ' +
+    'rule cannot rank. (Sharing an address with another controller is ALLOWED — that one is a ' +
+    'warning, not this dialog.) Fix the card, then push again.'));
   const list = el('div', 'led-push-diff');
   for (const c of collisions) {
     list.appendChild(el('div', 'led-push-diff-line', `• ${c.message}`));
@@ -1721,9 +2085,9 @@ async function startPerOutputPush(ctx, controller, snapshot, status) {
   }
   // Pre-flight gate (slice S2, widened by report 20260725_70 §4 and again by
   // _102) — runs BEFORE the device write so a push can never mint a duplicate
-  // port→output association, an out-of-range output, a park outside the
-  // firmware's window, or a shared address with no deterministic winner. A
-  // RESOLVABLE shared address is deliberately NOT here: it warns and proceeds.
+  // port→output association, an out-of-range output, an all-dark card, or a
+  // shared address with no deterministic winner. A RESOLVABLE shared address is
+  // deliberately NOT here: it warns and proceeds.
   const blocking = [...plan.collisions, ...unrankableCollisionsFor(ctx, controller)];
   if (blocking.length) {
     setSyncState(ctx, controller.id, { state: 'drift', detail: describeCollisions(blocking) });
@@ -1738,51 +2102,42 @@ async function startPerOutputPush(ctx, controller, snapshot, status) {
     console.warn(`[LedPanel] ${describeSharedUniverses(plan.sharedUniverses)}`);
   }
 
-  // Build the EXACT strands payload (RMW preview) and validate the APPLIED array
-  // — the intended POST-push state, which is the only array that can express an
-  // enable transition. A bad plan is blocked here, not at the device.
-  let payloadStrands;
+  // Build the ONE body this push will POST, from the SAME snapshot the plan was
+  // derived from (report `_362` §2.3-3 — no second read, no drift window). The
+  // builder validates the APPLIED array and decides the deviceName repair, so a
+  // bad plan or an unusable card name is refused HERE, before the operator
+  // confirms a write that cannot land.
+  let body;
   try {
-    payloadStrands = applyPerOutputPlan(snapshot.strands, plan);
-    validatePerOutputPlan(payloadStrands, plan.universeByOutputIndex);
+    body = buildForcedConfigBody({ snapshot, plan, ip: controller.ip });
   } catch (err) {
-    ctx.showToast(`✋ per-output plan rejected: ${err.message}`, { error: true, ttl: 10000 });
-    return;
-  }
-  const payload = {
-    strands: payloadStrands,
-  };
-  // A device whose STORED deviceName is invalid rejects every config write, so
-  // the push has to repair it with this card's name — or refuse now, before the
-  // operator confirms a write that cannot land (report 20260725_124). The same
-  // decision runs inside pushPerOutputUniverses; computing it here keeps the
-  // payload PREVIEW honest (it must show every key the POST will carry).
-  let nameRepair;
-  try {
-    nameRepair = deviceNameRepairForPush({
-      ip: controller.ip, storedName: snapshot.deviceName, controllerName: plan.controllerName,
-    });
-  } catch (err) {
-    ctx.showToast(`✋ per-output push refused: ${err.message}`, { error: true, ttl: 20000 });
+    ctx.showToast(`✋ forced push refused: ${err.message}`, { error: true, ttl: 20000 });
     setSyncState(ctx, controller.id, { state: 'drift', detail: err.message });
     ctx.refresh();
     return;
   }
-  if (nameRepair) payload.deviceName = nameRepair.to;
-  showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRepair);
+  // Same decision the builder made, recomputed for the DIALOG's own declaration
+  // of the name repair (it cannot throw here — the builder already ran it).
+  const nameRepair = deviceNameRepairForPush({
+    ip: controller.ip, storedName: snapshot.deviceName, controllerName: plan.controllerName,
+  });
+  showPerOutputPushConfirm(ctx, controller, plan, body, status, nameRepair);
 }
 
-function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRepair) {
+/**
+ * The FORCE-push confirm dialog. Exported for the unit tests: the warning copy
+ * and the payload preview are operator-facing contract text (report `_363`
+ * §2.3-2 / §5), and they are asserted on the rendered dialog rather than on a
+ * paraphrase of it.
+ */
+export function showPerOutputPushConfirm(ctx, controller, plan, body, status, nameRepair) {
   const overlay = el('div', 'vm-modal-overlay');
   const card = el('div', 'vm-modal-card led-push-card');
   overlay.appendChild(card);
   card.appendChild(el('div', 'vm-modal-title',
-    `Push per-output mapping to '${controller.name}' (${controller.ip})`));
+    `FORCE push to '${controller.name}' (${controller.ip})`));
 
-  card.appendChild(el('div', 'led-push-warn',
-    '⚠ This writes the saved strand mapping only; it NEVER changes DMX / swarm show mode. ' +
-    `A mapping change may reboot the device; the push waits up to ${REBOOT_WAIT_SECONDS} s for it ` +
-    'to answer and reads the saved mapping back before calling it done.'));
+  card.appendChild(el('div', 'led-push-warn', FORCE_PUSH_WARNING));
 
   // SHARED ADDRESSES — declared before anything else on the dialog, because it
   // is the one thing on this plan that changes what OTHER hardware sees
@@ -1821,33 +2176,36 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
   }
   card.appendChild(mapBox);
 
-  // (3) Parked outputs — enabled on the board, nothing routed here. This is the
-  // whole point of the park: it is declared, not silent.
-  if (plan.parked.length) {
-    card.appendChild(el('div', 'led-push-subhead', 'Parked outputs (no port maps them)'));
-    const parkBox = el('div', 'led-push-diff');
-    for (const p of plan.parked) {
-      const line = el('div', 'led-push-diff-line');
-      line.textContent = `output ${p.outputIndex + 1}  ·  U${p.universe}  ·  no port maps it — ` +
-        'stays ENABLED on the board, nothing routes here, so it stays dark' +
-        (p.reused ? '  (unchanged)' : '');
-      parkBox.appendChild(line);
+  // (3) DISABLES — outputs lit on the board today that this push will DARKEN.
+  // MANDATORY and loud (report `_362` §6): force semantics supersede the old
+  // "the push never disables anything" protection, so a strand somebody wired
+  // outside the sim WILL go dark, and the operator has to see it first.
+  if (plan.disables.length) {
+    const disableBlock = el('div', 'led-push-warn led-push-disables');
+    disableBlock.appendChild(el('div', 'led-push-disables-head',
+      `⚠ ${plan.disables.length} output(s) this push will DISABLE (no card port maps them):`));
+    for (const d of plan.disables) {
+      disableBlock.appendChild(el('div', 'led-push-disables-line',
+        `output ${d.outputIndex + 1}: ENABLED on the device` +
+        `${Number.isInteger(d.deviceCount) ? ` (${d.deviceCount} px` : ' ('}` +
+        `${Number.isInteger(d.deviceUniverse) ? `, U${d.deviceUniverse}` : ''}) → will be ` +
+        'DISABLED and go dark'));
     }
-    card.appendChild(parkBox);
+    card.appendChild(disableBlock);
   }
 
-  // (4) The ONE asymmetric write. The push may switch an output ON, never off —
-  // and it says so, per output, before anything is written.
-  if (plan.enables.length) {
-    const enableBlock = el('div', 'led-push-warn led-push-enables');
-    enableBlock.appendChild(el('div', 'led-push-enables-head',
-      `⚠ ${plan.enables.length} output(s) this push will ENABLE (it never disables anything):`));
-    for (const e of plan.enables) {
-      enableBlock.appendChild(el('div', 'led-push-enables-line',
-        `output ${e.outputIndex + 1}: DISABLED on the device → will be ENABLED ` +
-        `(port ${e.portNum} drives it, ${e.count} px, U${e.universe})`));
+  // (4) COUNT CHANGES — the other superseded protection. The sim's mapping now
+  // overwrites the board's pixel count in BOTH directions, so every rewrite is
+  // named before the write, never discovered after it.
+  if (plan.countChanges.length) {
+    const countBlock = el('div', 'led-push-warn led-push-count-changes');
+    countBlock.appendChild(el('div', 'led-push-count-changes-head',
+      `⚠ ${plan.countChanges.length} output(s) whose PIXEL COUNT this push will rewrite:`));
+    for (const c of plan.countChanges) {
+      countBlock.appendChild(el('div', 'led-push-count-changes-line',
+        `output ${c.outputIndex + 1}: device ${c.from} px → ${c.to} px (this card's mapping wins)`));
     }
-    card.appendChild(enableBlock);
+    card.appendChild(countBlock);
   }
 
   // (4b) The deviceName repair — declared on its own, because it is the one key
@@ -1866,7 +2224,7 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
     card.appendChild(nameBlock);
   }
 
-  // (5) Warnings — re-parks, repaired universes, count mismatches.
+  // (5) Warnings — repaired universes, unknown strand counts, shared addresses.
   if (plan.warnings.length) {
     const warnBlock = el('div', 'led-push-warn led-push-unhonorable');
     warnBlock.appendChild(el('div', 'led-push-unhonorable-head',
@@ -1877,7 +2235,9 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
 
   card.appendChild(el('div', 'led-push-subhead', 'Payload (POST /api/config)'));
   const pre = el('pre', 'led-push-pre');
-  pre.textContent = JSON.stringify(payload, null, 2);
+  // This IS the object that gets posted — not a rendering of it (report `_362`
+  // §2.6-3): `runPerOutputPush` hands the same `body` straight to the transport.
+  pre.textContent = JSON.stringify(body, null, 2);
   card.appendChild(pre);
 
   const statusLine = el('div', 'led-push-status');
@@ -1886,8 +2246,8 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
   const actions = el('div', 'vm-modal-actions');
   const cancelBtn = el('button', 'vm-modal-btn', 'Cancel');
   cancelBtn.onclick = () => overlay.remove();
-  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Push mapping');
-  confirmBtn.onclick = () => runPerOutputPush(ctx, controller, plan, DEFAULT_DEVICE_IO, {
+  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'FORCE push');
+  confirmBtn.onclick = () => runPerOutputPush(ctx, controller, plan, body, DEFAULT_DEVICE_IO, {
     overlay, statusLine, confirmBtn, cancelBtn,
   });
   actions.appendChild(cancelBtn);
@@ -1900,12 +2260,13 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
 }
 
 /**
- * Run a confirmed per-output push to completion: device write + verify, then the
- * slice-S1 completion (save the scene, then notify the bridge). Exported for the
- * unit tests — `ui` only needs `{statusLine, confirmBtn, cancelBtn}` objects with
- * `textContent` / `className` / `disabled`, so the whole flow runs without a DOM.
+ * Run a confirmed FORCED push to completion: device write + full verify, then the
+ * slice-S1 completion (save the scene, then notify the bridge). `body` is the
+ * EXACT object the confirm dialog previewed. Exported for the unit tests — `ui`
+ * only needs `{statusLine, confirmBtn, cancelBtn}` objects with `textContent` /
+ * `className` / `disabled`, so the whole flow runs without a DOM.
  */
-export async function runPerOutputPush(ctx, controller, plan, io, ui) {
+export async function runPerOutputPush(ctx, controller, plan, body, io, ui) {
   const { statusLine, confirmBtn, cancelBtn } = ui;
   confirmBtn.disabled = true;
   cancelBtn.disabled = true;
@@ -1932,12 +2293,18 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
     return;
   }
 
+  // THE ACCEPT PATH. The operator pressed FORCE, so this is where the registry
+  // may be mutated: commit the port-universe repairs the previewed plan implies
+  // (the exact universes `body` carries). Cancelling the dialog never reaches
+  // here, which is the whole point — a cancelled push leaves the card alone.
+  commitPlanPortUniverses(ctx, controller, plan);
+
   let pushResult;
   try {
-    pushResult = await pushPerOutputVerifyRecord(ctx, controller, plan, io,
+    pushResult = await pushPerOutputVerifyRecord(ctx, controller, body, io,
       (m) => setStatus(m));
   } catch (err) {
-    setStatus(`✋ per-output push failed: ${err.message}` +
+    setStatus(`✋ forced push failed: ${err.message}` +
       (err.field ? ` (field=${err.field})` : ''), 'led-push-error');
     setSyncState(ctx, controller.id, err.perOutputMismatch
       ? { state: 'drift', detail: err.message }
@@ -1955,7 +2322,11 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
   setStatus(`${deviceStep} · saving the scene (mapping → patches.yaml)…`);
   const steps = await persistAndNotifyAfterPush(io, [routeExpectation]);
   const outcome = describePushCompletion(steps, { lead: deviceStep });
-  setStatus(outcome.text, outcome.ok ? 'led-push-ok' : 'led-push-error');
+  // The informational swarm note (`_363` §2.2) rides on the outcome line and
+  // NEVER changes the verdict — the push did not touch swarm, so it cannot fail
+  // on it; the operator is simply told the board runs both.
+  const swarmNote = pushResult.swarmNote ? ` · ${pushResult.swarmNote}` : '';
+  setStatus(`${outcome.text}${swarmNote}`, outcome.ok ? 'led-push-ok' : 'led-push-error');
   // The chip measures device ≡ plan, which IS true here — but say so honestly
   // when the feed behind it is stale.
   const failedReason = !outcome.ok
@@ -1980,19 +2351,483 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
   ctx.refresh();
 }
 
+// ── The DMX ⏻ toggle (report `_363` §3 — the anti-switch) ───────────────────
+//
+// ONE button, ONE write, ONE read-back. NO confirm dialog (operator: *"use the
+// API to do that simply. No hassle, please simple process."*), no fleet toggle,
+// no status sweep, no DMX⇄SWARM mode model, no swarm write, no save-server route
+// (browser-direct like the push), no polling, no timer, no cache TTL, and
+// nothing about the live flag is ever persisted into the scene.
+//
+// The label is a plain LAST-OBSERVATION display (dmxToggleModel): it says `?`
+// until a read the panel already performs sets it, and it falls back to `?` the
+// moment anything fails — the read-back is the only truth source.
+
+/** The toggle's phase copy — the operator must be able to tell a reboot from a hang. */
+const DMX_TOGGLE_PHASES = {
+  reading: '⏻ reading…',
+  writing: '⏻ writing…',
+  rebooting: '⏻ rebooting…',
+  verifying: '⏻ verifying…',
+};
+
+/**
+ * Flip one board's DMX (sACN) input flag and CONFIRM it by reading the board
+ * back. Exported for the unit tests — `button` only needs
+ * `{textContent, disabled, title}` so the whole flow runs without a DOM.
+ *
+ * Sequence (identical discipline to the push, minus the dialog):
+ *  pre-write identity gate → ONE `getStatus`+`getConfig` → `buildDmxToggleBody`
+ *  → `pushDmxToggle` → on `needs-reboot`/a LOST reply `awaitReboot` → re-read →
+ *  `diffDmxToggle` → label + toast.
+ *
+ * Every failure is a LOUD toast and the label falls to `?` (codex P0 — a label
+ * that kept its old value after a failed write would be a fallback claiming
+ * knowledge the sim does not have).
+ *
+ * @returns {Promise<boolean>} true only when the board CONFIRMED the new state.
+ */
+export async function toggleDmx(ctx, controller, targetEnabled, io = DEFAULT_DEVICE_IO,
+  button = null) {
+  if (typeof targetEnabled !== 'boolean') {
+    throw new Error('[LedPanel] toggleDmx: targetEnabled must be a boolean — the toggle states ' +
+      'the target state explicitly');
+  }
+  const want = targetEnabled ? 'ON' : 'OFF';
+  if (!isValidIp(controller.ip)) {
+    ctx.showToast(`✋ ${controller.name}: set a valid device IP before switching DMX`,
+      { error: true, ttl: 7000 });
+    return false;
+  }
+  const setPhase = (text) => { if (button) button.textContent = text; };
+  if (button) button.disabled = true;
+  try {
+    setPhase(DMX_TOGGLE_PHASES.reading);
+    const status = await io.getStatus(controller.ip);
+    const identityRefusal = identityGateRefusal(controller, status);
+    if (identityRefusal) throw new Error(identityRefusal);
+    const snapshot = await io.getConfig(controller.ip);
+    // The pre-write read is itself an observation — the label tells the truth
+    // about the board even if the write below fails.
+    noteDmxStateFromConfig(ctx, controller.id, snapshot);
+    setDeviceOutputs(ctx, controller.id, snapshot.strands);
+    const body = buildDmxToggleBody({
+      snapshot, enabled: targetEnabled, controllerName: controller.name, ip: controller.ip,
+    });
+
+    setPhase(DMX_TOGGLE_PHASES.writing);
+    let reply = null;
+    let writeError = null;
+    try {
+      reply = await io.pushDmxToggle(controller.ip, body);
+    } catch (err) {
+      // Same arbitration as the push: NO answer at all is ambiguous (a `dmx`
+      // change reboots the board, which can drop the reply) and is settled by the
+      // read-back; a device that ANSWERED non-2xx is a definite failure (D2).
+      if (!err.writeResponseLost) throw err;
+      writeError = err;
+    }
+    if (reply && reply.outcome !== 'applied' && reply.outcome !== 'needs-reboot') {
+      throw new Error('the device refused the DMX write — it answered ' +
+        (reply.outcome === undefined ? 'a 2xx body with NO outcome field'
+          : `outcome='${reply.outcome}'`) +
+        (reply.message ? `: ${reply.message}` : '') + '. The write is NOT retried.');
+    }
+    const needsReboot = !!writeError || reply.reboot === true || reply.outcome === 'needs-reboot';
+    if (needsReboot) {
+      setPhase(DMX_TOGGLE_PHASES.rebooting);
+      try {
+        await io.awaitReboot(controller.ip);
+      } catch (err) {
+        if (!writeError) throw err;
+        throw new Error(`${writeError.message}; and the device never answered again within ` +
+          `${REBOOT_WAIT_SECONDS}s — the DMX write is UNCONFIRMED: it may or may not have ` +
+          'applied. Power-cycle the controller and read the card again.');
+      }
+    }
+
+    setPhase(DMX_TOGGLE_PHASES.verifying);
+    // RETRIED READS — same verify-race fix as the config push: the board can
+    // answer the reboot probe and still drop reads for a few seconds.
+    const { status: verifyStatus, config: verifyConfig } =
+      await readVerifyPair(io, controller.ip, { label: 'post-toggle read-back' });
+    setLiveMac(ctx, controller.id, verifyStatus.mac);   // display-only — never persisted
+    setDeviceOutputs(ctx, controller.id, verifyConfig.strands);
+    const prePushControllerId = controller.device && controller.device.controllerId;
+    const mismatches = diffDmxToggle(verifyConfig, verifyStatus, targetEnabled,
+      prePushControllerId !== undefined ? { controllerId: prePushControllerId } : {});
+    if (mismatches.length) {
+      throw new Error(`the board did NOT confirm DMX ${want} — ${mismatches.join('; ')}`);
+    }
+    noteDmxState(ctx, controller.id, targetEnabled);
+    ctx.showToast(`✓ '${controller.name}': DMX input is ${want} — confirmed by read-back` +
+      (writeError ? ' (the write reply was lost to the reboot; the read-back settled it)' : ''),
+    { ttl: 7000 });
+    return true;
+  } catch (err) {
+    // The label must never keep a value the board has not confirmed.
+    clearDmxState(ctx, controller.id);
+    ctx.showToast(`✋ '${controller.name}': DMX ${want} FAILED — ${err.message}`,
+      { error: true, ttl: 14000 });
+    return false;
+  } finally {
+    if (button) {
+      const model = dmxToggleModel(ctx, controller);
+      button.textContent = model.label;
+      button.title = model.title;
+      button.className = model.className;
+      button.disabled = false;
+    }
+    ctx.refresh();
+  }
+}
+
+// ── The GAMMA push (report `_363` §11 — PUSH ONLY, re-enabled by operator order)
+//
+// The sim's per-card gamma sliders are the CURVE SOURCE: they hold the scene
+// mirror (`led.wire.controllerGamma`) — the same values the preview models — and
+// ⬆ Push gamma states that curve to the board. The board is then asked to
+// CONFIRM it (read-back, float32 epsilon compare) and nothing else happens.
+//
+// NO PULL, in any form: there is no refresh, no mirror-from-device, no cache and
+// no fleet source harvest. That includes the SUCCESS path — a verified push does
+// NOT write the device's float32 read-back into the scene (2.2 would become
+// 2.200000047683716 in controllers.yaml, and reading a value off a board to keep
+// it is exactly the pull the operator retired). The mirror is the source; the
+// device confirms it; provenance records the curve that was SENT.
+//
+// Gamma is LIVE-APPLY: the expected reply is `{outcome:'applied'}` with no
+// reboot. A `needs-reboot` reply is still HONORED if a firmware ever sends one.
+
+/** The gamma push's phase copy — same discipline as the ⏻ toggle's. */
+const GAMMA_PUSH_PHASES = {
+  reading: '⬆ reading…',
+  writing: '⬆ writing…',
+  rebooting: '⬆ rebooting…',
+  verifying: '⬆ verifying…',
+};
+
+/**
+ * Push ONE controller's curve to its board and CONFIRM it by reading the board
+ * back. Exported for the unit tests — `button` only needs
+ * `{textContent, disabled, title}` so the whole flow runs without a DOM.
+ *
+ * Sequence (the proven machinery, minus the reboot):
+ *  pre-write identity gate → ONE `getStatus`+`getConfig` → `buildGammaPushBody`
+ *  → `pushGammaPush` → (only if the device asks) `awaitReboot` → retried
+ *  read-back → `diffGammaPush` → provenance + toast.
+ *
+ * Never throws — returns `{ok, detail}` so a fleet run can carry on and report
+ * every board. A single-card caller renders the toast this already raised.
+ */
+export async function pushGammaToDevice(ctx, controller, gamma, io = DEFAULT_DEVICE_IO,
+  button = null, onStatus = null) {
+  const report = onStatus || (() => {});
+  const setPhase = (text) => { if (button) button.textContent = text; };
+  if (!isValidIp(controller.ip)) {
+    const detail = `set a valid device IP before pushing gamma (got '${controller.ip}')`;
+    ctx.showToast(`✋ ${controller.name}: ${detail}`, { error: true, ttl: 7000 });
+    return { ok: false, detail };
+  }
+  const originalLabel = button ? button.textContent : null;
+  if (button) button.disabled = true;
+  try {
+    setPhase(GAMMA_PUSH_PHASES.reading);
+    report('reading the board…');
+    const status = await readRetrying(io, `GET /api/status ${controller.ip}`,
+      () => io.getStatus(controller.ip), report);
+    // PRE-WRITE IDENTITY GATE (`_363` §2.3-1) — before the snapshot read, so no
+    // body is ever built for hardware this card does not describe.
+    const identityRefusal = identityGateRefusal(controller, status);
+    if (identityRefusal) throw new Error(identityRefusal);
+    const snapshot = await readRetrying(io, `GET /api/config ${controller.ip}`,
+      () => io.getConfig(controller.ip), report);
+    noteDmxStateFromConfig(ctx, controller.id, snapshot);   // free observation, zero new reads
+    const body = buildGammaPushBody({
+      snapshot, gamma, controllerName: controller.name, ip: controller.ip,
+    });
+
+    setPhase(GAMMA_PUSH_PHASES.writing);
+    report(`writing gamma ${formatGamma(body.gamma)}…`);
+    let reply = null;
+    let writeError = null;
+    try {
+      reply = await io.pushGammaPush(controller.ip, body);
+    } catch (err) {
+      // Same arbitration as every other writer here: NO answer at all is
+      // ambiguous and is settled by the read-back; an ANSWERED non-2xx is a
+      // definite failure (D2).
+      if (!err.writeResponseLost) throw err;
+      writeError = err;
+    }
+    if (reply && reply.outcome !== 'applied' && reply.outcome !== 'needs-reboot') {
+      throw new Error('the device refused the gamma write — it answered ' +
+        (reply.outcome === undefined ? 'a 2xx body with NO outcome field'
+          : `outcome='${reply.outcome}'`) +
+        (reply.message ? `: ${reply.message}` : '') + '. The write is NOT retried.');
+    }
+    // Gamma is LIVE-APPLY, so this is normally FALSE and no reboot is waited
+    // for. It is honored — not assumed away — because a firmware that says it
+    // needs a reboot is telling us something we must believe.
+    const needsReboot = !!writeError || (reply && (reply.reboot === true
+      || reply.outcome === 'needs-reboot'));
+    if (needsReboot) {
+      setPhase(GAMMA_PUSH_PHASES.rebooting);
+      report(writeError
+        ? `the device did not answer the gamma write (${writeError.message}) — waiting up to ` +
+          `${REBOOT_WAIT_SECONDS}s in case it rebooted, then reading it back…`
+        : `the device asked for a reboot to apply gamma — waiting up to ${REBOOT_WAIT_SECONDS}s…`);
+      try {
+        await io.awaitReboot(controller.ip);
+      } catch (err) {
+        if (!writeError) throw err;
+        throw new Error(`${writeError.message}; and the device never answered again within ` +
+          `${REBOOT_WAIT_SECONDS}s — the gamma write is UNCONFIRMED: it may or may not have ` +
+          'applied. Power-cycle the controller and push again.');
+      }
+    }
+
+    setPhase(GAMMA_PUSH_PHASES.verifying);
+    report('reading the curve back…');
+    const { status: verifyStatus, config: verifyConfig } =
+      await readVerifyPair(io, controller.ip, { label: 'post-gamma read-back', onRetry: report });
+    setLiveMac(ctx, controller.id, verifyStatus.mac);   // display-only — never persisted
+    const prePushControllerId = controller.device && controller.device.controllerId;
+    const mismatches = diffGammaPush(verifyConfig, verifyStatus, body.gamma,
+      prePushControllerId !== undefined ? { controllerId: prePushControllerId } : {});
+    if (mismatches.length) {
+      throw new Error(`the board did NOT confirm the curve — ${mismatches.join('; ')}`);
+    }
+
+    // G8 — the same liveness guard the config push carries: a card deleted (or a
+    // scene switched) mid-flow must not receive provenance on a detached object.
+    if (!controllerIsLive(ctx, controller)) {
+      throw new Error(`'${controller.name}' was removed (or the scene changed) during the gamma ` +
+        'push — the device WAS written, but the receipt is discarded');
+    }
+    ctx.mutate(`Pushed gamma to '${controller.name}'`, () => {
+      // An UNBOUND card that answered is bound from the confirmed status, the
+      // same rule the config push follows — `recordDeviceGammaPush` refuses an
+      // unbound or provisional card outright.
+      if (!isVerifiedLedController(controller)) {
+        bindControllerDevice(controller, {
+          vendor: LED_DEVICE_VENDOR_MARSINLED,
+          controllerId: verifyStatus.controllerId,
+          deviceName: verifyStatus.deviceName,
+          boardId: verifyStatus.boardId,
+        });
+      }
+      recordDeviceGammaPush(controller, {
+        at: new Date().toISOString(),
+        outcome: needsReboot ? 'needs-reboot' : ((reply && reply.outcome) || 'applied'),
+        // The curve that was SENT and the board confirmed within epsilon — NOT
+        // the float32 read-back (recording that would be a pull).
+        gamma: body.gamma,
+        firmwareSHA: verifyStatus.firmwareSHA,
+      });
+    });
+    ctx.showToast(`✓ '${controller.name}': gamma ${formatGamma(body.gamma)} confirmed by ` +
+      `read-back${writeError ? ' (the write reply was lost; the read-back settled it)' : ''}`,
+    { ttl: 7000 });
+    return { ok: true, gamma: body.gamma, responseLost: !!writeError };
+  } catch (err) {
+    ctx.showToast(`✋ '${controller.name}': gamma push FAILED — ${err.message}`,
+      { error: true, ttl: 14000 });
+    return { ok: false, detail: err.message };
+  } finally {
+    if (button) {
+      button.textContent = originalLabel;
+      button.disabled = false;
+    }
+    ctx.refresh();
+  }
+}
+
+/**
+ * Fleet gamma: every LED controller with a valid IP, SEQUENTIALLY, each pushing
+ * ITS OWN card's curve (the scene mirror the card's sliders show). There is NO
+ * shared "fleet curve" and no source selection — that was the last place a curve
+ * was harvested from somewhere else, and it stays deleted (`_364` §2).
+ *
+ * NO SCENE SAVE: gamma is not part of the mapping, so unlike ⬆ Push all this
+ * writes no files and notifies no bridge. One board's failure never aborts the
+ * rest; every board gets its own row.
+ *
+ * @returns {Promise<Array<{name, id, ip, state, detail?}>>} state ∈
+ *   'pushed' | 'skipped' | 'failed'.
+ */
+export async function pushGammaAllControllers(ctx, io = DEFAULT_DEVICE_IO, onProgress = null) {
+  const registry = ctx.registry();
+  const controllers = (registry && Array.isArray(registry.controllers))
+    ? registry.controllers.filter(isLedController) : [];
+  const results = [];
+  for (const controller of controllers) {
+    const base = { name: controller.name, id: controller.id, ip: controller.ip };
+    const phase = (text) => {
+      if (onProgress) onProgress({ id: controller.id, name: controller.name, phase: text });
+    };
+    if (!isValidIp(controller.ip)) {
+      results.push({ ...base, state: 'skipped', detail: `no valid device IP ('${controller.ip}')` });
+      phase(`SKIPPED — no valid device IP ('${controller.ip}')`);
+      continue;
+    }
+    let gamma;
+    try {
+      gamma = readGammaMirror(controller);   // SCENE read — no I/O, no device pull
+    } catch (err) {
+      results.push({ ...base, state: 'failed', detail: err.message });
+      phase(`FAILED — ${err.message}`);
+      continue;
+    }
+    const outcome = await pushGammaToDevice(ctx, controller, gamma, io, null, phase);
+    if (outcome.ok) {
+      results.push({ ...base, state: 'pushed', detail: `gamma ${formatGamma(gamma)}` });
+      phase(`PUSHED — gamma ${formatGamma(gamma)} confirmed`);
+    } else {
+      results.push({ ...base, state: 'failed', detail: outcome.detail });
+      phase(`FAILED — ${outcome.detail}`);
+    }
+  }
+  ctx.refresh();
+  return results;
+}
+
+// ── Fleet DMX OFF (operator-ordered exception to `_363` §3's no-fleet rule) ──
+//
+// `_363` §3 says "NOT built: no fleet toggle". The operator overrode that after
+// the config push was live-validated: *"like the push all button, but DMX off —
+// no swarm, boards run their pattern"*. This is the ONE fleet toggle, and it is
+// deliberately one-directional: OFF. DMX comes back through ⬆ Push / ⬆ Push all
+// / the per-card ⏻ toggle, all of which already force or state DMX ON.
+//
+// It writes exactly what the per-card toggle writes — the board's own `dmx`
+// object with `enabled:false` — so: no swarm key, no strands, no gamma, and
+// NOTHING is persisted into the scene (the live mode is runtime state, `_363`
+// §3). Boards fall back to their own local pattern, which is the point.
+
+/**
+ * Switch DMX (sACN) input OFF on every LED controller with a valid IP,
+ * SEQUENTIALLY (each write reboots its board, so they must serialize).
+ *
+ * Per board: identity gate → ONE `getStatus`+`getConfig` → `buildDmxToggleBody`
+ * → `pushDmxToggle` → `awaitReboot` → RETRIED read-back → `diffDmxToggle(false)`.
+ * A failure is recorded and the loop CONTINUES (fail loud per board). No
+ * retries of the write, ever. The ⏻ labels are seeded from the results.
+ *
+ * @returns {Promise<Array<{name, id, ip, state, detail?}>>} state ∈
+ *   'off' | 'skipped' | 'failed'.
+ */
+export async function dmxOffAllControllers(ctx, io = DEFAULT_DEVICE_IO, onProgress = null) {
+  const registry = ctx.registry();
+  const controllers = (registry && Array.isArray(registry.controllers))
+    ? registry.controllers.filter(isLedController) : [];
+  const results = [];
+  for (const controller of controllers) {
+    const base = { name: controller.name, id: controller.id, ip: controller.ip };
+    const phase = (text) => {
+      if (onProgress) onProgress({ id: controller.id, name: controller.name, phase: text });
+    };
+    if (!isValidIp(controller.ip)) {
+      results.push({ ...base, state: 'skipped', detail: `no valid device IP ('${controller.ip}')` });
+      phase(`SKIPPED — no valid device IP ('${controller.ip}')`);
+      continue;
+    }
+    try {
+      phase('reading the board…');
+      const status = await readRetrying(io, `GET /api/status ${controller.ip}`,
+        () => io.getStatus(controller.ip), phase);
+      const identityRefusal = identityGateRefusal(controller, status);
+      if (identityRefusal) {
+        clearDmxState(ctx, controller.id);
+        setSyncState(ctx, controller.id, { state: 'drift', detail: identityRefusal });
+        results.push({ ...base, state: 'failed', detail: identityRefusal });
+        phase(`FAILED — ${identityRefusal}`);
+        continue;
+      }
+      const snapshot = await readRetrying(io, `GET /api/config ${controller.ip}`,
+        () => io.getConfig(controller.ip), phase);
+      noteDmxStateFromConfig(ctx, controller.id, snapshot);
+      setDeviceOutputs(ctx, controller.id, snapshot.strands);
+      const body = buildDmxToggleBody({
+        snapshot, enabled: false, controllerName: controller.name, ip: controller.ip,
+      });
+
+      phase('writing DMX OFF…');
+      let reply = null;
+      let writeError = null;
+      try {
+        reply = await io.pushDmxToggle(controller.ip, body);
+      } catch (err) {
+        if (!err.writeResponseLost) throw err;
+        writeError = err;
+      }
+      if (reply && reply.outcome !== 'applied' && reply.outcome !== 'needs-reboot') {
+        throw new Error('the device refused the DMX write — it answered ' +
+          (reply.outcome === undefined ? 'a 2xx body with NO outcome field'
+            : `outcome='${reply.outcome}'`) +
+          (reply.message ? `: ${reply.message}` : '') + '. The write is NOT retried.');
+      }
+      const needsReboot = !!writeError || reply.reboot === true || reply.outcome === 'needs-reboot';
+      if (needsReboot) {
+        phase(`rebooting — waiting up to ${REBOOT_WAIT_SECONDS}s…`);
+        try {
+          await io.awaitReboot(controller.ip);
+        } catch (err) {
+          if (!writeError) throw err;
+          throw new Error(`${writeError.message}; and the device never answered again within ` +
+            `${REBOOT_WAIT_SECONDS}s — the DMX write is UNCONFIRMED: it may or may not have ` +
+            'applied. Power-cycle the controller and read the card again.');
+        }
+      }
+
+      phase('verifying…');
+      const { status: verifyStatus, config: verifyConfig } =
+        await readVerifyPair(io, controller.ip, { label: 'post-toggle read-back', onRetry: phase });
+      setLiveMac(ctx, controller.id, verifyStatus.mac);
+      const prePushControllerId = controller.device && controller.device.controllerId;
+      const mismatches = diffDmxToggle(verifyConfig, verifyStatus, false,
+        prePushControllerId !== undefined ? { controllerId: prePushControllerId } : {});
+      if (mismatches.length) {
+        throw new Error(`the board did NOT confirm DMX OFF — ${mismatches.join('; ')}`);
+      }
+      noteDmxState(ctx, controller.id, false);          // seeds this card's ⏻ label
+      const lostNote = writeError
+        ? 'the write reply was lost (device rebooted before answering) — the read-back confirms it'
+        : null;
+      const row = { ...base, state: 'off' };
+      if (lostNote) { row.detail = lostNote; row.responseLost = true; }
+      results.push(row);
+      phase('DMX OFF — confirmed by read-back');
+    } catch (err) {
+      // The label must never keep a value the board has not confirmed.
+      clearDmxState(ctx, controller.id);
+      results.push({ ...base, state: 'failed', detail: err.message });
+      phase(`FAILED — ${err.message}`);
+    }
+  }
+  ctx.refresh();
+  return results;
+}
+
 // ── Push-all (every LED controller with a valid IP, sequential; FORCE) ───────
 
 /**
  * Push every LED controller in the registry that carries a syntactically valid
- * IP, SEQUENTIALLY (a mapping change may reboot, so writes must serialize). This is
- * a FORCE push (addendum #2): each controller runs the SAME per-output path as
- * the single push — derive the plan from the CURRENT port state, push,
- * awaitReboot when requested, verify the saved config read-back — with NO in-sync
- * short-circuit (sync state never gates a push). An UNBOUND card that answers is
- * bound on success (addendum #3). Firmware without per-output DMX gets the loud
- * firmware-too-old refusal, counted as a failure (no legacy fallback, codex P0).
- * A failure on one is reported but does NOT abort the rest (fail loud per
- * controller). A controller with no valid IP is SKIPPED with a note.
+ * IP, SEQUENTIALLY (a forced write reboots the board, so writes must serialize).
+ * Each controller runs the SAME forced path as the single push — derive the plan
+ * from the CURRENT port state, build the ONE body, push, awaitReboot, verify the
+ * FULL config read-back — with NO in-sync short-circuit (sync state never gates a
+ * push). An UNBOUND card that answers is bound on success (addendum #3). Firmware
+ * without per-output DMX gets the loud firmware-too-old refusal, counted as a
+ * failure (no legacy fallback, codex P0). A failure on one is reported but does
+ * NOT abort the rest (fail loud per controller). A controller with no valid IP is
+ * SKIPPED with a note. NO RETRIES, ever — the operator re-pushes after reading
+ * the reason (report `_362` §2.3-8).
+ *
+ * `onProgress({id, name, phase})` fires for every phase change on every board, so
+ * the dialog can render ONE LIVE LINE PER CONTROLLER (report `_362` §2.3-6). A
+ * fleet push is up to ~65 s per board; without it a rebooting controller is
+ * indistinguishable from a hang.
  *
  * DEVICE LAYER ONLY. The slice-S1 completion (save the scene, then notify the
  * bridge) runs ONCE for the whole sequence in the caller — `startPushAll` —
@@ -2001,39 +2836,63 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
  *
  * @param {Object} ctx - the editor bridge (registry/mutate/strandLedCounts/…).
  * @param {Object} [io] - injectable device I/O (defaults to the real client).
- * @returns {Promise<Array<{name, id, state, detail?}>>} state ∈
+ * @param {Function} [onProgress] - `({id, name, phase}) => void`.
+ * @returns {Promise<Array<{name, id, ip, state, detail?, responseLost?}>>} state ∈
  *   'pushed' | 'skipped' | 'failed'.
  */
-export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
+export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO, onProgress = null) {
   const registry = ctx.registry();
   const controllers = (registry && Array.isArray(registry.controllers))
     ? registry.controllers.filter(isLedController) : [];
   const results = [];
   for (const controller of controllers) {
-    const base = { name: controller.name, id: controller.id };
+    const base = { name: controller.name, id: controller.id, ip: controller.ip };
+    const phase = (text) => {
+      if (onProgress) onProgress({ id: controller.id, name: controller.name, phase: text });
+    };
     if (!isValidIp(controller.ip)) {
       results.push({ ...base, state: 'skipped', detail: `no valid device IP ('${controller.ip}')` });
+      phase(`SKIPPED — no valid device IP ('${controller.ip}')`);
       continue;
     }
     try {
-      const status = await io.getStatus(controller.ip);
+      phase('reading the board…');
+      // RETRIED on timeout (the verify-race fix): a fleet run reaches this board
+      // seconds after the PREVIOUS board rebooted, and a board that is still
+      // settling its WiFi drops reads — which used to fail this board before it
+      // was ever written. Answered errors are still immediate failures.
+      const status = await readRetrying(io, `GET /api/status ${controller.ip}`,
+        () => io.getStatus(controller.ip), phase);
+      // PRE-WRITE IDENTITY GATE (report `_363` §2.3-1), per controller: a bound
+      // card whose IP answers as a different board FAILS here — before any body
+      // exists — and the loop moves on to the next board.
+      const identityRefusal = identityGateRefusal(controller, status);
+      if (identityRefusal) {
+        setSyncState(ctx, controller.id, { state: 'drift', detail: identityRefusal });
+        results.push({ ...base, state: 'failed', detail: identityRefusal });
+        phase(`FAILED — ${identityRefusal}`);
+        continue;
+      }
       // Per-output DMX is the only push style — refuse stale firmware loudly.
       if (!deviceSupportsPerOutput(status)) {
         const detail = 'firmware too old — update MarsinLED to a per-output build';
         setSyncState(ctx, controller.id, { state: 'drift', detail });
         results.push({ ...base, state: 'failed', detail });
+        phase(`FAILED — ${detail}`);
         continue;
       }
-      const snapshot = await io.getConfig(controller.ip);
-      assertMappingPushAllowed(status, snapshot);
-      // Repair any port left without a universe only after the device mode gate.
-      ensurePortUniverses(ctx, controller);
+      // ONE read per controller per attempt: this snapshot derives the plan AND
+      // builds the body (report `_362` §2.3-3). There is no mode gate — a forced
+      // push targets a board in ANY show mode, by design.
+      const snapshot = await readRetrying(io, `GET /api/config ${controller.ip}`,
+        () => io.getConfig(controller.ip), phase);
       setDeviceOutputs(ctx, controller.id, snapshot.strands);
+      noteDmxStateFromConfig(ctx, controller.id, snapshot); // seeds the ⏻ label
       const plan = derivePerOutputPlan(controller, ctx.strandLedCounts(), snapshot,
         claimedUniversesFor(ctx, controller));
       // Registry-aware gate (slice S2, widened by 20260725_70 §4 and _102) — a
       // plan that drives one output from two ports, addresses an output the board
-      // does not have, parks outside the firmware window, or carries a shared
+      // does not have, would leave the board all-dark, or carries a shared
       // address with no deterministic winner is REFUSED before the device write,
       // per controller. A RESOLVABLE shared address pushes, loudly.
       const blocking = [...plan.collisions, ...unrankableCollisionsFor(ctx, controller)];
@@ -2041,8 +2900,10 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
         const detail = describeCollisions(blocking);
         setSyncState(ctx, controller.id, { state: 'drift', detail });
         results.push({ ...base, state: 'failed', detail });
+        phase(`FAILED — ${detail}`);
         continue;
       }
+      const body = buildForcedConfigBody({ snapshot, plan, ip: controller.ip });
       const shareNote = plan.sharedUniverses.length
         ? describeSharedUniverses(plan.sharedUniverses) : null;
       if (shareNote) console.warn(`[LedPanel] '${controller.name}': ${shareNote}`);
@@ -2054,36 +2915,118 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
         ip: controller.ip,
         stride: (controller.led && controller.led.stride) || 4,
       });
+      // The fleet's ONE confirm was accepted before this loop started, so this
+      // IS the accept path: commit the port-universe repairs the plan implies
+      // (the same universes `body` carries) before the write, and before the
+      // NEXT board's claim index is built — otherwise board 2 could be handed a
+      // universe board 1 is about to be written with.
+      commitPlanPortUniverses(ctx, controller, plan);
       // FORCE: always push + verify, even when the device already
       // matches. Same three phase budgets and the same "a lost write reply is
       // settled by the read-back, not by a timeout" rule as the single push.
-      const pushResult = await pushPerOutputVerifyRecord(ctx, controller, plan, io, null);
+      const pushResult = await pushPerOutputVerifyRecord(ctx, controller, body, io,
+        (m) => phase(m));
       setSyncState(ctx, controller.id,
         shareNote ? { state: 'in-sync', detail: shareNote } : { state: 'in-sync' });
       const lostNote = pushResult.responseLost
         ? 'the write reply was lost (device rebooted before answering) — the read-back ' +
           'confirms the mapping applied'
         : null;
-      const detail = [lostNote, shareNote].filter(Boolean).join(' · ');
-      results.push(detail
-        ? { ...base, state: 'pushed', detail, expectation }
-        : { ...base, state: 'pushed', expectation });
+      // The informational swarm note (`_363` §2.2) rides on this board's row —
+      // non-failing, exactly like the shared-address warning beside it.
+      const detail = [lostNote, shareNote, pushResult.swarmNote].filter(Boolean).join(' · ');
+      const row = { ...base, state: 'pushed', expectation };
+      if (detail) row.detail = detail;
+      if (pushResult.responseLost) row.responseLost = true;
+      results.push(row);
+      phase('PUSHED — device written + verified');
     } catch (err) {
-      // Fail loud PER controller — record the state, keep going.
+      // Fail loud PER controller — record the state, keep going. NO retry.
       setSyncState(ctx, controller.id, err.perOutputMismatch
         ? { state: 'drift', detail: err.message }
         : { state: 'unreachable', detail: err.message });
       results.push({ ...base, state: 'failed', detail: err.message });
+      phase(`FAILED — ${err.message}`);
     }
   }
   ctx.refresh();
   return results;
 }
 
+const PUSH_ALL_STATE_LABELS = { pushed: 'PUSHED', failed: 'FAILED', skipped: 'SKIPPED' };
+const GAMMA_ALL_STATE_LABELS = { pushed: 'GAMMA SET', failed: 'FAILED', skipped: 'SKIPPED' };
+const DMX_OFF_ALL_STATE_LABELS = { off: 'DMX OFF', failed: 'FAILED', skipped: 'SKIPPED' };
+
+/**
+ * PURE: turn any fleet run's results into the rows its dialog renders. Shared by
+ * ⬆ Push all, ⬆ Push gamma to all and ⏻ DMX all: off so three fleet tables can
+ * never drift into three different honesty standards.
+ *
+ * THROWS on a state it does not recognize — a row it cannot classify must not
+ * quietly render as anything.
+ */
+export function fleetRowsModel(results, labels) {
+  if (!Array.isArray(results)) {
+    throw new Error('[LedPanel] fleetRowsModel: results must be an array');
+  }
+  return results.map((r) => {
+    const state = labels[r && r.state];
+    if (!state) {
+      throw new Error(`[LedPanel] fleetRowsModel: unknown result state '${r && r.state}' ` +
+        `for '${r && r.name}'`);
+    }
+    const row = { name: r.name, ip: r.ip || null, state };
+    if (r.detail) row.reason = r.detail;
+    if (r.responseLost) row.responseLost = true;
+    return row;
+  });
+}
+
+/** PURE: the fleet gamma table's rows. */
+export function gammaPushAllResultsModel(results) {
+  return fleetRowsModel(results, GAMMA_ALL_STATE_LABELS);
+}
+
+/** PURE: the fleet DMX-off table's rows. */
+export function dmxOffAllResultsModel(results) {
+  return fleetRowsModel(results, DMX_OFF_ALL_STATE_LABELS);
+}
+
+/**
+ * PURE: turn `pushAllLedControllers`' results into the rows the dialog's
+ * per-controller table renders (report `_362` §2.3-7). A fleet push used to
+ * compress every failure into ONE summary sentence, which is unreadable the
+ * moment two boards fail for different reasons.
+ *
+ * THROWS on a state it does not recognize — a row it cannot classify must not
+ * quietly render as anything.
+ *
+ * @param {Array} results - pushAllLedControllers' return value.
+ * @returns {Array<{name:string, ip:(string|null), state:string, reason?:string,
+ *   responseLost?:boolean}>}
+ */
+export function pushAllResultsModel(results) {
+  if (!Array.isArray(results)) {
+    throw new Error('[LedPanel] pushAllResultsModel: results must be an array');
+  }
+  return results.map((r) => {
+    const state = PUSH_ALL_STATE_LABELS[r && r.state];
+    if (!state) {
+      throw new Error(`[LedPanel] pushAllResultsModel: unknown result state '${r && r.state}' ` +
+        `for '${r && r.name}'`);
+    }
+    const row = { name: r.name, ip: r.ip || null, state };
+    if (r.detail) row.reason = r.detail;
+    if (r.responseLost) row.responseLost = true;
+    return row;
+  });
+}
+
 /**
  * Operator entry point for "Push all MarsinLED controllers" (the MarsinLED group
- * header button). One up-front confirm summarizing the count + possible reboot
- * warning; then runs pushAllLedControllers and reports a per-controller summary.
+ * header button). One up-front confirm summarizing the count + the FORCE warning;
+ * then runs pushAllLedControllers with a LIVE per-controller progress line, and
+ * reports a per-controller results table plus the summary sentence.
  */
 export function startPushAll(ctx) {
   const registry = ctx.registry();
@@ -2098,23 +3041,34 @@ export function startPushAll(ctx) {
   const overlay = el('div', 'vm-modal-overlay');
   const card = el('div', 'vm-modal-card led-push-card');
   overlay.appendChild(card);
-  card.appendChild(el('div', 'vm-modal-title', `Push all MarsinLED controllers (${pushable.length})`));
+  card.appendChild(el('div', 'vm-modal-title',
+    `FORCE push all MarsinLED controllers (${pushable.length})`));
   card.appendChild(el('div', 'led-push-warn',
-    `⚠ This FORCE-pushes ${pushable.length} controller(s) SEQUENTIALLY — each is written and may ` +
-    `reboot (waited out to ${REBOOT_WAIT_SECONDS} s each), even if already in sync. ` +
-    'These writes change saved mappings only and never change DMX / swarm show mode.'));
+    `${FORCE_PUSH_ALL_WARNING} The ${pushable.length} controller(s) are written SEQUENTIALLY ` +
+    '(reboots must serialize), even the ones already in sync; one failure never aborts the rest, ' +
+    'and nothing is ever retried automatically.'));
   card.appendChild(el('div', 'led-push-warn led-push-saves-scene',
     'Push writes the device AND saves the scene (mapping must land on disk for the sACN feed to ' +
-    'follow). One scene save + bridge notify runs once, after the last controller.'));
+    'follow). One scene save + bridge notify + route read-back runs once, after the last ' +
+    'controller — and ONLY if every board passed. If any board fails, the scene is NOT saved ' +
+    'and the bridge is NOT notified: the boards that took the push stay written, and you fix ' +
+    'the failures and push all again.'));
+  // ONE LIVE LINE PER CONTROLLER (report `_362` §2.3-6): `name · phase` while it
+  // runs, then its final verdict. A fleet push is up to ~65 s per board — a
+  // single shared status line cannot tell "rebooting" from "hung".
   const list = el('div', 'led-push-diff');
+  const lineByControllerId = new Map();
   for (const c of ledControllers) {
     const line = el('div', 'led-push-diff-line');
     line.textContent = isValidIp(c.ip)
-      ? `• ${c.name} (${c.ip})`
+      ? `• ${c.name} (${c.ip}) — waiting`
       : `• ${c.name} — SKIPPED (no valid IP)`;
+    lineByControllerId.set(c.id, line);
     list.appendChild(line);
   }
   card.appendChild(list);
+  const resultsBox = el('div', 'led-push-diff led-push-results');
+  card.appendChild(resultsBox);
   const statusLine = el('div', 'led-push-status');
   card.appendChild(statusLine);
 
@@ -2128,27 +3082,53 @@ export function startPushAll(ctx) {
     cancelBtn.disabled = true;
     statusLine.textContent = `pushing ${pushable.length} controller(s) sequentially…`;
     statusLine.className = 'led-push-status';
-    const results = await pushAllLedControllers(ctx, DEFAULT_DEVICE_IO);
+    const results = await pushAllLedControllers(ctx, DEFAULT_DEVICE_IO, ({ id, name, phase }) => {
+      const line = lineByControllerId.get(id);
+      if (line) line.textContent = `• ${name} · ${phase}`;
+    });
+    // The per-controller verdict table — every board named with its own outcome,
+    // failures kept red and never compressed into the summary sentence.
+    for (const row of pushAllResultsModel(results)) {
+      const line = el('div', 'led-push-diff-line' +
+        (row.state === 'FAILED' ? ' led-push-result-failed' : ''));
+      line.textContent = `${row.state}  ·  ${row.name}${row.ip ? ` (${row.ip})` : ''}` +
+        `${row.responseLost ? '  ·  write reply LOST, confirmed by read-back' : ''}` +
+        `${row.reason ? `  ·  ${row.reason}` : ''}`;
+      resultsBox.appendChild(line);
+    }
     const pushed = results.filter((r) => r.state === 'pushed').length;
     const skipped = results.filter((r) => r.state === 'skipped').length;
     const failed = results.filter((r) => r.state === 'failed');
-    const lostReply = results.filter((r) => r.state === 'pushed' && r.detail);
+    const lostReply = results.filter((r) => r.responseLost);
     const summary =
       `done — ${pushed} pushed · ${skipped} skipped · ${failed.length} failed` +
       (lostReply.length
         ? ` (${lostReply.length} write reply(ies) lost to the reboot, confirmed by read-back: ` +
           `${lostReply.map((r) => r.name).join(', ')})` : '') +
       (failed.length ? `: ${failed.map((f) => `${f.name} (${f.detail})`).join('; ')}` : '');
-    // ONE completion for the whole sequence (slice S1): the per-controller
-    // failures are already reported above; this is the feed side of the loop.
-    // The route read-back (_127) checks the UNION of every pushed controller's
-    // expectation; a fleet where nothing pushed passes [] — an explicit
-    // "nothing to confirm", never a silent skip.
+    // ONE completion for the whole sequence (slice S1), GATED on a clean fleet
+    // (gap 5): the per-controller failures are already reported above, and a
+    // fleet that failed anywhere does NOT get its mapping written to disk —
+    // that would leave the file describing a rig the hardware only half
+    // carries. `completeFleetPush` owns that decision.
     statusLine.textContent = `${summary} · saving the scene (mapping → patches.yaml)…`;
-    const expectations = results
-      .filter((r) => r.state === 'pushed' && r.expectation)
-      .map((r) => r.expectation);
-    const steps = await persistAndNotifyAfterPush(DEFAULT_DEVICE_IO, expectations);
+    const completion = await completeFleetPush(DEFAULT_DEVICE_IO, results);
+    if (!completion.saved) {
+      // LOUD, and in the results box next to the failures it names — not just
+      // in the status line, which the operator may have scrolled past.
+      const refusal = el('div', 'led-push-diff-line led-push-result-failed',
+        completion.gate.reason);
+      resultsBox.appendChild(refusal);
+      statusLine.className = 'led-push-status led-push-error';
+      statusLine.textContent = `${summary} · ${completion.gate.reason}`;
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = 'Close';
+      ctx.showToast(`Push all: ${pushed} pushed, ${failed.length} failed · ✋ the scene was NOT ` +
+        'saved and the bridge was NOT notified — fix the failed board(s) and push all again',
+      { error: true, ttl: 16000 });
+      return;
+    }
+    const steps = completion.steps;
     const outcome = describePushCompletion(steps, {
       lead: summary,
       deviceNote: 'the device(s) WERE written (cannot be rolled back)',
@@ -2170,4 +3150,183 @@ export function startPushAll(ctx) {
   overlay.onkeydown = (e) => { if (e.key === 'Escape' && !confirmBtn.disabled) cancelBtn.click(); };
   document.body.appendChild(overlay);
   confirmBtn.focus();
+}
+
+// ── Fleet dialogs for the two device-only fleet runs (gamma, DMX off) ───────
+//
+// ⬆ Push all owns a bespoke dialog because it ALSO saves the scene and confirms
+// bridge routes. These two touch the DEVICE only — no files, no bridge — so they
+// share one small runner: confirm → one live line per board → a per-board
+// verdict table → an honest summary. Nothing here compresses a failure into a
+// count: every failed board keeps its own red row with its own reason.
+
+/**
+ * Open a fleet dialog for a device-only fleet run.
+ *
+ * @param {Object} ctx
+ * @param {{title:string, warnings:string[], confirmLabel:string,
+ *          controllers:Array, run:Function, rows:Function,
+ *          summary:Function}} spec
+ *   `run(onProgress)` performs the fleet run; `rows(results)` is the PURE row
+ *   model; `summary(results)` returns `{text, ok, toast}`.
+ */
+function openDeviceFleetDialog(ctx, spec) {
+  const { title, warnings, confirmLabel, controllers, run, rows, summary } = spec;
+  const runnable = controllers.filter((c) => isValidIp(c.ip));
+  const overlay = el('div', 'vm-modal-overlay');
+  const card = el('div', 'vm-modal-card led-push-card');
+  overlay.appendChild(card);
+  card.appendChild(el('div', 'vm-modal-title', title));
+  for (const warning of warnings) card.appendChild(el('div', 'led-push-warn', warning));
+
+  const list = el('div', 'led-push-diff');
+  const lineByControllerId = new Map();
+  for (const c of controllers) {
+    const line = el('div', 'led-push-diff-line');
+    line.textContent = isValidIp(c.ip)
+      ? `• ${c.name} (${c.ip}) — waiting`
+      : `• ${c.name} — SKIPPED (no valid IP)`;
+    lineByControllerId.set(c.id, line);
+    list.appendChild(line);
+  }
+  card.appendChild(list);
+  const resultsBox = el('div', 'led-push-diff led-push-results');
+  card.appendChild(resultsBox);
+  const statusLine = el('div', 'led-push-status');
+  card.appendChild(statusLine);
+
+  const actions = el('div', 'vm-modal-actions');
+  const cancelBtn = el('button', 'vm-modal-btn', 'Cancel');
+  cancelBtn.onclick = () => overlay.remove();
+  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', confirmLabel);
+  confirmBtn.disabled = runnable.length === 0;
+  confirmBtn.onclick = async () => {
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    statusLine.className = 'led-push-status';
+    statusLine.textContent = `running on ${runnable.length} controller(s) sequentially…`;
+    const results = await run(({ id, name, phase }) => {
+      const line = lineByControllerId.get(id);
+      if (line) line.textContent = `• ${name} · ${phase}`;
+    });
+    for (const row of rows(results)) {
+      const line = el('div', 'led-push-diff-line' +
+        (row.state === 'FAILED' ? ' led-push-result-failed' : ''));
+      line.textContent = `${row.state}  ·  ${row.name}${row.ip ? ` (${row.ip})` : ''}` +
+        `${row.responseLost ? '  ·  write reply LOST, confirmed by read-back' : ''}` +
+        `${row.reason ? `  ·  ${row.reason}` : ''}`;
+      resultsBox.appendChild(line);
+    }
+    const verdict = summary(results);
+    statusLine.className = 'led-push-status' + (verdict.ok ? ' led-push-ok' : ' led-push-error');
+    statusLine.textContent = verdict.text;
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = verdict.ok ? 'Done' : 'Close';
+    ctx.showToast(verdict.toast, { error: !verdict.ok, ttl: verdict.ok ? 9000 : 14000 });
+  };
+  actions.appendChild(cancelBtn);
+  actions.appendChild(confirmBtn);
+  card.appendChild(actions);
+  overlay.onkeydown = (e) => { if (e.key === 'Escape' && !confirmBtn.disabled) cancelBtn.click(); };
+  document.body.appendChild(overlay);
+  confirmBtn.focus();
+}
+
+/**
+ * The fleet gamma warning (binding copy). Gamma is LIVE-APPLY, so unlike every
+ * other fleet write on this panel nothing reboots and no scene file changes.
+ * Exported so the copy is asserted in ONE place.
+ */
+export const GAMMA_PUSH_ALL_WARNING =
+  '⬆ Push gamma to all — each board receives ITS OWN card\'s curve (the sliders on that card), ' +
+  'not one shared curve. The controllers are written SEQUENTIALLY; gamma is applied LIVE (no ' +
+  'reboot) and each board is read back and confirmed per channel. Nothing else is written: ' +
+  'strand counts, universes, DMX input, swarm and the mapping are all untouched, and the scene ' +
+  'is NOT saved. The sim never reads a curve back off a device — these values stay the source.';
+
+/**
+ * The fleet DMX-off warning (binding copy). This one is SHOW-VISIBLE: it takes
+ * sACN control away from every board at once, so the dialog says exactly what
+ * goes dark, what does not change, and how DMX comes back.
+ */
+export const DMX_OFF_ALL_WARNING =
+  '⏻ DMX all: OFF — this switches DMX (sACN) input OFF on every bound and reachable MarsinLED ' +
+  'board, SEQUENTIALLY. Each board reboots (~11 s) and then runs its own local pattern: the sim ' +
+  'stops driving them. Swarm and the mapping are NOT touched, and nothing is saved into the ' +
+  'scene (the live mode is runtime state). DMX comes back with ⬆ Push, ⬆ Push all, or a card\'s ' +
+  'own ⏻ DMX toggle. Each board is read back and confirmed; one failure never aborts the rest.';
+
+/**
+ * Operator entry point for "⬆ Push gamma to all" (the MarsinLED group header).
+ * One confirm, then a sequential per-board run with a live line each.
+ */
+export function startGammaPushAll(ctx) {
+  const registry = ctx.registry();
+  const ledControllers = (registry && Array.isArray(registry.controllers))
+    ? registry.controllers.filter(isLedController) : [];
+  if (ledControllers.length === 0) {
+    ctx.showToast('No MarsinLED controllers to push gamma to — add or discover one first',
+      { error: true, ttl: 6000 });
+    return;
+  }
+  const pushable = ledControllers.filter((c) => isValidIp(c.ip));
+  openDeviceFleetDialog(ctx, {
+    title: `Push gamma to all MarsinLED controllers (${pushable.length})`,
+    warnings: [GAMMA_PUSH_ALL_WARNING],
+    confirmLabel: 'Push gamma to all',
+    controllers: ledControllers,
+    run: (onProgress) => pushGammaAllControllers(ctx, DEFAULT_DEVICE_IO, onProgress),
+    rows: gammaPushAllResultsModel,
+    summary: (results) => {
+      const pushed = results.filter((r) => r.state === 'pushed').length;
+      const skipped = results.filter((r) => r.state === 'skipped').length;
+      const failed = results.filter((r) => r.state === 'failed');
+      const text = `done — ${pushed} confirmed · ${skipped} skipped · ${failed.length} failed` +
+        (failed.length ? `: ${failed.map((f) => `${f.name} (${f.detail})`).join('; ')}` : '');
+      return {
+        text,
+        ok: failed.length === 0 && pushed > 0,
+        toast: `Push gamma to all: ${pushed} confirmed, ${failed.length} failed` +
+          (skipped ? `, ${skipped} skipped` : ''),
+      };
+    },
+  });
+}
+
+/**
+ * Operator entry point for "⏻ DMX all: off" (the MarsinLED group header).
+ * ONE confirm — this is show-visible — then a sequential per-board run.
+ */
+export function startDmxOffAll(ctx) {
+  const registry = ctx.registry();
+  const ledControllers = (registry && Array.isArray(registry.controllers))
+    ? registry.controllers.filter(isLedController) : [];
+  if (ledControllers.length === 0) {
+    ctx.showToast('No MarsinLED controllers to switch off — add or discover one first',
+      { error: true, ttl: 6000 });
+    return;
+  }
+  const targets = ledControllers.filter((c) => isValidIp(c.ip));
+  openDeviceFleetDialog(ctx, {
+    title: `Switch DMX input OFF on all MarsinLED controllers (${targets.length})`,
+    warnings: [DMX_OFF_ALL_WARNING],
+    confirmLabel: 'Switch DMX off on all',
+    controllers: ledControllers,
+    run: (onProgress) => dmxOffAllControllers(ctx, DEFAULT_DEVICE_IO, onProgress),
+    rows: dmxOffAllResultsModel,
+    summary: (results) => {
+      const off = results.filter((r) => r.state === 'off').length;
+      const skipped = results.filter((r) => r.state === 'skipped').length;
+      const failed = results.filter((r) => r.state === 'failed');
+      const text = `done — ${off} switched OFF · ${skipped} skipped · ${failed.length} failed` +
+        (failed.length ? `: ${failed.map((f) => `${f.name} (${f.detail})`).join('; ')}` : '');
+      return {
+        text,
+        ok: failed.length === 0 && off > 0,
+        toast: `DMX all off: ${off} confirmed OFF, ${failed.length} failed` +
+          (skipped ? `, ${skipped} skipped` : '') +
+          (failed.length === 0 && off > 0 ? ' — the boards are running their own patterns' : ''),
+      };
+    },
+  });
 }

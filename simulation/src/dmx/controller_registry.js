@@ -160,7 +160,8 @@ export const LED_BINDING_VERIFIED = 'verified';
  * malformed or names an unknown vendor must hard-stop the boot, exactly like a
  * malformed port (codex P0 — no silent migration). Returns either
  *   VERIFIED:    { vendor, controllerId, deviceName?, boardId?,
- *                  lastPush?: { at, outcome, firmwareSHA?, configHash? },
+ *                  lastPush?: { at, outcome, firmwareSHA?, configHash?,
+ *                               perOutput?: [{index, enabled, universe?, count?}] },
  *                  lastGammaPush?: { … } }
  *   PROVISIONAL: { vendor, provisional: true, deviceName?, boardId? }
  * — see the grade note above. The two shapes are mutually exclusive by
@@ -254,6 +255,9 @@ export function normalizeDeviceBlock(raw, controllerName) {
         lastPush[opt] = lp[opt];
       }
     }
+    if (lp.perOutput !== undefined && lp.perOutput !== null) {
+      lastPush.perOutput = normalizePushPerOutput(lp.perOutput, controllerName);
+    }
     device.lastPush = lastPush;
   }
   // Provenance of the last GAMMA push — a separate stamp from lastPush because
@@ -293,6 +297,75 @@ export function normalizeDeviceBlock(raw, controllerName) {
     device.lastGammaPush = lastGammaPush;
   }
   return device;
+}
+
+/**
+ * Validate + compact a push receipt's per-output list
+ * (`device.lastPush.perOutput`). Every entry is `{index, enabled}` plus
+ * `universe` / `count` on the enabled ones; ANY other key is dropped and any
+ * malformed entry THROWS (codex P0 — a receipt the loader cannot read is
+ * corruption, not a curiosity).
+ *
+ * WHY IT IS PERSISTED (this slice). `configHash` proves a push happened but is
+ * unreadable; the per-output list is the human- and machine-readable half —
+ * which outputs this board carries, on which universes, at which pixel counts,
+ * as the BOARD confirmed them on read-back. It matters most exactly when the
+ * scene is deliberately NOT saved: a fleet push that fails on one board writes
+ * the others and refuses the save, and these receipts are what makes that
+ * partial state recoverable instead of a re-read of every box by hand.
+ *
+ * A DISABLED entry may not carry a universe or a count: the push deletes both
+ * keys on a darkened output (firmware all-or-none, D1), so a receipt claiming
+ * otherwise would describe a device state the push never wrote.
+ */
+function normalizePushPerOutput(raw, controllerName) {
+  const where = `[Controllers] LED controller '${controllerName}': device.lastPush.perOutput`;
+  if (!Array.isArray(raw)) {
+    throw new Error(`${where} must be a list of {index, enabled, universe?, count?} entries`);
+  }
+  const seen = new Set();
+  return raw.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`${where}[] entries must be mappings`);
+    }
+    if (!Number.isInteger(entry.index) || entry.index < 0) {
+      throw new Error(`${where}[].index '${entry.index}' must be a non-negative integer ` +
+        '(the 0-based device output slot)');
+    }
+    if (seen.has(entry.index)) {
+      throw new Error(`${where} names output ${entry.index} twice — a receipt states each ` +
+        'output once');
+    }
+    seen.add(entry.index);
+    if (typeof entry.enabled !== 'boolean') {
+      throw new Error(`${where}[output ${entry.index}].enabled must be a boolean`);
+    }
+    const out = { index: entry.index, enabled: entry.enabled };
+    if (!entry.enabled) {
+      for (const key of ['universe', 'count']) {
+        if (entry[key] !== undefined && entry[key] !== null) {
+          throw new Error(`${where}[output ${entry.index}] is DISABLED but carries ${key}=` +
+            `${entry[key]} — a darkened output has neither (the push deletes its universe keys)`);
+        }
+      }
+      return out;
+    }
+    if (entry.universe !== undefined && entry.universe !== null) {
+      if (!Number.isInteger(entry.universe) || entry.universe < 1 || entry.universe > MAX_UNIVERSE) {
+        throw new Error(`${where}[output ${entry.index}].universe ${entry.universe} must be an ` +
+          `integer in 1–${MAX_UNIVERSE}`);
+      }
+      out.universe = entry.universe;
+    }
+    if (entry.count !== undefined && entry.count !== null) {
+      if (!Number.isInteger(entry.count) || entry.count < 1) {
+        throw new Error(`${where}[output ${entry.index}].count ${entry.count} must be an integer ` +
+          '≥ 1 (an enabled output carries at least one pixel)');
+      }
+      out.count = entry.count;
+    }
+    return out;
+  });
 }
 
 /** Stride (bytes per pixel) for a channel order, or its explicit override. */
@@ -628,49 +701,17 @@ export function createControllerRegistry(tree) {
       controller.ports.push(port);
     }
 
-    // ── LED only: STICKY parked outputs (report 20260725_70 §2.2) ─────────
-    // A board output that no card port drives is not disabled — it is PARKED on
-    // a universe nobody routes to, so it sits enabled, subscribed and dark. The
-    // universe is PERSISTED here so it is stable across pushes: a re-derived
-    // park would move whenever any other card took a universe, and the sync chip
-    // would then report drift on a card nobody touched.
+    // ── LED only: RETIRED `parkedOutputs` (report `_362` §2.5) ───────────
+    // Parking is gone. A forced push now writes `enabled:false` on every board
+    // output no card port maps, so "an enabled output nobody routes to" — the
+    // thing a park existed to hold a universe for — cannot survive a push. A
+    // legacy scene still carrying the block LOADS and DROPS it, logged once per
+    // card so the migration is never silent (codex P0); saving the scene
+    // afterwards persists the drop. Same contract as the legacy `device.mac`
+    // block above.
     if (rawCtl.parkedOutputs !== undefined && rawCtl.parkedOutputs !== null) {
-      if (type !== CONTROLLER_TYPE_LED) {
-        throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs is only ` +
-          'valid on an LED controller (a DMX port number is a chain label, not a board output)');
-      }
-      if (!Array.isArray(rawCtl.parkedOutputs)) {
-        throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs must be a list`);
-      }
-      const seenParked = new Set();
-      controller.parkedOutputs = [];
-      for (const rawParked of rawCtl.parkedOutputs) {
-        if (!rawParked || typeof rawParked !== 'object') {
-          throw new Error(`[Controllers] Controller '${controller.name}': invalid parkedOutputs ` +
-            `entry ${JSON.stringify(rawParked)} — expected {output, universe}`);
-        }
-        const output = rawParked.output;
-        if (!Number.isInteger(output) || output < 1 || output > LED_MAX_OUTPUTS) {
-          throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs output ` +
-            `${JSON.stringify(output)} must be an integer in 1–${LED_MAX_OUTPUTS}`);
-        }
-        if (seenParked.has(output)) {
-          throw new Error(`[Controllers] Controller '${controller.name}': duplicate parkedOutputs ` +
-            `entry for output ${output}`);
-        }
-        seenParked.add(output);
-        const parkedUniverse = rawParked.universe;
-        if (!Number.isInteger(parkedUniverse) || parkedUniverse < 1 ||
-            parkedUniverse > MAX_UNIVERSE) {
-          throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs output ` +
-            `${output} universe ${JSON.stringify(parkedUniverse)} must be an integer in ` +
-            `1–${MAX_UNIVERSE}`);
-        }
-        // A park that collides with a port's declared output is OPERATIONAL, not
-        // structural: it LOADS (so the operator can fix it in the UI) and is
-        // flagged by validateLedManualUniverses + re-derived by the push.
-        controller.parkedOutputs.push({ output, universe: parkedUniverse });
-      }
+      console.log(`[Controllers] '${controller.name}': parkedOutputs is retired — dropped; ` +
+        'unmapped outputs are now disabled on push');
     }
     registry.controllers.push(controller);
   }
@@ -688,10 +729,6 @@ export function createControllerRegistry(tree) {
   let maxU = 1; // U1 (effects) never counts as allocatable
   for (const controller of registry.controllers) {
     for (const port of controller.ports) maxU = Math.max(maxU, port.universe);
-    // A PARKED universe is real gear's neighbour: the device subscribes to it.
-    // It must move the high-water mark or a later addPort would hand the same
-    // number to a strand somebody actually routes.
-    for (const parked of controller.parkedOutputs || []) maxU = Math.max(maxU, parked.universe);
   }
   const rawNextU = src.nextUniverse;
   registry.nextUniverse = Math.max(
@@ -844,9 +881,8 @@ export function setControllerType(controller, type) {
   } else {
     delete controller.led;
     // DMX port numbers are chain labels, not hardware indices — carrying an
-    // `output` (or a park) across would invent meaning that does not exist there,
-    // and the loader would refuse to re-parse it on a DMX card.
-    delete controller.parkedOutputs;
+    // `output` across would invent meaning that does not exist there, and the
+    // loader would refuse to re-parse it on a DMX card.
     for (const port of controller.ports || []) delete port.output;
   }
   return controller;
@@ -1018,9 +1054,16 @@ export function unbindControllerDevice(controller) {
 
 /**
  * Record the provenance of a config push onto a bound controller's device
- * block: { at (ISO8601), outcome, firmwareSHA?, configHash? }. THROWS on an
- * unbound controller or an invalid push record (codex P0 — a push we can't
- * describe must not be silently recorded).
+ * block: { at (ISO8601), outcome, firmwareSHA?, configHash?, perOutput? }.
+ * THROWS on an unbound controller or an invalid push record (codex P0 — a push
+ * we can't describe must not be silently recorded).
+ *
+ * `perOutput` is the COMPACT per-output receipt the caller reads off the
+ * device's post-reboot config (`[{index, enabled, universe?, count?}]`,
+ * validated + compacted by `normalizePushPerOutput`). The panel used to pass it
+ * and this function silently DROPPED it, so the scene remembered only an opaque
+ * `configHash` — enough to say "a push happened", useless for answering "what
+ * does that board carry right now". It is persisted now.
  */
 export function recordDevicePush(controller, push) {
   if (!controller || !controller.device) {
@@ -1035,6 +1078,7 @@ export function recordDevicePush(controller, push) {
   const lastPush = { at: push.at, outcome: push.outcome };
   if (push.firmwareSHA !== undefined && push.firmwareSHA !== null) lastPush.firmwareSHA = push.firmwareSHA;
   if (push.configHash !== undefined && push.configHash !== null) lastPush.configHash = push.configHash;
+  if (push.perOutput !== undefined && push.perOutput !== null) lastPush.perOutput = push.perOutput;
   // Round-trip through the validator so an invalid outcome/shape throws.
   controller.device = normalizeDeviceBlock({ ...controller.device, lastPush }, controller.name);
   return controller.device;
@@ -1370,51 +1414,6 @@ export function nextLedOutputNumber(controller) {
   throw new Error(`[Controllers] '${controller.name || 'LED controller'}' already drives all ` +
     `${LED_MAX_OUTPUTS} board output(s) — a MarsinLED addresses at most ${LED_MAX_OUTPUTS} ` +
     'outputs (docs/41 §4.2). Free one before adding a port.');
-}
-
-/**
- * The persisted parked universe for a 0-based device output index, or null.
- * A parked output is ENABLED on the board with no card port driving it: it
- * carries a universe nobody routes to, so it receives no packets and sits dark.
- */
-export function parkedUniverseFor(controller, outputIndex) {
-  if (!Number.isInteger(outputIndex) || outputIndex < 0) {
-    throw new Error(`[Controllers] parkedUniverseFor: outputIndex ${outputIndex} must be a ` +
-      'non-negative integer (0-based device strands[] index)');
-  }
-  const entry = (controller && controller.parkedOutputs || [])
-    .find((p) => p.output === outputIndex + 1);
-  return entry ? entry.universe : null;
-}
-
-/** Persist (or move) a parked universe for a 0-based device output index. */
-export function setParkedUniverse(controller, outputIndex, universe) {
-  if (!Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex >= LED_MAX_OUTPUTS) {
-    throw new Error(`[Controllers] setParkedUniverse: outputIndex ${outputIndex} must be in ` +
-      `0–${LED_MAX_OUTPUTS - 1}`);
-  }
-  if (!Number.isInteger(universe) || universe < 1 || universe > MAX_UNIVERSE) {
-    throw new Error(`[Controllers] setParkedUniverse: universe ${universe} must be an integer ` +
-      `in 1–${MAX_UNIVERSE}`);
-  }
-  if (!Array.isArray(controller.parkedOutputs)) controller.parkedOutputs = [];
-  const output = outputIndex + 1;
-  const existing = controller.parkedOutputs.find((p) => p.output === output);
-  if (existing) existing.universe = universe;
-  else controller.parkedOutputs.push({ output, universe });
-  controller.parkedOutputs.sort((a, b) => a.output - b.output);
-  return controller.parkedOutputs;
-}
-
-/** Drop the parked entry for a 0-based device output index (a port now drives it). */
-export function clearParkedUniverse(controller, outputIndex) {
-  if (!Array.isArray(controller.parkedOutputs)) return false;
-  const output = outputIndex + 1;
-  const at = controller.parkedOutputs.findIndex((p) => p.output === output);
-  if (at === -1) return false;
-  controller.parkedOutputs.splice(at, 1);
-  if (controller.parkedOutputs.length === 0) delete controller.parkedOutputs;
-  return true;
 }
 
 /**

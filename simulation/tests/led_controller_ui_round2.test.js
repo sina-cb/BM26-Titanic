@@ -32,7 +32,14 @@ import {
   computeSyncState,
   describeSyncChipTooltip,
   outputSelectorOptions,
+  showPerOutputPushConfirm,
+  startPushAll,
+  renderDeviceBindingSection,
+  FORCE_PUSH_WARNING,
+  FORCE_PUSH_ALL_WARNING,
 } from '../src/gui/led_discovery_panel.js';
+import { renderGammaSection } from '../src/gui/led_gamma_ui.js';
+import { buildForcedConfigBody } from '../src/dmx/led/marsinled_client.js';
 
 // ── R1 — default tray includes unmapped strands ──────────────────────────────
 
@@ -130,9 +137,10 @@ function ledCard(id, ip, universe, strandName, bound = true) {
 }
 
 /**
- * Mock per-output device I/O: getStatus / getConfig / pushPerOutputUniverses /
- * awaitReboot. The push takes the whole PLAN (report 20260725_70) — a bare
- * universe map cannot say which outputs the push must enable.
+ * Mock per-output device I/O: getStatus / getConfig / pushForcedConfig /
+ * awaitReboot. The forced push posts ONE body built from the plan + the same
+ * snapshot the plan was derived from; the mock board applies it verbatim UNLESS
+ * `verifyMismatch` tells it to keep its old mapping.
  */
 function makeMockIo(devices, calls) {
   return {
@@ -143,19 +151,19 @@ function makeMockIo(devices, calls) {
       return clone(d.status);
     },
     getConfig: async (ip) => { calls.push(`getConfig:${ip}`); return clone(devices[ip].config); },
-    pushPerOutputUniverses: async (ip, { plan }) => {
+    pushForcedConfig: async (ip, body) => {
       calls.push(`push:${ip}`);
       const d = devices[ip];
       if (d.throwOnPush) throw new Error('device rejected: HTTP 400');
-      const universeByOutputIndex = plan.universeByOutputIndex;
-      d.pushed = universeByOutputIndex;
-      d.pushedPlan = plan;
-      // The saved config reads the plan back UNLESS configured to mismatch on verify.
+      d.pushedBody = body;
+      // The saved config reads the body back UNLESS configured to mismatch.
       if (!d.verifyMismatch) {
-        for (const [index, universe] of Object.entries(universeByOutputIndex)) {
-          d.config.strands[Number(index)].dmxUniverse = universe;
-          d.config.strands[Number(index)].dmxStartAddress = 1;
-        }
+        d.config.strands = body.strands.map((strand) => ({ ...strand }));
+        d.config.dmx = { ...body.dmx };
+        if (body.swarm) d.config.swarm = { ...body.swarm };
+      } else {
+        // A board that ignored the mode write too — the verify must catch it.
+        d.config.dmx = { ...body.dmx };
       }
       return { outcome: 'needs-reboot', reboot: true };
     },
@@ -263,7 +271,7 @@ test('R5: a verify mismatch (device reports the wrong universe) is a failure', a
   const calls = [];
   const results = await pushAllLedControllers(makeCtx(reg, counts), makeMockIo(devices, calls));
   assert.equal(results[0].state, 'failed');
-  assert.match(results[0].detail, /mapping mismatch/);
+  assert.match(results[0].detail, /config mismatch/);
   assert.ok(calls.includes('push:10.0.0.1'), 'the push was attempted then failed verify');
 });
 
@@ -315,8 +323,8 @@ test('S1: the fleet completion saves once, notifies, then READS the routes back 
       return { ok: true, detail: 'U3→10.0.0.1, U4→10.0.0.2' };
     },
   }, [
-    { ip: '10.0.0.1', controllerName: 'a', expected: [3], parkedAbsent: [] },
-    { ip: '10.0.0.2', controllerName: 'b', expected: [4], parkedAbsent: [] },
+    { ip: '10.0.0.1', controllerName: 'a', expected: [3] },
+    { ip: '10.0.0.2', controllerName: 'b', expected: [4] },
   ]);
   assert.deepEqual(calls, ['persistScene', 'notifyBridge', 'confirmRoutes']);
   assert.equal(seenExpectations.length, 2, 'the read-back covers the WHOLE fleet');
@@ -378,10 +386,11 @@ test('S1: a fleet whose save fails says the devices WERE written and never notif
   assert.match(outcome.text, /LEDs will not follow until a successful save\./);
 });
 
-// ── _71: the chip measures the FULL output map, and the output selector ──────
-// Report 20260725_70 §5: the sync chip compares device ≡ plan across the WHOLE
-// post-push map — assigned, PARKED and pending-enable — using the same claims
-// and the same derive as the push, so the chip and the push can never disagree.
+// ── _71/_362: the chip measures the FULL forced array, and the output selector ─
+// The sync chip compares device ≡ plan across the WHOLE forced array — every
+// output the push would enable, every one it would DISABLE, every count it would
+// rewrite, and whether the board is DMX-driven at all — using the same claims and
+// the same derive as the push, so the chip and the push can never disagree.
 // No DOM, no device: `computeSyncState` reads through a stubbed global fetch.
 
 function jsonResponse(body, { ok = true, status = 200, statusText = 'OK' } = {}) {
@@ -412,22 +421,22 @@ function boardStatus(enabledFlags, perOutput) {
   };
 }
 
-function outputCard(ports, parkedOutputs) {
+function outputCard(ports) {
   const card = {
     id: 60, name: 'LeftLeftFront', ip: '10.0.0.60', type: CONTROLLER_TYPE_LED,
     led: { order: 'RGBW', startAddr: 1 },
     device: { vendor: 'marsinled', controllerId: 'titanic_60', deviceName: 'LeftLeftFront' },
     ports,
   };
-  if (parkedOutputs) card.parkedOutputs = parkedOutputs;
   return createControllerRegistry({ controllers: [card] });
 }
 
 const OUT_COUNTS = new Map([['sA', 40], ['sB', 40]]);
 
-async function syncOf(reg, enabledFlags, perOutput) {
+async function syncOf(reg, enabledFlags, perOutput, { dmxEnabled = true } = {}) {
   const card = reg.controllers[0];
   const config = board(enabledFlags);
+  config.dmx = { enabled: dmxEnabled, protocol: 0, timeoutMs: 3000 };
   for (const output of perOutput) {
     config.strands[output.index].dmxUniverse = output.universe;
     config.strands[output.index].dmxStartAddress = output.startAddress;
@@ -439,13 +448,13 @@ async function syncOf(reg, enabledFlags, perOutput) {
   }, () => computeSyncState(makeCtx(reg, OUT_COUNTS), card));
 }
 
-test('_71 (21): a PORTLESS enabled output on the wrong universe reads DRIFT (the .60 landmine)', async () => {
+test('_362: a PORTLESS enabled output reads DRIFT — the push will DARKEN it', async () => {
   // Two mapped ports; the board's third output is enabled with no port row and
-  // still carries the stale U23. The card's stored park says U27.
+  // still carries the stale U23. Under force semantics that output goes dark.
   const reg = outputCard([
     { port: 1, output: 1, universe: 21, chain: ['sA'] },
     { port: 2, output: 2, universe: 22, chain: ['sB'] },
-  ], [{ output: 3, universe: 27 }]);
+  ]);
 
   const drifted = await syncOf(reg, [true, true, true, false], [
     { index: 0, universe: 21, startAddress: 1, enabled: true },
@@ -453,16 +462,27 @@ test('_71 (21): a PORTLESS enabled output on the wrong universe reads DRIFT (the
     { index: 2, universe: 23, startAddress: 1, enabled: true },   // stale
   ]);
   assert.equal(drifted.state, 'drift');
-  assert.deepEqual(drifted.changes, [{ path: 'output 2', from: 'U23', to: 'U27' }]);
+  assert.deepEqual(drifted.changes, [{ path: 'output 2', from: 'enabled · U23', to: 'disabled' }]);
 
-  // One push re-parks it — and then the chip is quiet, because the park is
-  // STICKY (a re-derived park would move and re-drift a card nobody touched).
-  const clean = await syncOf(reg, [true, true, true, false], [
+  // One push darkens it — and then the chip is quiet.
+  const clean = await syncOf(reg, [true, true, false, false], [
     { index: 0, universe: 21, startAddress: 1, enabled: true },
     { index: 1, universe: 22, startAddress: 1, enabled: true },
-    { index: 2, universe: 27, startAddress: 1, enabled: true },
   ]);
   assert.deepEqual(clean, { state: 'in-sync' });
+});
+
+test('_362: a board that is not DMX-driven reads DRIFT, whatever its mapping says', async () => {
+  const reg = outputCard([
+    { port: 1, output: 1, universe: 21, chain: ['sA'] },
+    { port: 2, output: 2, universe: 22, chain: ['sB'] },
+  ]);
+  const sync = await syncOf(reg, [true, true, false, false], [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+    { index: 1, universe: 22, startAddress: 1, enabled: true },
+  ], { dmxEnabled: false });
+  assert.equal(sync.state, 'drift');
+  assert.match(sync.detail, /board is not DMX-driven — push will force DMX/);
 });
 
 test('_71 (22): a port pointed at a DISABLED output reads drift naming the pending ENABLE', async () => {
@@ -476,7 +496,7 @@ test('_71 (22): a port pointed at a DISABLED output reads drift naming the pendi
   assert.equal(sync.state, 'drift');
   assert.deepEqual(sync.changes, [{ path: 'output 3', from: 'disabled', to: 'enabled · U22' }]);
   // The chip states what it now measures, so green never over-promises.
-  assert.match(describeSyncChipTooltip(sync), /including the PARKED outputs no port drives/);
+  assert.match(describeSyncChipTooltip(sync), /which would be DISABLED/);
 });
 
 test('_71 (23): the output selector offers the BOARD\'s outputs and disables the taken ones', () => {
@@ -504,8 +524,11 @@ test('_71 (23): the output selector offers the BOARD\'s outputs and disables the
   assert.equal(taken.label, '3 — taken by P2');
   // Free options carry what the board is doing on them today.
   assert.equal(model.options[1].disabled, false);
-  assert.equal(model.options[1].label, '2 — enabled, 40 px, U24');
-  assert.equal(model.options[3].label, '4 — disabled (push will enable it)');
+  // FORCE labels: this row's own output reads plainly; every other one says what
+  // the next push will DO to it.
+  assert.equal(model.options[1].label, '2 — enabled, 40 px, U24 · push will DISABLE it');
+  assert.equal(model.options[0].label, '1 — enabled, 40 px, U21');
+  assert.equal(model.options[3].label, '4 — disabled');
   // This row's OWN output is selected and never reads as taken by itself.
   assert.equal(model.options[0].selected, true);
   assert.equal(model.options[0].disabled, false);
@@ -516,4 +539,286 @@ test('_71 (23): the output selector offers the BOARD\'s outputs and disables the
   assert.equal(blind.max, 16);
   assert.equal(blind.options[1].label, '2');
   assert.equal(blind.options[2].disabled, true, 'uniqueness holds without a snapshot');
+});
+
+// ── _363 / S3: the operator-facing COPY of the push dialogs + the ⏻ control ───
+// These render the REAL dialog / card DOM against a minimal fake document (the
+// same technique touch_control_passcode.test.js uses), so the narrowed warning
+// and the payload preview are asserted as the operator reads them — not as a
+// paraphrase. No browser, no device: the dialogs are built and inspected, never
+// confirmed.
+
+function fakeElement(doc, tagName) {
+  const node = {
+    tagName,
+    className: '',
+    textContent: '',
+    title: '',
+    value: '',
+    checked: false,
+    innerHTML: '',
+    disabled: false,
+    children: [],
+    style: {},
+    dataset: {},
+    attributes: {},
+    ownerDocument: doc,
+    appendChild(child) { this.children.push(child); return child; },
+    replaceChildren() { this.children = []; },
+    remove() {},
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    focus() {},
+  };
+  // The gamma section's preset chips are the only user of classList.
+  node.classList = {
+    add: (name) => {
+      if (!node.className.split(' ').includes(name)) {
+        node.className = node.className ? `${node.className} ${name}` : name;
+      }
+    },
+  };
+  return node;
+}
+
+function fakeDocument() {
+  const doc = { created: [] };
+  doc.createElement = (tagName) => {
+    const node = fakeElement(doc, tagName);
+    doc.created.push(node);
+    return node;
+  };
+  doc.body = fakeElement(doc, 'body');
+  return doc;
+}
+
+/** Every node under `root`, depth-first (the dialog is a tree of divs). */
+function descendants(root) {
+  const out = [];
+  const walk = (node) => {
+    for (const child of node.children) { out.push(child); walk(child); }
+  };
+  walk(root);
+  return out;
+}
+
+async function withFakeDocument(fn) {
+  const original = globalThis.document;
+  const doc = fakeDocument();
+  globalThis.document = doc;
+  try { return await fn(doc); } finally { globalThis.document = original; }
+}
+
+/** The plan shape every push consumer requires (derivePerOutputPlan's result). */
+function copyPlan() {
+  return {
+    controllerName: 'LeftLeftFront',
+    universeByOutputIndex: { 0: 21 },
+    assignments: [{ outputIndex: 0, portNum: 1, universe: 21, pixelCount: 40 }],
+    disables: [],
+    countChanges: [],
+    warnings: [],
+    collisions: [],
+    sharedUniverses: [],
+  };
+}
+
+/** A board that ALSO carries swarm + gamma — neither may appear in the preview. */
+function copySnapshot() {
+  return {
+    ...deviceConfig(),
+    deviceName: 'LeftLeftFront',
+    swarm: { enabled: true, isLeader: false, groupId: 'ropes' },
+    gamma: { r: 2.2, g: 2.2, b: 2.2, w: 2.2 },
+  };
+}
+
+test('_363: the single-push dialog leads with the NARROWED force warning', async () => {
+  const reg = createControllerRegistry({ controllers: [ledCard(60, '10.0.0.60', 21, 'sA', true)] });
+  const card = reg.controllers[0];
+  const plan = copyPlan();
+  const body = buildForcedConfigBody({ snapshot: copySnapshot(), plan, ip: card.ip });
+
+  await withFakeDocument(async (doc) => {
+    showPerOutputPushConfirm(makeCtx(reg, new Map([['sA', 40]])), card, plan, body,
+      deviceStatus('titanic_60'), null);
+    const overlay = doc.body.children[0];
+    const warn = descendants(overlay).find((n) => n.className === 'led-push-warn');
+
+    assert.equal(warn.textContent, FORCE_PUSH_WARNING);
+    // The narrowed truth, clause by clause (report `_363` §2.3-2, binding copy).
+    assert.match(warn.textContent, /⚠ FORCE push — the sim panel is the source of truth for the mapping\./);
+    assert.match(warn.textContent,
+      /overwrites the board's strand counts, enables and per-output DMX universes/);
+    assert.match(warn.textContent, /every other output is DISABLED/);
+    assert.match(warn.textContent, /DMX input \(sACN\) is switched ON/);
+    assert.match(warn.textContent,
+      /Strand type, color order, swarm and gamma settings are NOT touched\./);
+    assert.match(warn.textContent, /The device reboots \(~11 s\); the push waits up to 45 s/);
+    // The `_362` swarm-switching promise is GONE — the push no longer does it.
+    assert.equal(/leaves SWARM/.test(warn.textContent), false);
+  });
+});
+
+test('_363: the dialog PAYLOAD preview is the posted body — strands + dmx, no swarm, no gamma',
+  async () => {
+    const reg = createControllerRegistry({ controllers: [ledCard(60, '10.0.0.60', 21, 'sA', true)] });
+    const card = reg.controllers[0];
+    const plan = copyPlan();
+    const body = buildForcedConfigBody({ snapshot: copySnapshot(), plan, ip: card.ip });
+
+    await withFakeDocument(async (doc) => {
+      showPerOutputPushConfirm(makeCtx(reg, new Map([['sA', 40]])), card, plan, body,
+        deviceStatus('titanic_60'), null);
+      const overlay = doc.body.children[0];
+      const pre = descendants(overlay).find((n) => n.tagName === 'pre');
+      const previewed = JSON.parse(pre.textContent);
+
+      // The preview IS the object that gets posted, not a rendering of it.
+      assert.deepEqual(previewed, body);
+      assert.deepEqual(Object.keys(previewed).sort(), ['dmx', 'strands']);
+      assert.equal('swarm' in previewed, false, 'the board carries swarm — the push does not');
+      assert.equal('gamma' in previewed, false, 'gamma is operator-manual, never pushed');
+      assert.equal(previewed.dmx.enabled, true);
+      assert.equal(previewed.dmx.protocol, 0);
+      // Strand type / colour order ride through from the board, untouched.
+      assert.equal(previewed.strands[0].type, 'WS281X_RGBW');
+      assert.equal(previewed.strands[0].colorOrder, 'RGBW');
+      // And the section header names the endpoint the operator can check by hand.
+      assert.ok(descendants(overlay).some(
+        (n) => n.textContent === 'Payload (POST /api/config)'));
+    });
+  });
+
+test('_363: the push-all dialog carries the same narrowed warning, pluralized', async () => {
+  const reg = createControllerRegistry({
+    controllers: [ledCard(1, '10.0.0.1', 3, 'sA', true), ledCard(2, '10.0.0.2', 4, 'sB', true)],
+  });
+  await withFakeDocument(async (doc) => {
+    startPushAll(makeCtx(reg, new Map([['sA', 40], ['sB', 40]])));
+    const overlay = doc.body.children[0];
+    const warn = descendants(overlay).find((n) => n.className === 'led-push-warn');
+
+    assert.ok(warn.textContent.startsWith(FORCE_PUSH_ALL_WARNING));
+    assert.match(warn.textContent, /overwrites each board's strand counts, enables and per-output DMX universes/);
+    assert.match(warn.textContent,
+      /Strand type, color order, swarm and gamma settings are NOT touched\./);
+    assert.match(warn.textContent, /waits up to 45 s per board/);
+    assert.equal(/leaves SWARM/.test(warn.textContent), false);
+    // …and the sequencing sentence the fleet dialog appends stays put.
+    assert.match(warn.textContent, /written SEQUENTIALLY/);
+    assert.match(warn.textContent, /one failure never aborts the rest/);
+  });
+});
+
+test('_363: every LED card renders the DMX ⏻ control next to ⬆ Push', async () => {
+  const reg = createControllerRegistry({ controllers: [ledCard(60, '10.0.0.60', 21, 'sA', true)] });
+  const card = reg.controllers[0];
+  // Its OWN scene: the ⏻ label store is scene-scoped like the sync/MAC caches
+  // (G7), and this case is about the COLD label — no read has happened here.
+  const ctx = { ...makeCtx(reg, new Map([['sA', 40]])), activeScene: () => 'dmx_card_render' };
+  await withFakeDocument(async () => {
+    const section = renderDeviceBindingSection(ctx, card);
+    const buttons = section.children.filter((n) => n.tagName === 'button');
+    const labels = buttons.map((b) => b.textContent);
+    assert.deepEqual(labels, ['⬆ Push to controller', '⏻ DMX: ?', 'Re-bind…'],
+      'the toggle sits between Push and Re-bind, labelled from the last observation');
+
+    const toggle = buttons[1];
+    assert.equal(toggle.disabled, false);
+    assert.match(toggle.className, /led-device-dmx-toggle/);
+    assert.match(toggle.className, /led-dmx-unknown/);
+    assert.match(toggle.title, /writes the board's DMX flag and reboots it \(~11 s\)/);
+    assert.match(toggle.title, /strands, swarm and gamma are untouched/);
+    assert.equal(typeof toggle.onclick, 'function', 'one click, no confirm dialog');
+  });
+
+  // No usable IP → the control is disabled with the same hint the Push button uses.
+  const noIp = createControllerRegistry({ controllers: [ledCard(61, '', 21, 'sA', true)] });
+  await withFakeDocument(async () => {
+    const section = renderDeviceBindingSection(
+      { ...makeCtx(noIp, new Map([['sA', 40]])), activeScene: () => 'dmx_card_render_no_ip' },
+      noIp.controllers[0]);
+    const toggle = section.children.filter((n) => n.tagName === 'button')[1];
+    assert.equal(toggle.disabled, true);
+    assert.equal(toggle.title, 'set the device IP first');
+    assert.equal(toggle.onclick, undefined);
+  });
+});
+
+// ── The gamma section, RENDERED (report `_363` §11 re-enable) ───────────────
+//
+// `_364` asserted this section was inert. The operator re-enabled the PUSH side
+// after the config push was validated on real boards, so these assert the new
+// truth on the REAL rendered DOM: the sliders and presets are live and are the
+// curve source, ⬆ Push gamma is live, and no pull control exists anywhere.
+
+test('_363 §11: the rendered gamma section is LIVE — sliders, presets and ⬆ Push gamma', async () => {
+  const reg = createControllerRegistry({ controllers: [ledCard(60, '10.0.0.60', 21, 'sA', true)] });
+  const card = reg.controllers[0];
+  await withFakeDocument(async () => {
+    const section = renderGammaSection(makeCtx(reg, new Map([['sA', 40]])), card);
+    const nodes = [section, ...descendants(section)];
+
+    const pushBtn = nodes.find((n) => n.className.includes('cm-led-gamma-push'));
+    assert.equal(pushBtn.textContent, '⬆ Push gamma');
+    assert.equal(pushBtn.disabled, false, 'the push button is LIVE again');
+    assert.equal(typeof pushBtn.onclick, 'function');
+    assert.match(pushBtn.title, /read it back to confirm/);
+    assert.match(pushBtn.title, /applies LIVE — the board does not reboot/);
+    assert.match(pushBtn.title, /universes, DMX input and swarm are all untouched/);
+
+    const sliders = nodes.filter((n) => n.className === 'cm-led-gamma-slider');
+    assert.equal(sliders.length, 4, 'R, G, B and W');
+    for (const slider of sliders) {
+      assert.equal(slider.disabled, false);
+      assert.equal(typeof slider.onchange, 'function', 'the sliders are the curve SOURCE');
+    }
+
+    const chips = nodes.filter((n) => n.className.includes('cm-led-gamma-preset'));
+    assert.deepEqual(chips.map((c) => c.textContent), ['Off', '2.2 sRGB', 'Punchy']);
+    for (const chip of chips) {
+      assert.equal(chip.disabled, false);
+      assert.equal(typeof chip.onclick, 'function');
+    }
+
+    // NO pull control of any kind — this is the permanent half of the ruling.
+    const labels = nodes.map((n) => n.textContent).join(' | ');
+    assert.doesNotMatch(labels, /Refresh/i);
+    assert.doesNotMatch(labels, /Read gamma/i);
+    // The section says what it is: a push source, never a mirror of the device.
+    const note = nodes.find((n) => n.className === 'cm-led-gamma-note');
+    assert.match(note.textContent, /these sliders are the source of the curve/);
+    assert.match(note.textContent, /never reads gamma back off a device/);
+    // The section is no longer flagged disabled.
+    assert.equal(section.attributes['aria-disabled'], undefined);
+    assert.equal(section.className.includes('cm-led-gamma-off'), false);
+  });
+});
+
+test('_363 §11: a card with no device IP renders the gamma push INERT, and says why', async () => {
+  const reg = createControllerRegistry({ controllers: [ledCard(61, '', 22, 'sA', false)] });
+  const card = reg.controllers[0];
+  await withFakeDocument(async () => {
+    const section = renderGammaSection(makeCtx(reg, new Map([['sA', 40]])), card);
+    const nodes = [section, ...descendants(section)];
+    const pushBtn = nodes.find((n) => n.className.includes('cm-led-gamma-push'));
+    assert.equal(pushBtn.disabled, true);
+    assert.equal(pushBtn.onclick, undefined, 'an unpushable card gets no handler at all');
+    assert.equal(pushBtn.title, 'set the device IP first');
+    // The sliders still work: the curve is a SCENE value, editable before a
+    // board exists to receive it.
+    const sliders = nodes.filter((n) => n.className === 'cm-led-gamma-slider');
+    assert.equal(sliders.every((s) => typeof s.onchange === 'function'), true);
+  });
+});
+
+test('_363 §11: renderGammaSection refuses to render without the panel ctx', async () => {
+  const reg = createControllerRegistry({ controllers: [ledCard(60, '10.0.0.60', 21, 'sA', true)] });
+  await withFakeDocument(async () => {
+    assert.throws(() => renderGammaSection(null, reg.controllers[0]),
+      /needs the LED panel ctx/);
+    // A non-LED card gets nothing, ctx or no ctx.
+    assert.equal(renderGammaSection(makeCtx(reg, new Map()), { id: 9, name: 'DMX', ports: [] }),
+      null);
+  });
 });
