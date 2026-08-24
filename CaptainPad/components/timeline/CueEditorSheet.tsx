@@ -68,7 +68,9 @@ import { normalizeCueColorAutopilot } from './cue_color_theme_logic';
 import { useSpecialEvents } from '@/hooks/useSpecialEvents';
 import {
   isPartyWindowImplementationCue,
+  partyWindowDaysSummary,
   partyWindowSeed,
+  partyWindowStartDays,
   type PartyWindowSpec,
 } from './party_window_logic';
 
@@ -506,6 +508,22 @@ export function CueEditorSheet({
 
   const festivalDays = plan.festival?.days ?? 8;
 
+  // The explicit "which calendar day does this window open on" line rendered
+  // under DAYS for a Party Window. Null only while the working clock/length are
+  // not yet a resolvable window (the summary builder rejects those loudly, and
+  // a render is the one place we must not throw).
+  const partyDaysSummary = partyTrigger
+    && hhmmToMinutes(partyStartAt) !== null
+    && partyWindowDurationMin > 0
+    && partyWindowDurationMin <= 1440
+    ? partyWindowDaysSummary({
+      plan,
+      days,
+      startAt: partyStartAt,
+      windowDurationMin: partyWindowDurationMin,
+    })
+    : null;
+
   // Serialize the operator-day `days` selection to the wire-day form the
   // engine consumes. Only numeric arrays are rewound (date-string arrays or
   // 'all' pass through untouched). Each numeric operator-day index maps to a
@@ -576,6 +594,9 @@ export function CueEditorSheet({
         if (!Array.isArray(d)) return false;
         return (d as (number | string)[]).some((entry) => {
           if (typeof entry !== 'number') return false;
+          // A Party Window's days are CALENDAR days anchored on the day it
+          // opens (THE PARTY WINDOW DAY RULE) — no operator-day rewind.
+          if (partySeed) return entry === dayIndex;
           return wireDayToOperatorDay(entry, clock) === dayIndex;
         });
       })();
@@ -655,14 +676,19 @@ export function CueEditorSheet({
   // so a 9 AM cue authored on operator day D serializes to wire day D+1 and
   // still lands on operator day D's calendar card on the next read.
   const buildCue = (): { cue: PlanCue; overflowError: string | null } => {
-    const clock = partyTrigger
-      ? partyStartAt
-      : (trigger.type === 'clock'
-          ? trigger.at
-          : trigger.type === 'manual'
-            ? trigger.placementAt ?? null
-            : null);
-    const serialised = wireDaysForOperatorSelection(days, clock);
+    const clock = trigger.type === 'clock'
+      ? trigger.at
+      : trigger.type === 'manual'
+        ? trigger.placementAt ?? null
+        : null;
+    // A PARTY WINDOW's days are CALENDAR festival days anchored on the day the
+    // window OPENS — the engine resolves them against `nightStartMs`, never
+    // against a 6 PM operator boundary. Running them through the operator-day
+    // shift moved a daytime window (09:00 → 17:00) onto the next day.
+    // See THE PARTY WINDOW DAY RULE in party_window_logic.ts.
+    const serialised = partyTrigger
+      ? partyWindowStartDays(days, festivalDays)
+      : wireDaysForOperatorSelection(days, clock);
     // `days: CueDays` is required by `assembleCue`. When the caller left it
     // undefined we fall back to the schema default 'all' — an "any-day" cue.
     // The picker only produces undefined when nothing was picked; this matches
@@ -1650,13 +1676,21 @@ export function CueEditorSheet({
               <FieldLabel>DAYS</FieldLabel>
               <Segmented
                 options={[
-                  { id: 'this', label: 'This day' },
+                  // A Party Window's "this day" is a CALENDAR festival day, so
+                  // NAME it — the operator could not previously see which day a
+                  // window they were authoring would open on.
+                  { id: 'this', label: partyTrigger ? `This day (D${dayIndex + 1})` : 'This day' },
                   { id: 'all', label: 'All days' },
                   { id: 'pick', label: 'Pick…' },
                 ]}
                 value={daysMode}
                 onChange={(v) => setDaysMode(v as 'all' | 'this' | 'pick')}
               />
+              {partyTrigger && partyDaysSummary ? (
+                <View style={styles.subBlock}>
+                  <Text style={styles.hint}>{partyDaysSummary}</Text>
+                </View>
+              ) : null}
               {daysMode === 'pick' && isDateStringDays ? (
                 // Saved as explicit date strings — no grid representation.
                 // Show read-only so we never clobber the operator's dates.

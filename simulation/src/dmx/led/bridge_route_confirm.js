@@ -14,8 +14,8 @@
  * the same WebSocket the notify travelled (`{type:'getRoutes'}` →
  * `{type:'routes', …}`, answered by sacn_bridge.js from its live sender maps),
  * and the third check renders ✓ only when every (universe → controller IP)
- * pair this push must produce is actually present — and every PARKED universe
- * is actually ABSENT. Same-socket FIFO means a query sent after the notify is
+ * pair this push must produce is actually present. Same-socket FIFO means a
+ * query sent after the notify is
  * answered from the post-recompute table, so the bounded poll here is only
  * grace for a bridge mid-boot, never a "probably fine" fallback: on timeout or
  * mismatch the check FAILS, naming exactly which routes are missing or extra.
@@ -28,10 +28,7 @@
  *     suppressing its relay IS the one-writer rule working);
  *   - a pair the BENCH MIRROR owns               → a one-writer CONFLICT: the
  *     mirror composes different content for that destination, so this push's
- *     patch does NOT reach the controller — a named error, never a ✓;
- *   - a PARKED universe routed to this controller → error: parked means
- *     "enabled on the board, nothing maps it, stays dark"; a route feeding it
- *     contradicts the plan that was just pushed.
+ *     patch does NOT reach the controller — a named error, never a ✓.
  *
  * Everything here is pure or takes its I/O by injection (`readRoutes`,
  * `sleep`), so the unit tests cover the expectation builder, the assessment
@@ -70,10 +67,10 @@ function groupPairs(pairs) {
  * `expected` = every universe an enabled output's strand walk OCCUPIES — the
  * spill segments past channel 512 included, via the same single-source walker
  * (`projectLedStrandSegments`) the patches projection uses, so the expectation
- * is byte-identical to what the save projected into patches.yaml. Assignments
- * AND enable transitions both count (an output this push turns on gets frames
- * too). `parkedAbsent` = the parked universes, which must appear in NO route
- * to this controller.
+ * is byte-identical to what the save projected into patches.yaml. Under force
+ * semantics every ASSIGNED output is an output the push enables, so
+ * `plan.assignments` is the whole claim list — an output the push DISABLES
+ * makes no route claim at all.
  *
  * PURE, throws on a plan it cannot read — a push whose expectation cannot even
  * be stated must refuse before the device write, not render a blind ✓ after.
@@ -82,8 +79,7 @@ function groupPairs(pairs) {
  * @param {Object} args.plan   derivePerOutputPlan result.
  * @param {string} args.ip     this controller's device IP (route destination).
  * @param {number} args.stride bytes per pixel (the card's led.stride).
- * @returns {{ip: string, controllerName: string, expected: number[],
- *            parkedAbsent: number[]}}
+ * @returns {{ip: string, controllerName: string, expected: number[]}}
  */
 export function buildRouteExpectation({ plan, ip, stride }) {
   if (!plan || typeof plan !== 'object' || !Array.isArray(plan.assignments)) {
@@ -102,12 +98,7 @@ export function buildRouteExpectation({ plan, ip, stride }) {
   }
 
   const expected = new Set();
-  const claims = [
-    ...plan.assignments.map((a) => ({ ...a, kind: 'assignment' })),
-    ...(Array.isArray(plan.enables) ? plan.enables : [])
-      .map((e) => ({ outputIndex: e.outputIndex, universe: e.universe,
-        pixelCount: e.count, kind: 'enable' })),
-  ];
+  const claims = plan.assignments.map((a) => ({ ...a, kind: 'assignment' }));
   for (const claim of claims) {
     if (!Number.isInteger(claim.universe) || claim.universe < 1) {
       throw new Error(`[RouteConfirm] the plan's ${claim.kind} for output index ` +
@@ -125,28 +116,17 @@ export function buildRouteExpectation({ plan, ip, stride }) {
     }
   }
 
-  const parkedAbsent = [];
-  for (const park of plan.parked || []) {
-    if (!Number.isInteger(park.universe) || park.universe < 1) {
-      throw new Error(`[RouteConfirm] the plan parks output index ${park.outputIndex} on an ` +
-        `invalid universe (got ${park.universe})`);
-    }
-    if (expected.has(park.universe)) {
-      throw new Error(`[RouteConfirm] parked U${park.universe} is ALSO an expected route — the ` +
-        'plan contradicts itself; refusing to state an expectation');
-    }
-    parkedAbsent.push(park.universe);
-  }
-
-  if (expected.size === 0 && parkedAbsent.length === 0) {
+  // The empty-expectation refusal stays: a push that cannot even STATE what it
+  // expects must refuse before the device write, not render a blind ✓ after.
+  // `no_enabled_output` upstream makes a truly empty push impossible anyway.
+  if (expected.size === 0) {
     throw new Error(`[RouteConfirm] the plan for '${plan.controllerName || targetIp}' expects ` +
-      'no routes and parks nothing — there is nothing to confirm');
+      'no routes — there is nothing to confirm');
   }
   return {
     ip: targetIp,
     controllerName: plan.controllerName || targetIp,
     expected: [...expected].sort((a, b) => a - b),
-    parkedAbsent: parkedAbsent.sort((a, b) => a - b),
   };
 }
 
@@ -193,7 +173,6 @@ export function normalizeRouteSnapshot(reply) {
  * @returns {{ok: boolean,
  *            confirmed: Array<{universe:number, ip:string, via:('relay'|'engine')}>,
  *            missing: Array<{universe:number, ip:string}>,
- *            parkedPresent: Array<{universe:number, ip:string}>,
  *            mirrorConflicts: Array<{universe:number, ip:string}>}}
  */
 export function assessRouteReadback({ expectations, snapshot }) {
@@ -206,7 +185,6 @@ export function assessRouteReadback({ expectations, snapshot }) {
 
   const confirmed = [];
   const missing = [];
-  const parkedPresent = [];
   const mirrorConflicts = [];
   for (const exp of expectations) {
     for (const universe of exp.expected) {
@@ -223,18 +201,11 @@ export function assessRouteReadback({ expectations, snapshot }) {
         missing.push({ universe, ip: exp.ip });
       }
     }
-    for (const universe of exp.parkedAbsent) {
-      const key = routePairKey(universe, exp.ip);
-      if (relay.has(key) || engine.has(key) || mirror.has(key)) {
-        parkedPresent.push({ universe, ip: exp.ip });
-      }
-    }
   }
   return {
-    ok: missing.length === 0 && parkedPresent.length === 0 && mirrorConflicts.length === 0,
+    ok: missing.length === 0 && mirrorConflicts.length === 0,
     confirmed,
     missing,
-    parkedPresent,
     mirrorConflicts,
   };
 }
@@ -249,24 +220,20 @@ export function describeConfirmedRoutes(assessment) {
     parts.push(`${group} [engine-direct]`);
   }
   if (parts.length === 0) {
-    // A parked-only expectation: nothing routed is exactly what was asserted.
-    return 'no routed universes expected — parked universes confirmed absent';
+    throw new Error('[RouteConfirm] describeConfirmedRoutes: nothing was confirmed — an ' +
+      'expectation always names at least one routed universe, so this is a bug, not a ✓');
   }
   return parts.join(', ');
 }
 
 /**
- * The ✋ line: exactly which expected routes are missing, which parked
- * universes are wrongly routed, and which pairs another writer owns.
+ * The ✋ line: exactly which expected routes are missing, and which pairs
+ * another writer owns.
  */
 export function describeRouteMismatch(assessment, snapshot, reads) {
   const parts = [];
   if (assessment.missing.length > 0) {
     parts.push(`missing ${groupPairs(assessment.missing).join(', ')}`);
-  }
-  if (assessment.parkedPresent.length > 0) {
-    parts.push(`parked ${groupPairs(assessment.parkedPresent).join(', ')} IS routed ` +
-      '(a parked output must stay dark)');
   }
   if (assessment.mirrorConflicts.length > 0) {
     parts.push(`${groupPairs(assessment.mirrorConflicts).join(', ')} owned by the bench mirror ` +

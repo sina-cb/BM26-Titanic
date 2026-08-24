@@ -105,7 +105,7 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: 2d_pixels
+    value: full
     label: 💡 Lighting Profile
     options:
       - edit
@@ -167,7 +167,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: pixelblaze
+    value: sacn_in
     label: Mode
     options:
       - gradient
@@ -220,10 +220,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -37.7996
-    'y': 13.4718
-    z: 57.5613
+    x: 92.2717
+    'y': 19.503
+    z: 92.2717
   target:
-    x: -19.647
-    'y': 7.5537
-    z: 6.9459
+    x: -2
+    'y': 8
+    z: -5.3414

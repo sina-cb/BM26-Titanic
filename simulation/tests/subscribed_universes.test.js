@@ -9,7 +9,7 @@
  * These tests pin the four things that make the save-time gate trustworthy:
  *
  *   1. the required set is the UNION of every universe the configuration uses
- *      (DMX ports, LED per-output, parked outputs, stored patches, spill);
+ *      (DMX ports, LED per-output, stored patches, spill);
  *   2. required ⊆ subscribed never interrupts a save;
  *   3. a short field prompts, and the diff text names the controller behind
  *      every addition;
@@ -63,7 +63,6 @@ function syntheticRegistry() {
       {
         id: 4, name: 'RightLeftRopes', ip: '192.168.1.71', type: 'LED',
         ports: [{ port: 1, universe: 30, output: 1, chain: [] }],
-        parkedOutputs: [{ output: 4, universe: 33 }],
       },
     ],
   };
@@ -107,23 +106,17 @@ function fullSources() {
 
 // ── 1. The required set ────────────────────────────────────────────────────
 
-test('computeRequiredUniverses unions DMX ports, LED per-output, parked, spill and patches', () => {
+test('computeRequiredUniverses unions DMX ports, LED per-output, spill and patches', () => {
   const required = computeRequiredUniverses(fullSources());
-  assert.deepEqual([...required.keys()], [1, 2, 3, 9, 23, 26, 27, 28, 30, 33],
+  assert.deepEqual([...required.keys()], [1, 2, 3, 9, 23, 26, 27, 28, 30],
     'U1 pin, U2/U3 DMX claims, U9 patches-only fixture, U23 empty DMX port, U26/U28 LED start + ' +
-    'spill, U27 second LED output, U30 second card, U33 PARKED — every one of them must be in ' +
-    'the set');
+    'spill, U27 second LED output, U30 second card — every one of them must be in the set');
 });
 
 test('an EMPTY declared port is required even though nothing projects a claim', () => {
   const required = computeRequiredUniverses(fullSources());
   assert.deepEqual(required.get(23), ['LeftFrontDeck port 2'],
     'a port with no fixtures still declares a universe the hardware listens on');
-});
-
-test('a PARKED output is required and says so', () => {
-  const required = computeRequiredUniverses(fullSources());
-  assert.deepEqual(required.get(33), ['RightLeftRopes output 4 (parked)']);
 });
 
 test('an LED port reason names the controller, the port row and the physical output', () => {
@@ -213,8 +206,8 @@ test('missing universes are listed ascending with their reasons', () => {
     required: computeRequiredUniverses(fullSources()),
   });
   assert.equal(update.changed, true);
-  assert.deepEqual(update.missing.map((m) => m.universe), [9, 23, 26, 27, 28, 30, 33]);
-  assert.equal(update.nextValue, '1, 2, 3, 9, 23, 26, 27, 28, 30, 33');
+  assert.deepEqual(update.missing.map((m) => m.universe), [9, 23, 26, 27, 28, 30]);
+  assert.equal(update.nextValue, '1, 2, 3, 9, 23, 26, 27, 28, 30');
 });
 
 test('the diff NEVER removes: extras survive into nextValue and are FYI only', () => {
@@ -241,13 +234,12 @@ test('the description shows the change explicitly and names the controller per u
   });
   const described = describeSubscriptionUpdate(update);
   assert.equal(described.headline,
-    `${SUBSCRIBED_UNIVERSES_LABEL}: 1, 2, 3, 9, 23, 26, 28 → 1, 2, 3, 9, 23, 26, 27, 28, 30, 33`);
+    `${SUBSCRIBED_UNIVERSES_LABEL}: 1, 2, 3, 9, 23, 26, 28 → 1, 2, 3, 9, 23, 26, 27, 28, 30`);
   assert.deepEqual(described.additionLines, [
     'U27 — LeftLeftRopes port 2 → output 2',
     "U30 — RightLeftRopes port 1 → output 1; patched strand 'Right_Left_Ropes'",
-    'U33 — RightLeftRopes output 4 (parked)',
   ]);
-  assert.equal(described.summary, 'adding U27, U30, U33');
+  assert.equal(described.summary, 'adding U27, U30');
 });
 
 test('a clean field describes itself as no-change', () => {
@@ -273,7 +265,7 @@ function gateHarness({ currentValue, required, answer, interactive = true }) {
 
 test('a covering field saves silently — the dialog is never shown', async () => {
   const { state, deps } = gateHarness({
-    currentValue: '1, 2, 3, 9, 23, 26, 27, 28, 30, 33',
+    currentValue: '1, 2, 3, 9, 23, 26, 27, 28, 30',
     required: computeRequiredUniverses(fullSources()),
     answer: 'cancel',   // would abort if it were ever consulted
   });
@@ -281,7 +273,7 @@ test('a covering field saves silently — the dialog is never shown', async () =
   assert.equal(result.proceed, true);
   assert.equal(result.choice, 'clean');
   assert.equal(state.prompts, 0, 'no popup spam when there is nothing to add');
-  assert.equal(state.value, '1, 2, 3, 9, 23, 26, 27, 28, 30, 33');
+  assert.equal(state.value, '1, 2, 3, 9, 23, 26, 27, 28, 30');
 });
 
 test("'yes' updates the field and lets the save proceed", async () => {
@@ -294,7 +286,7 @@ test("'yes' updates the field and lets the save proceed", async () => {
   assert.equal(result.proceed, true);
   assert.equal(result.choice, 'yes');
   assert.equal(state.prompts, 1);
-  assert.equal(state.value, '1, 2, 3, 9, 23, 26, 27, 28, 30, 33');
+  assert.equal(state.value, '1, 2, 3, 9, 23, 26, 27, 28, 30');
   // Report 20260725_87: the bridge re-reads this field on every route recompute
   // and the save notifies it, so the update lands on the RUNNING receiver. The
   // log line must say that — a stale "restart required" caveat is what sent the
@@ -317,7 +309,7 @@ test("'no' saves WITHOUT touching the field, and logs one line", async () => {
   assert.equal(state.value, '1, 2, 3', 'the operator knows better — nothing is rewritten');
   assert.equal(state.logs.length, 1);
   assert.match(state.logs[0], /declined/);
-  assert.match(state.logs[0], /U9, U23, U26, U27, U28, U30, U33/);
+  assert.match(state.logs[0], /U9, U23, U26, U27, U28, U30/);
 });
 
 test("'cancel' aborts the save and changes nothing", async () => {

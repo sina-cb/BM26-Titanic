@@ -167,7 +167,9 @@ as operator-owned:
 
 - **Never start a server on a default port** — if a test needs an engine or
   sim server, run it on your slot's `31xxx` range (below) with a black-holed
-  config (`MARSIN_CONFIG_FILE`, `tests/helpers/setup_config_guard.mjs`).
+  config (`MARSIN_CONFIG_FILE`, `tests/helpers/setup_config_guard.mjs`) AND
+  a black-holed sACN destination (`--dest 192.0.2.9` — `--port` does not
+  move sACN; see the slot table notes below).
 - **Never kill, restart, or "adopt" a service on a default port.** If the
   operator's stack looks dead, report it — do not relaunch it for him
   unless he asks. (He may also grant temporary service control for a
@@ -201,22 +203,36 @@ including the operator's main checkout, may already be using them):
 
 Per-slot allocation (use these in your worktree):
 
-| Slot | Base | Engine API | Sim HTTP | Sim Save | sACN Bridge | sACN Out | OSC | Metro |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 31000 | 31068 | 31069 | 31070 | 31071 | 31072 | 31000 | 31081 |
-| 1 | 31100 | 31168 | 31169 | 31170 | 31171 | 31172 | 31100 | 31181 |
-| 2 | 31200 | 31268 | 31269 | 31270 | 31271 | 31272 | 31200 | 31281 |
-| 3 | 31300 | 31368 | 31369 | 31370 | 31371 | 31372 | 31300 | 31381 |
-| 4 | 31400 | 31468 | 31469 | 31470 | 31471 | 31472 | 31400 | 31481 |
-| 5 | 31500 | 31568 | 31569 | 31570 | 31571 | 31572 | 31500 | 31581 |
-| 6 | 31600 | 31668 | 31669 | 31670 | 31671 | 31672 | 31600 | 31681 |
+| Slot | Base | Engine API | Sim HTTP | Sim Save | sACN Bridge | sACN Out | OSC | Metro | sACN Dest |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 31000 | 31068 | 31069 | 31070 | 31071 | 31072 | 31000 | 31081 | `192.0.2.9` |
+| 1 | 31100 | 31168 | 31169 | 31170 | 31171 | 31172 | 31100 | 31181 | `192.0.2.9` |
+| 2 | 31200 | 31268 | 31269 | 31270 | 31271 | 31272 | 31200 | 31281 | `192.0.2.9` |
+| 3 | 31300 | 31368 | 31369 | 31370 | 31371 | 31372 | 31300 | 31381 | `192.0.2.9` |
+| 4 | 31400 | 31468 | 31469 | 31470 | 31471 | 31472 | 31400 | 31481 | `192.0.2.9` |
+| 5 | 31500 | 31568 | 31569 | 31570 | 31571 | 31572 | 31500 | 31581 | `192.0.2.9` |
+| 6 | 31600 | 31668 | 31669 | 31670 | 31671 | 31672 | 31600 | 31681 | `192.0.2.9` |
+
+**The sACN destination is part of isolation — `--port` alone is NOT enough.**
+`--port` moves only the engine's HTTP/WS API. An engine started without
+`--dest` still transmits sACN frames to its config default
+`127.0.0.1:5568`, and loopback is **not** a black hole: the operator's
+simulation sACN bridge binds every local interface, treats those frames as
+show input, and relays them onward to the rig — and because every engine
+ships the same E1.31 CID, the streams collide in the receiver's sequence
+tracking and stall live universes on stale frames (report `_361`). Every
+agent-started engine MUST therefore pass `--dest 192.0.2.9` (TEST-NET-1,
+RFC 5737 — never routed) alongside `--port`. The canonical definition of a
+safe destination is `marsin_engine/tests/helpers/sacn_black_hole.mjs`; the
+test suite's config guard (`tests/helpers/setup_config_guard.mjs`) applies
+the same wall automatically for `npm test`.
 
 How to apply the ports inside your worktree:
 
 ```bash
 # Engine — pass --port directly (recommended, no file edit):
 cd ~/workspace/BM26-Titanic-worktrees/<slug>/marsin_engine
-node engine.js --pattern test_const --model test_bench --port 31068
+node engine.js --pattern test_const --model test_bench --port 31068 --dest 192.0.2.9
 
 # Engine — if you need to also override OSC, edit the worktree's
 # marsin_engine/config.yaml IN-PLACE (do NOT commit this change;

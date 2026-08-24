@@ -84,6 +84,3 @@ controllers:
         outcome: needs-reboot
         firmwareSHA: f94b27b39f9f
         configHash: 0ea7d8a09fc0805e5197c4d762247830d4db908a85c7b31bb7e8082209fe6c91
-    parkedOutputs:
-      - output: 3
-        universe: 11

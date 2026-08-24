@@ -165,6 +165,82 @@ export function createSacnOutput({
     _frameCount++;
   }
 
+  /**
+   * Does this universe have at least one live sender?
+   *
+   * `sendFrame` silently skips a universe it has no sender for — fine on the
+   * 40 fps hot path, fatal for a shutdown blackout, where a skipped universe
+   * means those channels keep their last value forever. The shutdown path asks
+   * this first so a missing transport is NAMED instead of shrugged off.
+   *
+   * @param {number|string} uid
+   * @returns {boolean}
+   */
+  function hasUniverse(uid) {
+    const uSenders = senders[parseInt(uid, 10)];
+    return Array.isArray(uSenders) && uSenders.length > 0;
+  }
+
+  /**
+   * Send ONE frame and REPORT what actually happened to every datagram.
+   *
+   * `sendFrame` is deliberately fire-and-forget: a failed send is rate-limited
+   * into a log line and the frame is forgotten, because at 40 fps the next
+   * frame is 25 ms away. The shutdown blackout has no next frame, so it needs
+   * the opposite contract — every rejection surfaced to the caller so an
+   * unconfirmed blackout can be reported loudly instead of assumed.
+   *
+   * @param {Object} buffers - { [universeId]: Uint8Array(512) }
+   * @returns {Promise<{attempted: number, delivered: number,
+   *   failures: Array<{universe: number, destination: string|null, error: string}>}>}
+   */
+  async function sendFrameChecked(buffers) {
+    if (!_started) {
+      throw new Error('[sACN Out] sendFrameChecked() called on a stopped sender — the frame ' +
+        'would be dropped silently');
+    }
+
+    const seq = _frameSequence;
+    _frameSequence = (seq + 1) % 256;
+
+    const failures = [];
+    const promises = [];
+    let attempted = 0;
+    let delivered = 0;
+
+    for (const [uid, data] of Object.entries(buffers)) {
+      const universe = parseInt(uid, 10);
+      const uSenders = senders[universe];
+      if (!uSenders || uSenders.length === 0) {
+        failures.push({ universe, destination: null, error: 'no sender for this universe' });
+        continue;
+      }
+
+      const payload = {};
+      for (let ch = 0; ch < 512; ch++) {
+        if (data[ch] !== 0) {
+          payload[ch + 1] = data[ch]; // sACN uses 1-indexed channels
+        }
+      }
+
+      for (const { sender, dest } of uSenders) {
+        attempted++;
+        sender.sequence = seq;
+        promises.push(
+          sender.send({ payload, sourceName, priority }).then(() => {
+            delivered++;
+          }, err => {
+            failures.push({ universe, destination: dest, error: err && err.message ? err.message : String(err) });
+          })
+        );
+      }
+    }
+
+    await Promise.all(promises);
+    _frameCount++;
+    return { attempted, delivered, failures };
+  }
+
   function start() {
     _started = true;
     _frameCount = 0;
@@ -182,5 +258,13 @@ export function createSacnOutput({
     console.log(`[sACN Out] Sender stopped after ${_frameCount} frames`);
   }
 
-  return { start, stop, sendFrame, addUniverse, get frameCount() { return _frameCount; } };
+  return {
+    start,
+    stop,
+    sendFrame,
+    sendFrameChecked,
+    addUniverse,
+    hasUniverse,
+    get frameCount() { return _frameCount; },
+  };
 }

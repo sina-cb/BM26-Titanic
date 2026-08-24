@@ -54,6 +54,16 @@
 const http = require('http');
 const net = require('net');
 
+// The MarsinLED fingerprint (docs/41 §2) has ONE implementation and it lives in
+// the LED client. That file is a browser ES module and this one is CommonJS —
+// Node's native `require(esm)` (>= 22.12; this project runs 24.x) bridges the
+// boundary synchronously, the same way `led_gamma_service.cjs` consumes the
+// deviceName doctrine. This service used to keep a byte-for-byte COPY of the
+// predicate, which is how the browser and the server end up disagreeing about
+// whether a box is a MarsinLED. On an older Node this require crashes RIGHT
+// HERE at startup — the correct loud failure (codex P0).
+const { isMarsinLedStatus } = require('../src/dmx/led/marsinled_client.js');
+
 const STATE_ONLINE = 'online';
 const STATE_OFFLINE = 'offline';
 const STATE_UNKNOWN = 'unknown';
@@ -244,14 +254,6 @@ function httpGetJson(ip, urlPath, timeoutMs, port = 80) {
     }, timeoutMs);
     req.end();
   });
-}
-
-/** True iff a parsed /api/status body carries the 3-field MarsinLED fingerprint. */
-function isMarsinLedStatus(status) {
-  return !!status
-    && typeof status.controllerId === 'string' && status.controllerId.length > 0
-    && typeof status.boardId === 'string' && status.boardId.length > 0
-    && Array.isArray(status.strands);
 }
 
 /**

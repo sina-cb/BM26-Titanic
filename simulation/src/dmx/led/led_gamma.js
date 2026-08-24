@@ -1,29 +1,41 @@
 /**
  * led_gamma.js — the LED controller GAMMA curve, sim side: the scene mirror,
- * its validation, and the (DOM-free) push orchestration the Controllers UI
- * drives. Report 20260725_29.
+ * its validation, and the (DOM-free) push orchestration. Report 20260725_29.
+ *
+ * OPERATOR RULINGS (supersede report _363 §1's "total removal" plan):
+ *   - gamma PULL is removed PERMANENTLY — "only push, not pull". There is no
+ *     device read here any more: no refresh, no TTL cache, no fleet source
+ *     selection, no `/led/gamma` transport leg. The sim never reads gamma off
+ *     a controller again. This half is unconditional.
+ *   - gamma PUSH is LIVE again, but NOT through this file's transport. It
+ *     rides the config-push machinery instead (marsinled_client.js +
+ *     led_discovery_panel.js `pushGammaToDevice`); see the long note above the
+ *     push-orchestration section below for exactly what is superseded.
+ *   - What this file still owns for the live path: the curve maths, presets,
+ *     plot geometry, the validator, and the SCENE mirror accessors
+ *     (`readGammaMirror` / `setGammaMirror`) the sliders edit. No I/O.
  *
  * WHERE GAMMA LIVES. There is exactly ONE gamma curve in the chain and the LED
  * controller owns it: the sACN mapper deliberately emits linear bytes
  * (led_wire.js). The scene carries a MIRROR of the hardware curve at
  * `controllers.yaml → <LED controller>.led.wire.controllerGamma`; the sim
  * preview reads that mirror so screen matches strand. Nothing else reads it —
- * changing it never changes a wire byte.
+ * changing it never changes a wire byte. `readGammaMirror` / `setGammaMirror`
+ * read and write THAT SCENE FIELD; neither performs any I/O.
  *
- * THE INVARIANT this module exists to keep: the mirror and the hardware must
+ * THE INVARIANT the push side exists to keep: the mirror and the hardware must
  * never silently diverge.
- *   - Editing the fields updates the MIRROR only (preview), and marks the
- *     scene dirty through the editor's normal mutate/undo pipeline.
  *   - A push writes the curve to the device (backup → partial write →
  *     read-back verify, all server-side in server/led_gamma_service.cjs) and
  *     only then writes the VERIFIED values back into the mirror and stamps
  *     `device.lastGammaPush`.
  *   - A failed push leaves the mirror untouched and names the controller.
  *
- * Transport: the browser never talks to a controller directly — every hop goes
- * through the sim's save-server (`POST /led/gamma-push`), the same server that
- * owns the ~/tmp full-config backup. `transport` is injectable so the unit
- * tests drive the orchestration without a device or a server.
+ * Transport: the browser never talks to a controller directly — the one
+ * remaining hop goes through the sim's save-server (`POST /led/gamma-push`),
+ * the same server that owns the ~/tmp full-config backup. `transport` is
+ * injectable so the unit tests drive the orchestration without a device or a
+ * server.
  */
 
 import { normalizeLedWireConfig, RECOMMENDED_CONTROLLER_GAMMA } from '../led_wire.js';
@@ -50,8 +62,6 @@ export const LED_GAMMA_MAX = 3.0;
 export const LED_GAMMA_RECOMMENDED = RECOMMENDED_CONTROLLER_GAMMA;
 
 const GAMMA_EPSILON = 1e-3;
-export const GAMMA_REFRESH_TTL_MS = 60000;
-const gammaRefreshCache = new Map();
 
 /**
  * The gamma curve this controller's scene mirror currently declares. Falls back
@@ -128,49 +138,10 @@ export function formatGamma(gamma) {
   return LED_GAMMA_CHANNELS.map((ch) => String(Number(gamma[ch]))).join(' / ');
 }
 
-function gammaExactlyEquals(a, b) {
-  return LED_GAMMA_CHANNELS.every((channel) => a[channel] === b[channel]);
-}
-
-/** Resolve the one displayed source curve for a fleet run, without fallback. */
-export function fleetGammaSourcePlan(controllers, selectedSourceId = null) {
-  const choices = (controllers || []).filter(isLedController).map((controller) => ({
-    controller,
-    sourceId: String(controller.id),
-    gamma: Object.freeze(readGammaMirror(controller)),
-  }));
-  const sourceIds = choices.map((choice) => choice.sourceId);
-  if (new Set(sourceIds).size !== sourceIds.length) {
-    throw new Error('[LedGamma] fleet source selection requires unique controller ids');
-  }
-  if (choices.length === 0) {
-    return { choices, gamma: null, sourceLabel: null, requiresSelection: false };
-  }
-
-  const shared = choices.every((choice) => gammaExactlyEquals(choice.gamma, choices[0].gamma));
-  if (shared) {
-    return {
-      choices,
-      gamma: Object.freeze({ ...choices[0].gamma }),
-      sourceLabel: 'shared by every displayed LED controller',
-      requiresSelection: false,
-    };
-  }
-  if (selectedSourceId === null || selectedSourceId === undefined || selectedSourceId === '') {
-    return { choices, gamma: null, sourceLabel: null, requiresSelection: true };
-  }
-  const selected = choices.find((choice) => choice.sourceId === String(selectedSourceId));
-  if (!selected) {
-    throw new Error(`[LedGamma] selected fleet gamma source '${selectedSourceId}' is not displayed`);
-  }
-  return {
-    choices,
-    gamma: Object.freeze({ ...selected.gamma }),
-    sourceLabel: `${selected.controller.name} (${selected.controller.ip || 'no IP'})`,
-    sourceId: selected.sourceId,
-    requiresSelection: false,
-  };
-}
+// Fleet SOURCE selection (picking one displayed card's curve as the curve every
+// other controller receives) is DELETED with the pull side: it was the last
+// place a curve was harvested from somewhere else instead of being stated
+// outright. A future re-enable states the fleet curve explicitly.
 
 // ── Curve presentation (pure, DOM-free — the UI never does this maths) ──────
 //
@@ -352,101 +323,10 @@ export function commitGammaPush(controller, result) {
   return controller;
 }
 
-function validateGammaReadIdentity(controller, result) {
-  const device = controller.device;
-  if (device && device.controllerId && result.controllerId !== device.controllerId) {
-    throw new Error(`[LedGamma] '${controller.name}' gamma refresh identity mismatch — expected ` +
-      `controllerId '${device.controllerId}', got ${JSON.stringify(result.controllerId)}`);
-  }
-  if (device && device.boardId && result.boardId !== device.boardId) {
-    throw new Error(`[LedGamma] '${controller.name}' gamma refresh identity mismatch — expected ` +
-      `boardId '${device.boardId}', got ${JSON.stringify(result.boardId)}`);
-  }
-  if (!device && !result.controllerId) {
-    throw new Error(`[LedGamma] '${controller.name}' gamma refresh reported no controllerId`);
-  }
-}
-
-/** Mirror one validated saved-config read without stamping it as a push. */
-export function commitGammaRefresh(controller, result) {
-  validateGammaReadIdentity(controller, result);
-  const gamma = validateGammaMirror(result.gamma,
-    `controller '${controller.name}' saved gamma`);
-  setGammaMirror(controller, gamma);
-  if (!controller.device) {
-    bindControllerDevice(controller, {
-      vendor: LED_DEVICE_VENDOR_MARSINLED,
-      controllerId: result.controllerId,
-      deviceName: result.deviceName,
-      boardId: result.boardId,
-    });
-  }
-  return controller;
-}
-
-export function gammaRefreshState(controller) {
-  const entry = gammaRefreshCache.get(controller);
-  return entry && entry.record ? { ...entry.record } : null;
-}
-
-export function clearGammaRefreshCache(controller) {
-  if (controller) gammaRefreshCache.delete(controller);
-  else gammaRefreshCache.clear();
-}
-
-function cacheVerifiedGamma(controller, result, nowMs) {
-  const record = {
-    state: 'ok',
-    gamma: Object.freeze({ ...validateGammaMirror(result.gamma || result.verified) }),
-    controllerId: result.controllerId || null,
-    boardId: result.boardId || null,
-    firmwareSHA: result.firmwareSHA || null,
-    at: result.at || new Date(nowMs).toISOString(),
-    source: 'saved-config',
-    cached: false,
-  };
-  gammaRefreshCache.set(controller, { atMs: nowMs, record, inFlight: null });
-  return record;
-}
-
-/** One TTL-deduplicated saved-config read; never polls or retries. */
-export function refreshGammaFromController(controller, transport, commit, options = {}) {
-  const now = options.now || (() => Date.now());
-  const nowMs = now();
-  const ttlMs = options.ttlMs === undefined ? GAMMA_REFRESH_TTL_MS : options.ttlMs;
-  const existing = gammaRefreshCache.get(controller);
-  if (existing && existing.inFlight) return existing.inFlight;
-  if (!options.force && existing && existing.record && nowMs - existing.atMs < ttlMs) {
-    return Promise.resolve({ ...existing.record, cached: true });
-  }
-
-  const inFlight = (async () => {
-    let record;
-    try {
-      if (!isLedController(controller)) throw new Error('not an LED controller');
-      if (!isValidIp(controller.ip)) throw new Error(`no valid device IP ('${controller.ip}')`);
-      const result = await transport.readGamma(controller.ip);
-      validateGammaReadIdentity(controller, result);
-      const gamma = validateGammaMirror(result.gamma,
-        `controller '${controller.name}' saved gamma`);
-      const verified = { ...result, gamma, at: result.at || new Date(now()).toISOString() };
-      if (commit) commit(controller, verified);
-      record = cacheVerifiedGamma(controller, verified, now());
-    } catch (err) {
-      record = {
-        state: err.kind === 'unreachable' ? 'unreachable' : 'failed',
-        detail: err.message,
-        at: new Date(now()).toISOString(),
-        source: 'saved-config',
-        cached: false,
-      };
-      gammaRefreshCache.set(controller, { atMs: now(), record, inFlight: null });
-    }
-    return { ...record };
-  })();
-  gammaRefreshCache.set(controller, { atMs: nowMs, record: existing && existing.record, inFlight });
-  return inFlight;
-}
+// The saved-config REFRESH (a bounded device read, its identity validator, its
+// TTL de-duplication cache and the mirror-from-device commit) is DELETED. The
+// operator's ruling is unconditional: only push, never pull — not on render,
+// not on a button. There is no gamma read path in the sim any more.
 
 // ── Transport (browser → sim save-server → controller) ──────────────────────
 
@@ -482,20 +362,40 @@ async function postGamma(ip, gamma, controllerName) {
   return payload;
 }
 
-async function getGamma(ip) {
-  const res = await fetch(saveHttpUrl(`/led/gamma?ip=${encodeURIComponent(ip)}`));
-  const payload = await res.json();
-  if (!res.ok || payload.ok !== true) {
-    throw Object.assign(new Error(payload.error || `HTTP ${res.status}`),
-      { kind: payload.kind || 'error' });
-  }
-  return payload;
-}
-
-/** The production transport: every hop goes through the sim's save-server. */
-export const DEFAULT_GAMMA_TRANSPORT = { pushGamma: postGamma, readGamma: getGamma };
+/**
+ * The production transport: the one hop, through the sim's save-server.
+ * PUSH ONLY — there is deliberately no `readGamma` leg (the save-server's
+ * `GET /led/gamma` route is gone with it).
+ */
+export const DEFAULT_GAMMA_TRANSPORT = { pushGamma: postGamma };
 
 // ── Push orchestration (DOM-free, sequential, per-controller results) ───────
+//
+// SUPERSEDED, and deliberately left standing — READ THIS BEFORE USING IT.
+//
+// The gamma push was re-enabled (report `_363` §11 + the operator's order after
+// the config push was live-validated on four boards), but NOT through this
+// path. The live path is browser-direct and rides the proven config-push
+// machinery instead of the save-server hop:
+//
+//     marsinled_client.js  validateGammaCurve / buildGammaPushBody /
+//                          pushGammaPush / diffGammaPush
+//     led_discovery_panel.js  pushGammaToDevice  (identity gate → ONE snapshot →
+//                          POST → retried read-back → epsilon verify → receipt)
+//                          pushGammaAllControllers  (the fleet)
+//
+// So everything below — `pushGammaToController`, `pushGammaFleet`,
+// `commitGammaPush`, `postGamma`, `DEFAULT_GAMMA_TRANSPORT`, and with them
+// `server/led_gamma_service.cjs`, `POST /led/gamma-push` and
+// `agent_tools/led_gamma_push.cjs` — has NO production caller. It is kept
+// compiling and tested (it is the CLI's engine, and `_364`'s rulings kept it)
+// rather than deleted by an implementer's own decision; whether it goes is an
+// operator call, filed as an open question in report 20260824_369.
+//
+// The parts of this module that ARE live: the curve maths, the presets, the
+// plot geometry, the validator, and `readGammaMirror` / `setGammaMirror` —
+// the SCENE accessors the sliders and the new push read from. No I/O in any
+// of them, and there is no gamma READ path anywhere in the sim.
 
 /**
  * Push ONE controller's current mirror curve to its hardware.
@@ -552,7 +452,6 @@ export async function pushGammaToController(controller, transport, commit, optio
     return { ...base, state: 'failed', detail: `device written + verified, but the scene mirror ` +
       `could not be updated: ${err.message}` };
   }
-  cacheVerifiedGamma(controller, stamped, Date.now());
   return {
     ...base,
     state: 'ok',

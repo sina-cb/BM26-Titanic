@@ -16,6 +16,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint",
+    "eas-build-post-install": "node scripts/prepare_eas_ios_build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:ios-prebuild": "node scripts/verify_ios_prebuild_scratch.mjs"

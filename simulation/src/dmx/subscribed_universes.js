@@ -108,11 +108,11 @@ export function formatSubscribedUniverses(universes) {
  *    ORDINAL (docs/33 decision 20), resolved against `controllers`.
  *  - `controllers` — the registry array. Port rows are read DIRECTLY because a
  *    port declares its universe whether or not anything is patched on it yet:
- *    an empty DMX port, an LED output with no strand, and a PARKED output
- *    (report 20260725_71 §2.2) are all universes the hardware listens on and
- *    the sim must therefore be able to receive. Parked outputs are included on
- *    purpose: the device IS enabled there, and a spare subscription costs
- *    nothing while a missing one costs a dark output.
+ *    an empty DMX port and an LED output with no strand are both universes the
+ *    hardware listens on and the sim must therefore be able to receive. (Parked
+ *    outputs used to contribute here too; parking is retired — a forced push
+ *    DISABLES every output no port maps, so there is no enabled-but-unrouted
+ *    output left to subscribe for.)
  *  - `fixtures` / `ledStrands` — the STORED patch records (`patches.yaml` as
  *    loaded). This is what the bridge's own boot-time patches scan sees, and it
  *    is the only source that still says anything when the registry is inactive
@@ -175,7 +175,7 @@ export function computeRequiredUniverses(sources) {
     }
   }
 
-  // ── Declared ports + parked outputs (universes with nothing patched) ──
+  // ── Declared ports (universes with nothing patched on them yet) ───────
   for (const controller of controllers) {
     if (!controller) continue;
     const name = controller.name || `controller #${controller.id}`;
@@ -184,10 +184,6 @@ export function computeRequiredUniverses(sources) {
       note(port.universe, isLedController(controller) && Number.isInteger(port.output)
         ? `${name} port ${port.port} → output ${port.output}`
         : `${name} port ${port.port}`);
-    }
-    for (const parked of controller.parkedOutputs || []) {
-      if (!parked) continue;
-      note(parked.universe, `${name} output ${parked.output} (parked)`);
     }
   }
 

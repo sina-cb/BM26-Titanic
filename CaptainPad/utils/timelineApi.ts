@@ -134,6 +134,10 @@ export interface TimelineZoom {
   targetLocal: string | null;
   /** Travel only — the target's calendar date "YYYY-MM-DD" in the plan tz. */
   targetDate: string | null;
+  /** Travel only — seconds before the selected cue, or null at the cue itself. */
+  targetLeadSec?: number | null;
+  /** Travel only — selected cue label when the target is a pre-roll instant. */
+  targetCueLabel?: string | null;
   pendingDeferred: TimelineZoomPendingDeferred | null;
   /**
    * Travel only — the name of a NAMED saved plan the operator is rehearsing.
@@ -184,6 +188,41 @@ export interface TimelinePlanWarning {
   look: string | null;
   message: string;
 }
+
+// ── DECK OWNER (report _356 §2) — the engine's OWN answer to "what owns the
+// deck right now", derived from `activeProgram` / `_deckWindowCueId` /
+// `_defaultCueActive`. This is the single source of truth the NOW card and the
+// LIVE banner render: before it existed the pad preferred the RESOLVED RIBBON
+// segment, which cannot see phase-baseline cues and therefore lied whenever a
+// Party Window baseline owned the deck (_356 F4).
+//   kind 'program'    — a program cue is running.
+//   kind 'cue'        — a deck-window cue owns the deck.
+//   kind 'defaultCue' — the plan's standing default cue is applied.
+//   kind 'baseline'   — nothing cue-specific; the plan baseline is driving.
+// `untilMs` is the owned window's end (epoch ms) or null when open-ended.
+export type TimelineDeckOwnerKind = 'program' | 'cue' | 'defaultCue' | 'baseline';
+
+export interface TimelineDeckOwner {
+  kind: TimelineDeckOwnerKind;
+  cueId: string | null;
+  label: string;
+  untilMs: number | null;
+}
+
+// ── PARTY WINDOW (report _356 §2) — the ONE window predicate, computed engine
+// side by `partyWindowAt()` with night-start-day semantics. The pad reads
+// THIS (or `/party-config`.readiness.partyWindowOpen, the same predicate) and
+// never `currentPhase` / `phases` / a segment, which are clock-only and
+// disagree across midnight (_356 F2).
+export interface TimelinePartyWindow {
+  open: boolean;
+  phaseId: string | null;
+  opensAtMs: number | null;
+  closesAtMs: number | null;
+}
+
+export const TIMELINE_DECK_OWNER_KINDS: TimelineDeckOwnerKind[] =
+  ['program', 'cue', 'defaultCue', 'baseline'];
 
 export interface TimelineState {
   mode: TimelineMode;
@@ -257,6 +296,14 @@ export interface TimelineState {
   // before the zoom slice omits the key entirely. Readers must treat
   // undefined exactly like null (no zoom) — never invent one.
   zoom?: TimelineZoom | null;
+  // Runtime deck ownership (see TimelineDeckOwner). OPTIONAL on the wire: an
+  // engine built before _356 P0-4 omits the key entirely, and readers then fall
+  // back to the resolved-segment answer as they did before. NEVER synthesise
+  // one — an absent owner means "this engine cannot tell you", not "baseline".
+  deckOwner?: TimelineDeckOwner | null;
+  // The authored Party Window as the evaluator sees it (see TimelinePartyWindow).
+  // OPTIONAL for the same reason.
+  partyWindow?: TimelinePartyWindow | null;
   // Authoring diagnostics for the active plan. Current engines send structured
   // findings; string entries remain accepted for older engine compatibility.
   planWarnings?: (TimelinePlanWarning | string)[];
@@ -421,6 +468,15 @@ export interface ActionTransition {
   shuffle?: boolean;
 }
 
+// Persisted plan-wide Deck handoff policy. When present it overrides cue-local
+// transition blocks for every Deck-changing cue and for plan activation.
+export interface PlanTransition {
+  enabled: boolean;
+  mode: DeckTransitionMode;
+  durationMs: number;
+  shuffle: boolean;
+}
+
 // Color-autopilot block on a playlist (deck) action. Cycles the color
 // palette over time, distinct from the pattern `autopilot` above. The
 // engine's validator is strict: when present it requires active + a
@@ -566,6 +622,8 @@ export interface ShowPlan {
   location: PlanLocation;
   festival: PlanFestival;
   autopilot: PlanAutopilot;
+  /** Optional incoming-plan policy used between all Deck states in this plan. */
+  transition?: PlanTransition;
   looks: Record<string, PlanLook>;
   phases: Record<string, PlanPhase>;
   cues: PlanCue[];
@@ -581,9 +639,41 @@ export interface OverviewSun {
   sunset: string | null;
   solarNoon: string | null;
   civilDusk: string | null;
+  // ADDITIVE (report _359 §C.3): the missing half of the DUSK/DAWN pair the
+  // day chart labels. OPTIONAL — an engine built before the working-day slice
+  // omits it and the chart simply draws no DAWN bar (it never guesses one).
+  civilDawn?: string | null;
   goldenHourStart: string | null;
   goldenHourEnd: string | null;
   [k: string]: string | null | undefined;
+}
+
+/**
+ * The two MORNING sun events of the NEXT calendar date (report _359 §C.3).
+ * A working day runs 6 PM → 6 PM, so its morning half lives on `date + 1`; the
+ * LAST festival night has no next overview day yet has a real sunrise. The
+ * engine sends this on EVERY day rather than inventing a synthetic 9th entry.
+ */
+export interface OverviewNextSun {
+  sunrise: string | null;
+  civilDawn: string | null;
+}
+
+/**
+ * The Party Window that OPENS on this calendar date (report _359 §C.3, C-03).
+ * `null` when the party cue's `days:` do not apply to the night this window
+ * would open on — the ONE honest source for a PARTY WINDOW band. The pad used
+ * to infer bands from `phases[]`, which is emitted for every calendar day, so
+ * a purple band appeared on nights the party cue never runs.
+ *
+ * `wraps` means the window closes at `closesLocal` on the NEXT calendar date.
+ */
+export interface OverviewPartyWindow {
+  phaseId: string;
+  cueId: string;
+  opensLocal: string;
+  closesLocal: string;
+  wraps: boolean;
 }
 
 export interface OverviewCue {
@@ -657,6 +747,12 @@ export interface OverviewDay {
   // them. The DAY view says so loudly rather than drawing an empty ribbon.
   phases?: OverviewPhase[];
   segments?: OverviewSegment[];
+  // Additive (_359 §C.3). OPTIONAL for the same reason: an engine built before
+  // the working-day slice omits both. `partyWindow` is explicitly `null` on a
+  // day the party cue does not apply to — absent and null are NOT the same
+  // thing, and neither is ever turned into a drawn band.
+  nextSun?: OverviewNextSun;
+  partyWindow?: OverviewPartyWindow | null;
 }
 
 export interface TimelineOverview {
@@ -666,22 +762,242 @@ export interface TimelineOverview {
   days: OverviewDay[];
 }
 
-export function fetchTimelineState(): Promise<ApiResult<TimelineState>> {
-  return timelineGet<TimelineState>('/timeline/state');
+// ── Strict parsing of the _356 ownership additions ─────────────────────
+// Codex P0 (no fallback behaviours): a field the engine SENDS must be the
+// shape the contract pins, or we throw. ABSENT is the one tolerated case —
+// an older engine simply has no answer, and the readers degrade to the
+// resolved-ribbon path they used before. A wrong-typed field is never
+// coerced, defaulted, or dropped.
+
+const STATE_PATH = '/timeline/state';
+
+function requireNullableString(owner: string, field: string, value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') {
+    throw new Error(`GET ${STATE_PATH}: '${owner}.${field}' must be a string or null, got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
-export function fetchTimelineOverview(): Promise<ApiResult<TimelineOverview>> {
-  return timelineGet<TimelineOverview>('/timeline/overview');
+function requireNullableFiniteNumber(owner: string, field: string, value: unknown): number | null {
+  if (value === null) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(
+      `GET ${STATE_PATH}: '${owner}.${field}' must be a finite number or null, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Validate `state.deckOwner`. `undefined` (older engine) passes through as
+ * `undefined`; an explicit `null` is kept as null (the engine saying "no owner
+ * object"); anything else must be the full contract shape.
+ */
+export function parseTimelineDeckOwner(raw: unknown): TimelineDeckOwner | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`GET ${STATE_PATH}: 'deckOwner' must be an object or null, got ${JSON.stringify(raw)}`);
+  }
+  const o = raw as Record<string, unknown>;
+  if (typeof o.kind !== 'string' || !TIMELINE_DECK_OWNER_KINDS.includes(o.kind as TimelineDeckOwnerKind)) {
+    throw new Error(
+      `GET ${STATE_PATH}: 'deckOwner.kind' must be one of ${TIMELINE_DECK_OWNER_KINDS.join('|')}, `
+      + `got ${JSON.stringify(o.kind)}`,
+    );
+  }
+  if (typeof o.label !== 'string') {
+    throw new Error(`GET ${STATE_PATH}: 'deckOwner.label' must be a string, got ${JSON.stringify(o.label)}`);
+  }
+  return {
+    kind: o.kind as TimelineDeckOwnerKind,
+    cueId: requireNullableString('deckOwner', 'cueId', o.cueId),
+    label: o.label,
+    untilMs: requireNullableFiniteNumber('deckOwner', 'untilMs', o.untilMs),
+  };
+}
+
+/** Validate `state.partyWindow`. Same absent/null/strict rules as deckOwner. */
+export function parseTimelinePartyWindow(raw: unknown): TimelinePartyWindow | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`GET ${STATE_PATH}: 'partyWindow' must be an object or null, got ${JSON.stringify(raw)}`);
+  }
+  const o = raw as Record<string, unknown>;
+  if (typeof o.open !== 'boolean') {
+    throw new Error(`GET ${STATE_PATH}: 'partyWindow.open' must be a boolean, got ${JSON.stringify(o.open)}`);
+  }
+  return {
+    open: o.open,
+    phaseId: requireNullableString('partyWindow', 'phaseId', o.phaseId),
+    opensAtMs: requireNullableFiniteNumber('partyWindow', 'opensAtMs', o.opensAtMs),
+    closesAtMs: requireNullableFiniteNumber('partyWindow', 'closesAtMs', o.closesAtMs),
+  };
+}
+
+/**
+ * Validate the ownership additions on a `/timeline/state` document (REST or
+ * the `timelineState` broadcast, which is the same document). Returns a state
+ * whose two new fields are contract-checked; throws on a malformed one.
+ */
+export function parseTimelineState(raw: unknown): TimelineState {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`GET ${STATE_PATH}: expected an object, got ${JSON.stringify(raw)}`);
+  }
+  const state = raw as TimelineState;
+  const deckOwner = parseTimelineDeckOwner((state as { deckOwner?: unknown }).deckOwner);
+  const partyWindow = parseTimelinePartyWindow((state as { partyWindow?: unknown }).partyWindow);
+  const parsed: TimelineState = { ...state };
+  if (deckOwner === undefined) delete parsed.deckOwner; else parsed.deckOwner = deckOwner;
+  if (partyWindow === undefined) delete parsed.partyWindow; else parsed.partyWindow = partyWindow;
+  return parsed;
+}
+
+export async function fetchTimelineState(): Promise<ApiResult<TimelineState>> {
+  const result = await timelineGet<TimelineState>(STATE_PATH);
+  if (!result.ok || !result.data) return result;
+  try {
+    return { ...result, data: parseTimelineState(result.data) };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Timeline state malformed', status: result.status };
+  }
+}
+
+// ── Strict parsing of the _359 working-day additions (T-23) ────────────
+// Same discipline as parseTimelineState above: ABSENT is tolerated (an engine
+// built before the working-day slice simply has no answer, and every reader
+// says so instead of drawing something), a WRONG TYPE throws. Nothing is
+// coerced, defaulted, or quietly dropped.
+
+const OVERVIEW_PATH = '/timeline/overview';
+
+function overviewNullableString(owner: string, field: string, value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new Error(
+      `${OVERVIEW_PATH}: '${owner}.${field}' must be a string or null, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+function overviewRequiredString(owner: string, field: string, value: unknown): string {
+  if (typeof value !== 'string' || !value) {
+    throw new Error(
+      `${OVERVIEW_PATH}: '${owner}.${field}' must be a non-empty string, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+/** Validate `days[i].nextSun`. Absent → undefined; present → the full shape. */
+export function parseOverviewNextSun(
+  raw: unknown,
+  owner: string,
+): OverviewNextSun | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${OVERVIEW_PATH}: '${owner}.nextSun' must be an object, got ${JSON.stringify(raw)}`);
+  }
+  const o = raw as Record<string, unknown>;
+  return {
+    sunrise: overviewNullableString(`${owner}.nextSun`, 'sunrise', o.sunrise),
+    civilDawn: overviewNullableString(`${owner}.nextSun`, 'civilDawn', o.civilDawn),
+  };
+}
+
+/**
+ * Validate `days[i].partyWindow`. Absent → undefined (old engine, the pad draws
+ * nothing and says so); explicit `null` → null (the engine saying "no window
+ * opens here"); anything else must be the full contract shape.
+ */
+export function parseOverviewPartyWindow(
+  raw: unknown,
+  owner: string,
+): OverviewPartyWindow | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(
+      `${OVERVIEW_PATH}: '${owner}.partyWindow' must be an object or null, got ${JSON.stringify(raw)}`,
+    );
+  }
+  const o = raw as Record<string, unknown>;
+  if (typeof o.wraps !== 'boolean') {
+    throw new Error(
+      `${OVERVIEW_PATH}: '${owner}.partyWindow.wraps' must be a boolean, got ${JSON.stringify(o.wraps)}`,
+    );
+  }
+  return {
+    phaseId: overviewRequiredString(`${owner}.partyWindow`, 'phaseId', o.phaseId),
+    cueId: overviewRequiredString(`${owner}.partyWindow`, 'cueId', o.cueId),
+    opensLocal: overviewRequiredString(`${owner}.partyWindow`, 'opensLocal', o.opensLocal),
+    closesLocal: overviewRequiredString(`${owner}.partyWindow`, 'closesLocal', o.closesLocal),
+    wraps: o.wraps,
+  };
+}
+
+/**
+ * Contract-check the working-day additions on a `/timeline/overview` document
+ * (GET active or POST draft preview — the same shape). Returns an overview
+ * whose new per-day fields are validated; throws on a malformed one.
+ */
+export function parseTimelineOverview(raw: unknown): TimelineOverview {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${OVERVIEW_PATH}: expected an object, got ${JSON.stringify(raw)}`);
+  }
+  const overview = raw as TimelineOverview;
+  if (!Array.isArray(overview.days)) {
+    throw new Error(`${OVERVIEW_PATH}: 'days' must be an array, got ${JSON.stringify(overview.days)}`);
+  }
+  const days = overview.days.map((day, i) => {
+    const owner = `days[${i}]`;
+    if (!day || typeof day !== 'object') {
+      throw new Error(`${OVERVIEW_PATH}: '${owner}' must be an object, got ${JSON.stringify(day)}`);
+    }
+    const sun = day.sun as Record<string, unknown> | undefined;
+    if (sun && sun.civilDawn !== undefined) {
+      overviewNullableString(`${owner}.sun`, 'civilDawn', sun.civilDawn);
+    }
+    const nextSun = parseOverviewNextSun((day as { nextSun?: unknown }).nextSun, owner);
+    const partyWindow = parseOverviewPartyWindow(
+      (day as { partyWindow?: unknown }).partyWindow, owner,
+    );
+    const parsed: OverviewDay = { ...day };
+    if (nextSun === undefined) delete parsed.nextSun; else parsed.nextSun = nextSun;
+    if (partyWindow === undefined) delete parsed.partyWindow;
+    else parsed.partyWindow = partyWindow;
+    return parsed;
+  });
+  return { ...overview, days };
+}
+
+export async function fetchTimelineOverview(): Promise<ApiResult<TimelineOverview>> {
+  const result = await timelineGet<TimelineOverview>(OVERVIEW_PATH);
+  if (!result.ok || !result.data) return result;
+  try {
+    return { ...result, data: parseTimelineOverview(result.data) };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Timeline overview malformed', status: result.status };
+  }
 }
 
 // Overview of an UNSAVED draft plan — live maker preview. The engine
 // validates first and returns 400 {error} on a malformed draft; we surface
 // that verbatim so the operator sees the error loudly (Codex P0).
-export function previewTimelineOverview(
+export async function previewTimelineOverview(
   plan: ShowPlan,
   signal?: AbortSignal,
 ): Promise<ApiResult<TimelineOverview>> {
-  return timelineSend<TimelineOverview>('POST', '/timeline/overview', plan, signal);
+  const result = await timelineSend<TimelineOverview>('POST', OVERVIEW_PATH, plan, signal);
+  if (!result.ok || !result.data) return result;
+  try {
+    return { ...result, data: parseTimelineOverview(result.data) };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Timeline overview malformed', status: result.status };
+  }
 }
 
 export function fetchTimelinePlans(): Promise<ApiResult<{ plans: string[] }>> {
@@ -808,7 +1124,15 @@ export interface TimelineResolve {
   fireLocal: string | null;
   controller: 'manual' | 'program' | 'autopilot';
   source: SegmentSource | 'dormant';
-  target: { date: string; time: string | null; atMs: number; cueId: string | null };
+  target: {
+    date: string;
+    time: string | null;
+    atMs: number;
+    cueId: string | null;
+    cueLabel?: string | null;
+    cueDate?: string;
+    leadSeconds?: number;
+  };
 }
 
 // GET /timeline/resolve — ZERO side effects (nothing dispatched, no lease
@@ -828,7 +1152,9 @@ export function fetchTimelineResolve(
 
 // POST /timeline/travel — EXACTLY ONE of the three forms:
 //   { date, time }        an explicit instant
-//   { cueId, date? }      a cue's fire instant (date defaults to the current
+//   { cueId, date?, leadSeconds? }
+//                         a cue's fire instant, or an exact pre-roll instant
+//                         1–300 seconds before it (date defaults to the current
 //                         travel day, else today in the plan tz)
 //   { step:'prev'|'next'} the neighbouring EVENT on the current travel day —
 //                         REQUIRES an active travel, and 400s past the first /
@@ -840,7 +1166,7 @@ export function fetchTimelineResolve(
 // active plan's name) travels against the current active plan as before.
 export type TimelineTravelSpec =
   | { date: string; time: string; planName?: string }
-  | { cueId: string; date?: string; planName?: string }
+  | { cueId: string; date?: string; leadSeconds?: number; planName?: string }
   | { step: 'prev' | 'next' };
 
 export interface TimelineTravelResult {

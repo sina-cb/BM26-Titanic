@@ -6,6 +6,8 @@
  *   1. PARTY_TUNABLES — the operator-facing spec of every `party:` threshold
  *      from report 20260725_12 §2 (label, unit, editor range, what it does).
  *      One source of truth for the UI editors AND the persist whitelist.
+ *      PARTY_SOURCE_SPEC is the sibling spec for the SIGNAL SOURCE selector —
+ *      persisted in the same block, but NOT a threshold (see below).
  *
  *   2. SURGICAL PERSIST — write edited values back into config.yaml's `party:`
  *      block by replacing the individual `key: value` LINES.
@@ -64,21 +66,83 @@ export const PARTY_TUNABLES = Object.freeze([
 /** Just the keys, for validation. */
 export const PARTY_TUNABLE_KEYS = Object.freeze(PARTY_TUNABLES.map((t) => t.key));
 
-const TUNABLE_BY_KEY = new Map(PARTY_TUNABLES.map((t) => [t.key, t]));
+// ── SIGNAL SOURCE selector (`party.source`) ──────────────────────────────────
+// WHICH detector's verdict is published as `audioPartyStrong` — the one key the
+// show director, the Timeline mood cue and CaptainPad's SIGNAL chip trust.
+//
+//   'qualified' — PartyModeStrong: the gated detector every threshold above
+//                 belongs to (LEVEL+BEAT+SHAPE+QUIET, then a long sustain).
+//                 The default, and what shipped before this selector existed.
+//   'simple'    — PartyMode: the band-loudness Schmitt trigger already published
+//                 as `audioParty` and shown as the DERIVED panel's PARTY pill.
+//                 Loud room noise trips it — that is the whole reason the
+//                 qualified gate exists — but it is the honest fallback when the
+//                 gates refuse to close on a night that IS a party.
+//
+// It lives in the SAME `party:` block (it is party-detection config), but it is
+// deliberately NOT in PARTY_TUNABLES: the tunables list is the THRESHOLD set the
+// runtime detector, the profiles and the editors all iterate over, and a
+// non-numeric selector in that list would be applied to PartyModeStrong (which
+// rejects unknown keys) and demanded of every saved profile.
+export const PARTY_SOURCE_KEY = 'source';
+export const PARTY_SOURCES = Object.freeze(['qualified', 'simple']);
+export const DEFAULT_PARTY_SOURCE = 'qualified';
+
+export const PARTY_SOURCE_SPEC = Object.freeze({
+  key: PARTY_SOURCE_KEY,
+  kind: 'enum',
+  values: PARTY_SOURCES,
+  label: 'party signal source',
+  hint: 'which detector publishes audioPartyStrong — the qualified gates, or the simple derived PARTY flag',
+});
 
 /**
- * Render a JS value as the YAML scalar we write back. Only the two shapes the
- * `party:` block holds are legal; anything else — and any number that would
- * serialize in exponent form (`1e-7`, which reads back as a STRING in YAML 1.1)
- * — throws rather than corrupting the operator's config.
+ * Validate a signal-source selection. Throws on anything else: an unrecognised
+ * source must stop the companion (or reject the operator's click) loudly rather
+ * than silently running the gate it did not ask for.
+ *
+ * @param {unknown} value
+ * @returns {'qualified'|'simple'}
+ */
+export function parsePartySource(value) {
+  if (!PARTY_SOURCES.includes(value)) {
+    throw new Error(
+      `party source must be one of ${PARTY_SOURCES.join('/')}, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+// Everything `patchPartyBlock` is allowed to write: the thresholds PLUS the
+// source selector. (PARTY_TUNABLES itself stays thresholds-only — see above.)
+const PERSISTABLE_BY_KEY = new Map([
+  ...PARTY_TUNABLES.map((t) => [t.key, t]),
+  [PARTY_SOURCE_SPEC.key, PARTY_SOURCE_SPEC],
+]);
+
+/** Every key the persist path knows how to write, for error messages. */
+export const PARTY_PERSISTABLE_KEYS = Object.freeze([...PERSISTABLE_BY_KEY.keys()]);
+
+/**
+ * Render a JS value as the YAML scalar we write back. Only the three shapes the
+ * `party:` block holds are legal (number, boolean, source enum); anything else
+ * — and any number that would serialize in exponent form (`1e-7`, which reads
+ * back as a STRING in YAML 1.1) — throws rather than corrupting the operator's
+ * config.
  *
  * @param {string} key
- * @param {number|boolean} value
+ * @param {number|boolean|string} value
  * @returns {string}
  */
 export function formatYamlScalar(key, value) {
-  const spec = TUNABLE_BY_KEY.get(key);
+  const spec = PERSISTABLE_BY_KEY.get(key);
   if (!spec) throw new Error(`party persist: "${key}" is not a party tunable`);
+  if (spec.kind === 'enum') {
+    if (!spec.values.includes(value)) {
+      throw new Error(
+        `party persist: ${key} must be one of ${spec.values.join('/')}, got ${JSON.stringify(value)}`);
+    }
+    return value;
+  }
   if (spec.kind === 'boolean') {
     if (typeof value !== 'boolean') {
       throw new TypeError(`party persist: ${key} must be a boolean, got ${JSON.stringify(value)}`);
@@ -146,7 +210,7 @@ function locatePartyBlock(text) {
  * an operator document.
  *
  * @param {string} text — the whole config.yaml
- * @param {object} edits — { tunableKey: number|boolean }
+ * @param {object} edits — { tunableKey: number|boolean } and/or { source: 'qualified'|'simple' }
  * @returns {string} the new text
  */
 export function patchPartyBlock(text, edits) {
@@ -157,9 +221,9 @@ export function patchPartyBlock(text, edits) {
   const keys = Object.keys(edits);
   if (keys.length === 0) throw new Error('party persist: no edits given');
   for (const k of keys) {
-    if (!TUNABLE_BY_KEY.has(k)) {
+    if (!PERSISTABLE_BY_KEY.has(k)) {
       throw new Error(
-        `party persist: "${k}" is not a party tunable (known: ${PARTY_TUNABLE_KEYS.join(', ')})`);
+        `party persist: "${k}" is not a party tunable (known: ${PARTY_PERSISTABLE_KEYS.join(', ')})`);
     }
   }
   const { start, end } = locatePartyBlock(text);

@@ -23,7 +23,6 @@ import {
   entryFixtureName,
   isLedController,
   ledOutputIndexForPort,
-  parkedUniverseFor,
 } from '../controller_registry.js';
 
 const PER_OUTPUT_SPAN_MAX = 16;   // ≤16-universe window per controller (firmware rule)
@@ -124,25 +123,23 @@ export function collectClaimedUniverses(controller, sources) {
     }
   }
 
-  // The two universes a device SUBSCRIBES to that no strand patch projects, and
-  // which the claim index therefore used to be blind to (report 20260725_70 §4):
+  // The universe a device SUBSCRIBES to that no strand patch projects, and which
+  // the claim index would otherwise be blind to (report 20260725_70 §4): an LED
+  // port row carrying NO strand still DECLARES a universe, and the moment a
+  // strand lands on it the device listens there.
   //
-  //  1. an LED port row carrying NO strand — the port still declares a universe,
-  //     and the moment a strand lands on it the device listens there;
-  //  2. a PARKED output — enabled on the board with no port driving it, sitting
-  //     on a universe the sim allocated precisely so nobody else takes it.
+  // (Parked outputs used to be a second source here. Parking is retired — a
+  // forced push DISABLES every output no port maps, so there is no such thing as
+  // "an enabled output nobody routes to" holding a universe hostage.)
   //
-  // Both are read straight off the `controllers` array this function already
+  // This is read straight off the `controllers` array this function already
   // receives, and ownership is trivial (skip the controller being planned), so
-  // the ordinal-vs-id trap above does not apply to either source.
+  // the ordinal-vs-id trap above does not apply to it.
   for (const other of controllers) {
     if (other === controller) continue;
     if (!isLedController(other)) continue;
     for (const port of other.ports || []) {
       note(port.universe, `${other.name} port ${port.port} → output ${port.output}`);
-    }
-    for (const parked of other.parkedOutputs || []) {
-      note(parked.universe, `${other.name} output ${parked.output} (parked)`);
     }
   }
 
@@ -158,54 +155,36 @@ function strandCountMap(strandFixtures) {
   return new Map(Object.entries(strandFixtures || {}));
 }
 
-/** Total mapped pixels on a port's chain (0 when it carries no known strand). */
+/**
+ * A port chain's pixel accounting, split by whether the sim could resolve each
+ * entry's `ledCount`.
+ *
+ * The split is the point (known gap 4, closed here): summing only the RESOLVED
+ * entries and pushing that total is how a chain of two strands where the sim
+ * knows one of them writes a SHORT `count` onto the board — an output that
+ * looks configured and silently truncates half its pixels. The caller turns a
+ * MIXED chain into a blocking collision; a chain nothing resolves stays the
+ * older "nothing to enable it with, so the push DISABLES it" case.
+ *
+ * @returns {{total: number, resolved: string[], unresolved: string[]}}
+ *   `total` counts the resolved entries only.
+ */
 function portPixelCount(port, counts) {
   let total = 0;
+  const resolved = [];
+  const unresolved = [];
   for (const entry of port.chain || []) {
     const name = entryFixtureName(entry);
     if (name === null) continue;
     const ledCount = counts.get(name);
-    if (Number.isInteger(ledCount) && ledCount > 0) total += ledCount;
+    if (Number.isInteger(ledCount) && ledCount > 0) {
+      total += ledCount;
+      resolved.push(name);
+    } else {
+      unresolved.push(name);
+    }
   }
-  return total;
-}
-
-/**
- * Is a stored PARKED universe still usable? A park is sticky (report 20260725_70
- * §2.2) — it moves ONLY when it stops being valid, because a park that drifts on
- * its own makes the sync chip report drift on a card nobody touched.
- */
-function parkedUniverseIsValid(stored, planned, claimedUniverses, cardUniverses) {
-  if (!Number.isInteger(stored) || stored < 1 || stored > MAX_UNIVERSE) return false;
-  if (claimedUniverses.has(stored)) return false;   // another controller took it
-  if (cardUniverses.has(stored)) return false;      // collides with one of this card's ports
-  if (planned.has(stored)) return false;            // already handed to another output
-  const all = [...planned, stored];
-  return (Math.max(...all) - Math.min(...all) + 1) <= PER_OUTPUT_SPAN_MAX;
-}
-
-/**
- * Allocate a parked universe: the LOWEST universe free across the whole registry
- * at or above the plan's anchor that still fits the ≤16-universe window
- * (`validatePerOutputPlan`'s SPAN rule, measured across assigned AND parked
- * universes). Returns null when the window is exhausted — the caller turns that
- * into a BLOCKING refusal rather than parking outside the window and earning a
- * device 400 with a cryptic message.
- */
-function allocateParkedUniverse(planned, claimedUniverses, cardUniverses) {
-  const anchor = planned.size ? Math.min(...planned) : 2;   // U1 is effects-only
-  const ceiling = Math.min(MAX_UNIVERSE, anchor + PER_OUTPUT_SPAN_MAX - 1);
-  for (let u = anchor; u <= ceiling; u++) {
-    if (planned.has(u) || claimedUniverses.has(u) || cardUniverses.has(u)) continue;
-    return u;
-  }
-  return null;
-}
-
-/** The inclusive window a park must fall inside, for the refusal text. */
-function parkWindowText(planned) {
-  const anchor = planned.size ? Math.min(...planned) : 2;
-  return `U${anchor}–U${Math.min(MAX_UNIVERSE, anchor + PER_OUTPUT_SPAN_MAX - 1)}`;
+  return { total, resolved, unresolved };
 }
 
 /**
@@ -215,32 +194,32 @@ function parkWindowText(planned) {
  * drives is DECLARED by `port.output` (1-based; report 20260725_70 §1) — the
  * 0-based `strands[]` index is derived at this boundary only.
  *
- * THE THREE CASES, per device output slot `i`:
+ * FORCE SEMANTICS (operator ruling, report `_362`). The sim's controller panel
+ * is the SINGLE SOURCE OF TRUTH; a push is a one-way full overwrite, so there
+ * are only TWO cases per device output slot `i`:
  *
- *  1. A card port DECLARES it (`port.output - 1 === i`) → the output takes that
- *     port's universe. If the board has the output DISABLED, the push ENABLES it
- *     (§2.3) — the one asymmetric write, declared in the confirm dialog. A port
- *     left at an invalid universe (≤0) keeps the old repair: the next universe
- *     free across the whole registry, with a warning.
- *  2. No card port declares it, and the board has it ENABLED → it is PARKED: it
- *     keeps a universe proven free across the whole registry, so it stays
- *     enabled and subscribed and receives ZERO packets (relay routes are unicast
- *     per (universe, IP) and no patch record points at it) — dark, held there by
- *     the device's own `dmx.timeoutMs` blackout. Parking REPLACES the old
- *     anonymous "auto-extend" (report 20260725_59): same claims-gated mechanism,
- *     now a first-class, PERSISTED, sticky concept with its own UI surface.
- *  3. No card port declares it, and the board has it disabled → untouched. No
- *     universe, no enable, not in the plan.
+ *  1. A card port DECLARES it (`port.output - 1 === i`) AND that port maps ≥1
+ *     pixel → the output is ASSIGNED: the push enables it, forces its `count`
+ *     to the port's mapped pixel count, and stamps the port's universe with
+ *     `dmxStartAddress: 1`. A port left at an invalid universe (≤0) keeps the
+ *     old repair: the next universe free across the whole registry, with a
+ *     warning. If the port's chain is MIXED — some entries the sim can size,
+ *     some it cannot — the count would be short, so the plan raises a BLOCKING
+ *     `unknown_strand_count` collision instead (known gap 4).
+ *  2. Anything else → the push writes `enabled: false`. An output the board has
+ *     enabled today and no port maps is reported in `disables` so the confirm
+ *     dialog can name it before it goes dark.
  *
- * THE PUSH NEVER WRITES `enabled: false`, for any output, ever. Nothing the sim
- * does can dark a strand somebody wired outside it (operator ruling: "the
- * controller can have all 4 ports enabled at all times, and we just direct data
- * to the port we need"). "Off" means "no data routed here", not "output
- * disabled".
+ * This SUPERSEDES two earlier rulings that shaped the old three-case model:
+ * "the push NEVER writes `enabled: false`" (parking, report 20260725_70) and
+ * "count on an already-enabled output is never rewritten". Both are gone —
+ * unmapped outputs are DISABLED and counts are FORCED — and the confirm dialog
+ * carries mandatory DISABLES and COUNT CHANGES sections so nothing goes dark or
+ * gets resized silently.
  *
  * REGISTRY-AWARE (slice S2, report 20260725_58 §4): "free" means free across the
  * WHOLE registry. `claimedUniverses` carries the universes owned by OTHER
- * controllers (`collectClaimedUniverses`); parks and repairs skip them.
+ * controllers (`collectClaimedUniverses`); the repair path skips them.
  *
  * SHARED ADDRESSES (operator order 2026-07-31, report 20260725_102): an EXPLICIT
  * port universe that lands on another controller's claim is NO LONGER a blocking
@@ -251,12 +230,11 @@ function parkWindowText(planned) {
  * errors, raised by address_merge.assertResolvableOverlaps on the push path.
  *
  * PURE (no I/O, no mutation): the sync chip and the push both call this, so both
- * see the same plan. Persisting a newly-allocated park is the PUSH's job.
+ * see the same plan.
  *
  * @param {Object} controller - sim LED controller (registry shape).
- * @param {Map|Object|Array} strandFixtures - strand name → ledCount. Used for
- *   the pixel count written when an output is newly ENABLED, and for the
- *   count-mismatch warning on an already-enabled one.
+ * @param {Map|Object|Array} strandFixtures - strand name → ledCount. The source
+ *   of the `count` FORCED onto every assigned output.
  * @param {Object} deviceSnapshot - GET /api/config result (its strands[] define
  *   how many outputs the board has and which are enabled today).
  * @param {Set<number>|Map<number,string>} claimedUniverses - universes owned by
@@ -266,21 +244,23 @@ function parkWindowText(planned) {
  *   universeByOutputIndex: Object<number,number>,
  *   assignments: Array<{outputIndex: number, portNum: number, universe: number,
  *     pixelCount: number}>,
- *   parked: Array<{outputIndex: number, universe: number, reused: boolean}>,
- *   enableOutputIndices: number[],
- *   enables: Array<{outputIndex: number, portNum: number, universe: number,
- *     count: number}>,
+ *   disables: Array<{outputIndex: number, deviceCount: number,
+ *     deviceUniverse: (number|undefined)}>,
+ *   countChanges: Array<{outputIndex: number, from: number, to: number}>,
  *   warnings: string[],
  *   sharedUniverses: Array<{outputIndex: number, port: number, universe: number,
  *     owner: string, message: string}>,
  *   collisions: Array<{kind: string, outputIndex: (number|undefined),
  *     port: (number|undefined), universe: (number|undefined),
  *     owner: (string|undefined), message: string}>}}
- *   `universeByOutputIndex` covers EVERY output that will be enabled after the
- *   push (assigned + parked). `warnings` are loud but informational;
- *   `sharedUniverses` are the ALLOWED overlaps (also mirrored into `warnings`,
- *   so no caller can surface the plan without surfacing them); `collisions` are
- *   BLOCKING — the caller refuses before any device write.
+ *   `universeByOutputIndex` covers EXACTLY the outputs the push will enable —
+ *   every other output slot is written `enabled:false`. `disables` names the
+ *   outputs the board has ON today that the push will turn OFF; `countChanges`
+ *   names every already-enabled output whose `count` the push will rewrite.
+ *   `warnings` are loud but informational; `sharedUniverses` are the ALLOWED
+ *   overlaps (also mirrored into `warnings`, so no caller can surface the plan
+ *   without surfacing them); `collisions` are BLOCKING — the caller refuses
+ *   before any device write.
  */
 export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, claimedUniverses) {
   if (!controller || typeof controller !== 'object') {
@@ -307,8 +287,8 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
 
   const universeByOutputIndex = {};
   const assignments = [];
-  const parked = [];
-  const enables = [];
+  const disables = [];
+  const countChanges = [];
   const warnings = [];
   const collisions = [];
   const sharedUniverses = [];   // allowed overlaps — WARNING, never a refusal
@@ -373,9 +353,10 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
         // numerically higher controller IP overrides on contested channels.
         //
         // NOTE the asymmetry, and it is deliberate: an EXPLICIT operator-declared
-        // universe may now be shared, but the auto-assign paths below (repair,
-        // park) still SKIP every claimed universe. The sim never *chooses* to
-        // create a shared address — it only honours one the operator declared.
+        // universe may now be shared, but the auto-assign path below (the
+        // invalid-universe repair) still SKIPS every claimed universe. The sim
+        // never *chooses* to create a shared address — it only honours one the
+        // operator declared.
         const owner = claimOwner(claimedUniverses, universe);
         const share = {
           outputIndex: i,
@@ -418,26 +399,50 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
   }
 
   // Record the assignments (in output order) now that every declared output has
-  // its universe, and note the ENABLE transitions + the count policy.
+  // its universe, and note the COUNT rewrites the force semantics imply.
   for (let i = 0; i < outputCount; i++) {
     const port = portByOutput.get(i);
     if (!port || universeByOutputIndex[i] === undefined) continue;
-    const pixelCount = portPixelCount(port, counts);
+    const { total: pixelCount, resolved, unresolved } = portPixelCount(port, counts);
     const strand = strands[i];
 
-    // A port row that maps NOTHING, pointed at an output the board has OFF, is
-    // the everyday shape of a 4-row card driving two strands. There is nothing
-    // to enable it with and nothing to send it, so the output stays exactly as
-    // the board has it: out of the plan entirely (case 3). Enabling it would be
-    // the sim deciding to drive hardware nobody mapped.
-    if ((!strand || strand.enabled !== true) && pixelCount < 1) {
+    // MIXED CHAIN — BLOCKING (known gap 4). Some entries resolved, some did
+    // not: the sum below counts only the resolved ones, so pushing it would
+    // force a count SHORTER than the rope actually carries and the tail would
+    // go dark while every chip and dialog reported success. There is no honest
+    // number to write, so the plan refuses and names the strands to fix. (A
+    // chain NOTHING resolves is a different case — see below.)
+    if (unresolved.length && resolved.length) {
+      collisions.push({
+        kind: 'unknown_strand_count',
+        outputIndex: i,
+        port: port.port,
+        universe: universeByOutputIndex[i],
+        owner: undefined,
+        message: `output ${i + 1} (port ${port.port}) chains strand(s) the sim has NO pixel count ` +
+          `for (${unresolved.join(', ')}) alongside strand(s) it does know ` +
+          `(${resolved.join(', ')} = ${pixelCount} px) — pushing would force that SHORT count ` +
+          'onto the output and silently truncate the rest; give the unknown strand(s) a fixture ' +
+          'with a pixel count, or take them off this port',
+      });
+    }
+
+    // A port row that maps NOTHING has no count to write, and the firmware
+    // requires `count ≥ 1` on an enabled output. Such an output is NOT assigned
+    // — which, under force semantics, means the push DISABLES it (the `disables`
+    // pass below names it when the board has it on today).
+    if (pixelCount < 1) {
       delete universeByOutputIndex[i];
       used.delete(port.universe);
-      if ((port.chain || []).some((e) => entryFixtureName(e) !== null)) {
+      if (unresolved.length) {
         // It DOES carry chain entries — the sim just has no pixel count for
-        // them (an unknown strand). Say so; do not quietly enable a 0-px output.
-        warnings.push(`output ${i + 1} (port ${port.port}) is disabled on the device and the sim ` +
-          'has no pixel count for the strand(s) mapped to it — left disabled, nothing pushed');
+        // ANY of them. Say so; do not quietly push a 0-px output. This one is
+        // deliberately NOT a collision: the output is disabled, which the
+        // confirm dialog's DISABLES section states outright, so nothing lands
+        // on the board claiming a length nobody measured.
+        warnings.push(`output ${i + 1} (port ${port.port}) maps strand(s) the sim has no pixel ` +
+          `count for (${unresolved.join(', ')}) — nothing to enable it with, so the push ` +
+          'DISABLES it');
       }
       continue;
     }
@@ -445,59 +450,28 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
     assignments.push({
       outputIndex: i, portNum: port.port, universe: universeByOutputIndex[i], pixelCount,
     });
-    if (strand && strand.enabled === true) {
-      // ALREADY ENABLED — the push NEVER rewrites `count`. The physical strand
-      // length is hardware truth and the sim's model is a belief (the open
-      // 20-vs-40 px question); re-counting a live output could dark pixels that
-      // are lit today. A mismatch is REPORTED, never written.
-      if (pixelCount > 0 && Number.isInteger(strand.count) && strand.count !== pixelCount) {
-        warnings.push(`output ${i + 1}: device count ${strand.count} px, this card maps ` +
-          `${pixelCount} px — count NOT changed`);
-      }
-      continue;
+    // FORCED COUNT (report `_362` §2.1): the sim's mapping wins in BOTH
+    // directions, superseding the older "count on an already-enabled output is
+    // hardware truth" rule. Every rewrite is named so the confirm dialog can
+    // show it before the write, never after.
+    if (strand && strand.enabled === true
+        && Number.isInteger(strand.count) && strand.count !== pixelCount) {
+      countChanges.push({ outputIndex: i, from: strand.count, to: pixelCount });
     }
-    // DISABLED on the board, and a port with real pixels drives it → the push
-    // ENABLES it, writing the mapped pixel count (the firmware requires
-    // count ≥ 1 on an enabled output). This is the operator's "drive output 4
-    // from one row" case, and the ONLY write that changes an enable flag.
-    enables.push({
-      outputIndex: i, portNum: port.port, universe: universeByOutputIndex[i], count: pixelCount,
-    });
   }
 
-  // ── Pass 2 — every ENABLED output no port declares is PARKED, never disabled ─
-  const planned = new Set(Object.values(universeByOutputIndex));
+  // ── Pass 2 — every output the plan does not assign is DISABLED by the push ──
+  // Only the ones the board has ON today are worth naming: turning an already
+  // disabled output off again changes nothing the operator can see.
   for (let i = 0; i < outputCount; i++) {
     if (universeByOutputIndex[i] !== undefined) continue;
     const strand = strands[i];
-    if (!strand || strand.enabled !== true) continue;   // disabled + unmapped: untouched
-    const stored = parkedUniverseFor(controller, i);
-    if (parkedUniverseIsValid(stored, planned, claimedUniverses, cardUniverses)) {
-      universeByOutputIndex[i] = stored;
-      planned.add(stored);
-      parked.push({ outputIndex: i, universe: stored, reused: true });
-      continue;
-    }
-    const chosen = allocateParkedUniverse(planned, claimedUniverses, cardUniverses);
-    if (chosen === null) {
-      collisions.push({
-        kind: 'parked_span',
-        outputIndex: i,
-        port: undefined,
-        universe: undefined,
-        owner: undefined,
-        message: `no free universe in the window ${parkWindowText(planned)} for output ${i + 1} — ` +
-          'free one up, or unpark it by mapping a port to it',
-      });
-      continue;
-    }
-    universeByOutputIndex[i] = chosen;
-    planned.add(chosen);
-    parked.push({ outputIndex: i, universe: chosen, reused: false });
-    warnings.push(Number.isInteger(stored)
-      ? `output ${i + 1}: parked universe U${stored} is no longer free — re-parked on U${chosen}`
-      : `output ${i + 1} has no controller port row — PARKED on U${chosen} (enabled on the ` +
-        'board, nothing routes here, so it stays dark)');
+    if (!strand || strand.enabled !== true) continue;
+    disables.push({
+      outputIndex: i,
+      deviceCount: strand.count,
+      deviceUniverse: strand.dmxUniverse,
+    });
   }
 
   // ── The firmware's own floor ──────────────────────────────────────────────
@@ -524,9 +498,8 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
     controllerName: controller.name,
     universeByOutputIndex,
     assignments,
-    parked,
-    enableOutputIndices: enables.map((e) => e.outputIndex),
-    enables,
+    disables,
+    countChanges,
     warnings,
     sharedUniverses,
     collisions,

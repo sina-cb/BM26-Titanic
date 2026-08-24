@@ -17,6 +17,23 @@ errors.
 > **Push/save model:** ⬆ Push writes the device **and** saves the scene **and**
 > notifies the sACN bridge; a 💾 save alone is sufficient for mapping-only
 > changes. What each layer needs, and what a save still cannot fix, is **§4.5**.
+>
+> **What the push writes (narrowed):** exactly three things — strand
+> **counts + enables**, **per-output universes** (start address 1), and
+> **`dmx.enabled: true`**. Strand `type`, `colorOrder`, `rgbwMode`, pins,
+> **swarm** and **gamma** are *not* touched: they pass through from the board's
+> own snapshot or are never mentioned at all. A **pre-write identity gate**
+> refuses before the confirm dialog if a bound card's live `controllerId` has
+> changed, and a **disabled** output is written with its `dmxUniverse` /
+> `dmxStartAddress` keys **removed** (D1 — the firmware's all-or-none rule).
+> Details: **§4.1**.
+>
+> **DMX ⏻ toggle:** each LED card also carries a one-click DMX ON/OFF control
+> that writes only the board's `dmx.enabled` flag and reboots it (**§4.4**).
+>
+> **Gamma:** operator-manual on the controller's own web UI. The sim's gamma
+> section renders **disabled** and the sim **never reads gamma from a device**
+> (**§4.1(d)**).
 
 This doc is the source of truth for how the simulation onboards **MarsinLED
 LED-string controllers** the way it onboards DMX controllers: **discover →
@@ -80,7 +97,8 @@ the first bullet.
   `device:` block, whose identity key is the device's **`controllerId`**
   (`normalizeDeviceBlock`, `controller_registry.js`). "A card with this IP
   exists" and "a card is bound to this device" are different states, and only
-  the second one joins the bound-only flows (sync chip, push-all, gamma-all).
+  the second one joins the bound-only flows (sync chip, push-all, the DMX
+  toggle; the fleet gamma entry exists but is inert — §4.1(d)).
   Accordingly the discovery modal offers **Bind** whenever the card it was
   opened from is not already bound to *this* `controllerId` — including a
   hand-typed card that already carries the right IP — and labels a matching but
@@ -181,43 +199,55 @@ ports:
 - An enabled device output whose port row carries an invalid universe is
   **repaired** to the next universe free across the whole registry (all-or-none
   is a firmware rule), with a warning surfaced in the push confirm dialog —
-  never a silent fill. An output with **no port row at all** is **parked**
-  (§3.2.1), which replaces the old anonymous "auto-extend".
+  never a silent fill. An output with **no port row at all** is **DISABLED** by
+  the push (§3.2.1).
 
-### 3.2.1 Parking: "off" means no data routed here, not "output disabled"
+### 3.2.1 FORCE semantics: an output with no port row is DISABLED by the push
 
-**The push never writes `enabled: false`, for any output, ever.** Nothing the sim
-does can dark a strand somebody wired outside it. A board output that is enabled
-with no card port driving it is **PARKED**: it keeps a universe proven free
-across the whole registry, so it stays enabled and subscribed and receives **zero
-packets** (relay routes are unicast per `(universe, controllerIp)` and no patch
-record points at it) — dark, held there by the device's own `dmx.timeoutMs`
-blackout.
+**The sim's controller panel is the SINGLE SOURCE OF TRUTH for the MAPPING.** A
+push is a one-way overwrite of every output's enable, count and universe — no
+negotiation with board-local mapping state, no partial-push variants, no modes
+(operator ruling, report
+`.agent/reports/202608/20260823_362_smokestack_switch_removal_push_hardening_plan.md`).
+It is **not** an overwrite of the whole board: hardware fields the sim does not
+own (`type`, `colorOrder`, `rgbwMode`, pins) pass through from the board's own
+snapshot, and swarm and gamma are never mentioned (§4.1). Per output slot, there
+are exactly two cases:
 
-- Parked universes are **persisted** on the card as `parkedOutputs: [{output,
-  universe}]` and **reused** across pushes. A re-derived park would move whenever
-  any other controller took a universe, and the sync chip — which compares device
-  ≡ plan — would then report drift on a card nobody touched.
-- A park is re-allocated only when it stops being valid (another controller
-  claimed it, it collides with one of this card's port universes, or it falls
-  outside the ≤16-universe window). Each re-park names the old and new universe.
-- A park must fit the **≤16-universe window** measured across the card's assigned
-  AND parked universes. If no free universe fits, the push **refuses loudly**
-  rather than earning a device 400.
-- Parked universes are **registry claims**: another card's push can never take
-  one.
-- The card's `Board outputs:` line shows the whole picture —
-  `1←P1(U21)  2←P2(U22)  3 parked U27  4 disabled` — with a `↻ re-park` button
-  that forgets the stored universes so the next push allocates fresh ones.
+1. a card port drives it **and** that port maps ≥1 pixel → `enabled: true`,
+   `count` = the port's mapped pixel count, `dmxUniverse` = the port's universe,
+   `dmxStartAddress: 1`;
+2. anything else → `enabled: false`.
 
-**The ONE asymmetric write.** If a port with mapped pixels drives an output the
-board currently has **disabled**, the push **enables it** (`enabled: true` plus
-`count` = the port's mapped pixel count), declared per output in the confirm
-dialog under its own heading. It is add-only by construction, so it cannot dark
-anything. `count` on an **already-enabled** output is **never** rewritten — the
-physical strand length is hardware truth and the sim's model is a belief; a
-mismatch is reported as a warning, never a write. An EMPTY port row pointed at a
-disabled output enables nothing (there is nothing to drive it with).
+This **supersedes two earlier rulings** that shaped the previous model:
+
+- *"the push never writes `enabled: false`"* (parking, report `20260725_70`) —
+  **gone**. Parking is retired end-to-end: no `parkedOutputs` block, no
+  `↻ re-park` button, no parked registry claims, no parked-absent route
+  assertion. A legacy `controllers.yaml` still carrying `parkedOutputs:` LOADS,
+  DROPS the block and logs once per card
+  (`parkedOutputs is retired — dropped; unmapped outputs are now disabled on
+  push`); saving the scene persists the drop.
+- *"`count` on an already-enabled output is never rewritten"* — **gone**. The
+  count is forced from the sim's mapping **in both directions**.
+
+Because both protections are gone, the confirm dialog carries two **mandatory**
+sections before anything is written: **DISABLES** (every output enabled on the
+board today that this push will darken, with its current count + universe) and
+**COUNT CHANGES** (every already-enabled output whose `count` the push will
+rewrite, `from → to`). The sync chip shows the same pending change *before* any
+push: a portless enabled output reads `▲ Drift · enabled · U27 → disabled`.
+
+The card's `Board outputs:` line shows the whole picture —
+`1←P1(U21)  2←P2(U22)  3 will be DISABLED by push  4 disabled` — and the output
+selector labels each option the same way (`2 — enabled, 40 px, U24 · push will
+DISABLE it`, `4 — disabled · push will ENABLE it` on the row that maps it).
+
+An EMPTY port row (or one whose strands the sim has no pixel count for) maps 0
+pixels, so its output is **not** assigned — the firmware requires `count ≥ 1` on
+an enabled output — and it is disabled like any other unmapped output. A card
+that maps nothing at all still **refuses** (`no_enabled_output`): a MarsinLED
+requires at least one enabled strand, and an all-dark force would earn a 400.
 
 ### 3.3 The byte layout WITHIN one output
 
@@ -245,9 +275,9 @@ A 4-output board, outputs 0 and 1 enabled at 40 px RGBW, mapped to U3 and U4:
 | 3 (GPIO38) | — | 0 (disabled) | — | — |
 
 The "drive output 4 only" case is ONE row with `output: 4`: no filler rows, no
-unused universes. Outputs 1–3, if the board has them enabled, become **parked**
-(§3.2.1) and stay dark; output 4 is **enabled** by the push if the board has it
-off.
+unused universes. Outputs 1–3, if the board has them enabled, are **DISABLED**
+by the push (§3.2.1) and go dark; output 4 is **enabled** by the push if the
+board has it off.
 
 Note output 1 starts at **channel 1 of its own universe**, not at channel 161 of
 output 0's universe — that is precisely the difference from the old linear
@@ -281,22 +311,21 @@ SAME universe — both stream from its channel 1, so they overwrite each other),
 `led_universe_collision` (a universe a controller actually streams also carries
 DMX fixtures or another bound LED controller), `led_output_duplicate` (two port
 rows declaring the SAME physical output — this one the push also BLOCKS),
-`led_output_out_of_card_range`, and `led_parked_output_conflict` (a stored park
-on an output a port now drives).
+and `led_output_out_of_card_range`.
 
 On top of those chips, the **push itself runs a registry-aware pre-flight gate**
 (`collectClaimedUniverses` + `derivePerOutputPlan`, `device_config_mapper.js`):
-parked and repaired outputs pick universes free across the WHOLE registry, and
-an explicitly declared port universe that another controller already owns is a
-**blocking refusal** naming both sides ("output 3 would take U23 — owned by
-LeftFrontDeck port 1"). The claim index counts another card's **strandless port
-universes** and its **parked universes** too — both are universes that device
-really subscribes to, and neither shows up in the strand patch projection.
-Three more blocking findings share the same refusal surface: `duplicate_output`
+repaired outputs pick universes free across the WHOLE registry, and an
+explicitly declared port universe that another controller already owns is a
+**shared-address warning** naming both sides (the wire-side merge resolves it,
+`src/dmx/address_merge.js`). The claim index counts another card's **strandless
+port universes** too — a port declares its universe whether or not anything is
+patched on it yet, and that never shows up in the strand patch projection.
+Three blocking findings share the same refusal surface: `duplicate_output`
 (two rows on one physical output), `output_out_of_range` (a row driving an output
-the board does not have) and `parked_span` (no free universe left in the
-16-universe window to park an unmapped output on). The device is not written and
-there is no override path — fix the card and push again (§4.5).
+the board does not have) and `no_enabled_output` (a card that would leave every
+output dark). The device is not written and there is no override path — fix the
+card and push again (§4.5).
 
 A fixture is **patched** only once it is assigned to an output AND the sim's
 LED/sACN model carries its universe+channel span; otherwise it is unpatched.
@@ -329,17 +358,42 @@ in-page subnet sweep can read responses at all.)
 
 ### 4.1 What we write when patching a controller
 
-The patch push is a **read-modify-write**: `GET /api/config` first, mutate, then
-POST the strands array back **wholesale** so no hardware field is lost
-(`pushPerOutputUniverses`).
+The forced push reads the board **once** (`GET /api/status` + `GET /api/config`),
+builds **one** body from that snapshot (`buildForcedConfigBody`,
+`marsinled_client.js`) and POSTs it verbatim (`pushForcedConfig`). The transport
+does **no** GET of its own: the body must be built from the same snapshot the plan
+was derived from, or the board can change between the two reads. The body the
+confirm dialog previews **is** the object that gets posted, and there is
+deliberately **no re-read immediately before the POST** — a second read would make
+the posted body differ from the previewed one and would reopen the drift window it
+claims to close. The residual "stale dialog" risk is covered by the **pre-write
+identity gate** below plus the full read-back verify (§4.5).
 
-**(a) `strands[]`** — one object per physical output, array order = output
-index. Each **enabled** output carries its **own** `dmxUniverse` +
-`dmxStartAddress: 1` (§3). Set each assigned output's `count` to its fixture's
-pixel count and `enabled:true`; unassigned outputs stay `enabled:false` and are
-copied through **untouched** (no per-output fields added). Keep `type`,
-`pinData`, `pinClock`, `colorOrder`, `rgbwMode` as read from `/api/config`
-(don't invent pins — `angio4` pins are locked).
+**Pre-write identity gate.** Before the confirm dialog opens, a bound card's live
+`status.controllerId` is compared with the identity stored in the scene. A
+mismatch is a loud refusal naming both ids, and **nothing is written**. Push-all
+runs the same gate per controller inside its loop: that board FAILs, the loop
+continues.
+
+The body is `{ strands, dmx }` — and `deviceName` only under the §4.1.1 repair.
+**Three things and only three are forced**: strand counts + enables, per-output
+universes (start 1), and `dmx.enabled: true`.
+
+**(a) `strands[]`** — the FULL array, one object per physical output, array
+order = output index. Each **assigned** output carries its **own** `dmxUniverse`
++ `dmxStartAddress: 1` (§3), `enabled: true`, and `count` = the port's mapped
+pixel count (forced, both directions). Every **other** output is written
+`enabled: false` **and its `dmxUniverse` / `dmxStartAddress` keys are DELETED from
+the entry** (D1 — the firmware's all-or-none per-output rule 400s on a disabled
+strand that still carries a universe).
+
+Every **other** key of the entry passes through **untouched** from the snapshot:
+`type`, `pinData`, `pinClock`, `colorOrder`, `rgbwMode`, `deadPixels` /
+`deadPixelIndices`, and any key a future firmware adds (don't invent pins —
+`angio4` pins are locked). **Strand type and colour order are deliberately NOT
+pushed**: the operator manages chip type and colour order on the controller
+itself. That pass-through is not "merging board tweaks", it is refusing to invent
+hardware identity — and, by the same ruling, refusing to judge it (§4.5).
 
 ```json
 { "strands": [
@@ -356,13 +410,45 @@ copied through **untouched** (no per-output fields added). Keep `type`,
 ] }
 ```
 
-**(b) `dmx{}`** — switch the device into sACN-receive. On the per-output path
-this body carries **no `universe` / `startAddress`**: those are per-strand
-(above), so only the transport-level keys are written.
+**(b) `dmx{}` — merged, never replaced. NO `swarm` key, ever.** Every push turns
+the board's DMX input ON, idempotently: a board already receiving DMX re-asserts
+it. The body's `dmx` is the board's **own saved `dmx` object** with only two keys
+forced:
 
 ```json
-{ "dmx": { "enabled":true, "protocol":0, "timeoutMs":3000 } }
+{ "dmx": { "…the board's own saved dmx object…", "enabled":true, "protocol":0 } }
 ```
+
+`timeoutMs`, the legacy `universe` / `startAddress` keys, and everything else the
+board saved are **PRESERVED**. (The legacy globals are inert while per-output
+universes are in force — the sim's universes are per-strand, above — but they are
+the board's data and the push does not delete the board's data.) The snapshot must
+carry a `dmx` **object**: a snapshot without one is a loud refusal, never an
+invented block. The frozen `FORCED_DMX_BLOCK` export of the previous model is
+**gone**; this merge rule replaces it.
+
+`protocol: 0` (sACN) is forced because the per-output universes being written are
+sACN-only by firmware rule (§3.5) — a body claiming ArtNet alongside per-output
+universes would be incoherent.
+
+**Swarm is never mentioned by the push.** There is no `swarm` key in the body, in
+either direction. The board's swarm configuration — `enabled`, `isLeader`/`role`,
+`groupId`, everything — survives a push **byte-for-byte** because the push simply
+does not talk about it. Swarm is the operator's own setting on the controller's
+web UI, in both directions; the sim has no swarm control, no mode model, and no
+DMX⇄SWARM switch.
+
+A board that ends up reporting `dmx.enabled` **and** `swarm.enabled` is an
+**accepted** state — the firmware allows it, the retired mode model's "invalid
+dual mode" classification is gone with it. The read-back surfaces one
+**informational, non-failing** note on the outcome line — `ℹ board also reports
+SWARM enabled — swarm is operator-managed; the sim does not touch it` — and the
+push still passes.
+
+**The push never touches wifi.** Some external provisioning tooling switches a
+board's AP off when putting it into DMX mode; the sim deliberately does **not**
+(wifi writes are staged behind the anti-brick confirm handshake and stay denied),
+so the board's AP stays up after a push. That is cosmetic, not output ownership.
 
 - `protocol` 0 = sACN, 1 = ArtNet — but the per-output path is **sACN only**
   (§3.5). `timeoutMs` 0 = hold-last-look forever; >0 = blackout after N ms of no
@@ -377,36 +463,56 @@ this body carries **no `universe` / `startAddress`**: those are per-strand
 via `deviceName`, set a power cap with `maxMilliamps` /
 `maxMilliampsEnabled`, master `globalBrightness`.
 
-**(d) `gamma{}` — the per-channel correction curve** (`{r,g,b,w}`, each
-`1.0`–`3.0`, `1.0` = off). This is the ONE gamma in the whole chain: the sim's
-sACN mapper deliberately emits linear bytes, so the strand's perceptual
-response is entirely this curve (`simulation/src/dmx/led_wire.js`). Keep `w` at
-`1.0` unless the white emitter is measured to need its own trim — the
-controller derives white AFTER applying the R/G/B curve, so a second exponent
-compounds and crushes pastels.
+**(d) `gamma{}` — the per-channel correction curve — is NOT pushed. Gamma is
+operator-manual for now.**
+
+The curve (`{r,g,b,w}`, each `1.0`–`3.0`, `1.0` = off) is still the ONE gamma in
+the whole chain: the sim's sACN mapper deliberately emits linear bytes, so the
+strand's perceptual response is entirely this curve. Keep `w` at `1.0` unless the
+white emitter is measured to need its own trim — the controller derives white
+AFTER applying the R/G/B curve, so a second exponent compounds and crushes
+pastels.
 
 ```json
 { "gamma": { "r": 2.2, "g": 2.2, "b": 2.2, "w": 1.0 } }
 ```
 
 Verified live 2026-07-28: a gamma-only write replies
-`{"outcome":"applied","reboot":false}` — it applies WITHOUT a reboot (the
-push path still honours a `needs-reboot` reply if a future build asks for
-one). Exponents are stored as float32, so a written `2.2` reads back as
-`2.200000048` — compare with an epsilon, and round before mirroring.
+`{"outcome":"applied","reboot":false}` — it applies WITHOUT a reboot. Exponents
+are stored as float32, so a written `2.2` reads back as `2.200000048` — compare
+with an epsilon.
 
-Push it from the sim: **Controllers panel → each LED controller card has a
-gamma curve control — four R/G/B/W sliders (1.00–3.00, step 0.05) with a live
-`y = x^γ` curve preview, preset chips (Off / 2.2 sRGB / Punchy, all of which
-hold W at 1.0) and a Link-RGB toggle — plus "⬆ Push gamma", and the LED group
-header has "⬆ Push gamma to all"** (sequential, per-controller
-ok/failed/unreachable). Every push
-goes browser → save-server (`POST /led/gamma-push`) → controller and does
-full-config backup → gamma-only write → read-back verify, then mirrors the
-VERIFIED values into `controllers.yaml`
-(`led.wire.controllerGamma`) and stamps `device.lastGammaPush`. CLI equivalent:
-`simulation/agent_tools/led_gamma_push.cjs` (same shared implementation,
-`simulation/server/led_gamma_service.cjs`).
+**Where gamma is set today: on the controller's own web UI, by the operator.**
+By operator ruling the sim's gamma surface is parked while the narrowed config
+push is being proven:
+
+- **The sim's gamma section still renders, fully DISABLED.** Each LED card keeps
+  its gamma block — four R/G/B/W sliders, the `y = x^γ` curve plot, the preset
+  chips, Link-RGB, the ⬆ push button, the last-push stamp — and every one of them
+  is inert and greyed, with the note *"gamma is disabled until the config push is
+  confirmed — set it on the controller's own web UI for now. The sim never reads
+  gamma back from a device."* The LED group header's fleet gamma entry is inert
+  the same way. There are **no handlers** in that section at all — nothing in it
+  can reach the network.
+- **The sim NEVER reads gamma from a device — permanently.** "Only push, not
+  pull": there is no automatic read, no manual refresh, no TTL cache, no fleet
+  source selection, and no `GET /led/gamma` route. Nothing may re-add one.
+- **The push machinery is kept DORMANT, not deleted.** The save-server route
+  `POST /led/gamma-push` and its service (`simulation/server/led_gamma_service.cjs`)
+  still work and are still tested; the CLI
+  `simulation/agent_tools/led_gamma_push.cjs` is **push-only** (its `--read` leg is
+  gone and the flag now refuses loudly rather than silently pushing a default
+  curve). Nothing in the UI calls any of it.
+- **How gamma comes back:** as an operator-triggered option **after the config
+  push is confirmed** — re-enable the disabled controls, keeping it **push-only**
+  (verified by read-back within the push itself). The pull side does not come back.
+
+The per-card `led.wire.controllerGamma` value in `controllers.yaml` is a
+**preview-only** constant: it models the strand's screen response in the sim and
+changes **zero bytes on the wire** (the mapper is linear either way). Those values
+are still declared per scene and were deliberately KEPT. A card that declares
+nothing previews the wire default — a fixed **linear** response (`1.0` on every
+channel) — so unless a scene's YAML says otherwise, the preview models linear.
 
 ### 4.1.1 `deviceName` — the field EVERY write is validated against
 
@@ -427,8 +533,8 @@ Verified live 2026-08-03 on the `10.x.x.60` board, which shipped with
 
 Consequence for the push: on such a board, *not* writing `deviceName` is not
 "leave the device alone", it is "no config can ever be written". So
-`pushPerOutputUniverses` adds **one** key beyond `strands` + `dmx`, and only
-then: it writes `deviceName` = **the controller card's name, verbatim**
+`buildForcedConfigBody` adds `deviceName` beyond `strands` + `dmx`, and
+only then: it writes `deviceName` = **the controller card's name, verbatim**
 (`deviceNameRepairForPush`, `marsinled_client.js`). No sanitizing, no
 truncation, no substitution — if the card's name is not itself a legal device
 name the push **refuses before the POST** and names the rename to make. A board
@@ -443,11 +549,18 @@ The **gamma push carries the identical repair** (report
 client's `deviceNameRepairForPush` directly (Node `require(esm)` — one
 implementation, no drifting copy) and, when the stored name is invalid, adds
 `deviceName` = the controller card's name verbatim to the `{gamma}` body, or
-refuses before the POST naming the rename. The UI sends the card name with
+refuses before the POST naming the rename. Its caller sends the card name with
 every `POST /led/gamma-push`; the CLI takes `--device-name <card name>`. If a
 gamma write is still rejected with `field=deviceName` on a body that never
 carried the field, the error now explains this §4.1.1 quirk instead of
-parroting the device's misleading message.
+parroting the device's misleading message. (That path is **dormant** while the
+gamma UI is disabled — §4.1(d) — but the repair itself is live everywhere it
+matters: the config push and the DMX toggle both carry it.)
+
+**The repair is load-bearing for the whole write surface.** An invalid stored
+name rejects EVERY write, so the config push (§4.1), the DMX toggle (§4.4) and
+the dormant gamma push all share this one implementation. It is not gamma-specific
+and it did not go anywhere when gamma was parked.
 
 ### 4.2 Validation bounds (reject before sending)
 
@@ -470,7 +583,8 @@ parroting the device's misleading message.
 | `globalBrightness`, `maxMilliamps`, `maxMilliampsEnabled` | Brightness | **live**, no reboot |
 | `strands[]` **any** field (type/count/pin/colorOrder/rgbwMode/enabled/deadPixels) | Leds → reinit | **reboot to apply** (FastLED can't re-register a controller at runtime) |
 | `strands[]` array length change | Reboot | **reboot** |
-| `dmx.*` (enable/protocol/universe/startAddress/timeout) | Dmx | **reboot** (verified: `outcome:"needs-reboot"`) |
+| `dmx.*` (enable/protocol/universe/startAddress/timeout) | Dmx | **reboot** (verified: `outcome:"needs-reboot"`) — including `dmx.enabled` alone, which is what the DMX toggle writes (§4.4) |
+| `gamma.*` | — | **live**, no reboot (verified: `outcome:"applied"`, `reboot:false`) |
 | `boardType`, `networkMode`, `deviceName`, `wifi.*` | Reboot/Wifi | **reboot** |
 
 So a patch that changes strand counts **and** enables DMX will report
@@ -497,10 +611,41 @@ is an open operator decision (§7).
 > are not staged** — they apply on the reboot without a confirm. The sim's
 > patch flow only touches strands/dmx, so no confirm handshake is needed.
 
-### 4.4 Restore to standalone
+### 4.4 The DMX ⏻ toggle (and restoring a board to standalone)
 
-`POST /api/config {"dmx":{"enabled":false}}` → device reboots back to its
-local pattern engine.
+`POST /api/config {"dmx":{"enabled":false}}` → the device reboots back to its
+local pattern engine; `true` → it listens to sACN again. **There is no lighter
+endpoint than `POST /api/config` for `dmx.enabled`** — DMX on/off is a field of
+the persisted config, not a runtime-only route — so this is a configuration write
+and it reboots the board (~11 s, §4.3).
+
+**Each LED card carries a `DMX ⏻` control next to ⬆ Push** that does exactly this,
+and nothing else. One button, one write, one read-back:
+
+pre-write identity gate (§4.1) → one `GET /api/config` + `GET /api/status` →
+`buildDmxToggleBody` → one POST → `awaitReboot` (phase text on the button:
+`writing… / rebooting… / verifying…`) → re-read → `diffDmxToggle` → label + toast.
+
+The body is the board's **own saved `dmx` object with only `enabled` flipped**
+(same sidestep-partial-merge rule as the push), plus `deviceName` under the
+§4.1.1 repair; a snapshot without a `dmx` object is a loud refusal. The verify
+asserts three things and no more — `config.dmx.enabled`, `status.sacn.enabled`,
+and unchanged identity. The toggle claims nothing about strands, swarm or gamma.
+Writing the value the board already holds answers `applied` with no reboot.
+
+There is **no confirm dialog** (operator ruling: no hassle), no fleet toggle, no
+polling, no timer, no cache. The label shows the last confirmed observation —
+`DMX: on` / `DMX: off` / `DMX: ?` before anything was observed — seeded
+opportunistically from reads the panel already performs (the sync sweep, a push
+verify). Any failure is a loud toast and sets the label back to `?`, because the
+read-back is the only truth source.
+
+**How it reconciles with the push:** the push always forces `dmx.enabled: true`;
+the toggle is the manual lever between pushes. A board toggled OFF therefore reads
+`▲ Drift` on the sync chip ("push will force DMX ON") — honest and intended.
+
+**The DMX ⇄ SWARM switch is still the operator's own move in the board's web UI.**
+The sim has no swarm control at all, and the push does not touch swarm (§4.1(b)).
 
 ### 4.5 Push, save, and the sACN feed (what actually makes the LEDs light)
 
@@ -527,8 +672,8 @@ read-back verify it runs, in order:
    route table is read back over the same WS (`{type:'getRoutes'}` →
    `{type:'routes'}`, answered from the live sender maps), and the third check
    renders ✓ only when every expected `(universe → controller IP)` pair exists
-   — spill universes included — and every PARKED universe is ABSENT for this
-   controller. A pair the ENGINE delivers directly counts as confirmed
+   — spill universes included. An output the push DISABLES makes no route claim
+   at all. A pair the ENGINE delivers directly counts as confirmed
    `[engine-direct]` (the one-writer arbitration working); a pair the BENCH
    MIRROR owns is a named one-writer conflict, never a ✓.
 
@@ -579,11 +724,46 @@ reload (`/status.modelStale`) — that needs the deliberate reload runbook,
 `.agent/ops/engine_model_refresh.md`. Universe and mapping-only changes hot-reload
 fine.
 
-**What the sync chip measures.** `● In sync` compares the DEVICE to the
-per-output plan the page would push — device ≡ plan. It says nothing about the
-feed, and its tooltip says so. After a push whose save or notify failed the chip
-stays green (device ≡ plan is literally true) but carries the detail
+**What the sync chip measures.** `● In sync` compares the DEVICE to the FORCED
+plan the page would push — device ≡ plan across the **full** forced array: which
+outputs would be enabled and on which universe, which would be **DISABLED**,
+which **counts** would be rewritten, and whether the board's DMX input is on at
+all. A board with `dmx.enabled: false` reads `▲ Drift` with the detail
+`push will force DMX ON`, because a push *would* change it.
+
+**A board sitting in SWARM is NOT drift.** The swarm clause is gone from the chip:
+the push no longer changes swarm, so a swarm-enabled board with a correct mapping
+and DMX on is genuinely `● In sync`. Swarm membership is the operator's business
+(§4.1(b)). The chip says nothing about the feed, and its
+tooltip says so. After a push whose save or notify failed the chip stays green
+(device ≡ plan is literally true) but carries the detail
 `device ≡ plan, but the sACN feed is STALE — <step> failed: <reason>`.
+
+**What the push verifies — exactly what it pushed, and nothing else.** After the
+reboot wait the push reads `GET /api/status` + `GET /api/config` and asserts
+(`diffForcedConfig`): every index of the pushed `strands` array (`enabled` both
+directions; on enabled outputs `count`, `dmxUniverse` and `dmxStartAddress === 1`;
+on **disabled** outputs that the read-back carries **no integer `dmxUniverse`** —
+D1, proving the all-or-none strip landed on the device), the saved DMX block
+(`dmx.enabled === true`, `dmx.protocol === 0`), the RUNTIME receiver
+(`status.sacn.enabled === true`; `dmxOwnsOutput === true` only when the firmware
+reports the field — an absent field is never read as agreement), and the board's
+identity (`controllerId` unchanged versus the pre-push snapshot).
+
+**Deliberately NOT verified**, because they are deliberately not written: strand
+`type`, `colorOrder`, `rgbwMode`, pins, `dmx.timeoutMs`, `swarm.*`, `gamma`. This
+is a ruling, not an oversight — the sim does not judge fields it does not own, and
+a strand whose chip type or colour order is wrong is an on-device configuration
+matter. A read-back reporting `swarm.enabled: true` produces one informational,
+**non-failing** note on the outcome line (§4.1(b)), never a mismatch.
+
+Every mismatch is quoted
+verbatim in one thrown error; provenance hashes the FULL body into `configHash`.
+**No retries, ever** — the one sanctioned ambiguity resolution is unchanged: a
+LOST write reply falls through to `awaitReboot` + read-back arbitration. A fleet
+push reports a **per-controller results table** (PUSHED / FAILED / SKIPPED with
+the reason) plus a live per-controller progress line; the operator re-pushes a
+failed board after reading its reason.
 
 ---
 
@@ -682,3 +862,10 @@ report under `.agent/reports/`.
   remains open is fleet-scale discovery and allocation, not the collision.)
 - **Pixel cap** — surface the device's total-pixel cap from `/api/config`
   validation so the UI blocks over-assignment before POST.
+- **Re-enabling gamma push** — the machinery is dormant, not deleted (§4.1(d)).
+  When the operator green-lights it after the config push is confirmed, the open
+  product questions are: where a FLEET curve comes from now that source-selection
+  is deleted (one operator-typed curve, or per-card push only — per-card is the
+  smaller re-enable), and whether the parked section keeps showing the per-card
+  preview curve + last-push stamp or collapses to a single line while parked.
+  **The pull side does not come back** under any of those options.

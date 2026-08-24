@@ -7,6 +7,10 @@ const source = fs.readFileSync(
   path.join(process.cwd(), 'app', '(tabs)', 'timeline.tsx'),
   'utf8',
 );
+const prioritySource = fs.readFileSync(
+  path.join(process.cwd(), 'utils', 'timeline_priority_feedback.ts'),
+  'utf8',
+);
 const hookSource = fs.readFileSync(
   path.join(process.cwd(), 'hooks', 'useTimeline.ts'),
   'utf8',
@@ -14,11 +18,13 @@ const hookSource = fs.readFileSync(
 
 describe('Timeline maker ownership contract', () => {
   it('keeps preview read-only while Timeline mutations take priority', () => {
-    expect(source).toContain('Preview is not being shown; save status remains separate below.');
+    // Preview transport failures surface through the operator alert line, kept
+    // separate from save status (legacy banner removed with the dead edit body).
+    expect(source).toContain('saveError: saveFailure?.detail ?? previewTransportError,');
     expect(source).not.toContain('(a valid draft still auto-saves)');
-    expect(source).toContain('PREEMPT LIVE TOUCH + RETRY');
-    expect(source).toContain('Timeline actions have priority: the engine will disarm Live Touch first');
-    expect(source).toContain('Draft preview remains read-only.');
+    expect(source).not.toContain('PREEMPT LIVE TOUCH + RETRY');
+    expect(prioritySource).toContain('PREEMPTING LIVE TOUCH');
+    expect(prioritySource).toContain('TIMELINE TOOK PRIORITY — LIVE TOUCH');
     expect(source).not.toContain('WAITING FOR DISARM');
     expect(source).not.toContain('blocked until DISARM');
     expect(source).toContain('setDraftOverview(null);');

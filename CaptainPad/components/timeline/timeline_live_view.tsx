@@ -9,7 +9,11 @@ import {
 
 import { Palette, Type } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
-import type { TimelineNextCue, TimelineNowOwner } from '@/utils/timeline_operator_model';
+import {
+  timelineOwnerKindLabel,
+  type TimelineNextCue,
+  type TimelineNowOwner,
+} from '@/utils/timeline_operator_model';
 import type { OverviewCue as TimelineCueWire, TimelineState } from '@/utils/timelineApi';
 
 interface TimelineLiveViewProps {
@@ -130,17 +134,13 @@ export function TimelineLiveView({
       <View style={[styles.mainColumn, ipadLayout && styles.mainColumnIpad]}>
         <View style={[styles.card, styles.nowCard]}>
           <View style={styles.cardHeader}>
-            <Text style={styles.eyebrow}>NOW · {nowOwner.kind.toUpperCase()}</Text>
-            <Text style={styles.ownerSource}>
-              {nowOwner.source === 'resolved-segment' ? 'RESOLVED PLAN OWNER' : 'RUNTIME OWNER'}
-            </Text>
+            <Text style={styles.eyebrow}>NOW · {timelineOwnerKindLabel(nowOwner.kind)}</Text>
+            <Text style={styles.ownerSource}>{nowOwner.sourceLabel}</Text>
           </View>
           <Text style={styles.nowTitle} numberOfLines={2}>{nowOwner.label}</Text>
           <View style={styles.ownerMetaRow}>
             <Text style={styles.ownerMeta}>
-              {nowOwner.fromLocal && nowOwner.toLocal
-                ? `${nowOwner.fromLocal}–${nowOwner.toLocal}`
-                : 'Operator-controlled window'}
+              {nowOwner.rangeLabel || 'Operator-controlled window'}
             </Text>
             {countdown ? <Text style={styles.countdown}>{countdown}</Text> : null}
           </View>
@@ -236,8 +236,8 @@ export function TimelineLiveView({
               accessibilityLabel={`Review ${item.cue.label} at ${item.time}`}
             >
               <View style={styles.nextTimeBlock}>
-                <Text style={styles.nextTime}>
-                  {item.relativeDay === 0 ? item.time : `${item.dayLabel.slice(0, 3)} ${item.time}`}
+                <Text style={styles.nextTime} numberOfLines={1}>
+                  {item.rowLabel}
                 </Text>
                 <Text style={styles.nextOrdinal}>NEXT {index + 1}</Text>
               </View>
@@ -508,7 +508,9 @@ function makeStyles(C: Palette) {
       borderTopColor: C.ghostBorder,
     },
     nextTimeBlock: {
-      width: 100,
+      // Wide enough for the longest frame row label ("TOMORROW NIGHT 7:14 PM"),
+      // which replaced the bare clock time in _359 §D.7.
+      width: 190,
     },
     nextTime: {
       ...Type.timelineCue,

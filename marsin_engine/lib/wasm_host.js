@@ -50,6 +50,12 @@ export class WasmHost {
     this.blendFromPtr = 0;
     this.blendToPtr = 0;
 
+    // Reusable 6ch render output block (see renderAll6ch). Allocated
+    // once and grown on demand instead of malloc/free per channel per
+    // frame, so the 40 Hz path does no allocator work at all.
+    this.renderScratchCapacity = 0;
+    this.renderScratchPtr = 0;
+
     // C function bindings
     this._compile = null;
     this._getError = null;
@@ -168,18 +174,61 @@ export class WasmHost {
     }
 
     const outBuf6chSize = this.pixelCount * 6;
-    const outPtr6ch = this.Module._malloc(outBuf6chSize);
+    const outPtr6ch = this._ensureRenderScratch(outBuf6chSize);
+
+    // ZERO FIRST — this is not defensive tidying, it is the output
+    // contract (report `_361` MAJOR 1). The VM does NOT promise to write
+    // every pixel: overrunning the per-pixel instruction budget truncates
+    // the render SILENTLY (red-team `_112` F9/F2), and no C source is
+    // vendored, so that promise is unverifiable from this repo. Whatever
+    // the VM skips is copied out verbatim below, so an un-zeroed block
+    // emits the PREVIOUS frame's / another channel's pixels as colour —
+    // partial corruption that trips no detector (the never-black enforcer
+    // only flags a UNIFORMLY black or red composite). A skipped pixel must
+    // be BLACK. Pixels the VM does write are unaffected — it overwrites
+    // the zeroes. One memset on a reused block also costs less than the
+    // per-frame malloc/free/slice it replaces.
+    this.Module.HEAPU8.fill(0, outPtr6ch, outPtr6ch + outBuf6chSize);
 
     this._renderAllWithMeta6ch(handle, outPtr6ch, this.pixelCount, this.coordPtr, this.metaPtr || 0);
-    
-    const result = new Uint8Array(this.Module.HEAPU8.buffer, outPtr6ch, outBuf6chSize).slice();
-    this.Module._free(outPtr6ch);
+
+    // HEAPU8 is read fresh every call (the view detaches if WASM memory
+    // grows) and windowed to the exact size — the scratch block may be
+    // larger than this model needs.
+    const result = new Uint8Array(this.Module.HEAPU8.buffer, outPtr6ch, outBuf6chSize);
 
     if (outBuffer) {
       outBuffer.set(result);
       return outBuffer;
     }
-    return result;
+    return result.slice();
+  }
+
+  /**
+   * The 6ch render output block, allocated ONCE and grown on demand.
+   *
+   * This used to be a `_malloc`/`_free` pair per channel per frame — at
+   * 40 fps across every mixer channel, thousands of allocator round-trips
+   * a second whose only effect was to hand the VM a block still holding
+   * the last render's pixels (dlmalloc returns the most recently freed
+   * same-size block). Reusing one block makes the residue deterministic
+   * AND removes the churn; renderAll6ch zeroes it before every render.
+   *
+   * @param {number} bufSize bytes needed this frame
+   * @returns {number} pointer to a block of at least `bufSize` bytes
+   */
+  _ensureRenderScratch(bufSize) {
+    if (this.renderScratchCapacity >= bufSize && this.renderScratchPtr) {
+      return this.renderScratchPtr;
+    }
+    const nextPtr = this.Module._malloc(bufSize);
+    if (!nextPtr) {
+      throw new Error(`failed to allocate ${bufSize} bytes of 6ch render scratch memory`);
+    }
+    if (this.renderScratchPtr) this.Module._free(this.renderScratchPtr);
+    this.renderScratchPtr = nextPtr;
+    this.renderScratchCapacity = bufSize;
+    return nextPtr;
   }
 
   setControl(handle, id, v0 = 0.0, v1 = 0.0, v2 = 0.0) {
@@ -283,6 +332,13 @@ export class WasmHost {
 
     this.Module.HEAPU8.set(fromBuffer.subarray(0, bufSize), this.blendFromPtr);
     this.Module.HEAPU8.set(toBuffer.subarray(0, bufSize), this.blendToPtr);
+
+    // Same contract as renderAll6ch: the blend VM is not promised to write
+    // every pixel, and blendOutPtr is a REUSED block, so an unwritten slot
+    // would emit the previous transition's pixels. Zero it so a skipped
+    // pixel is black (report `_361` MAJOR 1); this runs only while a
+    // transition is in flight, never on the steady-state path.
+    this.Module.HEAPU8.fill(0, this.blendOutPtr, this.blendOutPtr + bufSize);
 
     this._renderBlend6ch(blendHandle, this.blendOutPtr, pixelCount,
                          this.coordPtr, this.metaPtr || 0,

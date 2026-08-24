@@ -772,6 +772,32 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   border-radius:10px;padding:12px 16px}
 .pfb-txt{font-weight:700;font-size:12.5px;color:var(--text);line-height:1.5}
 
+/* PARTY SIGNAL SOURCE — which detector is published as audioPartyStrong. */
+.party-source{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
+  display:flex;flex-direction:column;gap:11px}
+.psrc-head{font-weight:700;letter-spacing:1px;font-size:11.5px;color:var(--text);
+  display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.psrc-sub{font-weight:500;letter-spacing:.2px;font-size:10.5px;color:var(--muted)}
+.psrc-opts{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.psrc-btn{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;
+  background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;
+  color:var(--muted);font:inherit;cursor:pointer}
+.psrc-btn:hover{border-color:var(--muted)}
+.psrc-btn.active{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent)}
+.psrc-btn[disabled]{opacity:.5;cursor:default}
+.psrc-name{font-weight:800;letter-spacing:1.2px;font-size:12px;color:var(--text)}
+.psrc-btn.active .psrc-name{color:var(--accent)}
+.psrc-name em{font-style:normal;font-weight:600;letter-spacing:.4px;font-size:10.5px;color:var(--muted)}
+.psrc-desc{font-size:11px;line-height:1.5;color:var(--muted)}
+.psrc-verdict{font-weight:800;letter-spacing:1.1px;font-size:10.5px;padding:4px 10px;border-radius:7px;
+  background:var(--raised);color:var(--muted);border:1px solid var(--border)}
+.psrc-verdict.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.psrc-note{font-size:11px;line-height:1.5;color:var(--muted)}
+.psrc-note.err{color:var(--err);font-weight:700}
+/* Badge on the DERIVED readout's PARTY pill while SIMPLE is the active source. */
+.party-src-badge{font-weight:800;letter-spacing:1.1px;font-size:9px;padding:3px 7px;border-radius:6px;
+  background:var(--accent);color:var(--on-accent);align-self:center}
+
 .party-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
 .party-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
   display:flex;flex-direction:column;gap:11px}
@@ -879,6 +905,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 
 @media (max-width:1180px){
   .party-grid{grid-template-columns:1fr}
+  .psrc-opts{grid-template-columns:1fr}
   .pcal-cards{grid-template-columns:1fr}
   .pm-row{grid-template-columns:76px 1fr 58px 1fr}
 }

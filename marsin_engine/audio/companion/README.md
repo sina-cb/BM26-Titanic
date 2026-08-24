@@ -251,6 +251,42 @@ address, packet count, last value, and decaying send rate:
   `PATCH /audio/config` path as the gains; an out-of-range rate is rejected,
   never clamped. Every other `bpmTracker` key is config-only (restart).
 
+## PARTY signal source
+
+`audioPartyStrong` is the one key the show director, the Timeline's
+`mood calm→party` cue and CaptainPad's SIGNAL chip trust. **Two** detectors run
+in the Companion every hop, and the PARTY tab's **PARTY SIGNAL SOURCE** selector
+picks whose verdict is published:
+
+| Source | Detector | What it is |
+|---|---|---|
+| `qualified` (default) | `PartyModeStrong` | The gated detector this tab tunes: LEVEL **and** a real kick train **and** dance-music spectral shape **and** not-silent, all held continuously for `onSustainMs`. Rejects room noise and far camps. |
+| `simple` | `PartyMode` | The plain band-loudness Schmitt trigger already published as `audioParty` — the PARTY pill in the DERIVED readout. Trips on any loud sound; the escape hatch for a night where the gates will not close. |
+
+**This tab is where the choice lives.** It is persisted into
+`../../config.yaml` → `party:` → `source:` by the same **surgical** line-edit the
+thresholds use (comments survive; a missing `source:` line throws and writes
+nothing). CaptainPad's LIVE Timeline card only *exposes* the same switch — it
+holds no copy of the selection and hides the control entirely if the Companion
+does not report one.
+
+**Precedence — override > source > detectors** (`party_signal_source.js`):
+
+1. the **FAKE TRIGGER** (`partyOverride`, runtime-only) wins over everything;
+2. otherwise the persisted `party.source` picks whose verdict is published;
+3. and that detector's own latch is the value.
+
+Both detectors keep running whatever is selected, so a switch lands on the next
+hop and BOTH verdicts stay visible side by side (`partyState.qualifiedParty` /
+`partyState.simpleParty`). The 5 Hz publish cadence and the engine's staleness
+guard are unchanged either way.
+
+Wire contract: `hello` seeds `partySource` + `partySources`; the 10 Hz
+`partyState` carries `source`, `sources`, `qualifiedParty`, `simpleParty`,
+`simpleLoudness`, `simpleOnThresh`, `simpleOffThresh`; `{type:'setPartySource',
+source}` persists-then-switches and answers with
+`{type:'partySource', source, persisted, error?}`.
+
 ## Known gaps (documented, not fixed)
 
 Recorded here so the UI is not read as claiming more than it does:

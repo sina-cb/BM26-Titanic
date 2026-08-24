@@ -14,8 +14,8 @@
  * shape — a splitter, a mirrored strand, a stand-in board — so it is now a
  * WARNING that names both claimants, the exact contested channel range, and who
  * wins. The refusals that remain are the ones a merge cannot rescue: two port
- * rows on ONE physical output, an output the board does not have, an exhausted
- * park window.
+ * rows on ONE physical output, an output the board does not have, a card that
+ * would leave every output dark.
  *
  * ── THE THREE RULES ────────────────────────────────────────────────────────
  *

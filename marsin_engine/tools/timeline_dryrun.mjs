@@ -68,6 +68,20 @@ const MS_PER_DAY = 86400000;
 // Sun events printed in each simulated day's header.
 const DAY_HEADER_SUN = ['sunrise', 'goldenHourEnd', 'solarNoon', 'goldenHourStart', 'sunset', 'civilDusk'];
 
+// The lifecycle reasons that actually END a party session. Explicit since
+// report 356: the summary used to count EVERY `party-*` lifecycle line as a
+// session end, so operator actions and diagnostics (`party-config`,
+// `party-forced`, `party-cooldown-reset`, `party-plan-save`, and the new
+// `party-window-opened` / `party-rearm`) were reported as sessions ending.
+const PARTY_SESSION_END_REASONS = new Set([
+  'party-window-elapsed',
+  'party-follow-music',
+  'party-signal-lost',
+  'party-disabled',
+  'party-live-audio',
+  'party-not-resumed',
+]);
+
 /**
  * Built-in mood tracks. Each is a list of PARTY windows in playa-local wall
  * clock; outside every window the mood is CALM. `days` (optional) restricts a
@@ -814,7 +828,7 @@ export async function runDryRun(opts, emit) {
           countIn(summary.fires, ev.cueId);
         } else {
           events.push(`◆ ${ev.label}  (${ev.reason}, ${ev.source})`);
-          if (ev.reason && ev.reason.startsWith('party-')) countIn(summary.partySessionEnds, ev.reason);
+          if (PARTY_SESSION_END_REASONS.has(ev.reason)) countIn(summary.partySessionEnds, ev.reason);
         }
       }
 

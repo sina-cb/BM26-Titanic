@@ -79,8 +79,12 @@ import {
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import {
   PARTY_TUNABLES, PARTY_TUNABLE_KEYS, persistPartyConfig,
+  PARTY_SOURCE_KEY, PARTY_SOURCES, DEFAULT_PARTY_SOURCE, parsePartySource,
   percentile, calibrationSuggestions,
 } from './party_tuning.js';
+import {
+  PARTY_OVERRIDE_MODES, partyVerdictOf, resolvePartySignal,
+} from './party_signal_source.js';
 import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
 import {
   loadPartyProfiles,
@@ -1912,8 +1916,25 @@ let clockMs = 0, lastMs = 0;
  * RUNTIME ONLY. Never persisted, never written to config.yaml: a companion
  * restart returns to 'auto'. That is the safety.
  */
-const PARTY_OVERRIDE_MODES = Object.freeze(['auto', 'party', 'off']);
 let partyOverride = 'auto';
+
+/**
+ * SIGNAL SOURCE — WHICH detector's verdict is published as `audioPartyStrong`.
+ *
+ *   'qualified' — PartyModeStrong, the gated detector the PARTY tab tunes
+ *                 (LEVEL+BEAT+SHAPE+QUIET, then a long sustain). The default.
+ *   'simple'    — PartyMode, the band-loudness Schmitt trigger already published
+ *                 as `audioParty` (the DERIVED panel's PARTY pill).
+ *
+ * Unlike the FAKE TRIGGER above this is PERSISTED — it is a real configuration
+ * decision, so it lives in config.yaml's `party:` block (`party.source`) and
+ * survives a restart. The Companion's PARTY tab is where it is chosen;
+ * CaptainPad's LIVE card only exposes the same switch.
+ *
+ * BOTH detectors keep running whatever is selected, so switching is instant and
+ * both verdicts stay side by side in the meters.
+ */
+let partySource = DEFAULT_PARTY_SOURCE;
 
 /**
  * VALIDATION MODE (report 20260725_12 §6.3 step 3): drop `onSustainMs` to 3 s so
@@ -2150,12 +2171,24 @@ const analyzer = new AudioAnalyzer(buildAudioAnalyzerOptions(PRODUCTION_AUDIO_CO
     // BPM is a DERIVED signal (not an operator-designed osc_out tap), so the
     // Companion emits it as a built-in, always-on output right after the
     // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
-    // FAKE TRIGGER: override the PUBLISHED party flag before anything reads or
-    // emits it. The detector above already ran and its own state is untouched,
-    // so `getPartyStrongState()` still reports the TRUTH for the meters while
-    // the wire carries the forced value. Runtime-only (see partyOverride).
-    if (partyOverride !== 'auto') {
-      paramCenter.set('audioPartyStrong', partyOverride === 'party' ? 1 : 0, 'partyOverride');
+    // PARTY PUBLISH — override > source > detectors (party_signal_source.js).
+    // `derived.tick()` above already published the QUALIFIED gate's verdict into
+    // `audioPartyStrong`; this republishes over it only when the SIMPLE source
+    // is selected or the FAKE TRIGGER is engaged. BOTH detectors ran this hop
+    // either way, so their own state is untouched, the meters keep reporting the
+    // TRUTH, and a source switch lands on the very next hop.
+    {
+      // `audioPartyStrong` is a registered key here (DerivedSignals publishes it
+      // every hop), so get() throws rather than returning nothing — this read is
+      // never null and never needs a substitute value.
+      const qualifiedParty = partyVerdictOf(paramCenter.get('audioPartyStrong'));
+      const decision = resolvePartySignal({
+        source: partySource,
+        override: partyOverride,
+        qualifiedParty,
+        simpleParty: partyVerdictOf(safeGet('audioParty')),
+      });
+      if (decision.writer) paramCenter.set('audioPartyStrong', decision.value, decision.writer);
     }
     // Calibration capture (report 20260725_12 §6.2) samples the SAME hop.
     tickPartyCapture();
@@ -2264,14 +2297,28 @@ const PARTY_STATE_MS = 100;
 function buildPartyState() {
   const st = derived.getPartyStrongState(clockMs);
   const published = paramCenter.get('audioPartyStrong');
+  // SIGNAL SOURCE: both detectors' verdicts travel side by side, always — the
+  // operator has to SEE what the other source would be saying before switching.
+  const simpleConfig = derived.getConfig().party;
   return {
     ...st,
     // The two other CPC inputs the gate decides on, shown next to their limits.
     silence: safeGet('audioSilence'),
     bpmLocked: safeGet('audioBpmLocked'),
     bpmConf: safeGet('audioBpmConf'),
+    // SIGNAL SOURCE: which detector is on the wire, and BOTH live verdicts.
+    // `qualifiedParty` duplicates `party` (the gated detector's own latch) under
+    // an unambiguous name now that it is no longer the only candidate.
+    source: partySource,
+    sources: PARTY_SOURCES,
+    qualifiedParty: st.party,
+    simpleParty: partyVerdictOf(safeGet('audioParty')),
+    simpleLoudness: derived.getMetrics().partyLoudness,
+    simpleOnThresh: simpleConfig.onThresh,
+    simpleOffThresh: simpleConfig.offThresh,
     // FAKE TRIGGER: `party` above is the DETECTOR's truth; this is what is
-    // actually on the wire. They differ only while an override is engaged.
+    // actually on the wire. They differ while an override is engaged, and
+    // whenever the SIMPLE source is the one being published.
     overrideMode: partyOverride,
     publishedParty: Number.isFinite(published) ? published >= 0.5 : null,
     // VALIDATION MODE: on, plus the real onSustainMs being held for restore.
@@ -2989,6 +3036,29 @@ function handleMessage(ws, raw) {
         : `  ⚠ party publish override ACTIVE — publishing audioPartyStrong=${partyOverride === 'party' ? 1 : 0} regardless of audio`);
     }
   }
+  // SIGNAL SOURCE: pick WHICH detector is published as audioPartyStrong.
+  // PERSIST FIRST, then switch the runtime: if the surgical write into
+  // config.yaml's `party:` block fails there is no change at all, so the file
+  // and the running companion can never disagree about the operator's choice.
+  else if (m.type === 'setPartySource') {
+    try {
+      const next = parsePartySource(m.source);
+      if (next !== partySource) {
+        persistPartyConfig(ENGINE_CONFIG_PATH, { [PARTY_SOURCE_KEY]: next });
+        partySource = next;
+        console.log(`  🎉 party signal SOURCE → ${partySource} (persisted to config.yaml party.source)`);
+      }
+      broadcast({ type: 'partySource', source: partySource, persisted: true });
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `party signal source → ${partySource.toUpperCase()} (written to config.yaml)`,
+      }));
+    } catch (e) {
+      // The runtime is untouched; tell every client what is STILL selected.
+      broadcast({ type: 'partySource', source: partySource, persisted: false, error: e.message });
+      ws.send(JSON.stringify({ type: 'flash', text: `party source: ${e.message}`, error: true }));
+    }
+  }
   // CALIBRATION CAPTURE (report 20260725_12 §6.2).
   else if (m.type === 'startPartyCapture') {
     try { startPartyCapture(m.kind, m.seconds); }
@@ -3453,6 +3523,10 @@ wss.on('connection', (ws) => {
     partyProfiles: partyProfileState.profiles,
     activePartyProfileId: partyProfileState.activeId,
     partyOverride,
+    // SIGNAL SOURCE: the persisted `party.source` choice + the legal values, so
+    // a reloaded tab paints the right selection without waiting for a partyState.
+    partySource,
+    partySources: PARTY_SOURCES,
     partyValidationMode: validation.on,
     partyCaptures: partyCapResults,
     partySuggestions: buildPartySuggestions(),
@@ -3521,8 +3595,16 @@ function applyEngineConfig() {
     if (typeof cfg.party !== 'object' || Array.isArray(cfg.party)) {
       throw new Error(`config.yaml "party:" must be a mapping of tunables, got ${JSON.stringify(cfg.party)}`);
     }
-    derived.setPartyStrongParams(cfg.party);
-    console.log(`  🎉 party gate tunables applied from config.yaml (${Object.keys(cfg.party).length} keys)`);
+    // `party.source` is a SELECTOR, not a threshold: split it out before the
+    // rest goes to the gate (PartyModeStrong rejects unknown keys, by design).
+    // Present ⇒ validated or we die; absent ⇒ the coded DEFAULT_PARTY_SOURCE,
+    // which is the behaviour that shipped before the selector existed.
+    const { [PARTY_SOURCE_KEY]: configuredSource, ...partyThresholds } = cfg.party;
+    if (configuredSource !== undefined) partySource = parsePartySource(configuredSource);
+    derived.setPartyStrongParams(partyThresholds);
+    console.log(`  🎉 party gate tunables applied from config.yaml (${Object.keys(partyThresholds).length} keys)`);
+    console.log(`  🎉 party signal source: ${partySource}`
+      + (configuredSource === undefined ? ' (default — no party.source in config.yaml)' : ' (config.yaml party.source)'));
   }
   const bootPartyProfile = findPartyProfile(partyProfileState.activeId);
   if (!bootPartyProfile) {

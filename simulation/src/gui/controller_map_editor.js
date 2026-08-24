@@ -49,7 +49,6 @@ import {
   LED_CHANNEL_ORDERS,
   LED_WHITE_MODES,
   ledStrideForOrder,
-  parkedUniverseFor,
   computeLedProjection,
   testAutoPatch,
   clearAllPatches,
@@ -69,6 +68,8 @@ import {
   outputSelectorOptions,
   getDeviceOutputs,
   startPushAll,
+  startGammaPushAll,
+  startDmxOffAll,
   attemptFirstContactPromote,
   syncChipModel,
 } from './led_discovery_panel.js';
@@ -78,13 +79,9 @@ import {
   mergeProbeResults,
   shouldAttemptFirstContact,
 } from '../dmx/controller_status.js';
-import { renderSmokestackSection } from './smokestack_panel.js';
 import { saveHttpUrl } from '../core/save_endpoint.js';
 import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
-import {
-  renderGammaSection,
-  startFleetGammaPush,
-} from './led_gamma_ui.js';
+import { renderGammaSection } from './led_gamma_ui.js';
 import {
   computeLedStrandPatches,
   computeLedUniverseClaims,
@@ -1038,11 +1035,6 @@ function render() {
   const ledControllers = reg.controllers.filter(c => isLedController(c));
   main.appendChild(renderControllerGroup('DMX', 'DMX Controllers', dmxControllers, proj));
   main.appendChild(renderControllerGroup('LED', `${LED_TYPE_LABEL} Controllers`, ledControllers, proj));
-  // Smokestack DMX ⇄ swarm section — only for scenes that actually carry the
-  // rope controllers (smokestack_panel returns null otherwise). Its async
-  // status/job updates repaint the section in place, never this whole pane.
-  const smokestackSection = renderSmokestackSection(reg);
-  if (smokestackSection) main.appendChild(smokestackSection);
   // …and the third state: attached to NOTHING. Rendered as its own quiet card so
   // it is visible and actionable in the same place as the real cards.
   if (unmappedTotal > 0) main.appendChild(renderNoControllerCard(unmapped, unmappedStrands));
@@ -1405,16 +1397,36 @@ function renderControllerGroup(kind, title, controllers, proj) {
     pushAllBtn.onclick = () => startPushAll(ledCtx());
     head.appendChild(pushAllBtn);
 
-    // Fleet gamma: choose ONE displayed curve and write it identically to every
-    // LED controller, with a per-controller result. Independent of mapping.
+    // Fleet gamma: LIVE again (operator re-enable after the config push was
+    // validated on real boards). Each board receives ITS OWN card's curve —
+    // there is no shared "fleet curve" and no source selection, because
+    // harvesting a curve off one card to send everywhere was part of the PULL
+    // side and stays deleted. Gamma is live-apply, so nothing reboots and no
+    // scene file is written.
     const gammaAllBtn = document.createElement('button');
     gammaAllBtn.className = 'cm-btn cm-push-all-gamma';
     gammaAllBtn.textContent = '⬆ Push gamma to all';
-    gammaAllBtn.title = 'Choose one displayed gamma curve, then send those exact RGBW values ' +
-      'to every valid LED controller sequentially, with saved-config verification per controller';
-    gammaAllBtn.disabled = controllers.filter((c) => isValidIp(c.ip)).length === 0;
-    gammaAllBtn.onclick = () => startFleetGammaPush(ledCtx());
+    gammaAllBtn.title = "Push every MarsinLED controller's OWN gamma curve (the sliders on its " +
+      'card) to its board, sequentially, and read each one back to confirm it. Gamma applies ' +
+      'live — no reboot. The sim never reads gamma back off a device.';
+    gammaAllBtn.disabled = controllers.length === 0;
+    gammaAllBtn.onclick = () => startGammaPushAll(ledCtx());
     head.appendChild(gammaAllBtn);
+
+    // ⏻ DMX all: off — the ONE fleet toggle (operator-ordered exception to
+    // `_363` §3's "no fleet toggle"). One-directional by design: DMX comes back
+    // through ⬆ Push / ⬆ Push all / a card's own ⏻ toggle, all of which state
+    // DMX ON. It writes only the boards' dmx block — no swarm, no mapping, and
+    // nothing persisted into the scene.
+    const dmxOffAllBtn = document.createElement('button');
+    dmxOffAllBtn.className = 'cm-btn cm-dmx-off-all';
+    dmxOffAllBtn.textContent = '⏻ DMX all: off';
+    dmxOffAllBtn.title = 'Switch DMX (sACN) input OFF on every MarsinLED board, sequentially ' +
+      '(each reboots ~11 s). The boards then run their own local pattern and the sim stops ' +
+      'driving them. Swarm and the mapping are NOT touched.';
+    dmxOffAllBtn.disabled = controllers.length === 0;
+    dmxOffAllBtn.onclick = () => startDmxOffAll(ledCtx());
+    head.appendChild(dmxOffAllBtn);
   }
   group.appendChild(head);
 
@@ -1702,9 +1714,10 @@ function renderController(controller, proj) {
     cfg.appendChild(whiteSel);
     card.appendChild(cfg);
 
-    // Per-channel gamma: the scene MIRROR of the curve the controller runs
-    // (the one and only gamma in the chain), editable here, with a per-card
-    // push that verifies against the hardware. LED controllers only.
+    // Per-channel gamma: the SOURCE of the curve the controller runs (the one
+    // and only gamma in the chain). The sliders edit it through mutate/undo and
+    // ⬆ Push gamma states it to the board — push only, never a device read.
+    // LED cards only.
     const gammaSection = renderGammaSection(ledCtx(), controller);
     if (gammaSection) card.appendChild(gammaSection);
 
@@ -1713,11 +1726,10 @@ function renderController(controller, proj) {
     const deviceSection = renderDeviceBindingSection(ledCtx(), controller);
     if (deviceSection) card.appendChild(deviceSection);
 
-    // Board outputs: what every PHYSICAL output on this board is doing — driven
-    // by a port, parked (enabled but nothing routed here), or disabled. Rendered
-    // only when the device has actually been read, so the line is never a guess.
-    // This is where a portless enabled output becomes visible BEFORE anyone
-    // opens the push dialog (report 20260725_70 §5.2).
+    // Board outputs: what every PHYSICAL output on this board is doing, and what
+    // the next push would DO to it. Rendered only when the device has actually
+    // been read, so the line is never a guess. This is where an output the push
+    // will darken becomes visible BEFORE anyone opens the push dialog.
     const boardOutputs = getDeviceOutputs(ledCtx(), controller.id);
     if (boardOutputs && boardOutputs.length) {
       const boardRow = document.createElement('div');
@@ -1728,40 +1740,21 @@ function renderController(controller, proj) {
       for (let n = 1; n <= boardOutputs.length; n++) {
         const p = portByOutput.get(n);
         if (p) { parts.push(`${n}←P${p.port}(U${p.universe})`); continue; }
-        const parkedU = parkedUniverseFor(controller, n - 1);
-        if (boardOutputs[n - 1].enabled) {
-          parts.push(parkedU ? `${n} parked U${parkedU}` : `${n} parked (universe on next push)`);
-        } else {
-          parts.push(`${n} disabled`);
-        }
+        parts.push(boardOutputs[n - 1].enabled
+          ? `${n} will be DISABLED by push`
+          : `${n} disabled`);
       }
       const boardLbl = document.createElement('span');
       boardLbl.className = 'cm-led-lbl';
       boardLbl.textContent = 'Board outputs:';
-      boardLbl.title = 'PARKED = enabled on the board with no card port driving it. It keeps a ' +
-        'universe nobody routes to, so it receives no packets and stays dark. The push NEVER ' +
-        'disables an output.';
+      boardLbl.title = 'The sim panel is the source of truth: a push ENABLES exactly the outputs ' +
+        'a card port maps (with the mapped count + universe) and DISABLES every other one. An ' +
+        'output enabled on the board that no port maps WILL go dark on the next push.';
       boardRow.appendChild(boardLbl);
       const boardTxt = document.createElement('span');
       boardTxt.className = 'cm-led-board-outputs-text';
       boardTxt.textContent = parts.join('  ');
       boardRow.appendChild(boardTxt);
-
-      // Re-park: drop the stored parked universes so the next derive allocates
-      // fresh ones (the escape hatch for the span/claim cases in §2.2).
-      if (Array.isArray(controller.parkedOutputs) && controller.parkedOutputs.length) {
-        const reparkBtn = document.createElement('button');
-        reparkBtn.className = 'cm-btn cm-led-repark';
-        reparkBtn.textContent = '↻ re-park';
-        reparkBtn.title = 'Forget the stored parked universes on this card. The next push ' +
-          'allocates fresh ones (lowest free inside the 16-universe window).';
-        reparkBtn.onclick = () => {
-          mutate(`Re-parked unmapped outputs on ${controller.name}`, () => {
-            delete controller.parkedOutputs;
-          });
-        };
-        boardRow.appendChild(reparkBtn);
-      }
       card.appendChild(boardRow);
     }
   }
@@ -1828,9 +1821,9 @@ function renderLedPort(controller, port, proj) {
 
   // ── The physical board output this port drives (report 20260725_70 §5.1) ──
   // The operator's "use output 4 only" case is ONE row with this set to 4: no
-  // filler rows, no unused universes. Outputs 1–3, if enabled on the board,
-  // become PARKED — they keep a universe nobody routes to, so they stay dark
-  // without ever being disabled.
+  // filler rows, no unused universes. Outputs 1–3 are DISABLED by the next push
+  // (force semantics — the sim panel is the source of truth), which the selector
+  // labels and the Board outputs line above both say out loud.
   const devOutputs = getDeviceOutputs(ledCtx(), controller.id);
   const selModel = outputSelectorOptions(controller, port, devOutputs);
   const outSel = document.createElement('select');
@@ -1863,12 +1856,7 @@ function renderLedPort(controller, port, proj) {
       return;
     }
     mutate(`Port ${port.port} → output ${next} on ${controller.name}`, () => {
-      // The output this port now drives can no longer be parked.
       port.output = next;
-      if (Array.isArray(controller.parkedOutputs)) {
-        controller.parkedOutputs = controller.parkedOutputs.filter((p) => p.output !== next);
-        if (controller.parkedOutputs.length === 0) delete controller.parkedOutputs;
-      }
     });
   };
   head.appendChild(outSel);

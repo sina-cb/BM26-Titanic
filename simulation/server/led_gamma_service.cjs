@@ -1,7 +1,14 @@
 /**
- * led_gamma_service.cjs — read / back up / write an LED controller's
- * per-channel gamma curve (the strand "vibrancy" knob) over its HTTP JSON
- * config API (port 80, docs/41).
+ * led_gamma_service.cjs — back up and write an LED controller's per-channel
+ * gamma curve (the strand "vibrancy" knob) over its HTTP JSON config API
+ * (port 80, docs/41).
+ *
+ * PUSH ONLY, and DORMANT. By operator ruling the sim's gamma UI is disabled
+ * and gamma is managed on the controller's own web UI for now; this service is
+ * kept working and tested so the push can be re-enabled in one small slice once
+ * the narrowed config push is confirmed. The standalone gamma READ is gone
+ * permanently — "only push, not pull". (The reads inside the push below are
+ * part of the write discipline: backup, read-back verify, identity check.)
  *
  * This is the ONE implementation of the gamma-push discipline:
  *
@@ -298,22 +305,11 @@ function assertSavedConfigPreserved(host, before, after, nameRepair, backupPath)
   }
 }
 
-/**
- * Read a controller's identity + current gamma. No writes, no backup.
- * @returns {Promise<{ip, controllerId, deviceName, boardId, firmwareSHA, gamma}>}
- */
-async function readGamma(host) {
-  const status = await readStatus(host);
-  const config = await readConfig(host);
-  return {
-    ip: host,
-    controllerId: status.controllerId || null,
-    deviceName: config.deviceName || status.deviceName || null,
-    boardId: status.boardId || null,
-    firmwareSHA: status.firmwareSHA || null,
-    gamma: config.gamma || null,
-  };
-}
+// The standalone gamma READ (`readGamma(host)` — identity + current curve, no
+// write) is DELETED by operator ruling: "only push, not pull". Its two callers
+// went with it (the save-server's `GET /led/gamma` route and the CLI's
+// `--read`). `readStatus` / `readConfig` remain because the PUSH discipline
+// itself needs them — backup, read-back verify, identity check.
 
 /**
  * Push a gamma curve to ONE controller, with the full discipline (backup →
@@ -468,7 +464,6 @@ module.exports = {
   pushGamma,
   pushGammaWithIo,
   readConfig,
-  readGamma,
   readStatus,
   validateGamma,
   writeBackup,

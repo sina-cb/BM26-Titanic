@@ -318,7 +318,20 @@ export function evaluateTick({
         continue;
       }
       if (party !== toVal) continue;      // mood at neither endpoint (n/a for binary)
-      if (next.moodArmed[cue.id] !== true) continue; // never observed `from` → don't fire
+      // ARMED IS A DISARM LATCH, NOT AN OBSERVATION LOG (report 356, F1).
+      //
+      // The operator semantic is "the mood held at `to` for minDwell WHILE
+      // ARMED", and `armed:false` is only ever written by a fire (one fire per
+      // arrival at `to`) — i.e. it means "a session of this cue is live". It is
+      // cleared again at session end (_notePartySessionEnd) and on boot.
+      //
+      // This used to read `!== true`, which ALSO refused an UNDEFINED latch —
+      // a cue the evaluator had simply never seen at `from`. So a plan that went
+      // live with the music ALREADY playing (activate mid-set, engine restart
+      // into a party, a window opening onto a running DJ) could not fire until
+      // the next calm gap: the card said ✓ARMED while the evaluator would never
+      // fire. UNDEFINED now means ARMED; only an explicit `false` blocks.
+      if (next.moodArmed[cue.id] === false) continue; // a live session owns this cue
       // PARTY OVERRIDE (operator authority): while party mode is disabled, a cue
       // that moves the show INTO party cannot fire. Checked AFTER arming and
       // BEFORE the fire bookkeeping so re-enabling later finds the cue still

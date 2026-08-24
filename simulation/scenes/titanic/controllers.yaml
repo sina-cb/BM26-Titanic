@@ -161,7 +161,7 @@ controllers:
       whiteMode: native
       wire:
         foldAmber: true
-        amberRgb: &ref_0
+        amberRgb:
           - 0.9
           - 0.6
           - 0
@@ -223,7 +223,10 @@ controllers:
       whiteMode: native
       wire:
         foldAmber: true
-        amberRgb: *ref_0
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
         controllerGamma:
           r: 2.599999905
           g: 2.599999905
@@ -235,10 +238,23 @@ controllers:
       controllerId: ss_left_right
       boardId: angio4-new
       lastPush:
-        at: '2026-08-23T03:04:12.147Z'
-        outcome: applied
-        firmwareSHA: e046e8842986
-        configHash: 00f12caf5d78f6049de74aafdcf1f9c68563c15898a74d0ca1d326d998374afb
+        at: '2026-08-24T06:00:02.747Z'
+        outcome: needs-reboot
+        firmwareSHA: b05cfb1068ca
+        configHash: bf9dde41b431c985cb07e76d30d3ee2c6196ce776db091e1a404e8bf42d566f5
+        perOutput:
+          - index: 0
+            enabled: true
+            universe: 32
+            count: 40
+          - index: 1
+            enabled: true
+            universe: 33
+            count: 40
+          - index: 2
+            enabled: false
+          - index: 3
+            enabled: false
   - id: 16
     name: RightFrontWall
     ip: 10.1.1.16
@@ -485,10 +501,23 @@ controllers:
       controllerId: ss_right_right
       boardId: angio4-new
       lastPush:
-        at: '2026-08-23T03:04:30.507Z'
+        at: '2026-08-24T03:58:22.838Z'
         outcome: applied
-        firmwareSHA: e046e8842986
-        configHash: e9098153cebd2b50fc9d3075342dfa376fab1cffa272b3962e712e87f22a4bfe
+        firmwareSHA: b05cfb1068ca
+        configHash: c1ff5951311cf079fd497f7e710b740b8d59cf92db3a2b41f602b9625b4bb5a5
+        perOutput:
+          - index: 0
+            enabled: true
+            universe: 36
+            count: 40
+          - index: 1
+            enabled: true
+            universe: 37
+            count: 40
+          - index: 2
+            enabled: false
+          - index: 3
+            enabled: false
   - id: 25
     name: RightLeftRopes
     ip: 10.1.1.66
@@ -515,7 +544,10 @@ controllers:
       whiteMode: native
       wire:
         foldAmber: true
-        amberRgb: *ref_0
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
         controllerGamma:
           r: 1
           g: 1
@@ -527,7 +559,20 @@ controllers:
       controllerId: ss_right_left
       boardId: angio4-new
       lastPush:
-        at: '2026-08-23T03:04:31.755Z'
+        at: '2026-08-24T03:59:51.055Z'
         outcome: applied
-        firmwareSHA: e046e8842986
-        configHash: eb6433b23c89467f255f7d24ea0eb11638b921f4cf7b1d13a712b10109bcb592
+        firmwareSHA: b05cfb1068ca
+        configHash: 1ddb9936c5293454a80e615564c91cb8020991c3a0b5811e4c1f40bc431d0915
+        perOutput:
+          - index: 0
+            enabled: true
+            universe: 34
+            count: 40
+          - index: 1
+            enabled: true
+            universe: 35
+            count: 40
+          - index: 2
+            enabled: false
+          - index: 3
+            enabled: false

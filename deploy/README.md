@@ -25,6 +25,9 @@ python deploy\deploy.py fetch  --machine titanic-int --state                 # c
 Details in ["Deploying from the laptop"](#deploying-from-the-laptop-deploypy)
 below. The rest of this README is the one-time **server bring-up** path.
 
+CaptainPad production and TestFlight releases use a separate workflow:
+[`README_TEST_FLIGHT.md`](README_TEST_FLIGHT.md).
+
 After BIOS, the whole flow is **three commands**, in order:
 
 1. **user** -- `create_titanic_user.ps1` (create the `titanic` account; it

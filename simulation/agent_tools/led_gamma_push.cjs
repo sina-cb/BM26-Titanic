@@ -23,8 +23,14 @@
  *   whites and pastels. Trim W only if the white emitter is measured to need
  *   it, and trim it relative to 1.0.
  *
+ * PUSH ONLY. The `--read` flag is GONE by operator ruling — "only push, not
+ * pull": nothing in this repo reads a controller's gamma back any more. Read
+ * the current curve on the controller's own web UI. (The reads inside the push
+ * are part of the write discipline: backup, read-back verify, identity check.)
+ * The sim's per-card gamma section is disabled for the same reason; this CLI
+ * and the service behind it stay working so the push can be re-enabled quickly.
+ *
  * USAGE (from simulation/agent_tools/):
- *   node led_gamma_push.cjs --host 10.1.1.60 --read
  *   node led_gamma_push.cjs --host 10.1.1.60                 # push default curve
  *   node led_gamma_push.cjs --host 10.1.1.60 --gamma 2.0,2.0,2.0,1.0
  *   node led_gamma_push.cjs --host 10.1.1.60 --revert         # back to 1,1,1,1 (off)
@@ -38,9 +44,9 @@
  * if it is not itself a legal device name. A board whose stored name is valid
  * is never renamed, whatever this flag says.
  *
- * Prefer the sim UI for anything fleet-wide: the Controllers panel has
- * per-controller gamma fields, a per-card PUSH GAMMA, and a "Push gamma to ALL"
- * fleet action that also keeps the scene mirror in step.
+ * The sim UI is NOT an alternative right now: the Controllers panel renders its
+ * gamma section (sliders, presets, per-card push, fleet push) fully disabled
+ * until the operator confirms the narrowed config push.
  *
  * Discovery note: these controllers do not answer ICMP — probe over HTTP
  * (`GET /api/status`), never ping (docs/41 §2).
@@ -52,7 +58,6 @@ const {
   OFF_GAMMA,
   parseGammaSpec,
   pushGamma,
-  readGamma,
   validateGamma,
 } = require('../server/led_gamma_service.cjs');
 
@@ -72,10 +77,8 @@ function die(msg) {
   if (!host) die('--host <ip> is required (HTTP probe only — these controllers ignore ICMP)');
 
   if (has('--read')) {
-    const info = await readGamma(host).catch((e) => die(e.message));
-    console.log(`🔌 ${host} → controller "${info.controllerId || info.deviceName || host}"`);
-    console.log(`   current gamma: ${JSON.stringify(info.gamma)}`);
-    return;
+    die('--read is removed — the gamma PULL path is gone for good ("only push, not pull"). ' +
+      "Read the controller's current curve on its own web UI.");
   }
 
   let target;
@@ -101,7 +104,7 @@ function die(msg) {
   console.log('\nNow mirror it for the sim preview (scenes/<scene>/controllers.yaml, LED controller):');
   console.log('  led:\n    wire:\n      controllerGamma: ' +
     `{ r: ${target.r}, g: ${target.g}, b: ${target.b}, w: ${target.w} }`);
-  console.log('  (the sim Controllers panel does this for you — gamma fields + PUSH GAMMA)');
+  console.log('  (edit that block by hand — the sim panel\'s gamma controls are disabled)');
   console.log(`\nRevert:  node led_gamma_push.cjs --host ${host} --revert`);
   console.log(`Restore: node led_gamma_push.cjs --host ${host} --restore "${result.backupPath}"`);
 })();

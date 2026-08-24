@@ -223,6 +223,27 @@ test('E2 · TIME TRAVEL on an inactive event: static snapshot, steppers, zero li
     const before = await h.state();
     const firedBefore = before.recentFires.length;
 
+    // Prove the CaptainPad's "10 sec before" request through the real HTTP
+    // route, not only against TimelineService in-process.  The pre-roll is a
+    // distinct snapshot, and NEXT must land on the selected cue exactly.
+    const exact = await h.api(
+      'GET',
+      `/timeline/resolve?cueId=c_morning&date=${encodeURIComponent(TODAY())}`,
+    );
+    assert.equal(exact.status, 200, JSON.stringify(exact.data));
+    const preRoll = await h.api('POST', '/timeline/travel', {
+      cueId: 'c_morning', date: TODAY(), leadSeconds: 10,
+    });
+    assert.equal(preRoll.status, 200, JSON.stringify(preRoll.data));
+    assert.equal(preRoll.data.zoom.targetMs, exact.data.atMs - 10000);
+    assert.equal(preRoll.data.zoom.targetLeadSec, 10);
+    assert.equal(preRoll.data.zoom.targetCueLabel, 'Morning');
+    assert.notEqual(preRoll.data.resolved.owner.cueId, 'c_morning');
+
+    const fromPreRoll = await h.api('POST', '/timeline/travel', { step: 'next' });
+    assert.equal(fromPreRoll.status, 200, JSON.stringify(fromPreRoll.data));
+    assert.equal(fromPreRoll.data.resolved.owner.cueId, 'c_morning');
+
     const tv = await h.api('POST', '/timeline/travel', { cueId: 'c_morning', date: TODAY() });
     assert.equal(tv.status, 200, JSON.stringify(tv.data));
     assert.equal(tv.data.zoom.scope, 'travel');

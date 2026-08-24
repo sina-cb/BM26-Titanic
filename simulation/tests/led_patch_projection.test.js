@@ -437,16 +437,3 @@ test('_71: two ports declaring ONE output load and are flagged by the chip check
   assert.equal(dup.port, 1);
   assert.match(dup.message, /ports P1 and P3 both drive output 2/);
 });
-
-test('_71: a stale park on an output a port drives is flagged (the next push drops it)', () => {
-  const reg = createControllerRegistry({
-    controllers: [{
-      id: 1, name: 'T201', ip: '10.1.1.201', type: CONTROLLER_TYPE_LED,
-      led: { order: 'RGBW', startAddr: 1 }, device: DEVICE,
-      ports: [{ port: 1, output: 3, universe: 6, chain: ['lineA'] }],
-      parkedOutputs: [{ output: 3, universe: 27 }],
-    }],
-  });
-  const chips = validateLedManualUniverses(reg, new Map([['lineA', 40]]), new Map());
-  assert.ok(chips.some((w) => w.code === 'led_parked_output_conflict'));
-});

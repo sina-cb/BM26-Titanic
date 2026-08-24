@@ -32,6 +32,16 @@ import {
   PARTY_PLAYLIST_DEFAULT, PARTY_TIMING_DEFAULTS,
 } from '../../lib/timeline/timeline_state.js';
 
+// The TimelineService logs several lines per applied cue. That stdout volume
+// trips a known Windows node:test worker-IPC flake ("Unable to deserialize
+// cloned data" — report 20260725_12 §7) which TRUNCATES the run and reports a
+// phantom file-level failure. Silence the service chatter for this file only,
+// exactly as its sibling party_session_timeline.test.js already does;
+// warnings/errors still surface.
+const _origLog = console.log;
+console.log = () => {};
+process.on('exit', () => { console.log = _origLog; });
+
 const PALETTES = [{ id: 'deep_sea', c1: 0.62, c2: 0.48 }, { id: 'bass_drop', c1: 0.02, c2: 0.9 }];
 const PLAYLISTS = ['ambient', 'party_high', 'party_low', 'baseline_pl'];
 
@@ -356,6 +366,33 @@ test('party status exposes strong-signal sustain progress and readiness facts', 
     triggerArmed: true,
     cooldownClear: true,
   });
+  h.svc.stop();
+});
+
+test('readiness PLAN and DECK are two different facts (report 356, F8 / §4)', async () => {
+  // They used to be the same boolean, so the PLAN and DECK chips could never
+  // disagree — an operator could not tell "the plan is off / out of its days"
+  // from "a human is holding the deck".
+  const h = setup();
+  await h.svc.start();
+  let r = h.svc.getPartyStatus().readiness;
+  assert.equal(r.planActive, true);
+  assert.equal(r.planDriving, true);
+
+  // A HUMAN TAKEOVER: the plan is still on and still in its days — it just
+  // isn't driving.
+  h.svc.takeover();
+  await new Promise((resolve) => setImmediate(resolve));
+  r = h.svc.getPartyStatus().readiness;
+  assert.equal(r.planActive, true, 'PLAN stays ✓ — the plan is on and in its festival days');
+  assert.equal(r.planDriving, false, 'DECK goes ✗ — a human owns the deck');
+
+  // AUTO OFF: the plan itself is switched off, so both drop.
+  await h.svc.resume();
+  await h.svc.setAutopilotEnabled(false);
+  r = h.svc.getPartyStatus().readiness;
+  assert.equal(r.planActive, false);
+  assert.equal(r.planDriving, false);
   h.svc.stop();
 });
 

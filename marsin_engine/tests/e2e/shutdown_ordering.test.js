@@ -87,11 +87,19 @@ test('structural: exactly ONE shutdown blackout send today (blocked-on S-D10: fl
   const shutdownStart = src.indexOf('function shutdown(afterClose = null)');
   const shutdownEnd = src.indexOf('\n  process.on(\'SIGINT\'', shutdownStart);
   const body = src.slice(shutdownStart, shutdownEnd);
-  const sendFrameCalls = body.match(/sacnOut\.sendFrame\(/g) || [];
+  const sendFrameCalls = body.match(/sacnOut\.sendFrame(?:Checked)?\(/g) || [];
   assert.equal(sendFrameCalls.length, 1,
-    'shutdown() must call sacnOut.sendFrame exactly once today — if this count ' +
+    'shutdown() must send the blackout exactly once today — if this count ' +
     'changed, either S-D10 (3x shutdown blackout) landed (update this test to 3 ' +
     'and flip R-D10) or there is an unrelated regression');
+  // The blackout uses the CHECKED send: `sendFrame` is fire-and-forget (a
+  // rejected datagram is only rate-limit-logged), which cannot confirm the
+  // last frame the rig ever gets actually left. Whole-universe zeroing +
+  // confirmation live in lib/shutdown_blackout.js (report 20260823_361 §8);
+  // tests/io/shutdown_blackout.test.js is the behavioural proof.
+  assert.deepEqual(sendFrameCalls, ['sacnOut.sendFrameChecked('],
+    'the shutdown blackout must go out through sendFrameChecked so a failed ' +
+    'delivery is reported instead of assumed');
 });
 
 test('structural: the stale-universe hot-reload blackout is a 3x repeat with a naming log line (engine.js:1747-1763)', () => {

@@ -217,6 +217,86 @@ test('whenPhase gates against its own window even when an earlier phase overlaps
   assert.deepEqual(result.fires, [{ cueId: 'c_party', reason: 'mood' }]);
 });
 
+// ── the ARM LATCH is a DISARM latch (report 356, F1 / P0-1) ─────────────────
+//
+// `moodArmed` is written `false` by a fire and `true` again at session end. An
+// UNDEFINED entry means "the evaluator has simply never had to book this cue" —
+// which is exactly the state a plan is in when it goes live with the music
+// already playing. It used to be treated as NOT ARMED, so party could not fire
+// until the next calm gap while the card said ✓ARMED.
+
+const moodPlan = () => basePlan({
+  phases: { party_night: { start: { clock: '12:00' }, end: { clock: '23:59' } } },
+  cues: [{
+    id: 'c_mood',
+    trigger: { type: 'mood', from: 'calm', to: 'party', minDwellSec: 20, cooldownSec: 0, whenPhase: 'party_night' },
+    action: { type: 'look', look: 'l1' },
+  }],
+});
+
+test('an UNDEFINED arm latch is ARMED: music already playing fires after dwell, not before', () => {
+  const plan = moodPlan();
+  const dayTimes = resolveDayTimes({ plan, now: NOON_UTC, sunEvents: {} });
+  const inPhase = clockToEpochMs('13:00', NOON_UTC, TZ);
+  // The plan goes live with the mood ALREADY at party: no `from` was ever
+  // observed, so moodArmed has no entry for the cue at all.
+  let state = { ...defaultTimelineState(), moodArmed: {}, moodSince: inPhase, prevMood: 1 };
+  assert.equal(state.moodArmed.c_mood, undefined, 'setup: the latch is genuinely absent');
+
+  let r = evaluateTick({ now: inPhase + 5000, plan, state, mood: { party: 1 }, dayTimes });
+  assert.equal(r.fires.length, 0, 'the dwell still has to be served — no instant fire');
+  state = r.state;
+
+  r = evaluateTick({ now: inPhase + 21000, plan, state, mood: { party: 1 }, dayTimes });
+  assert.deepEqual(r.fires, [{ cueId: 'c_mood', reason: 'mood' }],
+    'with the dwell served the cue must fire — an absent latch is ARMED');
+  assert.equal(r.state.moodArmed.c_mood, false, 'and the fire burns the latch');
+});
+
+test('an EXPLICIT false latch still blocks — that is a LIVE session, not an unknown', () => {
+  const plan = moodPlan();
+  const dayTimes = resolveDayTimes({ plan, now: NOON_UTC, sunEvents: {} });
+  const inPhase = clockToEpochMs('13:00', NOON_UTC, TZ);
+  const state = {
+    ...defaultTimelineState(),
+    moodArmed: { c_mood: false }, moodSince: inPhase - 600000, prevMood: 1,
+  };
+  const r = evaluateTick({ now: inPhase, plan, state, mood: { party: 1 }, dayTimes });
+  assert.equal(r.fires.length, 0, 'a live session must not re-fire its own cue');
+});
+
+test('returning to CALM re-arms, so the session-end latch reset lets the next one fire', () => {
+  const plan = moodPlan();
+  const dayTimes = resolveDayTimes({ plan, now: NOON_UTC, sunEvents: {} });
+  const inPhase = clockToEpochMs('13:00', NOON_UTC, TZ);
+  let state = { ...defaultTimelineState(), moodArmed: { c_mood: false }, prevMood: 1 };
+  let r = evaluateTick({ now: inPhase, plan, state, mood: { party: 0 }, dayTimes });
+  assert.equal(r.state.moodArmed.c_mood, true, 'the mood sitting at `from` re-arms');
+  state = r.state;
+  // The flip back to party restarts the dwell clock (moodSince moves on change).
+  r = evaluateTick({ now: inPhase + 1000, plan, state, mood: { party: 1 }, dayTimes });
+  assert.equal(r.fires.length, 0, 'the fresh dwell still has to be served');
+  state = r.state;
+  r = evaluateTick({ now: inPhase + 22000, plan, state, mood: { party: 1 }, dayTimes });
+  assert.deepEqual(r.fires, [{ cueId: 'c_mood', reason: 'mood' }]);
+});
+
+test('a moodSince stamped in the FUTURE is clamped, so a backward clock step re-anchors', () => {
+  // Report 356 §5: the P0-1 dwell RE-ANCHOR writes `moodSince = now`, and the
+  // existing L2 clamp must keep governing any stamp that ends up ahead of `now`
+  // after a backward wall-clock step (no internet on the playa, RTC drift).
+  const plan = moodPlan();
+  const dayTimes = resolveDayTimes({ plan, now: NOON_UTC, sunEvents: {} });
+  const inPhase = clockToEpochMs('13:00', NOON_UTC, TZ);
+  const state = {
+    ...defaultTimelineState(),
+    moodArmed: {}, moodSince: inPhase + 3600000, prevMood: 1,
+  };
+  const r = evaluateTick({ now: inPhase, plan, state, mood: { party: 1 }, dayTimes });
+  assert.equal(r.fires.length, 0, 'the clamped dwell restarts at now — it must not fire yet');
+  assert.equal(r.state.moodSince, inPhase, 'and the future stamp is clamped down to now');
+});
+
 test('mood blip that reverts before dwell does NOT fire', () => {
   const plan = basePlan({
     phases: { party_night: { start: { clock: '12:00' }, end: { clock: '23:59' } } },

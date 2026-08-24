@@ -16,12 +16,17 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "ios": {
+        "buildConfiguration": "Release",
+        "image": "macos-tahoe-26.5-xcode-26.6"
+      }
     }
   },
   "submit": {
     "production": {
       "ios": {
+        "ascAppId": "6769843059",
         "language": "en-US"
       }
     }

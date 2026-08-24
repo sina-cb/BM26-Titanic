@@ -235,11 +235,14 @@ export function zoomBannerModel(zoom: TimelineZoom | null | undefined): ZoomBann
   }
   // TRAVEL. Say plainly that this is the PLAN, not tonight — the 3 am test.
   const where = [zoom.targetDate, zoom.targetLocal].filter(Boolean).join(' · ');
-  const label = zoom.label ? ` · ${zoom.label}` : '';
+  const preRoll = zoom.targetLeadSec && zoom.targetCueLabel
+    ? ` · ${zoom.targetLeadSec} sec before ${zoom.targetCueLabel}`
+    : '';
+  const label = !preRoll && zoom.label ? ` · ${zoom.label}` : '';
   return {
     tone: 'travel',
     title: 'TIME TRAVELING',
-    detail: `${where || 'target'}${label} · viewing the plan, not tonight`,
+    detail: `${where || 'target'}${preRoll}${label} · viewing the plan, not tonight`,
     showSteppers: true,
     deferredText,
   };

@@ -43,9 +43,6 @@ import {
   computeLedProjection,
   ledOutputIndexForPort,
   nextLedOutputNumber,
-  parkedUniverseFor,
-  setParkedUniverse,
-  clearParkedUniverse,
   LED_MAX_OUTPUTS,
   testAutoPatch,
   clearAllPatches,
@@ -1221,64 +1218,54 @@ test('_71 (4): nextLedOutputNumber refuses past the 16-output device ceiling', (
   assert.throws(() => nextLedOutputNumber(card), /already drives all 16 board output/);
 });
 
-test('_71 (5): parkedOutputs round-trips, and a malformed entry THROWS', () => {
-  const r = reg(ledCardTree(
-    [{ port: 1, output: 1, universe: 21, chain: ['sA'] }],
-    { parkedOutputs: [{ output: 3, universe: 27 }] },
-  ));
-  const card = r.controllers[0];
-  assert.deepEqual(card.parkedOutputs, [{ output: 3, universe: 27 }]);
-  // 0-based lookup at the device boundary; 1-based in the file.
-  assert.equal(parkedUniverseFor(card, 2), 27);
-  assert.equal(parkedUniverseFor(card, 0), null);
-  // A parked universe moves the monotonic high-water mark — the device really
-  // subscribes to it, so a later addPort must never hand it to real gear.
-  assert.ok(nextFreeUniverse(r) > 27);
-  // Round-trip through a save.
-  assert.deepEqual(reg(JSON.parse(JSON.stringify(r))).controllers[0].parkedOutputs,
-    [{ output: 3, universe: 27 }]);
-
-  const ports = [{ port: 1, output: 1, universe: 21, chain: [] }];
-  assert.throws(() => reg(ledCardTree(ports, { parkedOutputs: 'nope' })),
-    /parkedOutputs must be a list/);
-  assert.throws(() => reg(ledCardTree(ports, { parkedOutputs: [{ universe: 27 }] })),
-    /parkedOutputs output undefined must be an integer/);
-  assert.throws(() => reg(ledCardTree(ports, { parkedOutputs: [{ output: 3 }] })),
-    /parkedOutputs output 3 universe undefined must be an integer/);
-  assert.throws(() => reg(ledCardTree(ports, {
-    parkedOutputs: [{ output: 3, universe: 27 }, { output: 3, universe: 28 }],
-  })), /duplicate parkedOutputs entry for output 3/);
-  // A DMX card cannot carry parks at all — a DMX port is a chain label.
-  assert.throws(() => reg({
-    controllers: [{ id: 1, name: 'D', ip: '10.0.0.11', type: CONTROLLER_TYPE_DMX,
-      ports: [], parkedOutputs: [{ output: 1, universe: 5 }] }],
-  }), /parkedOutputs is only valid on an LED controller/);
+test('_362: a legacy `parkedOutputs` block LOADS, is DROPPED, and logs once', () => {
+  // Parking is retired: a forced push DISABLES every output no port maps, so an
+  // enabled-but-unrouted output holding a universe cannot survive a push. A
+  // scene still carrying the block must LOAD (never hard-stop the boot) and
+  // drop it, loudly — the same contract as the legacy `device.mac` block.
+  const logged = [];
+  const originalLog = console.log;
+  console.log = (...args) => { logged.push(args.join(' ')); };
+  let card;
+  try {
+    const r = reg(ledCardTree(
+      [{ port: 1, output: 1, universe: 21, chain: ['sA'] }],
+      { parkedOutputs: [{ output: 3, universe: 27 }] },
+    ));
+    card = r.controllers[0];
+    // The retired universe no longer moves the high-water mark either.
+    assert.ok(nextFreeUniverse(r) <= 27);
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal('parkedOutputs' in card, false, 'the retired block is dropped, not carried');
+  const hits = logged.filter((l) => l.includes('parkedOutputs is retired'));
+  assert.equal(hits.length, 1, 'logged exactly once for the card');
+  assert.match(hits[0], /unmapped outputs are now disabled on push/);
+  // Saving the loaded scene persists the drop; re-loading logs nothing.
+  logged.length = 0;
+  console.log = (...args) => { logged.push(args.join(' ')); };
+  try {
+    reg(JSON.parse(JSON.stringify({ controllers: [card] })));
+  } finally {
+    console.log = originalLog;
+  }
+  assert.deepEqual(logged.filter((l) => l.includes('parkedOutputs')), []);
 });
 
-test('_71 (5): a park on an output a PORT drives LOADS (operational), and is flagged elsewhere', () => {
-  const r = reg(ledCardTree(
-    [{ port: 1, output: 3, universe: 21, chain: ['sA'] }],
-    { parkedOutputs: [{ output: 3, universe: 27 }] },
-  ));
-  // It loads — the operator fixes it in the pane; validateLedManualUniverses
-  // raises led_parked_output_conflict and the next push drops the stale park.
-  assert.deepEqual(r.controllers[0].parkedOutputs, [{ output: 3, universe: 27 }]);
-});
-
-test('_71 (5): setParkedUniverse / clearParkedUniverse are the ONE place parks move', () => {
-  const card = { name: 'c', ports: [] };
-  setParkedUniverse(card, 2, 27);
-  setParkedUniverse(card, 0, 25);
-  assert.deepEqual(card.parkedOutputs, [{ output: 1, universe: 25 }, { output: 3, universe: 27 }]);
-  setParkedUniverse(card, 2, 28);                       // move, never duplicate
-  assert.deepEqual(card.parkedOutputs, [{ output: 1, universe: 25 }, { output: 3, universe: 28 }]);
-  assert.equal(clearParkedUniverse(card, 0), true);
-  assert.equal(clearParkedUniverse(card, 0), false);
-  assert.deepEqual(card.parkedOutputs, [{ output: 3, universe: 28 }]);
-  assert.equal(clearParkedUniverse(card, 2), true);
-  assert.equal('parkedOutputs' in card, false, 'an empty list is dropped, not left as []');
-  assert.throws(() => setParkedUniverse(card, -1, 5), /outputIndex -1 must be in 0–15/);
-  assert.throws(() => setParkedUniverse(card, 2, 0), /universe 0 must be an integer/);
+test('_362: a legacy block on a DMX card is dropped too — no type refusal survives', () => {
+  const originalLog = console.log;
+  console.log = () => {};
+  let r;
+  try {
+    r = reg({
+      controllers: [{ id: 1, name: 'D', ip: '10.0.0.11', type: CONTROLLER_TYPE_DMX,
+        ports: [], parkedOutputs: [{ output: 1, universe: 5 }] }],
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal('parkedOutputs' in r.controllers[0], false);
 });
 
 test('_71: flipping a card DMX → LED materializes `output`; LED → DMX strips it', () => {
@@ -1299,11 +1286,9 @@ test('_71: flipping a card DMX → LED materializes `output`; LED → DMX strips
   assert.deepEqual(c.ports.map((p) => p.output), [1, 3]);
   assert.equal(ledOutputIndexForPort(c.ports[1]), 2);
   // Flipping back strips it: a DMX port number is a chain label, and the loader
-  // refuses to re-parse `output`/`parkedOutputs` on a DMX card.
-  setParkedUniverse(c, 1, 30);
+  // refuses to re-parse `output` on a DMX card.
   setControllerType(c, CONTROLLER_TYPE_DMX);
   assert.equal('output' in c.ports[0], false);
-  assert.equal('parkedOutputs' in c, false);
   assert.doesNotThrow(() => reg(JSON.parse(JSON.stringify(r))));
 });
 

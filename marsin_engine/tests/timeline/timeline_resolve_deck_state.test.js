@@ -649,3 +649,107 @@ test('B1: every ribbon segment agrees with a direct resolver probe at its own st
     }
   }
 });
+
+// ── P1-5 (report 356, F4) — PHASE-BASELINE cues ─────────────────────────────
+//
+// A `kind: ambient` cue triggered by a PHASE is the plan's background layer for
+// that phase (the Party Window baseline the maker authors next to the window).
+// It has no clock/sun fire time, so the selection core never saw it: the ribbon
+// drew "Default (from deck) 00:00→24:00" while the phase cue actually owned the
+// deck, and a restart mid-window landed on the default cue with no way back —
+// a phase trigger is rising-edge, once a night.
+
+const PW_DAY0 = '2026-08-30';   // festival day 0 of START_DATE
+const PW_DAY1 = '2026-08-31';
+const pwAt = (dateKey, hhmm) => dateClockToEpochMs(dateKey, hhmm, TZ);
+
+// A wrapping Party Window (21:00 → 09:00) with its baseline authored for the
+// night that STARTS on day 0, plus a defaultCue to fall back to.
+function makeWindowPlan({ baselineDays = [0] } = {}) {
+  return validateShowPlan({
+    schemaVersion: 2,
+    name: 'window_resolver_plan',
+    location: { lat: 40.7864, lon: -119.2065, tz: TZ, elevationM: 1190 },
+    festival: { startDate: START_DATE, days: 4 },
+    autopilot: {
+      enabled: true, playlist: 'baseline_pl', delay_s: 45, shuffle: false,
+      target: { channel: 'deck', id: null }, mood: true,
+    },
+    phases: { pw: { start: { clock: '21:00' }, end: { clock: '09:00' } } },
+    looks: { pwb: { playlist: 'pwb_pl' }, ambient: { playlist: 'ambient_pl' } },
+    defaultCue: { label: 'Default (from deck)', action: { type: 'look', look: 'ambient' } },
+    cues: [{
+      id: 'pwb',
+      label: 'Party Window baseline',
+      kind: 'ambient',
+      days: baselineDays,
+      trigger: { type: 'phase', phase: 'pw' },
+      action: { type: 'look', look: 'pwb' },
+    }],
+  });
+}
+
+test('P1-5: a phase baseline OWNS its window, on both sides of midnight', () => {
+  const plan = makeWindowPlan();
+  const before = resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY0, '20:30') });
+  assert.equal(before.owner.kind, 'defaultCue', 'before the window the default cue fills');
+
+  const evening = resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY0, '22:00') });
+  assert.equal(evening.owner.kind, 'cue');
+  assert.equal(evening.owner.cueId, 'pwb');
+  assert.equal(evening.playlist, 'pwb_pl');
+  assert.equal(evening.fireMs, pwAt(PW_DAY0, '21:00'), 'its fire time is the NIGHT START');
+
+  const afterMidnight = resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY1, '03:00') });
+  assert.equal(afterMidnight.owner.cueId, 'pwb',
+    'the same window, seen from the other side of midnight');
+  assert.equal(afterMidnight.fireMs, pwAt(PW_DAY0, '21:00'));
+
+  const morning = resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY1, '09:30') });
+  assert.equal(morning.owner.kind, 'defaultCue', 'once the window closes the default cue is back');
+});
+
+test('P1-5: a phase baseline is day-targeted by the NIGHT it belongs to', () => {
+  // Authored for the night that starts on day 1: at 03:00 on day 1 the phase
+  // clock is active, but that window opened on day 0 — not this cue night.
+  const plan = makeWindowPlan({ baselineDays: [1] });
+  assert.equal(resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY1, '03:00') }).owner.kind, 'defaultCue');
+  assert.equal(resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY1, '22:00') }).owner.cueId, 'pwb');
+});
+
+test('P1-5: a phase baseline never displaces a LIVE program hold', () => {
+  // Ambient loses to a running program, exactly like the arbiter's live rule.
+  const plan = validateShowPlan({
+    ...makeWindowPlan(),
+    cues: [
+      ...makeWindowPlan().cues,
+      {
+        id: 'c_show',
+        label: 'Scheduled show',
+        kind: 'program',
+        trigger: { type: 'clock', at: '20:00' },
+        action: { type: 'look', look: 'ambient' },
+        hold: { min: 180 },                        // 20:00 → 23:00
+      },
+    ],
+  });
+  const inHold = resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY0, '22:00') });
+  assert.equal(inHold.owner.cueId, 'c_show', 'the program keeps the deck for its whole hold');
+  assert.equal(inHold.controller, 'program');
+  const afterHold = resolveDeckStateAt({ plan, atMs: pwAt(PW_DAY0, '23:30') });
+  assert.equal(afterHold.owner.cueId, 'pwb', 'and hands it to the window baseline afterwards');
+});
+
+test('P1-5: the RIBBON shows the window baseline, 21:00→24:00 and 00:00→09:00', () => {
+  const plan = makeWindowPlan();
+  const day0 = buildDaySegments({ plan, dateKey: PW_DAY0 });
+  const evening = day0.find((s) => s.owner.cueId === 'pwb');
+  assert.ok(evening, `day 0 ribbon must carry the baseline, got ${JSON.stringify(day0.map((s) => s.owner.label))}`);
+  assert.equal(evening.fromLocal, '21:00');
+  assert.equal(evening.toLocal, '24:00');
+
+  const day1 = buildDaySegments({ plan, dateKey: PW_DAY1 });
+  assert.equal(day1[0].owner.cueId, 'pwb', 'day 1 opens still inside the window');
+  assert.equal(day1[0].fromLocal, '00:00');
+  assert.equal(day1[0].toLocal, '09:00');
+});

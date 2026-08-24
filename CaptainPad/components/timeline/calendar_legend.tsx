@@ -1,21 +1,68 @@
+/**
+ * CalendarLegend — ONE legend, shared by the week strip and the DAY chart
+ * (report _359 §D.2/§D.7).
+ *
+ * Every structural marker the calendars draw has a row here, in the order
+ * `FRAME_LEGEND_IDS` fixes, and nothing is drawn that has no row. The previous
+ * legend said "☾ NIGHT" for the sunset colour and gave SUNRISE the same amber
+ * as PROGRAM cue blocks, while the strip quietly added golden-hour and
+ * civil-dusk ticks that appeared nowhere (C-02).
+ */
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 
+import {
+  FRAME_LEGEND_IDS,
+  FRAME_PARTY_COLOR,
+  FRAME_SUN_COLORS,
+  type FrameLegendId,
+} from './day_frame_logic';
 import { kindColor } from './timelineTemplate';
+
+/** Row copy + glyph per legend id. Colours that depend on the palette resolve
+ *  at render time (NOW rides `C.error` so it re-themes — §D.2). */
+const LEGEND_ROWS: Record<FrameLegendId, { symbol: string; label: string }> = {
+  now: { symbol: '—', label: 'NOW' },
+  sunset: { symbol: '- -', label: 'SUNSET' },
+  sunrise: { symbol: '- -', label: 'SUNRISE' },
+  duskDawn: { symbol: '- -', label: 'DUSK / DAWN' },
+  party: { symbol: '▮', label: 'PARTY WINDOW' },
+  program: { symbol: '●', label: 'PROGRAM' },
+  mood: { symbol: '●', label: 'MOOD' },
+  ambient: { symbol: '●', label: 'AMBIENT' },
+};
+
+function legendColor(id: FrameLegendId, C: Palette): string {
+  switch (id) {
+    case 'now': return C.error;
+    case 'sunset': return FRAME_SUN_COLORS.sunset;
+    case 'sunrise': return FRAME_SUN_COLORS.sunrise;
+    case 'duskDawn': return FRAME_SUN_COLORS.civilDusk;
+    case 'party': return FRAME_PARTY_COLOR;
+    case 'program': return kindColor('program', C);
+    case 'mood': return kindColor('mood', C);
+    case 'ambient': return kindColor('ambient', C);
+    default: return C.secondary;
+  }
+}
 
 export function CalendarLegend() {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
   return (
     <View style={styles.row} accessibilityLabel="Calendar legend">
-      <LegendItem symbol="☀" label="SUNRISE" color="#f5a623" styles={styles} />
-      <LegendItem symbol="☾" label="NIGHT" color="#5b6cf5" styles={styles} />
-      <LegendItem symbol="●" label="PROGRAM" color={kindColor('program', C)} styles={styles} />
-      <LegendItem symbol="▮" label="PARTY WINDOW" color="#b56dff" styles={styles} />
-      <LegendItem symbol="●" label="AMBIENT" color={kindColor('ambient', C)} styles={styles} />
+      {FRAME_LEGEND_IDS.map((id) => (
+        <LegendItem
+          key={id}
+          symbol={LEGEND_ROWS[id].symbol}
+          label={LEGEND_ROWS[id].label}
+          color={legendColor(id, C)}
+          styles={styles}
+        />
+      ))}
     </View>
   );
 }

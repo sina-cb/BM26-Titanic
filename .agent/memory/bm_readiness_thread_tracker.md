@@ -19333,3 +19333,18 @@ memory checkpoint: wave-state-20260820 (EOD rewrite).
 - LANDED+VERIFIED (coordinator): smokestack switch speed wave in private CLI — canary → parallel POST/reboot/verify for the rest, redundant survival reboot skipped when the mutation already rebooted, settle 2 s, journal lock. Private smokestack tests 112 pass/1 skip (both agents' runner.py edits coexist: fingerprint hunk + `_apply_followers_parallel`). Mock timing to-dmx 71→30 s, to-swarm 88→35 s; est. live 45–75 s. Timed live run still blocked by the asset re-release (3/4 boards refuse on asset contract). Private deployment README: +`BM26_SMOKESTACK_PYTHON` row; all smokestack env wiring verified live.
 - LANDED+VERIFIED: smokestack switch card v2 (`_354` Fable spec → `_355` Opus impl): GOOD/NEEDS RE-RELEASE/NEEDS REFLASH/UNREACHABLE chips, SWITCH TO DMX/SWARM two-step, CLI-parsed run timeline, verdict banner, REPAIR ASSETS (new private CLI `re-release --names`, 13 tests); sim smokestack suites 176/176, combined 219/219; 4 real defects fixed (refused dry-run armed APPLY, first-refusal parse miss, lastPacketAgeMs -1 as live feed, hidden vs display:grid). Agent ran+stopped the stack itself under operator authorization (06:22→06:35Z).
 - BLOCKED (round trips 0/4 legs): (1) assets still non-canonical on .61/.62/.65 — canonical keyed map `swarm_titanic_rop_b5fc8e9e.json` is a baked gitignored artifact absent from the private tree → bm26-titanic data pack must be baked before `re-release` can run; (2) `.65 ss_right_right` UNREACHABLE (confirmed by coordinator re-census). Coordinator redacted a TEST-NET sinkhole address in `_354` (report-ip rule).
+
+## 2026-08-23 overnight — party / LIVE tab bulletproofing (uncommitted)
+- Fable plan `_356` → Opus engine + CaptainPad → Sonnet live verify → Opus defect
+  fixes (A: session end restores phase baseline for every plan; B: FORCE
+  re-entrancy 409) → coordinator live re-verify 13/13. Handoff `_358`.
+- Timeline-tab review-only Fable pass `_357` (27 findings, two EDIT PLAN P0s:
+  T-01 durationMin stamping, T-02 party-cue rewrite) — nothing changed from it.
+- Wire: `/timeline/state.deckOwner` + `.partyWindow`; `/party-config.cueError`,
+  `partyWindowOpensAtMs/ClosesAtMs`, `readiness.planActive` vs `planDriving`.
+- Open design call: party routes not passcode-gated in performance mode
+  (takeover is); pad greys FORCE/END in performance mode.
+- Stack left running on the final engine (coordinator's launcher); no commits.
+
+## 2026-08-23 midday (coordinator)
+- Wrap report `_360`: calendar frames + NOW line live-verified; party source switch round-trip PASS; colour anomaly `_361` root causes fixed (test-suite sACN wall to TEST-NET-1, wasm scratch zeroing −12.7%/frame); shutdown blackout now type-blind + delivery-confirmed + fail-loud; multi_agent.md sACN Dest column; gitleaks RFC 5737 allowlist. All uncommitted. Running engine picks up wasm+blackout fixes at next restart (watchdog handles). Open: uv_test.yaml restore-vs-test-update, `_357` T-01/T-02, party-route passcode gate, `_359` S3 (operator-cancelled).

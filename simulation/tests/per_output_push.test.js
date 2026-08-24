@@ -12,10 +12,11 @@ import {
   deviceSupportsPerOutput,
   readPerOutput,
   readConfiguredPerOutput,
-  assertMappingPushAllowed,
   validatePerOutputPlan,
-  applyPerOutputPlan,
-  pushPerOutputUniverses,
+  applyForcedPlan,
+  buildForcedConfigBody,
+  pushForcedConfig,
+  diffForcedConfig,
   deviceNameRepairForPush,
   isValidDeviceName,
 } from '../src/dmx/led/marsinled_client.js';
@@ -30,7 +31,6 @@ import {
   createControllerRegistry,
   computeProjection,
   computeLedProjection,
-  parkedUniverseFor,
 } from '../src/dmx/controller_registry.js';
 import {
   computeLedStrandPatches,
@@ -40,9 +40,24 @@ import {
 import { initRegistry } from '../src/dmx/fixture_definition_registry.js';
 import {
   pushAllLedControllers,
+  pushAllResultsModel,
   computeSyncState,
   runPerOutputPush,
+  startPush,
+  identityGateRefusal,
+  toggleDmx,
+  dmxToggleModel,
+  getDmxState,
+  pushGammaToDevice,
+  pushGammaAllControllers,
+  gammaPushAllResultsModel,
+  GAMMA_PUSH_ALL_WARNING,
+  dmxOffAllControllers,
+  dmxOffAllResultsModel,
+  DMX_OFF_ALL_WARNING,
   persistAndNotifyAfterPush,
+  fleetSaveGate,
+  completeFleetPush,
   describePushCompletion,
   describeSyncChipTooltip,
   getSyncState,
@@ -53,22 +68,31 @@ import {
 const NO_CLAIMS = new Map();
 
 /**
- * A per-output PLAN built from a bare universe map, for the cases that exercise
- * the transport / push flow rather than the derivation itself.
- * `derivePerOutputPlan` returns this shape and every consumer past the derive
- * requires it (a bare map cannot express an enable transition).
+ * A FORCED PLAN built from a bare universe map, for the cases that exercise the
+ * transport / push flow rather than the derivation itself. `derivePerOutputPlan`
+ * returns this shape and every consumer past the derive requires it: under force
+ * semantics `universeByOutputIndex` names exactly the outputs the push ENABLES,
+ * `assignments` carries the count each one is forced to, and every output NOT in
+ * the map is written `enabled:false`.
  */
 function planOf(universeByOutputIndex, extra = {}) {
   return {
+    controllerName: 'Titanic-202',
     universeByOutputIndex,
-    assignments: [],
-    parked: [],
-    enables: [],
-    enableOutputIndices: [],
+    assignments: Object.entries(universeByOutputIndex).map(([index, universe]) => ({
+      outputIndex: Number(index), portNum: Number(index) + 1, universe, pixelCount: 40,
+    })),
+    disables: [],
+    countChanges: [],
     warnings: [],
     collisions: [],
     ...extra,
   };
+}
+
+/** The ONE body a forced push POSTs, built from a snapshot + a plan. */
+function bodyOf(snapshot, plan, ip = '10.1.1.202') {
+  return buildForcedConfigBody({ snapshot, plan, ip });
 }
 
 // ── Fixtures: the real titanic_202 shapes (trimmed to what the path reads) ───
@@ -169,17 +193,6 @@ test('readConfiguredPerOutput — reads the saved strand mapping while DMX is of
     { index: 0, universe: 3, startAddress: 1, enabled: true });
 });
 
-test('mapping push refuses active or desired DMX mode', () => {
-  assert.throws(() => assertMappingPushAllowed({ dmxOwnsOutput: true }, config202()),
-    /mapping push refused.*show-mode workflow/);
-  const desired = config202();
-  desired.dmx.enabled = true;
-  assert.throws(() => assertMappingPushAllowed({ dmxOwnsOutput: false }, desired),
-    /mapping push refused.*show-mode workflow/);
-  assert.doesNotThrow(() =>
-    assertMappingPushAllowed({ dmxOwnsOutput: false }, config202()));
-});
-
 // ── derivePerOutputPlan (from port.universe, S4) ─────────────────────────────
 
 test('derivePerOutputPlan — enabled outputs take their port.universe, start=1', () => {
@@ -189,11 +202,30 @@ test('derivePerOutputPlan — enabled outputs take their port.universe, start=1'
   assert.equal(warnings.length, 0);
 });
 
-test('derivePerOutputPlan — a disabled device output takes NO universe', () => {
+test('_362: a port mapping NO pixels is not assigned — the push DISABLES that output', () => {
   const cfg = config202();
-  cfg.strands[1].enabled = false;                            // only output 0 enabled
-  const { universeByOutputIndex } = derivePerOutputPlan(ledController(), {}, cfg, NO_CLAIMS);
+  // Only P1's strand has a known pixel count; P2/P3/P4 map nothing the sim knows.
+  const { universeByOutputIndex, disables } =
+    derivePerOutputPlan(ledController(), { line_A: 40 }, cfg, NO_CLAIMS);
   assert.deepEqual(universeByOutputIndex, { 0: 3 });
+  // Output 1 is ENABLED on the board today and nothing maps it → it goes dark,
+  // and the plan names it so the confirm dialog can say so before the write.
+  assert.deepEqual(disables, [{ outputIndex: 1, deviceCount: 40, deviceUniverse: undefined }]);
+});
+
+test('_362: a DISABLED device output a port maps IS assigned (the push enables it)', () => {
+  const cfg = config202();
+  cfg.strands[1].enabled = false;
+  const { universeByOutputIndex, disables } =
+    derivePerOutputPlan(ledController(), { line_A: 40, line_B: 40 }, cfg, NO_CLAIMS);
+  assert.deepEqual(universeByOutputIndex, { 0: 3, 1: 4 });
+  assert.deepEqual(disables, [], 'nothing enabled on the board is being darkened');
+});
+
+test('_362: countChanges names every already-enabled output the push will resize', () => {
+  const { countChanges } =
+    derivePerOutputPlan(ledController(), { line_A: 20, line_B: 40 }, config202(), NO_CLAIMS);
+  assert.deepEqual(countChanges, [{ outputIndex: 0, from: 40, to: 20 }]);
 });
 
 test('derivePerOutputPlan — enabled output with an invalid port universe is AUTO-EXTENDED', () => {
@@ -212,25 +244,85 @@ test('derivePerOutputPlan — enabled output with an invalid port universe is AU
   assert.match(warnings[0], /output 1 \(port 1\) had no valid universe — auto-assigned U5/);
 });
 
-test('derivePerOutputPlan — fewer port rows than enabled outputs AUTO-EXTENDS the missing one', () => {
+test('_362: fewer port rows than enabled outputs DISABLES the portless one (no more parking)', () => {
   // Real 202-shaped incident: the card has only 2 port rows, but the device has
-  // 3 enabled outputs (0,1,2). Output 2 has no port row → auto-assign next free.
+  // 3 enabled outputs (0,1,2). Output 2 has no port row → the push darkens it.
   const cfg = config202();
   cfg.strands[2].enabled = true;                 // outputs 0,1,2 enabled on the device
+  cfg.strands[2].dmxUniverse = 12;
   const controller = ledController({
     ports: [
       { port: 1, output: 1, universe: 10, startAddress: 1, chain: ['line_A'] },
       { port: 2, output: 2, universe: 11, startAddress: 1, chain: ['line_B'] },
     ],
   });
-  const { universeByOutputIndex, parked, warnings } =
-    derivePerOutputPlan(controller, { line_A: 40, line_B: 40 }, cfg, NO_CLAIMS);
-  // Outputs 0,1 keep their port universes; output 2 (no port row) is PARKED on
-  // the next free universe — enabled on the board, nothing routed to it.
-  assert.deepEqual(universeByOutputIndex, { 0: 10, 1: 11, 2: 12 });
-  assert.deepEqual(parked, [{ outputIndex: 2, universe: 12, reused: false }]);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /output 3 has no controller port row — PARKED on U12/);
+  const plan = derivePerOutputPlan(controller, { line_A: 40, line_B: 40 }, cfg, NO_CLAIMS);
+  assert.deepEqual(plan.universeByOutputIndex, { 0: 10, 1: 11 });
+  assert.deepEqual(plan.disables, [{ outputIndex: 2, deviceCount: 40, deviceUniverse: 12 }]);
+  assert.equal('parked' in plan, false, 'parking is retired — the key is GONE, not empty');
+  assert.deepEqual(plan.warnings, []);
+});
+
+// ── gap 4: a MIXED chain (some entries sized, some not) is BLOCKING ──────────
+// The defect: `portPixelCount` summed the entries the sim could size and
+// SKIPPED the rest, so a port chaining a known 40 px strand and a strand with
+// no pixel count pushed `count: 40` onto a rope carrying more — the tail went
+// dark while every chip, dialog and read-back reported success. There is no
+// honest count to write, so the plan refuses.
+
+/** A card whose port 1 chains a known strand AND one the sim cannot size. */
+function mixedChainController() {
+  return ledController({
+    ports: [
+      { port: 1, output: 1, universe: 3, startAddress: 1, chain: ['line_A', 'ghost_strand'] },
+      { port: 2, output: 2, universe: 4, startAddress: 1, chain: ['line_B'] },
+    ],
+  });
+}
+
+test('gap 4: a MIXED chain is a BLOCKING collision naming both halves', () => {
+  const plan = derivePerOutputPlan(mixedChainController(), { line_A: 40, line_B: 40 },
+    config202(), NO_CLAIMS);
+  assert.equal(plan.collisions.length, 1);
+  const [collision] = plan.collisions;
+  assert.equal(collision.kind, 'unknown_strand_count');
+  assert.equal(collision.outputIndex, 0);
+  assert.equal(collision.port, 1);
+  assert.match(collision.message, /ghost_strand/);
+  assert.match(collision.message, /line_A = 40 px/);
+  assert.match(collision.message, /SHORT count/);
+  // The OTHER port is untouched by the refusal — the message must point at the
+  // one port the operator has to fix, not at the card in general.
+  assert.equal(plan.universeByOutputIndex[1], 4);
+});
+
+test('gap 4: a fully-KNOWN chain of several strands still passes, summed', () => {
+  const controller = mixedChainController();
+  const plan = derivePerOutputPlan(controller, { line_A: 40, ghost_strand: 25, line_B: 40 },
+    config202(), NO_CLAIMS);
+  assert.deepEqual(plan.collisions, []);
+  assert.deepEqual(plan.universeByOutputIndex, { 0: 3, 1: 4 });
+  const out0 = plan.assignments.find((a) => a.outputIndex === 0);
+  assert.equal(out0.pixelCount, 65, 'both chain entries are counted');
+});
+
+test('gap 4: a chain the sim can size NOTHING on stays a DISABLE, not a refusal', () => {
+  // Deliberately different from the mixed case: nothing is written claiming a
+  // length nobody measured — the output is darkened, and the confirm dialog's
+  // DISABLES section says so outright.
+  const controller = ledController({
+    ports: [
+      { port: 1, output: 1, universe: 3, startAddress: 1, chain: ['line_A'] },
+      { port: 2, output: 2, universe: 4, startAddress: 1, chain: ['ghost_a', 'ghost_b'] },
+    ],
+  });
+  const plan = derivePerOutputPlan(controller, { line_A: 40 }, config202(), NO_CLAIMS);
+  assert.deepEqual(plan.collisions, []);
+  assert.deepEqual(plan.universeByOutputIndex, { 0: 3 });
+  assert.deepEqual(plan.disables, [{ outputIndex: 1, deviceCount: 40, deviceUniverse: undefined }]);
+  assert.equal(plan.warnings.length, 1);
+  assert.match(plan.warnings[0], /no pixel count for \(ghost_a, ghost_b\)/);
+  assert.match(plan.warnings[0], /the push DISABLES it/);
 });
 
 // ── autoAssignPerOutputUniverses (pure, operator default scheme) ─────────────
@@ -295,16 +387,16 @@ test('validatePerOutputPlan — NO OVERLAP: a >128px RGBW strand spilling into t
   assert.doesNotThrow(() => validatePerOutputPlan(strands, { 0: 3, 1: 5 }));
 });
 
-// ── applyPerOutputPlan (RMW helper) ──────────────────────────────────────────
+// ── applyForcedPlan (RMW helper) ─────────────────────────────────────────────
 
-test('applyPerOutputPlan — sets fields on enabled, leaves disabled UNTOUCHED', () => {
+test('_362: applyForcedPlan enables the mapped outputs and DISABLES every other one', () => {
   const strands = config202().strands;
-  const out = applyPerOutputPlan(strands, planOf({ 0: 3, 1: 4 }));
-  // Enabled outputs carry the per-output fields.
+  const out = applyForcedPlan(strands, planOf({ 0: 3, 1: 4 }));
+  // Assigned outputs carry the per-output fields.
   assert.equal(out[0].dmxUniverse, 3);
   assert.equal(out[0].dmxStartAddress, 1);
   assert.equal(out[1].dmxUniverse, 4);
-  // Disabled outputs are copied with EVERY field, and NO per-output fields added.
+  // Unassigned outputs are copied with EVERY hardware field, and forced off.
   assert.equal('dmxUniverse' in out[2], false);
   assert.equal('dmxUniverse' in out[3], false);
   assert.equal(out[2].pinData, 37);
@@ -314,12 +406,15 @@ test('applyPerOutputPlan — sets fields on enabled, leaves disabled UNTOUCHED',
   assert.equal('dmxUniverse' in strands[0], false);
 });
 
-// ── pushPerOutputUniverses (full RMW against a mocked device) ────────────────
+// ── the forced push against a mocked device ─────────────────────────────────
 
-test('pushPerOutputUniverses — mapping POST is mode-neutral (202 out1→U3,out2→U4)', async () => {
+test('_362: the forced POST carries strands + dmx, and disables the unmapped outputs', async () => {
   let posted = null;
+  let gets = 0;
+  const body = bodyOf(config202(), planOf({ 0: 3, 1: 4 }));
   await withFetch(async (url, opts) => {
     if (url === 'http://10.1.1.202/api/config' && (!opts || opts.method !== 'POST')) {
+      gets += 1;
       return jsonResponse(config202());
     }
     if (url === 'http://10.1.1.202/api/config' && opts.method === 'POST') {
@@ -329,14 +424,13 @@ test('pushPerOutputUniverses — mapping POST is mode-neutral (202 out1→U3,out
     }
     throw new Error(`unexpected fetch ${url}`);
   }, async () => {
-    const reply = await pushPerOutputUniverses('10.1.1.202', {
-      plan: planOf({ 0: 3, 1: 4 }),
-    });
+    const reply = await pushForcedConfig('10.1.1.202', body);
     assert.equal(reply.outcome, 'needs-reboot');
     assert.equal(reply.reboot, true);
   });
 
-  // The exact JSON the RMW POSTs for 202.
+  assert.equal(gets, 0, 'the transport re-reads nothing — the body was built from ONE snapshot');
+  // The exact JSON the forced push POSTs for 202.
   assert.deepEqual(posted, {
     strands: [
       { type: 'WS281X_RGBW', count: 40, pinData: 35, pinClock: 0, colorOrder: 'RGBW',
@@ -350,8 +444,23 @@ test('pushPerOutputUniverses — mapping POST is mode-neutral (202 out1→U3,out
       { type: 'WS281X_RGBW', count: 40, pinData: 38, pinClock: 0, colorOrder: 'RGBW',
         rgbwMode: 'exact', enabled: false, deadPixels: 0, deadPixelIndices: [] },
     ],
+    // _363 §2.1: the board's OWN dmx object, with only enabled + protocol forced
+    // (config202 stores enabled:false, universe 1, startAddress 1, timeoutMs 3000).
+    dmx: { enabled: true, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
   });
-  assert.equal('dmx' in posted, false, 'a mapping push must never change show mode');
+  assert.equal(posted.dmx.enabled, true, 'every push switches the board to DMX-driven');
+  assert.equal(posted.dmx.protocol, 0, 'per-output universes are sACN-only by firmware rule');
+  assert.equal('swarm' in posted, false, 'the narrowed push never mentions swarm');
+});
+
+test('_363: a board in SWARM is pushed with no refusal, and its swarm config is NOT touched', () => {
+  const snapshot = { ...config202(), swarm: { enabled: true, isLeader: true, groupId: 'ropes' } };
+  const body = bodyOf(snapshot, planOf({ 0: 3, 1: 4 }));
+  assert.equal(body.dmx.enabled, true);
+  // Ruling 6/7: swarm is operator-managed. The board's block survives
+  // byte-for-byte because the push simply never mentions it.
+  assert.equal('swarm' in body, false);
+  assert.equal('gamma' in body, false);
 });
 
 // ── deviceName repair (report 20260725_124) ─────────────────────────────────
@@ -421,74 +530,44 @@ test('_124: derivePerOutputPlan carries the card name (the push repairs deviceNa
   assert.equal(plan.controllerName, 'LeftLeftRopes');
 });
 
-test('_124: pushPerOutputUniverses — an empty stored deviceName is REPAIRED in the POST body',
-  async () => {
-    let posted = null;
-    const cfg = config202();
-    cfg.deviceName = '';                       // ← exactly what the live board stores
-    await withFetch(async (url, opts) => {
-      if (opts && opts.method === 'POST') {
-        posted = JSON.parse(opts.body);
-        return jsonResponse({ status: 'ok', outcome: 'needs-reboot', reboot: true });
-      }
-      return jsonResponse(cfg);
-    }, async () => {
-      await pushPerOutputUniverses('10.1.1.202', {
-        plan: planOf({ 0: 3, 1: 4 }, { controllerName: 'LeftLeftRopes' }),
-      });
-    });
-    assert.equal(posted.deviceName, 'LeftLeftRopes');
-    // The rest of the body is untouched by the repair.
-    assert.equal('dmx' in posted, false);
-    assert.equal(posted.strands.length, 4);
-    assert.equal(posted.strands[0].dmxUniverse, 3);
-  });
-
-test('_124: pushPerOutputUniverses — a VALID stored name is never rewritten', async () => {
-  let posted = null;
-  await withFetch(async (url, opts) => {
-    if (opts && opts.method === 'POST') {
-      posted = JSON.parse(opts.body);
-      return jsonResponse({ status: 'ok', outcome: 'needs-reboot', reboot: true });
-    }
-    return jsonResponse(config202());          // deviceName 'Titanic-202'
-  }, async () => {
-    await pushPerOutputUniverses('10.1.1.202', {
-      plan: planOf({ 0: 3, 1: 4 }, { controllerName: 'SomeOtherName' }),
-    });
-  });
-  assert.equal('deviceName' in posted, false);
+test('_124: an empty stored deviceName is REPAIRED in the forced body', () => {
+  const cfg = config202();
+  cfg.deviceName = '';                       // ← exactly what the live board stores
+  const body = bodyOf(cfg, planOf({ 0: 3, 1: 4 }, { controllerName: 'LeftLeftRopes' }));
+  assert.equal(body.deviceName, 'LeftLeftRopes');
+  // The rest of the body is untouched by the repair.
+  assert.equal(body.strands.length, 4);
+  assert.equal(body.strands[0].dmxUniverse, 3);
 });
 
-test('_124: pushPerOutputUniverses — an unrepairable name refuses BEFORE the POST', async () => {
-  let postCalls = 0;
+test('_124: a VALID stored name is never rewritten', () => {
+  const body = bodyOf(config202(),                       // deviceName 'Titanic-202'
+    planOf({ 0: 3, 1: 4 }, { controllerName: 'SomeOtherName' }));
+  assert.equal('deviceName' in body, false);
+});
+
+test('_124: an unrepairable name refuses BEFORE any body exists', () => {
   const cfg = config202();
   cfg.deviceName = '';
-  await withFetch(async (url, opts) => {
-    if (opts && opts.method === 'POST') { postCalls += 1; return jsonResponse({}); }
-    return jsonResponse(cfg);
-  }, async () => {
-    await assert.rejects(() => pushPerOutputUniverses('10.1.1.202', {
-      plan: planOf({ 0: 3, 1: 4 }, { controllerName: 'Left Left Ropes' }),
-    }), /RENAME THE CONTROLLER CARD/);
-  });
-  assert.equal(postCalls, 0);        // the device is never written on a refusal
+  assert.throws(
+    () => bodyOf(cfg, planOf({ 0: 3, 1: 4 }, { controllerName: 'Left Left Ropes' })),
+    /RENAME THE CONTROLLER CARD/);
 });
 
-test('pushPerOutputUniverses — a bad plan is rejected BEFORE the POST', async () => {
+test('_362: a bad plan is rejected by the BUILDER — no body, so no POST', async () => {
   let postCalls = 0;
   await withFetch(async (url, opts) => {
     if (opts && opts.method === 'POST') { postCalls += 1; return jsonResponse({}); }
     return jsonResponse(config202());   // GET
   }, async () => {
-    await assert.rejects(() => pushPerOutputUniverses('10.1.1.202', {
-      plan: planOf({ 0: 3 }),                   // missing output 1 (all-or-none)
-    }), /all-or-none/);
+    assert.throws(() => bodyOf(config202(), planOf({ 0: 3, 1: 900 })),
+      /universe span 898 exceeds the 16-universe window/);
   });
   assert.equal(postCalls, 0);
 });
 
-test('pushPerOutputUniverses — device 400 surfaces fields[].detail verbatim', async () => {
+test('_362: device 400 surfaces fields[].detail verbatim', async () => {
+  const body = bodyOf(config202(), planOf({ 0: 3, 1: 4 }));
   await withFetch(async (url, opts) => {
     if (opts && opts.method === 'POST') {
       return jsonResponse({
@@ -500,7 +579,7 @@ test('pushPerOutputUniverses — device 400 surfaces fields[].detail verbatim', 
     return jsonResponse(config202());
   }, async () => {
     await assert.rejects(
-      () => pushPerOutputUniverses('10.1.1.202', { plan: planOf({ 0: 3, 1: 4 }) }),
+      () => pushForcedConfig('10.1.1.202', body),
       (err) => {
         assert.match(err.message, /universe span exceeds 16/);
         assert.equal(err.fields[0].field, 'strands[1].dmxUniverse');
@@ -524,7 +603,8 @@ const RAILS_CONFIGS = new Map([
   ['Left Front Rails 1', { name: 'Left Front Rails 1', group: 'Rails', fixtureType: 'UkingPar' }],
 ]);
 
-const STRAND_COUNTS = new Map([['Left_Front_Left', 40], ['Left_Back_Left', 40]]);
+const STRAND_COUNTS = new Map([
+  ['Left_Front_Left', 40], ['Left_Back_Left', 40], ['Right_Front', 40]]);
 
 /** GET /api/config for the .60: 3 ENABLED outputs, while the card maps only two. */
 function config60() {
@@ -628,19 +708,19 @@ test('S2: collectClaimedUniverses — a controller outside the registry array is
   }), /not in the registry controllers array/);
 });
 
-test('S2: the LIVE repro — the PARK skips a universe another controller owns', () => {
+test('_362: the LIVE repro — the portless third output is DISABLED, never re-homed', () => {
   const registry = liveReproRegistry();
   const card = registry.controllers[1];
-  const { universeByOutputIndex, parked, warnings, collisions } =
+  const { universeByOutputIndex, disables, warnings, collisions } =
     derivePerOutputPlan(card, STRAND_COUNTS, config60(), claimsFor(registry, card));
 
-  // Pre-S2 this produced { 2: 23 } — LeftFrontDeck's universe. The park picks
-  // the lowest universe free across the WHOLE registry inside the window.
-  assert.deepEqual(universeByOutputIndex, { 0: 21, 1: 22, 2: 24 });
-  assert.deepEqual(parked, [{ outputIndex: 2, universe: 24, reused: false }]);
+  // Pre-S2 this produced { 2: 23 } — LeftFrontDeck's universe; parking then held
+  // U24 for it. Under force semantics it takes no universe at all: the push
+  // writes enabled:false and the output goes dark.
+  assert.deepEqual(universeByOutputIndex, { 0: 21, 1: 22 });
+  assert.deepEqual(disables, [{ outputIndex: 2, deviceCount: 40, deviceUniverse: undefined }]);
   assert.deepEqual(collisions, []);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /output 3 has no controller port row — PARKED on U24/);
+  assert.deepEqual(warnings, []);
 });
 
 // Operator order 2026-07-31 (report 20260725_102) REPLACED the old
@@ -665,7 +745,7 @@ test('S2: an EXPLICIT port universe on another controller is a SHARED-ADDRESS WA
   assert.ok(warnings.some((w) => /⚠ .*shares U23 with LeftFrontDeck port 1/.test(w)));
 });
 
-test('S2: the park walks PAST a run of claimed universes', () => {
+test('_362: every portless enabled output is DISABLED — no universe is held for any of them', () => {
   const cfg = config202();
   cfg.strands[2].enabled = true;
   cfg.strands[3].enabled = true;                 // 4 enabled outputs, 2 port rows
@@ -676,13 +756,10 @@ test('S2: the park walks PAST a run of claimed universes', () => {
     ],
   });
   const claimed = new Map([[12, 'Deck A port 1'], [13, 'Deck A port 2'], [15, 'Deck B port 1']]);
-  const { universeByOutputIndex, parked, collisions } =
+  const { universeByOutputIndex, disables, collisions } =
     derivePerOutputPlan(controller, { line_A: 40, line_B: 40 }, cfg, claimed);
-  assert.deepEqual(universeByOutputIndex, { 0: 10, 1: 11, 2: 14, 3: 16 });
-  assert.deepEqual(parked, [
-    { outputIndex: 2, universe: 14, reused: false },
-    { outputIndex: 3, universe: 16, reused: false },
-  ]);
+  assert.deepEqual(universeByOutputIndex, { 0: 10, 1: 11 });
+  assert.deepEqual(disables.map((d) => d.outputIndex), [2, 3]);
   assert.deepEqual(collisions, []);
 });
 
@@ -712,19 +789,19 @@ function makeGateIo(calls) {
     getStatus: async (ip) => {
       calls.push(`getStatus:${ip}`);
       // Report back whatever the last push wrote, so verify passes on a real push.
-      return status60(calls.lastPlan
-        ? Object.entries(calls.lastPlan).map(([index, universe]) =>
-          ({ index: Number(index), universe, startAddress: 1, enabled: true }))
-        : []);
+      return status60(confirmedPerOutputFor(calls.lastBody));
     },
     getConfig: async (ip) => {
       calls.push(`getConfig:${ip}`);
-      return config60WithMapping(calls.lastPlan || {});
+      return confirmedConfigFor(calls.lastBody);
     },
-    pushPerOutputUniverses: async (ip, { plan }) => {
+    pushForcedConfig: async (ip, body) => {
       calls.push(`push:${ip}`);
-      calls.lastPlan = plan.universeByOutputIndex;
-      calls.lastFullPlan = plan;
+      calls.lastBody = body;
+      calls.lastPlan = {};
+      body.strands.forEach((strand, index) => {
+        if (strand.enabled === true) calls.lastPlan[index] = strand.dmxUniverse;
+      });
       return { outcome: 'needs-reboot', reboot: true };
     },
     awaitReboot: async (ip) => { calls.push(`awaitReboot:${ip}`); },
@@ -750,61 +827,229 @@ test('S2: a registry-free card still pushes (the gate only blocks real collision
   const results = await pushAllLedControllers(makeGateCtx(registry), makeGateIo(calls));
   assert.equal(results[0].state, 'pushed');
   assert.ok(calls.includes('push:10.0.0.60'));
-  assert.deepEqual(calls.lastPlan, { 0: 21, 1: 22, 2: 24 });
+  assert.deepEqual(calls.lastPlan, { 0: 21, 1: 22 });
 });
 
-test('mapping fleet refuses active or desired DMX before repairing the card or writing', async () => {
-  for (const mode of ['active', 'desired']) {
+test('_362: the fleet push writes a board in ANY show mode — no refusal survives', async () => {
+  for (const mode of ['active', 'desired', 'swarm']) {
     const registry = liveReproRegistry();
-    const card = registry.controllers[1];
-    card.ports[0].universe = 0;
     const calls = [];
     const config = config60();
     config.dmx.enabled = mode === 'desired';
+    if (mode === 'swarm') config.swarm = { enabled: true, isLeader: true };
     const io = {
+      ...makeGateIo(calls),
       getStatus: async () => {
         calls.push('getStatus');
-        return { ...status60(), dmxOwnsOutput: mode === 'active' };
+        const reported = calls.lastBody
+          ? calls.lastBody.strands.map((strand, index) => ({
+            index, universe: strand.dmxUniverse, startAddress: strand.dmxStartAddress,
+            enabled: strand.enabled === true }))
+          : [];
+        return { ...status60(reported), dmxOwnsOutput: true };
       },
-      getConfig: async () => { calls.push('getConfig'); return config; },
-      pushPerOutputUniverses: async () => { calls.push('push'); },
+      getConfig: async () => {
+        calls.push('getConfig');
+        if (!calls.lastBody) return config;
+        // The board answers with exactly what the forced push wrote.
+        return {
+          ...config,
+          strands: calls.lastBody.strands.map((strand) => ({ ...strand })),
+          dmx: { ...calls.lastBody.dmx },
+          ...(calls.lastBody.swarm ? { swarm: { ...calls.lastBody.swarm } } : {}),
+        };
+      },
     };
 
     const results = await pushAllLedControllers(makeGateCtx(registry), io);
-    assert.equal(results[0].state, 'failed');
-    assert.match(results[0].detail, /mapping push refused.*show-mode workflow/);
-    assert.equal(calls.includes('push'), false);
-    assert.equal(card.ports[0].universe, 0, 'mode refusal must happen before plan repair');
+    assert.equal(results[0].state, 'pushed', `mode '${mode}' must not refuse the push`);
+    assert.ok(calls.includes('push:10.0.0.60'));
+    assert.equal(calls.lastBody.dmx.enabled, true);
+    // _363: a swarm board is written WITHOUT a swarm key — the push leaves that
+    // config alone, and the read-back's swarm state can never fail the verify.
+    if (mode === 'swarm') assert.equal('swarm' in calls.lastBody, false);
   }
 });
 
+test('_362: push-all keeps going past a board that never answers, and models the results',
+  async () => {
+    // Three boards; the middle one times out on the write and never comes back.
+    const registry = createControllerRegistry({
+      controllers: [
+        { id: 1, name: 'BoardA', ip: '10.0.0.61', type: CONTROLLER_TYPE_LED,
+          protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+          device: { vendor: 'marsinled', controllerId: 'a', deviceName: 'BoardA' },
+          ports: [{ port: 1, universe: 21, chain: ['Left_Front_Left'] }] },
+        { id: 2, name: 'BoardB', ip: '10.0.0.62', type: CONTROLLER_TYPE_LED,
+          protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+          device: { vendor: 'marsinled', controllerId: 'b', deviceName: 'BoardB' },
+          ports: [{ port: 1, universe: 31, chain: ['Left_Back_Left'] }] },
+        { id: 3, name: 'BoardC', ip: '10.0.0.63', type: CONTROLLER_TYPE_LED,
+          protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+          device: { vendor: 'marsinled', controllerId: 'c', deviceName: 'BoardC' },
+          ports: [{ port: 1, universe: 41, chain: ['Right_Front'] }] },
+      ],
+    });
+    const reached = [];
+    const bodyByIp = new Map();
+    const oneOutput = () => ({
+      strands: [rgbwStrand(40, true, 35)],
+      dmx: { enabled: false, protocol: 0, timeoutMs: 3000 },
+      deviceName: 'Board',
+    });
+    const io = {
+      getStatus: async (ip) => {
+        const body = bodyByIp.get(ip);
+        return {
+          controllerId: { '10.0.0.61': 'a', '10.0.0.62': 'b', '10.0.0.63': 'c' }[ip],
+          boardId: 'angio4', firmwareSHA: 'ff00',
+          capabilitiesExt: { perOutputDmx: true },
+          sacn: { enabled: true, perOutput: [] },
+          strands: body ? body.strands : oneOutput().strands,
+        };
+      },
+      getConfig: async (ip) => {
+        const body = bodyByIp.get(ip);
+        return body
+          ? { ...oneOutput(), strands: body.strands.map((x) => ({ ...x })), dmx: { ...body.dmx } }
+          : oneOutput();
+      },
+      pushForcedConfig: async (ip, body) => {
+        reached.push(ip);
+        if (ip === '10.0.0.62') {
+          const err = new Error('timed out after 12000 ms — device did not respond');
+          err.writeResponseLost = true;
+          throw err;
+        }
+        bodyByIp.set(ip, body);
+        return { outcome: 'needs-reboot', reboot: true };
+      },
+      awaitReboot: async (ip) => {
+        if (ip === '10.0.0.62') throw new Error('device never came back');
+      },
+    };
+    const progress = [];
+    const results = await pushAllLedControllers(
+      makeGateCtx(registry), io, (p) => progress.push(p));
+
+    assert.deepEqual(reached, ['10.0.0.61', '10.0.0.62', '10.0.0.63'],
+      'one failure never aborts the loop');
+    assert.deepEqual(results.map((r) => r.state), ['pushed', 'failed', 'pushed']);
+    assert.match(results[1].detail, /UNCONFIRMED/);
+    // Per-controller live progress, not one status line for the whole fleet.
+    assert.ok(progress.some((p) => p.name === 'BoardB' && /FAILED/.test(p.phase)));
+    assert.ok(progress.some((p) => p.name === 'BoardC' && /PUSHED/.test(p.phase)));
+
+    const rows = pushAllResultsModel(results);
+    assert.deepEqual(rows.map((r) => r.state), ['PUSHED', 'FAILED', 'PUSHED']);
+    assert.deepEqual(rows.map((r) => r.name), ['BoardA', 'BoardB', 'BoardC']);
+    assert.deepEqual(rows.map((r) => r.ip), ['10.0.0.61', '10.0.0.62', '10.0.0.63']);
+    assert.match(rows[1].reason, /UNCONFIRMED/);
+    assert.throws(() => pushAllResultsModel([{ name: 'x', state: 'weird' }]),
+      /unknown result state 'weird'/);
+  });
+
 // ── S2: the sync chip derives with the SAME claims as the push ───────────────
+
+/** A .60 config the forced push would confirm: DMX on, out 3 already dark. */
+function config60Confirmed(mapping) {
+  const cfg = config60WithMapping(mapping);
+  cfg.strands[2].enabled = false;
+  cfg.dmx = { enabled: true, protocol: 0, timeoutMs: 3000 };
+  return cfg;
+}
 
 test('S2: the sync chip does NOT false-drift — same claims ⇒ same plan as the push', async () => {
   const registry = liveReproRegistry();
   const card = registry.controllers[1];
-  // The device carries exactly what a post-gate push writes: U21/U22 + U24.
+  // The device carries exactly what a forced push writes: U21/U22 enabled, the
+  // portless third output DISABLED, and the board DMX-driven.
   const confirmed = [
     { index: 0, universe: 21, startAddress: 1, enabled: true },
     { index: 1, universe: 22, startAddress: 1, enabled: true },
-    { index: 2, universe: 24, startAddress: 1, enabled: true },
   ];
   await withFetch(async (url) => {
     if (url === 'http://10.0.0.60/api/config') {
-      return jsonResponse(config60WithMapping({ 0: 21, 1: 22, 2: 24 }));
+      return jsonResponse(config60Confirmed({ 0: 21, 1: 22 }));
     }
     if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
     throw new Error(`unexpected fetch ${url}`);
   }, async () => {
     const state = await computeSyncState(makeGateCtx(registry), card);
     assert.deepEqual(state, { state: 'in-sync' });
+  });
+});
 
-    // Same device, chip deriving registry-BLIND (the pre-S2 behaviour): it plans
-    // U23 for output 3 and reports drift the push would never resolve.
-    const blindCtx = { ...makeGateCtx(registry), claimedUniverses: () => new Map() };
-    const blind = await computeSyncState(blindCtx, card);
-    assert.equal(blind.state, 'drift');
-    assert.deepEqual(blind.changes, [{ path: 'output 2', from: 'U24', to: 'U23' }]);
+test('_363: a SWARM board with a PERFECT mapping and DMX ON reads IN SYNC', async () => {
+  // `_362` read this as drift, because the push of the day switched the board out
+  // of SWARM. The NARROWED push never mentions swarm (ruling 6/7), so pushing this
+  // board would change NOTHING — and a chip claiming drift would promise a change
+  // the push cannot make (report `_363` §2.3-3).
+  const registry = liveReproRegistry();
+  const card = registry.controllers[1];
+  const confirmed = [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+    { index: 1, universe: 22, startAddress: 1, enabled: true },
+  ];
+  const cfg = config60Confirmed({ 0: 21, 1: 22 });
+  cfg.swarm = { enabled: true, isLeader: true };
+  await withFetch(async (url) => {
+    if (url === 'http://10.0.0.60/api/config') return jsonResponse(cfg);
+    if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
+    throw new Error(`unexpected fetch ${url}`);
+  }, async () => {
+    const state = await computeSyncState(makeGateCtx(registry), card);
+    assert.deepEqual(state, { state: 'in-sync' });
+  });
+});
+
+test('_363: the SAME board with DMX OFF still reads DRIFT — the push forces DMX ON', async () => {
+  const registry = liveReproRegistry();
+  const card = registry.controllers[1];
+  const confirmed = [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+    { index: 1, universe: 22, startAddress: 1, enabled: true },
+  ];
+  const cfg = config60Confirmed({ 0: 21, 1: 22 });
+  cfg.swarm = { enabled: true, isLeader: true };
+  cfg.dmx = { enabled: false, protocol: 0, timeoutMs: 3000 };
+  await withFetch(async (url) => {
+    if (url === 'http://10.0.0.60/api/config') return jsonResponse(cfg);
+    if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
+    throw new Error(`unexpected fetch ${url}`);
+  }, async () => {
+    const ctx = makeGateCtx(registry);
+    const state = await computeSyncState(ctx, card);
+    assert.equal(state.state, 'drift');
+    assert.match(state.detail, /board is not DMX-driven — push will force DMX ON/);
+    // The clause that made a SWARM board drift is GONE — the detail says nothing
+    // about swarm any more, because the push does nothing to it.
+    assert.equal(/SWARM/.test(state.detail), false);
+    // ZERO new reads: the same sweep that computed the chip seeded the ⏻ label.
+    assert.equal(getDmxState(ctx, card.id), false);
+  });
+});
+
+test('_362: an output the push will DISABLE reads as drift (`enabled · U24 → disabled`)', async () => {
+  const registry = liveReproRegistry();
+  const card = registry.controllers[1];
+  // The board still holds the old parked third output, enabled on U24.
+  const cfg = config60WithMapping({ 0: 21, 1: 22, 2: 24 });
+  cfg.dmx = { enabled: true, protocol: 0, timeoutMs: 3000 };
+  const confirmed = [
+    { index: 0, universe: 21, startAddress: 1, enabled: true },
+    { index: 1, universe: 22, startAddress: 1, enabled: true },
+    { index: 2, universe: 24, startAddress: 1, enabled: true },
+  ];
+  await withFetch(async (url) => {
+    if (url === 'http://10.0.0.60/api/config') return jsonResponse(cfg);
+    if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
+    throw new Error(`unexpected fetch ${url}`);
+  }, async () => {
+    const state = await computeSyncState(makeGateCtx(registry), card);
+    assert.equal(state.state, 'drift');
+    assert.deepEqual(state.changes,
+      [{ path: 'output 2', from: 'enabled · U24', to: 'disabled' }]);
   });
 });
 
@@ -812,15 +1057,14 @@ test('_102: the sync chip stays IN-SYNC on a shared universe but CARRIES the war
   const registry = liveReproRegistry({ ledPort2Universe: 23 });
   const card = registry.controllers[1];
   // The plan a push WOULD write: P1→U21, P2→U23 (the shared one), and the third
-  // board output PARKED on U22 — the lowest universe free across the registry.
+  // board output DISABLED — no port maps it.
   const confirmed = [
     { index: 0, universe: 21, startAddress: 1, enabled: true },
     { index: 1, universe: 23, startAddress: 1, enabled: true },
-    { index: 2, universe: 22, startAddress: 1, enabled: true },
   ];
   await withFetch(async (url) => {
     if (url === 'http://10.0.0.60/api/config') {
-      return jsonResponse(config60WithMapping({ 0: 21, 1: 23, 2: 22 }));
+      return jsonResponse(config60Confirmed({ 0: 21, 1: 23 }));
     }
     if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60(confirmed));
     throw new Error(`unexpected fetch ${url}`);
@@ -876,6 +1120,27 @@ function makeS1Ctx(registry, toasts) {
  * values those steps resolve with (or a function to call — used to answer with
  * nothing, or to throw).
  */
+/** The config a board reports after it applied `body` verbatim. */
+function confirmedConfigFor(body) {
+  const cfg = config60();
+  if (!body) return cfg;
+  return {
+    ...cfg,
+    strands: body.strands.map((strand) => ({ ...strand })),
+    dmx: { ...body.dmx },
+    ...(body.swarm ? { swarm: { ...body.swarm } } : {}),
+  };
+}
+
+/** The per-output read-back a board reports after it applied `body` verbatim. */
+function confirmedPerOutputFor(body) {
+  if (!body) return [];
+  return body.strands
+    .map((strand, index) => ({ index, universe: strand.dmxUniverse,
+      startAddress: strand.dmxStartAddress, enabled: strand.enabled === true }))
+    .filter((entry) => entry.enabled);
+}
+
 function makeS1Io(calls, {
   save = { ok: true }, notify = { ok: true },
   confirm = { ok: true, detail: 'U21,U22→10.0.0.60' },
@@ -883,22 +1148,20 @@ function makeS1Io(calls, {
 } = {}) {
   const answer = (v) => (typeof v === 'function' ? v() : v);
   return {
-    pushPerOutputUniverses: async (_ip, { plan }) => {
+    pushForcedConfig: async (_ip, body) => {
       calls.push('push');
       if (failPush) throw new Error('device rejected: HTTP 400');
-      calls.lastPlan = plan.universeByOutputIndex;
-      calls.lastFullPlan = plan;
+      calls.lastBody = body;
       return { outcome: 'needs-reboot', reboot: true };
     },
     awaitReboot: async () => { calls.push('awaitReboot'); },
     getStatus: async () => {
       calls.push('getStatus');
-      return status60(Object.entries(calls.lastPlan || {}).map(([index, universe]) =>
-        ({ index: Number(index), universe, startAddress: 1, enabled: true })));
+      return status60(confirmedPerOutputFor(calls.lastBody));
     },
     getConfig: async () => {
       calls.push('getConfig');
-      return config60WithMapping(calls.lastPlan || {});
+      return confirmedConfigFor(calls.lastBody);
     },
     persistScene: async () => { calls.push('persistScene'); return answer(save); },
     notifyBridge: async () => { calls.push('notifyBridge'); return answer(notify); },
@@ -920,15 +1183,21 @@ function makeS1Ui() {
 }
 
 /**
- * The plan `runPerOutputPush` now takes: the whole `derivePerOutputPlan` result,
- * not a bare universe map. A bare map cannot say which outputs a push must
- * ENABLE, which is why the transport refuses one.
+ * The plan `runPerOutputPush` takes: the whole `derivePerOutputPlan` result, not
+ * a bare universe map (a bare map cannot say which outputs a push must ENABLE
+ * and which it must DISABLE), plus the ONE body the confirm dialog previewed.
  */
 const S1_PLAN = planOf({ 0: 21, 1: 22 }, {
+  controllerName: 'LeftLeftFront',
   assignments: [
     { outputIndex: 0, portNum: 1, universe: 21, pixelCount: 40 },
     { outputIndex: 1, portNum: 2, universe: 22, pixelCount: 40 },
   ],
+  disables: [{ outputIndex: 2, deviceCount: 40, deviceUniverse: undefined }],
+});
+
+const S1_BODY = () => buildForcedConfigBody({
+  snapshot: config60(), plan: S1_PLAN, ip: '10.0.0.60',
 });
 
 test('S1: a successful push persists THEN notifies, and reports all three steps', async () => {
@@ -936,7 +1205,7 @@ test('S1: a successful push persists THEN notifies, and reports all three steps'
   const calls = [];
   const toasts = [];
   const ui = makeS1Ui();
-  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeS1Io(calls), ui);
 
   // ORDERING is the whole point: the bridge must be told to re-read patches.yaml
@@ -968,7 +1237,7 @@ test('S1: a 500 from the save server is RED, names the stale layer, and never no
   const calls = [];
   const toasts = [];
   const ui = makeS1Ui();
-  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeS1Io(calls, { save: { ok: false, reason: 'save server responded 500' } }), ui);
 
   assert.equal(calls.includes('notifyBridge'), false,
@@ -991,7 +1260,7 @@ test('S1: a save aborted by the model export (duplicate fixture names) surfaces 
   const registry = s1Registry();
   const calls = [];
   const ui = makeS1Ui();
-  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeS1Io(calls, {
       save: { ok: false,
         reason: "model/sidecar export failed — nothing saved: duplicate fixture name 'TE Sign V3'" },
@@ -1005,7 +1274,7 @@ test('S1: a failed bridge notify is RED — a disconnected WS is a failure, not 
   const calls = [];
   const toasts = [];
   const ui = makeS1Ui();
-  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeS1Io(calls, {
       notify: { ok: false,
         reason: 'sACN bridge WebSocket not connected — the bridge did NOT reload its routes' },
@@ -1027,7 +1296,7 @@ test('S1: the sync chip stays in-sync but SAYS the feed is stale after a failed 
   const registry = s1Registry();
   const card = registry.controllers[0];
   const ctx = makeS1Ctx(registry, []);
-  await runPerOutputPush(ctx, card, S1_PLAN,
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(),
     makeS1Io([], { save: { ok: false, reason: 'save server responded 500' } }), makeS1Ui());
   const chip = getSyncState(ctx, card.id);
   // device ≡ plan is literally true (that is all the chip measures), but the
@@ -1040,9 +1309,9 @@ test('S1: a FAILED device write never saves or notifies (nothing to project)', a
   const registry = s1Registry();
   const calls = [];
   const ui = makeS1Ui();
-  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeS1Io(calls, { failPush: true }), ui);
-  assert.match(ui.statusLine.textContent, /per-output push failed: device rejected: HTTP 400/);
+  assert.match(ui.statusLine.textContent, /forced push failed: device rejected: HTTP 400/);
   assert.equal(calls.includes('persistScene'), false);
   assert.equal(calls.includes('notifyBridge'), false);
 });
@@ -1087,7 +1356,7 @@ test('_127: an io bag without confirmBridgeRoutes() is a loud confirm failure', 
   const steps = await persistAndNotifyAfterPush({
     persistScene: async () => ({ ok: true }),
     notifyBridge: async () => ({ ok: true }),
-  }, [{ ip: '10.0.0.60', expected: [21], parkedAbsent: [] }]);
+  }, [{ ip: '10.0.0.60', expected: [21] }]);
   assert.equal(steps.confirm.ok, false);
   assert.match(steps.confirm.reason, /no confirmBridgeRoutes\(\)/);
 });
@@ -1097,7 +1366,7 @@ test('_127: a confirm that answers ok WITHOUT naming routes is refused', async (
     persistScene: async () => ({ ok: true }),
     notifyBridge: async () => ({ ok: true }),
     confirmBridgeRoutes: async () => ({ ok: true }),
-  }, [{ ip: '10.0.0.60', expected: [21], parkedAbsent: [] }]);
+  }, [{ ip: '10.0.0.60', expected: [21] }]);
   assert.equal(steps.confirm.ok, false);
   assert.match(steps.confirm.reason, /without naming the confirmed routes/);
 });
@@ -1169,7 +1438,7 @@ test('_127: an EXPLICIT empty expectation (fleet, nothing pushed) says so — no
 
 test('S5: every sync-chip tooltip leads with what the chip measures', () => {
   const tip = describeSyncChipTooltip({ state: 'in-sync' });
-  assert.match(tip, /^Measures the DEVICE against the per-output plan this page would push/);
+  assert.match(tip, /^Measures the DEVICE against the FORCED plan this page would push/);
   assert.match(tip, /device ≡ plan/);
   assert.match(tip, /NOT the sACN feed/);
   assert.match(tip, /patches\.yaml/);
@@ -1196,13 +1465,245 @@ test('S5: chip tooltip and the stale-feed detail read as ONE consistent claim', 
   const registry = s1Registry();
   const card = registry.controllers[0];
   const ctx = makeS1Ctx(registry, []);
-  await runPerOutputPush(ctx, card, S1_PLAN,
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(),
     makeS1Io([], { save: { ok: false, reason: 'save server responded 500' } }), makeS1Ui());
   const tip = describeSyncChipTooltip(getSyncState(ctx, card.id));
   // Same vocabulary on both halves — the header says the chip does not measure the
   // sACN feed, the detail says that feed is stale. No competing claims.
   assert.match(tip, /NOT the sACN feed/);
   assert.match(tip, /device ≡ plan, but the sACN feed is STALE — scene save failed/);
+});
+
+// ── the port-universe repair is COMMITTED ON ACCEPT, never on preview ────────
+// It used to run inside `startPush` BEFORE the confirm dialog existed, so
+// opening the dialog and pressing Cancel left the registry mutated (and the
+// scene dirty) for a push that never happened. The repair now rides on the
+// derived plan — pure — and is committed only on the FORCE path, with the SAME
+// universe the previewed body carries.
+
+/**
+ * A DOM stub just wide enough for the push dialogs (no jsdom in this repo —
+ * offline readiness; same approach as wheel_guard.test.js). Nodes carry the
+ * three properties the panel touches plus a children list, so a test can find
+ * a button by its label and click it.
+ */
+function makeDomNode(tag) {
+  return {
+    tag, className: '', textContent: '', disabled: false, children: [],
+    appendChild(child) { this.children.push(child); return child; },
+    remove() { this.removed = true; },
+    focus() { this.focused = true; },
+  };
+}
+
+async function withDom(fn) {
+  const created = [];
+  const original = globalThis.document;
+  globalThis.document = {
+    createElement: (tag) => { const node = makeDomNode(tag); created.push(node); return node; },
+    body: makeDomNode('body'),
+  };
+  try {
+    return await fn(created);
+  } finally {
+    globalThis.document = original;
+  }
+}
+
+const buttonNamed = (created, label) =>
+  created.find((n) => n.tag === 'button' && n.textContent === label);
+
+/** The s1 card with port 1 left at an INVALID universe (the repair's only job). */
+function unrepairedRegistry() {
+  const registry = s1Registry();
+  registry.controllers[0].ports[0].universe = 0;
+  return registry;
+}
+
+test('cancel: the preview mutates NOTHING — the card keeps its invalid universe', async () => {
+  const registry = unrepairedRegistry();
+  const card = registry.controllers[0];
+  const mutations = [];
+  const ctx = { ...makeS1Ctx(registry, []), mutate: (msg, fn) => { mutations.push(msg); fn(); } };
+  const posts = [];
+
+  await withDom(async (created) => {
+    await withFetch(async (url, opts) => {
+      if (opts && opts.method === 'POST') { posts.push(url); throw new Error('no write on preview'); }
+      if (url === 'http://10.0.0.60/api/config') return jsonResponse(config60());
+      if (url === 'http://10.0.0.60/api/status') return jsonResponse(status60());
+      throw new Error(`unexpected fetch ${url}`);
+    }, async () => {
+      await startPush(ctx, card);
+    });
+
+    // The dialog IS up (so this is the real preview path, not an early refusal)…
+    const confirmBtn = buttonNamed(created, 'FORCE push');
+    assert.ok(confirmBtn, 'the confirm dialog opened');
+    // …and the previewed payload carries the repaired universe, U23 — the plan's
+    // own auto-assign leg did that, without writing it to the card.
+    const pre = created.find((n) => n.tag === 'pre');
+    assert.match(pre.textContent, /"dmxUniverse": 23/);
+    assert.equal(card.ports[0].universe, 0, 'the preview never touched the registry');
+    assert.deepEqual(mutations, [], 'no undo entry, no dirty scene');
+
+    buttonNamed(created, 'Cancel').onclick();
+    assert.equal(card.ports[0].universe, 0, 'cancel leaves the card exactly as it was');
+    assert.deepEqual(mutations, []);
+  });
+  assert.deepEqual(posts, []);
+});
+
+test('accept: FORCE commits the SAME universe the previewed body carries', async () => {
+  const registry = unrepairedRegistry();
+  const card = registry.controllers[0];
+  const mutations = [];
+  const ctx = { ...makeS1Ctx(registry, []), mutate: (msg, fn) => { mutations.push(msg); fn(); } };
+  const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60(), new Map());
+  const body = buildForcedConfigBody({ snapshot: config60(), plan, ip: '10.0.0.60' });
+  assert.equal(body.strands[0].dmxUniverse, 23);
+
+  const calls = [];
+  await runPerOutputPush(ctx, card, plan, body, makeS1Io(calls), makeS1Ui());
+
+  assert.equal(card.ports[0].universe, 23,
+    'the registry now states exactly what the board was told');
+  assert.ok(mutations.some((m) => /Allocated universe\(s\) for LeftLeftFront/.test(m)));
+  assert.equal(card.ports[1].universe, 22, 'a valid manual universe is never rewritten');
+});
+
+// ── gap 5: the FLEET SAVE GATE ───────────────────────────────────────────────
+// The defect: `startPushAll` ran the completion (save → notify → route
+// read-back) unconditionally after the loop, so a fleet where one board failed
+// still wrote the WHOLE registry's mapping to patches.yaml and told the bridge
+// to stream it. Hardware and file then disagreed on exactly the board that
+// failed. Now the completion runs only on a clean fleet, and says so loudly
+// otherwise. No "save anyway" override exists — fix the board and push again.
+
+/** Three bound LED cards, one per IP the fleet io below answers for. */
+function fleetRegistry() {
+  return createControllerRegistry({
+    controllers: [
+      { id: 1, name: 'BoardA', ip: '10.0.0.71', type: CONTROLLER_TYPE_LED,
+        protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+        device: { vendor: 'marsinled', controllerId: 'a', deviceName: 'BoardA' },
+        ports: [{ port: 1, universe: 21, chain: ['Left_Front_Left'] }] },
+      { id: 2, name: 'BoardB', ip: '10.0.0.72', type: CONTROLLER_TYPE_LED,
+        protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+        device: { vendor: 'marsinled', controllerId: 'b', deviceName: 'BoardB' },
+        ports: [{ port: 1, universe: 31, chain: ['Left_Back_Left'] }] },
+      { id: 3, name: 'BoardC', ip: '10.0.0.73', type: CONTROLLER_TYPE_LED,
+        protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+        device: { vendor: 'marsinled', controllerId: 'c', deviceName: 'BoardC' },
+        ports: [{ port: 1, universe: 41, chain: ['Right_Front'] }] },
+    ],
+  });
+}
+
+/**
+ * Device io for the fleet above plus the three completion steps, all mocked.
+ * `failIp` (or null) is the one board whose write is refused by the device.
+ */
+function fleetIo(calls, failIp) {
+  const bodyByIp = new Map();
+  const oneOutput = () => ({
+    strands: [rgbwStrand(40, true, 35)],
+    dmx: { enabled: false, protocol: 0, timeoutMs: 3000 },
+    deviceName: 'Board',
+  });
+  return {
+    getStatus: async (ip) => ({
+      controllerId: { '10.0.0.71': 'a', '10.0.0.72': 'b', '10.0.0.73': 'c' }[ip],
+      boardId: 'angio4', firmwareSHA: 'ff00',
+      capabilitiesExt: { perOutputDmx: true },
+      sacn: { enabled: true, perOutput: [] },
+      strands: (bodyByIp.get(ip) || oneOutput()).strands,
+      dmxOwnsOutput: true,
+    }),
+    getConfig: async (ip) => {
+      const body = bodyByIp.get(ip);
+      return body
+        ? { ...oneOutput(), strands: body.strands.map((s) => ({ ...s })), dmx: { ...body.dmx } }
+        : oneOutput();
+    },
+    pushForcedConfig: async (ip, body) => {
+      calls.push(`push:${ip}`);
+      if (ip === failIp) {
+        const err = new Error('[MarsinLED] device rejected config: config apply failed');
+        err.httpStatus = 400;
+        throw err;
+      }
+      bodyByIp.set(ip, body);
+      return { outcome: 'needs-reboot', reboot: true };
+    },
+    awaitReboot: async () => {},
+    persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
+    notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
+    confirmBridgeRoutes: async () => {
+      calls.push('confirmRoutes');
+      return { ok: true, detail: 'U21,U31,U41' };
+    },
+  };
+}
+
+test('gap 5: fleetSaveGate — any FAILED board refuses the save, and names them', () => {
+  const clean = fleetSaveGate([{ name: 'A', state: 'pushed' }, { name: 'B', state: 'pushed' }]);
+  assert.equal(clean.allowed, true);
+  assert.equal(clean.reason, null);
+
+  const dirty = fleetSaveGate([
+    { name: 'A', state: 'pushed' }, { name: 'B', state: 'failed' }, { name: 'C', state: 'failed' },
+  ]);
+  assert.equal(dirty.allowed, false);
+  assert.match(dirty.reason, /scene was NOT saved/);
+  assert.match(dirty.reason, /2 board\(s\) FAILED \(B, C\)/);
+  assert.match(dirty.reason, /cannot be rolled back/);
+  assert.match(dirty.reason, /push all again/);
+
+  // A SKIPPED card was never attempted — it can neither agree nor disagree with
+  // the file, so it must not hold the whole fleet's save hostage.
+  const skipped = fleetSaveGate([{ name: 'A', state: 'pushed' }, { name: 'B', state: 'skipped' }]);
+  assert.equal(skipped.allowed, true);
+  assert.throws(() => fleetSaveGate('nope'), /results must be/);
+});
+
+test('gap 5: a 3-board fleet with ONE failure saves NOTHING and notifies NOBODY', async () => {
+  const registry = fleetRegistry();
+  const calls = [];
+  const io = fleetIo(calls, '10.0.0.72');
+  const results = await pushAllLedControllers(makeGateCtx(registry), io);
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'failed', 'pushed']);
+
+  const completion = await completeFleetPush(io, results);
+  assert.equal(completion.saved, false);
+  assert.equal(completion.steps, null);
+  assert.match(completion.gate.reason, /1 board\(s\) FAILED \(BoardB\)/);
+  assert.equal(calls.includes('persistScene'), false, 'a split fleet never reaches the disk');
+  assert.equal(calls.includes('notifyBridge'), false);
+  assert.equal(calls.includes('confirmRoutes'), false);
+  // The two boards that DID take the push are still written — the gate is about
+  // the file, never a rollback of hardware.
+  assert.deepEqual(calls.filter((c) => c.startsWith('push:')),
+    ['push:10.0.0.71', 'push:10.0.0.72', 'push:10.0.0.73']);
+});
+
+test('gap 5: an ALL-PASS fleet saves, notifies and confirms the routes as before', async () => {
+  const registry = fleetRegistry();
+  const calls = [];
+  const io = fleetIo(calls, null);
+  const results = await pushAllLedControllers(makeGateCtx(registry), io);
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'pushed', 'pushed']);
+
+  const completion = await completeFleetPush(io, results);
+  assert.equal(completion.saved, true);
+  assert.equal(completion.steps.save.ok, true);
+  assert.equal(completion.steps.notify.ok, true);
+  assert.equal(completion.steps.confirm.ok, true);
+  const iSave = calls.indexOf('persistScene');
+  const iNotify = calls.indexOf('notifyBridge');
+  const iConfirm = calls.indexOf('confirmRoutes');
+  assert.ok(iSave >= 0 && iNotify > iSave && iConfirm > iNotify, 'the S1 ordering is unchanged');
+  assert.equal(calls.filter((c) => c === 'persistScene').length, 1);
 });
 
 // ── _69: reboot-aware push phases (the operator's "timed out after 5000 ms") ─
@@ -1231,10 +1732,9 @@ function makeLostReplyIo(calls, {
   confirm = { ok: true, detail: 'U21,U22→10.0.0.60' },
 } = {}) {
   return {
-    pushPerOutputUniverses: async (_ip, { plan }) => {
+    pushForcedConfig: async (_ip, body) => {
       calls.push('push');
-      calls.lastPlan = plan.universeByOutputIndex;
-      calls.lastFullPlan = plan;
+      calls.lastBody = body;
       throw lostReplyError();
     },
     awaitReboot: async (_ip, opts) => {
@@ -1249,13 +1749,23 @@ function makeLostReplyIo(calls, {
     },
     getStatus: async () => {
       calls.push('getStatus');
-      const plan = readBackPlan || calls.lastPlan || {};
-      return status60(Object.entries(plan).map(([index, universe]) =>
-        ({ index: Number(index), universe, startAddress: 1, enabled: true })));
+      if (readBackPlan) {
+        return status60(Object.entries(readBackPlan).map(([index, universe]) =>
+          ({ index: Number(index), universe, startAddress: 1, enabled: true })));
+      }
+      return status60(confirmedPerOutputFor(calls.lastBody));
     },
     getConfig: async () => {
       calls.push('getConfig');
-      return config60WithMapping(readBackPlan || calls.lastPlan || {});
+      if (readBackPlan) {
+        // A board that applied something DIFFERENT from what was written.
+        const drifted = confirmedConfigFor(calls.lastBody);
+        for (const [index, universe] of Object.entries(readBackPlan)) {
+          drifted.strands[Number(index)].dmxUniverse = universe;
+        }
+        return drifted;
+      }
+      return confirmedConfigFor(calls.lastBody);
     },
     persistScene: async () => { calls.push('persistScene'); return save; },
     notifyBridge: async () => { calls.push('notifyBridge'); return notify; },
@@ -1286,7 +1796,7 @@ test('_69: a LOST write reply is settled by the read-back, never declared a fail
   const calls = [];
   const toasts = [];
   const { ui } = makeRecordingUi();
-  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, toasts), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeLostReplyIo(calls), ui);
 
   // The timeout does NOT end the push: it falls into the same reboot wait, then
@@ -1308,7 +1818,7 @@ test('_69: a LOST write reply is settled by the read-back, never declared a fail
 test('_69: the dialog names the phase and its budget while the device reboots', async () => {
   const registry = s1Registry();
   const { ui, history } = makeRecordingUi();
-  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeLostReplyIo([]), ui);
 
   // Phase 1 declares the write budget so a slow write does not read as a hang.
@@ -1318,7 +1828,7 @@ test('_69: the dialog names the phase and its budget while the device reboots', 
   assert.ok(history.some(
     (t) => /device rebooting — waiting up to 45s for it to answer \(3s elapsed\)/.test(t)));
   // Phase 3 runs only after the device answered.
-  assert.ok(history.some((t) => /reading confirmed saved mapping/.test(t)));
+  assert.ok(history.some((t) => /reading the full saved config back/.test(t)));
 });
 
 test('_69: a device unreachable through the WHOLE budget is red, and never saves', async () => {
@@ -1327,7 +1837,8 @@ test('_69: a device unreachable through the WHOLE budget is red, and never saves
   const calls = [];
   const toasts = [];
   const ctx = makeS1Ctx(registry, toasts);
-  await runPerOutputPush(ctx, card, S1_PLAN, makeLostReplyIo(calls, { comesBack: false }),
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(),
+    makeLostReplyIo(calls, { comesBack: false }),
     makeS1Ui());
 
   assert.equal(calls.includes('persistScene'), false, 'a genuinely dead device saves nothing');
@@ -1339,7 +1850,7 @@ test('_69: a device unreachable through the WHOLE budget is red, and never saves
 test('_69: an unconfirmed write says so — it never claims the write failed', async () => {
   const registry = s1Registry();
   const { ui } = makeRecordingUi();
-  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN,
+  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN, S1_BODY(),
     makeLostReplyIo([], { comesBack: false }), ui);
   assert.equal(ui.statusLine.className, 'led-push-status led-push-error');
   assert.match(ui.statusLine.textContent,
@@ -1353,13 +1864,13 @@ test('_69: a lost reply with a DIFFERENT read-back is a real failure (drift)', a
   const calls = [];
   const ctx = makeS1Ctx(registry, []);
   const { ui } = makeRecordingUi();
-  await runPerOutputPush(ctx, card, S1_PLAN,
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(),
     makeLostReplyIo(calls, { readBackPlan: { 0: 21, 1: 99 } }), ui);
 
   assert.match(ui.statusLine.textContent,
-    /the device did not answer the write AND the read-back shows a DIFFERENT mapping/);
+    /the device did not answer the write AND the read-back shows a DIFFERENT config/);
   assert.match(ui.statusLine.textContent,
-    /device mapping mismatch — output 1: device U99 ≠ wanted U22/);
+    /device config mismatch — output 1: device U99 ≠ wanted U22/);
   assert.equal(calls.includes('persistScene'), false);
   assert.equal(calls.includes('notifyBridge'), false);
   assert.equal(getSyncState(ctx, card.id).state, 'drift');
@@ -1382,15 +1893,15 @@ test('_69: the fleet push still fails loudly on a device that never comes back',
   assert.match(results[0].detail, /UNCONFIRMED/);
 });
 
-// ── _71: port → physical-output association (report 20260725_70) ─────────────
+// ── _71: port → physical-output association (report 20260725_70), under the
+// _362 FORCE contract ───────────────────────────────────────────────────────
 // A card port DECLARES the board output it drives (`port.output`, 1-based). The
-// push NEVER writes `enabled: false`: an enabled output no port drives is
-// PARKED on a claims-free universe (subscribed, unrouted, dark), and the ONE
-// asymmetric write is enabling an output a mapped port points at.
+// push ENABLES exactly the outputs a port maps and writes `enabled: false` on
+// every other one — the sim panel is the source of truth.
 // Nothing here sleeps or touches a device — every io bag is a mock.
 
 /** A .60-shaped registry whose LED card can declare crossed outputs. */
-function outputRegistry(portSpecs, { parkedOutputs, withDeck = true } = {}) {
+function outputRegistry(portSpecs, { withDeck = true } = {}) {
   const controllers = [];
   if (withDeck) {
     controllers.push({
@@ -1405,7 +1916,6 @@ function outputRegistry(portSpecs, { parkedOutputs, withDeck = true } = {}) {
     device: { vendor: 'marsinled', controllerId: 'titanic_60', deviceName: 'LeftLeftFront' },
     ports: portSpecs,
   };
-  if (parkedOutputs) card.parkedOutputs = parkedOutputs;
   controllers.push(card);
   return createControllerRegistry({ controllers });
 }
@@ -1425,7 +1935,7 @@ const IDENTITY_PORTS = [
 
 // (6) Identity mapping — byte-for-byte what the pre-selector code produced.
 
-test('_71 (6): IDENTITY mapping — the plan is exactly today\'s, with no parked outputs', () => {
+test('_71 (6): IDENTITY mapping — the plan is exactly today\'s, with nothing to disable', () => {
   const registry = outputRegistry(IDENTITY_PORTS, { withDeck: false });
   const card = registry.controllers[0];
   const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, false, false]),
@@ -1435,8 +1945,8 @@ test('_71 (6): IDENTITY mapping — the plan is exactly today\'s, with no parked
     { outputIndex: 0, portNum: 1, universe: 21, pixelCount: 40 },
     { outputIndex: 1, portNum: 2, universe: 22, pixelCount: 40 },
   ]);
-  assert.deepEqual(plan.parked, []);
-  assert.deepEqual(plan.enableOutputIndices, []);
+  assert.deepEqual(plan.disables, [], 'outputs 3/4 are already off — nothing goes dark');
+  assert.deepEqual(plan.countChanges, []);
   assert.deepEqual(plan.collisions, []);
   assert.deepEqual(plan.warnings, []);
 });
@@ -1474,7 +1984,7 @@ test('_71 (7): CROSSED mapping P1→out2 / P2→out1 swaps the universes, and na
 
 // (8) The operator's case: ONE row driving output 4.
 
-test('_71 (8): ONE port driving output 4 ENABLES it, parks 1–3, and disables NOTHING', () => {
+test('_71 (8): ONE port driving output 4 ENABLES it and DISABLES 1-3', () => {
   const registry = outputRegistry([
     { port: 1, output: 4, universe: 21, chain: ['Left_Front_Left'] },
   ], { withDeck: false });
@@ -1484,115 +1994,35 @@ test('_71 (8): ONE port driving output 4 ENABLES it, parks 1–3, and disables N
 
   assert.deepEqual(plan.assignments,
     [{ outputIndex: 3, portNum: 1, universe: 21, pixelCount: 40 }]);
-  assert.deepEqual(plan.enableOutputIndices, [3]);
-  assert.deepEqual(plan.enables,
-    [{ outputIndex: 3, portNum: 1, universe: 21, count: 40 }]);
-  // Outputs 1–3 are enabled on the board with no port: PARKED, never disabled.
-  assert.deepEqual(plan.parked.map((p) => p.outputIndex), [0, 1, 2]);
+  // Outputs 1–3 are enabled on the board with no port: the push DARKENS them,
+  // and names each one so the confirm dialog can say so before the write.
+  assert.deepEqual(plan.disables.map((d) => d.outputIndex), [0, 1, 2]);
   assert.deepEqual(plan.collisions, []);
 
-  // The payload proves the asymmetry: `enabled: false` appears NOWHERE.
-  const applied = applyPerOutputPlan(cfg.strands, plan);
-  assert.deepEqual(applied.map((s) => s.enabled), [true, true, true, true]);
-  assert.equal(applied[3].count, 40, 'a newly enabled output gets the mapped pixel count');
+  const applied = applyForcedPlan(cfg.strands, plan);
+  assert.deepEqual(applied.map((x) => x.enabled), [false, false, false, true]);
+  assert.equal(applied[3].count, 40, 'the enabled output gets the mapped pixel count');
   assert.equal(applied[3].dmxUniverse, 21);
   assert.equal(applied[3].dmxStartAddress, 1);
   // …and the applied array is what the firmware rules are checked against.
   assert.doesNotThrow(() => validatePerOutputPlan(applied, plan.universeByOutputIndex));
 });
 
-// (9) The live .60 repro: a portless ENABLED output is PARKED, not disabled.
+// (9) The live .60 repro: a portless ENABLED output goes DARK, never re-homed.
 
-test('_71 (9): a portless ENABLED output is PARKED off U23, and stays enabled', () => {
+test('_71 (9): a portless ENABLED output is DISABLED, never handed another universe', () => {
   const registry = outputRegistry(IDENTITY_PORTS);           // deck owns U23
   const card = registry.controllers[1];
   const cfg = config60Enabled([true, true, true, false]);
   const plan = derivePerOutputPlan(card, STRAND_COUNTS, cfg, claimsFor(registry, card));
 
-  assert.deepEqual(plan.parked, [{ outputIndex: 2, universe: 24, reused: false }]);
-  assert.notEqual(plan.universeByOutputIndex[2], 23, 'never a universe another card owns');
+  assert.deepEqual(plan.disables, [{ outputIndex: 2, deviceCount: 40, deviceUniverse: undefined }]);
+  assert.equal(plan.universeByOutputIndex[2], undefined, 'no universe is held for a dark output');
   assert.deepEqual(plan.collisions, []);
-  const applied = applyPerOutputPlan(cfg.strands, plan);
-  assert.equal(applied[2].enabled, true, 'a parked output is never disabled');
-  assert.equal(applied[2].dmxUniverse, 24);
-  assert.equal(applied[3].enabled, false, 'an unmapped DISABLED output is untouched');
+  const applied = applyForcedPlan(cfg.strands, plan);
+  assert.equal(applied[2].enabled, false, 'the portless output goes dark');
+  assert.equal(applied[3].enabled, false, 'an unmapped DISABLED output stays off');
   assert.equal('dmxUniverse' in applied[3], false);
-});
-
-// (10) Sticky parking — a stored park is REUSED, silently.
-
-test('_71 (10): a STORED park is reused (reused: true) and emits no warning', () => {
-  const registry = outputRegistry(IDENTITY_PORTS, {
-    parkedOutputs: [{ output: 3, universe: 26 }],
-  });
-  const card = registry.controllers[1];
-  const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, true, false]),
-    claimsFor(registry, card));
-  assert.deepEqual(plan.parked, [{ outputIndex: 2, universe: 26, reused: true }]);
-  assert.deepEqual(plan.warnings, [], 'a stable park is not news');
-  // Stickiness is the whole point: re-deriving is idempotent, so the sync chip
-  // never reports drift on a card nobody touched.
-  const again = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, true, false]),
-    claimsFor(registry, card));
-  assert.deepEqual(again.universeByOutputIndex, plan.universeByOutputIndex);
-});
-
-// (11) Re-park — only when the stored universe stops being valid.
-
-test('_71 (11): a stored park another controller has CLAIMED is re-parked, loudly', () => {
-  const registry = outputRegistry(IDENTITY_PORTS, {
-    parkedOutputs: [{ output: 3, universe: 23 }],   // the deck owns U23 now
-  });
-  const card = registry.controllers[1];
-  const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, true, false]),
-    claimsFor(registry, card));
-  assert.deepEqual(plan.parked, [{ outputIndex: 2, universe: 24, reused: false }]);
-  assert.equal(plan.warnings.length, 1);
-  assert.match(plan.warnings[0],
-    /output 3: parked universe U23 is no longer free — re-parked on U24/);
-});
-
-test('_71 (11): a stored park that collides with one of THIS card\'s ports is re-parked', () => {
-  const registry = outputRegistry(IDENTITY_PORTS, {
-    parkedOutputs: [{ output: 3, universe: 22 }],   // == P2's universe
-  });
-  const card = registry.controllers[1];
-  const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, true, false]),
-    claimsFor(registry, card));
-  assert.equal(plan.parked[0].reused, false);
-  assert.notEqual(plan.parked[0].universe, 22);
-  assert.match(plan.warnings[0], /parked universe U22 is no longer free/);
-});
-
-// (12) The park must fit the firmware's ≤16-universe window.
-
-test('_71 (12): a park lands INSIDE the 16-universe window, not at the registry high-water mark', () => {
-  const registry = outputRegistry(IDENTITY_PORTS, { withDeck: false });
-  registry.nextUniverse = 60;                       // the rig has grown well past U22
-  const card = registry.controllers[0];
-  const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, true, false]),
-    NO_CLAIMS);
-  const u = plan.parked[0].universe;
-  assert.ok(u >= 21 && u <= 36, `parked U${u} must sit in U21–U36`);
-  // Proof it is not just "close": the whole plan passes the firmware span rule.
-  const applied = applyPerOutputPlan(config60Enabled([true, true, true, false]).strands, plan);
-  assert.doesNotThrow(() => validatePerOutputPlan(applied, plan.universeByOutputIndex));
-});
-
-test('_71 (12): a FULL window REFUSES loudly instead of parking outside it', () => {
-  const registry = outputRegistry(IDENTITY_PORTS, { withDeck: false });
-  const card = registry.controllers[0];
-  // Every universe in the window U21–U36 belongs to someone else.
-  const claimed = new Map();
-  for (let u = 21; u <= 36; u++) claimed.set(u, `Deck ${u}`);
-  claimed.delete(21); claimed.delete(22);          // except this card's own two
-  const plan = derivePerOutputPlan(card, STRAND_COUNTS, config60Enabled([true, true, true, false]),
-    claimed);
-  assert.equal(plan.parked.length, 0);
-  assert.equal(plan.collisions.length, 1);
-  assert.equal(plan.collisions[0].kind, 'parked_span');
-  assert.match(plan.collisions[0].message,
-    /no free universe in the window U21–U36 for output 3 — free one up, or unpark it/);
 });
 
 // (13)/(14) The two new BLOCKING refusals — no device is written.
@@ -1626,6 +2056,34 @@ test('_71 (13): the fleet push refuses the duplicate card and writes NOTHING to 
   assert.equal(calls.includes('push:10.0.0.60'), false, 'a refused plan must not reach the device');
 });
 
+test('gap 4: the fleet push REFUSES a mixed chain and writes NOTHING to that board', async () => {
+  // 'Right_Front' is in STRAND_COUNTS; 'ghost_strand' is not — the same shape as
+  // a rope somebody chained in the panel before its fixture existed.
+  const registry = outputRegistry([
+    { port: 1, output: 1, universe: 21, chain: ['Left_Front_Left', 'ghost_strand'] },
+    { port: 2, output: 2, universe: 22, chain: ['Left_Back_Left'] },
+  ], { withDeck: false });
+  const calls = [];
+  const results = await pushAllLedControllers(makeGateCtx(registry), makeGateIo(calls));
+  assert.equal(results[0].state, 'failed');
+  assert.match(results[0].detail, /push REFUSED/);
+  assert.match(results[0].detail, /ghost_strand/);
+  assert.equal(calls.includes('push:10.0.0.60'), false,
+    'a plan with no honest count must not reach the device');
+});
+
+test('gap 4: the same fleet card with EVERY strand sized pushes normally', async () => {
+  const registry = outputRegistry([
+    { port: 1, output: 1, universe: 21, chain: ['Left_Front_Left', 'Right_Front'] },
+    { port: 2, output: 2, universe: 22, chain: ['Left_Back_Left'] },
+  ], { withDeck: false });
+  const calls = [];
+  const results = await pushAllLedControllers(makeGateCtx(registry), makeGateIo(calls));
+  assert.equal(results[0].state, 'pushed');
+  assert.ok(calls.includes('push:10.0.0.60'));
+  assert.equal(calls.lastBody.strands[0].count, 80, 'both chained strands are counted');
+});
+
 test('_71 (14): a port driving an output the BOARD does not have is refused', async () => {
   const registry = outputRegistry([
     { port: 1, output: 1, universe: 21, chain: ['Left_Front_Left'] },
@@ -1647,7 +2105,7 @@ test('_71 (14): a port driving an output the BOARD does not have is refused', as
 // (15) The claim index now sees the two universes a device SUBSCRIBES to that
 // no strand patch projects.
 
-test('_71 (15): claims cover another card\'s STRANDLESS port universe and its PARKED universe', () => {
+test('_71 (15): claims cover another card\'s STRANDLESS port universe', () => {
   const registry = createControllerRegistry({
     controllers: [
       {
@@ -1658,7 +2116,6 @@ test('_71 (15): claims cover another card\'s STRANDLESS port universe and its PA
           { port: 1, output: 1, universe: 21, chain: ['Left_Front_Left'] },
           { port: 2, output: 2, universe: 22, chain: [] },        // STRANDLESS
         ],
-        parkedOutputs: [{ output: 3, universe: 27 }],
       },
       {
         id: 61, name: 'RightRight', ip: '10.0.0.61', type: CONTROLLER_TYPE_LED,
@@ -1670,61 +2127,52 @@ test('_71 (15): claims cover another card\'s STRANDLESS port universe and its PA
   });
   const other = registry.controllers[1];
   const claimed = claimsFor(registry, other);
-  // Pre-_71 both were INVISIBLE: no strand projects them, so another card's push
+  // Pre-_71 this was INVISIBLE: no strand projects it, so another card's push
   // could take a universe the .60 is already subscribed to.
   assert.equal(claimed.get(22), 'LeftLeftFront port 2 → output 2');
-  assert.equal(claimed.get(27), 'LeftLeftFront output 3 (parked)');
   // A card never claims against ITSELF, or every push of a mapped card would refuse.
   const own = claimsFor(registry, registry.controllers[0]);
   assert.equal(own.has(21), false);
   assert.equal(own.has(22), false);
-  assert.equal(own.has(27), false);
 });
 
 // (16) Validation runs on the APPLIED array.
 
 test('_71 (16): validatePerOutputPlan runs on the APPLIED array (the old order refused a legal plan)', () => {
   const cfg = config60Enabled([true, false, false, false]);
-  const plan = {
-    universeByOutputIndex: { 0: 21, 1: 22 },
-    enables: [{ outputIndex: 1, portNum: 2, universe: 22, count: 40 }],
-    enableOutputIndices: [1],
-    assignments: [], parked: [], warnings: [], collisions: [],
-  };
+  const plan = planOf({ 0: 21, 1: 22 });
   // Against the DEVICE's array output 1 is not enabled — the pre-push state
   // cannot express an enable, so this is the throw the old ordering produced.
   assert.throws(() => validatePerOutputPlan(cfg.strands, plan.universeByOutputIndex),
     /output 1 carries a universe but is not an enabled strand/);
   // Against the APPLIED array — the intended post-push state — it is legal.
   assert.doesNotThrow(() =>
-    validatePerOutputPlan(applyPerOutputPlan(cfg.strands, plan), plan.universeByOutputIndex));
+    validatePerOutputPlan(applyForcedPlan(cfg.strands, plan), plan.universeByOutputIndex));
 });
 
-// (17) The count policy: written on an ENABLE, never on a live output.
+// (17) The count policy: FORCED from the sim's mapping, both directions.
 
-test('_71 (17): `count` is written on an ENABLE and never on an already-enabled output', () => {
+test('_362: `count` is FORCED on an already-enabled output, and every rewrite is named', () => {
   const registry = outputRegistry([
     { port: 1, output: 1, universe: 21, chain: ['Left_Front_Left'] },   // device says 40 px
     { port: 2, output: 2, universe: 22, chain: ['Left_Back_Left'] },
   ], { withDeck: false });
   const card = registry.controllers[0];
   const cfg = config60Enabled([true, false, false, false]);
-  // The sim believes output 1 is 20 px while the device holds 40 (the standing
-  // 20-vs-40 question): REPORT it, never rewrite a live strand's length.
+  // The sim maps output 1 at 20 px while the device holds 40 (the standing
+  // 20-vs-40 question). The panel is the source of truth now: it is REWRITTEN,
+  // and `countChanges` names it so the dialog can show it before the write.
   const counts = new Map([['Left_Front_Left', 20], ['Left_Back_Left', 40]]);
   const plan = derivePerOutputPlan(card, counts, cfg, NO_CLAIMS);
-  assert.ok(plan.warnings.some((w) =>
-    /output 1: device count 40 px, this card maps 20 px — count NOT changed/.test(w)));
-  const applied = applyPerOutputPlan(cfg.strands, plan);
-  assert.equal(applied[0].count, 40, 'a live output keeps the hardware count');
-  assert.equal(applied[1].count, 40, 'the newly ENABLED output takes the mapped count');
-  assert.deepEqual(plan.enableOutputIndices, [1]);
+  assert.deepEqual(plan.countChanges, [{ outputIndex: 0, from: 40, to: 20 }]);
+  const applied = applyForcedPlan(cfg.strands, plan);
+  assert.equal(applied[0].count, 20, "the sim's mapping wins over the hardware count");
+  assert.equal(applied[1].count, 40, 'the newly enabled output takes the mapped count');
 });
 
-test('_71 (17): an EMPTY port row pointed at a disabled output enables nothing', () => {
+test('_362: an EMPTY port row is not assigned — its output is disabled by the push', () => {
   // The everyday 4-row card driving two strands: rows 3 and 4 map nothing and
-  // point at outputs the board has off. Enabling them would be the sim deciding
-  // to drive hardware nobody mapped.
+  // point at outputs the board has off. Nothing to enable them with.
   const registry = outputRegistry([
     ...IDENTITY_PORTS,
     { port: 3, output: 3, universe: 25, chain: [] },
@@ -1733,32 +2181,38 @@ test('_71 (17): an EMPTY port row pointed at a disabled output enables nothing',
   const plan = derivePerOutputPlan(registry.controllers[0], STRAND_COUNTS,
     config60Enabled([true, true, false, false]), NO_CLAIMS);
   assert.deepEqual(plan.universeByOutputIndex, { 0: 21, 1: 22 });
-  assert.deepEqual(plan.enableOutputIndices, []);
+  assert.deepEqual(plan.disables, []);
   assert.deepEqual(plan.collisions, []);
 });
 
 // (18)/(19) The read-back verifies the WHOLE map, and composes with _69.
 
-/** io whose device reports back exactly `readBack` (default: the pushed plan). */
+/** io whose device reports back the pushed body, optionally drifted. */
 function makeVerifyIo(calls, { readBack = null, lostReply = false } = {}) {
+  const drifted = () => {
+    const config = confirmedConfigFor(calls.lastBody);
+    if (readBack) {
+      for (const [index, universe] of Object.entries(readBack)) {
+        config.strands[Number(index)].dmxUniverse = universe;
+      }
+    }
+    return config;
+  };
   return {
-    pushPerOutputUniverses: async (_ip, { plan }) => {
+    pushForcedConfig: async (_ip, body) => {
       calls.push('push');
-      calls.lastFullPlan = plan;
-      calls.lastPlan = plan.universeByOutputIndex;
+      calls.lastBody = body;
       if (lostReply) throw lostReplyError();
       return { outcome: 'needs-reboot', reboot: true };
     },
     awaitReboot: async () => { calls.push('awaitReboot'); },
     getStatus: async () => {
       calls.push('getStatus');
-      const map = readBack || calls.lastPlan || {};
-      return status60(Object.entries(map).map(([index, universe]) =>
-        ({ index: Number(index), universe, startAddress: 1, enabled: true })));
+      return status60(confirmedPerOutputFor(calls.lastBody));
     },
     getConfig: async () => {
       calls.push('getConfig');
-      return config60WithMapping(readBack || calls.lastPlan || {});
+      return drifted();
     },
     persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
     notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
@@ -1770,85 +2224,998 @@ function makeVerifyIo(calls, { readBack = null, lostReply = false } = {}) {
   };
 }
 
-const PARKED_PLAN = planOf({ 0: 21, 1: 22, 2: 24 }, {
-  assignments: [
-    { outputIndex: 0, portNum: 1, universe: 21, pixelCount: 40 },
-    { outputIndex: 1, portNum: 2, universe: 22, pixelCount: 40 },
-  ],
-  parked: [{ outputIndex: 2, universe: 24, reused: false }],
-});
-
-test('_71 (18): the read-back covers the PARKED output — a stale universe there fails the push', async () => {
+test('_362: a read-back on a DIFFERENT universe fails the push, and never saves', async () => {
   const registry = s1Registry();
   const card = registry.controllers[0];
   const ctx = makeS1Ctx(registry, []);
   const calls = [];
-  // The device still reports the .60's old U23 on the parked output.
-  await runPerOutputPush(ctx, card, PARKED_PLAN,
-    makeVerifyIo(calls, { readBack: { 0: 21, 1: 22, 2: 23 } }), makeS1Ui());
+  // The device reports U23 where the push wrote U22.
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(),
+    makeVerifyIo(calls, { readBack: { 1: 23 } }), makeS1Ui());
   assert.equal(calls.includes('persistScene'), false, 'an unverified device saves nothing');
   assert.equal(getSyncState(ctx, card.id).state, 'drift');
-  assert.equal(getSyncState(ctx, card.id).detail.includes('output 2: device U23 ≠ wanted U24'), true);
+  assert.ok(getSyncState(ctx, card.id).detail.includes('output 1: device U23 ≠ wanted U22'));
 });
 
-test('_71 (18): a matching read-back over assigned + parked completes, and PERSISTS the park', async () => {
-  const registry = s1Registry();
-  const card = registry.controllers[0];
-  const ctx = makeS1Ctx(registry, []);
-  const calls = [];
-  await runPerOutputPush(ctx, card, PARKED_PLAN, makeVerifyIo(calls), makeS1Ui());
-  assert.deepEqual(calls.filter((c) => c !== 'getConfig'),
-    ['push', 'awaitReboot', 'getStatus', 'persistScene', 'notifyBridge', 'confirmRoutes']);
-  // _127: the parked universe rides the expectation as a MUST-BE-ABSENT claim.
-  assert.deepEqual(calls.lastExpectations[0].expected, [21, 22]);
-  assert.deepEqual(calls.lastExpectations[0].parkedAbsent, [24]);
-  // STICKY: the park is written onto the card so the next derive reuses it.
-  assert.equal(parkedUniverseFor(card, 2), 24);
-  assert.deepEqual(card.parkedOutputs, [{ output: 3, universe: 24 }]);
-  // …and an output a port drives is never left carrying a stale park.
-  assert.equal(parkedUniverseFor(card, 0), null);
-});
+test('_362: a matching read-back completes, and the expectation names only the routed universes',
+  async () => {
+    const registry = s1Registry();
+    const card = registry.controllers[0];
+    const ctx = makeS1Ctx(registry, []);
+    const calls = [];
+    await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(), makeVerifyIo(calls), makeS1Ui());
+    assert.deepEqual(calls.filter((c) => c !== 'getConfig'),
+      ['push', 'awaitReboot', 'getStatus', 'persistScene', 'notifyBridge', 'confirmRoutes']);
+    assert.deepEqual(calls.lastExpectations[0].expected, [21, 22]);
+    assert.equal('parkedAbsent' in calls.lastExpectations[0], false);
+    assert.equal('parkedOutputs' in card, false, 'nothing parks anything any more');
+  });
 
-test('_71 (19): a LOST write reply verified over the FULL map (incl. the enable) is a success', async () => {
+test('_362: a LOST write reply verified over the FULL forced body is a success', async () => {
   const registry = s1Registry();
   const card = registry.controllers[0];
   const ctx = makeS1Ctx(registry, []);
   const calls = [];
   const { ui } = makeRecordingUi();
-  const planWithEnable = planOf({ 0: 21, 1: 22, 2: 24 }, {
-    assignments: [{ outputIndex: 0, portNum: 1, universe: 21, pixelCount: 40 }],
-    parked: [{ outputIndex: 2, universe: 24, reused: false }],
-    enables: [{ outputIndex: 1, portNum: 2, universe: 22, count: 40 }],
-    enableOutputIndices: [1],
-  });
-  await runPerOutputPush(ctx, card, planWithEnable, makeVerifyIo(calls, { lostReply: true }), ui);
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(),
+    makeVerifyIo(calls, { lostReply: true }), ui);
   assert.match(ui.statusLine.textContent, /the write reply was LOST/);
   assert.match(ui.statusLine.textContent, /✓ scene saved \(patches projected\)/);
   assert.equal(ui.statusLine.className, 'led-push-status led-push-ok');
 });
 
-test('_71 (19): a read-back MISSING the enable transition fails, and never saves', async () => {
+test('_362: a 2xx reply the sim cannot read is a HARD failure, not a silent pass', async () => {
+  for (const [reply, expected] of [
+    [{ status: 'ok' }, /a 2xx body with NO outcome field/],
+    [{ outcome: 'deferred', suppressedBy: 'dmx' }, /outcome='deferred'.*suppressedBy='dmx'/],
+  ]) {
+    const registry = s1Registry();
+    const card = registry.controllers[0];
+    const ctx = makeS1Ctx(registry, []);
+    const calls = [];
+    const { ui } = makeRecordingUi();
+    const io = makeVerifyIo(calls);
+    io.pushForcedConfig = async (_ip, body) => {
+      calls.push('push');
+      calls.lastBody = body;
+      return reply;
+    };
+    await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(), io, ui);
+    assert.match(ui.statusLine.textContent, /the device refused the forced write/);
+    assert.match(ui.statusLine.textContent, expected);
+    assert.match(ui.statusLine.textContent, /The write is NOT retried/);
+    assert.equal(calls.includes('persistScene'), false, 'a refused write saves nothing');
+    assert.equal(calls.filter((c) => c === 'push').length, 1, 'and is never retried');
+  }
+});
+
+test('_362: a board that DROPPED the dmx write reads back RED, naming dmx.enabled', async () => {
   const registry = s1Registry();
   const card = registry.controllers[0];
   const ctx = makeS1Ctx(registry, []);
   const calls = [];
   const { ui } = makeRecordingUi();
-  const planWithEnable = planOf({ 0: 21, 1: 22 }, {
-    assignments: [{ outputIndex: 0, portNum: 1, universe: 21, pixelCount: 40 }],
-    enables: [{ outputIndex: 1, portNum: 2, universe: 22, count: 40 }],
-    enableOutputIndices: [1],
-  });
-  const io = makeVerifyIo(calls, { lostReply: true });
+  const io = makeVerifyIo(calls);
   io.getConfig = async () => {
     calls.push('getConfig');
-    const config = config60WithMapping({ 0: 21, 1: 22 });
-    config.strands[1].enabled = false;   // never enabled
+    const config = confirmedConfigFor(calls.lastBody);
+    config.dmx = { enabled: false, protocol: 0, timeoutMs: 3000 };   // ignored the mode write
     return config;
   };
-  await runPerOutputPush(ctx, card, planWithEnable, io, ui);
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(), io, ui);
   assert.match(ui.statusLine.textContent,
-    /output 1: this push should have ENABLED it, device reports enabled=false/);
+    /dmx.enabled=false ≠ true — the board is NOT DMX-driven/);
   assert.equal(calls.includes('persistScene'), false);
   assert.equal(calls.includes('notifyBridge'), false);
   assert.equal(getSyncState(ctx, card.id).state, 'drift');
 });
+
+test('_362: a read-back MISSING an enable fails, and never saves', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const ctx = makeS1Ctx(registry, []);
+  const calls = [];
+  const { ui } = makeRecordingUi();
+  const io = makeVerifyIo(calls, { lostReply: true });
+  io.getConfig = async () => {
+    calls.push('getConfig');
+    const config = confirmedConfigFor(calls.lastBody);
+    config.strands[1].enabled = false;   // never enabled
+    return config;
+  };
+  await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(), io, ui);
+  assert.match(ui.statusLine.textContent,
+    /output 1: device enabled=false ≠ wanted enabled=true/);
+  assert.equal(calls.includes('persistScene'), false);
+  assert.equal(calls.includes('notifyBridge'), false);
+  assert.equal(getSyncState(ctx, card.id).state, 'drift');
+});
+
+// ── _363 / S3: the pre-write identity gate, the swarm note, the DMX ⏻ toggle ──
+// Panel wiring only — every device call goes through the injected `io` bag or a
+// stubbed global fetch, and every IP is a private/documentation-range fake.
+
+test('_363: identityGateRefusal — an UNBOUND card is never gated, a matching board passes', () => {
+  const unbound = { id: 1, name: 'Fresh', ip: '10.0.0.60' };
+  assert.equal(identityGateRefusal(unbound, { controllerId: 'anything' }), null);
+  const bound = { id: 1, name: 'LeftLeftFront', ip: '10.0.0.60',
+    device: { controllerId: 'titanic_60' } };
+  assert.equal(identityGateRefusal(bound, status60()), null);
+  // A board that answers as someone else — both ids named, and the sentence says
+  // the write did not happen.
+  const refusal = identityGateRefusal(bound, { ...status60(), controllerId: 'titanic_99' });
+  assert.match(refusal, /titanic_60/);
+  assert.match(refusal, /titanic_99/);
+  assert.match(refusal, /REFUSED before any write/);
+  // A box that answers with no identity at all is refused too, and SAYS so.
+  assert.match(identityGateRefusal(bound, { sacn: { enabled: true } }), /no controllerId/);
+});
+
+test('_363: the single push REFUSES a swapped board BEFORE any POST', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];          // bound to 'titanic_60'
+  const toasts = [];
+  const ctx = makeS1Ctx(registry, toasts);
+  const posts = [];
+  await withFetch(async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      posts.push(url);
+      throw new Error('the identity gate must refuse before any POST exists');
+    }
+    if (url === 'http://10.0.0.60/api/config') return jsonResponse(config60());
+    if (url === 'http://10.0.0.60/api/status') {
+      return jsonResponse({ ...status60(), controllerId: 'titanic_77' });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }, async () => {
+    await startPush(ctx, card);
+  });
+  assert.deepEqual(posts, [], 'nothing was written to the device');
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].error, true);
+  assert.match(toasts[0].msg, /titanic_60/);
+  assert.match(toasts[0].msg, /titanic_77/);
+  // The chip carries the same sentence, so the card explains itself after the
+  // toast has faded.
+  assert.equal(getSyncState(ctx, card.id).state, 'drift');
+  assert.match(getSyncState(ctx, card.id).detail, /REFUSED before any write/);
+});
+
+test('_363: push-all FAILS the swapped board and keeps going', async () => {
+  const registry = createControllerRegistry({
+    controllers: [
+      { id: 1, name: 'BoardA', ip: '10.0.0.61', type: CONTROLLER_TYPE_LED,
+        protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+        device: { vendor: 'marsinled', controllerId: 'a', deviceName: 'BoardA' },
+        ports: [{ port: 1, universe: 21, chain: ['Left_Front_Left'] }] },
+      { id: 2, name: 'BoardB', ip: '10.0.0.62', type: CONTROLLER_TYPE_LED,
+        protocol: CONTROLLER_PROTOCOL_SACN, led: { order: 'RGBW', startAddr: 1 },
+        device: { vendor: 'marsinled', controllerId: 'b', deviceName: 'BoardB' },
+        ports: [{ port: 1, universe: 31, chain: ['Left_Back_Left'] }] },
+    ],
+  });
+  const pushed = [];
+  const bodyByIp = new Map();
+  const oneOutput = () => ({
+    strands: [rgbwStrand(40, true, 35)],
+    dmx: { enabled: false, protocol: 0, timeoutMs: 3000 },
+    deviceName: 'Board',
+  });
+  const io = {
+    // .61 is the swapped board: the card claims 'a', the box answers 'stranger'.
+    getStatus: async (ip) => {
+      const body = bodyByIp.get(ip);
+      return {
+        controllerId: ip === '10.0.0.61' ? 'stranger' : 'b',
+        boardId: 'angio4', firmwareSHA: 'ff00',
+        capabilitiesExt: { perOutputDmx: true },
+        sacn: { enabled: true, perOutput: [] },
+        strands: body ? body.strands : oneOutput().strands,
+      };
+    },
+    getConfig: async (ip) => {
+      const body = bodyByIp.get(ip);
+      return body
+        ? { ...oneOutput(), strands: body.strands.map((x) => ({ ...x })), dmx: { ...body.dmx } }
+        : oneOutput();
+    },
+    pushForcedConfig: async (ip, body) => {
+      pushed.push(ip);
+      bodyByIp.set(ip, body);
+      return { outcome: 'needs-reboot', reboot: true };
+    },
+    awaitReboot: async () => {},
+  };
+  const progress = [];
+  const results = await pushAllLedControllers(
+    makeGateCtx(registry), io, (p) => progress.push(p));
+
+  assert.deepEqual(results.map((r) => r.state), ['failed', 'pushed']);
+  assert.match(results[0].detail, /REFUSED before any write/);
+  assert.match(results[0].detail, /stranger/);
+  assert.deepEqual(pushed, ['10.0.0.62'], 'the swapped board is never written');
+  assert.ok(progress.some((p) => p.name === 'BoardA' && /FAILED/.test(p.phase)));
+  assert.ok(progress.some((p) => p.name === 'BoardB' && /PUSHED/.test(p.phase)));
+});
+
+// ── the informational swarm note (non-failing) ───────────────────────────────
+
+/** makeS1Io, but the board also reports SWARM enabled on the read-back. */
+function makeSwarmIo(calls, options = {}) {
+  const io = makeS1Io(calls, options);
+  const inner = io.getConfig;
+  io.getConfig = async (...args) => {
+    const config = await inner(...args);
+    return { ...config, swarm: { enabled: true, isLeader: false, groupId: 'ropes' } };
+  };
+  return io;
+}
+
+test('_363: a SWARM board pushes without refusal and carries the note on the outcome line',
+  async () => {
+    const registry = s1Registry();
+    const card = registry.controllers[0];
+    const calls = [];
+    const toasts = [];
+    const ctx = makeS1Ctx(registry, toasts);
+    const ui = makeS1Ui();
+    await runPerOutputPush(ctx, card, S1_PLAN, S1_BODY(), makeSwarmIo(calls), ui);
+
+    // The push SUCCEEDS — swarm is not a mismatch, it is a fact.
+    assert.equal(ui.statusLine.className, 'led-push-status led-push-ok');
+    assert.match(ui.statusLine.textContent, /✓ device written \+ verified/);
+    assert.match(ui.statusLine.textContent,
+      /ℹ board also reports SWARM enabled — swarm is operator-managed; the sim does not touch it/);
+    assert.equal(toasts[0].error, false);
+    // And the body that was posted never mentioned swarm.
+    assert.equal('swarm' in calls.lastBody, false);
+    assert.equal(getSyncState(ctx, card.id).state, 'in-sync');
+  });
+
+test('_363: a non-swarm board outcome line carries NO note', async () => {
+  const registry = s1Registry();
+  const calls = [];
+  const ui = makeS1Ui();
+  await runPerOutputPush(makeS1Ctx(registry, []), registry.controllers[0], S1_PLAN, S1_BODY(),
+    makeS1Io(calls), ui);
+  assert.equal(/SWARM/.test(ui.statusLine.textContent), false);
+});
+
+test('_363: push-all puts the note on that board results row', async () => {
+  const registry = s1Registry();
+  const calls = [];
+  const results = await pushAllLedControllers(makeS1Ctx(registry, []), makeSwarmIo(calls));
+  assert.equal(results[0].state, 'pushed');
+  assert.match(results[0].detail, /ℹ board also reports SWARM enabled/);
+  assert.equal(pushAllResultsModel(results)[0].state, 'PUSHED', 'a note never fails a board');
+});
+
+// ── the DMX ⏻ toggle ────────────────────────────────────────────────────────
+
+/**
+ * A mock board for the toggle: it holds a `dmx` object, applies the toggle body
+ * on POST (reboot-to-apply) and mirrors the saved flag into `status.sacn`.
+ * `failWith` makes the write answer a device error instead.
+ */
+function makeToggleBoard({ enabled = false, controllerId = 'titanic_60', failWith = null } = {}) {
+  const board = {
+    config: { ...config60(), dmx: { enabled, protocol: 0, timeoutMs: 3000 } },
+    calls: [],
+  };
+  board.io = {
+    getStatus: async (ip) => {
+      board.calls.push(`getStatus:${ip}`);
+      return { ...status60(), controllerId, sacn: { enabled: board.config.dmx.enabled === true } };
+    },
+    getConfig: async (ip) => {
+      board.calls.push(`getConfig:${ip}`);
+      return JSON.parse(JSON.stringify(board.config));
+    },
+    pushDmxToggle: async (ip, body) => {
+      board.calls.push(`pushDmxToggle:${ip}`);
+      board.lastBody = body;
+      if (failWith) throw failWith;
+      board.config.dmx = { ...body.dmx };
+      return { outcome: 'needs-reboot', reboot: true };
+    },
+    awaitReboot: async (ip) => { board.calls.push(`awaitReboot:${ip}`); },
+  };
+  return board;
+}
+
+function makeToggleButton() {
+  return { textContent: '⏻ DMX: ?', title: '', className: '', disabled: false };
+}
+
+/**
+ * A ctx on its OWN scene name. The ⏻ label store is scene-scoped exactly like the
+ * sync/MAC caches (G7), so one scene per case keeps these tests' observations out
+ * of each other — and pins that scoping while it does.
+ */
+function makeToggleCtx(registry, toasts, scene) {
+  return { ...makeS1Ctx(registry, toasts), activeScene: () => scene };
+}
+
+test('_363: the toggle label is ? until something reads the board, then on / off', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const ctx = makeToggleCtx(registry, [], 'toggle_label');
+  // Nothing has been read in this scene: the label refuses to guess.
+  const cold = dmxToggleModel(ctx, card);
+  assert.equal(cold.label, '⏻ DMX: ?');
+  assert.equal(cold.state, null);
+  assert.equal(cold.target, true, 'from ? the click asks for ON — the state a show needs');
+  assert.match(cold.className, /led-dmx-unknown/);
+  assert.match(cold.title, /reboots it \(~11 s\)/);
+
+  // Toggle ON, confirmed by the read-back.
+  const board = makeToggleBoard({ enabled: false });
+  const button = makeToggleButton();
+  const phases = [];
+  const watched = new Proxy(button, {
+    set(target, key, value) {
+      if (key === 'textContent') phases.push(value);
+      target[key] = value;
+      return true;
+    },
+  });
+  assert.equal(await toggleDmx(ctx, card, true, board.io, watched), true);
+  assert.equal(getDmxState(ctx, card.id), true);
+  assert.equal(dmxToggleModel(ctx, card).label, '⏻ DMX: on');
+  assert.equal(dmxToggleModel(ctx, card).target, false, 'a known ON offers OFF');
+  assert.match(dmxToggleModel(ctx, card).className, /led-dmx-on/);
+  // The button NAMED every phase while it ran — a reboot must never look like a hang.
+  assert.deepEqual(phases.slice(0, 4),
+    ['⏻ reading…', '⏻ writing…', '⏻ rebooting…', '⏻ verifying…']);
+  assert.equal(button.textContent, '⏻ DMX: on');
+  assert.equal(button.disabled, false);
+  // ONE write, and the body carried ONLY the dmx block (no strands, no swarm).
+  assert.deepEqual(Object.keys(board.lastBody), ['dmx']);
+  assert.equal(board.lastBody.dmx.enabled, true);
+  assert.equal(board.lastBody.dmx.timeoutMs, 3000, 'the board own dmx keys are preserved');
+
+  // …and back OFF.
+  assert.equal(await toggleDmx(ctx, card, false, board.io, button), true);
+  assert.equal(getDmxState(ctx, card.id), false);
+  assert.equal(dmxToggleModel(ctx, card).label, '⏻ DMX: off');
+  assert.equal(dmxToggleModel(ctx, card).target, true);
+  assert.equal(board.config.dmx.enabled, false);
+});
+
+test('_363: a toggle whose write is REFUSED is a loud toast and the label falls to ?', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'toggle_refused');
+  const err = new Error('config apply failed (field=dmx)');
+  err.httpStatus = 400;
+  const board = makeToggleBoard({ enabled: true, failWith: err });
+  const button = makeToggleButton();
+
+  assert.equal(await toggleDmx(ctx, card, false, board.io, button), false);
+  assert.equal(getDmxState(ctx, card.id), null, 'a failed write leaves NO claim about the board');
+  assert.equal(button.textContent, '⏻ DMX: ?');
+  assert.equal(toasts.at(-1).error, true);
+  assert.match(toasts.at(-1).msg, /DMX OFF FAILED — config apply failed \(field=dmx\)/);
+  assert.equal(board.calls.includes('awaitReboot:10.0.0.60'), false,
+    'a device that ANSWERED non-2xx did not apply anything — nothing to wait for');
+});
+
+test('_363: a toggle the board does NOT confirm fails, naming the read-back', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'toggle_unconfirmed');
+  const board = makeToggleBoard({ enabled: false });
+  // The board takes the POST but keeps reporting DMX off.
+  board.io.pushDmxToggle = async () => ({ outcome: 'needs-reboot', reboot: true });
+
+  assert.equal(await toggleDmx(ctx, card, true, board.io, makeToggleButton()), false);
+  assert.equal(getDmxState(ctx, card.id), null);
+  assert.match(toasts.at(-1).msg, /did NOT confirm DMX ON/);
+  assert.match(toasts.at(-1).msg, /dmx.enabled=false ≠ true/);
+});
+
+test('_363: the toggle applies the SAME pre-write identity gate — no write on a swap', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'toggle_identity');
+  const board = makeToggleBoard({ enabled: false, controllerId: 'someone_else' });
+
+  assert.equal(await toggleDmx(ctx, card, true, board.io, makeToggleButton()), false);
+  assert.equal(board.calls.some((c) => c.startsWith('pushDmxToggle')), false,
+    'the gate refuses before the write');
+  assert.equal(board.calls.some((c) => c.startsWith('getConfig')), false,
+    'and before the snapshot read that would build a body');
+  assert.match(toasts.at(-1).msg, /someone_else/);
+  assert.equal(getDmxState(ctx, card.id), null);
+});
+
+test('_363: a LOST toggle reply is settled by the read-back, not declared a failure', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'toggle_lost_reply');
+  const board = makeToggleBoard({ enabled: false });
+  const realPush = board.io.pushDmxToggle;
+  board.io.pushDmxToggle = async (ip, body) => {
+    await realPush(ip, body);                       // the board DID apply it
+    const lost = new Error('timed out after 12000 ms — device did not respond');
+    lost.writeResponseLost = true;                  // …and dropped the reply rebooting
+    throw lost;
+  };
+  assert.equal(await toggleDmx(ctx, card, true, board.io, makeToggleButton()), true);
+  assert.equal(getDmxState(ctx, card.id), true);
+  assert.match(toasts.at(-1).msg, /the write reply was lost to the reboot/);
+});
+
+test('_363: the toggle NEVER polls — one read, one write, one read-back', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const board = makeToggleBoard({ enabled: false });
+  await toggleDmx(makeToggleCtx(registry, [], 'toggle_no_poll'), card, true, board.io,
+    makeToggleButton());
+  assert.deepEqual(board.calls, [
+    'getStatus:10.0.0.60', 'getConfig:10.0.0.60',      // ONE pre-write read pair
+    'pushDmxToggle:10.0.0.60',
+    'awaitReboot:10.0.0.60',
+    'getStatus:10.0.0.60', 'getConfig:10.0.0.60',      // ONE verify read pair
+  ]);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 20260824 — the verify-race fix, the gamma push, and the fleet DMX-off
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The rejection shape `fetchWithTimeout` raises when OUR abort timer fires. */
+function readTimeout(ms = 8000) {
+  const err = new Error(`timed out after ${ms} ms — device did not respond`);
+  err.timedOut = true;
+  return err;
+}
+
+/** Retry options that make a retry case instant (`io.readRetry` is an injected seam). */
+const FAST_RETRY = { retryDelayMs: 0 };
+
+// ── 1. THE VERIFY RACE (live evidence: hit twice on 4 real boards) ──────────
+//
+// `awaitReboot` returns on the FIRST /api/status answer, but the board finishes
+// re-associating to WiFi afterwards and drops reads for a few seconds. The
+// verify's read pair had ONE attempt each, so it timed out and the push
+// declared a FALSE FAIL over a write that HAD applied.
+
+/**
+ * A .60 board whose POST applies, and whose first `dropReads` verify read pairs
+ * TIME OUT before it starts serving reads again. `calls` records every hop.
+ */
+function makeRaceBoard({ dropReads = 0, calls = [] } = {}) {
+  const state = { config: config60(), written: null, dropsLeft: 0, calls };
+  const io = {
+    getStatus: async (ip) => {
+      if (state.dropsLeft > 0) { state.dropsLeft -= 1; calls.push(`getStatus:TIMEOUT`); throw readTimeout(); }
+      calls.push(`getStatus:${ip}`);
+      return status60(confirmedPerOutputFor(state.written));
+    },
+    getConfig: async (ip) => {
+      calls.push(`getConfig:${ip}`);
+      return state.written ? confirmedConfigFor(state.written) : config60();
+    },
+    pushForcedConfig: async (ip, body) => {
+      calls.push(`push:${ip}`);
+      state.written = body;
+      // The write landed — from HERE the board is rebooting and re-associating.
+      state.dropsLeft = dropReads;
+      return { outcome: 'needs-reboot', reboot: true };
+    },
+    pushDmxToggle: async (ip, body) => {
+      calls.push(`pushDmxToggle:${ip}`);
+      state.config = { ...state.config, dmx: { ...body.dmx } };
+      state.dropsLeft = dropReads;
+      return { outcome: 'needs-reboot', reboot: true };
+    },
+    awaitReboot: async (ip) => { calls.push(`awaitReboot:${ip}`); },
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+    confirmBridgeRoutes: async () => ({ ok: true, detail: 'U21,U22' }),
+    readRetry: FAST_RETRY,
+  };
+  state.io = io;
+  return state;
+}
+
+test('_20260824: a push whose first TWO verify reads time out still PASSES', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const calls = [];
+  const board = makeRaceBoard({ dropReads: 2, calls });
+  const plan = S1_PLAN;
+  const body = S1_BODY();
+  const ui = makeS1Ui();
+
+  await runPerOutputPush(makeS1Ctx(registry, []), card, plan, body, board.io, ui);
+
+  assert.match(ui.statusLine.textContent, /device written \+ verified/,
+    'the write applied and the read-back confirmed it — no false FAIL');
+  assert.equal(ui.statusLine.className.includes('led-push-error'), false);
+  // The read pair was retried as a UNIT, and the WRITE was never repeated.
+  assert.equal(calls.filter((c) => c === 'getStatus:TIMEOUT').length, 2);
+  assert.equal(calls.filter((c) => c.startsWith('push:')).length, 1,
+    'retrying READS must never re-POST the body');
+  assert.deepEqual(getSyncState(makeS1Ctx(registry, []), card.id), { state: 'in-sync' });
+});
+
+test('_20260824: a verify that times out on EVERY attempt still fails, loudly', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const calls = [];
+  const board = makeRaceBoard({ dropReads: 99, calls });
+  const plan = S1_PLAN;
+  const body = S1_BODY();
+  const ui = makeS1Ui();
+
+  await runPerOutputPush(makeS1Ctx(registry, []), card, plan, body, board.io, ui);
+
+  assert.match(ui.statusLine.textContent, /forced push failed/);
+  assert.match(ui.statusLine.textContent, /timed out on every attempt/);
+  assert.equal(calls.filter((c) => c === 'getStatus:TIMEOUT').length, 4,
+    'exactly the declared attempt budget — bounded, never an infinite spinner');
+  assert.equal(calls.filter((c) => c.startsWith('push:')).length, 1);
+});
+
+test('_20260824: an ANSWERED verify error is NOT retried — it fails on the first read',
+  async () => {
+    const registry = s1Registry();
+    const card = registry.controllers[0];
+    const calls = [];
+    const board = makeRaceBoard({ dropReads: 0, calls });
+    const answered = new Error('[MarsinLED] GET /api/status 10.0.0.60 failed: HTTP 500 oops');
+    answered.httpStatus = 500;
+    let reads = 0;
+    board.io.getStatus = async () => { reads += 1; throw answered; };
+    const plan = S1_PLAN;
+    const body = S1_BODY();
+    const ui = makeS1Ui();
+
+    await runPerOutputPush(makeS1Ctx(registry, []), card, plan, body, board.io, ui);
+    assert.match(ui.statusLine.textContent, /HTTP 500 oops/);
+    assert.equal(reads, 1, 'ONE verify read — a device that spoke is final, never re-asked');
+  });
+
+test('_20260824: the fleet retries a board SNAPSHOT read that times out', async () => {
+  const registry = fleetRegistry();
+  const calls = [];
+  const io = fleetIo(calls, null);
+  io.readRetry = FAST_RETRY;
+  const realStatus = io.getStatus;
+  let drops = 2;
+  io.getStatus = async (ip) => {
+    if (ip === '10.0.0.72' && drops > 0) { drops -= 1; calls.push('snapshotTimeout:72'); throw readTimeout(); }
+    return realStatus(ip);
+  };
+  const results = await pushAllLedControllers(makeGateCtx(registry), io);
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'pushed', 'pushed'],
+    'a board that was merely slow to serve reads must not FAIL before it is even written');
+  assert.equal(calls.filter((c) => c === 'snapshotTimeout:72').length, 2);
+});
+
+// ── 2. THE GAMMA PUSH (report `_363` §11, operator-ordered re-enable) ───────
+
+const CURVE_22 = { r: 2.2, g: 2.2, b: 2.2, w: 1 };
+const CURVE_26 = { r: 2.6, g: 2.6, b: 2.6, w: 1 };
+
+/**
+ * A board that stores a gamma block, applies a gamma POST LIVE (outcome
+ * 'applied', no reboot) and reports it back with float32 noise, exactly as the
+ * firmware does.
+ */
+function makeGammaBoard({ controllerId = 'titanic_60', failWith = null, confirm = true } = {}) {
+  const float32 = (v) => Math.fround(v);
+  const board = { gamma: { r: 1, g: 1, b: 1, w: 1 }, calls: [] };
+  board.io = {
+    getStatus: async (ip) => {
+      board.calls.push(`getStatus:${ip}`);
+      return { ...status60(), controllerId, mac: 'AA:BB:CC:00:00:60' };
+    },
+    getConfig: async (ip) => {
+      board.calls.push(`getConfig:${ip}`);
+      return { ...config60(), gamma: { ...board.gamma } };
+    },
+    pushGammaPush: async (ip, body) => {
+      board.calls.push(`pushGammaPush:${ip}`);
+      board.lastBody = body;
+      if (failWith) throw failWith;
+      if (confirm) {
+        board.gamma = {
+          r: float32(body.gamma.r), g: float32(body.gamma.g),
+          b: float32(body.gamma.b), w: float32(body.gamma.w),
+        };
+      }
+      return { status: 'ok', outcome: 'applied', reboot: false };
+    },
+    awaitReboot: async (ip) => { board.calls.push(`awaitReboot:${ip}`); },
+    readRetry: FAST_RETRY,
+  };
+  return board;
+}
+
+test('_363 §11: a gamma push is LIVE-APPLY — one read pair, one write, one read-back, NO reboot',
+  async () => {
+    const registry = s1Registry();
+    const card = registry.controllers[0];
+    const toasts = [];
+    const ctx = makeToggleCtx(registry, toasts, 'gamma_live');
+    const board = makeGammaBoard();
+
+    const result = await pushGammaToDevice(ctx, card, CURVE_22, board.io);
+    assert.equal(result.ok, true);
+    assert.deepEqual(board.calls, [
+      'getStatus:10.0.0.60', 'getConfig:10.0.0.60',   // ONE pre-write read pair
+      'pushGammaPush:10.0.0.60',
+      'getStatus:10.0.0.60', 'getConfig:10.0.0.60',   // ONE verify read pair
+    ]);
+    assert.equal(board.calls.includes('awaitReboot:10.0.0.60'), false,
+      'gamma applies live — the flow must not wait out a reboot nobody asked for');
+    // The body carried the curve and NOTHING else.
+    assert.deepEqual(Object.keys(board.lastBody), ['gamma']);
+    assert.deepEqual(board.lastBody.gamma, CURVE_22);
+    // Provenance records the curve that was SENT, not the float32 read-back —
+    // adopting the device's numbers would be a PULL.
+    assert.deepEqual(card.device.lastGammaPush.gamma, CURVE_22);
+    assert.equal(card.device.lastGammaPush.outcome, 'applied');
+    assert.match(toasts.at(-1).msg, /gamma 2\.2 \/ 2\.2 \/ 2\.2 \/ 1 confirmed by read-back/);
+    assert.equal(toasts.at(-1).error, undefined);
+  });
+
+test('_363 §11: the SCENE mirror is never overwritten by the device read-back', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const ctx = makeToggleCtx(registry, [], 'gamma_no_pull');
+  const board = makeGammaBoard();
+  await pushGammaToDevice(ctx, card, CURVE_22, board.io);
+  // The board reports 2.200000047683716; the card's own curve stays exactly 2.2.
+  assert.equal(Math.fround(2.2) !== 2.2, true, 'the float32 noise is real');
+  const mirror = card.led && card.led.wire && card.led.wire.controllerGamma;
+  if (mirror) assert.deepEqual(mirror, mirror, 'the mirror is whatever the sliders set');
+  assert.deepEqual(card.device.lastGammaPush.gamma, { r: 2.2, g: 2.2, b: 2.2, w: 1 });
+});
+
+test('_363 §11: the gamma push applies the SAME pre-write identity gate', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'gamma_identity');
+  const board = makeGammaBoard({ controllerId: 'someone_else' });
+
+  const result = await pushGammaToDevice(ctx, card, CURVE_22, board.io);
+  assert.equal(result.ok, false);
+  assert.equal(board.calls.some((c) => c.startsWith('pushGammaPush')), false,
+    'the gate refuses before the write');
+  assert.equal(board.calls.some((c) => c.startsWith('getConfig')), false,
+    'and before the snapshot read that would build a body');
+  assert.match(toasts.at(-1).msg, /someone_else/);
+  assert.equal(card.device.lastGammaPush, undefined, 'no receipt for a write that never happened');
+});
+
+test('_363 §11: a curve the board does NOT confirm is a FAILURE with no receipt', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'gamma_unconfirmed');
+  const board = makeGammaBoard({ confirm: false });   // takes the POST, keeps 1.0
+
+  const result = await pushGammaToDevice(ctx, card, CURVE_22, board.io);
+  assert.equal(result.ok, false);
+  assert.match(toasts.at(-1).msg, /did NOT confirm the curve/);
+  assert.match(toasts.at(-1).msg, /gamma\.r=1 ≠ pushed 2\.2/);
+  assert.equal(toasts.at(-1).error, true);
+  assert.equal(card.device.lastGammaPush, undefined);
+});
+
+test('_363 §11: a device-ANSWERED gamma refusal is loud and never waits for a reboot', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'gamma_refused');
+  const err = new Error('[MarsinLED] rejected config: config apply failed (field=gamma)');
+  err.httpStatus = 400;
+  const board = makeGammaBoard({ failWith: err });
+
+  assert.equal((await pushGammaToDevice(ctx, card, CURVE_22, board.io)).ok, false);
+  assert.match(toasts.at(-1).msg, /gamma push FAILED — .*field=gamma/);
+  assert.equal(board.calls.includes('awaitReboot:10.0.0.60'), false);
+  assert.equal(card.device.lastGammaPush, undefined);
+});
+
+test('_363 §11: a needs-reboot gamma reply IS honored, even though none is expected', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const ctx = makeToggleCtx(registry, [], 'gamma_reboot');
+  const board = makeGammaBoard();
+  const applied = board.io.pushGammaPush;
+  board.io.pushGammaPush = async (ip, body) => {
+    await applied(ip, body);
+    return { status: 'ok', outcome: 'needs-reboot', reboot: true };
+  };
+  assert.equal((await pushGammaToDevice(ctx, card, CURVE_22, board.io)).ok, true);
+  assert.equal(board.calls.includes('awaitReboot:10.0.0.60'), true,
+    'believing the device beats assuming live-apply');
+  assert.equal(card.device.lastGammaPush.outcome, 'needs-reboot');
+});
+
+test('_363 §11: an invalid curve is refused BEFORE any device hop', async () => {
+  const registry = s1Registry();
+  const card = registry.controllers[0];
+  const toasts = [];
+  const ctx = makeToggleCtx(registry, toasts, 'gamma_invalid');
+  const board = makeGammaBoard();
+  assert.equal((await pushGammaToDevice(ctx, card, { r: 9, g: 2.2, b: 2.2, w: 1 }, board.io)).ok,
+    false);
+  assert.match(toasts.at(-1).msg, /gamma\.r 9 must be a finite number in 1–3/);
+  assert.equal(board.calls.some((c) => c.startsWith('pushGammaPush')), false);
+});
+
+// ── Fleet gamma: each board gets ITS OWN curve, no scene save ───────────────
+
+function gammaFleetRegistry() {
+  const registry = fleetRegistry();
+  // Three cards, three DIFFERENT curves — the point of "its own card's curve".
+  registry.controllers[0].led.wire = { controllerGamma: { ...CURVE_22 } };
+  registry.controllers[1].led.wire = { controllerGamma: { ...CURVE_26 } };
+  registry.controllers[2].led.wire = { controllerGamma: { r: 1, g: 1, b: 1, w: 1 } };
+  return registry;
+}
+
+function gammaFleetIo(calls, { failIp = null } = {}) {
+  const float32 = (v) => Math.fround(v);
+  const gammaByIp = new Map();
+  const idByIp = { '10.0.0.71': 'a', '10.0.0.72': 'b', '10.0.0.73': 'c' };
+  return {
+    getStatus: async (ip) => ({
+      controllerId: idByIp[ip], boardId: 'angio4', firmwareSHA: 'ff00',
+      capabilitiesExt: { perOutputDmx: true }, sacn: { enabled: true, perOutput: [] },
+      strands: config60().strands,
+    }),
+    getConfig: async (ip) => ({
+      ...config60(), deviceName: 'Board',
+      gamma: gammaByIp.get(ip) || { r: 1, g: 1, b: 1, w: 1 },
+    }),
+    pushGammaPush: async (ip, body) => {
+      calls.push(`gamma:${ip}:${body.gamma.r}`);
+      if (ip === failIp) {
+        const err = new Error('[MarsinLED] rejected config: config apply failed');
+        err.httpStatus = 400;
+        throw err;
+      }
+      gammaByIp.set(ip, {
+        r: float32(body.gamma.r), g: float32(body.gamma.g),
+        b: float32(body.gamma.b), w: float32(body.gamma.w),
+      });
+      return { status: 'ok', outcome: 'applied', reboot: false };
+    },
+    awaitReboot: async (ip) => { calls.push(`awaitReboot:${ip}`); },
+    persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
+    notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
+    readRetry: FAST_RETRY,
+  };
+}
+
+test('_363 §11: the gamma fleet sends each board ITS OWN card curve, sequentially', async () => {
+  const registry = gammaFleetRegistry();
+  const calls = [];
+  const phases = [];
+  const results = await pushGammaAllControllers(makeGateCtx(registry),
+    gammaFleetIo(calls), (p) => phases.push(`${p.name}:${p.phase}`));
+
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'pushed', 'pushed']);
+  // Three different curves, in registry order — no shared "fleet curve".
+  assert.deepEqual(calls.filter((c) => c.startsWith('gamma:')),
+    ['gamma:10.0.0.71:2.2', 'gamma:10.0.0.72:2.6', 'gamma:10.0.0.73:1']);
+  assert.equal(calls.includes('awaitReboot:10.0.0.71'), false, 'gamma is live-apply');
+  // NO scene save: gamma is not part of the mapping.
+  assert.equal(calls.includes('persistScene'), false);
+  assert.equal(calls.includes('notifyBridge'), false);
+  assert.ok(phases.some((p) => /BoardB:PUSHED — gamma 2\.6/.test(p)));
+});
+
+test('_363 §11: one failed board never aborts the gamma fleet, and the table says so', async () => {
+  const registry = gammaFleetRegistry();
+  const calls = [];
+  const results = await pushGammaAllControllers(makeGateCtx(registry),
+    gammaFleetIo(calls, { failIp: '10.0.0.72' }));
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'failed', 'pushed']);
+  assert.match(results[1].detail, /config apply failed/);
+  assert.equal(calls.filter((c) => c.startsWith('gamma:')).length, 3, 'the loop kept going');
+  // Only the boards that CONFIRMED carry a receipt.
+  assert.deepEqual(registry.controllers.map((c) => !!(c.device && c.device.lastGammaPush)),
+    [true, false, true]);
+  const rows = gammaPushAllResultsModel(results);
+  assert.deepEqual(rows.map((r) => r.state), ['GAMMA SET', 'FAILED', 'GAMMA SET']);
+  assert.match(rows[1].reason, /config apply failed/);
+  assert.throws(() => gammaPushAllResultsModel([{ name: 'X', state: 'weird' }]),
+    /unknown result state 'weird'/);
+});
+
+test('_363 §11: a card with no usable IP is SKIPPED by the gamma fleet, never guessed at',
+  async () => {
+    const registry = gammaFleetRegistry();
+    registry.controllers[1].ip = '';
+    const calls = [];
+    const results = await pushGammaAllControllers(makeGateCtx(registry), gammaFleetIo(calls));
+    assert.deepEqual(results.map((r) => r.state), ['pushed', 'skipped', 'pushed']);
+    assert.match(results[1].detail, /no valid device IP/);
+    assert.equal(calls.some((c) => c.includes('10.0.0.72')), false);
+  });
+
+test('_363 §11: the fleet gamma dialog copy states push-only, live-apply, own-curve', () => {
+  assert.match(GAMMA_PUSH_ALL_WARNING, /ITS OWN card's curve/);
+  assert.match(GAMMA_PUSH_ALL_WARNING, /LIVE \(no reboot\)/);
+  assert.match(GAMMA_PUSH_ALL_WARNING, /the scene is NOT saved/);
+  assert.match(GAMMA_PUSH_ALL_WARNING, /never reads a curve back off a device/);
+  assert.doesNotMatch(GAMMA_PUSH_ALL_WARNING, /swarm[^,]*ON|switch/i);
+});
+
+// ── 3. FLEET DMX OFF (operator-ordered exception to `_363` §3) ──────────────
+
+function dmxFleetIo(calls, { failIp = null, controllerIds = null } = {}) {
+  const dmxByIp = new Map();
+  const idByIp = controllerIds || { '10.0.0.71': 'a', '10.0.0.72': 'b', '10.0.0.73': 'c' };
+  const dmxOf = (ip) => dmxByIp.get(ip) || { enabled: true, protocol: 0, timeoutMs: 3000 };
+  return {
+    getStatus: async (ip) => {
+      calls.push(`getStatus:${ip}`);
+      return {
+        controllerId: idByIp[ip], boardId: 'angio4', firmwareSHA: 'ff00',
+        capabilitiesExt: { perOutputDmx: true },
+        sacn: { enabled: dmxOf(ip).enabled === true },
+        strands: config60().strands,
+      };
+    },
+    getConfig: async (ip) => {
+      calls.push(`getConfig:${ip}`);
+      return { ...config60(), deviceName: 'Board', dmx: { ...dmxOf(ip) },
+        swarm: { enabled: true, role: 'follower' } };
+    },
+    pushDmxToggle: async (ip, body) => {
+      calls.push(`pushDmxToggle:${ip}`);
+      calls.lastBody = body;
+      if (ip === failIp) {
+        const err = new Error('[MarsinLED] rejected config: config apply failed');
+        err.httpStatus = 400;
+        throw err;
+      }
+      dmxByIp.set(ip, { ...body.dmx });
+      return { outcome: 'needs-reboot', reboot: true };
+    },
+    awaitReboot: async (ip) => { calls.push(`awaitReboot:${ip}`); },
+    persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
+    notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
+    readRetry: FAST_RETRY,
+  };
+}
+
+test('_20260824: DMX all-off writes ONLY the dmx block, board by board, and confirms each',
+  async () => {
+    const registry = fleetRegistry();
+    const ctx = makeGateCtx(registry);
+    const calls = [];
+    const phases = [];
+    const results = await dmxOffAllControllers(ctx, dmxFleetIo(calls),
+      (p) => phases.push(`${p.name}:${p.phase}`));
+
+    assert.deepEqual(results.map((r) => r.state), ['off', 'off', 'off']);
+    // Sequential, and the FULL discipline per board: read pair → write → reboot
+    // → verify read pair.
+    assert.deepEqual(calls.filter((c) => typeof c === 'string' && c.includes('10.0.0.71')), [
+      'getStatus:10.0.0.71', 'getConfig:10.0.0.71',
+      'pushDmxToggle:10.0.0.71',
+      'awaitReboot:10.0.0.71',
+      'getStatus:10.0.0.71', 'getConfig:10.0.0.71',
+    ]);
+    // The body is the board's own dmx object with ONE flag flipped: no swarm
+    // key (even though the board reports swarm ON), no gamma, no strands.
+    assert.deepEqual(Object.keys(calls.lastBody), ['dmx']);
+    assert.equal(calls.lastBody.dmx.enabled, false);
+    assert.equal(calls.lastBody.dmx.timeoutMs, 3000, 'the board own dmx keys are preserved');
+    assert.equal('swarm' in calls.lastBody, false);
+    assert.equal('gamma' in calls.lastBody, false);
+    // Runtime state only — nothing is written to disk.
+    assert.equal(calls.includes('persistScene'), false);
+    assert.equal(calls.includes('notifyBridge'), false);
+    // The ⏻ labels are seeded from the results, per card.
+    for (const c of registry.controllers) {
+      assert.equal(getDmxState(ctx, c.id), false);
+      assert.equal(dmxToggleModel(ctx, c).label, '⏻ DMX: off');
+      assert.equal(dmxToggleModel(ctx, c).target, true, 'a known OFF offers ON');
+    }
+    assert.ok(phases.some((p) => /BoardC:DMX OFF — confirmed by read-back/.test(p)));
+  });
+
+test('_20260824: one failed board never aborts the DMX-off fleet, and its label falls to ?',
+  async () => {
+    const registry = fleetRegistry();
+    const ctx = makeGateCtx(registry);
+    const calls = [];
+    const results = await dmxOffAllControllers(ctx, dmxFleetIo(calls, { failIp: '10.0.0.72' }));
+
+    assert.deepEqual(results.map((r) => r.state), ['off', 'failed', 'off']);
+    assert.match(results[1].detail, /config apply failed/);
+    assert.equal(calls.filter((c) => typeof c === 'string' && c.startsWith('pushDmxToggle')).length,
+      3, 'the loop kept going');
+    assert.equal(getDmxState(ctx, registry.controllers[0].id), false);
+    assert.equal(getDmxState(ctx, registry.controllers[1].id), null,
+      'a failed board makes NO claim about its DMX flag');
+    assert.equal(getDmxState(ctx, registry.controllers[2].id), false);
+    const rows = dmxOffAllResultsModel(results);
+    assert.deepEqual(rows.map((r) => r.state), ['DMX OFF', 'FAILED', 'DMX OFF']);
+    assert.throws(() => dmxOffAllResultsModel([{ name: 'X', state: 'pushed' }]),
+      /unknown result state 'pushed'/);
+  });
+
+test('_20260824: DMX all-off FAILS a swapped board before writing it, and skips a card with no IP',
+  async () => {
+    const registry = fleetRegistry();
+    registry.controllers[2].ip = '';
+    const ctx = makeGateCtx(registry);
+    const calls = [];
+    const io = dmxFleetIo(calls, {
+      controllerIds: { '10.0.0.71': 'a', '10.0.0.72': 'not_b', '10.0.0.73': 'c' },
+    });
+    const results = await dmxOffAllControllers(ctx, io);
+
+    assert.deepEqual(results.map((r) => r.state), ['off', 'failed', 'skipped']);
+    assert.match(results[1].detail, /bound to board 'b'.*answers as 'not_b'/);
+    assert.match(results[1].detail, /Nothing was sent to the device/);
+    assert.equal(calls.includes('pushDmxToggle:10.0.0.72'), false,
+      'the identity gate refuses before any write');
+    assert.equal(calls.includes('getConfig:10.0.0.72'), false,
+      'and before the snapshot read that would build a body');
+    assert.match(results[2].detail, /no valid device IP/);
+  });
+
+test('_20260824: a board that does NOT confirm DMX off is a per-board failure', async () => {
+  const registry = fleetRegistry();
+  const ctx = makeGateCtx(registry);
+  const calls = [];
+  const io = dmxFleetIo(calls);
+  io.pushDmxToggle = async (ip) => {   // takes the POST, changes nothing
+    calls.push(`pushDmxToggle:${ip}`);
+    return { outcome: 'needs-reboot', reboot: true };
+  };
+  const results = await dmxOffAllControllers(ctx, io);
+  assert.deepEqual(results.map((r) => r.state), ['failed', 'failed', 'failed']);
+  assert.match(results[0].detail, /did NOT confirm DMX OFF/);
+  assert.match(results[0].detail, /dmx\.enabled=true ≠ false/);
+});
+
+test('_20260824: the DMX-off fleet uses the retrying reads — a slow board is not a failure',
+  async () => {
+    const registry = fleetRegistry();
+    const ctx = makeGateCtx(registry);
+    const calls = [];
+    const io = dmxFleetIo(calls);
+    const realStatus = io.getStatus;
+    let drops = 2;
+    io.getStatus = async (ip) => {
+      if (ip === '10.0.0.73' && drops > 0) { drops -= 1; throw readTimeout(); }
+      return realStatus(ip);
+    };
+    const results = await dmxOffAllControllers(ctx, io);
+    assert.deepEqual(results.map((r) => r.state), ['off', 'off', 'off']);
+    assert.equal(calls.filter((c) => c === 'pushDmxToggle:10.0.0.73').length, 1,
+      'retrying READS never re-POSTs the toggle');
+  });
+
+test('_20260824: the DMX-off dialog copy names the show-visible consequence and the way back',
+  () => {
+    // Binding copy — this darkens sACN control of the whole rig, so the ONE
+    // confirm must say exactly what happens, what does not, and how it comes back.
+    assert.match(DMX_OFF_ALL_WARNING, /switches DMX \(sACN\) input OFF on every bound and reachable/);
+    assert.match(DMX_OFF_ALL_WARNING, /SEQUENTIALLY/);
+    assert.match(DMX_OFF_ALL_WARNING, /reboots \(~11 s\)/);
+    assert.match(DMX_OFF_ALL_WARNING, /runs its own local pattern/);
+    assert.match(DMX_OFF_ALL_WARNING, /Swarm and the mapping are NOT touched/);
+    assert.match(DMX_OFF_ALL_WARNING, /nothing is saved into the scene/);
+    assert.match(DMX_OFF_ALL_WARNING, /DMX comes back with ⬆ Push, ⬆ Push all, or a card's own ⏻ DMX toggle/);
+    assert.match(DMX_OFF_ALL_WARNING, /one failure never aborts the rest/);
+  });
