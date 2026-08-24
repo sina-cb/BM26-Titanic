@@ -82,6 +82,7 @@ import {
   GlobalEffectSlotBehavior,
 } from '@/utils/midi';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
+import { midiControllerConnected } from '@/utils/midi/controller_visibility';
 import {
   combinedAutopilotTarget,
   combinedAutopilotLedOn,
@@ -467,15 +468,23 @@ function _setWindow(channelId: string, start: number, size: number): void {
   _windowListeners.forEach((cb) => { try { cb(); } catch { /* ignore */ } });
 }
 
-/** Read the active MIDI browse window for a mixer channel (null if none). */
+/** Read the APC Mini browse window for a mixer channel. The six-row blue
+ *  navigation highlight is hardware-specific: when the APC is absent, hide it
+ *  even if `_windows` still retains the controller's last cursor. */
 export function useMidiWindow(channelId: string | undefined): MidiWindow | null {
-  const [w, setW] = useState<MidiWindow | null>(channelId ? _windows.get(channelId) ?? null : null);
+  const midi = useMidiStatus();
+  const apcConnected = midiControllerConnected(midi.statuses, 'apc_mini_mk2');
+  const [w, setW] = useState<MidiWindow | null>(
+    apcConnected && channelId ? _windows.get(channelId) ?? null : null,
+  );
   useEffect(() => {
-    const update = () => setW(channelId ? _windows.get(channelId) ?? null : null);
+    const update = () => setW(
+      apcConnected && channelId ? _windows.get(channelId) ?? null : null,
+    );
     _windowListeners.add(update);
     update();
     return () => { _windowListeners.delete(update); };
-  }, [channelId]);
+  }, [channelId, apcConnected]);
   return w;
 }
 
@@ -775,6 +784,14 @@ export function useMidiStatus(): MidiControlState {
     return () => { _listeners.delete(setS); };
   }, []);
   return s;
+}
+
+/** Live controller-presence hook for hardware-specific UI. Generic MIDI
+ *  surfaces should keep using `useMidiStatus`; only affordances that name or
+ *  visualize one physical controller should use this gate. */
+export function useMidiControllerConnected(deviceId: string): boolean {
+  const state = useMidiStatus();
+  return midiControllerConnected(state.statuses, deviceId);
 }
 
 // ── Performance-dialog controller affordance ───────────────────────────────
@@ -1205,6 +1222,7 @@ export function useMidiControl(): MidiControlState {
     const mapStatusSlot = (s: {
       slotId: number; active?: unknown; behavior?: unknown;
       effectId?: unknown; label?: unknown; enabled?: unknown;
+      color?: unknown;
       intensity?: unknown; intensityDefault?: unknown;
       mode?: unknown; modeLabel?: unknown; modeValues?: unknown;
     }) => ({
@@ -1220,6 +1238,11 @@ export function useMidiControl(): MidiControlState {
         ? ''
         : (typeof s.effectId === 'string' ? s.effectId : undefined),
       label: typeof s.label === 'string' ? s.label : undefined,
+      color: Array.isArray(s.color)
+        && s.color.length === 3
+        && s.color.every((component) => typeof component === 'number')
+        ? [s.color[0], s.color[1], s.color[2]] as [number, number, number]
+        : null,
       // Thread the engine's per-slot behavior ('toggle' | 'trigger' | 'hold') so
       // the pad dispatch is BEHAVIOR-AWARE — a 'trigger' slot (Iceberg Flash /
       // White Drop) must fire 'trigger', not 'toggle'. The REST field is a bare

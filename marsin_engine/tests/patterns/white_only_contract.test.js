@@ -5,7 +5,7 @@
 //   1. WHITE MEANS WHITE. Zero chroma — R = G = B exactly, on every pixel of
 //      every sampled frame, on BOTH show models. Native white is W = A
 //      matched; UV is always zero. One shared WHITE AUTHORITY block owns the
-//      emit path and is byte-identical across all twenty sources, so a stray
+//      emit path and is byte-identical across every source, so a stray
 //      tint is a hash failure before it is ever a pixel.
 //   2. NOT A FLAT WHITE BLAST. "High contrast white … not always and too
 //      white": the level histogram must show a real mid/low body under the
@@ -18,7 +18,7 @@
 //   3. DARK AREAS SPARINGLY. Time-averaged dark fraction (byte < 8) <= 0.20,
 //      and no named Titanic region is ever permanently dark — the rig stays
 //      visible (night-visibility mission).
-//   4. ALIVE AND DISTINCT. Every keeper animates, and all twenty are
+//   4. ALIVE AND DISTINCT. Every source animates, and all are
 //      pairwise distinguishable.
 //   5. SILENCE == MUSIC. No audio hooks at all — grep-gated.
 //
@@ -44,7 +44,9 @@ const SCENES_DIR = path.resolve(ENGINE_DIR, '..', 'simulation', 'scenes');
 const SCENES = ['titanic', 'test_bench'];
 const MODELS = ['titanic', 'test_bench'];
 
-const KEEPERS = 20;
+const NIGHT_KEEPERS = 20;
+const DAY_DRAFTS = 5;
+const TOTAL_SOURCES = NIGHT_KEEPERS + DAY_DRAFTS;
 const NAME_RE = /^(\d\d)_([a-z0-9_]+)$/;
 
 // dt per beginFrame step. MUST stay under the VM's 0.1 s clamp.
@@ -59,6 +61,7 @@ function whiteIds() {
 }
 
 const IDS = whiteIds();
+const NIGHT_IDS = IDS.slice(0, NIGHT_KEEPERS);
 const SOURCE = new Map(IDS.map((id) => [id, fs.readFileSync(path.join(WHITE_DIR, `${id}.js`), 'utf8')]));
 
 const modelCache = new Map();
@@ -117,8 +120,9 @@ function levelAt(frame, pixelIndex) {
 
 // ── 1. curation ────────────────────────────────────────────────────────────
 
-test('white_only is exactly twenty numbered keepers in playlist order', () => {
-  assert.equal(IDS.length, KEEPERS, `expected ${KEEPERS} keepers, found ${IDS.length}: ${IDS.join(', ')}`);
+test('white_only has twenty night keepers followed by five numbered day drafts', () => {
+  assert.equal(IDS.length, TOTAL_SOURCES,
+    `expected ${TOTAL_SOURCES} sources, found ${IDS.length}: ${IDS.join(', ')}`);
   IDS.forEach((id, index) => {
     const match = NAME_RE.exec(id);
     assert.ok(match, `${id}: file name must be NN_snake_name`);
@@ -174,8 +178,10 @@ test('no palette exports, no audio hooks, the shared speed law', () => {
     if (sliders.includes('sliderDirection')) {
       assert.equal(sliders[1], 'sliderDirection', `${id}: direction must be the second knob`);
     }
-    assert.match(source, /export var localSpeed = 0\.30;/,
-      `${id}: code default localSpeed must be the 0.30 reference point`);
+    if (NIGHT_IDS.includes(id)) {
+      assert.match(source, /export var localSpeed = 0\.30;/,
+        `${id}: night source default localSpeed must be the 0.30 reference point`);
+    }
   }
 });
 
@@ -219,7 +225,7 @@ for (const modelName of MODELS) {
 //   - frac(< 124) >= 30%: a real mid/low-gray body under the peaks
 //     ("the colors are not always and too white").
 test('intensity texture: real mid body, real crisp peaks, never a wash (titanic)', async () => {
-  for (const id of IDS) {
+  for (const id of NIGHT_IDS) {
     const frames = await titanicSeries(id);
     const loaded = await model('titanic');
     const lit = [];
@@ -255,7 +261,7 @@ test('intensity texture: real mid body, real crisp peaks, never a wash (titanic)
 
 test('no named titanic region is permanently dark', async () => {
   const loaded = await model('titanic');
-  for (const id of IDS) {
+  for (const id of NIGHT_IDS) {
     const frames = await titanicSeries(id);
     const coverage = measureNamedRegionCoverage(loaded.pixels, frames);
     for (const [region, stats] of Object.entries(coverage)) {
@@ -287,9 +293,9 @@ test('every keeper is visibly animated (titanic)', async () => {
   }
 });
 
-// ── 8. distinctness across the twenty ──────────────────────────────────────
+// ── 8. distinctness across the complete source family ─────────────────────
 
-test('all twenty keepers are pairwise distinct (titanic)', async () => {
+test('all white-only sources are pairwise distinct (titanic)', async () => {
   const loaded = await model('titanic');
   const signatures = new Map();
   for (const id of IDS) {
@@ -337,16 +343,17 @@ test('white_only playlist: byte-identical scenes, resolving entries, playlist or
 
   const text = copies[0].toString('utf8');
   const referenced = [...text.matchAll(/pattern: (white_only\/[a-z0-9_]+)/g)].map((m) => m[1]);
-  assert.equal(referenced.length, KEEPERS, `playlist must carry all ${KEEPERS} family entries`);
+  assert.equal(referenced.length, NIGHT_KEEPERS,
+    `night review playlist must carry its ${NIGHT_KEEPERS} keeper entries`);
   referenced.forEach((qualified, index) => {
     const id = qualified.split('/')[1];
-    assert.equal(id, IDS[index],
-      `playlist position ${index + 1} is ${qualified}, expected white_only/${IDS[index]} — numbering IS playlist order`);
+    assert.equal(id, NIGHT_IDS[index],
+      `playlist position ${index + 1} is ${qualified}, expected white_only/${NIGHT_IDS[index]} — numbering IS playlist order`);
     assert.ok(fs.existsSync(path.join(WHITE_DIR, `${id}.js`)), `${qualified}: file missing`);
   });
   // Every family entry loads at the authored reference point.
   const entryBlocks = text.split(/\n  - id: /).filter((block) => block.includes('pattern: white_only/'));
-  assert.equal(entryBlocks.length, KEEPERS);
+  assert.equal(entryBlocks.length, NIGHT_KEEPERS);
   for (const block of entryBlocks) {
     assert.match(block, /sliderLocalSpeed: 0\.3\b/,
       'family entries must load at the sliderLocalSpeed 0.30 reference point');

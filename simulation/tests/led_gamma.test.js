@@ -14,6 +14,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import {
   GAMMA_CURVE_GEOMETRY,
@@ -23,15 +24,21 @@ import {
   LED_GAMMA_RECOMMENDED,
   LED_GAMMA_STEP,
   activeGammaPresetKey,
+  clearGammaRefreshCache,
+  commitGammaRefresh,
   commitGammaPush,
+  fleetGammaSourcePlan,
   formatGamma,
   gammaCurvePath,
   gammaEquals,
+  gammaPushRequestBody,
+  gammaRefreshState,
   parseGammaField,
   pushGammaFleet,
   pushGammaToController,
   quantizeGamma,
   readGammaMirror,
+  refreshGammaFromController,
   setGammaMirror,
   summarizeFleetResults,
   validateGammaMirror,
@@ -87,6 +94,10 @@ test('validateGammaMirror enforces the controller-accepted range and the key set
   assert.throws(() => validateGammaMirror({ r: 3.1, g: 2, b: 2, w: 1 }), /must be a number in/);
   assert.throws(() => validateGammaMirror({ r: 2, g: 2, b: 2 }), /\.w/);
   assert.throws(() => validateGammaMirror({ r: 2, g: 2, b: 2, w: 1, x: 1 }), /unknown key/);
+  assert.throws(() => validateGammaMirror({ r: '2.2', g: 2, b: 2, w: 1 }),
+    /must be a number/);
+  assert.throws(() => validateGammaMirror({ r: true, g: 2, b: 2, w: 1 }),
+    /must be a number/);
   assert.throws(() => validateGammaMirror(2.2), /must be an object/);
 });
 
@@ -114,6 +125,15 @@ test('gammaEquals / formatGamma', () => {
   assert.ok(!gammaEquals({ r: 2.2, g: 2.2, b: 2.2, w: 1 }, { r: 2.2, g: 2.3, b: 2.2, w: 1 }));
   assert.ok(!gammaEquals(null, { r: 1, g: 1, b: 1, w: 1 }));
   assert.equal(formatGamma({ r: 2.2, g: 2.2, b: 2.2, w: 1 }), '2.2 / 2.2 / 2.2 / 1');
+});
+
+test('browser gamma request carries only ip, four-channel gamma, and controller name', () => {
+  const gamma = { r: 2.1, g: 2.2, b: 2.3, w: 1 };
+  assert.deepEqual(gammaPushRequestBody('192.0.2.5', gamma, 'LED-A'), {
+    ip: '192.0.2.5',
+    gamma,
+    controllerName: 'LED-A',
+  });
 });
 
 // ── Mirror writes ───────────────────────────────────────────────────────────
@@ -268,16 +288,66 @@ test('pushGammaToController sends the mirror curve and commits the verified read
   assert.deepEqual(controller.device.lastGammaPush.gamma, { r: 2.2, g: 2.3, b: 2.2, w: 1 });
 });
 
-test('a device that answered with DIFFERENT values mirrors what the HARDWARE reports', async () => {
-  // The read-back is the truth. (The server refuses a mismatched write, but if
-  // a device ever normalizes a value, the mirror must follow the hardware.)
+test('a different saved-config read-back is refused before the scene mirror changes', async () => {
   const controller = boundLedController();
   setGammaMirror(controller, { r: 2.2, g: 2.3, b: 2.2, w: 1 });
   const transport = okTransport({ r: 2.2, g: 2.2, b: 2.2, w: 1 });
   const res = await pushGammaToController(controller, transport,
     (c, result) => commitGammaPush(c, result));
-  assert.equal(res.state, 'ok');
-  assert.deepEqual(readGammaMirror(controller), { r: 2.2, g: 2.2, b: 2.2, w: 1 });
+  assert.equal(res.state, 'failed');
+  assert.match(res.detail, /read-back MISMATCH/);
+  assert.deepEqual(readGammaMirror(controller), { r: 2.2, g: 2.3, b: 2.2, w: 1 });
+  assert.equal(controller.device.lastGammaPush, undefined);
+});
+
+test('fleet source auto-resolves only when every displayed curve is identical', () => {
+  const a = boundLedController({ id: 1, name: 'A' });
+  const b = boundLedController({ id: 2, name: 'B' });
+  const shared = { r: 2.1, g: 2.2, b: 2.3, w: 1 };
+  setGammaMirror(a, shared);
+  setGammaMirror(b, shared);
+  const plan = fleetGammaSourcePlan([a, b]);
+  assert.equal(plan.requiresSelection, false);
+  assert.deepEqual(plan.gamma, shared);
+  assert.match(plan.sourceLabel, /shared by every displayed/);
+});
+
+test('differing fleet curves refuse until one displayed source is explicit', () => {
+  const a = boundLedController({ id: 1, name: 'A' });
+  const b = boundLedController({ id: 2, name: 'B' });
+  setGammaMirror(a, { r: 2.1, g: 2.1, b: 2.1, w: 1 });
+  setGammaMirror(b, { r: 2.6, g: 2.6, b: 2.6, w: 1 });
+  const refused = fleetGammaSourcePlan([a, b]);
+  assert.equal(refused.requiresSelection, true);
+  assert.equal(refused.gamma, null);
+  const chosen = fleetGammaSourcePlan([a, b], b.id);
+  assert.deepEqual(chosen.gamma, readGammaMirror(b));
+  assert.match(chosen.sourceLabel, /^B /);
+});
+
+test('one frozen source curve reaches every controller despite later source mutation', async () => {
+  const a = boundLedController({ id: 1, name: 'A', ip: '10.0.0.5' });
+  const b = boundLedController({ id: 2, name: 'B', ip: '10.0.0.6' });
+  const chosen = { r: 2.1, g: 2.2, b: 2.3, w: 1 };
+  setGammaMirror(a, chosen);
+  setGammaMirror(b, { r: 2.8, g: 2.8, b: 2.8, w: 1 });
+  const gammaSnapshot = Object.freeze({ ...fleetGammaSourcePlan([a, b], a.id).gamma });
+  setGammaMirror(a, { r: 3, g: 3, b: 3, w: 1 });
+
+  const transport = okTransport(gammaSnapshot);
+  const results = await pushGammaFleet([a, b], transport, { gammaSnapshot });
+  assert.deepEqual(results.map((result) => result.state), ['ok', 'ok']);
+  assert.equal(transport.calls.length, 2);
+  for (const call of transport.calls) assert.deepEqual(call.gamma, chosen);
+});
+
+test('a fleet refuses a missing shared snapshot before any write', async () => {
+  const controller = boundLedController();
+  const transport = okTransport({ r: 1, g: 1, b: 1, w: 1 });
+  const results = await pushGammaFleet([controller], transport);
+  assert.equal(results[0].state, 'failed');
+  assert.match(results[0].detail, /confirmed fleet gamma curve is missing/);
+  assert.equal(transport.calls.length, 0);
 });
 
 test('an unreachable controller is reported as such and leaves the mirror UNTOUCHED', async () => {
@@ -312,6 +382,107 @@ test('a controller without a usable IP is skipped, never pushed', async () => {
   assert.equal(transport.calls.length, 0);
 });
 
+// ── Bounded saved-config refresh ────────────────────────────────────────────
+
+function gammaReadResult(gamma = { r: 2.2, g: 2.3, b: 2.4, w: 1 }, overrides = {}) {
+  return {
+    gamma,
+    controllerId: 'bench_1',
+    deviceName: 'Bench-1',
+    boardId: 'angio4-old',
+    firmwareSHA: 'sha-1',
+    ...overrides,
+  };
+}
+
+test('panel-open refresh is one GET; concurrent/rerender calls coalesce within TTL', async () => {
+  const controller = boundLedController();
+  clearGammaRefreshCache(controller);
+  let reads = 0;
+  let resolveRead;
+  const transport = {
+    readGamma: () => {
+      reads += 1;
+      return new Promise((resolve) => { resolveRead = resolve; });
+    },
+  };
+  let clock = 1000;
+  const options = { now: () => clock, ttlMs: 100 };
+  const commit = (c, result) => commitGammaRefresh(c, result);
+  const first = refreshGammaFromController(controller, transport, commit, options);
+  const concurrent = refreshGammaFromController(controller, transport, commit, options);
+  assert.equal(first, concurrent);
+  assert.equal(reads, 1);
+  resolveRead(gammaReadResult());
+  await Promise.all([first, concurrent]);
+
+  clock = 1050;
+  const cached = await refreshGammaFromController(controller, transport, commit, options);
+  assert.equal(cached.cached, true);
+  assert.equal(reads, 1);
+  assert.deepEqual(readGammaMirror(controller), gammaReadResult().gamma);
+});
+
+test('TTL expiry and manual refresh each issue exactly one new GET', async () => {
+  const controller = boundLedController();
+  clearGammaRefreshCache(controller);
+  let reads = 0;
+  let clock = 1000;
+  const transport = { readGamma: async () => { reads += 1; return gammaReadResult(); } };
+  const commit = (c, result) => commitGammaRefresh(c, result);
+  const options = { now: () => clock, ttlMs: 100 };
+  await refreshGammaFromController(controller, transport, commit, options);
+  clock = 1200;
+  await refreshGammaFromController(controller, transport, commit, options);
+  await refreshGammaFromController(controller, transport, commit, { ...options, force: true });
+  assert.equal(reads, 3);
+});
+
+test('verified push primes refresh cache, so rerender performs zero GETs', async () => {
+  const controller = boundLedController();
+  clearGammaRefreshCache(controller);
+  const gamma = { r: 2.2, g: 2.3, b: 2.4, w: 1 };
+  await pushGammaToController(controller, okTransport(gamma),
+    (c, result) => commitGammaPush(c, result), { gamma });
+  let reads = 0;
+  const refreshed = await refreshGammaFromController(controller, {
+    readGamma: async () => { reads += 1; return gammaReadResult(gamma); },
+  }, (c, result) => commitGammaRefresh(c, result));
+  assert.equal(refreshed.cached, true);
+  assert.equal(reads, 0);
+  assert.deepEqual(gammaRefreshState(controller).gamma, gamma);
+});
+
+test('identity or malformed saved gamma refuses mirror update and caches the failure', async () => {
+  for (const response of [
+    gammaReadResult(undefined, { controllerId: 'other' }),
+    gammaReadResult({ r: '2.2', g: 2.2, b: 2.2, w: 1 }),
+  ]) {
+    const controller = boundLedController();
+    clearGammaRefreshCache(controller);
+    const before = readGammaMirror(controller);
+    let reads = 0;
+    const transport = { readGamma: async () => { reads += 1; return response; } };
+    const first = await refreshGammaFromController(controller, transport,
+      (c, result) => commitGammaRefresh(c, result));
+    const second = await refreshGammaFromController(controller, transport,
+      (c, result) => commitGammaRefresh(c, result));
+    assert.equal(first.state, 'failed');
+    assert.equal(second.cached, true);
+    assert.equal(reads, 1);
+    assert.deepEqual(readGammaMirror(controller), before);
+  }
+});
+
+test('startup gamma refresh updates in place and never calls the parent refresh', () => {
+  const source = fs.readFileSync(new URL('../src/gui/led_gamma_ui.js', import.meta.url), 'utf8');
+  const body = source.match(/async function runGammaRefresh[\s\S]*?\n}/);
+  assert.ok(body, 'runGammaRefresh must exist');
+  assert.doesNotMatch(body[0], /ctx\.refresh\(/);
+  assert.match(source, /ctx\.mutateInPlace\(null/);
+  assert.match(source, /failed\.length \+ unreachable\.length \+ skipped\.length/);
+});
+
 // ── Fleet push ──────────────────────────────────────────────────────────────
 
 test('pushGammaFleet reports EVERY controller and one failure never aborts the rest', async () => {
@@ -338,6 +509,7 @@ test('pushGammaFleet reports EVERY controller and one failure never aborts the r
 
   const progress = [];
   const results = await pushGammaFleet([a, b, c, dmx], transport, {
+    gammaSnapshot: { r: 1, g: 1, b: 1, w: 1 },
     commit: (ctl, result) => commitGammaPush(ctl, result),
     onResult: (record, done, total) => progress.push([record.name, record.state, done, total]),
   });

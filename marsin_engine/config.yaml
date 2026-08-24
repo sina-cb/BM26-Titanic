@@ -341,7 +341,7 @@ party:
   ambientFloor: 0.09
   marginX: 2.5
   kickRateMin: 1.2
-  kickRateMax: 3.2
+  kickRateMax: 3.8
   kickRegMin: 0.45
   requireBpmLock: true
   shapeLowMin: 0.2
@@ -461,3 +461,45 @@ colorAutopilot:
   delay_s: 5
   shuffle: false
   transitionMs: 1000
+  # BM26 bikes (MarsinLED controllers) — mirrors the engine's shared global palette
+# (colorPalette1/2) out to the bikes' /api/colors so a bike rolling past the
+# ship reads as part of the same show. See lib/bike_color_share.js for the
+# full contract; every field below is optional and takes the default shown.
+bike_color_share:
+  # Master switch. MUST default to false — merging this feature must not make
+  # the live rig start scanning IP ranges on its own.
+  enabled: false
+  # Comma-separated scan targets, each entry one of:
+    #   'A.B.C.D'          (uses `port` below)
+    #   'A.B.C.D:port'     (explicit port)
+    #   'A.B.C.[D...E]'    (inclusive last-octet bracket range)
+    #   'A.B.C.[D...E]:port' (bracket range with explicit port)
+    #   'A.B.C.D-A.B.C.E'  (inclusive last-octet range, uses `port` below)
+  # Example (TEST-NET, never a real LAN address): '192.0.2.10-192.0.2.20'
+  # Required non-empty when enabled: true. Total expansion is capped at 256
+  # addresses (conservative pacing for ESP32-class devices).
+  targets: ''
+  # Default port for any target entry that doesn't specify one. Default: 80.
+  # port: 80
+  # How often (ms) a full discovery sweep re-resolves controllerId -> address
+  # across every expanded target. Default: 15000.
+  # scanIntervalMs: 15000
+  # Per-request timeout (ms) for a discovery/support-check probe. Default: 2000.
+  # probeTimeoutMs: 2000
+  # Gap (ms) between requests within one sweep or push cycle — sequential,
+  # never parallel, to stay gentle on ESP32-class HTTP servers. Default: 50.
+  # probeStaggerMs: 50
+    # The keepalive cycle POSTs shared global Color 1/2 to every LINKED bike on
+    # a fixed 10 s cadence. This is not operator-tunable.
+    # pushIntervalMs: 10000
+  # Per-request timeout (ms) for a color push. Default: 3000.
+  # pushTimeoutMs: 3000
+  # Consecutive push failures before a LINKED bike is marked STALE (its lease
+  # will then expire firmware-side). Default: 2.
+  # staleAfterFailures: 2
+  # STALE -> GONE after this many ms unseen by a discovery sweep. Default:
+  # 300000 (5 min).
+  # goneAfterMs: 300000
+  # GONE -> dropped from the registry entirely after this many ms unseen.
+  # Default: 1800000 (30 min).
+  # dropAfterMs: 1800000

@@ -3,7 +3,7 @@ name: bm26_show_readiness
 status: active
 owner: Sina (lead artist) — coordinator agent acts as readiness manager
 created: 2026-07-27
-updated: 2026-08-17
+updated: 2026-08-20
 ---
 
 # BM26 Show Readiness — Master Program
@@ -24,6 +24,36 @@ party moments, never stuck.
 Sub-project dossiers link from here; this doc tracks the PROGRAM. Ops
 detail per thread lives in `../memory/bm_readiness_thread_tracker.md`
 (**canonical, most-current state**).
+
+## MUST-HAVE program (operator-declared 2026-08-20) — the show-critical four
+
+Priority-ordered by the operator. Everything else in this doc yields to these.
+
+**End-of-day 2026-08-20 state:** branch `feat/bm_readiness` synced to
+`65f8e058` (operator's native iPad MIDI commit; bike-panel `api.ts` append
+auto-merged cleanly, tsc clean). ALL of the day's wave output is
+UNCOMMITTED in the working tree by rule (commit only on operator order;
+security scanner clean on every tracked file): bike link engine+panel,
+timeline phase-aware+validator+follow-up fixes, smokestack repatch, seven
+reports, docs/77 v2 — plus the external author's FOREIGN-OWNED night-arc
+content (both scenes' `timeline/playa_default.yaml` + 16 `night_*`/
+`dusk_sprinkles`/`dust_beacon` playlists): no agent edits, reverts, or
+"cleans" those, ever (a rogue slice destroyed them once already; incident
+record in report `_338` §4; destructive git ops are permanently forbidden
+for all agents). Operator's hands-on checklist: report `_341` (living
+test sheet, §0–7 incl. §5b night-arc acceptance).
+
+| # | Must-have | State | Next action | Owner |
+|---|---|---|---|---|
+| 1 (highest) | **Party playlist fast/slow split** — from the blessed 53-entry `ambient_sound_reactive` (old `party_high`/`party_low` retired as sources) | **Proposal DONE** (report `_337`): FAST 26 / SLOW 27 in ramp order, tunings verbatim; 7 borderliners seated FAST for balance (flagged); recommends REUSING the `party_high`/`party_low` names (zero config ripple — verified reference list in report); old YAMLs archive-not-delete; ChatGPT review + salvage-audit appendices delivered to operator | Operator runs the ChatGPT review, returns verdicts; implementation wave then lands playlists + parity + gallery regen; engine restart activates | operator (external review) → coordinator wave |
+| 2 | **Night-arc timeline** — sunset white/slow start → color sprinkles → party window → sunrise wind-down → off ~9am; placeholder event slots (Baby, weddings, Maxa party, philharmonic party) | **v2 DONE** (`docs/77`): D1–D8 recorded; 8-phase arc with eligibility≠enablement (window 21:30→sunrise−120), 4 named deep-night blocks + quiet resets over a visibility floor, two-stage sunrise + `morning_watch` closing the morning gap to 09:00, master-restore contract (`M_IGNITION`), dust/audio-staleness/party-budget/power/takeover/dry-run sections, shuffle pinning per cue. 5 open decisions (OD-1..5) + gap list G1–G11 (G1 phase-aware defaultCue now HIGH) | **Arc content LANDED by the external author** in both scenes (plan v2 + 16 block playlists, foreign-owned, working tree, uncommitted) and validated 8/8 through the new assert harness (192-hour runs, restart probes). Engine plumbing landed (`_338`: phase-aware resume + validator). **Follow-up wave running**: stale phase-aware test rework, end-program resurrection guard, natural-expiry phase restore, 21:30 double-dispatch coalesce. Timeline UI redesign mock exists (local, out-of-repo) — awaiting operator direction ruling before any implementation | operator acceptance (test sheet §5b) + coordinator follow-ups |
+| 3 | **Bike link tested + deployed** (bikes on firmware 1.2.5+) | **Engine side LANDED** (report `_336`, coordinator-verified): `lib/bike_color_share.js` + `GET /bikes` + `POST /bikes/config`; DISCOVERED→LINKED→STALE→GONE registry keyed by controllerId; 30 s keepalive vs 60 s firmware lease; pushes the operator-visible active palette; disabled by default; engine suite 3959/3959 (was 3941), bike tests 18/18 re-run independently | Operator: enable + live-test on real bikes (now doable from the pad), then confirm on 1.2.5 when the fleet flashes. **Panel LANDED** (report `_340`, coordinator-verified 30/30): Config tab "BIKE COLOR LINK" card — five link states, lease countdown, enable/disable with 60 s self-revert warning; CaptainPad suite 2729 pass / 0 regressions | operator live test |
+| 4 | **Smokestack swarm tooling + checks** | CLI landed in MarsinLED (`deploy/smokestack_mode.py`, commit `c9c5c1d`, 76 tests, full suite green — coordinator-verified) | Scene repatch LANDED (report `_339`, coordinator-verified): all four ropes bound by controllerId — `.61` U30/31, `.62` U32/33, `.65` U36/37, `.66` U34/35; retired the hidden 5th rope card (bench board `.60`); sim suite unchanged (2546 pass); registry proposal updated to match. Remaining: operator reviews registry diff, reboots stale `.60`, confirms TE-sign `.63`/`.64` IPs, first live CLI dry-run over Ethernet; ropes flash to 1.2.5 when cut | operator gates |
+
+Wedding note: the wedding show was removed from the titanic scene during
+merge-readiness, but weddings are on the event list above — the night-arc
+design must carry the timeline-gated re-introduction path (flagged to the
+design wave as an open decision).
 
 ## Coordinator checkpoint — 2026-08-17
 

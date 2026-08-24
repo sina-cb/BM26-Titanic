@@ -17,6 +17,7 @@ import { lockCaptainPadOrientation } from '@/utils/app_orientation';
 
 export const unstable_settings = {
   anchor: '(tabs)',
+  initialRouteName: '(tabs)',
 };
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -31,7 +32,7 @@ function RootShell() {
 
   return (
     <NavThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
+      <Stack initialRouteName="(tabs)">
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>

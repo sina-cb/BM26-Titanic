@@ -39,7 +39,7 @@ function strandDev(enabled, count, pinData) {
 function deviceConfig() {
   return {
     strands: [strandDev(true, 40, 35), strandDev(false, 40, 36)],
-    dmx: { enabled: true, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
+    dmx: { enabled: false, protocol: 0, universe: 1, startAddress: 1, timeoutMs: 3000 },
     deviceName: 'Titanic-XXX', firmwareSHA: 'be2fcc1b5f6f',
   };
 }
@@ -59,9 +59,11 @@ function makeMockIo(devices, { onAwaitReboot } = {}) {
     getStatus: async (ip) => clone(devices[ip].status),
     getConfig: async (ip) => clone(devices[ip].config),
     pushPerOutputUniverses: async (ip, { plan }) => {
-      // Device confirms the plan back on verify (start=1, enabled).
-      devices[ip].status.sacn.perOutput = Object.entries(plan.universeByOutputIndex)
-        .map(([index, universe]) => ({ index: Number(index), universe, startAddress: 1, enabled: true }));
+      // Device confirms the saved plan back on verify (start=1, enabled).
+      for (const [index, universe] of Object.entries(plan.universeByOutputIndex)) {
+        devices[ip].config.strands[Number(index)].dmxUniverse = universe;
+        devices[ip].config.strands[Number(index)].dmxStartAddress = 1;
+      }
       return { outcome: 'needs-reboot', reboot: true };
     },
     awaitReboot: async (ip) => { if (onAwaitReboot) onAwaitReboot(ip); },

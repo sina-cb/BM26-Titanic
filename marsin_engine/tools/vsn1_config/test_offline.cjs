@@ -178,10 +178,10 @@ async function main() {
       assert(b.length <= maxLength, `${b.label} over budget: ${b.length}`);
     }
     for (const p of patches) {
-      // 8 keys x (INIT + factory BC) + encoder (INIT + BC + ENDLESS)
-      // + 4 side buttons (BC) + LCD (INIT + DRAW) + system (INIT) = 26
+      // Base 26 actions + layout receiver (button 9 INIT) + guarded value
+      // receiver (button 10 INIT) = 28.
       const n = p.elements.reduce((a, e) => a + e.events.length, 0);
-      assert(n === 26, `page ${p.page}: expected 26 action strings, got ${n}`);
+      assert(n === 28, `page ${p.page}: expected 28 action strings, got ${n}`);
       for (const el of p.elements) {
         for (const ev of el.events) {
           const descr = gs.configExecuteDescriptor(
@@ -199,9 +199,9 @@ async function main() {
         }
       }
     }
-    // The feedback CC map must be substituted into the receiver. `knd` (the
-    // 32-entry kind array) now rides the LCD INIT for budget, but the receiver
-    // still USES it via the sticky-LED gate below.
+    // The feedback CC map must be substituted into both receivers. `knd` (the
+    // 32-entry kind array) rides the key INITs, while the encoder receiver still
+    // uses it via the sticky-LED gate below.
     const rx = patches[0].elements.find((e) => e.elementIndex === 8)
       .events.find((e) => e.eventKey === 'INIT').shortLua;
     assert(!rx.includes('__'), 'unsubstituted placeholder in encoder INIT');
@@ -210,7 +210,11 @@ async function main() {
     assert(rx.includes('hi=1'), 'receiver must ARM the welcome on the host hello (connect only)');
     assert(rx.includes('knd[base+k+1]==1'), 'sticky LEDs must be gated on toggle kind');
     assert(rx.includes('vm=p2'), 'receiver must apply the host-echoed view mode');
-    assert(rx.includes('ebar('), 'receiver must repaint the bar on selected-slot feedback');
+    const valueRx = patches[0].elements.find((e) => e.elementIndex === 10)
+      .events.find((e) => e.eventKey === 'INIT').shortLua;
+    assert(!valueRx.includes('__'), 'unsubstituted placeholder in value receiver');
+    assert(valueRx.includes('lck==z'), 'value receiver must guard stale encoder echoes');
+    assert(valueRx.includes('ebar('), 'value receiver must repaint the bar on confirmed feedback');
     // Welcome = HOST-ARMED on connect only (device INIT defaults hi=0). View
     // mode (DRUM/EFFECT) is host-echoed; the grid draws in EFFECT view only.
     const lcdEvs = patches[0].elements.find((e) => e.elementIndex === 13).events;

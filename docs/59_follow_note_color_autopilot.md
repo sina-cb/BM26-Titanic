@@ -220,6 +220,15 @@ changes; "a colour rotation is driving" stays literally true.
   new wire unchanged — a cue can arm follow-note. `deactivate()` (deck-pin
   release, docs/38 §16.11) is mode-agnostic and needs only the unsubscribe
   added to `stop()`.
+- CaptainPad's ADD CUE and EDIT CUE surfaces expose the same mode discriminator
+  directly: `2 TONE`, `5 TONE`, and `FOLLOW NOTE`. Follow Note authors the
+  scheme subset plus method hold/fade and note-fade timing; cue save strips the
+  broadcast-only runtime facts. Saved palette sets remain available as a
+  compatibility mode for existing plans.
+- `show_plan.js` delegates cue validation to this same
+  `ColorAutopilot.validate` contract. The cue path therefore accepts the exact
+  Deck wires, including continuous palette fades (`delay_s: 0` with a safe
+  transition) and mode-scoped Follow Note blocks.
 - MIDI: `colorAutopilotWritable` (CaptainPad `useMidiControl.ts:1398`)
   derives writability from `palettes` alone and would call a follow-note
   config un-toggleable — it must learn `mode` (writable when

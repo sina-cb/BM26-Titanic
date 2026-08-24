@@ -52,7 +52,14 @@ const RUNTIME_FILE = CONFIG_FILE.replace(/\.ya?ml$/i, '') + '.autopilot_runtime.
  *   (or immediately if transitions are disabled).
  */
 export class Autopilot {
-  constructor(listPatternsFn, patternsDir, currentPatternCb, changePatternFn, onScheduleFn) {
+  constructor(
+    listPatternsFn,
+    patternsDir,
+    currentPatternCb,
+    changePatternFn,
+    onScheduleFn,
+    isActiveAuthorityFn,
+  ) {
     this.listPatterns = listPatternsFn;
     this.patternsDir = patternsDir;
     this.currentPatternCb = currentPatternCb;
@@ -72,6 +79,12 @@ export class Autopilot {
     // transition lands). Works identically for operator- and plan-driven
     // autopilot: both flow through updateState → _scheduleNext.
     this.onSchedule = typeof onScheduleFn === 'function' ? onScheduleFn : null;
+    // Optional host-owned authority. The deck playlist mirror is the
+    // operator-facing truth; when it says OFF, no stale runtime file, timer,
+    // profile callback, or reordered startup frame may advance a pattern.
+    this.isActiveAuthority = typeof isActiveAuthorityFn === 'function'
+      ? isActiveAuthorityFn
+      : null;
     // Wall-clock ms when the next cycle fires (null when inactive). The deck
     // subtracts Date.now() to render the countdown — same absolute-ms
     // convention as the operator-lease / program countdowns.
@@ -125,6 +138,11 @@ export class Autopilot {
 
   get state() {
     return this.config.playlist || { active: false, delay_s: "30", shuffle: false };
+  }
+
+  _isActive() {
+    return this.state.active === true
+      && (this.isActiveAuthority === null || this.isActiveAuthority() === true);
   }
 
   updateState(newState) {
@@ -197,7 +215,7 @@ export class Autopilot {
       clearTimeout(this.cycleTimer);
       this.cycleTimer = null;
     }
-    if (!this.state.active) {
+    if (!this._isActive()) {
       this._nextSwapAtMs = null;
       if (this.onSchedule) this.onSchedule();
       return;
@@ -229,7 +247,7 @@ export class Autopilot {
 
   /** Wall-clock ms when the next pattern swap fires, or null when inactive. */
   get nextSwapAtMs() {
-    return this.state.active && typeof this._nextSwapAtMs === 'number' ? this._nextSwapAtMs : null;
+    return this._isActive() && typeof this._nextSwapAtMs === 'number' ? this._nextSwapAtMs : null;
   }
 
   /**
@@ -239,7 +257,7 @@ export class Autopilot {
    */
   async _runTick(scheduledGen) {
     if (scheduledGen !== this.generation) return;   // state changed mid-wait
-    if (!this.state.active) return;                  // belt-and-suspenders
+    if (!this._isActive()) return;                   // deck OFF rules over every timer/profile
 
     try {
       const ret = this.changePattern();
@@ -258,7 +276,7 @@ export class Autopilot {
     // matches: a new updateState would have bumped it AND scheduled
     // its own next tick, so we should not double-schedule.
     if (scheduledGen !== this.generation) return;
-    if (!this.state.active) return;
+    if (!this._isActive()) return;
     this._scheduleNext();
   }
 

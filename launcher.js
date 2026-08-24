@@ -66,6 +66,27 @@ const portCleanup = require('./tools/port_cleanup.cjs');
 const browserSplit = require('./tools/browser_split.cjs');
 const processPriority = require('./tools/process_priority.cjs');
 
+const LOCAL_ENV_PATH = path.join(__dirname, '.env');
+
+/**
+ * Load the gitignored machine-local handoff written by the private deployment
+ * bootstrap. Shell variables keep precedence (Node's native dotenv contract),
+ * while a malformed explicit file fails the launch loudly.
+ */
+function loadLocalLaunchEnv(envPath = LOCAL_ENV_PATH) {
+  if (!fs.existsSync(envPath)) return { loaded: false, path: envPath };
+  if (typeof process.loadEnvFile !== 'function') {
+    throw new Error('Local launch environment requires Node.js process.loadEnvFile support.');
+  }
+  process.loadEnvFile(envPath);
+  return { loaded: true, path: envPath };
+}
+
+// Tests import this module for pure helpers and must not inherit an operator's
+// local environment. Every direct launcher command, regardless of flags,
+// loads the handoff before any process.env-backed constants are resolved.
+if (require.main === module) loadLocalLaunchEnv();
+
 const ROOT = __dirname;
 const SIM_DIR = path.join(ROOT, 'simulation');
 const ENGINE_DIR = path.join(ROOT, 'marsin_engine');
@@ -124,6 +145,20 @@ const ENGINE_RESTART_EXIT_CODE = 75;
 
 const DEFAULT_SCENE = 'titanic';
 const DEFAULT_PATTERN = '00_golden_hour_wash';
+// The boot pattern is PER SCENE. A pattern compiled against one rig's fixture
+// constants is a hard boot failure on another: `00_golden_hour_wash` references
+// FIX_BAR_18 / FIX_VINTAGE_6, which exist on `titanic` and on no other model, so
+// booting it on `titanic_interior` (FIX_RAW_LED only) kills the engine. Scenes
+// with no entry here keep DEFAULT_PATTERN — that is the shipped behavior, not a
+// new fallback, and `--pattern` always wins over both.
+const SCENE_DEFAULT_PATTERN = {
+  titanic: '00_golden_hour_wash',
+  titanic_interior: '131_river_run',
+};
+
+function defaultPatternForScene(scene) {
+  return SCENE_DEFAULT_PATTERN[scene] || DEFAULT_PATTERN;
+}
 const IS_WIN = process.platform === 'win32';
 
 const STOP_GRACE_MS = 8000;       // SIGTERM → SIGKILL escalation per child
@@ -478,7 +513,9 @@ function usage(stream = process.stdout) {
     '',
     '  Options:',
     `    --scene <name>     Sim scene AND engine model (default: ${DEFAULT_SCENE})`,
-    `    --pattern <name>   Engine boot pattern (default: ${DEFAULT_PATTERN})`,
+    '    --pattern <name>   Engine boot pattern. The default is PER SCENE:',
+    `                       ${Object.entries(SCENE_DEFAULT_PATTERN).map(([s, p]) => `${s} → ${p}`).join(', ')};`,
+    `                       every other scene → ${DEFAULT_PATTERN}.`,
     `    --sim-profile <id> Override the profile's sim lighting profile.`,
     `                       Valid: ${SIM_LIGHTING_PROFILES.join(', ')}`,
     '    --sacn-priority <n>  Override the profile\'s E1.31 per-packet priority',
@@ -517,7 +554,9 @@ const SUBCOMMANDS = ['status', 'stop', 'setup', 'rebuild-pad'];
 
 function parseArgs(argv) {
   const opts = {
-    command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN,
+    // pattern stays null until the whole argv is read: the default depends on
+    // the RESOLVED --scene, which may appear after --pattern on the line.
+    command: null, scene: DEFAULT_SCENE, pattern: null,
     kill: true, open: true, force: false, split: 'auto',
     // Profile overrides. null = "use the profile's value" — deliberately NOT a
     // default value, so resolveSimProfile/resolveSacnPriority can name the
@@ -603,6 +642,7 @@ function parseArgs(argv) {
     logError(`Unknown profile '${opts.command}'. Valid: ${Object.keys(PROFILES).join(', ')}, ${SUBCOMMANDS.join(', ')}`);
     process.exit(2);
   }
+  if (opts.pattern === null) opts.pattern = defaultPatternForScene(opts.scene);
   return opts;
 }
 
@@ -2911,6 +2951,7 @@ module.exports = {
   healthCheckList, runHealthChecks, readFrameFlow,
   validateCaptainPadSecrets, parseArgs,
   resolveDevNoAuthRequest, resolveCaptainPadAuthPreflight, lockHasDevNoAuthBypass,
+  loadLocalLaunchEnv, LOCAL_ENV_PATH,
   DEV_NO_AUTH_FLAG, DEVELOPMENT_PROFILES,
   PROFILES, COMPANIONS, SIM_QUERY_COMMON,
   SIM_LIGHTING_PROFILES, CAPTAINPAD_MODES,

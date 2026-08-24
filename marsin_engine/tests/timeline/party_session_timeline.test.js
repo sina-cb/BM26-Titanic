@@ -428,7 +428,7 @@ test('a LIVE session keeps the mode it STARTED with when the toggle flips mid-se
   assert.notEqual(after.effectiveState, 'in_session');
 });
 
-test('a FIXED-duration session is not ended by a signal drop — its window governs', async () => {
+test('a FIXED-duration session ends early only after 15 seconds without party detection', async () => {
   const h = setup();
   await h.svc.start();
   await h.svc.setPartyConfig({ minDwellSec: 0, durationEnabled: true, durationMin: 12 });
@@ -437,11 +437,87 @@ test('a FIXED-duration session is not ended by a signal drop — its window gove
   await h.svc._tick();
   assert.equal(h.svc.getPartyStatus().sessionFollowsMusic, false);
   h.setMood({ party: 0, value: 0 });
+  await h.svc._tick();                       // starts the 15 s loss hold
+  let st = h.svc.getPartyStatus();
+  assert.equal(st.signalLossHeldSec, 0);
+  assert.equal(st.signalLossRequiredSec, 15);
+  h.setNow(IN_WINDOW + 14_000);
   await h.svc._tick();
-  const st = h.svc.getPartyStatus();
+  st = h.svc.getPartyStatus();
+  assert.equal(st.effectiveState, 'in_session');
+  assert.equal(st.signalLossHeldSec, 14);
+  h.setNow(IN_WINDOW + 15_000);
+  await h.svc._tick();
+  st = h.svc.getPartyStatus();
   h.svc.stop();
-  assert.equal(st.effectiveState, 'in_session',
-    'a fixed-duration session must ride out a breakdown — that is what durationMin is for');
+  assert.notEqual(st.effectiveState, 'in_session',
+    'a fixed session must release once the 15-second no-party hold completes');
+  assert.ok(h.calls.loadPlaylist.some((call) => call.name === 'ambient'),
+    'the calm/default cue must reclaim the deck after early release');
+});
+
+test('a party signal return inside the 15-second grace period resets the release hold', async () => {
+  const h = setup();
+  await inSession(h);
+  h.setMood({ party: 0, value: 0 });
+  await h.svc._tick();
+  h.setNow(IN_WINDOW + 10_000);
+  await h.svc._tick();
+  assert.equal(h.svc.getPartyStatus().signalLossHeldSec, 10);
+  h.setMood({ party: 1, value: 1 });
+  await h.svc._tick();
+  assert.equal(h.svc.getPartyStatus().signalLossHeldSec, 0);
+  h.setMood({ party: 0, value: 0 });
+  await h.svc._tick();
+  h.setNow(IN_WINDOW + 24_000);
+  await h.svc._tick();
+  assert.equal(h.svc.getPartyStatus().effectiveState, 'in_session',
+    'the stale 10-second hold leaked through a recovered signal');
+  h.svc.stop();
+});
+
+test('Force Party bypasses every gate and RETURN TO LIVE AUDIO cancels it immediately', async () => {
+  const plan = partyPlan({
+    phases: {
+      closed_window: { start: { clock: '08:00' }, end: { clock: '09:00' } },
+    },
+  });
+  plan.cues[0].trigger.whenPhase = 'closed_window';
+  const h = setup(plan);
+  await h.svc.start();
+  h.svc.state.moodLastFire = { c_mood_to_party: IN_WINDOW };
+  assert.equal(h.svc.getPartyStatus().partyWindowOpen, false);
+  assert.equal(h.svc.getPartyStatus().effectiveState, 'waiting_window');
+
+  const forced = await h.svc.forcePartySession();
+  assert.equal(forced.effectiveState, 'in_session');
+  assert.equal(forced.sessionForced, true);
+  assert.ok(h.calls.loadPlaylist.some((call) => call.name === 'party_high'));
+
+  h.setNow(IN_WINDOW + 60_000);
+  await h.svc._tick();
+  assert.equal(h.svc.getPartyStatus().effectiveState, 'in_session',
+    'a forced session listened to the absent signal before RETURN TO LIVE AUDIO');
+
+  const returned = await h.svc.returnPartyToLiveAudio();
+  assert.notEqual(returned.effectiveState, 'in_session');
+  assert.equal(returned.sessionForced, false);
+  assert.equal(h.svc.getPartyStatus().signalLossHeldSec, 0);
+  assert.ok(h.calls.loadPlaylist.some((call) => call.name === 'ambient'),
+    'the calm/default cue must reclaim the deck immediately');
+  h.svc.stop();
+});
+
+test('operator can reset an active Party cooldown immediately', async () => {
+  const h = setup();
+  await inSession(h);
+  await h.svc.setPartyConfig({ enabled: false });
+  await h.svc.setPartyConfig({ enabled: true });
+  assert.equal(h.svc.getPartyStatus().effectiveState, 'cooldown');
+  const reset = h.svc.resetPartyCooldown();
+  assert.equal(reset.cooldownRemainingSec, 0);
+  assert.equal(reset.effectiveState, 'armed');
+  h.svc.stop();
 });
 
 test('toggles round-trip to disk and survive a restart', async () => {

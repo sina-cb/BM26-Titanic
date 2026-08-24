@@ -1,0 +1,382 @@
+# dev_runup — the BENCH RUN-UP plan. NOT the show plan.
+#
+# A fictional, fast-to-watch plan whose only job is to exercise every Timeline
+# operator surface (docs/78 "Mock specification" → run-up test plan) against the
+# real engine on the test_bench stack. The prod plan is `playa_default` in the
+# titanic scene and is never touched by run-up testing.
+#
+# WHY THE NAME MATTERS: CaptainPad treats any plan whose name starts with `dev_`
+# as a DEV plan and renders the standing `DEV PLAN — NOT THE SHOW PLAN` banner
+# on every Timeline view. Do not rename this file without renaming the plan.
+#
+# DATES: `festival.startDate` below is a NEUTRAL PAST DATE on purpose — this
+# repo is public and a tracked file must never announce a rehearsal calendar.
+# The first step of a run-up session is retargeting the start to today with the
+# FestivalEditor DateWheel; that edit auto-saves back into this file and is
+# runtime residue — report it, never commit it.
+#
+# VALIDATION: this is the first in-tree plan that asserts ALL EIGHT dry-run
+# classes with none skipped. Its whitelist lives beside the other fixtures at
+# `marsin_engine/tests/fixtures/timeline/dev_runup_spec.yaml`. From
+# `marsin_engine/`:
+#
+#   node tools/timeline_dryrun.mjs --scene test_bench --plan dev_runup \
+#     --date 2025-08-24 --days 4 --step 5 --events-only \
+#     --assert --assert-spec tests/fixtures/timeline/dev_runup_spec.yaml
+#
+# CONTIGUITY NOTE: every `kind: program` hold here ENDS exactly where the next
+# owner begins. A program whose hold expires with no cue behind it hands the
+# deck to the defaultCue, which class 1 correctly reports as ownerless minutes.
+# `d_ignition` therefore holds `until 21:45` (where `d_chapter_one` starts)
+# rather than for a bare duration.
+schemaVersion: 2
+name: dev_runup
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+festival:
+  # Neutral past date — see the DATES note in the header.
+  startDate: '2025-08-24'
+  days: 5
+autopilot:
+  enabled: true
+  playlist: ambient
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  # One phase, same shape as the show plan, so the party card's eligibility
+  # line reads identically on the bench.
+  party_window:
+    start:
+      clock: '21:30'
+    end:
+      sun: sunrise
+      offsetMin: -120
+looks:
+  ambient:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 45
+      shuffle: true
+    palette: deep_sea
+    target:
+      channel: deck
+      id: null
+cues:
+  # ── the DEMO HOUR: three 12-minute chapters so a transition can be watched
+  # live instead of waited out overnight. `d_fastlane_1` is the explicit master
+  # RESTORE writer that lifts the deck back out of `d_lights_out`'s master 0.
+  - id: d_fastlane_1
+    label: Fast lane 1 — demo chapter A
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '17:00' }
+    action:
+      type: playlist
+      name: ambient
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 20, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 2000, enabled: true, shuffle: false }
+      overlays: disable
+      globals:
+        master: 0.8
+    kind: ambient
+    days: all
+  - id: d_fastlane_2
+    label: Fast lane 2 — demo chapter B
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '17:12' }
+    action:
+      type: playlist
+      name: night_uv_lasers
+      target: { channel: deck, id: null }
+      palette: ultraviolet
+      autopilot: { active: true, delay_s: 20, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 2000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [ultraviolet, laser_lime]
+        delay_s: 60
+        shuffle: true
+        transitionMs: 3000
+    kind: ambient
+    days: all
+  - id: d_fastlane_3
+    label: Fast lane 3 — demo chapter C
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '17:24' }
+    action:
+      type: playlist
+      name: night_ember_hold
+      target: { channel: deck, id: null }
+      palette: phoenix
+      autopilot: { active: true, delay_s: 20, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 2000, enabled: true, shuffle: false }
+      overlays: disable
+    kind: ambient
+    days: all
+  # ── the sun-anchored directed opener + master writer.
+  - id: d_ignition
+    label: Ignition — directed white opener
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: -30
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: electric_ice
+      autopilot: { active: true, delay_s: 120, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 3000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [electric_ice], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.8
+    kind: program
+    hold:
+      until: { clock: '21:45' }
+    days: all
+  # ── the night blocks: chapter / quiet reset / chapter, then the carry.
+  - id: d_chapter_one
+    label: Chapter one — animated block
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '21:45' }
+    action:
+      type: playlist
+      name: ambient_sound_reactive
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 60, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 4000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [deep_sea, aurora, ultraviolet]
+        delay_s: 120
+        shuffle: false
+        transitionMs: 6000
+    kind: ambient
+    days: all
+  - id: d_quiet_reset
+    label: Quiet reset — sequential hush
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '23:00' }
+    action:
+      type: playlist
+      name: night_quiet_reset_aurora
+      target: { channel: deck, id: null }
+      palette: aurora
+      autopilot: { active: true, delay_s: 90, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 4000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [aurora], delay_s: 600, shuffle: false, transitionMs: 0 }
+    kind: ambient
+    days: all
+  - id: d_chapter_two
+    label: Chapter two — deep block
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '23:10' }
+    action:
+      type: playlist
+      name: night_midnight_drive
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 60, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 4000, enabled: true, shuffle: false }
+      overlays: disable
+    kind: ambient
+    days: all
+  - id: d_carry
+    label: Cross-midnight carry
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '00:00' }
+    action:
+      type: playlist
+      name: night_midnight_drive
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 60, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 4000, enabled: true, shuffle: false }
+      overlays: disable
+    kind: ambient
+    days: [1, 2, 3, 4]
+  # ── one day-specific cue, so the calendar's per-day columns differ.
+  - id: d_day3_special
+    label: Day 3 only — special chapter
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 60
+    action:
+      type: playlist
+      name: default
+      target: { channel: deck, id: null }
+      palette: sunset_coral
+      autopilot: { active: true, delay_s: 60, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 4000, enabled: true, shuffle: false }
+      overlays: disable
+    kind: ambient
+    days: [2]
+  # ── morning coverage into a hard lights-out, with no uncontrolled gap.
+  - id: d_morning_hold
+    label: Morning hold — steady reduced visibility
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: 30
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: electric_ice
+      autopilot: { active: false, delay_s: 120, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 4000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [electric_ice], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.4
+    kind: program
+    hold:
+      until: { clock: '09:30' }
+    days: all
+  - id: d_lights_out
+    label: Lights out — output dark, engine available
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '09:30' }
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: false, delay_s: 120, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [deep_sea], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0
+    kind: program
+    hold:
+      until: { sun: sunset, offsetMin: -30 }
+    days: all
+  # ── the party path: short dwell + short cooldown so a bench session can be
+  # driven, watched, and repeated inside one sitting.
+  - id: d_mood_party
+    label: 'Party session: eligible + enabled + sustained music'
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 20
+      cooldownSec: 120
+      whenPhase: party_window
+    action:
+      type: playlist
+      name: party_high
+      target: { channel: deck, id: null }
+      palette: bass_drop
+      autopilot: { active: true, delay_s: 20, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 2000, enabled: true, shuffle: false }
+      overlays: disable
+    kind: mood
+    durationMin: 5
+    days: all
+  # ── the three manual events the LIVE view derives its buttons from.
+  - id: d_show_slot
+    label: EVENT — staged show slot
+    enabled: true
+    catchUp: false
+    trigger: { type: manual }
+    action:
+      type: sequence
+      steps:
+        - afterSec: 0
+          action:
+            type: playlist
+            name: dusk_sprinkles
+            target: { channel: deck, id: null }
+            palette: lavender_dream
+            autopilot: { active: false, delay_s: 60, shuffle: false }
+            transition: { mode: trans_crossfade, durationMs: 1500, enabled: true, shuffle: false }
+            overlays: disable
+        - afterSec: 120
+          action:
+            type: playlist
+            name: night_open_sea
+            target: { channel: deck, id: null }
+            palette: deep_sea
+            autopilot: { active: true, delay_s: 45, shuffle: true }
+            transition: { mode: trans_crossfade, durationMs: 3000, enabled: true, shuffle: false }
+            overlays: disable
+    kind: program
+    hold:
+      min: 10
+    days: all
+  - id: d_beacon
+    label: BEACON — high-visibility, holds until you end it
+    enabled: true
+    catchUp: false
+    trigger: { type: manual }
+    action:
+      type: playlist
+      name: dust_beacon
+      target: { channel: deck, id: null }
+      palette: sunset_coral
+      autopilot: { active: true, delay_s: 90, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 2000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [sunset_coral], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.8
+    kind: program
+    days: all
+  - id: d_bounded_party
+    label: EVENT — bounded party window
+    enabled: true
+    catchUp: false
+    trigger: { type: manual }
+    action:
+      type: playlist
+      name: party_high
+      target: { channel: deck, id: null }
+      palette: bass_drop
+      autopilot: { active: true, delay_s: 20, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 2000, enabled: true, shuffle: false }
+      overlays: disable
+    kind: program
+    hold:
+      min: 15
+    durationMin: 15
+    days: all
+defaultCue:
+  label: Phase-aware ambient program
+  phaseAware: true
+  action:
+    type: look
+    look: ambient

@@ -80,3 +80,7 @@ self.eventrx_cb = function(self, hdr, e, v, n)
   end
   dirty = 1
 end
+-- Announce only after the LCD's baked globals exist and element 9's runtime
+-- layout receiver has registered. CaptainPad answers by sending the current
+-- iPad-owned page layout, so no startup race can restore stale flash labels.
+self:midi_send(-1, 176, __HCC__, 1)

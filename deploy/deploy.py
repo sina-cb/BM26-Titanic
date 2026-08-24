@@ -40,7 +40,8 @@ import urllib.error
 import urllib.request
 if os.name == 'nt':
     # winreg is Windows-only stdlib (absent on macOS/Linux, where deploy.py can
-    # run from a setup_env.sh-provided env). Guard the IMPORT by platform so the
+    # run from an externally configured environment). Guard the import by
+    # platform so the
     # module still loads cross-platform without a try/except wrap (codex P0: no
     # try/except-wrapped imports); it is referenced ONLY under the same
     # os.name == 'nt' guard in manifest_path().
@@ -49,10 +50,9 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# The show-server manifest (machines.yaml) is PRIVATE - it lives in the
-# BM26-Firmware-Deployment repo, never in this public tree (real hostnames/IPs/
-# shares must not be published). deploy.py resolves it from $BM26_MACHINES and
-# fails loudly if unset (no repo-local fallback - codex P0). See manifest_path().
+# The show-server manifest comes from an external/private deployment source,
+# never this public tree. deploy.py resolves the generic $BM26_MACHINES contract
+# and fails loudly if unset (no repo-local fallback - codex P0).
 MANIFEST_ENV = 'BM26_MACHINES'
 SECRETS_ENV = 'BM26_SECRETS'
 OVERLAYS_ROOT = REPO_ROOT / 'deploy' / 'overlays'
@@ -268,15 +268,13 @@ def _read_user_env_registry(name: str) -> str:
     """Read a User-scope environment variable straight from HKCU\\Environment.
 
     This is NOT a config fallback (codex P0): it reads the SAME canonical
-    persisted variable that setup_env.ps1 writes, just from its authoritative
-    store instead of the process env. A long-running parent app (an IDE opened
-    BEFORE setup_env ran) hands its terminals a stale process env that predates
-    the write, so os.environ lacks the var even though the registry has the real,
+    persisted variable from its authoritative store instead of the process env.
+    A long-running parent app can hand its terminals a stale process env that
+    predates the write, so os.environ lacks the var even though the registry has the real,
     current value. Returns '' when the value is absent (missing VALUE lookup ->
     FileNotFoundError/OSError); only that lookup is guarded, never the import.
-    A REG_EXPAND_SZ value (setup_env may store a path containing %USERPROFILE% or
-    similar) is expanded exactly as the shell would, so the caller gets the same
-    resolved path the process env would have carried. Windows-only: the sole
+    A REG_EXPAND_SZ value is expanded exactly as the shell would, so the caller
+    gets the same resolved path the process env would have carried. Windows-only: the sole
     caller is guarded by os.name == 'nt'.
     """
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
@@ -292,17 +290,16 @@ def _read_user_env_registry(name: str) -> str:
 def manifest_path() -> Path:
     """Resolve the show-server manifest (machines.yaml) from $BM26_MACHINES.
 
-    The real machines.yaml lives in the PRIVATE BM26-Firmware-Deployment repo
-    (real hostnames/IPs/shares are never published), exported as $BM26_MACHINES
-    by that repo's setup_env scripts. There is NO repo-local fallback (codex P0):
-    an unset var or a missing target file is a loud FAIL, not a silent default.
+    BM26_MACHINES is supplied by an external/private deployment source. There
+    is NO repo-local fallback (codex P0): an unset variable or missing target
+    file is a loud FAIL, not a silent default.
 
     Resolution order: (1) os.environ - cross-platform, and honors an explicit
     per-session override; (2) on Windows, the User-scope registry value if the
     process env lacks it - the SAME persisted variable read from its authoritative
     store (HKCU\\Environment), covering the stale-terminal case where a long-lived
-    parent app (IDE/editor) predates setup_env. This is not a second source of
-    truth; it is the same variable, read where setup_env actually wrote it.
+    parent app (IDE/editor) predates external setup. This is not a second source
+    of truth; it is the same persisted variable.
     """
     raw = os.environ.get(MANIFEST_ENV, '').strip()
     from_registry = False
@@ -310,19 +307,17 @@ def manifest_path() -> Path:
         raw = _read_user_env_registry(MANIFEST_ENV)
         from_registry = bool(raw)
     if not raw:
-        fail(f'{MANIFEST_ENV} is not set - the show-server manifest (machines.yaml) '
-             f'lives in the private BM26-Firmware-Deployment repo, not this one.\n'
-             f'  fix: clone BM26-Firmware-Deployment, then run its setup_env.ps1 '
-             f'(or `source setup_env.sh`) and open a NEW terminal;\n'
-             f'  or set {MANIFEST_ENV} manually to the machines.yaml path.')
+        fail(f'{MANIFEST_ENV} is not set - configure it from the external/private '
+             'deployment source and open a new terminal; there is no repo-local '
+             'fallback.')
     if from_registry:
         print(f'  note: {MANIFEST_ENV} came from the user registry (HKCU\\Environment) '
-              f"because this terminal's environment is stale (opened before setup_env ran).")
+              "because this terminal's environment is stale "
+              '(opened before external setup).')
     path = Path(raw)
     if not path.is_file():
         fail(f'{MANIFEST_ENV} points at a file that does not exist: {path}\n'
-             f'  fix: run setup_env.ps1 in your BM26-Firmware-Deployment checkout, '
-             f'or set {MANIFEST_ENV} to the correct machines.yaml path.')
+             f'  fix: repair the external/private deployment source contract.')
     return path
 
 
@@ -331,8 +326,7 @@ def secrets_path() -> Path:
 
     The path and file contents are never printed. Resolution mirrors
     ``manifest_path`` so a long-running desktop app with a stale process
-    environment still reads the authoritative User-scope value written by the
-    private deployment repo's setup script.
+    environment still reads the authoritative User-scope value.
     """
     raw = os.environ.get(SECRETS_ENV, '').strip()
     from_registry = False
@@ -340,8 +334,8 @@ def secrets_path() -> Path:
         raw = _read_user_env_registry(SECRETS_ENV)
         from_registry = bool(raw)
     if not raw:
-        fail(f'{SECRETS_ENV} is not set on the laptop. Run the private deployment '
-             'repo setup_env script and open a new terminal; no secret was copied.')
+        fail(f'{SECRETS_ENV} is not set on the laptop. Configure the external/private '
+             'deployment source and open a new terminal; no secret was copied.')
     path = Path(raw)
     if not path.is_file():
         fail(f'{SECRETS_ENV} does not name a readable local file (path redacted). '
@@ -591,8 +585,19 @@ def preflight_smb(name: str, entry: dict) -> str:
     return unc
 
 
-def robocopy_cmd(src: str, dst: str, list_only: bool) -> list[str]:
-    """Build the prod-sync robocopy invocation (shared by --dry-run and the real run)."""
+def robocopy_cmd(
+        src: str,
+        dst: str,
+        list_only: bool,
+        force_fast: bool = False,
+) -> list[str]:
+    """Build the production Robocopy invocation.
+
+    Production ``--force`` skips the separate list-only pass and raises the
+    real mirror's worker count. The mirror itself remains authoritative: it
+    still applies exclusions, propagates deletions, and fails on Robocopy
+    error classes.
+    """
     cmd = ['robocopy', src, dst, '/MIR', '/XJ', '/R:2', '/W:2', '/NP']
     excl = []
     for rel in SYNC_EXCLUDE_DIRS:
@@ -601,7 +606,8 @@ def robocopy_cmd(src: str, dst: str, list_only: bool) -> list[str]:
     if list_only:
         cmd += ['/L', '/NJH']
     else:
-        cmd += ['/MT:16', '/NFL', '/NDL']
+        workers = 64 if force_fast else 16
+        cmd += [f'/MT:{workers}', '/NFL', '/NDL']
     return cmd
 
 
@@ -721,9 +727,18 @@ def _assert_boot_task_not_running(entry: dict) -> None:
              f're-check)')
 
 
-def sync_prod(unc: str) -> None:
+def sync_prod(unc: str, force_fast: bool = False) -> None:
     """robocopy /MIR the laptop tree onto the prod dest (exclusions per docs/43)."""
-    proc = run(robocopy_cmd(str(REPO_ROOT), unc, list_only=False), check=False, timeout=3600)
+    proc = run(
+        robocopy_cmd(
+            str(REPO_ROOT),
+            unc,
+            list_only=False,
+            force_fast=force_fast,
+        ),
+        check=False,
+        timeout=3600,
+    )
     if proc.returncode >= ROBOCOPY_FAIL_THRESHOLD:
         robocopy_failure('robocopy sync', proc)
     tail = [l for l in proc.stdout.splitlines() if l.strip()][-8:]
@@ -1205,6 +1220,7 @@ def verify_prod(entry: dict, expected_scene: str, server_start: str) -> None:
 
 def deploy_prod(name: str, entry: dict, args: argparse.Namespace) -> None:
     """The full docs/43 prod pipeline (or the --dry-run / --restart-only subsets)."""
+    force_fast = bool(getattr(args, 'force', False))
     info = git_info()
     step(f'1/8 preflight ({name} = prod, laptop {info["head"]} on {info["branch"]}, '
          f'{info["dirty_count"]} dirty)')
@@ -1227,7 +1243,11 @@ def deploy_prod(name: str, entry: dict, args: argparse.Namespace) -> None:
         provision_runtime_secrets(entry, local_secrets)
     if not args.restart_only:
         unc = preflight_smb(name, entry)
-        show_sync_preview(unc)
+        if force_fast:
+            print('  PROD --force FAST PATH: list-only preview skipped; '
+                  'the real /MIR remains authoritative')
+        else:
+            show_sync_preview(unc)
     if args.dry_run:
         print('\n--dry-run: stopping here (nothing was changed on the server).')
         return
@@ -1240,7 +1260,7 @@ def deploy_prod(name: str, entry: dict, args: argparse.Namespace) -> None:
         print('\n--restart-only: skipping sync/scene/overlay/stamp.')
     else:
         step('3/8 sync working tree (robocopy /MIR)')
-        sync_prod(unc)
+        sync_prod(unc, force_fast=force_fast)
         step('4/8 boot scene + manifest')
         if args.scene:
             write_boot_scene(name, args.scene)
@@ -1496,7 +1516,8 @@ def build_parser() -> argparse.ArgumentParser:
     dep.add_argument('--restart-only', action='store_true',
                      help='(prod) stop/start/verify without touching files')
     dep.add_argument('--force', action='store_true',
-                     help='(scratch) overwrite a dirty scratch tree')
+                     help='prod: skip preview + use fast mirror; '
+                          'scratch: overwrite a dirty tree')
     fet = sub.add_parser('fetch', help='collect on-server git work / runtime state')
     fet.add_argument('--machine', required=True, help='machine key in the $BM26_MACHINES manifest')
     # Keep the retired spellings parseable so old field commands receive the
@@ -1526,8 +1547,10 @@ def main() -> None:
         start_machine(args.machine, entry, args)
         return
     if args.op == 'deploy' and args.target == 'prod':
-        if args.force:
-            fail('--force only applies to --target scratch')
+        if args.force and args.dry_run:
+            fail('--force is a real prod deploy and cannot combine with --dry-run')
+        if args.force and args.restart_only:
+            fail('--force changes sync behavior and cannot combine with --restart-only')
         if args.dry_run and args.restart_only:
             fail('--dry-run and --restart-only are mutually exclusive')
         if args.scene and args.restart_only:

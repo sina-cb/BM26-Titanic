@@ -58,24 +58,33 @@ export interface RowSizingOpts {
   /** usePerformanceMode().active — the live-show structural lock. */
   perfActive?: boolean;
   /**
-   * docs/69 W3 R1 (operator-authorized 2026-08-16, D5 default ON): "in
-   * horizontal layout the pattern list is basically not showing up to
-   * select patterns... rethink the layout". W3's media-column relocation is
-   * the main fix; R1 is its rider — compact the row's floor to the docs/66
-   * 44pt minimum (never below) instead of leaving it content-sized, so more
-   * rows fit per card.
+   * The docs/66 44pt-minimum-floor diet tier. Two independent authorizations
+   * have opted into this same sizing:
    *
-   * Scoped by PROP all the way up through `PlaylistPanel` to ONE mount —
-   * the MIXER screen's `app/(tabs)/mixer.tsx` — so every deck mount
-   * (`DeckOverlayStack.tsx`, `components/deck/split_playlist_panes.tsx`)
-   * stays byte-identical: neither passes this, so `playlistRowSizing`
-   * never even sees it true for them. Deliberately a SEPARATE flag from
-   * `compact` (which DeckOverlayStack also sets, for its own chrome sizing)
-   * — reusing `compact` here would have leaked the row diet onto that deck
-   * mount too.
+   *   docs/69 W3 R1 (2026-08-16, D5 default ON) — MIXER channel-strip
+   *     pattern list. "in horizontal layout the pattern list is basically
+   *     not showing up to select patterns... rethink the layout". Scoped
+   *     UNCONDITIONALLY on the mixer strip mount (`app/(tabs)/mixer.tsx`).
    *
-   * This explicit mixer tier also wins when `perfActive`: entering a show must
-   * not inflate rows and reduce how much of the pattern list is visible.
+   *   deck perf-split (2026-08-20, operator-authorized) —
+   *     `components/deck/split_playlist_panes.tsx` passes this prop ONLY
+   *     when `usePerfLock()` is true: with two playlists open in a live
+   *     show, each pane's ~250pt share of a ~500pt column can seat fewer
+   *     than three of the perf tier's ~62pt rows. The diet's 44pt floor
+   *     buys ~5 rows per pane at the same touch minimum. Edit mode on the
+   *     deck stays byte-identical — the prop is `perfLocked` there, not a
+   *     literal true.
+   *
+   * `DeckOverlayStack.tsx` (single-list overlay, no split) DOES NOT pass
+   * this flag: it never hits the two-panes-in-half-a-column crunch that
+   * motivated either authorization.
+   *
+   * Deliberately a SEPARATE flag from `compact` (which DeckOverlayStack
+   * also sets, for its own chrome sizing) — reusing `compact` here would
+   * leak the row diet onto that deck overlay mount too.
+   *
+   * This tier also wins when `perfActive`: entering a show must not inflate
+   * rows and reduce how much of the pattern list is visible.
    */
   compactRows?: boolean;
 }

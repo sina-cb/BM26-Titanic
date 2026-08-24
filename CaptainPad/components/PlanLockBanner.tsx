@@ -8,6 +8,12 @@ import { Radius } from '@/constants/theme';
 import { useEngineLock } from '@/hooks/useEngineLock';
 import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
 import { usePerformanceMode } from '@/hooks/usePerformanceMode';
+import { subscribePlanLeaseNoticeRequests } from '@/utils/plan_lease_notice_requests';
+import {
+  formatPlanClock,
+  planRemainingStatus,
+  planRunningQuote,
+} from './plan_lock_banner_logic';
 
 // ── PlanLockBanner ─────────────────────────────────────────────────────
 // The SOFT counterpart to EngineLockoutOverlay. Lights up whenever the
@@ -56,7 +62,8 @@ export const PlanLockBanner: React.FC<{
   // the DECK omits it and uses the default plain takeover (its output already
   // is the deck). Both engage the same operator lease.
   onTemporaryTakeOver?: () => void | Promise<void>;
-}> = ({ onTemporaryTakeOver }) => {
+  surface?: 'DECK' | 'MIXER' | 'LIVE TOUCH';
+}> = ({ onTemporaryTakeOver, surface = 'DECK' }) => {
   const { planLocked } = useEngineLock();
   const C = usePalette();
   // The whole banner is painted from ONE pair: the theme's caution amber and
@@ -71,6 +78,7 @@ export const PlanLockBanner: React.FC<{
       // lifts the light-theme deep gold — one rule, five themes.
       rule: withAlpha(ink, 0.35),
       inkSoft: withAlpha(ink, 0.82),
+      panel: withAlpha(ink, 0.1),
     };
   }, [C.warning]);
   const { takeover, state } = useTimeline();
@@ -96,6 +104,12 @@ export const PlanLockBanner: React.FC<{
   useEffect(() => {
     if (!leaseHeld) setLeaseDismissed(false);
   }, [leaseHeld]);
+  useEffect(
+    () => subscribePlanLeaseNoticeRequests(() => {
+      if (leaseHeld) setLeaseDismissed(false);
+    }),
+    [leaseHeld],
+  );
   const handleGoToPlan = () => {
     try { router.push('/timeline'); } catch { /* router not ready during very early boot */ }
   };
@@ -135,6 +149,17 @@ export const PlanLockBanner: React.FC<{
   const slide = useRef(new Animated.Value(0)).current;
 
   const visible = planLocked || (leaseHeld && !leaseDismissed);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!visible) return undefined;
+    setNowMs(Date.now());
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [visible]);
+  const planName = state?.activePlan ?? 'UNNAMED PLAN';
+  const cueLabel = activeCue?.label ?? 'AUTOPILOT BASELINE';
+  const remaining = planRemainingStatus(state, nowMs);
+  const burnQuote = planRunningQuote(nowMs);
   useEffect(() => {
     Animated.timing(slide, {
       toValue: visible ? 1 : 0,
@@ -164,7 +189,8 @@ export const PlanLockBanner: React.FC<{
         right: 16,
         // Compact so it doesn't blanket the deck/mixer (operator request
         // 2026-07-03: the takeover warning was covering too much UI).
-        maxWidth: 300,
+        width: 390,
+        maxWidth: '90%',
         zIndex: 1000,
         transform: [
           {
@@ -187,9 +213,6 @@ export const PlanLockBanner: React.FC<{
           paddingHorizontal: 12,
           paddingRight: leaseHeld ? 34 : 12,
           paddingVertical: 8,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 9,
           boxShadow: shadow(0, 4, 12, '#000', 0.3),
           elevation: 8,
         }}
@@ -215,52 +238,124 @@ export const PlanLockBanner: React.FC<{
             </Text>
           </TouchableOpacity>
         ) : null}
-        <PulsingDot color={tone.ink} />
-        <View style={{ flex: 1 }}>
-          <Text
-            style={{
-              fontFamily: 'SpaceGrotesk_700Bold',
-              fontSize: 11.5,
-              // Ink derived from the amber field, never a literal — the
-              // light theme's warning wants WHITE here, the dark ones black.
-              color: tone.ink,
-              letterSpacing: 0.8,
-              textTransform: 'uppercase',
-            }}
-          >
-            {leaseHeld
-              ? `Taken over · resumes ${formatMSS(leaseRemainingSec)}`
-              : 'Plan running · controls locked'}
-          </Text>
-          {/* Name the LIVE event (engine activeCue) — shown in BOTH the locked
-              and taken-over states so the operator always knows what the plan
-              is running / will resume to. */}
-          {activeCue ? (
+        <View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <PulsingDot color={tone.ink} />
+            <Text
+              style={{
+                flex: 1,
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 11.5,
+                // Ink derived from the amber field, never a literal — the
+                // light theme's warning wants WHITE here, the dark ones black.
+                color: tone.ink,
+                letterSpacing: 0.8,
+                textTransform: 'uppercase',
+              }}
+              numberOfLines={1}
+            >
+              {leaseHeld
+                ? `Taken over · resumes ${formatMSS(leaseRemainingSec)}`
+                : 'Plan running · controls locked'}
+            </Text>
             <Text
               style={{
                 fontFamily: 'SpaceGrotesk_700Bold',
                 fontSize: 10.5,
                 color: tone.ink,
-                marginTop: 2,
+                fontVariant: ['tabular-nums'],
               }}
-              numberOfLines={1}
+              accessibilityLabel={`Current time ${formatPlanClock(nowMs)}`}
             >
-              {`▶ ${activeCue.label}${activeCue.kind === 'program' ? ' (show)' : ''}`}
+              {formatPlanClock(nowMs)}
             </Text>
-          ) : null}
-          {/* One-line hint. In the taken-over state the title already says it
-              auto-resumes, so we skip the paragraph to keep the strip small
-              (operator request 2026-07-03). */}
+          </View>
+
+          {/* Compact status check: exact active cue/baseline, plan, and the
+              authoritative window/next-cue countdown. */}
+          <View
+            style={{
+              marginTop: 6,
+              borderRadius: Radius.control,
+              backgroundColor: tone.panel,
+              paddingHorizontal: 9,
+              paddingVertical: 7,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text
+                style={{
+                  fontFamily: 'SpaceGrotesk_700Bold',
+                  fontSize: 9,
+                  color: tone.inkSoft,
+                  letterSpacing: 0.8,
+                }}
+              >
+                {leaseHeld ? '↩ RESUME TARGET' : '✓ CUE LIVE'}
+              </Text>
+              <Text
+                style={{
+                  fontFamily: 'SpaceGrotesk_700Bold',
+                  fontSize: 12,
+                  color: tone.ink,
+                  marginTop: 1,
+                }}
+                numberOfLines={1}
+              >
+                {cueLabel}
+              </Text>
+              <Text
+                style={{
+                  fontFamily: 'Inter_600SemiBold',
+                  fontSize: 9.5,
+                  color: tone.inkSoft,
+                  marginTop: 1,
+                }}
+                numberOfLines={1}
+              >
+                {`PLAN · ${planName}`}
+              </Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text
+                style={{
+                  fontFamily: 'SpaceGrotesk_700Bold',
+                  fontSize: 15,
+                  color: tone.ink,
+                  fontVariant: ['tabular-nums'],
+                }}
+              >
+                {remaining.value}
+              </Text>
+              <Text
+                style={{
+                  fontFamily: 'SpaceGrotesk_700Bold',
+                  fontSize: 8.5,
+                  color: tone.inkSoft,
+                  letterSpacing: 0.8,
+                }}
+              >
+                {remaining.label}
+              </Text>
+            </View>
+          </View>
+
           {leaseHeld ? null : (
             <Text
               style={{
-                fontFamily: 'Inter_400Regular',
-                fontSize: 10,
+                fontFamily: 'Inter_600SemiBold',
+                fontSize: 9.5,
+                lineHeight: 13,
                 color: tone.inkSoft,
-                marginTop: 2,
+                fontStyle: 'italic',
+                marginTop: 5,
               }}
+              numberOfLines={2}
             >
-              Take over to make changes.
+              {`“${burnQuote}”`}
             </Text>
           )}
           {/* TAKEN-OVER state → a single RESUME NOW hand-back + GO TO PLAN.
@@ -274,7 +369,7 @@ export const PlanLockBanner: React.FC<{
                 onPress={() => { void resumeNow(); }}
                 style={{
                   flex: 1,
-                  minHeight: 30,
+                  minHeight: 44,
                   borderRadius: Radius.control,
                   backgroundColor: tone.ink,
                   alignItems: 'center',
@@ -291,7 +386,7 @@ export const PlanLockBanner: React.FC<{
                 onPress={handleGoToPlan}
                 style={{
                   flex: 1,
-                  minHeight: 30,
+                  minHeight: 44,
                   borderRadius: Radius.control,
                   borderWidth: 1.5,
                   borderColor: tone.ink,
@@ -312,7 +407,7 @@ export const PlanLockBanner: React.FC<{
                 onPress={handleTakeOver}
                 disabled={takingOver}
                 style={{
-                  minHeight: 32,
+                  minHeight: 44,
                   borderRadius: Radius.control,
                   backgroundColor: tone.ink,
                   alignItems: 'center',
@@ -322,22 +417,29 @@ export const PlanLockBanner: React.FC<{
                 }}
                 accessibilityRole="button"
                 accessibilityLabel={performanceActive
-                  ? 'Temporarily take over — asks for the operator passcode, then unlocks the deck and mixer'
-                  : 'Temporarily take over — unlock the deck and mixer for manual control'}
+                  ? `Take over ${surface.toLowerCase()} — asks for the operator passcode first`
+                  : `Take over ${surface.toLowerCase()} for manual control`}
                 accessibilityState={{ disabled: takingOver }}
               >
                 {/* Say the passcode is coming BEFORE the tap: mid-show, a modal
                     that appears unannounced reads as a fault. */}
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.6, color: tone.fill }}>
+                <Text
+                  style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.6, color: tone.fill }}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.78}
+                >
                   {takingOver
                     ? 'TAKING OVER…'
-                    : performanceActive ? 'TAKE OVER · PASSCODE' : 'TEMPORARY TAKE OVER'}
+                    : performanceActive
+                      ? `TAKE OVER ${surface} · PASSCODE`
+                      : `TAKE OVER ${surface}`}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleGoToPlan}
                 style={{
-                  minHeight: 28,
+                  minHeight: 40,
                   borderRadius: Radius.control,
                   borderWidth: 1.5,
                   borderColor: tone.ink,

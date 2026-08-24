@@ -51,6 +51,35 @@ describe('CaptainPad iOS prebuild contract (declarative, non-mutating)', () => {
     expect(readText('.easignore')).toMatch(/^\/android$/m);
   });
 
+  it('keeps direct iPad MIDI in a local Expo module, never in generated CaptainPad/ios', () => {
+    const moduleConfig = readJson('modules/captain-midi/expo-module.config.json') as {
+      platforms: string[];
+      apple: { modules: string[] };
+    };
+    const modulePackage = readJson('modules/captain-midi/package.json') as {
+      name: string;
+      main: string;
+      private: boolean;
+    };
+    const podspec = readText('modules/captain-midi/ios/CaptainMidi.podspec');
+    const swift = readText('modules/captain-midi/ios/CaptainMidiModule.swift');
+
+    // `modules/` is Expo's local-module source boundary. The generated
+    // top-level `ios/` remains disposable (the preceding test pins both ignore
+    // files), while prebuild discovers this declaration and emits the provider.
+    expect(modulePackage).toMatchObject({
+      name: 'captain-midi',
+      main: 'src/index.ts',
+      private: true,
+    });
+    expect(moduleConfig.platforms).toEqual(['apple']);
+    expect(moduleConfig.apple.modules).toEqual(['CaptainMidiModule']);
+    expect(podspec).toContain("s.dependency 'ExpoModulesCore'");
+    expect(podspec).toContain("s.frameworks = 'CoreMIDI'");
+    expect(swift).toMatch(/public class CaptainMidiModule:\s*Module/);
+    expect(swift).toMatch(/Name\("CaptainMidi"\)/);
+  });
+
   it('declares every native iOS setting in app.json (no hand-edited Info.plist required)', () => {
     const { expo } = appConfig;
     expect(expo.name).toBe('CaptainPad');

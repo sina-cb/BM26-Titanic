@@ -107,8 +107,8 @@ Scripted: `deploy\server_setup.ps1` (firewall step) / run
 
 **Step 7 — network (OPERATOR decides, you apply).** Static IP on the show
 LAN — ask the operator which address. Report hostname + chosen IP back so
-they go into the private `machines.yaml` (`$BM26_MACHINES`, the
-BM26-Firmware-Deployment repo — never this public repo).
+they go into the external/private manifest supplied by `$BM26_MACHINES` —
+never this public repo.
 Scripted (apply the operator's chosen address):
 `deploy\server_setup.ps1 -StaticIp <ip> -PrefixLength 24 -Gateway <gw> -Dns <dns>`
 / run `deploy\setup\setup_static_ip.ps1` alone. Fails loudly if more than one

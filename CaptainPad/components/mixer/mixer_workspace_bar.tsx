@@ -36,6 +36,7 @@ import {
 
 import { usePalette } from '@/hooks/use-theme';
 import { Space, Type } from '@/constants/theme';
+import { AUDIO_BAND_FALLBACK as AUDIO_ACCENT } from '@/constants/identity';
 import { identityDot } from '@/styles/design_recipes';
 import { useSharedParamValues } from '@/hooks/useEngineState';
 import { DualSwatch } from '@/components/ColorPickerModal';
@@ -88,6 +89,9 @@ export interface MixerWorkspaceBarProps {
   channels: readonly MixerBarChannel[];
   onOpen: (id: MixerSurfaceId) => void;
   onClose: (id: MixerSurfaceId) => void;
+  audioBarOpen: boolean;
+  onAudioOpen: () => void;
+  onAudioClose: () => void;
   /** Perf overlay active — feeds the bar PLAN (which citizens are shown).
    *  It renders NO caption: report _308 removed every explainer label from
    *  the chip bar, perf mode included. */
@@ -124,7 +128,14 @@ const MixerWorkspaceChip = React.memo(function MixerWorkspaceChip({ entry, onPre
   // neutral for the same reason — it IS the rig's own pixel picture.
   const dot = isColorsCitizen
     ? <MixerColorsIdentityDot />
-    : <View style={identityDot(entry.kind === 'channel' ? (entry.groupColor ?? C.secondary) : C.secondary, 10)} />;
+    : <View style={identityDot(
+        entry.kind === 'audio'
+          ? AUDIO_ACCENT
+          : entry.kind === 'channel'
+            ? (entry.groupColor ?? C.secondary)
+            : C.secondary,
+        10,
+      )} />;
 
   const showMutedStyle = entry.kind === 'channel' && entry.showMutedStyle;
   const isFloor = entry.kind === 'channel' && entry.floorDisabled;
@@ -172,7 +183,17 @@ const ZERO_EXTENT: MixerBarScrollExtent = { content: 0, viewport: 0, offset: 0 }
 // ── The bar ──────────────────────────────────────────────────────────────
 
 export const MixerWorkspaceBar = React.memo(function MixerWorkspaceBar(
-  { layout, channels, onOpen, onClose, perfActive = false, floorChannelId = null }: MixerWorkspaceBarProps,
+  {
+    layout,
+    channels,
+    onOpen,
+    onClose,
+    audioBarOpen,
+    onAudioOpen,
+    onAudioClose,
+    perfActive = false,
+    floorChannelId = null,
+  }: MixerWorkspaceBarProps,
 ) {
   const C = usePalette();
 
@@ -181,9 +202,23 @@ export const MixerWorkspaceBar = React.memo(function MixerWorkspaceBar(
     [channels],
   );
   const plan = useMemo(
-    () => buildMixerBarPlan(channelInputs, layout, perfActive, floorChannelId as MixerChannelId | null),
-    [channelInputs, layout, perfActive, floorChannelId],
+    () => buildMixerBarPlan(
+      channelInputs,
+      layout,
+      perfActive,
+      floorChannelId as MixerChannelId | null,
+      audioBarOpen,
+    ),
+    [channelInputs, layout, perfActive, floorChannelId, audioBarOpen],
   );
+  const handleOpen = useCallback((id: MixerSurfaceId) => {
+    if (id === 'audioBar') onAudioOpen();
+    else onOpen(id);
+  }, [onAudioOpen, onOpen]);
+  const handleClose = useCallback((id: MixerSurfaceId) => {
+    if (id === 'audioBar') onAudioClose();
+    else onClose(id);
+  }, [onAudioClose, onClose]);
 
   // Scroll extent for the overflow hint. ONE state object rather than three,
   // so a layout pass that reports content + viewport together costs one
@@ -225,7 +260,7 @@ export const MixerWorkspaceBar = React.memo(function MixerWorkspaceBar(
         scrollEventThrottle={16}
       >
         {plan.shown.map((entry) => (
-          <MixerWorkspaceChip key={entry.surfaceId} entry={entry} onPress={onClose} />
+          <MixerWorkspaceChip key={entry.surfaceId} entry={entry} onPress={handleClose} />
         ))}
         {plan.showHiddenDivider ? (
           <>
@@ -238,7 +273,7 @@ export const MixerWorkspaceBar = React.memo(function MixerWorkspaceBar(
           </>
         ) : null}
         {plan.rail.map((entry) => (
-          <MixerWorkspaceChip key={entry.surfaceId} entry={entry} onPress={onOpen} />
+          <MixerWorkspaceChip key={entry.surfaceId} entry={entry} onPress={handleOpen} />
         ))}
       </ScrollView>
       {/* docs/67 §4.2 — the fold becomes visible. Pinned OUTSIDE the scroller

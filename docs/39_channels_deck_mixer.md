@@ -1883,7 +1883,7 @@ becomes a no-op; the next switch ramps from wherever the fade was interrupted). 
 hooks (`resolvePaletteFn` + `applyParamsFn`) are injected into the `ColorAutopilot` ctor; the
 operator-facing control mirrors the **DECK TX crossfade-time** idiom (presets `0/0.5/1/2/3s`).
 
-**Persistence.** The `{active,palettes,delay_s,shuffle,transitionMs}` block lives in
+**Persistence.** The `{active,behavior?,palettes,delay_s,shuffle,transitionMs}` block lives in
 `config.yaml` under `colorAutopilot:` (same idiom as the pattern autopilot's `playlist:`
 block) and restores on boot. Older persisted configs that omit `transitionMs` report `0`.
 
@@ -1909,6 +1909,18 @@ tab mirrors the cycle config immediately.
 **Timeline cue integration.** A deck `playlist` cue may carry a `colorAutopilot` block
 (deck-only, see `docs/38 §16.10`); the `setColorAutopilot` dep is bound to the engine's
 internal `setColorAutopilot()` (no HTTP self-call; fail loud if the dep is missing).
+
+**Current cue contract.** The historical id-only shape above remains valid, but
+the canonical contract is now the complete Deck `ColorAutopilot.validate` wire:
+palette mode accepts saved ids or inline `{c1,c2}` pairs, `delay_s` may be `0`
+when `transitionMs >= 100`, and `mode: followNote` carries the mode-scoped
+sampling block documented in `docs/59`. `behavior: fixed` is the deliberate
+one-shot exception: it requires exactly one inline pair, applies that pair when
+the cue fires, and parks without a rotation timer; `transitionMs` controls its
+entry fade. ADD CUE and EDIT CUE expose fixed/crossfading two-tone, five-tone,
+Follow Note, and the legacy saved-set mode. The live Deck WebSocket
+snapshot also carries `colorAutopilot`, and `deck_state.yaml` mirrors the
+validated config as part of the complete Deck state.
 
 **Touched.** `lib/color_autopilot.js` (new; + crossfade tween `_runTween`/`lerpParams`
 + `transitionMs` validation), `lib/api_server.js` (instance + crossfade hooks +

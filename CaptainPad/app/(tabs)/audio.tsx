@@ -58,7 +58,8 @@ import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { PulseFlash } from '@/components/audio/PulseFlash';
 import {
   audioAccentHex, audioGenreName, describePartySignal, isGenreKey, isPulseKey,
-  nextPartySignalTruth, PARTY_SIGNAL_UNKNOWN, type PartySignalTruth,
+  nextPartySignalTruth, PARTY_SIGNAL_UNKNOWN, selectAudioTabSummarySignals,
+  type PartySignalTruth,
 } from '@/utils/audioSignals';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
 import { EmbeddedServiceScreen } from '@/components/embedded_service_screen';
@@ -577,7 +578,17 @@ function LiveAudioMeters({
   // adding/removing a signal in the Companion adds/removes a column with
   // no code change. Slots carry the post key + (optional) raw mirror key.
   const signals = useAudioSignals();
-  const slots = useMemo<SignalSlot[]>(() => signals.map(toSignalSlot), [signals]);
+  const [allSignalsExpanded, setAllSignalsExpanded] = useState(false);
+  const summarySignals = useMemo(
+    () => selectAudioTabSummarySignals(signals),
+    [signals],
+  );
+  const visibleSignals = allSignalsExpanded ? signals : summarySignals;
+  const slots = useMemo<SignalSlot[]>(
+    () => visibleSignals.map(toSignalSlot),
+    [visibleSignals],
+  );
+  const hiddenSignalCount = Math.max(0, signals.length - summarySignals.length);
   // Whole live doc — the key set is dynamic, so we read it directly rather
   // than via useLiveParamValues (whose pinned-key-set contract assumes a
   // fixed list). The strip re-renders at the analyser cadence; the body
@@ -656,7 +667,7 @@ function LiveAudioMeters({
   //
   // "Missing" includes the LINK being down: the live-param cache holds its
   // last frame when /ws/signals drops (deliberate — every meter freezes
-  // rather than snapping to zero), so reading the cached `audioParty` alone
+  // rather than snapping to zero), so reading cached `audioPartyStrong` alone
   // let the pill keep asserting ON/OFF with no engine behind it. We therefore
   // fold {is the signals socket up, which live doc is in hand, what does it
   // say} through nextPartySignalTruth: it yields null (→ "PARTY SIGNAL …")
@@ -667,7 +678,10 @@ function LiveAudioMeters({
   // SAME frame as the disconnect; the reducer is idempotent for a repeated
   // observation, so a re-render with no new data is a no-op.
   const signalsConnected = useLiveSignalsConnected();
-  const partyEntry = liveDoc?.params?.audioParty;
+  // Match the Timeline show director exactly. `audioParty` is the permissive
+  // legacy level detector and can be ON while the kick/shape-qualified show
+  // trigger is OFF; labelling that value "PARTY SIGNAL" misled the operator.
+  const partyEntry = liveDoc?.params?.audioPartyStrong;
   const partyTruthRef = useRef<PartySignalTruth>(PARTY_SIGNAL_UNKNOWN);
   partyTruthRef.current = nextPartySignalTruth(partyTruthRef.current, {
     connected: signalsConnected,
@@ -698,10 +712,22 @@ function LiveAudioMeters({
           sits OUTSIDE the signal grid (its own headline chip) rather than
           riding as a grid cell styled like the meters. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: C.secondary, textTransform: 'uppercase', letterSpacing: 1,
-        }}>AUDIO SIGNALS</Text>
+        <View>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+            color: C.secondary, textTransform: 'uppercase', letterSpacing: 1,
+          }}>AUDIO SIGNALS</Text>
+          {hiddenSignalCount > 0 ? (
+            <Text style={{
+              fontFamily: 'Inter_400Regular', fontSize: 10,
+              color: C.icon, marginTop: 2,
+            }}>
+              {allSignalsExpanded
+                ? `All ${signals.length} signal visualizers active`
+                : `${summarySignals.length} of ${signals.length} shown for performance`}
+            </Text>
+          ) : null}
+        </View>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
@@ -734,6 +760,47 @@ function LiveAudioMeters({
           ))}
         </View>
       )}
+      {hiddenSignalCount > 0 ? (
+        <TouchableOpacity
+          onPress={() => setAllSignalsExpanded((expanded) => !expanded)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: allSignalsExpanded }}
+          accessibilityLabel={allSignalsExpanded
+            ? 'Collapse extra audio signal visualizers'
+            : `Show ${hiddenSignalCount} more audio signal visualizers`}
+          style={{
+            minHeight: 44,
+            marginHorizontal: 6,
+            marginTop: 2,
+            marginBottom: 10,
+            paddingHorizontal: 14,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: C.ghostBorder,
+            backgroundColor: C.surfaceContainerLow,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold',
+            fontSize: 11,
+            color: C.primary,
+            letterSpacing: 0.8,
+          }}>
+            {allSignalsExpanded
+              ? 'SHOW FEWER SIGNALS'
+              : `SHOW ${hiddenSignalCount} MORE SIGNAL${hiddenSignalCount === 1 ? '' : 'S'}`}
+          </Text>
+          <IconSymbol
+            name={allSignalsExpanded ? 'chevron.up' : 'chevron.down'}
+            size={16}
+            color={C.primary}
+          />
+        </TouchableOpacity>
+      ) : null}
       {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
           gain (patches audio.bands.inputGain): it lifts the mic bands
           above the noise gate so a quiet mic/feed drives the meters AND

@@ -1,10 +1,64 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIO_TAB_SUMMARY_SIGNAL_LIMIT,
   describePartySignal,
   nextPartySignalTruth,
   PARTY_SIGNAL_UNKNOWN,
+  selectAudioTabSummarySignals,
   type PartySignalTruth,
 } from './audioSignals';
+import type { AudioSignalDescriptor } from '@/hooks/useEngineState';
+
+function signal(key: string): AudioSignalDescriptor {
+  return {
+    key,
+    postKey: key,
+    rawKey: null,
+    label: key,
+    kind: 'intensity',
+    max: 1,
+  };
+}
+
+describe('Audio tab signal summary', () => {
+  it('mounts only four familiar live signals by default', () => {
+    const signals = [
+      signal('audioGenre'),
+      signal('audioHigh'),
+      signal('audioKick'),
+      signal('audioFlux'),
+      signal('audioLow'),
+      signal('audioMid'),
+      signal('audioBuild'),
+    ];
+
+    expect(AUDIO_TAB_SUMMARY_SIGNAL_LIMIT).toBe(4);
+    expect(selectAudioTabSummarySignals(signals).map((entry) => entry.key)).toEqual([
+      'audioLow',
+      'audioMid',
+      'audioHigh',
+      'audioKick',
+    ]);
+  });
+
+  it('fills missing familiar slots from the live schema without inventing signals', () => {
+    const signals = [
+      signal('crowdRoar'),
+      signal('audioHigh'),
+      signal('audioBuild'),
+    ];
+
+    expect(selectAudioTabSummarySignals(signals).map((entry) => entry.key)).toEqual([
+      'audioHigh',
+      'crowdRoar',
+      'audioBuild',
+    ]);
+  });
+
+  it('rejects invalid limits instead of silently changing the render contract', () => {
+    expect(() => selectAudioTabSummarySignals([], -1)).toThrow(/non-negative integer/);
+  });
+});
 
 describe('describePartySignal', () => {
   it('shows unknown until a finite engine value arrives', () => {

@@ -211,6 +211,12 @@ export interface DeviceDef {
    *  satisfy `nameContains` and shift portIndex 0 onto the wrong device is
    *  rejected. Backward-compatible: absent → `nameContains` matching unchanged. */
   nameEquals?: string;
+  /** OPTIONAL exact-name alias allowlist for platform-specific driver names.
+   *  Every entry is matched with `===`; this is not a substring fallback.
+   *  Used by the VSN1, which enumerates as "Intech Grid MIDI device" on
+   *  Windows/Web MIDI and "Grid" on iPadOS/CoreMIDI. Mutually exclusive with
+   *  `nameEquals` so the matching rule is always unambiguous. */
+  nameEqualsAny?: string[];
   /** Which port (by index among same-name matches) carries input. */
   sourcePort: number;
   /** Which port receives LED feedback. */
@@ -507,6 +513,21 @@ export function validateProfile(raw: any, profilePath = '<profile>'): Controller
   if (dev.nameEquals !== undefined && (typeof dev.nameEquals !== 'string' || !dev.nameEquals)) {
     fail(`${profilePath}: device.nameEquals must be a non-empty string when present`);
   }
+  if (dev.nameEqualsAny !== undefined) {
+    if (
+      !Array.isArray(dev.nameEqualsAny)
+      || dev.nameEqualsAny.length === 0
+      || dev.nameEqualsAny.some((name: unknown) => typeof name !== 'string' || name.length === 0)
+    ) {
+      fail(`${profilePath}: device.nameEqualsAny must be a non-empty array of non-empty strings when present`);
+    }
+    if (new Set(dev.nameEqualsAny).size !== dev.nameEqualsAny.length) {
+      fail(`${profilePath}: device.nameEqualsAny must not contain duplicate names`);
+    }
+  }
+  if (dev.nameEquals !== undefined && dev.nameEqualsAny !== undefined) {
+    fail(`${profilePath}: device.nameEquals and device.nameEqualsAny are mutually exclusive`);
+  }
   for (const k of ['sourcePort', 'destinationPort'] as const) {
     if (typeof dev[k] !== 'number' || dev[k] < 0 || !Number.isInteger(dev[k])) {
       fail(`${profilePath}: device.${k} must be a non-negative integer`);
@@ -540,6 +561,7 @@ export function validateProfile(raw: any, profilePath = '<profile>'): Controller
       // Only carry nameEquals when the profile pinned it — absent stays absent
       // so `'nameEquals' in device` cleanly distinguishes pinned from unpinned.
       ...(dev.nameEquals !== undefined ? { nameEquals: dev.nameEquals } : {}),
+      ...(dev.nameEqualsAny !== undefined ? { nameEqualsAny: [...dev.nameEqualsAny] } : {}),
       sourcePort: dev.sourcePort, destinationPort: dev.destinationPort,
       configureOnConnect: dev.configureOnConnect === true,
     },

@@ -159,7 +159,7 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
               while a swap is scheduled. Self-ticking (its own 1 Hz interval) so
               it never re-renders the deck screen; reads identically whether the
               operator or a plan cue owns the cadence. */}
-          <SwapCountdown targetMs={nextSwapAtMs ?? null} />
+          <SwapCountdown targetMs={active ? (nextSwapAtMs ?? null) : null} />
           <TouchableOpacity
             onPress={() => { onInteraction?.(); onChange({ active: !active }); }}
             // RUNNING is a LIVE state — the engine is swapping patterns on

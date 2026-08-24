@@ -50,12 +50,12 @@ const WHITE_PATTERNS = [
   '63_white_chase',
   '64_temple_warm_white',
 ];
-// Wave _312 (2026-08-17): 20 white-only conversions live in their own
-// directory and sit in the white_only playlist AFTER the 5 legacy entries.
-// They have their own harness; only the playlist-roster assertion below
-// includes them — the legacy per-pattern checks stay scoped to the 5 above.
+// Wave _312: 20 night-visibility conversions live in their own directory and
+// sit in the white_only review playlist after the 5 legacy entries. The later
+// 21..25 drafts are daylight-duty-cycle content reviewed through white_day;
+// do not silently pull those drafts into the established night review arc.
 const WHITE_ONLY_WAVE = fs.readdirSync(path.join(PATTERNS_DIR, 'white_only'))
-  .filter((f) => f.endsWith('.js'))
+  .filter((f) => /^(?:0[1-9]|1\d|20)_[a-z0-9_]+\.js$/.test(f))
   .map((f) => `white_only/${f.slice(0, -3)}`);
 const UV_PATTERN = '65_uv_only';
 const ALL_NEW = [...WHITE_PATTERNS, UV_PATTERN];

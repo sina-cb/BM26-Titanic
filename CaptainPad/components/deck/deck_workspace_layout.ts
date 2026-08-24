@@ -31,8 +31,14 @@ import { WORKSPACE_KNOWN_SET_RULE } from '@/components/workspace_known_set_polic
  *  new-id policy and the mixer's must "read as one rule"). */
 export { WORKSPACE_KNOWN_SET_RULE };
 
-/** The five Deck windows. */
-export type DeckWindowId = 'patterns' | 'parameters' | 'autopilot' | 'colors' | 'pixels';
+/** The six Deck windows. */
+export type DeckWindowId =
+  | 'patterns'
+  | 'parameters'
+  | 'autopilot'
+  | 'overlays'
+  | 'colors'
+  | 'pixels';
 
 /** Canonical (left-to-right / top-to-bottom) order. Also the render order.
  *  PIXELS is appended LAST so adding it moved nothing: every previously
@@ -41,6 +47,7 @@ export const DECK_WINDOW_IDS: readonly DeckWindowId[] = [
   'patterns',
   'parameters',
   'autopilot',
+  'overlays',
   'colors',
   'pixels',
 ];
@@ -73,6 +80,7 @@ export const DECK_WINDOW_TITLES: Readonly<Record<DeckWindowId, string>> = {
   patterns: 'PATTERNS',
   parameters: 'PARAMETERS',
   autopilot: 'AUTOPILOT',
+  overlays: 'OVERLAYS',
   colors: 'COLORS',
   pixels: 'PIXELS',
 };
@@ -94,7 +102,7 @@ export type DeckWorkspaceLayout = { closed: DeckSurfaceId[] };
 
 // Frozen so an accidental in-place mutation of the shared default throws in
 // strict mode instead of silently poisoning every later hydrate.
-const DEFAULT_CLOSED: DeckSurfaceId[] = ['colors', 'pixels'];
+const DEFAULT_CLOSED: DeckSurfaceId[] = ['overlays', 'colors', 'pixels'];
 Object.freeze(DEFAULT_CLOSED);
 
 /** COLORS starts on the restore rail so the default Deck keeps today's
@@ -124,6 +132,7 @@ const WIDE_FLEX: Readonly<Record<DeckWindowId, number>> = {
   patterns: 4,
   parameters: 3,
   autopilot: 3,
+  overlays: 3,
   colors: 3,
   pixels: 4,
 };

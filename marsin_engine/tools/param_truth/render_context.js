@@ -59,7 +59,7 @@ export async function createRenderContext(modelName) {
   // primitives engine.js itself calls, so the Tier-A auto-views (LEFT /
   // RIGHT / FRONT / BACK / Strands / TE Signs / @BAR / CTRL_n …) are
   // present offline exactly as on the rig. loadModelForGauge() alone does not
-  // derive them, and a hand-built table here held 31 of titanic's 58 names —
+  // derive them, and a hand-built table here held 31 of titanic's 59 names —
   // a documented view was a COMPILE_FAIL in this sweep while it compiled on
   // the rig (reports 20260804_146 §4, 20260804_147). This runs BEFORE
   // buildMaskConstants because the auto-views ride the same viewMasks array;

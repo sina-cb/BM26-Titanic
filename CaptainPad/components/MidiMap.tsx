@@ -191,7 +191,7 @@ export function MidiMapPopover({
 
   const save = async () => {
     if (busy) return;
-    if (!control) { setError('Move a fader to bind a control first.'); return; }
+    if (!control) { setError('Move a control on your MIDI device to bind it first.'); return; }
     // Belt-and-braces (plan §1.1): refuse to persist a control that already
     // resolves to a static profile action, in case a stale captured ref slipped
     // through the runtime's capture-time rejection.
@@ -282,14 +282,18 @@ export function MidiMapPopover({
               </Text>
               {listening ? (
                 <>
+                  {/* Controller-neutral copy: this popover is used by APC mini
+                      mk2 + MIDI Fighter Twister + Intech VSN1 (and any future
+                      profile), so no controller-specific ranges. "Move a
+                      control" covers faders, encoders, pads, buttons alike. */}
                   <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: MIDI_VIOLET, textAlign: 'center' }}>
-                    ◉ Listening — move a fader (4-6 or 8) or press a pad…
+                    ◉ Listening — move a control on your MIDI device…
                   </Text>
                   <Chip active accent={MIDI_VIOLET} onPress={stopLearn}>CANCEL LISTENING</Chip>
                 </>
               ) : (
                 <Chip active={false} accent={MIDI_VIOLET} onPress={startLearn}>
-                  {control ? 'RE-LEARN' : 'LEARN — MOVE A FADER'}
+                  {control ? 'RE-LEARN' : 'LEARN — MOVE A CONTROL'}
                 </Chip>
               )}
             </View>

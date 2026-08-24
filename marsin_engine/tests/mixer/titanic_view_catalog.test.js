@@ -16,11 +16,12 @@
 //   The retired names (PORT/STARBOARD, FORE/AFT, BAND_*, `<base>_BOTH`,
 //   @RAW, every Left */Right * composite) resolve to NOTHING.
 //
-// Report 20260804_148 retired two more by operator ruling: the derived
-// structural views WALLS and AUDITORIUM were byte-identical to the authored
-// composites Hull Canvas and Auditoriums, so the authored names are canonical
-// and the derived duplicates are gone. The catalog is 58 names. The
-// dedup lives in lib/view_catalog.js `appendAutoViews`, which is why this file
+// Report 20260804_148 retired byte-identical structural aliases. WALLS still
+// duplicates Hull Canvas and is gone. AUDITORIUM now intentionally combines
+// the 16 auditorium PARs and every TE-sign pixel, so it is distinct from the
+// authored PAR-only Auditoriums view and remains selectable. The catalog is
+// 59 names. The dedup
+// lives in lib/view_catalog.js `appendAutoViews`, which is why this file
 // assembles the catalog through the SHARED path — the one the engine and the
 // three offline tools both use — rather than calling deriveAutoViews raw.
 
@@ -34,8 +35,8 @@ import { injectInViewIntrinsic, createBitFreeViewPromoter } from '../../lib/in_v
 
 const PIXELS = 964;
 const HALF = 482;
-// 24 base groups + 7 authored composites + 27 derived auto-views.
-const CATALOG_NAMES = 58;
+// 24 base groups + 7 authored composites + 28 derived auto-views.
+const CATALOG_NAMES = 59;
 
 async function titanicCatalog() {
   const model = await loadModelForGauge('titanic');
@@ -167,35 +168,69 @@ test('titanic: inView() folds every catalog name and fails loudly on a removed o
     { pixels: model.pixels, viewMasks: all, groupBits: model.groupBits }, { metaDirty: false });
 
   for (const name of ['LEFT', 'RIGHT', 'FRONT', 'BACK', 'Strands', 'TE Signs',
-    'Hull Canvas', 'Silhouette', 'Jewelry', 'Organs', 'Identity', 'Stacks', 'Auditoriums']) {
+    'AUDITORIUM', 'Hull Canvas', 'Silhouette', 'Jewelry', 'Organs', 'Identity', 'Stacks',
+    'Auditoriums']) {
     const out = injectInViewIntrinsic(`if (inView("${name}")) rgb(1,1,1);`, table, promote);
     assert.match(out, /\(\(viewMask(Hi)? & \d+\) != 0\)/, `inView("${name}") must fold to a bit test`);
   }
   for (const gone of ['PORT', 'STARBOARD', 'FORE', 'AFT', 'BAND_LOW', '@RAW',
-    'Left Hull', 'Right Stacks', 'Front Wall_BOTH', 'WALLS', 'AUDITORIUM']) {
+    'Left Hull', 'Right Stacks', 'Front Wall_BOTH', 'WALLS']) {
     assert.throws(() => injectInViewIntrinsic(`if (inView("${gone}")) rgb(1,1,1);`, table, promote),
       new RegExp(`unknown view\\(s\\) via inView\\(\\): ${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
       `inView("${gone}") must be a loud compile error naming the view`);
   }
 });
 
-test('titanic: WALLS and AUDITORIUM are retired duplicates, not selectable views', async () => {
-  const { auto, registry, count } = await titanicCatalog();
-  // Gone from the mixer/CaptainPad picker (the MaskRegistry is what
-  // /model/view-selection-options enumerates) …
-  for (const gone of ['WALLS', 'AUDITORIUM']) {
-    assert.equal(registry.get(gone), null, `'${gone}' must not be selectable`);
-  }
-  // … and the authored names that replace them still resolve, unchanged.
+test('titanic: AUDITORIUM is exactly auditorium PARs plus both complete TE signs', async () => {
+  const { model, auto, registry, count } = await titanicCatalog();
+  assert.equal(registry.get('WALLS'), null, 'WALLS remains a retired duplicate');
   assert.equal(count('Hull Canvas'), 360);
   assert.equal(count('Auditoriums'), 16);
-  // The drop is reported with its twin, never silent (codex P0).
+  assert.equal(count('AUDITORIUM'), 164);
+
+  const auditorium = registry.get('AUDITORIUM').members;
+  const auditoriumPars = registry.get('Auditoriums').members;
+  const signs = registry.get('TE Signs').members;
+  const parGroups = new Map();
+  const signGroups = new Map();
+  const includedTypes = new Set();
+  for (let i = 0; i < PIXELS; i++) {
+    assert.equal(auditorium[i], auditoriumPars[i] || signs[i] ? 1 : 0,
+      `AUDITORIUM pixel ${i} must equal Auditoriums ∪ TE Signs (${model.pixels[i].fixtureType})`);
+    if (model.pixels[i].fixtureType === 'UkingPar') {
+      const group = model.pixels[i].group;
+      parGroups.set(group, (parGroups.get(group) || 0) + auditorium[i]);
+    }
+    if (signs[i]) {
+      const group = model.pixels[i].group;
+      signGroups.set(group, (signGroups.get(group) || 0) + auditorium[i]);
+    }
+    if (auditorium[i]) includedTypes.add(model.pixels[i].fixtureType);
+  }
+  assert.deepEqual([...parGroups].sort(([a], [b]) => a.localeCompare(b)), [
+    ['Left SmokeStack', 0],
+    ['Left Small SmokeStack', 0],
+    ['Left Auditorium', 8],
+    ['Right SmokeStacks', 0],
+    ['Right Small SmokeStack', 0],
+    ['Right Auditorium', 8],
+  ].sort(([a], [b]) => a.localeCompare(b)),
+  'only the exact auditorium PAR groups are selected; all 24 smokestack PARs are excluded');
+  assert.deepEqual([...signGroups].sort(([a], [b]) => a.localeCompare(b)),
+    [['TE Sign', 74], ['TE Sign 2', 74]].sort(([a], [b]) => a.localeCompare(b)),
+    'all pixels from both complete TE signs are selected');
+  assert.deepEqual([...includedTypes].sort(), ['TeSignV3A40', 'TeSignV3B34', 'UkingPar'],
+    'no unrelated fixture type enters AUDITORIUM');
+  assert.equal(count('@PAR'), 40, 'the typed all-PAR view remains unchanged');
+  assert.equal(count('Auditoriums'), 16, 'the authored auditorium PAR view remains unchanged');
+  assert.equal(count('TE Signs'), 148, 'the typed all-sign view remains unchanged');
+
+  // Only WALLS is still byte-identical to an authored view and retired.
   assert.deepEqual(auto.deduped.map((d) => [d.name, d.twin, d.pixels]),
-    [['WALLS', 'Hull Canvas', 360], ['AUDITORIUM', 'Auditoriums', 16]]);
-  assert.equal(auto.families.structural.length, 0, 'both structural bands were duplicates');
-  // The whole catalog is 58 names.
+    [['WALLS', 'Hull Canvas', 360]]);
+  assert.deepEqual(auto.families.structural, ['AUDITORIUM']);
   assert.equal(registry.names().length, CATALOG_NAMES);
-  // Fixture-capability targeting is untouched: @BAR covers the same 360 px as
+  // Other fixture-capability targeting is untouched: @BAR covers the same 360 px as
   // Hull Canvas and STAYS (operator ruling, report _148).
   assert.equal(count('@BAR'), 360);
 });

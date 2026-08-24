@@ -21,6 +21,9 @@ if cls ~= nil then
   local si = page_current() * 8 + sel + 1
   local d = math.floor(self:endless_value()) - 64
   vals[si] = math.max(0, math.min(127, math.floor((vals[si] or 0) + d)))
+  -- Hold this local prediction until value_rx sees the matching host echo.
+  lck = si
+  lcv = vals[si]
   if ebar ~= nil then ebar(vals[si]) end
   dirty = 1
   self:midi_send(-1, 176, __SB__ + sel, vals[si])

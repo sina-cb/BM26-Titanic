@@ -1,0 +1,12 @@
+# assert_violations_event_lint_restart_spec.yaml — trips:
+#   - class 5: c_event_no_hold's sunrise+90 representative fire (no hold ->
+#     release = fire+60min) lands in the day_off dead zone.
+#   - class 8: restartProbes adds 00:30 (ownerless — no midnight bridge cue in
+#     this fixture) and restartExpect deliberately mis-names the 07:30 owner.
+eventCues:
+  - c_event_no_hold
+restartProbes:
+  - '00:30'
+  - '07:30'
+restartExpect:
+  '07:30': c_totally_wrong_cue

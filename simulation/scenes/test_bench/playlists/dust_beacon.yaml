@@ -1,0 +1,70 @@
+schemaVersion: 1
+name: dust_beacon
+entries:
+  - id: e_dust_beacon_01_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.58
+      sliderEvenness: 0.42
+      sliderWhiteLevel: 0.72
+      sliderWhiteKick: 0.18
+      sliderWarmth: 0.14
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dust_beacon_02_63_white_chase
+    pattern: 63_white_chase
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.30
+      sliderDirection: 0.75
+      sliderLevel: 0.78
+      sliderKick: 0.08
+      sliderRadius: 0.38
+      sliderTailLength: 0.58
+      sliderCount: 0.42
+      sliderWhiteLevel: 0.70
+      sliderWhiteKick: 0.24
+      sliderWarmth: 0.06
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dust_beacon_03_white_only_13_tidal_crossing
+    pattern: white_only/13_tidal_crossing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderWaveWidth: 0.56
+      sliderRecoil: 0.48
+      sliderContrast: 0.58
+      sliderLevel: 0.62
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dust_beacon_04_white_only_06_lighthouse_watch
+    pattern: white_only/06_lighthouse_watch
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderWidth: 0.5
+      sliderSafetyFloor: 0.5
+      sliderLevel: 0.72
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_dust_beacon_05_white_only_12_porthole_liner
+    pattern: white_only/12_porthole_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDetail: 0.5
+      sliderFlare: 0.35
+      sliderLevel: 0.65
+    modulations: []
+    midiMappings: []
+    notes: null

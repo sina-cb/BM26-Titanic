@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMixerBarPlan,
   channelChipLabel,
+  AUDIO_TITLE,
   COLORS_TITLE,
   MIXER_BAR_OVERFLOW_EPSILON,
   shouldShowBarOverflowHint,
@@ -58,7 +59,9 @@ describe('buildMixerBarPlan — shown chips, canonical order', () => {
     const layout = freshLayout(THREE);
     const opened = layoutReducer(layout, { type: 'open', id: citizenSurfaceId('colors') });
     const plan = buildMixerBarPlan(THREE, opened, false, null);
-    const kinds = plan.shown.map((e) => (e.kind === 'citizen' ? e.citizen : e.channelId));
+    const kinds = plan.shown.map((e) => (
+      e.kind === 'citizen' ? e.citizen : e.kind === 'channel' ? e.channelId : e.surfaceId
+    ));
     expect(kinds).toEqual(['a', 'b', 'c', 'colors']);
     expect(plan.shown[3].label).toBe(COLORS_TITLE);
   });
@@ -70,6 +73,27 @@ describe('buildMixerBarPlan — shown chips, canonical order', () => {
     expect(plan.rail.some((e) => e.kind === 'citizen' && e.citizen === 'colors')).toBe(true);
   });
 
+  it('places AUDIO in the same shown/hidden workspace bar as channels and COLORS', () => {
+    const layout = freshLayout(THREE);
+    const shown = buildMixerBarPlan(THREE, layout, false, null, true);
+    expect(shown.shown.at(-1)).toMatchObject({
+      kind: 'audio',
+      surfaceId: 'audioBar',
+      label: AUDIO_TITLE,
+      open: true,
+    });
+    expect(shown.rail.some((entry) => entry.kind === 'audio')).toBe(false);
+
+    const hidden = buildMixerBarPlan(THREE, layout, false, null, false);
+    expect(hidden.shown.some((entry) => entry.kind === 'audio')).toBe(false);
+    expect(hidden.rail.at(-1)).toMatchObject({
+      kind: 'audio',
+      surfaceId: 'audioBar',
+      label: AUDIO_TITLE,
+      open: false,
+    });
+  });
+
   it('does not expose the retired master 2D citizen on either side of the bar', () => {
     const layout = freshLayout(THREE);
     const legacyOpened = layoutReducer(layout, { type: 'open', id: citizenSurfaceId('masterBand') });
@@ -77,7 +101,9 @@ describe('buildMixerBarPlan — shown chips, canonical order', () => {
       const plan = buildMixerBarPlan(THREE, candidate, false, null);
       expect(plan.shown.some((e) => e.label === 'MASTER VIEW')).toBe(false);
       expect(plan.rail.some((e) => e.label === 'MASTER VIEW')).toBe(false);
-      expect(plan.rail.map((e) => (e.kind === 'citizen' ? e.citizen : e.channelId)))
+      expect(plan.rail.map((e) => (
+        e.kind === 'citizen' ? e.citizen : e.kind === 'channel' ? e.channelId : e.surfaceId
+      )))
         .toEqual(['colors']);
       expect(plan.showHiddenDivider).toBe(true);
     }
@@ -114,7 +140,9 @@ describe('buildMixerBarPlan — the rail, close order', () => {
     l = layoutReducer(l, { type: 'close', id: citizenSurfaceId('masterBand'), roster });
     l = close(l, channelSurfaceId('a'), roster);
     const plan = buildMixerBarPlan(THREE, l, false, null);
-    const railIds = plan.rail.map((e) => (e.kind === 'channel' ? e.channelId : e.citizen));
+    const railIds = plan.rail.map((e) => (
+      e.kind === 'channel' ? e.channelId : e.kind === 'citizen' ? e.citizen : e.surfaceId
+    ));
     expect(railIds).toEqual(['colors', 'b', 'a']);
   });
 

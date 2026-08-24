@@ -14,6 +14,8 @@ const { listPatterns: listManifestPatterns } = require('./pattern_manifest.cjs')
 
 const ledGamma = require('./led_gamma_service.cjs');
 const controllerProbe = require('./controller_probe_service.cjs');
+const smokestackStatus = require('./smokestack_status_service.cjs');
+const smokestackCli = require('./smokestack_cli_service.cjs');
 
 const {
   writeFileAtomic,
@@ -1066,6 +1068,138 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: false, error: e.message }));
       });
     });
+  } else if (req.method === 'GET' && pathname === '/smokestack/provision') {
+    // Is the private deployment source (deploy CLI + registry) available to
+    // this process? Reports missing env-var NAMES only — never a path value.
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true, ...smokestackCli.defaultService.provisionState() }));
+  } else if (req.method === 'POST' && pathname === '/smokestack/status') {
+    // Read-only DMX ⇄ swarm glance for the rope controllers. Two GETs per
+    // board (/api/status + /api/config), ZERO mutation — the switch path is
+    // /smokestack/run below, and only there. Same hostile-shape guards as
+    // /controllers/probe: this port carries CORS `*` and no auth.
+    // Body: { targets: [{id, name, ip}], timeoutMs?: number }
+    let body = '';
+    let bodyTooBig = false;
+    req.on('data', (chunk) => {
+      if (bodyTooBig) return;
+      body += chunk;
+      if (body.length > PROBE_MAX_BODY_BYTES) {
+        bodyTooBig = true;
+        res.statusCode = 413;
+        res.end(JSON.stringify({ ok: false,
+          error: `request body exceeds ${PROBE_MAX_BODY_BYTES} bytes` }));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (bodyTooBig) return;
+      res.setHeader('Content-Type', 'application/json');
+      let parsed;
+      try {
+        parsed = JSON.parse(body || '{}');
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: `invalid JSON body: ${e.message}` }));
+        return;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: 'body must be a JSON object' }));
+        return;
+      }
+      if (!Array.isArray(parsed.targets)) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: '`targets` must be a list of {id, name, ip}' }));
+        return;
+      }
+      let timeoutMs;
+      try {
+        timeoutMs = smokestackStatus.validateTimeoutMs(parsed.timeoutMs);
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+        return;
+      }
+      smokestackStatus.smokestackStatusSweep(parsed.targets, { timeoutMs })
+        .then((out) => { res.end(JSON.stringify({ ok: true, ...out })); })
+        .catch((e) => {
+          // The sweep is documented never to reject; if it ever does, that is
+          // a bug in the sweeper and must be visible, not a silent empty table.
+          console.error(`[SAVE SERVER] ✋ smokestack status sweep failed: ${e.stack || e.message}`);
+          res.statusCode = 500;
+          res.end(JSON.stringify({ ok: false, error: e.message }));
+        });
+    });
+  } else if (req.method === 'POST' && pathname === '/smokestack/run') {
+    // Start ONE deploy-CLI run: status / dry-run / apply. Every gate lives in
+    // smokestack_cli_service (provisioning, one-at-a-time, and the apply
+    // two-step: fresh clean dry-run of the same action + frozen repair target
+    // set + the exact typed phrase). This route only maps refusal codes to
+    // HTTP statuses.
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      res.setHeader('Content-Type', 'application/json');
+      let parsed;
+      try {
+        parsed = JSON.parse(body || '{}');
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: `invalid JSON body: ${e.message}` }));
+        return;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: 'body must be a JSON object' }));
+        return;
+      }
+      const result = smokestackCli.defaultService.startJob({
+        action: parsed.action,
+        apply: parsed.apply === true,
+        confirm: parsed.confirm,
+        dryRunJobId: parsed.dryRunJobId,
+        targetIds: parsed.targetIds,
+        leaderContext: parsed.leaderContext,
+        preflightDigest: parsed.preflightDigest,
+      });
+      if (result.ok) {
+        console.log(`[SAVE SERVER] 🌫 smokestack job ${result.job.id} started: ` +
+          `${result.job.action}${result.job.apply ? ' --yes' : ''}`);
+        res.end(JSON.stringify(result));
+        return;
+      }
+      const statusByCode = {
+        bad_action: 400,
+        bad_targets: 400,
+        not_provisioned: 503,
+        busy: 409,
+        confirm_mismatch: 403,
+        dry_run_required: 409,
+        dry_run_failed: 409,
+        dry_run_stale: 409,
+        dry_run_target_mismatch: 409,
+        dry_run_consumed: 409,
+        force_target_required: 400,
+        force_leader_context: 409,
+        force_drift: 409,
+        spawn_failed: 500,
+      };
+      res.statusCode = statusByCode[result.code] || 500;
+      console.error(`[SAVE SERVER] ✋ smokestack run refused (${result.code}): ${result.error}`);
+      res.end(JSON.stringify(result));
+    });
+  } else if (req.method === 'GET' && pathname === '/smokestack/job') {
+    // Poll one job's live state (output verbatim + verdict line when printed).
+    res.setHeader('Content-Type', 'application/json');
+    const id = parsedUrl.searchParams.get('id');
+    const job = id ? smokestackCli.defaultService.getJob(id) : null;
+    if (!job) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ ok: false, error: `no smokestack job '${id}'` }));
+      return;
+    }
+    res.end(JSON.stringify({ ok: true, job }));
   } else if (req.method === 'GET' && pathname === '/list-scenes') {
     // The simulation client now reads the static manifest directly, but we
     // keep this endpoint for ad-hoc tooling. Source of truth is listScenes().

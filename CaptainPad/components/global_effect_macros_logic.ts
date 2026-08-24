@@ -333,6 +333,8 @@ export function resolveEffectsPresentation(): EffectsPresentation {
 
 /** iOS HIG / operator minimum — chip row height never drops below this. */
 export const EFFECTS_BAR_MIN_TOUCH_TARGET = 44;
+/** Fixed strip host box: 44px controls + 4px top + 6px bottom + 1px rule. */
+export const EFFECTS_STRIP_HOST_HEIGHT = EFFECTS_BAR_MIN_TOUCH_TARGET + 11;
 
 export type EffectsBarVariant = 'deck' | 'mixer-strip';
 

@@ -96,8 +96,8 @@ const BABY_REVEAL: EventShow = {
       kind: 'action',
       choices: [],
       effects: [
-        { id: 'strobe', label: 'STROBE', color: null },
-        { id: 'flash_vintage_white', label: 'FLASH VINTAGE WHITE', color: null },
+        { id: 'strobe', label: 'STROBE', color: null, mode: 'toggle' },
+        { id: 'flash_vintage_white', label: 'FLASH VINTAGE WHITE', color: null, mode: 'pulse' },
       ],
       extendLabel: 'RESTART TEASE',
       extendKind: 'actions',
@@ -151,6 +151,7 @@ function state(over: Partial<SpecialEventsState> = {}): SpecialEventsState {
     endedDetail: null,
     error: null,
     leaseHeld: false,
+    quickEffectStates: {},
     autopilot: IDLE_AUTOPILOT,
     // The library rides on every frame — see special_events_api's header.
     catalog: { shows: [BABY_REVEAL], errors: [] },
@@ -286,6 +287,11 @@ describe('the ceremonial choice pair', () => {
     expect(stageOf(REVEALED, 'reveal').choices.every((c) => c.compact)).toBe(true);
   });
 
+  it('marks only the answer the engine says is live', () => {
+    expect(stageOf(CHOOSING, 'reveal').choices.map((c) => c.selected)).toEqual([false, false]);
+    expect(stageOf(REVEALED, 'reveal').choices.map((c) => c.selected)).toEqual([true, false]);
+  });
+
   it('carries each choice its own show accent', () => {
     expect(stageOf(CHOOSING, 'reveal').choices.map((c) => c.accent)).toEqual([PINK, BLUE]);
   });
@@ -309,6 +315,16 @@ describe('quick-effect pulses', () => {
 
   it('are still DRAWN when idle, so the operator knows the stage has them', () => {
     expect(stageOf(BLACKED_OUT, 'tease').effects).toHaveLength(2);
+  });
+
+  it('shows toggle state only when the engine says the effect is actually on', () => {
+    const strobeOn = state({
+      ...TEASING,
+      quickEffectStates: { strobe: true },
+    });
+    expect(stageOf(TEASING, 'tease').effects[0].active).toBe(false);
+    expect(stageOf(strobeOn, 'tease').effects[0].active).toBe(true);
+    expect(stageOf(strobeOn, 'tease').effects[1].active).toBe(false);
   });
 
   it('mirror the two refusals the engine itself raises', () => {

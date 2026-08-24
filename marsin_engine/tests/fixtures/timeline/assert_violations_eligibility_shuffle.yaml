@@ -1,0 +1,112 @@
+# assert_violations_eligibility_shuffle.yaml — deliberately violating fixture
+# for class 3 (eligibility-window sanity) and class 4 (shuffle-pinning). See
+# assert_violations_eligibility_shuffle_spec.yaml for the directedCues /
+# eligibility whitelist that trips the findings.
+schemaVersion: 2
+name: assert_violations_eligibility_shuffle
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  # An EMPTY phase (start === end) — a real, if unusual, authoring bug: the
+  # window never opens (class 3's "non-empty" check).
+  bad_phase:
+    start:
+      clock: '10:00'
+    end:
+      clock: '10:00'
+  # A real, non-empty phase whose boundaries deliberately DON'T match the
+  # spec's `eligibility` anchors (class 3's optional boundary-match check).
+  real_window:
+    start:
+      clock: '20:00'
+    end:
+      clock: '23:00'
+looks:
+  ambient_look:
+    playlist: ambient
+    autopilot:
+      active: true
+      # Deliberately shuffle:true — this look is referenced by a directedCues
+      # entry in the spec, which requires shuffle:false (class 4).
+      delay_s: 60
+      shuffle: true
+    target:
+      channel: deck
+      id: null
+defaultCue:
+  label: Ambient default
+  action:
+    type: look
+    look: ambient_look
+cues:
+  - id: c_mood_no_gate
+    label: Mood cue with no eligibility gate at all
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 20
+      cooldownSec: 120
+    action:
+      type: look
+      look: ambient_look
+    kind: mood
+    days: all
+  - id: c_mood_bad_phase
+    label: Mood cue gated on an empty phase
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 20
+      cooldownSec: 120
+      whenPhase: bad_phase
+    action:
+      type: look
+      look: ambient_look
+    kind: mood
+    days: all
+  - id: c_mood_real
+    label: Mood cue gated on a real, but mismatched, phase
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 20
+      cooldownSec: 120
+      whenPhase: real_window
+    action:
+      type: look
+      look: ambient_look
+    kind: mood
+    days: all
+  - id: c_shuffle_bad
+    label: Directed cue that forgot to pin shuffle
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '22:00'
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all

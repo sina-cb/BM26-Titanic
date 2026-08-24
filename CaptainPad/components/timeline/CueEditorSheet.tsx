@@ -7,23 +7,21 @@
  *
  *   CUE NAME  text input  the operator-facing label for this cue
  *   KIND      segmented   program | mood | ambient
- *   TRIGGER   segmented   clock | sun | phase | mood | manual
+ *   TRIGGER   segmented   clock | sun | phase | party | mood | manual
  *               clock → HH:MM stepper
  *               sun   → event dropdown + offset ±min stepper
  *               phase → phase dropdown
+ *               party → audio sustain/cooldown + optional phase gate
  *               mood  → from/to segmented + dwell/cooldown steppers + whenPhase
- *   ACTION    (fixed)     playlist only        (look + scene removed)
+ *   ACTION                playlist; manual cues may start a Special Event
  *               playlist → dropdown (GET /playlists), deck-only target,
  *                          TRANSITION (default|crossfade|flash|dissolve),
  *                          OVERLAYS (leave|enable|disable),
  *                          pattern AUTOPILOT + COLOR AUTOPILOT
  *   DAYS      This day | All days | Pick…       (Pick = day-index toggles)
  *
- * PLAYLIST is the ONLY action the maker authors now (operator decision:
- * "remove look all together"). The CueAction union still carries `look` /
- * `globals` for hand-authored plans, but this editor never emits them. The
- * `scene` action is likewise NOT authored here: a scene switch restarts the
- * engine — dangerous + irrelevant inside the maker.
+ * PLAYLIST remains the normal cue action. Manual cues may instead select a
+ * staged Special Event; clock/sun/party cues never expose that action.
  *
  * Two authoring surfaces REMOVED (operator rulings 2026-08-03), both engine-
  * intact — see cue_edit_logic.ts for the pinned round-trip rules:
@@ -35,26 +33,44 @@
  *     save, never shown. The DECK-level size global is a real control and is
  *     not affected.
  */
-import React, { useMemo, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, Modal, Pressable, StyleSheet } from 'react-native';
 import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
-  PlanCue, PlanDefaultCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
+  PlanCue, PlanDefaultCue, CueKind, CueTrigger, CueAction, ActionPlaylist, ActionSpecialEvent, SunEvent, CueDays, ShowPlan,
   DeckTransitionMode, ActionOverlays, PlanAutopilotInline,
 } from '@/utils/timelineApi';
 import {
   hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
-import { assembleCue, stripCueSizeGlobal } from './cue_edit_logic';
+import {
+  assembleCue,
+  DEFAULT_CUE_DURATION_MIN,
+  defaultCuePlaylistAction,
+  isPartyCueTrigger,
+  partyPlaylistActionForEditor,
+  programCueAutopilotError,
+  stripEmptyCuePalette,
+  stripCueSizeGlobal,
+  wireDaysForOperatorDay,
+  wireDayToOperatorDay,
+} from './cue_edit_logic';
 import { DayTimePicker, DayTimeContextCue } from './DayTimePicker';
 import { DeckTransitionControls } from '@/components/DeckTransitionControls';
 import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
-import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import type { DeckColorAutopilotConfig } from '@/utils/api';
+import { LockableScrollView } from '@/components/ui/lockable_scroll_view';
+import { CueColorThemeEditor } from './cue_color_theme_editor';
+import { normalizeCueColorAutopilot } from './cue_color_theme_logic';
+import { useSpecialEvents } from '@/hooks/useSpecialEvents';
+import {
+  isPartyWindowImplementationCue,
+  partyWindowSeed,
+  type PartyWindowSpec,
+} from './party_window_logic';
 
 // HSV(h°, 1, 1) → #rrggbb for the HUE fader fill (ColorPickerModal's
 // hsvToRgbString is module-private, so we restate the few lines here). Full
@@ -111,6 +127,13 @@ const OVERLAY_OPTIONS: { id: 'asis' | ActionOverlays; label: string }[] = [
 // many minutes after it fires; "None" emits no `durationMin` (point event).
 // Mirrors the HOLD stepper idiom but with quick playa-friendly presets.
 const DURATION_PRESETS_MIN = [15, 30, 60, 90, 120, 180];
+const CUE_DURATION_PRESETS_MIN = [0.5, 5, 15, 30, 60, 90, 120, 180];
+
+function formatDurationMinutes(minutes: number): string {
+  if (minutes < 1) return `${Math.round(minutes * 60)} sec`;
+  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes} min`;
+}
 
 // ── Overlap detection (operator: "disallow overlapping cues") ──────────────
 // A cue owns the deck for [start, start+durationMin). Two cues conflict only
@@ -125,6 +148,7 @@ const DURATION_PRESETS_MIN = [15, 30, 60, 90, 120, 180];
 // anchor either → null (skip).
 function cueStartMinutes(cue: PlanCue): number | null {
   if (cue.trigger.type === 'clock') return hhmmToMinutes(cue.trigger.at);
+  if (cue.trigger.type === 'manual') return hhmmToMinutes(cue.trigger.placementAt ?? null);
   return null;
 }
 
@@ -155,9 +179,23 @@ function defaultTrigger(type: CueTrigger['type']): CueTrigger {
     case 'clock': return { type: 'clock', at: '20:00' };
     case 'sun': return { type: 'sun', event: 'sunset', offsetMin: 0 };
     case 'phase': return { type: 'phase', phase: '' };
-    case 'mood': return { type: 'mood', from: 'calm', to: 'party', minDwellSec: 30, cooldownSec: 300 };
-    case 'manual': return { type: 'manual' };
+    // Generic Mood defaults to the non-PARTY direction. A calm→party
+    // transition is authored through the dedicated PARTY mode below.
+    case 'mood': return { type: 'mood', from: 'party', to: 'calm', minDwellSec: 30, cooldownSec: 300 };
+    case 'manual': return { type: 'manual', placementAt: '20:00' };
   }
+}
+
+type TriggerEditorMode = CueTrigger['type'] | 'party';
+
+function defaultPartyTrigger(): CueTrigger {
+  return {
+    type: 'mood',
+    from: 'calm',
+    to: 'party',
+    minDwellSec: 30,
+    cooldownSec: 300,
+  };
 }
 
 // Smart default start for a fresh CLOCK trigger (operator: a new cue should
@@ -188,12 +226,44 @@ function smartDefaultClockAt(tz: string): string {
   return minutesToHHMM(Math.floor(boundarySec / 60) % 1440);
 }
 
-// The maker authors PLAYLIST cues only now (look removed). This always
-// returns a fresh, deck-targeted playlist action — the editor's single
-// default and reset shape.
-function defaultPlaylistAction(): ActionPlaylist {
-  return { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } };
+function nextCueLabel(plan: ShowPlan, prefix: 'Cue' | 'Party'): string {
+  const used = new Set<number>();
+  const pattern = new RegExp(`^${prefix}\\s+(\\d+)$`, 'i');
+  for (const cue of plan.cues ?? []) {
+    const match = pattern.exec(cue.label?.trim() ?? '');
+    if (match) used.add(Number(match[1]));
+  }
+  let index = 1;
+  while (used.has(index)) index += 1;
+  return `${prefix} ${index}`;
 }
+
+function isPrefilledCueLabel(value: string): boolean {
+  return /^(?:Cue|Party)\s+\d+$/i.test(value.trim());
+}
+
+/** Copy all Deck behavior while keeping each Party state's playlist independent. */
+function copyPlaylistSettings(source: ActionPlaylist, destination: ActionPlaylist): ActionPlaylist {
+  const { name: _sourceName, ...settings } = source;
+  return {
+    ...destination,
+    ...settings,
+    name: destination.name,
+    target: { channel: 'deck', id: null },
+  };
+}
+
+function stripPlaylistSizeGlobal(source: ActionPlaylist): ActionPlaylist {
+  const stripped = stripCueSizeGlobal(source);
+  if (stripped.type !== 'playlist') {
+    throw new Error('Playlist normalization changed the action type.');
+  }
+  return stripped;
+}
+
+export type CueSaveResult =
+  | { ok: true }
+  | { ok: false; error: string };
 
 export function CueEditorSheet({
   visible, mode = 'cue', initialCue, initialDefaultCue, plan, playlists, palettes, dayIndex,
@@ -227,18 +297,23 @@ export function CueEditorSheet({
   palettes?: { id: string; name: string; c1?: number; c2?: number }[];
   /** The day the editor was opened from — seeds DAYS "This day". */
   dayIndex: number;
-  onSave: (cue: PlanCue) => void;
+  onSave: (cue: PlanCue, partyWindow?: PartyWindowSpec) => Promise<CueSaveResult>;
   /** Called (mode==='defaultCue' only) with the edited plan default cue. */
-  onSaveDefault?: (dc: PlanDefaultCue) => void;
+  onSaveDefault?: (dc: PlanDefaultCue) => Promise<CueSaveResult>;
   onDelete: (() => void) | null;
   onClose: () => void;
 }) {
   const isDefaultMode = mode === 'defaultCue';
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const { state: specialEventsState } = useSpecialEvents();
 
   const paletteOptions = palettes ?? [];
   const phaseNames = Object.keys(plan.phases);
+  const specialEventShows = useMemo(
+    () => (specialEventsState?.catalog.shows ?? []).filter((show) => show.playlistsUsable),
+    [specialEventsState?.catalog.shows],
+  );
 
   // Fresh trigger for a given type. CLOCK gets the smart "~5 min from now"
   // default (plan tz) instead of a fixed time — used when seeding a NEW cue
@@ -247,16 +322,39 @@ export function CueEditorSheet({
   const makeTrigger = (type: CueTrigger['type']): CueTrigger =>
     type === 'clock'
       ? { type: 'clock', at: smartDefaultClockAt(plan.location.tz) }
+      : type === 'manual'
+        ? { type: 'manual', placementAt: smartDefaultClockAt(plan.location.tz) }
       : defaultTrigger(type);
+  const makeEditorTrigger = (mode: TriggerEditorMode): CueTrigger =>
+    mode === 'party' ? defaultPartyTrigger() : makeTrigger(mode);
 
   type DaysMode = 'all' | 'this' | 'pick';
 
+  // Extract the clock "HH:MM" from a cue's trigger when it has an editor-
+  // resolvable time-of-day anchor. Morning-clock cues stored on wire day D+1
+  // belong to operator day D — we need the clock to reverse that mapping.
+  const clockOfTrigger = (t: CueTrigger | undefined): string | null => {
+    if (!t) return null;
+    if (t.type === 'clock') return t.at;
+    if (t.type === 'manual') return t.placementAt ?? null;
+    return null;
+  };
+
   // Classify a saved `days` value into an initial segmented mode. A date-string
   // array (e.g. ['2026-08-31']) has no grid representation, so we surface it as
-  // 'pick' (read-only) rather than clobbering it.
-  const initialDaysMode = (d: CueDays | undefined): DaysMode => {
+  // 'pick' (read-only) rather than clobbering it. A single wire-day array is
+  // rewound through operator-day math so a 9 AM cue stored on wire day D+1
+  // still reads as "this day" on operator day D's card.
+  const initialDaysMode = (
+    d: CueDays | undefined,
+    trigger: CueTrigger | undefined,
+  ): DaysMode => {
     if (d === 'all' || d === undefined) return 'all';
-    if (Array.isArray(d) && d.length === 1 && d[0] === dayIndex) return 'this';
+    if (Array.isArray(d) && d.length === 1 && typeof d[0] === 'number') {
+      const wireDay = d[0] as number;
+      const operatorDay = wireDayToOperatorDay(wireDay, clockOfTrigger(trigger));
+      if (operatorDay === dayIndex) return 'this';
+    }
     return 'pick';
   };
 
@@ -264,12 +362,16 @@ export function CueEditorSheet({
   const [kind, setKind] = useState<CueKind>('program');
   const [label, setLabel] = useState<string>('');
   const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
-  const [action, setAction] = useState<CueAction>(defaultPlaylistAction());
+  const [action, setAction] = useState<CueAction>(defaultCuePlaylistAction());
   // NOTE: no hold state — HOLD left the cue UI (operator ruling 2026-08-03).
   // An existing cue.hold rides through assembleCue's spread untouched.
   // Cue DURATION (minutes) — REQUIRED. A cue always owns the deck for this window
-  // after it fires (operator: "new CUEs must have a duration, no None"). Default 60.
-  const [durationMin, setDurationMin] = useState<number>(60);
+  // after it fires (operator: "new CUEs must have a duration, no None"). Default 30 sec.
+  const [durationMin, setDurationMin] = useState<number>(DEFAULT_CUE_DURATION_MIN);
+  const [partyStartAt, setPartyStartAt] = useState<string>('20:00');
+  const [partyWindowDurationMin, setPartyWindowDurationMin] = useState<number>(240);
+  const [partyAction, setPartyAction] = useState<ActionPlaylist>(defaultCuePlaylistAction());
+  const [partySessionDurationMin, setPartySessionDurationMin] = useState<number>(12);
   const [days, setDays] = useState<CueDays>('all');
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
   // from `days` on every render (deriving made "Pick…" snap back to "This day").
@@ -279,54 +381,100 @@ export function CueEditorSheet({
   // BLOCKED (e.g. overlapping cue); cleared on the next save attempt. null =
   // no error (nothing renders).
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [validating, setValidating] = useState(false);
+  const partyTrigger = isPartyCueTrigger(trigger);
 
-  // Seed when the sheet opens / target cue changes. We key on mode + cue id +
-  // visibility so re-opening the SAME cue after an external edit re-seeds.
-  const wantKey = `${visible ? 'v' : 'h'}:${mode}:${initialCue?.id ?? 'new'}:${dayIndex}`;
-  if (visible && wantKey !== seedKey) {
+  // Seed when the sheet OPENS or its target changes. Merely putting `visible`
+  // in the key is insufficient: hidden renders intentionally do not seed, so
+  // close→reopen would otherwise compare the same `v:` key and preserve stale
+  // state (including a successful save's VALIDATING flag).
+  const wasVisibleRef = useRef(false);
+  const opening = visible && !wasVisibleRef.current;
+  wasVisibleRef.current = visible;
+  const wantKey = `${mode}:${initialCue?.id ?? 'new'}:${dayIndex}`;
+  if (visible && (opening || wantKey !== seedKey)) {
     setSeedKey(wantKey);
     setSaveError(null); // fresh sheet → clear any stale blocked-save message
+    setValidating(false);
     if (isDefaultMode) {
       // DEFAULT CUE: only label + action apply. Normalise a non-playlist action
       // to a fresh deck playlist so the editor always has something to render.
       const dc = initialDefaultCue ?? null;
       setLabel(dc?.label || '');
       // Legacy `size` is shed at load (accept-and-ignore, never re-emitted).
-      setAction(dc && dc.action.type === 'playlist' ? stripCueSizeGlobal(dc.action) : defaultPlaylistAction());
+      setAction(dc && dc.action.type === 'playlist' ? stripCueSizeGlobal(dc.action) : defaultCuePlaylistAction());
       // The following are inert in default mode but reset for hygiene.
       setKind('program');
       setTrigger(defaultTrigger('manual'));
-      setDurationMin(60);
+      setDurationMin(DEFAULT_CUE_DURATION_MIN);
+      setPartyStartAt('20:00');
+      setPartyWindowDurationMin(240);
+      setPartyAction(defaultCuePlaylistAction());
+      setPartySessionDurationMin(12);
       setDays('all');
       setDaysModeState('all');
     } else if (initialCue) {
       setKind(initialCue.kind || (initialCue.trigger.type === 'mood' ? 'mood' : 'program'));
       setLabel(initialCue.label || '');
       setTrigger(initialCue.trigger);
+      const partySeed = partyWindowSeed(plan, initialCue);
+      const legacyPartyAction = isPartyCueTrigger(initialCue.trigger)
+        ? partyPlaylistActionForEditor(initialCue, plan.looks)
+        : null;
+      const defaultBaselineAction = isPartyCueTrigger(initialCue.trigger) && plan.defaultCue
+        ? partyPlaylistActionForEditor(
+            { ...initialCue, action: plan.defaultCue.action },
+            plan.looks,
+          )
+        : null;
       // A hand-authored cue could carry a look/globals action; the maker only
       // edits playlist actions, so normalise anything else to a fresh playlist
       // so the editor never gets stuck on an action it can't render. Legacy
       // `size` is shed at load (accept-and-ignore, never re-emitted). The
       // cue's hold (if any) is NOT loaded — it round-trips via assembleCue.
-      setAction(initialCue.action.type === 'playlist' ? stripCueSizeGlobal(initialCue.action) : defaultPlaylistAction());
+      setAction(
+        partySeed
+          ? stripCueSizeGlobal(partySeed.baselineAction)
+          : isPartyCueTrigger(initialCue.trigger) && defaultBaselineAction
+            ? stripCueSizeGlobal(defaultBaselineAction)
+          : initialCue.action.type === 'playlist'
+            ? stripCueSizeGlobal(initialCue.action)
+          : initialCue.action.type === 'special_event'
+            ? initialCue.action
+            : partyPlaylistActionForEditor(initialCue, plan.looks) ?? defaultCuePlaylistAction(),
+      );
       // DURATION is required; seed from a saved positive durationMin, else 60.
       setDurationMin(
         typeof initialCue.durationMin === 'number' && initialCue.durationMin > 0
           ? initialCue.durationMin
-          : 60,
+          : DEFAULT_CUE_DURATION_MIN,
       );
+      setPartyStartAt(partySeed?.startAt ?? smartDefaultClockAt(plan.location.tz));
+      setPartyWindowDurationMin(partySeed?.windowDurationMin ?? 240);
+      setPartyAction(
+        partySeed
+          ? stripPlaylistSizeGlobal(partySeed.partyAction)
+          : legacyPartyAction
+            ? stripPlaylistSizeGlobal(legacyPartyAction)
+            : defaultCuePlaylistAction(),
+      );
+      setPartySessionDurationMin(partySeed?.sessionDurationMin ?? initialCue.durationMin ?? 12);
       setDays(initialCue.days ?? 'all');
-      setDaysModeState(initialDaysMode(initialCue.days));
+      setDaysModeState(initialDaysMode(initialCue.days, initialCue.trigger));
     } else {
       setKind('program');
-      setLabel('');
+      setLabel(nextCueLabel(plan, 'Cue'));
       // NEW cue: the clock trigger defaults to ~5 min from NOW in the plan tz,
       // snapped up to the next comfortable 5-minute boundary (smartDefaultClockAt).
       setTrigger(makeTrigger('clock'));
-      setAction(defaultPlaylistAction());
-      // A cue is an EVENT with a REQUIRED duration; a fresh cue defaults to 60 min
+      setAction(defaultCuePlaylistAction());
+      // A cue is an EVENT with a REQUIRED duration; a fresh cue defaults to 30 sec
       // (renders as a deck-owned block on the day overview).
-      setDurationMin(60);
+      setDurationMin(DEFAULT_CUE_DURATION_MIN);
+      setPartyStartAt(smartDefaultClockAt(plan.location.tz));
+      setPartyWindowDurationMin(240);
+      setPartyAction(defaultCuePlaylistAction());
+      setPartySessionDurationMin(12);
       setDays([dayIndex]); // new cue defaults to "this day"
       setDaysModeState('this');
     }
@@ -358,6 +506,46 @@ export function CueEditorSheet({
 
   const festivalDays = plan.festival?.days ?? 8;
 
+  // Serialize the operator-day `days` selection to the wire-day form the
+  // engine consumes. Only numeric arrays are rewound (date-string arrays or
+  // 'all' pass through untouched). Each numeric operator-day index maps to a
+  // wire day via the same 6 PM boundary math as the calendar view, so a 9 AM
+  // cue on operator day 0 becomes wire day 1 and shows on operator day 0's
+  // card exactly where it was authored. Returns an overflow error when a
+  // numeric entry rolls past the festival span so the caller can fail loudly.
+  const wireDaysForOperatorSelection = (
+    selection: CueDays | undefined,
+    atHHMM: string | null,
+  ): { days: CueDays | undefined; overflowError: string | null } => {
+    if (selection === undefined || selection === 'all') {
+      return { days: selection, overflowError: null };
+    }
+    if (!Array.isArray(selection)) {
+      return { days: selection, overflowError: null };
+    }
+    if (selection.every((d) => typeof d === 'string')) {
+      return { days: selection, overflowError: null };
+    }
+    const mapped: number[] = [];
+    let overflowError: string | null = null;
+    for (const entry of selection as (number | string)[]) {
+      if (typeof entry !== 'number') continue;
+      const res = wireDaysForOperatorDay(entry, atHHMM, festivalDays);
+      if (res.overflowError) {
+        overflowError ??= res.overflowError;
+        continue;
+      }
+      for (const wireDay of res.wireDays) {
+        if (!mapped.includes(wireDay)) mapped.push(wireDay);
+      }
+    }
+    mapped.sort((a, b) => a - b);
+    return {
+      days: mapped.length > 0 ? mapped : selection,
+      overflowError,
+    };
+  };
+
   // The plan's OTHER cues resolvable on the SELECTED day, for the visual day
   // pane's context blocks. Only CLOCK triggers have a client-resolvable start
   // (same limitation as the overlap check) — sun/phase/mood/manual cues are
@@ -367,16 +555,35 @@ export function CueEditorSheet({
     const out: DayTimeContextCue[] = [];
     for (const c of plan.cues ?? []) {
       if (initialCue && c.id === initialCue.id) continue;
+      if (isPartyWindowImplementationCue(c, plan.cues ?? [])) continue;
       const d = c.days;
-      const onDay =
-        d === 'all' || d === undefined
-        || (Array.isArray(d) && (d as (number | string)[]).includes(dayIndex));
-      if (!onDay) continue;
-      const start = cueStartMinutes(c);
+      // A cue belongs to the currently-editing operator day when its wire-day
+      // set contains either D (evening half) or D+1 (morning half, rolled back
+      // via wireDayToOperatorDay). 'all'/undefined naturally match every day.
+      const partySeed = partyWindowSeed(plan, c);
+      const start = partySeed
+        ? hhmmToMinutes(partySeed.startAt)
+        : cueStartMinutes(c);
       if (start === null) continue;
+      const clock = partySeed?.startAt
+        ?? (c.trigger.type === 'clock'
+          ? c.trigger.at
+          : c.trigger.type === 'manual'
+            ? c.trigger.placementAt ?? null
+            : null);
+      const onDay = (() => {
+        if (d === 'all' || d === undefined) return true;
+        if (!Array.isArray(d)) return false;
+        return (d as (number | string)[]).some((entry) => {
+          if (typeof entry !== 'number') return false;
+          return wireDayToOperatorDay(entry, clock) === dayIndex;
+        });
+      })();
+      if (!onDay) continue;
       out.push({
         startMinutes: start,
-        durationMin: typeof c.durationMin === 'number' && c.durationMin > 0 ? c.durationMin : 0,
+        durationMin: partySeed?.windowDurationMin
+          ?? (typeof c.durationMin === 'number' && c.durationMin > 0 ? c.durationMin : 0),
         kind: c.kind ?? 'program',
         label: c.label,
       });
@@ -387,9 +594,9 @@ export function CueEditorSheet({
   // Normalize the working ACTION into a valid, emittable CueAction. Shared by
   // buildCue and buildDefaultCue so the deck-target / autopilot / color-autopilot
   // discipline is identical in both paths.
-  const buildNormalizedAction = (): CueAction => {
-    let outAction: CueAction = action;
-    if (action.type === 'playlist') {
+  const buildNormalizedAction = (source: CueAction = action): CueAction => {
+    let outAction: CueAction = source;
+    if (source.type === 'playlist') {
       // Force the deck-only target (mixer authoring removed) and NORMALIZE the
       // optional autopilot block so the emitted JSON always satisfies the
       // engine's strict validateAutopilot (active + delay_s>0 + shuffle, no
@@ -398,7 +605,7 @@ export function CueEditorSheet({
       // do emit it, delay_s is clamped to a positive value (default 30) and
       // shuffle defaults to false — guaranteeing validity regardless of the
       // order the operator touched the autopilot controls.
-      const pl: ActionPlaylist = { ...action, target: { channel: 'deck' as const, id: null } };
+      const pl: ActionPlaylist = { ...source, target: { channel: 'deck' as const, id: null } };
       // The AUTOPILOT PATTERNS card gates on BLOCK PRESENCE (card ON = block
       // present), and the reused panel's PLAY/PAUSE drives `active`. So emit the
       // block whenever it's present — preserving active:false ("this cue PAUSES
@@ -422,24 +629,14 @@ export function CueEditorSheet({
       } else {
         delete pl.autopilot;
       }
-      // COLOR AUTOPILOT — same PRESENCE discipline as the pattern autopilot
-      // above. Emit the block whenever it's present WITH ≥1 palette, preserving
-      // active:false ("this cue PAUSES color cycling") instead of dropping it —
-      // so card ON + PAUSE is honored, not silently discarded. Card OFF (absent
-      // block), or a block that somehow has no palettes, omits it. delay_s clamps
-      // positive, shuffle defaults false, and transitionMs (a non-finite/negative
-      // value collapses to 0 = hard cut) so the emitted JSON always satisfies the
-      // engine's strict validateColorAutopilot regardless of interaction order.
+      // COLOR THEME — same PRESENCE discipline as pattern autopilot. The pure
+      // normalizer preserves active:false and accepts every Deck color mode:
+      // saved palettes, two-tone crossfade (`delay_s:0` included), five-tone
+      // rotation, and Follow Note sampling. Invalid hand-authored state fails
+      // loudly into the sheet's SAVE error instead of being silently clamped.
       const ca = pl.colorAutopilot;
-      if (ca && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
-        const tm = ca.transitionMs;
-        pl.colorAutopilot = {
-          active: !!ca.active,
-          palettes: ca.palettes,
-          delay_s: typeof ca.delay_s === 'number' && ca.delay_s > 0 ? ca.delay_s : 30,
-          shuffle: ca.shuffle ?? false,
-          transitionMs: typeof tm === 'number' && Number.isFinite(tm) && tm >= 0 ? tm : 0,
-        };
+      if (ca) {
+        pl.colorAutopilot = normalizeCueColorAutopilot(ca);
       } else {
         delete pl.colorAutopilot;
       }
@@ -447,22 +644,65 @@ export function CueEditorSheet({
     }
     // Shed the legacy cue-level `size` on EVERY emit path (cue + default cue):
     // accepted when reading an old plan, never written back.
-    return stripCueSizeGlobal(outAction);
+    return stripEmptyCuePalette(stripCueSizeGlobal(outAction));
   };
 
   // Assembly (spread-the-original + overlay managed fields) lives in the PURE
   // cue_edit_logic.assembleCue so the hold round-trip and the size shed are
   // pinned by plain-node vitest. Notably: `hold` is NOT touched here — an
-  // existing cue keeps its hold byte-identical; a new cue emits none.
-  const buildCue = (): PlanCue => assembleCue({
-    initial: initialCue,
-    kind,
-    trigger,
-    action: buildNormalizedAction(),
-    days,
-    label,
-    durationMin,
-  });
+  // existing cue keeps its hold byte-identical; a new cue emits none. `days`
+  // is rewound from operator-day to wire-day via wireDaysForOperatorSelection
+  // so a 9 AM cue authored on operator day D serializes to wire day D+1 and
+  // still lands on operator day D's calendar card on the next read.
+  const buildCue = (): { cue: PlanCue; overflowError: string | null } => {
+    const clock = partyTrigger
+      ? partyStartAt
+      : (trigger.type === 'clock'
+          ? trigger.at
+          : trigger.type === 'manual'
+            ? trigger.placementAt ?? null
+            : null);
+    const serialised = wireDaysForOperatorSelection(days, clock);
+    // `days: CueDays` is required by `assembleCue`. When the caller left it
+    // undefined we fall back to the schema default 'all' — an "any-day" cue.
+    // The picker only produces undefined when nothing was picked; this matches
+    // the plan validator's default behaviour and avoids a silent drop.
+    const resolvedDays: CueDays = serialised.days ?? 'all';
+    return {
+      cue: assembleCue({
+        initial: initialCue,
+        kind: partyTrigger ? 'mood' : kind,
+        trigger,
+        action: partyTrigger
+          ? buildNormalizedAction(partyAction)
+          : buildNormalizedAction(),
+        days: resolvedDays,
+        label,
+        durationMin: partyTrigger ? partySessionDurationMin : durationMin,
+      }),
+      overflowError: serialised.overflowError,
+    };
+  };
+
+  const buildPartyWindowSpec = (): PartyWindowSpec => {
+    const baselineAction = buildNormalizedAction();
+    const detectedPartyAction = buildNormalizedAction(partyAction);
+    if (baselineAction.type !== 'playlist') {
+      throw new Error('Party Window baseline must be a playlist action.');
+    }
+    if (detectedPartyAction.type !== 'playlist') {
+      throw new Error('Detected Party state must be a playlist action.');
+    }
+    return {
+      startAt: partyStartAt,
+      windowDurationMin: partyWindowDurationMin,
+      baselineAction,
+      partyAction: detectedPartyAction,
+      minDwellSec: trigger.type === 'mood' ? (trigger.minDwellSec ?? 30) : 30,
+      sessionDurationMin: partySessionDurationMin,
+      cooldownSec: trigger.type === 'mood' ? (trigger.cooldownSec ?? 120) : 120,
+    };
+  };
 
   // Validate the candidate cue against every OTHER cue in the plan and return a
   // human-readable BLOCK message if it overlaps one, else null. Overlap rule:
@@ -508,16 +748,67 @@ export function CueEditorSheet({
     return dc;
   };
 
+  // Validate first, mutate second. The parent submits a complete candidate plan
+  // to the engine validator and inserts/replaces this cue only after a 2xx
+  // response. A schema error OR an unreachable validator leaves the draft and
+  // modal untouched, with the reason rendered beside the save controls.
+  const validateAndSave = async () => {
+    if (validating) return;
+    setSaveError(null);
+    try {
+      if (isDefaultMode) {
+        if (!onSaveDefault) {
+          throw new Error('CueEditorSheet: defaultCue mode requires onSaveDefault');
+        }
+        setValidating(true);
+        const result = await onSaveDefault(buildDefaultCue());
+        if (!result.ok) {
+          setSaveError(result.error);
+          setValidating(false);
+        }
+        return;
+      }
+
+      const { cue: candidate, overflowError } = buildCue();
+      if (overflowError) {
+        setSaveError(overflowError);
+        return;
+      }
+      const autopilotSafety = programCueAutopilotError(candidate);
+      if (autopilotSafety) {
+        setSaveError(autopilotSafety);
+        return;
+      }
+      const overlap = findOverlapError(candidate);
+      if (overlap) {
+        setSaveError(overlap);
+        return;
+      }
+      setValidating(true);
+      const result = await onSave(candidate, partyTrigger ? buildPartyWindowSpec() : undefined);
+      if (!result.ok) {
+        setSaveError(result.error);
+        setValidating(false);
+      }
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Cue validation failed.');
+      setValidating(false);
+    }
+  };
+
   // ── Trigger sub-editors ──
   const renderTriggerBody = () => {
     if (trigger.type === 'clock') {
       const mins = hhmmToMinutes(trigger.at) ?? 1200;
       return (
         <View style={styles.subBlock}>
-          <FieldLabel>TIME</FieldLabel>
-          {/* AM/PM summary of the chosen 24h stepper value (operator preference:
-              clock times read as AM/PM everywhere). The steppers stay 24h. */}
-          <Text style={[styles.hint, { marginBottom: 8, color: C.text }]}>{minutesTo12h(mins)}</Text>
+          <FieldLabel>PLACE ON DAY</FieldLabel>
+          {/* The visual picker snaps to a comfortable 15-minute grid. Keep
+              these five-minute steppers immediately above it as the explicit
+              precision adjustment the operator requested. */}
+          <Text style={[styles.hint, { marginBottom: 8, color: C.text }]}>
+            {`EXACT START · ${minutesTo12h(mins)} · adjust in 5-minute steps`}
+          </Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <View style={{ flex: 1 }}>
               <Stepper
@@ -539,13 +830,12 @@ export function CueEditorSheet({
           </View>
 
           {/* VISUAL day pane — place the cue on the 24h column by touch: tap
-              sets START (5-min snap), dragging the block's bottom-edge pill
+              sets START (15-min snap), dragging the block's bottom-edge pill
               sets DURATION. Two-way synced with the steppers above and the
               DURATION presets/stepper below (all drive the same state). Sun
               shading is omitted here — the sheet has no overview sun table
               (see DayTimePicker header). min/max mirror the DURATION stepper. */}
-          <View style={{ height: 14 }} />
-          <FieldLabel>PLACE ON DAY</FieldLabel>
+          <View style={{ height: 8 }} />
           <DayTimePicker
             startMinutes={mins}
             durationMin={durationMin}
@@ -553,7 +843,7 @@ export function CueEditorSheet({
             others={dayContextCues}
             onChangeStart={(m) => setTrigger({ type: 'clock', at: minutesToHHMM(m) })}
             onChangeDuration={setDurationMin}
-            minDuration={5}
+            minDuration={0.5}
             maxDuration={720}
           />
         </View>
@@ -591,6 +881,82 @@ export function CueEditorSheet({
             placeholder="Pick a phase…"
             emptyHint="This plan defines no phases."
           />
+        </View>
+      );
+    }
+    if (partyTrigger && trigger.type === 'mood') {
+      const startMinutes = hhmmToMinutes(partyStartAt) ?? 1200;
+      return (
+        <View style={styles.subBlock}>
+          <Text style={styles.hint}>
+            PARTY WINDOW is a timed period on the calendar. Its baseline playlist
+            runs normally; only sustained party music may temporarily switch to
+            the detected-party playlist.
+          </Text>
+          <View style={{ height: 8 }} />
+          <FieldLabel>PLACE ON DAY</FieldLabel>
+          <Text style={[styles.hint, { marginBottom: 8, color: C.text }]}>
+            {`EXACT START · ${minutesTo12h(startMinutes)} · adjust in 5-minute steps`}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Stepper
+                value={Math.floor(startMinutes / 60)}
+                onChange={(hour) => setPartyStartAt(minutesToHHMM(hour * 60 + (startMinutes % 60)))}
+                min={0}
+                max={23}
+                wrap
+                format={(hour) => `${String(hour).padStart(2, '0')}h`}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Stepper
+                value={startMinutes % 60}
+                step={5}
+                onChange={(minute) => setPartyStartAt(minutesToHHMM(Math.floor(startMinutes / 60) * 60 + minute))}
+                min={0}
+                max={55}
+                wrap
+                format={(minute) => `${String(minute).padStart(2, '0')}m`}
+              />
+            </View>
+          </View>
+          <View style={{ height: 8 }} />
+          <DayTimePicker
+            startMinutes={startMinutes}
+            durationMin={partyWindowDurationMin}
+            kind="mood"
+            others={dayContextCues}
+            onChangeStart={(m) => setPartyStartAt(minutesToHHMM(m))}
+            onChangeDuration={setPartyWindowDurationMin}
+            minDuration={5}
+            maxDuration={720}
+          />
+          <View style={{ height: 12 }} />
+          <FieldLabel>SUSTAIN BEFORE TRIGGER</FieldLabel>
+          <Stepper
+            value={trigger.minDwellSec ?? 0}
+            step={15}
+            onChange={(v) => setTrigger({ ...trigger, minDwellSec: v })}
+            min={0} max={1800}
+            format={(v) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`}
+          />
+          <Text style={[styles.hint, { marginTop: 6 }]}>
+            Party audio must remain strong for this long before the cue fires.
+          </Text>
+          <View style={{ height: 8 }} />
+          <FieldLabel>COOLDOWN AFTER SESSION</FieldLabel>
+          <Stepper
+            value={trigger.cooldownSec ?? 0}
+            step={60}
+            onChange={(v) => setTrigger({ ...trigger, cooldownSec: v })}
+            min={0} max={7200}
+            format={(v) => `${Math.round(v / 60)} min`}
+          />
+          <Text style={[styles.hint, { marginTop: 8 }]}>
+            Outside this window, party detection cannot switch playlists. LIVE can
+            enable or disable detection without changing the saved window.
+          </Text>
         </View>
       );
     }
@@ -644,25 +1010,97 @@ export function CueEditorSheet({
         </View>
       );
     }
+    const manualMinutes = hhmmToMinutes(trigger.placementAt) ?? 1200;
     return (
       <View style={styles.subBlock}>
-        <Text style={styles.hint}>Manual cues fire only when the operator taps FIRE.</Text>
+        <Text style={styles.hint}>
+          Manual cues fire only when the operator taps FIRE. Placement organizes
+          the cue on the calendar; it never schedules an automatic trigger.
+        </Text>
+        <View style={{ height: 8 }} />
+        <FieldLabel>PLACE ON DAY</FieldLabel>
+        <Text style={[styles.hint, { marginBottom: 8, color: C.text }]}>
+          {`PLANNED TIME · ${minutesTo12h(manualMinutes)} · adjust in 5-minute steps`}
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Stepper
+              value={Math.floor(manualMinutes / 60)}
+              onChange={(hour) => setTrigger({
+                ...trigger,
+                placementAt: minutesToHHMM(hour * 60 + (manualMinutes % 60)),
+              })}
+              min={0}
+              max={23}
+              wrap
+              format={(hour) => `${String(hour).padStart(2, '0')}h`}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Stepper
+              value={manualMinutes % 60}
+              step={5}
+              onChange={(minute) => setTrigger({
+                ...trigger,
+                placementAt: minutesToHHMM(Math.floor(manualMinutes / 60) * 60 + minute),
+              })}
+              min={0}
+              max={55}
+              wrap
+              format={(minute) => `${String(minute).padStart(2, '0')}m`}
+            />
+          </View>
+        </View>
+        <View style={{ height: 8 }} />
+        <DayTimePicker
+          startMinutes={manualMinutes}
+          durationMin={durationMin}
+          kind={kind}
+          others={dayContextCues}
+          onChangeStart={(minute) => setTrigger({
+            ...trigger,
+            placementAt: minutesToHHMM(minute),
+          })}
+          onChangeDuration={setDurationMin}
+          minDuration={0.5}
+          maxDuration={720}
+        />
       </View>
     );
   };
 
   // ── Action sub-editors ──
-  const renderActionBody = () => {
-    if (action.type !== 'playlist') return null;
-    // `action` is narrowed to ActionPlaylist for the rest of this branch.
-    const pl = action;
+  const renderActionBody = (
+    editedAction: CueAction = action,
+    updateAction: (next: CueAction) => void = setAction,
+  ) => {
+    if (editedAction.type === 'special_event') {
+      return (
+        <View style={styles.subBlock}>
+          <FieldLabel>SPECIAL EVENT</FieldLabel>
+          <Dropdown
+            value={editedAction.showId || null}
+            options={specialEventShows.map((show) => ({ id: show.id, label: show.name }))}
+            onSelect={(showId) => updateAction({ type: 'special_event', showId })}
+            placeholder="Choose an event…"
+            emptyHint="No Special Events are usable in this scene."
+          />
+          <Text style={[styles.hint, { marginTop: 8 }]}>
+            FIRE arms the selected event and starts its first stage. Continue its
+            protected stages and choices from the Events tab.
+          </Text>
+        </View>
+      );
+    }
+    if (editedAction.type !== 'playlist') return null;
+    const pl = editedAction;
     const ap = pl.autopilot ?? {};
     const ca = pl.colorAutopilot;
     // Each rich section is gated by BLOCK PRESENCE, not the block's `active`
     // flag: the outer ON/OFF adds/removes the whole override, while the reused
     // deck card's own PLAY/PAUSE drives `active` inside it. (Tracking `active`
     // here would make an in-panel PAUSE collapse the card out from under the
-    // operator.) buildNormalizedAction still drops an inactive block on save.
+    // operator.) buildNormalizedAction preserves an inactive block on save.
     const apOn = pl.autopilot !== undefined;
     const caOn = pl.colorAutopilot !== undefined;
     const hueOn = typeof pl.hue === 'number';
@@ -678,19 +1116,6 @@ export function CueEditorSheet({
     const speedVal = typeof gl.speed === 'number' ? gl.speed : 0.5;
     const syncOn = (gl.bpmSpeedSync ?? 0) >= 0.5;
 
-    // Adapter for the reused ColorAutopilotPanel: its config type requires a
-    // non-optional `shuffle`, while the cue's ActionColorAutopilot has it
-    // optional. Feed a COMPLETE config; onChange merges the panel's patch back
-    // into action.colorAutopilot (the panel enforces the ≥1-palette invariant
-    // itself via its removePalette guard).
-    const caConfig: DeckColorAutopilotConfig = {
-      active: !!ca?.active,
-      palettes: ca?.palettes ?? [],
-      delay_s: ca?.delay_s ?? 30,
-      shuffle: ca?.shuffle ?? false,
-      transitionMs: ca?.transitionMs,
-    };
-
     return (
       <>
         {/* 1. PLAYLIST — a cue NAMES a playlist; deck-only target. */}
@@ -698,7 +1123,7 @@ export function CueEditorSheet({
           <Dropdown
             value={pl.name || null}
             options={playlists.map((p) => ({ id: p, label: p }))}
-            onSelect={(id) => setAction({ ...pl, name: id })}
+            onSelect={(id) => updateAction({ ...pl, name: id })}
             placeholder="Pick a playlist…"
             emptyHint="Engine reports no playlists."
           />
@@ -721,11 +1146,11 @@ export function CueEditorSheet({
                 if (apOn) {
                   const next = { ...pl };
                   delete next.autopilot;
-                  setAction(next);
+                  updateAction(next);
                 } else {
                   // Seed a COMPLETE, valid block (engine validateAutopilot is
                   // strict: active + delay_s>0 + shuffle, no defaults).
-                  setAction({ ...pl, autopilot: { active: true, delay_s: 30, shuffle: false } });
+                  updateAction({ ...pl, autopilot: { active: true, delay_s: 30, shuffle: true } });
                 }
               }}
               label={apOn ? 'ON' : 'OFF'}
@@ -745,12 +1170,12 @@ export function CueEditorSheet({
               onChange={(patch) => {
                 // One key per emit; keep the block complete (active/delay_s/
                 // shuffle always present — the seed guarantees it, and buildNormalizedAction re-guards).
-                if (patch.active !== undefined) setAction({ ...pl, autopilot: { ...ap, active: patch.active } });
-                else if (patch.shuffle !== undefined) setAction({ ...pl, autopilot: { ...ap, shuffle: patch.shuffle } });
-                else if (patch.delayStr !== undefined) setAction({ ...pl, autopilot: { ...ap, delay_s: parseInt(patch.delayStr, 10) || 30 } });
-                else if (patch.groupMode !== undefined) setAction({ ...pl, autopilot: { ...ap, groupMode: patch.groupMode } });
-                else if (patch.groupSize !== undefined) setAction({ ...pl, autopilot: { ...ap, groupSize: patch.groupSize } });
-                else if (patch.groupDwell !== undefined) setAction({ ...pl, autopilot: { ...ap, groupDwell: patch.groupDwell } });
+                if (patch.active !== undefined) updateAction({ ...pl, autopilot: { ...ap, active: patch.active } });
+                else if (patch.shuffle !== undefined) updateAction({ ...pl, autopilot: { ...ap, shuffle: patch.shuffle } });
+                else if (patch.delayStr !== undefined) updateAction({ ...pl, autopilot: { ...ap, delay_s: parseInt(patch.delayStr, 10) || 30 } });
+                else if (patch.groupMode !== undefined) updateAction({ ...pl, autopilot: { ...ap, groupMode: patch.groupMode } });
+                else if (patch.groupSize !== undefined) updateAction({ ...pl, autopilot: { ...ap, groupSize: patch.groupSize } });
+                else if (patch.groupDwell !== undefined) updateAction({ ...pl, autopilot: { ...ap, groupDwell: patch.groupDwell } });
               }}
             />
           ) : (
@@ -770,9 +1195,9 @@ export function CueEditorSheet({
               if (id === 'default') {
                 const next = { ...pl };
                 delete next.transition;
-                setAction(next);
+                updateAction(next);
               } else if (!pl.transition) {
-                setAction({
+                updateAction({
                   ...pl,
                   transition: { mode: 'trans_crossfade', durationMs: 1000, enabled: true, shuffle: false },
                 });
@@ -790,7 +1215,7 @@ export function CueEditorSheet({
               mode={pl.transition.mode}
               durationMs={pl.transition.durationMs ?? 1000}
               shuffle={pl.transition.shuffle ?? false}
-              onChange={(patch) => setAction({
+              onChange={(patch) => updateAction({
                 ...pl,
                 transition: {
                   mode: (patch.mode ?? pl.transition!.mode) as DeckTransitionMode,
@@ -803,13 +1228,11 @@ export function CueEditorSheet({
           ) : null}
         </ActionCard>
 
-        {/* 4. AUTOPILOT COLORS — reuse the live deck's ColorAutopilotPanel. The
-            header ON/OFF adds/removes the whole colorAutopilot block; the panel
-            reads its own palette catalog + drives palettes/delay/transition/
-            shuffle. Turning ON seeds a COMPLETE, valid block (≥1 palette +
-            positive delay_s + shuffle). */}
+        {/* 4. AUTOPILOT COLOR THEME — the same families as Deck > Colors:
+            fixed/crossfading two-tone, five-tone rotation, and Follow Note.
+            SAVED SET remains available for old cues and palette-library shows. */}
         <ActionCard
-          title="AUTOPILOT COLORS"
+          title="AUTOPILOT COLOR THEME"
           right={
             <ToggleChip
               on={caOn}
@@ -817,36 +1240,32 @@ export function CueEditorSheet({
                 if (caOn) {
                   const next = { ...pl };
                   delete next.colorAutopilot;
-                  setAction(next);
+                  updateAction(next);
                 } else {
-                  // Turning ON requires ≥1 palette; without one we can't seed a
-                  // valid block, so keep OFF and let the empty-state hint explain.
-                  if (paletteOptions.length === 0) return;
-                  const seedPalette =
-                    ca?.palettes && ca.palettes.length > 0 ? ca.palettes : [paletteOptions[0].id];
-                  setAction({
+                  const defaultColorAutopilot = defaultCuePlaylistAction().colorAutopilot;
+                  if (!defaultColorAutopilot) {
+                    throw new Error('Cue defaults must define an Autopilot Color theme.');
+                  }
+                  updateAction({
                     ...pl,
-                    colorAutopilot: { active: true, palettes: seedPalette, delay_s: 30, shuffle: false },
+                    colorAutopilot: defaultColorAutopilot,
                   });
                 }
               }}
-              label={caOn ? 'ON' : 'OFF'}
+              label={caOn ? 'OVERRIDE COLORS' : 'LEAVE AS-IS'}
             />
           }
         >
-          {paletteOptions.length === 0 ? (
-            <Text style={styles.hint}>
-              No color palettes reported by the engine — color autopilot unavailable.
-            </Text>
-          ) : caOn ? (
-            <ColorAutopilotPanel
-              bare
-              title=""
-              config={caConfig}
-              onChange={(patch) => setAction({ ...pl, colorAutopilot: { ...caConfig, ...patch } })}
+          {caOn && ca ? (
+            <CueColorThemeEditor
+              value={ca}
+              onChange={(colorAutopilot) => updateAction({ ...pl, colorAutopilot })}
+              paletteOptions={paletteOptions.map((palette) => ({ id: palette.id, label: palette.name }))}
             />
           ) : (
-            <Text style={styles.hint}>Off — this cue leaves the deck&apos;s color palette as-is.</Text>
+            <Text style={styles.hint}>
+              Leave as-is — this cue does not start, stop, or replace the deck&apos;s current color theme.
+            </Text>
           )}
         </ActionCard>
 
@@ -862,9 +1281,9 @@ export function CueEditorSheet({
                 if (hueOn) {
                   const next = { ...pl };
                   delete next.hue;
-                  setAction(next);
+                  updateAction(next);
                 } else {
-                  setAction({ ...pl, hue: 0 });
+                  updateAction({ ...pl, hue: 0 });
                 }
               }}
               label={hueOn ? 'SET HUE' : 'LEAVE AS-IS'}
@@ -879,7 +1298,7 @@ export function CueEditorSheet({
               </View>
               <HorizontalFader
                 value={hueDeg / 360}
-                onChange={(v: number) => setAction({ ...pl, hue: Math.round(v * 360) })}
+                onChange={(v: number) => updateAction({ ...pl, hue: Math.round(v * 360) })}
                 trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
                 fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: hueToHex(hueDeg) }}
                 thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
@@ -903,9 +1322,9 @@ export function CueEditorSheet({
                 if (glOn) {
                   const next = { ...pl };
                   delete next.globals;
-                  setAction(next);
+                  updateAction(next);
                 } else {
-                  setAction({ ...pl, globals: { speed: 0.5, bpmSpeedSync: 0 } });
+                  updateAction({ ...pl, globals: { speed: 0.25, bpmSpeedSync: 0 } });
                 }
               }}
               label={glOn ? 'SET GLOBALS' : 'LEAVE AS-IS'}
@@ -922,7 +1341,7 @@ export function CueEditorSheet({
                 </View>
                 <HorizontalFader
                   value={speedVal}
-                  onChange={(v: number) => setAction({ ...pl, globals: { ...gl, speed: Math.round(v * 100) / 100 } })}
+                  onChange={(v: number) => updateAction({ ...pl, globals: { ...gl, speed: Math.round(v * 100) / 100 } })}
                   trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
                   fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: C.primary }}
                   thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
@@ -931,7 +1350,7 @@ export function CueEditorSheet({
               {/* SYNC — bpmSpeedSync: drive SPEED from the arbitrated tempo. */}
               <ToggleChip
                 on={syncOn}
-                onToggle={() => setAction({ ...pl, globals: { ...gl, bpmSpeedSync: syncOn ? 0 : 1 } })}
+                onToggle={() => updateAction({ ...pl, globals: { ...gl, bpmSpeedSync: syncOn ? 0 : 1 } })}
                 label={syncOn ? 'SPEED SYNC ON' : 'SPEED SYNC OFF'}
               />
               <Text style={styles.hint}>
@@ -952,9 +1371,9 @@ export function CueEditorSheet({
               if (id === 'asis') {
                 const next = { ...pl };
                 delete next.overlays;
-                setAction(next);
+                updateAction(next);
               } else {
-                setAction({ ...pl, overlays: id as ActionOverlays });
+                updateAction({ ...pl, overlays: id as ActionOverlays });
               }
             }}
           />
@@ -967,14 +1386,20 @@ export function CueEditorSheet({
   };
 
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onClose}
       supportedOrientations={CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS}
     >
-      <Pressable
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
-      >
-        <Pressable onPress={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, maxHeight: '90%' }}>
+      <View style={styles.backdrop}>
+        <Pressable
+          onPress={onClose}
+          style={styles.backdropDismiss}
+          accessibilityLabel="Close cue editor"
+        />
+        <View style={styles.panelHost}>
           <View style={styles.sheet}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>
@@ -987,10 +1412,19 @@ export function CueEditorSheet({
               ) : null}
             </View>
 
-            {/* paddingBottom clears the sticky footer (≈48pt button + 16pt
-                margin + slack) so the last DAYS / SHUFFLE controls aren't
-                hidden behind it. */}
-            <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+            {/* The body owns all remaining panel height; header, validation
+                message, and footer stay visible. LockableScrollView prevents
+                native fader/duration gestures from stealing or being stolen by
+                the sheet, while ordinary vertical drags scroll from anywhere
+                else — including the large day-placement pane. */}
+            <LockableScrollView
+              style={styles.sheetScroll}
+              contentContainerStyle={styles.sheetScrollContent}
+              showsVerticalScrollIndicator
+              indicatorStyle="white"
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
               {/* NAME — the operator-facing label (optional). */}
               <FieldLabel>{isDefaultMode ? 'DEFAULT CUE NAME' : 'CUE NAME'}</FieldLabel>
               <TextInput
@@ -1015,16 +1449,21 @@ export function CueEditorSheet({
               {!isDefaultMode ? (
                 <>
                   <View style={{ height: 14 }} />
-                  <FieldLabel>KIND</FieldLabel>
-                  <Segmented
-                    options={[
-                      { id: 'program', label: 'Program' },
-                      { id: 'mood', label: 'Mood' },
-                      { id: 'ambient', label: 'Ambient' },
-                    ]}
-                    value={kind}
-                    onChange={(v) => setKind(v as CueKind)}
-                  />
+                  <FieldLabel>CUE TYPE</FieldLabel>
+                  {partyTrigger ? (
+                    <Text style={styles.hint}>
+                      PARTY WINDOW · timed baseline with audio-detected party sessions
+                    </Text>
+                  ) : (
+                    <Segmented
+                      options={[
+                        { id: 'program', label: 'Program' },
+                        { id: 'ambient', label: 'Ambient' },
+                      ]}
+                      value={kind === 'mood' ? 'program' : kind}
+                      onChange={(v) => setKind(v as CueKind)}
+                    />
+                  )}
 
                   <View style={{ height: 14 }} />
                   <FieldLabel>TRIGGER</FieldLabel>
@@ -1032,12 +1471,29 @@ export function CueEditorSheet({
                     options={[
                       { id: 'clock', label: 'Clock' },
                       { id: 'sun', label: 'Sun' },
-                      { id: 'phase', label: 'Phase' },
-                      { id: 'mood', label: 'Mood' },
+                      { id: 'party', label: 'Party Window' },
                       { id: 'manual', label: 'Manual' },
                     ]}
-                    value={trigger.type}
-                    onChange={(v) => setTrigger(makeTrigger(v as CueTrigger['type']))}
+                    value={partyTrigger ? 'party' : trigger.type}
+                    onChange={(v) => {
+                      const mode = v as TriggerEditorMode;
+                      if (mode === 'party') {
+                        setKind('mood');
+                        setPartyStartAt(smartDefaultClockAt(plan.location.tz));
+                        if (!initialCue && isPrefilledCueLabel(label)) {
+                          setLabel(nextCueLabel(plan, 'Party'));
+                        }
+                      } else if (kind === 'mood') {
+                        setKind('program');
+                        if (!initialCue && isPrefilledCueLabel(label)) {
+                          setLabel(nextCueLabel(plan, 'Cue'));
+                        }
+                      }
+                      if (mode !== 'manual' && action.type === 'special_event') {
+                        setAction(defaultCuePlaylistAction());
+                      }
+                      setTrigger(makeEditorTrigger(mode));
+                    }}
                   />
                   {renderTriggerBody()}
                 </>
@@ -1048,29 +1504,101 @@ export function CueEditorSheet({
                   Reused verbatim by the DEFAULT CUE editor. */}
               <View style={{ height: 14 }} />
               <FieldLabel>ACTION</FieldLabel>
-              <Text style={styles.hint}>Playlist — the only cue action (looks removed).</Text>
-              {renderActionBody()}
+              {!isDefaultMode && trigger.type === 'manual' ? (
+                <View style={{ marginBottom: 10 }}>
+                  <Segmented
+                    options={[
+                      { id: 'playlist', label: 'Playlist' },
+                      { id: 'special_event', label: 'Special Event' },
+                    ]}
+                    value={action.type === 'special_event' ? 'special_event' : 'playlist'}
+                    onChange={(value) => {
+                      if (value === 'special_event') {
+                        const next: ActionSpecialEvent = {
+                          type: 'special_event',
+                          showId: specialEventShows[0]?.id ?? '',
+                        };
+                        setAction(next);
+                      } else {
+                        setAction(defaultCuePlaylistAction());
+                      }
+                    }}
+                  />
+                </View>
+              ) : null}
+              <Text style={styles.hint}>
+                {partyTrigger
+                  ? 'Choose what normally runs during the window and what replaces it only while party is detected.'
+                  : action.type === 'special_event'
+                    ? 'Start a staged Special Event instead of loading a playlist.'
+                    : 'Load and configure a Deck playlist.'}
+              </Text>
+              {partyTrigger && action.type === 'playlist' ? (
+                <View style={{ gap: 12, marginTop: 10 }}>
+                  <View style={styles.subBlock}>
+                    <FieldLabel>SHARE CUSTOMIZATIONS</FieldLabel>
+                    <Text style={[styles.hint, { marginBottom: 8 }]}>
+                      Copy every Deck setting without replacing the destination playlist.
+                    </Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      <TouchableOpacity
+                        style={styles.dayPill}
+                        onPress={() => setPartyAction(copyPlaylistSettings(action, partyAction))}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.dayPillText}>COPY BASELINE → PARTY</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.dayPill}
+                        onPress={() => setAction(copyPlaylistSettings(partyAction, action))}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.dayPillText}>COPY PARTY → BASELINE</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <FieldLabel>WINDOW BASELINE</FieldLabel>
+                  <Text style={styles.hint}>
+                    Runs whenever the Party Window is open and no detected session owns the Deck.
+                  </Text>
+                  {renderActionBody(action, setAction)}
+                  <FieldLabel>DETECTED PARTY</FieldLabel>
+                  <Text style={styles.hint}>
+                    Replaces the baseline only after the strong signal completes its sustain.
+                  </Text>
+                  {renderActionBody(partyAction, (next) => {
+                    if (next.type !== 'playlist') {
+                      throw new Error('Detected Party customization must remain a playlist action.');
+                    }
+                    setPartyAction(next);
+                  })}
+                </View>
+              ) : renderActionBody()}
 
               {/* DURATION — cue-only. A cue owns the deck for this window after it
                   fires; outside it (and in the gaps) the default cue runs. */}
               {!isDefaultMode ? (
                 <>
                   <View style={{ height: 14 }} />
-                  <FieldLabel>DURATION</FieldLabel>
+                  <FieldLabel>{partyTrigger ? 'PARTY WINDOW LENGTH' : 'DURATION'}</FieldLabel>
                   <View style={styles.chipRow}>
-                    {DURATION_PRESETS_MIN.map((m) => {
-                      const sel = durationMin === m;
+                    {(partyTrigger ? DURATION_PRESETS_MIN : CUE_DURATION_PRESETS_MIN).map((m) => {
+                      const displayedDuration = partyTrigger ? partyWindowDurationMin : durationMin;
+                      const sel = displayedDuration === m;
                       return (
                         <TouchableOpacity
                           key={m}
-                          onPress={() => setDurationMin(m)}
+                          onPress={() => {
+                            if (partyTrigger) setPartyWindowDurationMin(m);
+                            else setDurationMin(m);
+                          }}
                           style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
                           accessibilityRole="button"
                           accessibilityState={{ selected: sel }}
-                          accessibilityLabel={`${m} minute duration`}
+                          accessibilityLabel={`${formatDurationMinutes(m)} duration`}
                         >
                           <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
-                            {m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`}
+                            {formatDurationMinutes(m)}
                           </Text>
                         </TouchableOpacity>
                       );
@@ -1078,16 +1606,35 @@ export function CueEditorSheet({
                   </View>
                   <View style={{ marginTop: 8 }}>
                     <Stepper
-                      value={durationMin}
-                      step={15}
-                      onChange={setDurationMin}
-                      min={5} max={720}
-                      format={(v) => `${v} min`}
+                      value={partyTrigger ? partyWindowDurationMin : durationMin}
+                      step={partyTrigger ? 15 : 0.5}
+                      onChange={partyTrigger ? setPartyWindowDurationMin : setDurationMin}
+                      min={partyTrigger ? 5 : 0.5}
+                      max={720}
+                      format={formatDurationMinutes}
                     />
                   </View>
                   <Text style={[styles.hint, { marginTop: 8 }]}>
-                    This cue owns the deck for {durationMin} min after it fires; the default cue fills the gaps.
+                    {partyTrigger
+                      ? `The baseline may run for ${partyWindowDurationMin} min from the selected start. Party detection is blocked before and after this window.`
+                      : `This cue owns the deck for ${formatDurationMinutes(durationMin)} after it fires; the default cue fills the gaps.`}
                   </Text>
+                  {partyTrigger ? (
+                    <View style={[styles.subBlock, { marginTop: 12 }]}>
+                      <FieldLabel>DETECTED SESSION LENGTH</FieldLabel>
+                      <Stepper
+                        value={partySessionDurationMin}
+                        step={1}
+                        onChange={setPartySessionDurationMin}
+                        min={1}
+                        max={180}
+                        format={(value) => `${value} min`}
+                      />
+                      <Text style={[styles.hint, { marginTop: 6 }]}>
+                        Each detected session uses the party playlist for this long, then returns to the window baseline.
+                      </Text>
+                    </View>
+                  ) : null}
                 </>
               ) : null}
 
@@ -1138,7 +1685,7 @@ export function CueEditorSheet({
               ) : null}
                 </>
               ) : null}
-            </ScrollView>
+            </LockableScrollView>
 
             {/* BLOCKED-SAVE reason (e.g. overlapping cue). Sits directly above
                 the footer so it's visible regardless of scroll position; only
@@ -1155,37 +1702,24 @@ export function CueEditorSheet({
                 <Text style={[styles.footerBtnText, { color: C.text }]}>CANCEL</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => {
-                  if (isDefaultMode) {
-                    // Codex P0: fail loud rather than silently no-op if the parent
-                    // opened default mode without wiring the save handler.
-                    if (!onSaveDefault) throw new Error('CueEditorSheet: defaultCue mode requires onSaveDefault');
-                    onSaveDefault(buildDefaultCue());
-                  } else {
-                    // Validate BEFORE committing: a cue owns the deck for its
-                    // window, and two cues can't own it at once on a shared day.
-                    const candidate = buildCue();
-                    const overlap = findOverlapError(candidate);
-                    if (overlap) {
-                      // BLOCK the save — surface WHY inline, don't call onSave.
-                      setSaveError(overlap);
-                      return;
-                    }
-                    setSaveError(null);
-                    onSave(candidate);
-                  }
-                }}
-                style={[styles.footerBtn, { backgroundColor: C.primary }]}
+                onPress={() => { void validateAndSave(); }}
+                disabled={validating}
+                style={[styles.footerBtn, { backgroundColor: C.primary, opacity: validating ? 0.55 : 1 }]}
                 accessibilityLabel={isDefaultMode ? 'Save default cue' : 'Save cue'}
+                accessibilityState={{ disabled: validating, busy: validating }}
               >
                 <Text style={[styles.footerBtnText, { color: C.onPrimary }]}>
-                  {isDefaultMode ? 'SAVE DEFAULT' : (initialCue ? 'SAVE CUE' : 'ADD CUE')}
+                  {validating
+                    ? 'VALIDATING…'
+                    : isDefaultMode
+                      ? 'SAVE DEFAULT'
+                      : (initialCue ? 'SAVE CUE' : 'ADD CUE')}
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -1193,12 +1727,38 @@ export function CueEditorSheet({
 
 function makeStyles(C: Palette) {
   return StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.68)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    backdropDismiss: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    panelHost: {
+      width: '100%',
+      maxWidth: 720,
+      height: '92%',
+      maxHeight: 760,
+      minHeight: 0,
+    },
     sheet: {
+      flex: 1,
+      minHeight: 0,
       backgroundColor: C.surfaceContainerLow,
       borderRadius: 16,
       borderWidth: 1,
       borderColor: C.ghostBorder,
       padding: 20,
+    },
+    sheetScroll: {
+      flex: 1,
+      minHeight: 0,
+    },
+    sheetScrollContent: {
+      paddingBottom: 20,
     },
     sheetHeader: {
       flexDirection: 'row',

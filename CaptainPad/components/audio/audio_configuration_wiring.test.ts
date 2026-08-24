@@ -28,6 +28,15 @@ describe('Audio native interaction wiring', () => {
     expect(meters).toContain('width: `${100 / meterColumns}%`');
   });
 
+  it('mounts only the summary visualizers until the operator expands all signals', () => {
+    const meters = functionBody('LiveAudioMeters', 'BpmStaleWarning');
+    expect(meters).toContain('const [allSignalsExpanded, setAllSignalsExpanded] = useState(false)');
+    expect(meters).toContain('const visibleSignals = allSignalsExpanded ? signals : summarySignals');
+    expect(meters).toContain('() => visibleSignals.map(toSignalSlot)');
+    expect(meters).not.toContain('signals.map(toSignalSlot)');
+    expect(meters).toContain('SHOW FEWER SIGNALS');
+  });
+
   it('does not flex-grow signal columns inside the native auto-height grid', () => {
     const start = AUDIO.indexOf('const SignalColumn = React.memo');
     const end = AUDIO.indexOf('function StatusPill', start);

@@ -23,7 +23,15 @@
  * to edit.
  */
 import React, { useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, StyleSheet, ScrollView } from 'react-native';
+import {
+  ActivityIndicator,
+  View,
+  Text,
+  TouchableOpacity,
+  Modal,
+  StyleSheet,
+  ScrollView,
+} from 'react-native';
 import { CAPTAIN_PAD_MODAL_SUPPORTED_ORIENTATIONS } from '@/utils/modal_orientation';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
@@ -39,7 +47,7 @@ const PURPLE = '#8b5cf6';
 
 export function EventSheet({
   cue, moment, dayDate, activeCueId, planActive, inFestivalWindow,
-  resolve, resolveError, resolvePending, busy, actionError, canEdit,
+  resolve, resolveError, resolvePending, busy, actionError, canEdit, actionsDisabled,
   onPerform, onTravel, onEdit, onClose,
 }: {
   /**
@@ -69,6 +77,8 @@ export function EventSheet({
   /** The engine's verbatim error from the last perform/travel attempt. */
   actionError: string | null;
   canEdit: boolean;
+  /** Offline/stale authority gate. Browse stays available; mutations do not. */
+  actionsDisabled?: boolean;
   onPerform: () => void;
   onTravel: () => void;
   onEdit: () => void;
@@ -192,8 +202,8 @@ export function EventSheet({
               {performOffered ? (
                 <TouchableOpacity
                   onPress={onPerform}
-                  disabled={busy}
-                  style={[styles.bigBtn, { backgroundColor: GREEN }, busy && { opacity: 0.5 }]}
+                  disabled={busy || actionsDisabled}
+                  style={[styles.bigBtn, { backgroundColor: GREEN }, (busy || actionsDisabled) && { opacity: 0.5 }]}
                   accessibilityLabel="Perform this live event — take the deck"
                 >
                   <Text style={styles.bigBtnTitle}>🎚 PERFORM</Text>
@@ -202,12 +212,25 @@ export function EventSheet({
               ) : (
                 <TouchableOpacity
                   onPress={onTravel}
-                  disabled={busy}
-                  style={[styles.bigBtn, { backgroundColor: PURPLE }, busy && { opacity: 0.5 }]}
+                  disabled={busy || actionsDisabled || resolvePending || !!resolveError || !resolve}
+                  style={[
+                    styles.bigBtn,
+                    { backgroundColor: PURPLE },
+                    (busy || actionsDisabled || resolvePending || !!resolveError || !resolve) && { opacity: 0.5 },
+                  ]}
                   accessibilityLabel="Time travel to this event"
                 >
-                  <Text style={styles.bigBtnTitle}>🕰 TIME TRAVEL HERE</Text>
-                  <Text style={styles.bigBtnSub}>show the ship what this moment looks like</Text>
+                  {busy ? (
+                    <>
+                      <ActivityIndicator color="#FFFFFF" />
+                      <Text style={styles.bigBtnTitle}>APPLYING TIME TRAVEL…</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.bigBtnTitle}>🕰 TIME TRAVEL HERE</Text>
+                      <Text style={styles.bigBtnSub}>show the ship what this moment looks like</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               )}
             </View>

@@ -293,7 +293,19 @@ export function SplitPlaylistPanes({
         {/* Both panes read the deck channel's MIDI browse window (the manager
             keys it by engine channel id, not slot key); PlaylistPanel's
             live-slot gate means only the pane hosting the deck's LIVE
-            playlist paints the blue window highlight. */}
+            playlist paints the blue window highlight.
+
+            `compactRows={perfLocked}` — operator request 2026-08-20: in
+            PERFORMANCE MODE with two playlists open, each pane's share of the
+            column is small (default 50/50 of a ~500pt column ≈ 250pt) and the
+            live-show perf tier's ~62pt rows fit fewer than three patterns per
+            pane. Under `perfCompact`, playlist_row_sizing yields the docs/66
+            44pt-min floor with the padding-only diet (rowPadY:2, rowGap:1) —
+            the same discipline docs/69 W3 R1 uses on the mixer strip — so
+            more patterns are reachable at a glance without shrinking any
+            glyph or per-control tap target. Off in edit mode (byte-identical
+            to before) and off when the second pane is collapsed (see the
+            branch above — only one big pane is on-screen there). */}
         <PlaylistPanel
           channelId="primary"
           role="deckSlot"
@@ -304,6 +316,7 @@ export function SplitPlaylistPanes({
           onRefreshConnection={onRefreshConnection}
           playlistLibrary={playlistLibrary}
           midiWindowChannelId={deckChannelId}
+          compactRows={perfLocked}
         />
       </View>
 
@@ -344,7 +357,8 @@ export function SplitPlaylistPanes({
       {/* Pane 2 — DECK B (secondary). Complementary flexGrow share; ✕ (onClosePane)
           clears the slot binding AND collapses back to the "+ SECOND PLAYLIST"
           bar. Its binding lifecycle is identical on both axes — this is
-          placement, nothing else. */}
+          placement, nothing else. `compactRows={perfLocked}` mirrors DECK A —
+          same rationale, same gate. */}
       <View key={`secondary-${deckChannelId}`} style={{ ...paneBox, flexGrow: 1 - paintRatio }}>
         <PlaylistPanel
           channelId="secondary"
@@ -355,6 +369,7 @@ export function SplitPlaylistPanes({
           playlistLibrary={playlistLibrary}
           onClosePane={() => { setLocalOpen(false); onCloseSecondary(); }}
           midiWindowChannelId={deckChannelId}
+          compactRows={perfLocked}
         />
       </View>
     </View>

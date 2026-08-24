@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CAPTAINPAD_DEFAULT_TAB,
+  CAPTAINPAD_RAIL_ORDER,
   CAPTAINPAD_TAB_POLICIES,
   canMountCaptainPadRoute,
+  captainPadRailOrder,
   captainPadRailRouteName,
   captainPadRouteHref,
   captainPadSubviewRoutes,
@@ -13,11 +16,11 @@ import {
 } from './captainpad_tab_policy';
 
 describe('CaptainPad tab policy', () => {
-  it('exposes only Deck, Mixer, Live Touch and Events during global Performance', () => {
+  it('keeps the view-only Timeline operator surface reachable during Performance', () => {
     // docs/52 §4: SPECIAL EVENTS joined the performance nav. Performance mode
     // freezes STRUCTURE; a special event IS the live set, and the operator has
     // to be able to reach the tab to arm one.
-    const performanceRoutes = ['index', 'mixer', 'touch_control', 'special_events'];
+    const performanceRoutes = ['index', 'mixer', 'touch_control', 'timeline', 'special_events'];
     expect(performanceRoutes.every((route) => isCaptainPadTabVisible(route, true))).toBe(true);
     expect(Object.keys(CAPTAINPAD_TAB_POLICIES)
       .filter((route) => !performanceRoutes.includes(route))
@@ -31,28 +34,48 @@ describe('CaptainPad tab policy', () => {
     // face — that hatch moved to the EXIT itself, which now works with the
     // engine offline (see performanceNavigationLocked below). The recovery path
     // is EXIT PERFORMANCE → edit → CONFIG, not CONFIG-during-the-show.
-    for (const routeName of ['config', 'studio', 'midi', 'osc']) {
+    for (const routeName of ['config', 'studio', 'midi', 'osc', 'bike_link']) {
       expect(isCaptainPadTabVisible(routeName, true)).toBe(false);
       expect(canMountCaptainPadRoute(routeName, true)).toBe(false);
     }
     // The rail still only draws CONFIG — the sub-views remain parented.
     expect(isCaptainPadRailTab('config')).toBe(true);
-    expect(['studio', 'midi', 'osc'].every((r) => isCaptainPadRailTab(r) === false)).toBe(true);
+    expect(['studio', 'midi', 'osc', 'bike_link'].every((r) => isCaptainPadRailTab(r) === false)).toBe(true);
   });
 
   it('returns CONFIG and its sub-views to the rail in edit mode', () => {
     // The other half of the reversal: hiding CONFIG during a show is only
     // acceptable because edit mode still has it, one tap from the exit.
-    for (const routeName of ['config', 'studio', 'midi', 'osc']) {
+    for (const routeName of ['config', 'studio', 'midi', 'osc', 'bike_link']) {
       expect(isCaptainPadTabVisible(routeName, false)).toBe(true);
       expect(canMountCaptainPadRoute(routeName, false)).toBe(true);
     }
   });
 
   it('still freezes the surfaces that are structural authoring, not diagnostics', () => {
-    for (const routeName of ['audio', 'timeline', 'scheduler', 'dimmer_rack', 'simulation']) {
+    for (const routeName of ['audio', 'scheduler', 'dimmer_rack', 'simulation']) {
       expect(isCaptainPadTabVisible(routeName, true)).toBe(false);
     }
+  });
+
+  it('declares Timeline as the fresh-launch tab without changing route hrefs', () => {
+    expect(CAPTAINPAD_DEFAULT_TAB).toBe('timeline');
+    expect(captainPadRouteHref(CAPTAINPAD_DEFAULT_TAB)).toBe('/timeline');
+    expect(captainPadRouteHref('index')).toBe('/');
+  });
+
+  it('puts the five default operator tabs first with Timeline above Deck', () => {
+    expect(CAPTAINPAD_RAIL_ORDER.slice(0, 5)).toEqual([
+      'timeline',
+      'index',
+      'mixer',
+      'touch_control',
+      'audio',
+    ]);
+    expect(CAPTAINPAD_RAIL_ORDER.slice(0, 5).map((route) => (
+      captainPadTabPolicy(route).tabBarGroup
+    ))).toEqual(Array(5).fill('Default'));
+    expect(captainPadRailOrder('timeline')).toBeLessThan(captainPadRailOrder('index'));
   });
 
   it('restores the complete edit navigation when global Performance is inactive', () => {
@@ -72,15 +95,19 @@ describe('CaptainPad tab policy', () => {
 
   it('requires every registered route to declare an explicit policy', () => {
     expect(() => captainPadTabPolicy('unregistered')).toThrow('Missing CaptainPad tab policy');
-    expect(Object.keys(CAPTAINPAD_TAB_POLICIES)).toHaveLength(13);
+    expect(Object.keys(CAPTAINPAD_TAB_POLICIES)).toHaveLength(14);
+    expect(Object.keys(CAPTAINPAD_TAB_POLICIES)
+      .filter((route) => isCaptainPadRailTab(route))
+      .every((route) => (CAPTAINPAD_RAIL_ORDER as readonly string[]).includes(route))).toBe(true);
+    expect(() => captainPadRailOrder('studio')).toThrow('Missing CaptainPad rail order');
   });
 
-  it('keeps STUDIO, MIDI and OSC off the sidebar rail as CONFIG sub-views', () => {
+  it('keeps setup surfaces off the sidebar rail as CONFIG sub-views', () => {
     // Operator ruling 2026-08-15: three setup surfaces were eating rail slots
     // they never earned. They stay REAL routes (mount/focus/deep-link
     // semantics unchanged — the header MIDI chip still pushes '/midi'); only
     // the rail entry moved into CONFIG.
-    for (const routeName of ['studio', 'midi', 'osc']) {
+    for (const routeName of ['studio', 'midi', 'osc', 'bike_link']) {
       expect(isCaptainPadRailTab(routeName)).toBe(false);
       expect(captainPadRailRouteName(routeName)).toBe('config');
       expect(canMountCaptainPadRoute(routeName, false)).toBe(true);
@@ -91,8 +118,8 @@ describe('CaptainPad tab policy', () => {
 
   it('lists the CONFIG sub-views in policy order with an icon and a summary', () => {
     const subviews = captainPadSubviewRoutes('config');
-    expect(subviews.map((s) => s.routeName)).toEqual(['studio', 'midi', 'osc']);
-    expect(subviews.map((s) => s.title)).toEqual(['Studio', 'MIDI', 'OSC']);
+    expect(subviews.map((s) => s.routeName)).toEqual(['studio', 'midi', 'osc', 'bike_link']);
+    expect(subviews.map((s) => s.title)).toEqual(['Studio', 'MIDI', 'OSC', 'Bike Link']);
     expect(subviews.every((s) => s.tabBarIconName.length > 0)).toBe(true);
     expect(subviews.every((s) => s.summary.length > 0)).toBe(true);
     // Rail-level tabs own no sub-views unless the policy says so.
@@ -114,6 +141,7 @@ describe('CaptainPad tab policy', () => {
   it('resolves route hrefs, with the tab-group root as /', () => {
     expect(captainPadRouteHref('index')).toBe('/');
     expect(captainPadRouteHref('midi')).toBe('/midi');
+    expect(captainPadRouteHref('bike_link')).toBe('/bike_link');
     expect(captainPadRouteHref('config')).toBe('/config');
     expect(() => captainPadRouteHref('nope')).toThrow('Missing CaptainPad tab policy');
   });

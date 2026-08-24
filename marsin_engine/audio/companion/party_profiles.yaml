@@ -1,0 +1,32 @@
+# PARTY detector profiles — written by the Audio Companion.
+# Loading a profile applies it at runtime; config.yaml changes only via explicit PERSIST.
+profiles:
+  - id: playa
+    name: Playa
+    params:
+      ambientFloor: 0.09
+      marginX: 2.5
+      kickRateMin: 1.2
+      kickRateMax: 3.8
+      kickRegMin: 0.45
+      requireBpmLock: true
+      shapeLowMin: 0.2
+      shapeHighMin: 0.12
+      silenceMax: 0.5
+      onSustainMs: 20000
+      offConfirmMs: 30000
+  - id: home
+    name: Home
+    params:
+      ambientFloor: 0.08
+      marginX: 2
+      kickRateMin: 1
+      kickRateMax: 4.2
+      kickRegMin: 0.35
+      requireBpmLock: true
+      shapeLowMin: 0.16
+      shapeHighMin: 0.09
+      silenceMax: 0.6
+      onSustainMs: 15000
+      offConfirmMs: 30000
+activeId: home

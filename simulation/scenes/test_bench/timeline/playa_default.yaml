@@ -7,44 +7,34 @@ location:
   elevationM: 1190
 festival:
   startDate: '2026-08-30'
-  days: 8
+  # Nine calendar dates cover eight evening arcs through the final morning.
+  days: 9
 autopilot:
   enabled: true
-  playlist: default
-  delay_s: 45
+  playlist: ambient
+  delay_s: 90
   shuffle: true
   target:
     channel: deck
     id: null
   mood: true
 phases:
-  philharmonic:
+  # The schema reports one active phase. Keep the eligibility window as the
+  # sole phase; the named artistic chapters are the timed cues below.
+  party_window:
     start:
-      sun: sunset
-      offsetMin: -30
-    end:
-      sun: sunset
-      offsetMin: 60
-  party_night:
-    start:
-      sun: sunset
-      offsetMin: 120
+      clock: '21:30'
     end:
       sun: sunrise
-      offsetMin: -60
-  sunrise_set:
-    start:
-      sun: sunrise
-      offsetMin: -30
-    end:
-      sun: sunrise
-      offsetMin: 90
+      offsetMin: -120
 looks:
-  daytime:
-    playlist: default
+  ambient:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
     palette: deep_sea
-    globals:
-      master: 0.5
     target:
       channel: deck
       id: null
@@ -58,105 +48,345 @@ looks:
     target:
       channel: deck
       id: null
-  party:
+  burn_night:
     playlist: default
     autopilot:
       active: true
       delay_s: 30
       shuffle: true
-    palette: bass_drop
-    target:
-      channel: deck
-      id: null
-  sunrise:
-    playlist: default
-    palette: aurora
-    globals:
-      master: 0.6
-    target:
-      channel: deck
-      id: null
-  burn_night:
-    playlist: default
     palette: bass_drop
     globals:
       master: 1
     target:
       channel: deck
       id: null
-  ambient:
-    playlist: ambient
+  temple:
+    playlist: default
     autopilot:
       active: true
       delay_s: 90
-      shuffle: true
-    palette: deep_sea
-    target:
-      channel: deck
-      id: null
-  party_high:
-    playlist: party_high
-    autopilot:
-      active: true
-      delay_s: 30
-      shuffle: true
-    palette: bass_drop
-    target:
-      channel: deck
-      id: null
-  party_low:
-    playlist: party_low
-    autopilot:
-      active: true
-      delay_s: 45
-      shuffle: true
-    palette: ultraviolet
-    target:
-      channel: deck
-      id: null
-  temple:
-    playlist: default
+      shuffle: false
     palette: aurora
     globals:
       master: 0.4
     target:
       channel: deck
       id: null
-defaultCue:
-  label: Ambient program
-  action:
-    type: look
-    look: ambient
 cues:
-  - id: c_visibility_on
-    label: Exterior up at golden hour
+  - id: c_initial_off
+    label: Initial festival morning — remain off until first ignition
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '00:00'
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: false, delay_s: 120, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [deep_sea], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0
+    kind: program
+    hold:
+      until: { sun: sunset, offsetMin: -30 }
+    days: [0]
+  - id: c_ignition_white
+    label: Ignition — pure white visibility
     enabled: true
     catchUp: true
     trigger:
       type: sun
       event: sunset
-      offsetMin: -45
+      offsetMin: -30
     action:
-      type: look
-      look: philharmonic
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: electric_ice
+      autopilot: { active: true, delay_s: 120, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 3000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [electric_ice], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.8
     kind: program
     hold:
-      min: 90
-    days: all
-  - id: c_party_start
-    label: Party night ramp
+      min: 60
+    days: [0, 1, 2, 3, 4, 5, 6, 7]
+  - id: c_first_color
+    label: First color — white with gentle sprinkles
     enabled: true
     catchUp: true
     trigger:
-      type: phase
-      phase: party_night
+      type: sun
+      event: sunset
+      offsetMin: 30
     action:
-      type: look
-      look: party
+      type: playlist
+      name: dusk_sprinkles
+      target: { channel: deck, id: null }
+      palette: lavender_dream
+      autopilot: { active: true, delay_s: 300, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [lavender_dream], delay_s: 600, shuffle: false, transitionMs: 0 }
+    # Program ownership removes the ignition-expiry baseline reload. Party is
+    # ineligible throughout this directed ramp; operator takeover still wins.
+    kind: program
+    hold:
+      until: { clock: '21:30' }
+    days: [0, 1, 2, 3, 4, 5, 6, 7]
+  - id: c_early_night
+    label: Early night — cool animated welcome
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '21:30'
+    action:
+      type: playlist
+      name: ambient
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 90, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [deep_sea, lavender_dream, aurora]
+        delay_s: 300
+        shuffle: false
+        transitionMs: 10000
     kind: ambient
+    days: [0, 1, 2, 3, 4, 5, 6, 7]
+  - id: b1_midnight_drive
+    label: Deep night 1 — Midnight Drive
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '23:30' }
+    action:
+      type: playlist
+      name: night_midnight_drive
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 75, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [deep_sea, midnight_laser]
+        delay_s: 300
+        shuffle: false
+        transitionMs: 8000
+    kind: ambient
+    days: [0, 1, 2, 3, 4, 5, 6, 7]
+  - id: b1_midnight_carry
+    label: Deep night 1 — cross-midnight carry
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '00:00' }
+    action:
+      type: playlist
+      name: night_midnight_drive
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 75, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [deep_sea, midnight_laser]
+        delay_s: 300
+        shuffle: false
+        transitionMs: 8000
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: r1_quiet_reset
+    label: Quiet reset 1 — Aurora hush
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '01:00' }
+    action:
+      type: playlist
+      name: night_quiet_reset_aurora
+      target: { channel: deck, id: null }
+      palette: aurora
+      autopilot: { active: true, delay_s: 150, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [aurora], delay_s: 600, shuffle: false, transitionMs: 0 }
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: b2_uv_lasers
+    label: Deep night 2 — UV Lasers
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '01:10' }
+    action:
+      type: playlist
+      name: night_uv_lasers
+      target: { channel: deck, id: null }
+      palette: ultraviolet
+      autopilot: { active: true, delay_s: 75, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [ultraviolet, laser_lime, vapor_laser]
+        delay_s: 240
+        shuffle: true
+        transitionMs: 8000
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: r2_quiet_reset
+    label: Quiet reset 2 — Electric Ice hush
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '02:30' }
+    action:
+      type: playlist
+      name: night_quiet_reset_ice
+      target: { channel: deck, id: null }
+      palette: electric_ice
+      autopilot: { active: true, delay_s: 150, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [electric_ice], delay_s: 600, shuffle: false, transitionMs: 0 }
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: b3_ember_hold
+    label: Deep night 3 — Ember Hold
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '02:40' }
+    action:
+      type: playlist
+      name: night_ember_hold
+      target: { channel: deck, id: null }
+      palette: phoenix
+      autopilot: { active: true, delay_s: 120, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [phoenix, acid_sunset, afterhours]
+        delay_s: 360
+        shuffle: false
+        transitionMs: 10000
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: b4_open_sea
+    label: Deep night 4 — Open Sea
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '04:00' }
+    action:
+      type: playlist
+      name: night_open_sea
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: true, delay_s: 180, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [deep_sea, aurora]
+        delay_s: 480
+        shuffle: false
+        transitionMs: 12000
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: c_pre_dawn
+    label: Pre-dawn — pale maritime taper
+    enabled: true
+    catchUp: true
+    trigger: { type: sun, event: sunrise, offsetMin: -120 }
+    action:
+      type: playlist
+      name: night_open_sea
+      target: { channel: deck, id: null }
+      palette: electric_ice
+      autopilot: { active: true, delay_s: 180, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 8000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [electric_ice, aurora]
+        delay_s: 480
+        shuffle: false
+        transitionMs: 12000
+    kind: ambient
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: c_sunrise_bloom
+    label: Sunrise Bloom — expressive white
+    enabled: true
+    catchUp: true
+    trigger: { type: sun, event: sunrise, offsetMin: -20 }
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: sunset_coral
+      autopilot: { active: true, delay_s: 90, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 8000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [sunset_coral], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.8
+    kind: program
+    hold:
+      min: 80
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: c_morning_watch
+    label: Morning Watch — steady reduced visibility
+    enabled: true
+    catchUp: true
+    trigger: { type: sun, event: sunrise, offsetMin: 60 }
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: electric_ice
+      autopilot: { active: false, delay_s: 120, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [electric_ice], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.4
+    kind: program
+    hold:
+      until: { clock: '09:00' }
+    days: [1, 2, 3, 4, 5, 6, 7, 8]
+  - id: c_day_off
+    label: Day Off — output dark, engine available
+    enabled: true
+    catchUp: true
+    trigger: { type: clock, at: '09:00' }
+    action:
+      type: playlist
+      name: white_only
+      entryId: e_white_only_0_60_white_wash
+      target: { channel: deck, id: null }
+      palette: deep_sea
+      autopilot: { active: false, delay_s: 120, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [deep_sea], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0
+    kind: program
+    hold:
+      until: { sun: sunset, offsetMin: -30 }
     days: all
   - id: c_mood_to_party
-    label: 'Party session: sustained real music -> party_high'
+    label: 'Party session: eligible + enabled + sustained music'
     enabled: true
     catchUp: true
     trigger:
@@ -164,24 +394,81 @@ cues:
       from: calm
       to: party
       minDwellSec: 120
-      cooldownSec: 120
+      cooldownSec: 900
+      whenPhase: party_window
     action:
-      type: look
-      look: party_high
+      type: playlist
+      name: party_high
+      target: { channel: deck, id: null }
+      palette: bass_drop
+      autopilot: { active: true, delay_s: 30, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 3000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [bass_drop, ultraviolet, laser_lime]
+        delay_s: 120
+        shuffle: true
+        transitionMs: 5000
     kind: mood
     durationMin: 12
     days: all
-  - id: c_sunrise
-    label: Sunrise wind-down
+  - id: c_dust_storm
+    label: DUST STORM — high-visibility beacon
     enabled: true
-    catchUp: true
-    trigger:
-      type: sun
-      event: sunrise
-      offsetMin: -15
+    catchUp: false
+    trigger: { type: manual }
     action:
-      type: look
-      look: sunrise
+      type: playlist
+      name: dust_beacon
+      target: { channel: deck, id: null }
+      palette: sunset_coral
+      autopilot: { active: true, delay_s: 120, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 3000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [sunset_coral], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.8
+    kind: program
+    days: all
+  - id: c_event_maxa
+    label: EVENT — Maxa party
+    enabled: true
+    catchUp: false
+    trigger: { type: manual }
+    action:
+      type: playlist
+      name: party_high
+      target: { channel: deck, id: null }
+      palette: bass_drop
+      autopilot: { active: true, delay_s: 30, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 3000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes: [bass_drop, ultraviolet, laser_lime]
+        delay_s: 120
+        shuffle: true
+        transitionMs: 5000
+    kind: program
+    hold:
+      min: 120
+    durationMin: 120
+    days: all
+  - id: c_event_philharmonic
+    label: EVENT — Philharmonic
+    enabled: true
+    catchUp: false
+    trigger: { type: manual }
+    action:
+      type: playlist
+      name: default
+      target: { channel: deck, id: null }
+      palette: sunset_coral
+      autopilot: { active: true, delay_s: 90, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [sunset_coral], delay_s: 600, shuffle: false, transitionMs: 0 }
     kind: program
     hold:
       min: 90
@@ -190,31 +477,45 @@ cues:
     label: Burn night spectacle
     enabled: true
     catchUp: true
-    trigger:
-      type: sun
-      event: sunset
-      offsetMin: 90
+    trigger: { type: sun, event: sunset, offsetMin: 90 }
     action:
-      type: look
-      look: burn_night
+      type: playlist
+      name: default
+      target: { channel: deck, id: null }
+      palette: bass_drop
+      autopilot: { active: true, delay_s: 30, shuffle: true }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [bass_drop], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 1
     kind: program
     hold:
       min: 120
-    days:
-      - 6
+    days: [6]
   - id: c_temple
     label: Temple burn — reverent
     enabled: true
     catchUp: true
-    trigger:
-      type: sun
-      event: sunset
-      offsetMin: 60
+    trigger: { type: sun, event: sunset, offsetMin: 60 }
     action:
-      type: look
-      look: temple
+      type: playlist
+      name: default
+      target: { channel: deck, id: null }
+      palette: aurora
+      autopilot: { active: true, delay_s: 90, shuffle: false }
+      transition: { mode: trans_crossfade, durationMs: 5000, enabled: true, shuffle: false }
+      overlays: disable
+      colorAutopilot: { active: false, palettes: [aurora], delay_s: 600, shuffle: false, transitionMs: 0 }
+      globals:
+        master: 0.4
     kind: program
     hold:
       min: 120
-    days:
-      - 7
+    days: [7]
+defaultCue:
+  label: Phase-aware ambient program
+  phaseAware: true
+  action:
+    type: look
+    look: ambient

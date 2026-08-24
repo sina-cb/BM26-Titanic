@@ -45,13 +45,14 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
-import { opConfirm, opWarn } from '@/utils/op_dialog';
+import { opConfirm, opInfo, opWarn } from '@/utils/op_dialog';
 import { useFocusEffect, router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { useTimeline, zoomEnteredHere } from '@/hooks/useTimeline';
+import { useTimeline } from '@/hooks/useTimeline';
+import { usePerformanceMode } from '@/hooks/usePerformanceMode';
 import {
   fetchPlaylists, getCachedColorPalettes, fetchLayerSettingsState,
   fetchDeckChannel, getAutopilot, fetchDeckColorAutopilot,
@@ -61,6 +62,7 @@ import {
   fetchTimelinePlans,
   fetchTimelinePlan,
   fetchTimelineOverview,
+  fetchTimelineState,
   fetchTimelineResolve,
   previewTimelineOverview,
   saveTimelinePlan,
@@ -81,7 +83,14 @@ import {
 import { DayOverviewStrip } from '@/components/timeline/DayOverviewStrip';
 import { DayView } from '@/components/timeline/DayView';
 import { EventSheet } from '@/components/timeline/EventSheet';
-import { CueEditorSheet } from '@/components/timeline/CueEditorSheet';
+import { CueEditorSheet, type CueSaveResult } from '@/components/timeline/CueEditorSheet';
+import { planWithUpsertedCue } from '@/components/timeline/cue_edit_logic';
+import {
+  isPartyWindowImplementationCue,
+  planWithPartyWindow,
+  planWithoutPartyWindow,
+  type PartyWindowSpec,
+} from '@/components/timeline/party_window_logic';
 import { PlanPickerSheet } from '@/components/timeline/PlanPickerSheet';
 import {
   FestivalEditor, addDaysToDateKey, FESTIVAL_MIN_DAYS, FESTIVAL_MAX_DAYS,
@@ -98,7 +107,12 @@ import {
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { companionUrlFromApiBase } from '@/utils/companion_url';
 import { babyRevealConfirmation } from '@/components/timeline/baby_reveal_confirmation';
-import { PerformanceRouteGuard } from '@/components/performance_route_guard';
+import { BabyRevealChoiceSheet } from '@/components/timeline/baby_reveal_choice_sheet';
+import { ManualCueReviewSheet } from '@/components/timeline/manual_cue_review_sheet';
+import { TimelineLiveView } from '@/components/timeline/timeline_live_view';
+import { TimelineOperatorShell } from '@/components/timeline/timeline_operator_shell';
+import { TimelinePartyCard } from '@/components/timeline/timeline_party_card';
+import { TimelineTravelView } from '@/components/timeline/timeline_travel_view';
 import { parseLayerSettingsState, type LayerSettingsState } from '@/utils/layer_settings';
 import {
   describeTimelineDraftSaveFailure,
@@ -112,6 +126,19 @@ import {
   timelinePriorityFeedbackText,
   type TimelinePriorityFeedback,
 } from '@/utils/timeline_priority_feedback';
+import { primaryTimelineAlert, TIMELINE_STALE_AFTER_MS } from '@/utils/timeline_alert_model';
+import {
+  manualTimelineCues,
+  overviewForTimelineView,
+  resolveTimelineNowOwner,
+  timelineTravelCuesForDay,
+  timelineTravelResolveDateForOperatorTime,
+  upcomingTimelineCues,
+  type TimelineTravelCue,
+  type TimelineOperatorView,
+} from '@/utils/timeline_operator_model';
+import { roundTimelineLocalTime } from '@/utils/timeline_travel_model';
+import { normalizeCueColorAutopilot } from '@/components/timeline/cue_color_theme_logic';
 
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
@@ -145,6 +172,12 @@ function nowPartsInTz(tz: string | null | undefined): { dateKey: string; minutes
   } catch {
     return null;
   }
+}
+
+function minutesToLocalTime(minutes: number | null): string {
+  if (minutes === null) return '00:00';
+  const normalized = Math.max(0, Math.min(1439, Math.trunc(minutes)));
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
 }
 
 function formatCountdown(sec: number | null): string {
@@ -198,19 +231,13 @@ async function snapshotDeckAsDefaultCue(): Promise<PlanDefaultCue> {
     };
   }
 
-  // Color autopilot — include ONLY when active with ≥1 palette (the engine's
-  // strict validateColorAutopilot); clamp delay_s / transitionMs like the editor.
+  // Color theme — capture the COMPLETE Deck wire, including two-tone
+  // continuous crossfades (`delay_s:0`), five-tone inline rings, and Follow
+  // Note sampling. The shared normalizer strips runtime-only fields and fails
+  // loudly on a malformed Deck response instead of saving a lossy cue.
   const ca = caRes.ok ? caRes.data : null;
-  if (ca && ca.active && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
-    const d = Number(ca.delay_s);
-    const tm = Number(ca.transitionMs);
-    action.colorAutopilot = {
-      active: true,
-      palettes: [...ca.palettes],
-      delay_s: Number.isFinite(d) && d > 0 ? d : 30,
-      shuffle: !!ca.shuffle,
-      transitionMs: Number.isFinite(tm) && tm >= 0 ? tm : 0,
-    };
+  if (ca?.active) {
+    action.colorAutopilot = normalizeCueColorAutopilot(ca);
   }
 
   return { label: 'Default (from deck)', action };
@@ -246,7 +273,7 @@ function ControllerPill({ state, styles, C }: { state: TimelineState; styles: St
 
 function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | null; styles: Styles; C: Palette }) {
   const color = party ? C.error : C.tertiary;
-  const label = party ? 'PARTY' : (mood ? mood.toUpperCase() : 'CALM');
+  const label = party ? 'MUSIC · PARTY DETECTED' : `MUSIC · ${(mood || 'calm').toUpperCase()}`;
   return (
     <View style={[styles.pill, { borderColor: color }]}>
       <Text style={[styles.pillText, { color }]}>{`● ${label}`}</Text>
@@ -255,11 +282,7 @@ function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | n
 }
 
 export default function TimelineScreen() {
-  return (
-    <PerformanceRouteGuard routeName="timeline">
-      <TimelineScreenContent />
-    </PerformanceRouteGuard>
-  );
+  return <TimelineScreenContent />;
 }
 
 function TimelineScreenContent() {
@@ -267,9 +290,10 @@ function TimelineScreenContent() {
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const {
-    state, connected, error, setAutopilot, endProgram, fireCue, activatePlan,
-    resume, performTakeover, travel,
+    state, connected, receivedAtMs, error, setAutopilot, endProgram, fireCue, activatePlan,
+    resume, takeover, performTakeover, travel,
   } = useTimeline();
+  const performanceMode = usePerformanceMode();
 
   // ── Server resources ──
   const [plans, setPlans] = useState<string[]>([]);
@@ -415,6 +439,7 @@ function TimelineScreenContent() {
   }, [beginPriorityHandoff, finishPriorityHandoff]);
 
   // ── UI sheet state ──
+  const [operatorView, setOperatorView] = useState<TimelineOperatorView>('live');
   const [planPickerOpen, setPlanPickerOpen] = useState(false);
   // The operator-SELECTED day (highlighted in the strip + drives the cue
   // filter below it). Defaults to today; falls back to day 0. `null` only
@@ -441,18 +466,68 @@ function TimelineScreenContent() {
   // event sheet (operator ruling 2026-08-03). Exactly one of eventCue /
   // eventMoment is ever set.
   const [eventMoment, setEventMoment] = useState<{ date: string; time: string } | null>(null);
+  const [eventOperatorDate, setEventOperatorDate] = useState<string | null>(null);
+  // Saved plan used for this preview/travel. Edit/Calendar may rehearse a
+  // selected plan without activating it; retaining the source here prevents a
+  // later tab/view change from silently resolving the event against another plan.
+  const [eventPlanName, setEventPlanName] = useState<string | null>(null);
   const [eventResolve, setEventResolve] = useState<TimelineResolve | null>(null);
   const [eventResolveError, setEventResolveError] = useState<string | null>(null);
   const [eventResolvePending, setEventResolvePending] = useState(false);
   const [eventBusy, setEventBusy] = useState(false);
   const [eventActionError, setEventActionError] = useState<string | null>(null);
+  const [manualCue, setManualCue] = useState<OverviewCue | null>(null);
+  const [babyRevealOpen, setBabyRevealOpen] = useState(false);
+  const [travelDate, setTravelDate] = useState<string | null>(null);
+  const [travelTime, setTravelTime] = useState(() => roundTimelineLocalTime(new Date()));
+  const [travelCueId, setTravelCueId] = useState<string | null>(null);
+  const [travelAdvancedOpen, setTravelAdvancedOpen] = useState(false);
+  const [travelResolve, setTravelResolve] = useState<TimelineResolve | null>(null);
+  const [travelResolveError, setTravelResolveError] = useState<string | null>(null);
+  const [travelResolving, setTravelResolving] = useState(false);
+  const [travelBusy, setTravelBusy] = useState(false);
+  const [liveActionPending, setLiveActionPending] = useState(false);
+  const [liveActionFeedback, setLiveActionFeedback] = useState<string | null>(null);
+  const liveActionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showLiveActionFeedback = useCallback((message: string) => {
+    setLiveActionFeedback(message);
+    if (liveActionFeedbackTimer.current) clearTimeout(liveActionFeedbackTimer.current);
+    liveActionFeedbackTimer.current = setTimeout(() => {
+      setLiveActionFeedback(null);
+      liveActionFeedbackTimer.current = null;
+    }, 7000);
+  }, []);
+  useEffect(() => () => {
+    if (liveActionFeedbackTimer.current) clearTimeout(liveActionFeedbackTimer.current);
+  }, []);
 
   // ── 1s ticker — drives the live NOW playhead (strip + day editor). ──
-  const [, setNowTick] = useState(() => Date.now());
+  const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+  useEffect(() => {
+    if (state?.zoom?.scope !== 'travel' || performanceMode.active) return;
+    setOperatorView('travel');
+    if (state.zoom.targetDate) setTravelDate(state.zoom.targetDate);
+    if (state.zoom.targetLocal) setTravelTime(state.zoom.targetLocal);
+    setTravelCueId(state.zoom.cueId);
+    setTravelAdvancedOpen(state.zoom.cueId === null);
+  }, [
+    performanceMode.active,
+    state?.zoom?.cueId,
+    state?.zoom?.scope,
+    state?.zoom?.targetDate,
+    state?.zoom?.targetLocal,
+  ]);
+  useEffect(() => {
+    if (!performanceMode.active) return;
+    if (operatorView === 'edit' || operatorView === 'travel') setOperatorView('live');
+    setPlanPickerOpen(false);
+    setCueSheetOpen(false);
+    setDefaultCueSheetOpen(false);
+  }, [operatorView, performanceMode.active]);
 
   // ── Resource loaders ──
   const refreshPlans = useCallback(() => {
@@ -535,8 +610,11 @@ function TimelineScreenContent() {
     };
   }, [draft, draftVersion]);
 
-  // The overview the strip / day editor render from.
-  const overview = draft ? draftOverview : liveOverview;
+  // LIVE is active-plan truth. Calendar, Time Travel, and Edit follow the
+  // operator-selected saved plan (the loaded draft), falling back to live only
+  // when no selected plan exists.
+  const overview = overviewForTimelineView(operatorView, liveOverview, draftOverview);
+  const selectedPlanName = draft?.name ?? state?.activePlan ?? null;
 
   // SAVE is blocked ONLY by a schema-validation (HTTP 400) error that belongs
   // to the CURRENT draft version — never by a transient transport failure, and
@@ -552,21 +630,20 @@ function TimelineScreenContent() {
     return 'UNSAVED…';
   })();
   const autoSaveTone = autoSaveLabel === '✓ SAVED'
-    ? '#00a86b'
+    ? C.tertiary
     : autoSaveLabel === 'SAVING…' || autoSaveLabel === 'UNSAVED…'
       ? C.secondary
       : C.error;
 
-  // Plan timezone (festival-local). Falls back to the active plan's location if
-  // the overview carries no location, then to the device tz so the playhead
-  // still tracks *something* when a plan omits a tz.
+  // Plan timezone (festival-local). Never guess from the pad: a missing plan
+  // timezone means no truthful TODAY/playhead answer.
   const planTz = useMemo(() => {
     return (
       overview?.location?.tz
-      ?? draft?.location?.tz
-      ?? (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : null)
+      ?? liveOverview?.location?.tz
+      ?? null
     );
-  }, [overview?.location?.tz, draft?.location?.tz]);
+  }, [liveOverview?.location?.tz, overview?.location?.tz]);
 
   // "Now" in the plan tz, recomputed each 1s tick. dateKey picks "today"; the
   // minutes feed the playhead position.
@@ -582,6 +659,50 @@ function TimelineScreenContent() {
 
   // Live minutes-of-day for the playhead (null when no tz could be read).
   const nowMinutes = nowInTz ? nowInTz.minutes : null;
+  const nowLocal = minutesToLocalTime(nowMinutes);
+  const liveToday = useMemo(() => {
+    if (!liveOverview || !nowInTz) return liveOverview?.days[0] ?? null;
+    return liveOverview.days.find((day) => day.date === nowInTz.dateKey)
+      ?? liveOverview.days[0]
+      ?? null;
+  }, [liveOverview, nowInTz]);
+  const nowOwner = useMemo(
+    () => resolveTimelineNowOwner(state, liveOverview, liveToday, nowLocal),
+    [liveOverview, liveToday, nowLocal, state],
+  );
+  const nextCues = useMemo(
+    () => upcomingTimelineCues(liveOverview, liveToday?.date ?? null, nowLocal, 4),
+    [liveOverview, liveToday?.date, nowLocal],
+  );
+  const manualCues = useMemo(() => manualTimelineCues(liveOverview), [liveOverview]);
+  const syncAgeSec = receivedAtMs === null
+    ? null
+    : Math.max(0, Math.floor((nowTick - receivedAtMs) / 1000));
+  const timelineDataStale = !connected
+    || receivedAtMs === null
+    || nowTick - receivedAtMs > TIMELINE_STALE_AFTER_MS;
+  const actionsDisabled = timelineDataStale || performanceMode.active;
+  const primaryAlert = primaryTimelineAlert({
+    connected,
+    receivedAtMs,
+    nowMs: nowTick,
+    timelineError: state?.lastError || error,
+    actionError,
+    planWarnings: state?.planWarnings,
+    priorityMessage: priorityFeedback
+      ? timelinePriorityFeedbackText(priorityFeedback)
+      : null,
+    priorityFailed: priorityFeedback?.phase === 'failed',
+    performanceViewOnly: performanceMode.active,
+    liveTouchActive: liveTouchLease?.armed === true,
+    liveTouchOwner: liveTouchLease?.ownerId ?? null,
+    zoomActive: !!state?.zoom,
+    zoomScope: state?.zoom?.scope ?? null,
+    saveError: saveFailure?.detail ?? previewTransportError,
+    activePlanHotReload: operatorView === 'edit'
+      && !!draft?.name
+      && draft.name === state?.activePlan,
+  });
 
   // Default the SELECTED day to today (or day 0) once the overview resolves.
   // Re-applies if the selection points outside the current day range (e.g. a
@@ -832,6 +953,35 @@ function TimelineScreenContent() {
     return () => clearTimeout(t);
   }, [draft, draftVersion, saveBlocked, previewError?.msg]);
 
+  /**
+   * Named-plan rehearsal is allowed only against an engine-acknowledged saved
+   * plan. Flush the selected draft before preview/travel; fail loudly if the
+   * latest version is invalid, still saving, or rejected.
+   */
+  const prepareSelectedPlanForRehearsal = useCallback(async (): Promise<
+    { ok: true; planName: string | null } | { ok: false; error: string }
+  > => {
+    if (!draft) return { ok: true, planName: state?.activePlan ?? null };
+    if (saveBlocked) {
+      return {
+        ok: false,
+        error: previewError?.msg || 'Fix the invalid draft before Time Travel.',
+      };
+    }
+    const version = draftVersion;
+    if (lastSavedVersionRef.current !== version) {
+      draftSaverRef.current?.enqueue(version, draft);
+      await draftSaverRef.current?.flush();
+    }
+    if (lastSavedVersionRef.current !== version) {
+      return {
+        ok: false,
+        error: 'The selected plan is not saved yet. Wait for ✓ SAVED, then try Time Travel again.',
+      };
+    }
+    return { ok: true, planName: draft.name };
+  }, [draft, draftVersion, previewError?.msg, saveBlocked, state?.activePlan]);
+
   // ── Festival span / estimate-tz mutators (top-of-page FestivalEditor) ──
   // These edit the DRAFT. When the operator touches them while viewing the LIVE
   // plan (no draft yet) we first load the active plan into the draft — same
@@ -911,21 +1061,42 @@ function TimelineScreenContent() {
   }, [ensureDraftThen]);
 
   // ── Cue CRUD (within the draft) ──
-  const handleSaveCue = useCallback((cue: PlanCue) => {
+  const handleSaveCue = useCallback(async (
+    cue: PlanCue,
+    partyWindow?: PartyWindowSpec,
+  ): Promise<CueSaveResult> => {
+    if (!draft) {
+      return { ok: false, error: 'Cue was not added: there is no draft plan to validate.' };
+    }
+    const finalCue = cue.id
+      ? cue
+      : { ...cue, id: makeCueId(new Set(draft.cues.map((current) => current.id))) };
+    const candidate = partyWindow
+      ? planWithPartyWindow(draft, finalCue, partyWindow)
+      : planWithUpsertedCue(draft, finalCue);
+    const validation = await previewTimelineOverview(candidate);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        error: `Cue was not added — ${validation.error || 'engine validation failed.'}`,
+      };
+    }
+
     mutateDraft((p) => {
-      if (cue.id && p.cues.some((c) => c.id === cue.id)) {
-        p.cues = p.cues.map((c) => (c.id === cue.id ? cue : c));
-      } else {
-        const id = cue.id || makeCueId(new Set(p.cues.map((c) => c.id)));
-        p.cues = [...p.cues, { ...cue, id }];
-      }
+      p.cues = candidate.cues;
+      p.phases = candidate.phases;
     });
     setCueSheetOpen(false);
     setEditingCue(null);
-  }, [mutateDraft]);
+    return { ok: true };
+  }, [draft, mutateDraft]);
 
   const handleDeleteCue = useCallback((cueId: string) => {
-    mutateDraft((p) => { p.cues = p.cues.filter((c) => c.id !== cueId); });
+    mutateDraft((p) => {
+      const next = planWithoutPartyWindow(p, cueId);
+      p.cues = next.cues;
+      p.phases = next.phases;
+    });
     setCueSheetOpen(false);
     setEditingCue(null);
   }, [mutateDraft]);
@@ -959,10 +1130,21 @@ function TimelineScreenContent() {
     setDefaultCueSheetOpen(true);
   }, [draft, refreshPlaylists]);
 
-  const handleSaveDefaultCue = useCallback((dc: PlanDefaultCue) => {
+  const handleSaveDefaultCue = useCallback(async (dc: PlanDefaultCue): Promise<CueSaveResult> => {
+    if (!draft) {
+      return { ok: false, error: 'Default cue was not saved: there is no draft plan to validate.' };
+    }
+    const validation = await previewTimelineOverview({ ...draft, defaultCue: dc });
+    if (!validation.ok) {
+      return {
+        ok: false,
+        error: `Default cue was not saved — ${validation.error || 'engine validation failed.'}`,
+      };
+    }
     mutateDraft((p) => { p.defaultCue = dc; });
     setDefaultCueSheetOpen(false);
-  }, [mutateDraft]);
+    return { ok: true };
+  }, [draft, mutateDraft]);
 
   // ── Live controls ──
   const isOffline = !connected && !state;
@@ -990,6 +1172,10 @@ function TimelineScreenContent() {
     if (selectedDay === null || !overview) return null;
     return overview.days.find((d) => d.index === selectedDay) ?? null;
   }, [selectedDay, overview]);
+  const selectedNextDayOverview = useMemo(() => {
+    if (!selectedDayOverview || !overview) return null;
+    return overview.days.find((d) => d.index === selectedDayOverview.index + 1) ?? null;
+  }, [overview, selectedDayOverview]);
 
   // Cues shown in the timeline view: the selected day's resolved cues, or all
   // days' cues flattened (with their day index) when the toggle is ALL DAYS.
@@ -997,22 +1183,63 @@ function TimelineScreenContent() {
   const viewCues = useMemo(() => {
     if (!overview) return [] as { cue: OverviewCue; dayIndex: number }[];
     const rows: { cue: OverviewCue; dayIndex: number }[] = [];
-    if (showAllDays) {
-      for (const d of overview.days) for (const c of d.cues) rows.push({ cue: c, dayIndex: d.index });
-    } else if (selectedDayOverview) {
-      for (const c of selectedDayOverview.cues) rows.push({ cue: c, dayIndex: selectedDayOverview.index });
-    }
     const mins = (s: string | null) => {
       if (!s) return 100000;
       const m = /^(\d{1,2}):(\d{2})$/.exec(s);
       return m ? Number(m[1]) * 60 + Number(m[2]) : 100000;
     };
+    if (showAllDays) {
+      for (const d of overview.days) {
+        for (const c of d.cues) {
+          if (!isPartyWindowImplementationCue(c, d.cues)) {
+            rows.push({ cue: c, dayIndex: d.index });
+          }
+        }
+      }
+    } else if (selectedDayOverview) {
+      // The operator day is 6 PM → 6 PM. Evening cues on this day plus the
+      // morning half from the following calendar day belong on this card.
+      for (const c of selectedDayOverview.cues) {
+        if (isPartyWindowImplementationCue(c, selectedDayOverview.cues)) continue;
+        // Cues without a resolvable time (manual/mood) always show on the
+        // authoring day; timed cues need atLocal >= 6 PM to belong to the
+        // evening half of this operator day.
+        if (!c.atLocal || mins(c.atLocal) >= 18 * 60) {
+          rows.push({ cue: c, dayIndex: selectedDayOverview.index });
+        }
+      }
+      if (selectedNextDayOverview) {
+        for (const c of selectedNextDayOverview.cues) {
+          if (isPartyWindowImplementationCue(c, selectedNextDayOverview.cues)) continue;
+          // Only pick up the morning half of the next calendar day (< 6 PM);
+          // its evening cues stay on that day's own card.
+          if (c.atLocal && mins(c.atLocal) < 18 * 60) {
+            rows.push({ cue: c, dayIndex: selectedDayOverview.index });
+          }
+        }
+      }
+    }
     rows.sort((a, b) => {
       if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
-      return mins(a.cue.atLocal) - mins(b.cue.atLocal);
+      const am = mins(a.cue.atLocal);
+      const bm = mins(b.cue.atLocal);
+      // Sort operator-day evening (≥18:00) before morning (<18:00) so the
+      // calendar row order matches how the strip renders top→bottom.
+      const aRank = am >= 18 * 60 ? am : am + 24 * 60;
+      const bRank = bm >= 18 * 60 ? bm : bm + 24 * 60;
+      return aRank - bRank;
     });
     return rows;
-  }, [overview, showAllDays, selectedDayOverview]);
+  }, [overview, showAllDays, selectedDayOverview, selectedNextDayOverview]);
+
+  const travelCueEntries = useMemo(
+    () => timelineTravelCuesForDay(overview, travelDate),
+    [overview, travelDate],
+  );
+  const selectedTravelEntry = useMemo(
+    () => travelCueEntries.find((entry) => entry.cue.id === travelCueId) ?? null,
+    [travelCueEntries, travelCueId],
+  );
 
   // Map overview cue id → live engine cue (for FIRE + countdown), so the
   // filtered/resolved rows still drive the real fire path + live status.
@@ -1055,31 +1282,57 @@ function TimelineScreenContent() {
     if (next !== undefined) setSelectedDay(next);
   }, [overview, selectedDay]);
 
+  const preparePlanForCurrentView = useCallback(() => {
+    if (operatorView === 'live') {
+      return Promise.resolve({
+        ok: true as const,
+        planName: state?.activePlan ?? null,
+      });
+    }
+    return prepareSelectedPlanForRehearsal();
+  }, [operatorView, prepareSelectedPlanForRehearsal, state?.activePlan]);
+
   // DAY → EVENT. Opens the sheet and fires the READ-ONLY resolver peek
   // (GET /timeline/resolve — zero side effects: nothing dispatched, no lease
   // armed, no latch written). A 400 (out-of-window target, unresolvable cue) is
   // surfaced verbatim in the sheet; we never fake a preview.
-  const openEvent = useCallback((cue: OverviewCue) => {
+  const openEvent = useCallback((cue: OverviewCue, dateOverride?: string) => {
     setEventCue(cue);
     setEventMoment(null);
     setEventResolve(null);
     setEventResolveError(null);
     setEventActionError(null);
     setEventResolvePending(true);
-    const date = selectedDayOverview?.date;
-    fetchTimelineResolve({ cueId: cue.id, ...(date ? { date } : {}) }).then((r) => {
+    const date = dateOverride ?? selectedDayOverview?.date;
+    setEventOperatorDate(
+      operatorView === 'live'
+        ? (date ?? null)
+        : (selectedDayOverview?.date ?? date ?? null),
+    );
+    void preparePlanForCurrentView().then(async (prepared) => {
+      if (!prepared.ok) {
+        setEventResolvePending(false);
+        setEventResolveError(prepared.error);
+        return;
+      }
+      setEventPlanName(prepared.planName);
+      const r = await fetchTimelineResolve({
+        cueId: cue.id,
+        ...(date ? { date } : {}),
+        ...(prepared.planName ? { planName: prepared.planName } : {}),
+      });
       setEventResolvePending(false);
       if (r.ok && r.data) { setEventResolve(r.data); setEventResolveError(null); }
       else setEventResolveError(r.error || 'Could not resolve this moment');
     });
-  }, [selectedDayOverview?.date]);
+  }, [operatorView, preparePlanForCurrentView, selectedDayOverview?.date]);
 
   // CALENDAR → MOMENT. A tap on EMPTY calendar time opens the same sheet in
   // MOMENT mode, peeking the resolver at that bare instant ({date, time} —
   // the same arbitrary-timestamp surface the travel steppers ride on). Still
   // read-only: the rig moves only on the sheet's TIME TRAVEL button.
-  const openMoment = useCallback((time: string) => {
-    const date = selectedDayOverview?.date;
+  const openMoment = useCallback((time: string, dateOverride?: string) => {
+    const date = dateOverride ?? selectedDayOverview?.date;
     if (!date) return; // no resolvable day under the tap — open nothing
     setEventCue(null);
     setEventMoment({ date, time });
@@ -1087,12 +1340,28 @@ function TimelineScreenContent() {
     setEventResolveError(null);
     setEventActionError(null);
     setEventResolvePending(true);
-    fetchTimelineResolve({ date, time }).then((r) => {
+    setEventOperatorDate(
+      operatorView === 'live'
+        ? date
+        : (selectedDayOverview?.date ?? date),
+    );
+    void preparePlanForCurrentView().then(async (prepared) => {
+      if (!prepared.ok) {
+        setEventResolvePending(false);
+        setEventResolveError(prepared.error);
+        return;
+      }
+      setEventPlanName(prepared.planName);
+      const r = await fetchTimelineResolve({
+        date,
+        time,
+        ...(prepared.planName ? { planName: prepared.planName } : {}),
+      });
       setEventResolvePending(false);
       if (r.ok && r.data) { setEventResolve(r.data); setEventResolveError(null); }
       else setEventResolveError(r.error || 'Could not resolve this moment');
     });
-  }, [selectedDayOverview?.date]);
+  }, [operatorView, preparePlanForCurrentView, selectedDayOverview?.date]);
 
   const closeEvent = useCallback(() => {
     setEventCue(null);
@@ -1100,6 +1369,8 @@ function TimelineScreenContent() {
     setEventResolve(null);
     setEventResolveError(null);
     setEventActionError(null);
+    setEventPlanName(null);
+    setEventOperatorDate(null);
   }, []);
 
   // PERFORM — a SCOPED takeover of the LIVE event. The plan holds; a program
@@ -1132,44 +1403,756 @@ function TimelineScreenContent() {
   const handleTravel = useCallback(async () => {
     let spec: TimelineTravelSpec;
     if (eventCue) {
-      const date = selectedDayOverview?.date;
-      spec = { cueId: eventCue.id, ...(date ? { date } : {}) };
+      const date = eventResolve?.date ?? selectedDayOverview?.date;
+      spec = {
+        cueId: eventCue.id,
+        ...(date ? { date } : {}),
+        ...(eventPlanName ? { planName: eventPlanName } : {}),
+      };
     } else if (eventMoment) {
-      spec = { date: eventMoment.date, time: eventMoment.time };
+      spec = {
+        date: eventMoment.date,
+        time: eventMoment.time,
+        ...(eventPlanName ? { planName: eventPlanName } : {}),
+      };
     } else {
       return;
     }
+    // The large purple action inside EventSheet is the confirmation. Opening a
+    // second native confirmation Modal while EventSheet's Modal is still
+    // presented can place the confirmation behind the sheet on iPad, making a
+    // valid tap look like a no-op. Apply immediately and keep the sheet visible
+    // in its busy state until success (navigate to Deck) or a loud error.
     setEventBusy(true);
     const priorityAttempt = beginPriorityHandoff('TIME TRAVEL');
-    const err = await travel(spec);
-    finishPriorityHandoff(priorityAttempt, err === null, err);
+    const outcome = await travel(spec);
+    finishPriorityHandoff(
+      priorityAttempt,
+      outcome.ok,
+      outcome.ok ? null : outcome.error,
+    );
     setEventBusy(false);
-    if (err) { setEventActionError(err); return; }
+    if (!outcome.ok) { setEventActionError(outcome.error); return; }
+    if (eventOperatorDate) {
+      setTravelDate(eventOperatorDate);
+      if ('time' in spec) setTravelTime(spec.time);
+      else if (eventResolve) setTravelTime(eventResolve.atLocal);
+    } else if ('date' in spec && spec.date) {
+      setTravelDate(spec.date);
+      if ('time' in spec) setTravelTime(spec.time);
+    } else if (eventResolve) {
+      setTravelDate(eventResolve.date);
+      setTravelTime(eventResolve.atLocal);
+    }
+    setTravelCueId(eventCue?.id ?? null);
+    setTravelAdvancedOpen(eventCue === null);
     closeEvent();
+    // Time Travel puts the rig into the resolved snapshot: the operator now
+    // needs to see the Deck (and Mixer) that the plan applied. Navigate to
+    // the Deck tab and surface a temporary confirmation toast that names the
+    // applied plan, target, cue, playlist, and palette so the operator sees
+    // the truth without hunting for it.
+    const resolved = outcome.result.resolved;
+    const planLabel = outcome.result.rehearsingPlan ?? state?.activePlan ?? 'plan';
+    const targetLabel = `${resolved.date} ${resolved.atLocal}`;
+    const ownerLabel = resolved.owner?.label ?? 'resolved baseline';
+    const applied = [resolved.playlist, resolved.palette].filter(Boolean).join(' · ');
+    opInfo(
+      'TIME TRAVEL APPLIED',
+      `${planLabel} → ${targetLabel} · ${ownerLabel}${applied ? ` · ${applied}` : ''}`,
+    );
     router.push('/');
   }, [beginPriorityHandoff, eventCue, eventMoment, finishPriorityHandoff, travel,
-    closeEvent, selectedDayOverview?.date]);
+    closeEvent, eventOperatorDate, eventPlanName, eventResolve, selectedDayOverview?.date,
+    state?.activePlan]);
 
-  // ── EXIT RULE D1: returning to the TIMELINE tab ends the zoom ──────────
-  //
-  // The operator's own words — "going back to the timeline tab is how to get out
-  // of the time travel feature". `resume()` → catchUp re-derives the owner for
-  // NOW, so the plan picks straight back up.
-  //
-  // Gated on zoomEnteredHere(): there is ONE engine zoom session, and a second
-  // pad merely browsing to its timeline tab must NEVER yank pad A's live
-  // performance. That pad exits through the banner's explicit EXIT instead.
-  //
-  // Deps are deliberately EMPTY so this fires once per FOCUS event and not every
-  // time the zoom state changes while the tab is already focused (which would
-  // resume the zoom the instant the operator armed it).
-  const zoomRef = useRef(state?.zoom ?? null);
-  useEffect(() => { zoomRef.current = state?.zoom ?? null; }, [state?.zoom]);
-  const resumeRef = useRef(resume);
-  useEffect(() => { resumeRef.current = resume; }, [resume]);
-  useFocusEffect(useCallback(() => {
-    if (zoomRef.current && zoomEnteredHere()) void resumeRef.current();
-  }, []));
+  // Returning to this tab never mutates a zoom. TIME TRAVEL and PERFORM remain
+  // active until the explicit RESUME LIVE action, including across tab changes
+  // and on pads that did not initiate the takeover.
+
+  useEffect(() => {
+    if (travelDate || !liveOverview?.days.length) return;
+    setTravelDate(liveToday?.date ?? liveOverview.days[0].date);
+  }, [liveOverview, liveToday?.date, travelDate]);
+
+  useEffect(() => {
+    if (operatorView !== 'travel' || !travelDate || !connected) return;
+    if (!travelCueId && !travelAdvancedOpen) {
+      setTravelResolve(null);
+      setTravelResolveError(null);
+      setTravelResolving(false);
+      return;
+    }
+    let active = true;
+    setTravelResolving(true);
+    setTravelResolve(null);
+    setTravelResolveError(null);
+    void prepareSelectedPlanForRehearsal().then(async (prepared) => {
+      if (!active) return;
+      if (!prepared.ok) {
+        setTravelResolving(false);
+        setTravelResolveError(prepared.error);
+        return;
+      }
+      if (travelCueId && !selectedTravelEntry) {
+        setTravelResolving(false);
+        setTravelResolveError('The selected cue is not part of this operator day.');
+        return;
+      }
+      const exactResolveDate = selectedTravelEntry?.resolveDate
+        ?? timelineTravelResolveDateForOperatorTime(overview, travelDate, travelTime);
+      if (!exactResolveDate) {
+        setTravelResolving(false);
+        setTravelResolveError('This target falls beyond the selected plan’s last operator day.');
+        return;
+      }
+      const spec = selectedTravelEntry
+        ? {
+          cueId: selectedTravelEntry.cue.id,
+          date: selectedTravelEntry.resolveDate,
+          ...(prepared.planName ? { planName: prepared.planName } : {}),
+        }
+        : {
+          date: exactResolveDate,
+          time: travelTime,
+          ...(prepared.planName ? { planName: prepared.planName } : {}),
+        };
+      const result = await fetchTimelineResolve(spec);
+      if (!active) return;
+      setTravelResolving(false);
+      if (result.ok && result.data) {
+        setTravelResolve(result.data);
+        setTravelResolveError(null);
+      } else {
+        setTravelResolveError(result.error || 'Could not resolve this Time Travel target');
+      }
+    });
+    return () => { active = false; };
+  }, [
+    connected,
+    operatorView,
+    overview,
+    prepareSelectedPlanForRehearsal,
+    selectedTravelEntry,
+    travelAdvancedOpen,
+    travelCueId,
+    travelDate,
+    travelTime,
+  ]);
+
+  const handleTravelDate = useCallback((date: string) => {
+    setTravelDate(date);
+    setTravelCueId(null);
+    setTravelAdvancedOpen(false);
+  }, []);
+
+  const handleTravelCue = useCallback((entry: TimelineTravelCue) => {
+    setTravelCueId(entry.cue.id);
+    setTravelAdvancedOpen(false);
+    if (entry.cue.atLocal) setTravelTime(entry.cue.atLocal);
+  }, []);
+
+  const handleToggleTravelAdvanced = useCallback(() => {
+    if (!travelAdvancedOpen) setTravelCueId(null);
+    setTravelAdvancedOpen(!travelAdvancedOpen);
+  }, [travelAdvancedOpen]);
+
+  const handleOperatorView = useCallback((next: TimelineOperatorView) => {
+    if (performanceMode.active && (next === 'edit' || next === 'travel')) return;
+    setOperatorView(next);
+    if (next === 'calendar' || next === 'edit') setZoomLevel('festival');
+  }, [performanceMode.active]);
+
+  const handleTakeover = useCallback(async () => {
+    if (actionsDisabled) return;
+    const confirmed = await opConfirm({
+      title: 'TAKE OVER TIMELINE?',
+      message: 'Manual control will own the deck until RESUME LIVE or the operator lease expires.',
+      confirmLabel: 'TAKE OVER',
+    });
+    if (!confirmed) return;
+    setLiveActionPending(true);
+    showLiveActionFeedback('Requesting MANUAL control…');
+    const priorityAttempt = beginPriorityHandoff('TAKE OVER');
+    const result = await takeover();
+    finishPriorityHandoff(priorityAttempt, result === 'ok', result === 'failed'
+      ? 'The engine rejected the Timeline takeover.'
+      : null);
+    setLiveActionPending(false);
+    showLiveActionFeedback(result === 'ok'
+      ? 'OPERATOR TAKEOVER now controls Deck output. The live plan is waiting.'
+      : 'The engine did not grant operator control.');
+  }, [
+    actionsDisabled,
+    beginPriorityHandoff,
+    finishPriorityHandoff,
+    showLiveActionFeedback,
+    takeover,
+  ]);
+
+  const handleResumeLive = useCallback(async () => {
+    if (actionsDisabled) return;
+    if (!state?.zoom && !state?.activePlan) {
+      showLiveActionFeedback(
+        'No live plan is active. Open EDIT PLAN → PLANS and activate one first.',
+      );
+      return;
+    }
+    setLiveActionPending(true);
+    showLiveActionFeedback('Enabling Timeline and returning control to the live plan…');
+    const priorityAttempt = beginPriorityHandoff('RESUME TIMELINE');
+    // RESUME TIMELINE is one operator action, not two hidden switches. The
+    // engine deliberately keeps "enable the schedule" separate from "release
+    // an operator lease"; calling only resume() while Timeline AUTO was off
+    // cleared the lease but left controller=manual forever. Always arm the
+    // active plan first (idempotent when already on), then hand control back.
+    const enabled = await setAutopilot(true);
+    const ok = enabled && await resume();
+    finishPriorityHandoff(priorityAttempt, ok, ok ? null : 'The engine rejected RESUME TIMELINE.');
+    setLiveActionPending(false);
+    if (ok) {
+      // Read AFTER resume. The render-scope `state` is the pre-action snapshot
+      // and previously produced a false DORMANT message after a successful
+      // handoff even when the plan covered today.
+      const refreshed = await fetchTimelineState();
+      const resumedState = refreshed.ok && refreshed.data ? refreshed.data : null;
+      if (!resumedState) {
+        showLiveActionFeedback(
+          'RESUME TIMELINE was accepted. Waiting for authoritative Timeline state.',
+        );
+      } else if (resumedState.inFestivalWindow === false) {
+        showLiveActionFeedback(
+          `Operator lease cleared, but “${resumedState.activePlan}” is outside its festival window.`,
+        );
+      } else if (resumedState.controller === 'manual') {
+        showLiveActionFeedback(
+          `“${resumedState.activePlan}” is enabled, but the engine still reports operator control. Check the Timeline alert above.`,
+        );
+      } else {
+        showLiveActionFeedback(
+          `Control returned to “${resumedState.activePlan}”. Timeline is resolving what should run now.`,
+        );
+      }
+      setOperatorView('live');
+    } else {
+      showLiveActionFeedback('RESUME TIMELINE was rejected. Check the Timeline alert above.');
+    }
+  }, [
+    actionsDisabled,
+    beginPriorityHandoff,
+    finishPriorityHandoff,
+    resume,
+    setAutopilot,
+    showLiveActionFeedback,
+    state?.activePlan,
+    state?.zoom,
+  ]);
+
+  const handlePausePlan = useCallback(async () => {
+    if (actionsDisabled || !state?.activePlan) return;
+    const confirmed = await opConfirm({
+      title: 'PAUSE ACTIVE PLAN?',
+      message: `Pause “${state.activePlan}” now? Its active cue/program ends and the operator keeps Deck output until RESUME TIMELINE NOW is pressed. The schedule will resume at the current time, not where it paused.`,
+      confirmLabel: 'PAUSE PLAN',
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setLiveActionPending(true);
+    showLiveActionFeedback(`Pausing “${state.activePlan}”…`);
+    const priorityAttempt = beginPriorityHandoff('PAUSE TIMELINE');
+    const ok = await setAutopilot(false);
+    finishPriorityHandoff(priorityAttempt, ok, ok ? null : 'The engine rejected PAUSE PLAN.');
+    setLiveActionPending(false);
+    showLiveActionFeedback(ok
+      ? `“${state.activePlan}” is paused. Operator control owns Deck output until RESUME TIMELINE NOW.`
+      : 'PAUSE PLAN was rejected. Check the Timeline alert above.');
+  }, [
+    actionsDisabled,
+    beginPriorityHandoff,
+    finishPriorityHandoff,
+    setAutopilot,
+    showLiveActionFeedback,
+    state?.activePlan,
+  ]);
+
+  const handleEndProgramConfirmed = useCallback(async () => {
+    if (actionsDisabled) return;
+    const confirmed = await opConfirm({
+      title: 'END ACTIVE PROGRAM?',
+      message: 'The running program ends immediately and Timeline resolves the live owner again.',
+      confirmLabel: 'END PROGRAM',
+      destructive: true,
+    });
+    if (confirmed) await handleEndProgram();
+  }, [actionsDisabled, handleEndProgram]);
+
+  const confirmAndFireManualCue = useCallback(async (cue: OverviewCue) => {
+    if (actionsDisabled) return;
+    // Close the native review/choice Modal BEFORE opening opConfirm. iOS does
+    // not reliably stack the app-wide confirmation host over an already-open
+    // native Modal; the old ordering made FIRE appear to do nothing.
+    setManualCue(null);
+    setBabyRevealOpen(false);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const protectedReveal = babyRevealConfirmation(cue.id);
+    const specialEventId = cue.action.type === 'special_event' ? cue.action.showId : null;
+    const babyReveal = specialEventId === 'baby_reveal';
+    const confirmed = await opConfirm(babyReveal ? {
+      title: 'START BABY REVEAL?',
+      message: 'This starts START TEASE on the live rig and opens the protected Baby Reveal controls.',
+      confirmLabel: 'START BABY REVEAL',
+      destructive: true,
+    } : protectedReveal ? {
+      title: protectedReveal.title,
+      message: protectedReveal.body,
+      confirmLabel: protectedReveal.confirmLabel,
+      destructive: true,
+    } : {
+      title: `FIRE ${cue.label.toUpperCase()}?`,
+      message: 'This ON DEMAND cue applies to the live rig immediately. It never auto-fires.',
+      confirmLabel: 'FIRE CUE',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    setEventBusy(true);
+    const ok = await handleFireCue(cue.id);
+    setEventBusy(false);
+    if (ok) {
+      if (specialEventId) {
+        opInfo(
+          `${cue.label.toUpperCase()} STARTED`,
+          'Opening Events for the remaining protected stages and choices.',
+        );
+        router.push('/special_events');
+      }
+    } else {
+      setEventActionError('The engine rejected the ON DEMAND cue.');
+      opWarn('ON DEMAND CUE FAILED', 'The engine rejected the cue. No Special Event was started.');
+    }
+  }, [actionsDisabled, handleFireCue]);
+
+  const handleLocalTravel = useCallback(async () => {
+    if (!travelDate || !travelResolve || actionsDisabled) return;
+    if (!travelCueId && !travelAdvancedOpen) return;
+    const prepared = await prepareSelectedPlanForRehearsal();
+    if (!prepared.ok) {
+      setTravelResolveError(prepared.error);
+      return;
+    }
+    if (travelCueId && !selectedTravelEntry) {
+      setTravelResolveError('The selected cue no longer exists in this operator day.');
+      return;
+    }
+    const exactResolveDate = selectedTravelEntry?.resolveDate
+      ?? timelineTravelResolveDateForOperatorTime(overview, travelDate, travelTime);
+    if (!exactResolveDate) {
+      setTravelResolveError('This target falls beyond the selected plan’s last operator day.');
+      return;
+    }
+    const spec: TimelineTravelSpec = selectedTravelEntry
+      ? {
+        cueId: selectedTravelEntry.cue.id,
+        date: selectedTravelEntry.resolveDate,
+        ...(prepared.planName ? { planName: prepared.planName } : {}),
+      }
+      : {
+        date: exactResolveDate,
+        time: travelTime,
+        ...(prepared.planName ? { planName: prepared.planName } : {}),
+      };
+    const targetLabel = selectedTravelEntry
+      ? `“${selectedTravelEntry.cue.label}” on ${travelDate}`
+      : `${travelDate} at ${travelTime}`;
+    const confirmed = await opConfirm({
+      title: 'ENTER TIME TRAVEL?',
+      message: `Run ${targetLabel} as NOW on the live rig. Timeline autopilot stays paused until RESUME LIVE.`,
+      confirmLabel: state?.zoom?.scope === 'travel' ? 'MOVE TIME TRAVEL' : 'RUN AS NOW',
+    });
+    if (!confirmed) return;
+    setTravelBusy(true);
+    const priorityAttempt = beginPriorityHandoff('TIME TRAVEL');
+    const outcome = await travel(spec);
+    finishPriorityHandoff(
+      priorityAttempt,
+      outcome.ok,
+      outcome.ok ? null : outcome.error,
+    );
+    setTravelBusy(false);
+    if (!outcome.ok) { setTravelResolveError(outcome.error); return; }
+    // Confirm the applied travel by naming exactly what the engine resolved,
+    // then hop to Deck so the operator sees the resulting look. The banner
+    // (ZoomBanner) remains the persistent proof of the active rehearsal.
+    const resolved = outcome.result.resolved;
+    const planLabel = outcome.result.rehearsingPlan ?? state?.activePlan ?? 'plan';
+    const appliedTarget = `${resolved.date} ${resolved.atLocal}`;
+    const ownerLabel = resolved.owner?.label ?? 'resolved baseline';
+    const applied = [resolved.playlist, resolved.palette].filter(Boolean).join(' · ');
+    opInfo(
+      'TIME TRAVEL APPLIED',
+      `${planLabel} → ${appliedTarget} · ${ownerLabel}${applied ? ` · ${applied}` : ''}`,
+    );
+    router.push('/');
+  }, [
+    actionsDisabled,
+    beginPriorityHandoff,
+    finishPriorityHandoff,
+    overview,
+    prepareSelectedPlanForRehearsal,
+    selectedTravelEntry,
+    state?.activePlan,
+    state?.zoom?.scope,
+    travel,
+    travelAdvancedOpen,
+    travelCueId,
+    travelDate,
+    travelResolve,
+    travelTime,
+  ]);
+
+  const pinkBabyCue = manualCues.find((cue) => cue.id === 'c_baby_reveal_pink') ?? null;
+  const blueBabyCue = manualCues.find((cue) => cue.id === 'c_baby_reveal_blue') ?? null;
+
+  const renderOperatorWorkspace = (body: React.ReactNode) => (
+    <>
+      <TimelineOperatorShell
+        state={state}
+        connected={connected}
+        syncAgeSec={syncAgeSec}
+        dayLabel={liveToday?.weekday ?? null}
+        alert={primaryAlert}
+        view={operatorView}
+        editDisabled={performanceMode.active}
+        travelDisabled={performanceMode.active}
+        onView={handleOperatorView}
+      >
+        {body}
+      </TimelineOperatorShell>
+
+      <PlanPickerSheet
+        visible={planPickerOpen}
+        plans={plans}
+        activePlan={state?.activePlan ?? null}
+        planActive={state?.planActive === true}
+        inFestivalWindow={state?.inFestivalWindow ?? null}
+        draftName={draft?.name ?? null}
+        onLoad={loadPlanIntoDraft}
+        onActivate={handleActivate}
+        onDuplicate={handleDuplicate}
+        onDelete={handleDeletePlan}
+        onNewTemplate={handleNewTemplate}
+        onNewBlank={handleNewBlank}
+        onClose={() => setPlanPickerOpen(false)}
+      />
+
+      {eventCue || eventMoment ? (
+        <EventSheet
+          cue={eventCue}
+          moment={eventMoment}
+          dayDate={eventResolve?.date ?? eventMoment?.date ?? selectedDayOverview?.date ?? null}
+          activeCueId={
+            eventResolve?.date === nowInTz?.dateKey
+              ? nowOwner.cueId
+              : null
+          }
+          planActive={state?.planActive}
+          inFestivalWindow={state?.inFestivalWindow}
+          resolve={eventResolve}
+          resolveError={eventResolveError}
+          resolvePending={eventResolvePending}
+          busy={eventBusy}
+          actionError={eventActionError}
+          actionsDisabled={actionsDisabled}
+          canEdit={operatorView === 'edit'
+            && !!draft
+            && !!eventCue
+            && (draft.cues ?? []).some((cue) => cue.id === eventCue.id)}
+          onPerform={() => { void handlePerform(); }}
+          onTravel={() => { void handleTravel(); }}
+          onEdit={() => {
+            if (!eventCue || operatorView !== 'edit') return;
+            const planCue = (draft?.cues ?? []).find((cue) => cue.id === eventCue.id);
+            closeEvent();
+            if (planCue) openEditCue(planCue);
+          }}
+          onClose={closeEvent}
+        />
+      ) : null}
+
+      <ManualCueReviewSheet
+        cue={manualCue}
+        busy={eventBusy}
+        disabled={actionsDisabled}
+        onClose={() => setManualCue(null)}
+        onFire={(cue) => { void confirmAndFireManualCue(cue); }}
+      />
+      <BabyRevealChoiceSheet
+        visible={babyRevealOpen}
+        pinkCue={pinkBabyCue}
+        blueCue={blueBabyCue}
+        disabled={actionsDisabled}
+        onChoose={(cue) => { void confirmAndFireManualCue(cue); }}
+        onClose={() => setBabyRevealOpen(false)}
+      />
+
+      {draft ? (
+        <CueEditorSheet
+          visible={cueSheetOpen}
+          initialCue={editingCue}
+          plan={draft}
+          playlists={playlists}
+          palettes={getCachedColorPalettes()}
+          dayIndex={selectedDay ?? 0}
+          onSave={handleSaveCue}
+          onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
+          onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}
+        />
+      ) : null}
+      {draft ? (
+        <CueEditorSheet
+          visible={defaultCueSheetOpen}
+          mode="defaultCue"
+          initialCue={null}
+          initialDefaultCue={draft.defaultCue ?? null}
+          plan={draft}
+          playlists={playlists}
+          palettes={getCachedColorPalettes()}
+          dayIndex={0}
+          onSave={handleSaveCue}
+          onSaveDefault={handleSaveDefaultCue}
+          onDelete={null}
+          onClose={() => setDefaultCueSheetOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+
+  if (operatorView === 'live') {
+    return renderOperatorWorkspace(
+      <TimelineLiveView
+        state={state}
+        nowOwner={nowOwner}
+        nextCues={nextCues}
+        manualCues={manualCues}
+        nowMs={nowTick}
+        actionsDisabled={actionsDisabled}
+        actionPending={liveActionPending}
+        actionFeedback={liveActionFeedback}
+        partyCard={(
+          <TimelinePartyCard
+            state={state}
+            connected={connected}
+            controlsLocked={performanceMode.active}
+          />
+        )}
+        onReviewCue={(cue, date) => openEvent(cue, date)}
+        onReviewManualCue={setManualCue}
+        onOpenBabyReveal={() => setBabyRevealOpen(true)}
+        onTakeover={() => { void handleTakeover(); }}
+        onPausePlan={() => { void handlePausePlan(); }}
+        onResumeLive={() => { void handleResumeLive(); }}
+        onEndProgram={() => { void handleEndProgramConfirmed(); }}
+      />,
+    );
+  }
+
+  if (operatorView === 'travel') {
+    return renderOperatorWorkspace(
+      <TimelineTravelView
+        overview={overview}
+        todayDate={nowInTz?.dateKey ?? null}
+        targetDate={travelDate}
+        targetTime={travelTime}
+        selectedCueId={travelCueId}
+        advancedOpen={travelAdvancedOpen}
+        resolved={travelResolve}
+        previewError={travelResolveError}
+        resolving={travelResolving}
+        busy={travelBusy}
+        actionsDisabled={actionsDisabled}
+        zoom={state?.zoom}
+        onTargetDate={handleTravelDate}
+        onTargetTime={setTravelTime}
+        onSelectCue={handleTravelCue}
+        onToggleAdvanced={handleToggleTravelAdvanced}
+        onTravel={() => { void handleLocalTravel(); }}
+        onResumeLive={() => { void handleResumeLive(); }}
+      />,
+    );
+  }
+
+  if (operatorView === 'calendar') {
+    return renderOperatorWorkspace(
+      zoomLevel === 'day' && selectedDayOverview ? (
+        <>
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { minHeight: 48, paddingHorizontal: 20 }]}
+              onPress={() => {
+                setOperatorView('edit');
+                if (!draft && state?.activePlan) void loadPlanIntoDraft(state.activePlan);
+              }}
+              disabled={performanceMode.active}
+              accessibilityRole="button"
+            >
+              <Text style={styles.miniBtnText}>EDIT THIS DAY</Text>
+            </TouchableOpacity>
+          </View>
+          <DayView
+            day={selectedDayOverview}
+            nextDay={selectedNextDayOverview}
+            dayCount={overview?.days.length ?? 0}
+            planCues={[]}
+            nowMinutes={nowMinutes}
+            nowDate={nowInTz?.dateKey ?? null}
+            activeCueId={
+              selectedDayOverview.date === nowInTz?.dateKey
+              || selectedNextDayOverview?.date === nowInTz?.dateKey
+                ? nowOwner.cueId
+                : null
+            }
+            canEdit={false}
+            showRibbon={false}
+            onBackToWeek={backToWeek}
+            onPrevDay={() => stepDay(-1)}
+            onNextDay={() => stepDay(1)}
+            onOpenEvent={openEvent}
+            onOpenMoment={openMoment}
+            onEditCue={() => undefined}
+            onDeleteCue={() => undefined}
+            onAddCue={() => undefined}
+          />
+        </>
+      ) : overview ? (
+        <View style={{ gap: 12 }}>
+          <Text style={[styles.sectionLabel, { fontSize: 18, color: C.text }]}>
+            {`SAVED PLAN · ${selectedPlanName ?? 'NO PLAN'} · WEEK OVERVIEW`}
+          </Text>
+          <Text style={[styles.helperLine, { fontSize: 16, lineHeight: 22 }]}>
+            Cue and empty-time taps open review first. Nothing on this calendar fires immediately.
+          </Text>
+          <DayOverviewStrip
+            days={overview.days}
+            todayIndex={todayIndex}
+            selectedIndex={selectedDay}
+            nowMinutes={nowMinutes}
+            onOpenDay={openDay}
+          />
+        </View>
+      ) : (
+        <Text style={styles.emptyHint}>No saved plan overview is available.</Text>
+      ),
+    );
+  }
+
+  if (operatorView === 'edit') {
+    return renderOperatorWorkspace(
+      <View
+        style={{ gap: 14, opacity: timelineDataStale ? 0.58 : 1 }}
+        pointerEvents={timelineDataStale ? 'none' : 'auto'}
+      >
+        <View style={[
+          {
+            minHeight: 72,
+            alignItems: 'center',
+            paddingHorizontal: 18,
+            paddingVertical: 12,
+            flexDirection: 'row',
+            gap: 12,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: C.ghostBorder,
+            backgroundColor: C.surfaceContainerLowest,
+          },
+        ]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>
+              EDIT PLAN · {draft?.name || 'NO DRAFT'}
+            </Text>
+            <Text style={styles.helperLine}>
+              Draft preview only. Autosave writes every valid change; there is no Save Draft button.
+            </Text>
+          </View>
+          <Text style={[styles.miniBtnText, { color: autoSaveTone }]}>
+            {autoSaveLabel}
+          </Text>
+          <TouchableOpacity
+            style={[styles.miniBtn, { minHeight: 48, paddingHorizontal: 18 }]}
+            onPress={() => setPlanPickerOpen(true)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.miniBtnText}>PLANS</Text>
+          </TouchableOpacity>
+        </View>
+
+        {zoomLevel === 'day' && selectedDayOverview ? (
+          <DayView
+            day={selectedDayOverview}
+            nextDay={selectedNextDayOverview}
+            dayCount={overview?.days.length ?? 0}
+            planCues={draft?.cues ?? []}
+            nowMinutes={nowMinutes}
+            nowDate={nowInTz?.dateKey ?? null}
+            activeCueId={
+              selectedDayOverview.date === nowInTz?.dateKey
+              || selectedNextDayOverview?.date === nowInTz?.dateKey
+                ? nowOwner.cueId
+                : null
+            }
+            canEdit={!!draft}
+            showRibbon={false}
+            onBackToWeek={backToWeek}
+            onPrevDay={() => stepDay(-1)}
+            onNextDay={() => stepDay(1)}
+            onOpenEvent={openEvent}
+            onOpenMoment={openMoment}
+            onEditCue={openEditCue}
+            onDeleteCue={handleDeleteCue}
+            onAddCue={openAddCue}
+          />
+        ) : (
+          <>
+            {festivalView ? (
+              <FestivalEditor
+                startDate={festivalView.startDate}
+                days={festivalView.days}
+                tz={festivalView.tz}
+                onSetStartDate={handleSetStartDate}
+                onAddDay={handleAddDay}
+                onRemoveDay={handleRemoveDay}
+                onSetTz={handleSetTz}
+              />
+            ) : null}
+            <TouchableOpacity
+              style={[
+                styles.miniBtn,
+                { minHeight: 52, alignSelf: 'flex-start', paddingHorizontal: 18 },
+                !draft && { opacity: 0.4 },
+              ]}
+              onPress={openEditDefaultCue}
+              disabled={!draft}
+              accessibilityRole="button"
+            >
+              <Text style={styles.miniBtnText}>EDIT DEFAULT CUE</Text>
+            </TouchableOpacity>
+            {overview ? (
+              <DayOverviewStrip
+                days={overview.days}
+                todayIndex={todayIndex}
+                selectedIndex={selectedDay}
+                nowMinutes={nowMinutes}
+                onOpenDay={openDay}
+              />
+            ) : (
+              <Text style={styles.emptyHint}>
+                {draft ? 'Previewing draft…' : 'Open PLANS to load or create a draft.'}
+              </Text>
+            )}
+          </>
+        )}
+      </View>,
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -1266,7 +2249,6 @@ function TimelineScreenContent() {
             <Text style={styles.nextCueText} numberOfLines={1}>
               {`next in ${formatCountdown(state.nextCue.inSec)} · ${state.nextCue.label}`}
             </Text>
-            {state.currentPhase ? <Text style={styles.phaseChip}>{`phase · ${state.currentPhase}`}</Text> : null}
           </View>
         ) : null}
 
@@ -1375,9 +2357,11 @@ function TimelineScreenContent() {
         {zoomLevel === 'day' && selectedDayOverview ? (
           <DayView
             day={selectedDayOverview}
+            nextDay={selectedNextDayOverview}
             dayCount={overview ? overview.days.length : 0}
             planCues={draft?.cues ?? []}
-            nowMinutes={selectedDayOverview.index === todayIndex ? nowMinutes : null}
+            nowMinutes={nowMinutes}
+            nowDate={nowInTz?.dateKey ?? null}
             // LIVE is a property of TODAY's occurrence, not of the cue id. The
             // same cue appears on every day it applies to; marking Thursday's
             // row live because today's instance is running would be a lie — and
@@ -1597,6 +2581,8 @@ function TimelineScreenContent() {
         visible={planPickerOpen}
         plans={plans}
         activePlan={state?.activePlan ?? null}
+        planActive={state?.planActive === true}
+        inFestivalWindow={state?.inFestivalWindow ?? null}
         draftName={draft?.name ?? null}
         onLoad={loadPlanIntoDraft}
         onActivate={handleActivate}
@@ -2023,7 +3009,7 @@ function PartyModeSection({
 
       {view && rows ? (
         <>
-          <Text style={styles.partySubLabel}>{`TRIGGER PLAYLIST (${view.availablePlaylists.length})`}</Text>
+          <Text style={styles.partySubLabel}>{`DETECTED PARTY PLAYLIST (${view.availablePlaylists.length})`}</Text>
           {view.availablePlaylists.length === 0 ? (
             <Text style={styles.cueError}>
               The engine reports no playlists — a party session would have nothing to run.

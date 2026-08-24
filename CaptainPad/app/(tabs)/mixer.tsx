@@ -20,6 +20,7 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 // through.
 import { LockableScrollView } from '@/components/ui/lockable_scroll_view';
 import { RigGlobals } from '@/components/RigGlobals';
+import { EFFECTS_STRIP_HOST_HEIGHT } from '@/components/global_effect_macros_logic';
 import { useLiveTouchCoordinator } from '@/components/live_touch_coordinator';
 import { mixerFocusMayActivate } from '@/utils/layer_settings';
 import {
@@ -34,7 +35,12 @@ import {
 import { engineEvents } from '@/utils/engineEvents';
 import { useActiveModel, useColorAutopilotFrame } from '@/hooks/useEngineState';
 import { ColorsWindow } from '@/components/deck/colors_window';
-import { setMidiActiveContext, setMidiFocus, useIsMidiFocused } from '@/hooks/useMidiControl';
+import {
+  setMidiActiveContext,
+  setMidiFocus,
+  useIsMidiFocused,
+  useMidiControllerConnected,
+} from '@/hooks/useMidiControl';
 import { MidiMapBadge, MidiMapPopover, useEntryMidiMappings, MIDI_VIOLET } from '@/components/MidiMap';
 import { KnobPill } from '@/components/ui/knob_pill';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
@@ -42,7 +48,7 @@ import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 import { CPCControls } from '@/components/CPCControls';
-import { useDeckWorkspace, DeckWorkspaceBar } from '@/components/deck/deck_workspace';
+import { useDeckWorkspace } from '@/components/deck/deck_workspace';
 import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import {
@@ -270,6 +276,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
   disabled?: boolean;
 }) {
   const C = usePalette();
+  const mftConnected = useMidiControllerConnected('mft');
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const playlistName = channel.playlist?.name ?? null;
@@ -365,7 +372,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           <ParamRow
             key={exp.id}
             dimmed={knobExcluded}
-            knobNumber={badge.mapped ? badge.knobNumber : null}
+            knobNumber={mftConnected && badge.mapped ? badge.knobNumber : null}
             name={niceLabel}
             status={(
               <>
@@ -471,6 +478,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
 const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange, hidden, workspaceLayout, onOpenSection, onCloseSection, channelCardTrack }: any) => {
   const C = usePalette();
+  const mftConnected = useMidiControllerConnected('mft');
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   // Orientation drives the strip body layout (QA round1 #2): in PORTRAIT the
@@ -1136,7 +1144,9 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
               per-channel only — the global shifter was removed 2026-07).
               The badge follows focus so it always sits
               on the control the knob is live on (push = reset this to 0°). */}
-          {isFocused ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 4 }} /> : null}
+          {isFocused && mftConnected
+            ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 4 }} />
+            : null}
           <Text style={[styles.labelCaps, { width: 52, fontSize: 10 }]}>HUE</Text>
           {/* QA round 10 fix #4: the swatch is now a CIRCLE (was a rounded
               square that mimicked the destructive Blackout/Invert chips and
@@ -3111,7 +3121,7 @@ export default function MixerScreen() {
           live; the channel ACTIVATION controls (fader/mute/solo/bump/params)
           are the only thing disabled (per ChannelStrip activationsLocked). The
           full red portwatch lockout stays in the tab layout. */}
-      <PlanLockBanner onTemporaryTakeOver={handleMixerTakeover} />
+      <PlanLockBanner surface="MIXER" onTemporaryTakeOver={handleMixerTakeover} />
       {/* ── Plan-lock content region ──────────────────────────────────
           Header + master strip + channel strips live inside this relative
           wrapper so the PlanLockScrim (bottom of the wrapper) hermetically
@@ -3309,15 +3319,6 @@ export default function MixerScreen() {
       <CPCControls
         screen="mixer"
         disabled={activationsLocked}
-        optimizerSlot={
-          <DeckWorkspaceBar
-            layout={deckWorkspace.layout}
-            onOpen={deckWorkspace.openWindow}
-            onClose={deckWorkspace.closeWindow}
-            perfActive={deckWorkspace.perfActive}
-            barsOnly={['audioBar']}
-          />
-        }
         hideAudioRow={!deckWorkspace.isBarShown('audioBar')}
         trailing={
           <TouchableOpacity
@@ -3364,6 +3365,9 @@ export default function MixerScreen() {
             channels={mixerBarChannels}
             onOpen={workspace.open}
             onClose={workspace.close}
+            audioBarOpen={deckWorkspace.isBarShown('audioBar')}
+            onAudioOpen={() => deckWorkspace.openWindow('audioBar')}
+            onAudioClose={() => deckWorkspace.closeWindow('audioBar')}
             perfActive={perfComposition}
             floorChannelId={floorChannelId}
           />
@@ -3750,6 +3754,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   return StyleSheet.create({
   container: {
     flex: 1,
+    minHeight: 0,
     backgroundColor: C.background,
   },
   header: {
@@ -3787,6 +3792,8 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   // width and floated it left; the inner GEM now sets flex:1 in
   // mixer-strip mode so it stretches edge-to-edge.
   globalRigBar: {
+    flexShrink: 0,
+    height: EFFECTS_STRIP_HOST_HEIGHT,
     backgroundColor: C.surfaceContainerLow,
     paddingHorizontal: 12,
     paddingTop: 4,

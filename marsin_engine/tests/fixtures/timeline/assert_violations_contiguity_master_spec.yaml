@@ -1,0 +1,9 @@
+# assert_violations_contiguity_master_spec.yaml — deliberately WRONG whitelist
+# for assert_violations_contiguity_master.yaml, to trigger class 2 findings:
+#   - c_ignition writes globals.master=0.8 but is NOT listed here (unwhitelisted writer)
+#   - c_nonexistent_cue is listed but no such cue exists (stale whitelist entry)
+#   - masterZeroCue is deliberately WRONG (c_ignition writes 0.8, not 0)
+#   - c_day_off actually writes master=0 but isn't named as masterZeroCue
+masterWriters:
+  - c_nonexistent_cue
+masterZeroCue: c_ignition

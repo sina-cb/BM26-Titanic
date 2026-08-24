@@ -365,6 +365,9 @@ export const CURATED_DECK_TOKENS: readonly string[] = [
   'energy',
 ];
 
+/** Number of live traces mounted by default on the Audio tab. */
+export const AUDIO_TAB_SUMMARY_SIGNAL_LIMIT = 4;
+
 /**
  * Whether `key` contains `token` as a discrete WORD SEGMENT — anchored to a
  * camelCase boundary or the key edges — rather than as a loose substring. This
@@ -407,4 +410,28 @@ export function curateDeckSignals(
     }
   }
   return out;
+}
+
+/**
+ * Choose the Audio tab's lightweight, always-mounted signal summary.
+ *
+ * Familiar LOW / MID / HIGH / KICK-style cues are promoted first, then the
+ * live schema's own order fills any remaining slots. Every returned descriptor
+ * came from the engine; no signal is invented. The full dynamic set is mounted
+ * only after the operator expands it.
+ */
+export function selectAudioTabSummarySignals(
+  signals: AudioSignalDescriptor[],
+  limit = AUDIO_TAB_SUMMARY_SIGNAL_LIMIT,
+): AudioSignalDescriptor[] {
+  if (!Number.isInteger(limit) || limit < 0) {
+    throw new Error(`Audio tab signal limit must be a non-negative integer: ${limit}`);
+  }
+
+  const preferred = curateDeckSignals(signals);
+  const preferredKeys = new Set(preferred.map((signal) => signal.key));
+  return [
+    ...preferred,
+    ...signals.filter((signal) => !preferredKeys.has(signal.key)),
+  ].slice(0, limit);
 }

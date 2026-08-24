@@ -1,0 +1,17 @@
+{
+  "name": "captain-midi",
+  "version": "0.1.0",
+  "description": "Local Expo module exposing iPadOS CoreMIDI to CaptainPad. Implements the frozen MidiTransport surface (listEndpoints / openSource / openDestination / send / midiMessage / endpointsChanged) directly against CoreMIDI, so the mapping/dispatch/LED stack in utils/midi/ runs unchanged over USB-C on the FoH iPad.",
+  "main": "src/index.ts",
+  "types": "src/index.d.ts",
+  "keywords": [
+    "expo",
+    "midi",
+    "coremidi",
+    "captainpad"
+  ],
+  "license": "SEE LICENSE IN ../../../LICENSE",
+  "author": "Titanic's End",
+  "homepage": "https://github.com/titanicend/BM26-Titanic",
+  "private": true
+}

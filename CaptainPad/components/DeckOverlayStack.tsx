@@ -50,8 +50,14 @@ import {
   DECK_OVERLAY_BLEND_MODES,
   type DeckOverlay,
   type DeckOverlayAutopilot,
+  type DeckOverlaySourceMode,
   type ViewSelection,
 } from '@/utils/deckOverlaysApi';
+import {
+  hexToHue,
+  hueToHex,
+  overlaySourceMode,
+} from '@/components/deck/overlay_source_logic';
 
 // ── View-selection helpers ─────────────────────────────────────────────────
 
@@ -141,12 +147,38 @@ const OverlayCard: React.FC<{
   // Local fader mirror for instant drag feedback; reconciled by the WS deck
   // broadcast (the parent re-renders this card with the engine value).
   const [faderLocal, setFaderLocal] = useState<number>(typeof overlay.fader === 'number' ? overlay.fader : 1);
+  const sourceMode = overlaySourceMode(overlay);
+  const [tintHueLocal, setTintHueLocal] = useState(hexToHue(overlay.playlistTint));
+  const [solidHueLocal, setSolidHueLocal] = useState(hexToHue(overlay.solidColor || '#FFFFFF'));
   useEffect(() => {
     if (typeof overlay.fader === 'number') setFaderLocal(overlay.fader);
   }, [overlay.fader]);
+  useEffect(() => {
+    if (overlay.playlistTint) setTintHueLocal(hexToHue(overlay.playlistTint));
+  }, [overlay.playlistTint]);
+  useEffect(() => {
+    setSolidHueLocal(hexToHue(overlay.solidColor || '#FFFFFF'));
+  }, [overlay.solidColor]);
 
   const enabled = overlay.enabled !== false;
   const viewLabel = viewSelectionLabel(overlay.viewSelection);
+  const faderTrackStyle = {
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: C.surfaceContainerHigh,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+  };
+  const faderThumbStyle = {
+    width: 12,
+    height: 22,
+    borderRadius: 6,
+    marginLeft: -6,
+    marginTop: -3,
+    backgroundColor: C.surfaceContainerLowest,
+    borderWidth: 2,
+    borderColor: C.borderStrong,
+  };
 
   const onPatch = useCallback(async (fields: Parameters<typeof patchDeckOverlay>[1], failTitle: string) => {
     const res = await patchDeckOverlay(overlay.id, fields);
@@ -169,6 +201,8 @@ const OverlayCard: React.FC<{
   return (
     <View
       style={{
+        width: '100%',
+        minWidth: 0,
         backgroundColor: C.surfaceContainerLowest,
         // `cardOnPanel` radius (docs/54 row 15) — the overlay cards are the
         // same kind of object as the DECK MAIN / autopilot cards.
@@ -187,75 +221,118 @@ const OverlayCard: React.FC<{
         overflow: 'hidden',
       }}
     >
-      {/* ── Collapsed one-line header ──────────────────────────────────── */}
-      <TouchableOpacity
-        onPress={onToggleExpand}
-        activeOpacity={0.7}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 9 }}
-      >
-        {/* Identity dot in the overlay's own accent — the accent is DATA
-            (operator-assigned per overlay), so it stays; only the shape moves
-            to the shared dot grammar (docs/54 row 15). */}
-        <View style={identityDot(accent, 10)} />
-        <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', fontSize: 11, color: C.text }} numberOfLines={1}>
-          {viewLabel}
-        </Text>
-        {/* Blend chip */}
-        <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: Radius.chip, backgroundColor: C.surfaceContainerHigh }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.5, color: C.secondary }}>{blendLabel(overlay.mode)}</Text>
+      {/* Header controls are SIBLINGS, never nested touchables. The old
+          one-line layout put title, blend, level, eye, remove and chevron in
+          one unshrinkable row; narrow iPad columns clipped the destructive
+          control first. This two-row header reserves fixed 36pt hit targets
+          for eye/remove/expand and lets only the title truncate. */}
+      <View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 10, paddingRight: 4, minWidth: 0 }}>
+          <TouchableOpacity
+            onPress={onToggleExpand}
+            activeOpacity={0.7}
+            style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9 }}
+            accessibilityRole="button"
+            accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${viewLabel} overlay`}
+          >
+            <View style={identityDot(accent, 10)} />
+            <Text
+              style={{ ...Type.labelCaps, textTransform: 'uppercase', fontSize: 11, color: C.text, flex: 1, minWidth: 0 }}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {viewLabel}
+            </Text>
+          </TouchableOpacity>
+          {/* Enable toggle (eye) — quick on/off without expanding. */}
+          <TouchableOpacity
+            onPress={() => onPatch({ enabled: !enabled }, 'Toggle failed')}
+            disabled={disabled}
+            style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.45 : 1 }}
+            accessibilityLabel={enabled ? 'Disable overlay' : 'Enable overlay'}
+            accessibilityRole="button"
+            accessibilityState={{ disabled }}
+          >
+            <IconSymbol name={enabled ? 'eye' : 'eye.slash'} size={16} color={enabled ? accent : C.icon} />
+          </TouchableOpacity>
+          {/* REMOVE owns a permanent, fixed-width seat. */}
+          <TouchableOpacity
+            onPress={() => setConfirmRemove(true)}
+            disabled={disabled || perfLocked}
+            style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', opacity: (disabled || perfLocked) ? 0.45 : 1 }}
+            accessibilityLabel="Remove overlay"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: disabled || perfLocked }}
+          >
+            <IconSymbol name="trash" size={16} color={C.error} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={onToggleExpand}
+            style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}
+            accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} overlay controls`}
+            accessibilityRole="button"
+          >
+            <IconSymbol name={expanded ? 'chevron.up' : 'chevron.down'} size={14} color={C.icon} />
+          </TouchableOpacity>
         </View>
-        <View style={{ flex: 1 }} />
-        {/* Fader readout */}
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary }}>
-          {Math.round(faderLocal * 100)}%
-        </Text>
-        {/* Enable toggle (eye) — quick on/off without expanding */}
         <TouchableOpacity
-          onPress={() => onPatch({ enabled: !enabled }, 'Toggle failed')}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          disabled={disabled}
+          onPress={onToggleExpand}
+          activeOpacity={0.7}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingBottom: 8, minWidth: 0 }}
         >
-          <IconSymbol name={enabled ? 'eye' : 'eye.slash'} size={16} color={enabled ? accent : C.icon} />
+          <View style={{ flexShrink: 1, paddingHorizontal: 6, paddingVertical: 2, borderRadius: Radius.chip, backgroundColor: C.surfaceContainerHigh }}>
+            <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8.5, letterSpacing: 0.4, color: C.secondary }}>
+              {sourceMode.toUpperCase()}
+            </Text>
+          </View>
+          <View style={{ flexShrink: 1, paddingHorizontal: 6, paddingVertical: 2, borderRadius: Radius.chip, backgroundColor: C.surfaceContainerHigh }}>
+            <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8.5, letterSpacing: 0.4, color: C.secondary }}>
+              {blendLabel(overlay.mode)}
+            </Text>
+          </View>
+          <View style={{ flex: 1 }} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary }}>
+            {sourceMode === 'solid' ? 'BRIGHTNESS' : 'LEVEL'} {Math.round(faderLocal * 100)}%
+          </Text>
         </TouchableOpacity>
-        {/* Remove overlay — always visible in the header (collapsed AND
-            expanded) so the operator can delete without expanding first.
-            Confirms via the ConfirmSheet below. Nested TouchableOpacity so the
-            tap removes rather than toggling the card's expand. */}
-        <TouchableOpacity
-          onPress={() => setConfirmRemove(true)}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          disabled={disabled || perfLocked}
-          style={perfLocked ? { opacity: 0.45 } : null}
-          accessibilityLabel="Remove overlay"
-          accessibilityRole="button"
-          accessibilityState={{ disabled: disabled || perfLocked }}
-        >
-          <IconSymbol name="xmark" size={15} color={C.error} />
-        </TouchableOpacity>
-        <IconSymbol name={expanded ? 'chevron.up' : 'chevron.down'} size={14} color={C.icon} />
-      </TouchableOpacity>
+      </View>
 
       {/* ── Expanded body ──────────────────────────────────────────────── */}
       {expanded && (
-        <View style={{ paddingHorizontal: 10, paddingBottom: 10, gap: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder }}>
-          {/* Row: view picker | blend picker | reorder | remove */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-            <TouchableOpacity
-              onPress={() => setShowViewPicker(true)}
-              disabled={disabled || perfLocked}
-              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh, opacity: perfLocked ? 0.45 : 1 }}
-              accessibilityState={{ disabled: disabled || perfLocked }}
-            >
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>VIEW: {viewLabel} ▾</Text>
-            </TouchableOpacity>
+        <View style={{ width: '100%', minWidth: 0, paddingHorizontal: 10, paddingBottom: 10, gap: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder }}>
+          {/* View gets its own full-width row: long named views may truncate,
+              but can never push blend/reorder outside the card. */}
+          <TouchableOpacity
+            onPress={() => setShowViewPicker(true)}
+            disabled={disabled || perfLocked}
+            style={{
+              marginTop: 8,
+              minWidth: 0,
+              paddingHorizontal: 10,
+              paddingVertical: 8,
+              borderRadius: Radius.control,
+              borderWidth: 1,
+              borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+              opacity: perfLocked ? 0.45 : 1,
+            }}
+            accessibilityState={{ disabled: disabled || perfLocked }}
+          >
+            <Text numberOfLines={1} ellipsizeMode="tail" style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.text }}>
+              VIEW · {viewLabel} ▾
+            </Text>
+          </TouchableOpacity>
+          {/* Blend and layer-order controls share a bounded row. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
             <TouchableOpacity
               onPress={() => setShowBlendPicker(true)}
               disabled={disabled}
-              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
+              style={{ flex: 1, minWidth: 0, paddingHorizontal: 10, paddingVertical: 8, borderRadius: Radius.control, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
             >
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>BLEND: {blendLabel(overlay.mode)} ▾</Text>
+              <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.text }}>
+                BLEND · {blendLabel(overlay.mode)} ▾
+              </Text>
             </TouchableOpacity>
-            <View style={{ flex: 1 }} />
             {/* Reorder up (toward top) / down (toward bottom). order[0]=bottom,
                 last=top — "up" in the visual stack means toward the TOP layer.
                 Reorder is handled by the parent (it owns the full ordered list). */}
@@ -263,7 +340,8 @@ const OverlayCard: React.FC<{
               onPress={() => onReorder(overlay.id, -1)}
               disabled={disabled || perfLocked || index === count - 1}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              style={{ padding: 6, opacity: (index === count - 1 || perfLocked) ? 0.3 : 1 }}
+              style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', opacity: (index === count - 1 || perfLocked) ? 0.3 : 1 }}
+              accessibilityLabel="Move overlay up"
             >
               <IconSymbol name="arrow.up" size={16} color={C.text} />
             </TouchableOpacity>
@@ -271,41 +349,182 @@ const OverlayCard: React.FC<{
               onPress={() => onReorder(overlay.id, 1)}
               disabled={disabled || perfLocked || index === 0}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              style={{ padding: 6, opacity: (index === 0 || perfLocked) ? 0.3 : 1 }}
+              style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', opacity: (index === 0 || perfLocked) ? 0.3 : 1 }}
+              accessibilityLabel="Move overlay down"
             >
               <IconSymbol name="arrow.down" size={16} color={C.text} />
             </TouchableOpacity>
-            {/* (Remove ✕ moved to the always-visible card header.) */}
           </View>
 
-          {/* Fader */}
+          {/* Explicit source selector. Switching to SOLID preserves the
+              playlist/entry/handle engine-side; switching back restores it. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, width: 54 }}>
+              SOURCE
+            </Text>
+            {(['playlist', 'solid'] as DeckOverlaySourceMode[]).map((mode) => {
+              const active = sourceMode === mode;
+              const activeTone = accentWash(active ? accent : C.primary);
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  onPress={() => onPatch({ sourceMode: mode }, 'Set source failed')}
+                  disabled={disabled || active}
+                  style={{
+                    paddingHorizontal: 11,
+                    paddingVertical: 7,
+                    borderRadius: Radius.control,
+                    borderWidth: 1,
+                    borderColor: active ? activeTone.borderColor : C.ghostBorder,
+                    backgroundColor: active ? activeTone.backgroundColor : C.surfaceContainerHigh,
+                    opacity: disabled ? 0.5 : 1,
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active, disabled: disabled || active }}
+                >
+                  <Text style={{ ...Type.microCaps, textTransform: 'uppercase', color: active ? activeTone.color : C.text }}>
+                    {mode}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Existing overlay fader is the source brightness in SOLID mode and
+              the blend level in PLAYLIST mode. */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, width: 44 }}>LEVEL</Text>
+            <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary, width: 72 }}>
+              {sourceMode === 'solid' ? 'BRIGHTNESS' : 'LEVEL'}
+            </Text>
             <View style={{ flex: 1 }}>
               <HorizontalFader
                 value={faderLocal}
                 onChange={(v: number) => setFaderLocal(v)}
                 onRelease={(v: number) => { setFaderLocal(v); onPatch({ fader: v }, 'Set level failed'); }}
-                fillStyle={{ backgroundColor: accent }}
+                trackStyle={faderTrackStyle}
+                fillStyle={{ height: '100%', borderRadius: 9, backgroundColor: accent }}
+                thumbStyle={faderThumbStyle}
               />
             </View>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(faderLocal * 100)}%</Text>
           </View>
 
-          {/* The overlay's own playlist + transport. role="deckOverlay"
-              dispatches the /deck/overlays/:id/playlist routes and reconciles
-              off the same `deck` WS message. */}
-          <View style={{ height: 230 }}>
-            <PlaylistPanel
-              channelId={overlay.id}
-              role="deckOverlay"
-              channelLabel={`OVERLAY · ${viewLabel}`}
-              compact
-              disabled={disabled}
-              initialAssignment={overlay.playlist || null}
-              playlistLibrary={playlistLibrary}
-            />
-          </View>
+          {sourceMode === 'solid' ? (
+            <View style={{ gap: 5 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary }}>
+                  SOLID HUE
+                </Text>
+                <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: hueToHex(solidHueLocal), borderWidth: 1, borderColor: C.borderStrong }} />
+                <View style={{ flex: 1 }} />
+                <Text numberOfLines={1} style={{ ...Type.microCaps, color: C.secondary }}>
+                  {hueToHex(solidHueLocal)}
+                </Text>
+              </View>
+              <HorizontalFader
+                value={solidHueLocal}
+                onChange={setSolidHueLocal}
+                onRelease={(hue: number) => {
+                  setSolidHueLocal(hue);
+                  onPatch({ solidColor: hueToHex(hue) }, 'Set solid color failed');
+                }}
+                trackStyle={faderTrackStyle}
+                fillStyle={{ height: '100%', borderRadius: 9, backgroundColor: hueToHex(solidHueLocal) }}
+                thumbStyle={faderThumbStyle}
+              />
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9.5, lineHeight: 13, color: C.secondary }}>
+                Solid replaces the main Deck only inside this overlay&apos;s selected view. Its playlist stays parked.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {/* Overlay-only playlist colorization. NATIVE / CLEAR removes
+                  entry metadata, so the pattern renders its authored colors. */}
+              <View style={{ gap: 5 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.secondary }}>
+                    COLOR
+                  </Text>
+                  <View style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 10,
+                    backgroundColor: overlay.playlistTint || C.surfaceContainerHigh,
+                    borderWidth: 1,
+                    borderColor: C.borderStrong,
+                  }} />
+                  <View style={{ flex: 1 }} />
+                  <TouchableOpacity
+                    onPress={() => onPatch({ playlistTint: null }, 'Clear overlay color failed')}
+                    disabled={disabled || overlay.playlistTint === null}
+                    style={{
+                      flexShrink: 1,
+                      paddingHorizontal: 8,
+                      paddingVertical: 7,
+                      borderRadius: Radius.control,
+                      borderWidth: 1,
+                      borderColor: C.ghostBorder,
+                      opacity: disabled || overlay.playlistTint === null ? 0.45 : 1,
+                    }}
+                  >
+                    <Text numberOfLines={1} style={{ ...Type.microCaps, color: C.text }}>NATIVE / CLEAR</Text>
+                  </TouchableOpacity>
+                </View>
+                <HorizontalFader
+                  value={tintHueLocal}
+                  onChange={setTintHueLocal}
+                  onRelease={(hue: number) => {
+                    setTintHueLocal(hue);
+                    onPatch({ playlistTint: hueToHex(hue) }, 'Set overlay color failed');
+                  }}
+                  trackStyle={faderTrackStyle}
+                  fillStyle={{ height: '100%', borderRadius: 9, backgroundColor: hueToHex(tintHueLocal) }}
+                  thumbStyle={faderThumbStyle}
+                />
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9.5, lineHeight: 13, color: C.secondary }}>
+                  Color is saved on this active playlist entry and affects Deck overlays only.
+                </Text>
+              </View>
+
+              {/* The overlay's own playlist + transport. */}
+              <View style={{ height: 230 }}>
+                <PlaylistPanel
+                  channelId={overlay.id}
+                  role="deckOverlay"
+                  channelLabel={`OVERLAY · ${viewLabel}`}
+                  compact
+                  disabled={disabled}
+                  initialAssignment={overlay.playlist || null}
+                  playlistLibrary={playlistLibrary}
+                />
+              </View>
+            </>
+          )}
+          {/* Redundant destructive affordance at the natural end of the edit
+              form. The fixed header seat remains available while scrolling;
+              this labeled button makes the action unmistakable in expanded
+              mode and cannot be clipped by a long view/playlist label. */}
+          <TouchableOpacity
+            onPress={() => setConfirmRemove(true)}
+            disabled={disabled || perfLocked}
+            style={{
+              minHeight: 40,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 7,
+              borderRadius: Radius.control,
+              borderWidth: 1,
+              borderColor: C.error,
+              opacity: (disabled || perfLocked) ? 0.45 : 1,
+            }}
+            accessibilityLabel="Remove overlay"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: disabled || perfLocked }}
+          >
+            <IconSymbol name="trash" size={15} color={C.error} />
+            <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: C.error }}>REMOVE OVERLAY</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -360,6 +579,7 @@ export const DeckOverlayStack: React.FC<{
   // Add flow: pick a view (required) then a playlist, then POST.
   const [showAdd, setShowAdd] = useState(false);
   const [addView, setAddView] = useState<ViewSelection | null>(null);
+  const [addSource, setAddSource] = useState<DeckOverlaySourceMode>('playlist');
   const [showAddViewPicker, setShowAddViewPicker] = useState(false);
 
   // Fetch the model's view options once (the picker reuses the same endpoint
@@ -414,14 +634,19 @@ export const DeckOverlayStack: React.FC<{
       opWarn('Pick a view', 'An overlay needs a specific view (a group or view mask) — it cannot target the whole rig.');
       return;
     }
-    // The engine requires a playlist OR pattern — the "DEFAULT" choice maps
-    // to the engine's `default` playlist (passing nothing is a 400). A named
-    // pick passes that name through.
     // Default new overlays to OVER blend (operator request 2026-06-29): an
     // overlay laid OVER the deck should, by default, replace what's under it
     // within its view rather than screen-brighten it. The operator can still
     // switch to SCREEN/ADD per overlay via the blend picker.
-    const res = await addDeckOverlay({ viewSelection: addView, playlist: playlist || 'default', mode: 'blend_over' });
+    const res = await addDeckOverlay({
+      viewSelection: addView,
+      sourceMode: addSource,
+      // A SOLID overlay parks the default playlist underneath so the operator
+      // can switch back to PLAYLIST without losing/reconstructing its source.
+      playlist: playlist || 'default',
+      mode: 'blend_over',
+      solidColor: '#FFFFFF',
+    });
     if (!res.ok) {
       const code = (res.data && res.data.code) as string | undefined;
       if (code === 'DECK_OVERLAY_VIEW_REQUIRED') {
@@ -440,27 +665,29 @@ export const DeckOverlayStack: React.FC<{
     const newId = (res.data && res.data.overlayId) as string | undefined;
     setShowAdd(false);
     setAddView(null);
+    setAddSource('playlist');
     if (newId) setExpandedId(newId);
-  }, [addView]);
+  }, [addSource, addView]);
 
   // The shared caps recipe (docs/54 §1.1) — this file used to restate it.
   const labelCaps = { ...Type.labelCaps, textTransform: 'uppercase' as const, color: C.secondary };
 
   return (
-    <View style={{ marginBottom: 12 }}>
+    <View style={{ width: '100%', minWidth: 0, marginBottom: 12 }}>
       {/* ── Shared header: OVERLAYS title + shared AUTO cadence + ADD ────── */}
       <View style={{ paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: Radius.card, backgroundColor: C.surfaceContainerLowest, borderWidth: 1, borderColor: C.ghostBorder, gap: 6, marginBottom: 8 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <View style={identityDot(C.tertiary)} />
           <Text style={labelCaps}>OVERLAYS</Text>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary }}>{overlays.length}/{DECK_OVERLAY_MAX}</Text>
-          <View style={{ flex: 1 }} />
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 6, minWidth: 0 }}>
           {/* SHARED auto-cycle (one unison clock for ALL overlays). */}
           <TouchableOpacity
             onPress={() => setAuto({ active: !overlayAutopilot.active })}
             disabled={disabled}
             style={[
-              { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: overlayAutopilot.active ? live.backgroundColor : 'transparent', paddingHorizontal: 10, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: overlayAutopilot.active ? live.borderColor : C.ghostBorder },
+              { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: overlayAutopilot.active ? live.backgroundColor : 'transparent', paddingHorizontal: 8, paddingVertical: 7, borderRadius: Radius.control, borderWidth: 1, borderColor: overlayAutopilot.active ? live.borderColor : C.ghostBorder },
               overlayAutopilot.active && { boxShadow: glowFor(C.tertiary) },
             ]}
           >
@@ -473,6 +700,7 @@ export const DeckOverlayStack: React.FC<{
             onPress={() => setAuto({ shuffle: !overlayAutopilot.shuffle })}
             disabled={disabled}
             style={{
+              flex: 1, minWidth: 0, justifyContent: 'center',
               flexDirection: 'row', alignItems: 'center', gap: 6,
               paddingHorizontal: 8, paddingVertical: 7,
               borderRadius: Radius.control, borderWidth: 1,
@@ -528,7 +756,7 @@ export const DeckOverlayStack: React.FC<{
         </Text>
       ) : (
         <TouchableOpacity
-          onPress={() => { setAddView(null); setShowAdd(true); }}
+          onPress={() => { setAddView(null); setAddSource('playlist'); setShowAdd(true); }}
           disabled={disabled || perfLocked}
           style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: Radius.control, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ghostBorder, opacity: (disabled || perfLocked) ? 0.5 : 1 }}
           accessibilityState={{ disabled: disabled || perfLocked }}
@@ -556,32 +784,77 @@ export const DeckOverlayStack: React.FC<{
                 {addView ? `VIEW: ${viewSelectionLabel(addView)}` : 'PICK A VIEW (required) ▾'}
               </Text>
             </TouchableOpacity>
-            {/* Step 2: pick a playlist (or default). Disabled until a view is set. */}
-            <Text style={[labelCaps, { fontSize: 9, marginTop: 4 }]}>PLAYLIST</Text>
-            <ScrollView style={{ maxHeight: 260 }}>
+            {/* Step 2: source. Solid needs no sacrificial pattern; playlist
+                mode keeps the existing playlist picker. */}
+            <Text style={[labelCaps, { fontSize: 9, marginTop: 4 }]}>SOURCE</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {(['playlist', 'solid'] as DeckOverlaySourceMode[]).map((mode) => {
+                const active = addSource === mode;
+                return (
+                  <TouchableOpacity
+                    key={mode}
+                    onPress={() => setAddSource(mode)}
+                    style={{
+                      flex: 1,
+                      alignItems: 'center',
+                      paddingVertical: 10,
+                      borderRadius: Radius.control,
+                      borderWidth: 1,
+                      borderColor: active ? C.primary : C.ghostBorder,
+                      backgroundColor: active ? on.backgroundColor : C.surfaceContainerHigh,
+                    }}
+                  >
+                    <Text style={{ ...Type.labelCaps, textTransform: 'uppercase', color: active ? on.color : C.text }}>
+                      {mode}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {addSource === 'solid' ? (
               <TouchableOpacity
-                onPress={() => handleAdd(undefined)}
+                onPress={() => handleAdd()}
                 disabled={!addView}
-                style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: Radius.control, opacity: addView ? 1 : 0.4 }}
+                style={{
+                  alignItems: 'center',
+                  paddingVertical: 12,
+                  borderRadius: Radius.control,
+                  borderWidth: 1,
+                  borderColor: C.primary,
+                  backgroundColor: on.backgroundColor,
+                  opacity: addView ? 1 : 0.4,
+                }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>DEFAULT</Text>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: on.color }}>
+                  ADD SOLID OVERLAY
+                </Text>
               </TouchableOpacity>
-              {/* Skip the playlist literally named "default" — the dedicated
-                  DEFAULT option above already represents it, so listing it
-                  again rendered a duplicate "DEFAULT" row. */}
-              {playlistLibrary
-                .filter((name) => name.toLowerCase() !== 'default')
-                .map((name) => (
-                <TouchableOpacity
-                  key={name}
-                  onPress={() => handleAdd(name)}
-                  disabled={!addView}
-                  style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: Radius.control, opacity: addView ? 1 : 0.4 }}
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>{name.toUpperCase()}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            ) : (
+              <>
+                <Text style={[labelCaps, { fontSize: 9, marginTop: 4 }]}>PLAYLIST</Text>
+                <ScrollView style={{ maxHeight: 220 }}>
+                  <TouchableOpacity
+                    onPress={() => handleAdd(undefined)}
+                    disabled={!addView}
+                    style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: Radius.control, opacity: addView ? 1 : 0.4 }}
+                  >
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>DEFAULT</Text>
+                  </TouchableOpacity>
+                  {playlistLibrary
+                    .filter((name) => name.toLowerCase() !== 'default')
+                    .map((name) => (
+                    <TouchableOpacity
+                      key={name}
+                      onPress={() => handleAdd(name)}
+                      disabled={!addView}
+                      style={{ paddingVertical: 11, paddingHorizontal: 8, borderRadius: Radius.control, opacity: addView ? 1 : 0.4 }}
+                    >
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>{name.toUpperCase()}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </>
+            )}
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>

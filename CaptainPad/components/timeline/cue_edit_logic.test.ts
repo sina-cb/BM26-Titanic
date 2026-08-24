@@ -11,14 +11,127 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { assembleCue, stripCueSizeGlobal } from './cue_edit_logic';
-import type { ActionPlaylist, PlanCue } from '../../utils/timelineApi';
+import {
+  assembleCue,
+  DEFAULT_CUE_COLOR_PALETTES,
+  DEFAULT_CUE_DURATION_MIN,
+  defaultCuePlaylistAction,
+  isPartyCueTrigger,
+  operatorDayToWireDay,
+  partyPlaylistActionForEditor,
+  planWithUpsertedCue,
+  programCueAutopilotError,
+  stripEmptyCuePalette,
+  stripCueSizeGlobal,
+  wireDayToOperatorDay,
+  wireDaysForOperatorDay,
+} from './cue_edit_logic';
+import type { ActionPlaylist, PlanCue, ShowPlan } from '../../utils/timelineApi';
 
 const playlistAction = (over: Partial<ActionPlaylist> = {}): ActionPlaylist => ({
   type: 'playlist',
   name: 'default',
   target: { channel: 'deck', id: null },
   ...over,
+});
+
+describe('new cue defaults', () => {
+  it('starts a safe 30-second program with the requested deck behavior', () => {
+    expect(DEFAULT_CUE_DURATION_MIN).toBe(0.5);
+    expect(defaultCuePlaylistAction()).toEqual({
+      type: 'playlist',
+      name: 'default',
+      target: { channel: 'deck', id: null },
+      autopilot: { active: true, delay_s: 30, shuffle: true },
+      transition: {
+        mode: 'trans_crossfade',
+        durationMs: 1000,
+        enabled: true,
+        shuffle: false,
+      },
+      colorAutopilot: {
+        active: true,
+        mode: 'palettes',
+        palettes: ['bass_drop', 'cyberpunk', 'phoenix'],
+        delay_s: 10,
+        shuffle: false,
+        transitionMs: 1000,
+      },
+      globals: { speed: 0.25, bpmSpeedSync: 0 },
+      overlays: 'disable',
+    });
+    expect(DEFAULT_CUE_COLOR_PALETTES).toEqual(['bass_drop', 'cyberpunk', 'phoenix']);
+  });
+
+  it('returns fresh nested values so edits cannot corrupt later defaults', () => {
+    const first = defaultCuePlaylistAction();
+    const second = defaultCuePlaylistAction();
+    first.autopilot!.shuffle = false;
+    first.colorAutopilot!.active = false;
+    expect(second.autopilot?.shuffle).toBe(true);
+    expect(second.colorAutopilot?.active).toBe(true);
+  });
+});
+
+describe('programCueAutopilotError', () => {
+  const candidate = (over: Partial<PlanCue> = {}): PlanCue => ({
+    id: 'c_new',
+    kind: 'program',
+    trigger: { type: 'clock', at: '20:00' },
+    action: playlistAction(),
+    ...over,
+  });
+
+  it('blocks a new deck program when pattern autopilot is absent or paused', () => {
+    expect(programCueAutopilotError(candidate())).toMatch(/AUTOPILOT PATTERNS ON/);
+    expect(programCueAutopilotError(candidate({
+      action: playlistAction({ autopilot: { active: false, delay_s: 30, shuffle: true } }),
+    }))).toMatch(/does not freeze/);
+  });
+
+  it('allows an active program, an ambient cue, or a disabled cue', () => {
+    expect(programCueAutopilotError(candidate({
+      action: playlistAction({ autopilot: { active: true, delay_s: 30, shuffle: true } }),
+    }))).toBeNull();
+    expect(programCueAutopilotError(candidate({ kind: 'ambient' }))).toBeNull();
+    expect(programCueAutopilotError(candidate({ enabled: false }))).toBeNull();
+  });
+});
+
+describe('isPartyCueTrigger', () => {
+  it('recognizes only the engine-compatible mood transition into party', () => {
+    expect(isPartyCueTrigger({
+      type: 'mood', from: 'calm', to: 'party', minDwellSec: 30, cooldownSec: 300,
+    })).toBe(true);
+    expect(isPartyCueTrigger({ type: 'mood', from: 'party', to: 'calm' })).toBe(false);
+    expect(isPartyCueTrigger({ type: 'manual' })).toBe(false);
+  });
+});
+
+describe('partyPlaylistActionForEditor', () => {
+  const legacyPartyCue: PlanCue = {
+    id: 'c_mood_to_party',
+    kind: 'mood',
+    trigger: { type: 'mood', from: 'calm', to: 'party' },
+    action: { type: 'look', look: 'party_high' },
+  };
+
+  it('preserves the playlist and palette resolved by a legacy PARTY look', () => {
+    expect(partyPlaylistActionForEditor(legacyPartyCue, {
+      party_high: { playlist: 'party_high', palette: 'bass_drop' },
+    })).toEqual({
+      type: 'playlist',
+      name: 'party_high',
+      palette: 'bass_drop',
+      target: { channel: 'deck', id: null },
+    });
+  });
+
+  it('fails loudly instead of silently choosing a fallback playlist', () => {
+    expect(() => partyPlaylistActionForEditor(legacyPartyCue, {
+      party_high: { palette: 'bass_drop' },
+    })).toThrow(/without a playlist/);
+  });
 });
 
 describe('stripCueSizeGlobal', () => {
@@ -53,6 +166,22 @@ describe('stripCueSizeGlobal', () => {
     const action = playlistAction({ globals: { speed: 0.3, size: 0.7 } });
     stripCueSizeGlobal(action);
     expect(action.globals).toEqual({ speed: 0.3, size: 0.7 });
+  });
+});
+
+describe('stripEmptyCuePalette', () => {
+  it('omits an empty legacy palette instead of submitting an invalid optional field', () => {
+    const action = playlistAction({ palette: '   ' });
+    const out = stripEmptyCuePalette(action) as ActionPlaylist;
+    expect('palette' in out).toBe(false);
+    expect(action.palette).toBe('   ');
+  });
+
+  it('preserves a selected palette and leaves non-playlist actions alone', () => {
+    const selected = playlistAction({ palette: 'bass_drop' });
+    expect(stripEmptyCuePalette(selected)).toBe(selected);
+    const globalsAction = { type: 'globals' as const, set: { master: 1 } };
+    expect(stripEmptyCuePalette(globalsAction)).toBe(globalsAction);
   });
 });
 
@@ -151,6 +280,24 @@ describe('assembleCue — everything else', () => {
     expect((out.action as ActionPlaylist).globals).toEqual({ speed: 0.4, bpmSpeedSync: 0 });
   });
 
+  it('sheds an empty legacy palette on the way OUT', () => {
+    const legacy: PlanCue = {
+      id: 'c_empty_palette',
+      trigger: { type: 'manual' },
+      action: playlistAction({ palette: '' }),
+    };
+    const out = assembleCue({
+      initial: legacy,
+      kind: 'program',
+      trigger: legacy.trigger,
+      action: legacy.action,
+      days: 'all',
+      label: '',
+      durationMin: 60,
+    });
+    expect('palette' in (out.action as ActionPlaylist)).toBe(false);
+  });
+
   it('trims the label, dropping an all-whitespace one', () => {
     const base = {
       initial: null,
@@ -176,5 +323,98 @@ describe('assembleCue — everything else', () => {
     });
     expect(out.durationMin).toBe(15);
     expect(out.id).toBe(''); // parent mints ids
+  });
+});
+
+describe('6 PM operator-day mapping', () => {
+  it('rolls morning clock cues onto the next wire day, leaves evening cues put', () => {
+    // 3 AM cue authored on operator day 0 → wire day 1 (festival morning of day 1).
+    expect(operatorDayToWireDay(0, '03:00')).toBe(1);
+    // 5:59 PM is still the morning half of the operator day → next wire day.
+    expect(operatorDayToWireDay(2, '17:59')).toBe(3);
+    // 6:00 PM is exactly the operator-day boundary → stays on the same wire day.
+    expect(operatorDayToWireDay(2, '18:00')).toBe(2);
+    // 11:30 PM stays on the same wire day.
+    expect(operatorDayToWireDay(4, '23:30')).toBe(4);
+  });
+
+  it('leaves non-clock cues on their operator day (sun/phase/manual)', () => {
+    expect(operatorDayToWireDay(3, null)).toBe(3);
+    expect(operatorDayToWireDay(3, undefined)).toBe(3);
+    expect(operatorDayToWireDay(3, '')).toBe(3);
+    // Malformed clock strings are treated as no-anchor rather than crashing.
+    expect(operatorDayToWireDay(3, 'nope')).toBe(3);
+  });
+
+  it('round-trips deserialization back to the operator day the operator selected', () => {
+    // 3 AM stored on wire day 1 belongs to operator day 0's calendar card.
+    expect(wireDayToOperatorDay(1, '03:00')).toBe(0);
+    expect(wireDayToOperatorDay(3, '17:59')).toBe(2);
+    expect(wireDayToOperatorDay(2, '18:00')).toBe(2);
+    expect(wireDayToOperatorDay(2, '20:00')).toBe(2);
+    expect(wireDayToOperatorDay(0, '03:00')).toBeNull(); // no operator day owns it
+  });
+
+  it('flags an overflow when the last operator day rolls past the festival span', () => {
+    // Festival with 3 days [0,1,2]: a 9 AM cue on operator day 2 needs wire
+    // day 3 which doesn't exist → surface loudly instead of dropping the cue.
+    const overflow = wireDaysForOperatorDay(2, '09:00', 3);
+    expect(overflow.wireDays).toEqual([]);
+    expect(overflow.overflowError).toMatch(/rolls past the last festival day/);
+  });
+
+  it('emits the correct wire-day array for a legal morning or evening cue', () => {
+    expect(wireDaysForOperatorDay(0, '20:00', 8)).toEqual({
+      wireDays: [0],
+      overflowError: null,
+    });
+    expect(wireDaysForOperatorDay(0, '09:00', 8)).toEqual({
+      wireDays: [1],
+      overflowError: null,
+    });
+    expect(wireDaysForOperatorDay(4, null, 8)).toEqual({
+      wireDays: [4],
+      overflowError: null,
+    });
+  });
+});
+
+describe('planWithUpsertedCue — validation candidate', () => {
+  const plan: ShowPlan = {
+    schemaVersion: 2,
+    name: 'test',
+    location: { lat: 0, lon: 0, tz: 'UTC' },
+    festival: { startDate: '2026-08-30', days: 1 },
+    autopilot: { enabled: true, delay_s: 30, shuffle: false },
+    phases: {},
+    looks: {},
+    cues: [
+      {
+        id: 'c_old',
+        trigger: { type: 'manual' as const },
+        action: playlistAction(),
+      },
+    ],
+  };
+
+  it('adds a cue to a new plan object without touching the draft', () => {
+    const added = {
+      id: 'c_new',
+      trigger: { type: 'manual' as const },
+      action: playlistAction(),
+    } as PlanCue;
+    const candidate = planWithUpsertedCue(plan, added);
+
+    expect(candidate).not.toBe(plan);
+    expect(candidate.cues.map((cue) => cue.id)).toEqual(['c_old', 'c_new']);
+    expect(plan.cues.map((cue) => cue.id)).toEqual(['c_old']);
+  });
+
+  it('replaces by id and rejects an unminted cue', () => {
+    const edited = { ...plan.cues[0], label: 'Edited' } as PlanCue;
+    expect(planWithUpsertedCue(plan, edited).cues).toEqual([edited]);
+    expect(() => planWithUpsertedCue(plan, { ...edited, id: '' })).toThrow(
+      'A cue must have an id before plan validation.',
+    );
   });
 });

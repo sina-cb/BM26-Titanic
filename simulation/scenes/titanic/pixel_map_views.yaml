@@ -104,8 +104,8 @@ views:
         dx: 48
         dy: -16
       Left_Back_Left:
-        dx: 8
-        dy: -24
+        dx: 48
+        dy: -8
       Left Small SmokeStack 1:
         dx: 64
         dy: 16

@@ -18,19 +18,19 @@
  *     pad A's performance),
  *   • the EXIT button here — available on EVERY client, including one that
  *     never zoomed,
- *   • lease expiry (the presence pings below stop when this banner unmounts),
+ *   • lease expiry after two minutes without a real app touch,
  *   • engine restart / autopilot OFF / plan save — engine-side lease clears.
  *
  * Second CaptainPads see the same banner because it renders off the shared
  * `timelineState` broadcast: nobody can walk up to a pad and not know.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
-  useTimeline, useZoomPresence, zoomEnteredHere, zoomExitRequested, clearZoomClaims,
+  useTimeline, zoomEnteredHere, zoomExitRequested, clearZoomClaims,
 } from '@/hooks/useTimeline';
 import { shadow } from '@/styles/globalStyles';
 import { zoomBannerModel, shouldAnnounceZoomEnd } from './zoom_logic';
@@ -41,6 +41,7 @@ const AMBER = '#f5a623';
 
 // How long the "zoom ended without you asking" notice stays up.
 const ENDED_TOAST_MS = 6000;
+const TRAVEL_EXPANDED_MS = 7000;
 
 export const ZoomBanner: React.FC = () => {
   const C = usePalette();
@@ -48,19 +49,42 @@ export const ZoomBanner: React.FC = () => {
   const { state, resume, travel, enableProgram } = useTimeline();
   const zoom = state?.zoom ?? null;
   const model = useMemo(() => zoomBannerModel(zoom), [zoom]);
-
-  // PRESENCE, not touch (_94 §3.2): while this banner is mounted with a live
-  // zoom we ping /timeline/activity every ~30 s, so a performer watching the rig
-  // hands-off doesn't lose the lease mid-performance. The pings die with the
-  // banner — a backgrounded app / dead iPad / dropped WiFi still hands the ship
-  // back within the 120 s lease.
-  useZoomPresence(!!zoom);
+  const modelTone = model?.tone ?? null;
+  const modelDeferredText = model?.deferredText ?? null;
+  const [expanded, setExpanded] = useState(true);
+  const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleTravelCollapse = useCallback(() => {
+    if (collapseTimer.current) clearTimeout(collapseTimer.current);
+    collapseTimer.current = setTimeout(() => {
+      setExpanded(false);
+      collapseTimer.current = null;
+    }, TRAVEL_EXPANDED_MS);
+  }, []);
+  useEffect(() => {
+    if (!modelTone) return;
+    setExpanded(true);
+    if (modelTone === 'travel' && !modelDeferredText) scheduleTravelCollapse();
+    return () => {
+      if (collapseTimer.current) {
+        clearTimeout(collapseTimer.current);
+        collapseTimer.current = null;
+      }
+    };
+  }, [
+    modelDeferredText,
+    modelTone,
+    scheduleTravelCollapse,
+    zoom?.cueId,
+    zoom?.targetDate,
+    zoom?.targetLocal,
+  ]);
 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (errorTimer.current) clearTimeout(errorTimer.current); }, []);
   const flashError = (msg: string) => {
+    setExpanded(true);
     setActionError(msg);
     if (errorTimer.current) clearTimeout(errorTimer.current);
     errorTimer.current = setTimeout(() => setActionError(null), 5000);
@@ -112,6 +136,29 @@ export const ZoomBanner: React.FC = () => {
 
   const accent = model.tone === 'perform' ? GREEN : PURPLE;
 
+  if (!expanded) {
+    return (
+      <View style={[styles.wrap, styles.wrapCompact]} pointerEvents="box-none">
+        <TouchableOpacity
+          style={[styles.compactChip, { borderColor: accent }]}
+          onPress={() => {
+            setExpanded(true);
+            scheduleTravelCollapse();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`${model.title}. Expand Time Travel controls`}
+        >
+          <Text style={[styles.glyph, { color: accent }]}>🕰</Text>
+          <Text style={[styles.compactTitle, { color: accent }]}>TIME TRAVEL</Text>
+          <Text style={styles.compactDetail} numberOfLines={1}>
+            {zoom?.label || zoom?.targetLocal || 'SAVED SNAPSHOT'}
+          </Text>
+          <Text style={[styles.compactExpand, { color: accent }]}>EXPAND</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   const onExit = async () => {
     setBusy(true);
     const ok = await resume();
@@ -123,9 +170,9 @@ export const ZoomBanner: React.FC = () => {
     setBusy(true);
     // The engine 400s at the first/last event of the day with a named message
     // ("no prev event on 2026-09-04") — it never clamps, and neither do we.
-    const err = await travel({ step });
+    const outcome = await travel({ step });
     setBusy(false);
-    if (err) flashError(err);
+    if (!outcome.ok) flashError(outcome.error);
   };
 
   const onEnableDeferred = async () => {
@@ -164,6 +211,16 @@ export const ZoomBanner: React.FC = () => {
             </>
           ) : null}
 
+          {model.tone === 'travel' ? (
+            <TouchableOpacity
+              onPress={() => setExpanded(false)}
+              disabled={busy}
+              style={[styles.minimizeBtn, { borderColor: accent }, busy && { opacity: 0.5 }]}
+              accessibilityLabel="Minimize the Time Travel reminder"
+            >
+              <Text style={[styles.minimizeBtnText, { color: accent }]}>MINIMIZE</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity
             onPress={() => { void onExit(); }}
             disabled={busy}
@@ -214,6 +271,9 @@ function makeStyles(C: Palette) {
       paddingTop: 8,
       paddingHorizontal: 10,
     },
+    wrapCompact: {
+      alignItems: 'flex-end',
+    },
     strip: {
       borderRadius: 12,
       borderWidth: 2,
@@ -222,6 +282,35 @@ function makeStyles(C: Palette) {
       gap: 6,
       boxShadow: shadow(0, 6, 18, '#000', 0.3),
       elevation: 9,
+    },
+    compactChip: {
+      minHeight: 44,
+      maxWidth: 390,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      borderRadius: 22,
+      borderWidth: 2,
+      backgroundColor: C.surfaceContainerHigh,
+      paddingHorizontal: 14,
+      boxShadow: shadow(0, 4, 14, '#000', 0.3),
+      elevation: 9,
+    },
+    compactTitle: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      letterSpacing: 1,
+    },
+    compactDetail: {
+      flexShrink: 1,
+      fontFamily: 'Inter_600SemiBold',
+      fontSize: 12,
+      color: C.text,
+    },
+    compactExpand: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 0.8,
     },
     mainRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     glyph: { fontSize: 18 },
@@ -238,6 +327,19 @@ function makeStyles(C: Palette) {
       alignItems: 'center', justifyContent: 'center',
     },
     stepBtnText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14 },
+    minimizeBtn: {
+      minHeight: 36,
+      borderRadius: 8,
+      borderWidth: 1.5,
+      paddingHorizontal: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    minimizeBtnText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 0.8,
+    },
     exitBtn: {
       paddingHorizontal: 16, minHeight: 36, borderRadius: 8,
       alignItems: 'center', justifyContent: 'center',

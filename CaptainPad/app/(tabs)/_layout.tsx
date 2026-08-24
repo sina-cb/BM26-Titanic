@@ -11,6 +11,7 @@ import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
 import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
 import { PendingProgramOverlay } from '@/components/timeline/PendingProgramOverlay';
 import { ZoomBanner } from '@/components/timeline/ZoomBanner';
+import { TimelineLeaseActivitySurface } from '@/components/timeline/timeline_lease_activity_surface';
 import { TakeoverPasscodeHost } from '@/components/takeover_passcode_host';
 import { OpDialogHost } from '@/components/op_dialog_host';
 import { opError } from '@/utils/op_dialog';
@@ -22,16 +23,23 @@ import {
 import { layerSettingForRoute } from '@/utils/layer_settings';
 import { PerformanceModeControl } from '@/components/PerformanceModeControl';
 import { EditSessionChip } from '@/components/edit_session_chip';
-import { ColorModeChip } from '@/components/ui/color_mode_chip';
+import { DeckGlobalStatus } from '@/components/ui/deck_global_status';
+import { editSessionChip as editSessionChipModel } from '@/components/performance_mode_logic';
 import { usePerformanceMode, usePerformanceModeReady } from '@/hooks/usePerformanceMode';
 import { useSpatialFullscreen } from '@/hooks/use_spatial_fullscreen';
 import {
+  captainPadRailOrder,
   captainPadRailRouteName,
   captainPadTabOptions,
+  CAPTAINPAD_DEFAULT_TAB,
   isCaptainPadRailTab,
   isCaptainPadTabVisible,
   performanceNavigationLocked as performanceNavigationLockedFor,
 } from '@/utils/captainpad_tab_policy';
+
+export const unstable_settings = {
+  initialRouteName: CAPTAINPAD_DEFAULT_TAB,
+};
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
   const palette = usePalette();
@@ -40,8 +48,15 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
      open (docs/60 §4.5). The rail stands down — style/tree only; the Live
      Touch screen and its WebView never move. */
   const spatialFullscreen = useSpatialFullscreen();
-  const { active: globalPerformanceActive, engineOffline } = usePerformanceMode();
+  const {
+    active: globalPerformanceActive,
+    engineOffline,
+    editPrincipal,
+    authRequired,
+  } = usePerformanceMode();
   const performanceModeReady = usePerformanceModeReady();
+  const editSessionVisible = performanceModeReady
+    && editSessionChipModel(editPrincipal, globalPerformanceActive, authRequired) !== null;
   /* ONE shared rule with performance_route_guard.tsx — see
      performanceNavigationLocked(). Offline it follows the presented face so the
      operator can always exit the lock and reach CONFIG (report `_283`). */
@@ -58,6 +73,8 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
   const visibleRoutes = state.routes.filter((route: any) => (
     isCaptainPadRailTab(route.name)
     && isCaptainPadTabVisible(route.name, performanceNavigationLocked)
+  )).sort((left: any, right: any) => (
+    captainPadRailOrder(left.name) - captainPadRailOrder(right.name)
   ));
   const focusedRailRoute = currentRoute ? captainPadRailRouteName(currentRoute.name) : null;
 
@@ -196,19 +213,15 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
           Global mode
         </Text>
         <PerformanceModeControl isPortrait />
-        {/* Edit-session identity (docs/56 D8). Renders NOTHING for an owner
-            session, while the show lock is on, or on an auth-disabled bench —
-            it appears only when the engine is NOT saving what this pad does,
-            which is exactly the state that must never be silent. */}
+        {/* PERF owns row one. Row two is one persistent, auto-scrolling status
+            viewport: the edit-session warning and every active Deck-global chip
+            share it, so this rail can never grow past two rows total. */}
         <View style={{ marginTop: 8 }}>
-          <EditSessionChip />
-        </View>
-        {/* App-wide colour-mode chip (docs/61 §4.4, W4). Renders NOTHING
-            while no colour rotation/follow-note daemon is driving — it
-            appears on every tab the instant one is, naming the family that
-            used to change colours on the Mixer with no visible cause. */}
-        <View style={{ marginTop: 8 }}>
-          <ColorModeChip />
+          <DeckGlobalStatus
+            maxRows={1}
+            leadingKey="edit-session"
+            leading={editSessionVisible ? <EditSessionChip /> : null}
+          />
         </View>
       </View>
     </View>
@@ -225,20 +238,34 @@ export default function TabLayout() {
   return (
     <RigProvider>
       <LiveTouchCoordinatorProvider>
-        <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }}>
+        <TimelineLeaseActivitySurface>
+          <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }}>
         <Tabs
+          initialRouteName={CAPTAINPAD_DEFAULT_TAB}
+          // iOS Fabric + Reanimated 4.1 can recurse through a detached tab's
+          // removal mutations and abort in LayoutAnimationsProxy. Keeping
+          // inactive screens attached avoids that native deletion path while
+          // preserving Expo Router/EAS as the sole source of the iOS project.
+          detachInactiveScreens={false}
           tabBar={(props) => <CustomSideBar {...props} />}
           screenOptions={{
             headerShown: false,
             // Shifts the screens to the right of the sidebar — except while the
             // Live Touch spatial surface has the whole pad.
             sceneStyle: {
+              flex: 1,
+              minHeight: 0,
               marginLeft: spatialFullscreen ? 0 : 112,
               backgroundColor: palette.background,
             },
           }}>
-          {/* Layer settings share one transition router. Deck and Mixer take
-              over on tab selection; Live Touch only takes over after ARM. */}
+          <Tabs.Screen
+            name="timeline"
+            options={captainPadTabOptions('timeline') as any}
+          />
+          {/* Default live controls. Layer settings share one transition
+              router: Deck and Mixer take over on tab selection; Live Touch
+              only takes over after ARM. */}
           <Tabs.Screen
             name="index"
             options={captainPadTabOptions('index') as any}
@@ -252,33 +279,19 @@ export default function TabLayout() {
             options={captainPadTabOptions('touch_control') as any}
           />
           <Tabs.Screen
-            name="studio"
-            options={captainPadTabOptions('studio') as any}
-          />
-          <Tabs.Screen
             name="audio"
             options={captainPadTabOptions('audio') as any}
+          />
+          {/* SPECIAL EVENTS (docs/52): staged one-button shows. It is still a
+              PERFORMANCE surface and stays visible in performance mode
+              alongside Timeline/Deck/Mixer/Live Touch. */}
+          <Tabs.Screen
+            name="special_events"
+            options={captainPadTabOptions('special_events') as any}
           />
           <Tabs.Screen
             name="simulation"
             options={captainPadTabOptions('simulation') as any}
-          />
-          <Tabs.Screen
-            name="osc"
-            options={captainPadTabOptions('osc') as any}
-          />
-          <Tabs.Screen
-            name="timeline"
-            options={captainPadTabOptions('timeline') as any}
-          />
-          {/* SPECIAL EVENTS (docs/52): staged one-button shows. Sits directly
-              under TIMELINE in the sidebar (operator ruling 2026-08-14) — the
-              two are the show-authoring pair. It is still a PERFORMANCE
-              surface and stays visible in performance mode alongside
-              Deck/Mixer/Live Touch (see captainpad_tab_policy). */}
-          <Tabs.Screen
-            name="special_events"
-            options={captainPadTabOptions('special_events') as any}
           />
           <Tabs.Screen
             name="scheduler"
@@ -289,8 +302,20 @@ export default function TabLayout() {
             options={captainPadTabOptions('dimmer_rack') as any}
           />
           <Tabs.Screen
+            name="studio"
+            options={captainPadTabOptions('studio') as any}
+          />
+          <Tabs.Screen
             name="midi"
             options={captainPadTabOptions('midi') as any}
+          />
+          <Tabs.Screen
+            name="bike_link"
+            options={captainPadTabOptions('bike_link') as any}
+          />
+          <Tabs.Screen
+            name="osc"
+            options={captainPadTabOptions('osc') as any}
           />
           <Tabs.Screen
             name="config"
@@ -328,7 +353,8 @@ export default function TabLayout() {
             unmount mid-message. Renders nothing until something is raised.
             LAST in the tree so its Modal wins over the banners above. */}
         <OpDialogHost />
-        </SafeAreaView>
+          </SafeAreaView>
+        </TimelineLeaseActivitySurface>
       </LiveTouchCoordinatorProvider>
     </RigProvider>
   );

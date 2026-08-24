@@ -13,7 +13,7 @@ import { fetchWithTimeout, ApiResult } from './api';
 import { TAKEOVER_PASSCODE_HEADER } from './edit_session';
 import { clearOperatorAuthOnRefusal, operatorAuthHeaders } from './operator_auth';
 import type { OperatorAuthSendInput } from './takeover_passcode';
-import type { ColorPaletteEntry } from './api';
+import type { ColorPaletteEntry, DeckFollowNoteConfig } from './api';
 
 // ── Wire types (the engine /timeline contract, docs/38 §7 + §14) ───────
 
@@ -135,6 +135,12 @@ export interface TimelineZoom {
   /** Travel only — the target's calendar date "YYYY-MM-DD" in the plan tz. */
   targetDate: string | null;
   pendingDeferred: TimelineZoomPendingDeferred | null;
+  /**
+   * Travel only — the name of a NAMED saved plan the operator is rehearsing.
+   * `null` (or absent) means the operator is time-travelling against the
+   * active plan. CaptainPad badges "REHEARSING <plan>" when set.
+   */
+  rehearsingPlan?: string | null;
 }
 
 // armed = the plan drives the rig; overridden = an operator TEMPORARY TAKE OVER
@@ -169,6 +175,14 @@ export interface TimelineSequenceResult {
   endedAtMs: number;
   completedSteps: number;
   totalSteps: number;
+}
+
+export interface TimelinePlanWarning {
+  code: string;
+  severity: 'error' | 'warning' | string;
+  cueId: string | null;
+  look: string | null;
+  message: string;
 }
 
 export interface TimelineState {
@@ -223,8 +237,13 @@ export interface TimelineState {
   // it, and the Audio tab's PARTY MODE card then reads the REST config
   // instead (both are the same server truth, not a guessed default).
   partyEnabled?: boolean;
+  partyPlaylist?: string;
   // Seconds until another party session may trigger; absent/0 when clear.
   partyCooldownRemainingSec?: number;
+  // Mood-input health is engine-owned. Stale means party detection is down and
+  // the calm fallback is intentionally holding.
+  moodStale?: boolean;
+  moodStaleForSec?: number | null;
   moodValue: number;
   engineConnected: boolean;
   nextCue: TimelineNextCue | null;
@@ -238,6 +257,9 @@ export interface TimelineState {
   // before the zoom slice omits the key entirely. Readers must treat
   // undefined exactly like null (no zoom) — never invent one.
   zoom?: TimelineZoom | null;
+  // Authoring diagnostics for the active plan. Current engines send structured
+  // findings; string entries remain accepted for older engine compatibility.
+  planWarnings?: (TimelinePlanWarning | string)[];
   lastError: string | null;
 }
 
@@ -319,7 +341,11 @@ export interface TriggerMood {
   cooldownSec?: number;
   whenPhase?: string;
 }
-export interface TriggerManual { type: 'manual' }
+export interface TriggerManual {
+  type: 'manual';
+  /** Display-only placement on the 6 PM operator day. Never auto-fires. */
+  placementAt?: string;
+}
 export type CueTrigger = TriggerClock | TriggerSun | TriggerPhase | TriggerMood | TriggerManual;
 
 export interface ActionLook { type: 'look'; look: string }
@@ -400,8 +426,11 @@ export interface ActionTransition {
 // engine's validator is strict: when present it requires active + a
 // non-empty `palettes` list + delay_s>=0 (+ optional shuffle). Shape matches
 // the engine contract EXACTLY (deck target only).
-export interface ActionColorAutopilot {
+export interface ActionColorAutopilotPalettes {
   active: boolean;
+  mode?: 'palettes';
+  /** 'fixed' applies one inline pair once and parks; absent/'rotate' cycles. */
+  behavior?: 'rotate' | 'fixed';
   // A library id OR an inline {c1,c2} colour pair — the engine's validator
   // accepts both (docs/53 §5.3, slice E1), and a cue that CAPTURES the live
   // config can capture a PALETTE TURNS ring, which is inline pairs. Narrowing
@@ -417,6 +446,16 @@ export interface ActionColorAutopilot {
   // absent normalizes to 0 server-side (docs/39).
   transitionMs?: number;
 }
+
+export interface ActionColorAutopilotFollowNote {
+  active: boolean;
+  mode: 'followNote';
+  followNote: DeckFollowNoteConfig;
+}
+
+export type ActionColorAutopilot =
+  | ActionColorAutopilotPalettes
+  | ActionColorAutopilotFollowNote;
 
 export interface ActionPlaylist {
   type: 'playlist';
@@ -448,13 +487,14 @@ export interface ActionPlaylist {
   globals?: { speed?: number; size?: number; bpmSpeedSync?: number };
 }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
+export interface ActionSpecialEvent { type: 'special_event'; showId: string }
 export interface ActionSequenceStep { afterSec: number; action: ActionLook | ActionPlaylist | ActionGlobals }
 export interface ActionSequence { type: 'sequence'; steps: ActionSequenceStep[] }
 // NOTE: the engine also validates a `scene` action, but the maker deliberately
 // does NOT author it — a scene switch RESTARTS the engine, which is dangerous
 // and irrelevant inside the timeline maker. So `scene` is omitted from this
 // union (the maker never emits it; the engine still accepts hand-authored ones).
-export type CueAction = ActionLook | ActionPlaylist | ActionGlobals | ActionSequence;
+export type CueAction = ActionLook | ActionPlaylist | ActionGlobals | ActionSequence | ActionSpecialEvent;
 
 export interface PlanTarget { channel: 'deck' | 'mixer' | 'all'; id: string | null }
 export interface PlanAutopilotInline {
@@ -776,12 +816,13 @@ export interface TimelineResolve {
 // malformed date/time, an unresolvable cueId, or an out-of-window target —
 // surfaced verbatim, never a silent fall back to "now".
 export function fetchTimelineResolve(
-  spec: { date?: string; time?: string; cueId?: string },
+  spec: { date?: string; time?: string; cueId?: string; planName?: string },
 ): Promise<ApiResult<TimelineResolve>> {
   const q = new URLSearchParams();
   if (spec.date) q.set('date', spec.date);
   if (spec.time) q.set('time', spec.time);
   if (spec.cueId) q.set('cueId', spec.cueId);
+  if (spec.planName) q.set('planName', spec.planName);
   return timelineGet<TimelineResolve>(`/timeline/resolve?${q.toString()}`);
 }
 
@@ -792,9 +833,14 @@ export function fetchTimelineResolve(
 //   { step:'prev'|'next'} the neighbouring EVENT on the current travel day —
 //                         REQUIRES an active travel, and 400s past the first /
 //                         last event of the day (fail loud, never clamp).
+// `planName` (optional) lets the operator rehearse a NAMED saved plan without
+// activating it. When set, the engine loads that plan into a scratch buffer,
+// resolves against it, and records the plan name in the returned zoom so the
+// live view can badge "REHEARSING <plan>". Omitting `planName` (or passing the
+// active plan's name) travels against the current active plan as before.
 export type TimelineTravelSpec =
-  | { date: string; time: string }
-  | { cueId: string; date?: string }
+  | { date: string; time: string; planName?: string }
+  | { cueId: string; date?: string; planName?: string }
   | { step: 'prev' | 'next' };
 
 export interface TimelineTravelResult {
@@ -802,6 +848,10 @@ export interface TimelineTravelResult {
   zoom: TimelineZoom;
   resolved: TimelineResolve;
   steps: string[];
+  // The plan the engine actually resolved against. `null` means the active
+  // plan; a name means a rehearsal buffer. CaptainPad uses this to show the
+  // exact applied confirmation toast and the persistent rehearsal banner.
+  rehearsingPlan?: string | null;
 }
 
 export function postTimelineTravel(

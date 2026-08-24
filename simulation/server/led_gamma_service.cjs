@@ -14,8 +14,10 @@
  *      firmware rejects every write (docs/41 §4.1.1), so the push repairs it
  *      with the controller card's name VERBATIM or refuses before the POST
  *      (`gammaPushBody` below — same doctrine as the per-output push)
- *   5. honour the reply (`applied` vs `needs-reboot`) — wait out a reboot
- *   6. GET /api/config again and VERIFY the read-back matches, or throw
+ *   5. send exactly one write; a lost reply is settled by read-back, never by
+ *      retrying the mutation
+ *   6. GET /api/config again and VERIFY saved gamma, mode, and name
+ *   7. GET /api/status again and VERIFY controller identity is unchanged
  *
  * Both callers share it:
  *   - the CLI tool   simulation/agent_tools/led_gamma_push.cjs
@@ -38,6 +40,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const { isDeepStrictEqual } = require('util');
 
 // The deviceName doctrine (docs/41 §4.1.1, report _124) has ONE implementation
 // and it lives in the LED client: `deviceNameRepairForPush` + DEVICE_NAME_RE.
@@ -126,8 +129,8 @@ function validateGamma(raw) {
   }
   const out = {};
   for (const ch of GAMMA_CHANNELS) {
-    const v = Number(raw[ch]);
-    if (!Number.isFinite(v) || v < GAMMA_MIN || v > GAMMA_MAX) {
+    const v = raw[ch];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < GAMMA_MIN || v > GAMMA_MAX) {
       throw gammaError('invalid', `gamma.${ch} ${JSON.stringify(raw[ch])} must be a number in ` +
         `${GAMMA_MIN}–${GAMMA_MAX} (1.0 = off) — the range the LED controller accepts`, { field: ch });
     }
@@ -258,6 +261,43 @@ async function readConfig(host) {
   return res.json;
 }
 
+/** One partial saved-config write. Callers never retry this operation. */
+async function writeConfig(host, body) {
+  return request(host, 'POST', '/api/config', body);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function assertStableIdentity(host, before, after, backupPath) {
+  for (const field of ['controllerId', 'boardId', 'firmwareSHA']) {
+    const expected = before[field];
+    if (expected !== undefined && expected !== null && after[field] !== expected) {
+      throw gammaError('identity-mismatch', `${host}: controller identity changed during gamma ` +
+        `push — ${field} was ${JSON.stringify(expected)}, now ${JSON.stringify(after[field])}`,
+      { field, expected, actual: after[field], backupPath });
+    }
+  }
+}
+
+function assertSavedConfigPreserved(host, before, after, nameRepair, backupPath) {
+  for (const field of ['dmx', 'swarm']) {
+    if (!isDeepStrictEqual(after[field], before[field])) {
+      throw gammaError('verify-mismatch', `${host}: gamma push changed saved ${field} config — ` +
+        'DMX / SWARM mode must remain unchanged',
+      { field, expected: before[field], actual: after[field], backupPath });
+    }
+  }
+
+  const expectedName = nameRepair ? nameRepair.to : before.deviceName;
+  if (before.deviceName !== undefined && after.deviceName !== expectedName) {
+    throw gammaError('identity-mismatch', `${host}: gamma push changed deviceName unexpectedly — ` +
+      `expected ${JSON.stringify(expectedName)}, got ${JSON.stringify(after.deviceName)}`,
+    { field: 'deviceName', expected: expectedName, actual: after.deviceName, backupPath });
+  }
+}
+
 /**
  * Read a controller's identity + current gamma. No writes, no backup.
  * @returns {Promise<{ip, controllerId, deviceName, boardId, firmwareSHA, gamma}>}
@@ -277,7 +317,7 @@ async function readGamma(host) {
 
 /**
  * Push a gamma curve to ONE controller, with the full discipline (backup →
- * partial write → reboot-aware read-back verify).
+ * partial write → reboot-aware saved-config + identity verification).
  *
  * @param {string} host - controller IP (HTTP only; these devices ignore ICMP)
  * @param {Object} rawTarget - {r,g,b,w}
@@ -287,10 +327,11 @@ async function readGamma(host) {
  *   or not at all. A board whose stored name is valid is never renamed.
  * @returns {Promise<Object>} {ip, controllerId, deviceName, boardId, firmwareSHA,
  *   before, target, verified, outcome, reboot, backupPath, changed,
- *   deviceNameRepaired}
- * @throws Error with `.kind` ∈ 'invalid'|'unreachable'|'rejected'|'verify-mismatch'
+ *   deviceNameRepaired, writeReplyLost}
+ * @throws Error with `.kind` ∈ 'invalid'|'unreachable'|'rejected'|
+ *   'verify-mismatch'|'identity-mismatch'
  */
-async function pushGamma(host, rawTarget, opts = {}) {
+async function pushGammaWithIo(host, rawTarget, opts = {}, io) {
   const log = opts.onLog || (() => {});
   const rebootWaitMs = Number.isFinite(opts.rebootWaitMs) ? opts.rebootWaitMs : REBOOT_WAIT_MS;
   const target = validateGamma(rawTarget);
@@ -298,15 +339,15 @@ async function pushGamma(host, rawTarget, opts = {}) {
     throw gammaError('invalid', 'a controller IP is required');
   }
 
-  const status = await readStatus(host);
-  const name = status.controllerId || status.deviceName || host;
+  const beforeStatus = await io.readStatus(host);
+  const name = beforeStatus.controllerId || beforeStatus.deviceName || host;
   log(`🔌 ${host} → controller "${name}"`);
 
-  const before = await readConfig(host);
+  const before = await io.readConfig(host);
   const currentGamma = before.gamma || null;
   log(`   current gamma: ${JSON.stringify(currentGamma)}`);
 
-  const backupPath = writeBackup(host, name, before);
+  const backupPath = io.writeBackup(host, name, before);
   log(`   💾 full config backed up → ${backupPath}`);
 
   // §4.1.1: an invalid STORED deviceName makes the board reject every write —
@@ -320,47 +361,76 @@ async function pushGamma(host, rawTarget, opts = {}) {
   if (nameRepair) log(`   ⚠ ${nameRepair.message}`);
 
   log(`   ➡  pushing gamma ${JSON.stringify(target)}`);
-  const res = await request(host, 'POST', '/api/config', body);
-  if (res.status === 400) {
+  let res = null;
+  let writeReplyLost = false;
+  try {
+    res = await io.writeConfig(host, body);
+  } catch (err) {
+    if (err.kind !== 'unreachable') throw err;
+    writeReplyLost = true;
+    log(`   ⚠ write reply was lost (${err.message}); the write will NOT be retried — ` +
+      'checking saved config once');
+  }
+  if (writeReplyLost) {
+    await io.sleep(rebootWaitMs);
+  }
+  if (res && res.status === 400) {
     throw gammaRejectionError(host, res.json, body);
   }
-  if (res.status !== 200) {
+  if (res && res.status !== 200) {
     throw gammaError('rejected', `${host}: POST /api/config returned HTTP ${res.status}: ` +
       JSON.stringify(res.json));
   }
-  const reply = res.json;
+  const reply = res ? res.json : {};
   const outcome = reply.outcome || 'applied';
   const reboot = reply.reboot === true || outcome === 'needs-reboot';
-  log(`   reply: ${JSON.stringify(reply)}`);
+  if (res) log(`   reply: ${JSON.stringify(reply)}`);
 
   if (reboot) {
-    log(`   ⏳ controller is rebooting — waiting ${Math.round(rebootWaitMs / 1000)} s before read-back`);
-    await new Promise((r) => setTimeout(r, rebootWaitMs));
+    log(`   ⏳ controller is rebooting — waiting ${Math.round(rebootWaitMs / 1000)} s ` +
+      'before read-back');
+    await io.sleep(rebootWaitMs);
   }
 
-  const after = await readConfig(host);
-  const verified = after.gamma || {};
+  let after;
+  try {
+    after = await io.readConfig(host);
+  } catch (err) {
+    if (!writeReplyLost) throw err;
+    throw gammaError('unreachable', `${host}: write reply was lost and saved config could not be ` +
+      `read back (${err.message}). The write was sent exactly once and was not retried; inspect ` +
+      'the controller before another push.', { backupPath, writeReplyLost: true });
+  }
+  let verified;
+  try {
+    verified = validateGamma(after.gamma || {});
+  } catch (err) {
+    throw gammaError('verify-mismatch', `${host}: saved config returned malformed gamma — ` +
+      err.message, { backupPath, writeReplyLost });
+  }
   if (!gammaEquals(verified, target)) {
+    const prefix = writeReplyLost ? 'write reply was lost; ' : '';
     throw gammaError('verify-mismatch',
-      `${host}: read-back MISMATCH — wanted ${JSON.stringify(target)}, ` +
-      `controller reports ${JSON.stringify(verified)}`, { verified, target, backupPath });
+      `${host}: ${prefix}saved-config read-back MISMATCH — wanted ${JSON.stringify(target)}, ` +
+      `controller reports ${JSON.stringify(verified)}. The write was not retried.`,
+    { verified, target, backupPath, writeReplyLost });
   }
-  if (nameRepair && after.deviceName !== nameRepair.to) {
-    throw gammaError('verify-mismatch',
-      `${host}: deviceName repair did not land — wrote '${nameRepair.to}', ` +
-      `controller reports ${JSON.stringify(after.deviceName)}`, { nameRepair, backupPath });
-  }
-  log(`   ✅ verified on hardware: ${JSON.stringify(verified)}`);
+  assertSavedConfigPreserved(host, before, after, nameRepair, backupPath);
+
+  const afterStatus = await io.readStatus(host);
+  assertStableIdentity(host, beforeStatus, afterStatus, backupPath);
+
+  log(`   ✅ verified in saved config: ${JSON.stringify(verified)}`);
   if (nameRepair) {
     log(`   ✅ deviceName repaired: ${JSON.stringify(nameRepair.from)} → '${nameRepair.to}'`);
   }
 
   return {
     ip: host,
-    controllerId: status.controllerId || null,
-    deviceName: after.deviceName || status.deviceName || null,
-    boardId: status.boardId || null,
-    firmwareSHA: status.firmwareSHA || null,
+    controllerId: afterStatus.controllerId || null,
+    deviceName: after.deviceName || afterStatus.deviceName || null,
+    boardId: afterStatus.boardId || null,
+    firmwareSHA: afterStatus.firmwareSHA || null,
     before: currentGamma,
     target,
     verified: validateGamma(roundGamma(verified)),
@@ -369,7 +439,18 @@ async function pushGamma(host, rawTarget, opts = {}) {
     backupPath,
     changed: !gammaEquals(currentGamma, target),
     deviceNameRepaired: nameRepair ? { from: nameRepair.from, to: nameRepair.to } : null,
+    writeReplyLost,
   };
+}
+
+async function pushGamma(host, rawTarget, opts = {}) {
+  return pushGammaWithIo(host, rawTarget, opts, {
+    readStatus,
+    readConfig,
+    writeConfig,
+    writeBackup,
+    sleep,
+  });
 }
 
 module.exports = {
@@ -385,6 +466,7 @@ module.exports = {
   parseGammaSpec,
   roundGamma,
   pushGamma,
+  pushGammaWithIo,
   readConfig,
   readGamma,
   readStatus,

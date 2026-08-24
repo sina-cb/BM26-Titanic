@@ -57,6 +57,35 @@ test('clock at of 25:99 throws', () => {
   assert.throws(() => validateShowPlan(plan), /HH:MM/);
 });
 
+test('manual cue accepts calendar placement without becoming a clock trigger', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0] = {
+    id: 'manual_event',
+    kind: 'program',
+    trigger: { type: 'manual', placementAt: '20:15' },
+    action: { type: 'special_event', showId: 'baby_reveal' },
+    durationMin: 30,
+    days: [0],
+  };
+  const validated = validateShowPlan(plan);
+  assert.deepEqual(validated.cues[0].trigger, { type: 'manual', placementAt: '20:15' });
+  assert.deepEqual(validated.cues[0].action, { type: 'special_event', showId: 'baby_reveal' });
+});
+
+test('special-event actions are manual-only and reject invalid placement', () => {
+  const scheduled = defaultShowPlan();
+  scheduled.cues[0].action = { type: 'special_event', showId: 'baby_reveal' };
+  assert.throws(() => validateShowPlan(scheduled), /special_event requires trigger\.type "manual"/);
+
+  const invalidPlacement = defaultShowPlan();
+  invalidPlacement.cues[0] = {
+    id: 'manual_event',
+    trigger: { type: 'manual', placementAt: '25:99' },
+    action: { type: 'special_event', showId: 'baby_reveal' },
+  };
+  assert.throws(() => validateShowPlan(invalidPlacement), /placementAt.*HH:MM/);
+});
+
 test('duplicate cue id throws', () => {
   const plan = defaultShowPlan();
   plan.cues[1].id = plan.cues[0].id;

@@ -392,4 +392,9 @@ export const Type = {
   ceremonial: { fontFamily: Fonts.headline, fontSize: 20, letterSpacing: 1.2 },
   valueText:  { fontFamily: Fonts.bodySemibold, fontSize: 12 },
   body:       { fontFamily: Fonts.body, fontSize: 14 },
+  timelineHero:  { fontFamily: Fonts.headline, fontSize: 34, letterSpacing: 0.3 },
+  timelineTitle: { fontFamily: Fonts.headline, fontSize: 24, letterSpacing: 0.4 },
+  timelineCue:   { fontFamily: Fonts.bodySemibold, fontSize: 18, lineHeight: 24 },
+  timelineBody:  { fontFamily: Fonts.body, fontSize: 16, lineHeight: 23 },
+  timelineMeta:  { fontFamily: Fonts.bodySemibold, fontSize: 16, lineHeight: 21 },
 } as const;

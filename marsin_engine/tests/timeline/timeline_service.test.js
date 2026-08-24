@@ -18,6 +18,7 @@ function makeDeps() {
     requestScene: [],
     patchScheduledTask: [],
     fireScheduledTask: [],
+    startSpecialEvent: [],
     setDeckTransition: [],
     setDeckOverlaysEnabled: [],
     setColorAutopilot: [],
@@ -53,6 +54,7 @@ function makeDeps() {
     requestScene: (a) => { calls.requestScene.push(a); },
     patchScheduledTask: (id, patch) => { calls.patchScheduledTask.push({ id, patch }); },
     fireScheduledTask: (id) => { calls.fireScheduledTask.push(id); },
+    startSpecialEvent: (showId) => { calls.startSpecialEvent.push(showId); },
     listMixerChannelIds: () => [],
     listPlaylists: () => [{ name: 'default' }],
     setDeckTransition: (patch) => { calls.setDeckTransition.push(patch); },
@@ -188,6 +190,15 @@ test('manual fire of a program cue → loadPlaylist + setAutopilot(off)', async 
   assert.ok(apOff, 'program fire must turn deck autopilot off');
   // The look's palette is pushed to the CPC.
   assert.ok(calls.setParams.some((p) => p.colorPalette1), 'palette should be written to CPC');
+});
+
+test('special-event action delegates to the staged show runner', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  const result = await svc._applyAction({ type: 'special_event', showId: 'baby_reveal' });
+  assert.deepEqual(calls.startSpecialEvent, ['baby_reveal']);
+  assert.match(result.steps.join('; '), /special event "baby_reveal" started/);
 });
 
 test('mood swap is gated to autopilot (suppressed under a program)', async () => {
@@ -976,7 +987,7 @@ test('docs/39 schema: deck playlist cue round-trips colorAutopilot', () => {
   });
   const norm = validateShowPlan(plan);
   assert.deepEqual(norm.cues[0].action.colorAutopilot, {
-    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: false, transitionMs: 0,
+    active: true, mode: 'palettes', palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: false, transitionMs: 0,
   });
 });
 
@@ -1011,12 +1022,14 @@ test('docs/39 schema: colorAutopilot shuffle defaults to false', () => {
   assert.equal(norm.cues[0].action.colorAutopilot.shuffle, false);
 });
 
-test('docs/39 schema: colorAutopilot rejects delay_s <= 0', () => {
+test('docs/55 schema: colorAutopilot accepts continuous crossfade delay_s 0', () => {
   const plan = makePlanWithDeckKnobs({
     type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
-    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 0 },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 0, transitionMs: 800 },
   });
-  assert.throws(() => validateShowPlan(plan), /colorAutopilot\.delay_s must be a number > 0/);
+  const norm = validateShowPlan(plan);
+  assert.equal(norm.cues[0].action.colorAutopilot.delay_s, 0);
+  assert.equal(norm.cues[0].action.colorAutopilot.transitionMs, 800);
 });
 
 test('docs/39 schema: colorAutopilot rejects an empty palettes array', () => {
@@ -1043,6 +1056,65 @@ test('docs/39 schema: colorAutopilot rejects a non-boolean active', () => {
   assert.throws(() => validateShowPlan(plan), /colorAutopilot\.active must be a boolean/);
 });
 
+test('docs/55 schema: deck cue round-trips a five-tone inline rotation', () => {
+  const palettes = [
+    { c1: 0.08, c2: 0.19 },
+    { c1: 0.36, c2: 0.58 },
+    { c1: 0.82, c2: 0.08 },
+    { c1: 0.19, c2: 0.36 },
+    { c1: 0.58, c2: 0.82 },
+  ];
+  const norm = validateShowPlan(makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: {
+      active: true, mode: 'palettes', palettes, delay_s: 5, shuffle: false, transitionMs: 800,
+    },
+  }));
+  assert.deepEqual(norm.cues[0].action.colorAutopilot.palettes, palettes);
+});
+
+test('docs/55 schema: deck cue round-trips a fixed two-tone pair', () => {
+  const norm = validateShowPlan(makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: {
+      active: true,
+      mode: 'palettes',
+      behavior: 'fixed',
+      palettes: [{ c1: 0.08, c2: 0.58 }],
+      delay_s: 0,
+      shuffle: false,
+      transitionMs: 500,
+    },
+  }));
+  assert.deepEqual(norm.cues[0].action.colorAutopilot, {
+    active: true,
+    mode: 'palettes',
+    behavior: 'fixed',
+    palettes: [{ c1: 0.08, c2: 0.58 }],
+    delay_s: 0,
+    shuffle: false,
+    transitionMs: 500,
+  });
+});
+
+test('docs/59 schema: deck cue round-trips Follow Note sampling methods', () => {
+  const followNote = {
+    schemes: ['analogous', 'triadic', 'golden'],
+    methodHoldS: 8,
+    methodFadeS: 1,
+    noteFadeMs: 150,
+    sel: [0, 1],
+    shuffle: false,
+  };
+  const norm = validateShowPlan(makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, mode: 'followNote', followNote },
+  }));
+  assert.deepEqual(norm.cues[0].action.colorAutopilot, {
+    active: true, mode: 'followNote', followNote,
+  });
+});
+
 test('docs/39 apply: deck cue with colorAutopilot calls setColorAutopilot via deps', async () => {
   const plan = makePlanWithDeckKnobs({
     type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
@@ -1060,7 +1132,7 @@ test('docs/39 apply: deck cue with colorAutopilot calls setColorAutopilot via de
 
   assert.equal(calls.setColorAutopilot.length, 1, 'setColorAutopilot called once for the deck cue');
   assert.deepEqual(calls.setColorAutopilot[0], {
-    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: true, transitionMs: 0,
+    active: true, mode: 'palettes', palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: true, transitionMs: 0,
   });
 });
 
@@ -1304,6 +1376,89 @@ test('buildOverview carries durationMin on cues that own a deck window', () => {
   assert.ok(typeof block.atLocal === 'string' && /^\d{2}:\d{2}$/.test(block.atLocal), 'block must resolve atLocal');
   assert.ok(point, 'c_point must appear in the day overview');
   assert.equal(point.durationMin, undefined, 'a point cue (no durationMin) must omit durationMin');
+});
+
+test('buildOverview places a manual cue without scheduling it', () => {
+  const plan = validateShowPlan({
+    schemaVersion: 2,
+    name: 'manual_placement_plan',
+    location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles' },
+    autopilot: {
+      enabled: true, playlist: 'baseline_pl', delay_s: 30, shuffle: true,
+      target: { channel: 'deck', id: null }, mood: true,
+    },
+    phases: {},
+    looks: {},
+    cues: [{
+      id: 'c_event',
+      label: 'Baby Reveal',
+      trigger: { type: 'manual', placementAt: '21:15' },
+      action: { type: 'special_event', showId: 'baby_reveal' },
+      durationMin: 30,
+      days: 'all',
+    }],
+  });
+  const overview = buildOverview(plan, Date.UTC(2026, 7, 30, 12, 0, 0));
+  const cue = overview.days[0].cues[0];
+  assert.equal(cue.atLocal, '21:15');
+  assert.deepEqual(cue.trigger, { type: 'manual', placementAt: '21:15' });
+});
+
+test('buildOverview exposes one timed Party Window cue instead of a timeless mood row', () => {
+  const plan = validateShowPlan({
+    schemaVersion: 2,
+    name: 'party_window_plan',
+    location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles' },
+    festival: { startDate: '2026-08-30', days: 2 },
+    autopilot: {
+      enabled: true, playlist: 'baseline_pl', delay_s: 45, shuffle: true,
+      target: { channel: 'deck', id: null }, mood: true,
+    },
+    phases: {
+      pw_c_party: { start: { clock: '20:00' }, end: { clock: '01:30' } },
+    },
+    looks: {},
+    cues: [
+      {
+        id: 'pwb_c_party',
+        label: 'Party Window baseline',
+        kind: 'ambient',
+        trigger: { type: 'phase', phase: 'pw_c_party' },
+        action: { type: 'playlist', name: 'baseline_pl', target: { channel: 'deck', id: null } },
+        days: 'all',
+      },
+      {
+        id: 'pwe_c_party',
+        label: 'Default after Party Window',
+        kind: 'ambient',
+        trigger: { type: 'clock', at: '01:30' },
+        action: { type: 'playlist', name: 'baseline_pl', target: { channel: 'deck', id: null } },
+        days: 'all',
+      },
+      {
+        id: 'c_party',
+        label: 'Party 1',
+        kind: 'mood',
+        trigger: {
+          type: 'mood', from: 'calm', to: 'party', minDwellSec: 30,
+          cooldownSec: 120, whenPhase: 'pw_c_party',
+        },
+        action: { type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null } },
+        durationMin: 12,
+        days: 'all',
+      },
+    ],
+    defaultCue: {
+      label: 'Ambient',
+      action: { type: 'playlist', name: 'baseline_pl', target: { channel: 'deck', id: null } },
+    },
+  });
+
+  const overview = buildOverview(plan, Date.UTC(2026, 7, 30, 12, 0, 0));
+  const party = overview.days[0].cues.find((cue) => cue.id === 'c_party');
+  assert.ok(party, 'operator Party Window cue must be present');
+  assert.equal(party.atLocal, '20:00');
+  assert.equal(party.durationMin, 330, 'calendar block uses the full Party Window, not session length');
 });
 
 // ── recentFires records AUTOMATIC cue fires (operator bug) ────────────────────
@@ -1705,7 +1860,7 @@ test('Task 3: resume() re-applies the deck-window cue (playlist + colorAutopilot
     `resume must reload the owner playlist, got ${JSON.stringify(calls.loadPlaylist)}`);
   assert.equal(calls.setColorAutopilot.length, 1, 'resume re-applies the cue colorAutopilot');
   assert.deepEqual(calls.setColorAutopilot[0], {
-    active: true, palettes: ['deep_sea'], delay_s: 2, shuffle: false, transitionMs: 0,
+    active: true, mode: 'palettes', palettes: ['deep_sea'], delay_s: 2, shuffle: false, transitionMs: 0,
   });
   assert.ok(calls.setAutopilot.some((c) => c.state && c.state.active === true),
     'resume re-applies the cue pattern autopilot');

@@ -1,0 +1,60 @@
+schemaVersion: 1
+name: night_quiet_reset_ice
+entries:
+  - id: e_night_quiet_reset_ice_01_ambient_extra_16_turning_tiles
+    pattern: ambient_extra/16_turning_tiles
+    label: Turning Tiles
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderTileSize: 0.56
+      sliderFaceDepth: 0.4
+      sliderFaceHold: 0.64
+      sliderGrout: 0.46
+      sliderJewelryCatch: 0.26
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_quiet_reset_ice_02_ambient_extra_12_floating_frames
+    pattern: ambient_extra/12_floating_frames
+    label: Floating Frames
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.76
+      sliderFrameCount: 0.46
+      sliderFrameWidth: 0.19
+      sliderDepth: 0.48
+      sliderTwist: 0.44
+      sliderLevel: 0.7
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_quiet_reset_ice_03_ambient_extra_17_frost_branch
+    pattern: ambient_extra/17_frost_branch
+    label: Frost Branch
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBranchCount: 0.52
+      sliderGrowth: 0.58
+      sliderHold: 0.46
+      sliderMelt: 0.34
+      sliderJewelryIce: 0.18
+      sliderSafetyFloor: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_night_quiet_reset_ice_04_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0.18
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderLineSoftness: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null

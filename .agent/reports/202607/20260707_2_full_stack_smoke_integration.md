@@ -2,7 +2,7 @@
 
 **Role:** validator (delegated agent). **Spec:** `skills/full_stack_smoke.md`.
 Plan row: T1.1 in the private party plan
-(`BM26-Firmware-Deployment/.agent/plans/20260707_party_plan_20260711.md`).
+(the party plan in the external/private deployment source).
 
 ## Verdicts
 

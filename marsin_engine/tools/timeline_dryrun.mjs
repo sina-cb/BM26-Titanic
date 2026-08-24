@@ -55,6 +55,7 @@ import { loadShowPlan } from '../lib/timeline/show_plan.js';
 import { computeSunEvents, formatLocal } from '../lib/timeline/sun.js';
 import { TimelineService } from '../lib/timeline/timeline_service.js';
 import { dateClockToEpochMs, dayKeyFor } from '../lib/timeline/triggers.js';
+import { parseAssertSpec, runAssertions, renderAssertionReport } from './timeline_assertions.mjs';
 
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_DIR = path.resolve(ENGINE_DIR, '..');
@@ -136,6 +137,8 @@ const FLAG_SPEC = Object.freeze({
   out: 'string',
   'list-moods': 'bool',
   help: 'bool',
+  assert: 'bool',
+  'assert-spec': 'string',
 });
 
 const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -188,6 +191,8 @@ export function parseArgv(argv) {
     out: raw.out !== undefined ? String(raw.out) : null,
     listMoods: raw['list-moods'] === true,
     help: raw.help === true,
+    assert: raw.assert === true,
+    assertSpec: raw['assert-spec'] !== undefined ? String(raw['assert-spec']) : null,
   };
 
   if (opts.date !== null && !DATE_RE.test(opts.date)) {
@@ -216,6 +221,9 @@ export function parseArgv(argv) {
   }
   if (opts.fixture && raw.plan !== undefined) {
     throw new Error('--fixture and --plan are mutually exclusive');
+  }
+  if (opts.assertSpec !== null && !opts.assert) {
+    throw new Error('--assert-spec requires --assert');
   }
   return opts;
 }
@@ -887,10 +895,12 @@ export async function runDryRun(opts, emit) {
   return {
     lines,
     summary,
+    plan,
     meta: {
       planPath, planName: plan.name, tz, runDir, playlistsDir,
       moodLabel: moodDoc.label, spanStartMs: span.startMs, spanEndMs: span.endMs,
       steps: instants.length, deckAdvances: deck.advances,
+      dateKey, dayKeys: span.dayKeys,
     },
   };
 }
@@ -929,6 +939,16 @@ OUTPUT
   --seed N            PRNG seed for the autopilot shuffle          (default: 1)
   --party-config <json>  applied through the REAL setPartyConfig before the run,
                       e.g. --party-config '{"durationMin":5,"cooldownSec":600}'
+
+VALIDATION (docs/77 §9 — offline dry-run assertion harness, G2)
+  --assert             run the 8 assertion classes after the transcript and print
+                      an ASSERTIONS section; exits 1 on any violation
+  --assert-spec <path> YAML spec (masterWriters, directedCues, nightStart/End,
+                      solarSweep, eventCues, masterZeroCue, eligibility,
+                      expectedOrder, restartProbes, restartExpect — all optional).
+                      Without it, classes 2 (master-authorship) and 4
+                      (shuffle-pinning) are SKIPPED loudly (they need a
+                      whitelist); every other class still runs on defaults.
 
 The harness is OFFLINE: no sACN, no network, no running engine, and it never
 writes inside simulation/scenes/** (the plan is copied to ~/tmp first).
@@ -980,6 +1000,23 @@ async function main() {
     emit(`mood:      ${result.meta.moodLabel}`);
     emit(`steps:     ${result.meta.steps} × ${opts.stepMin} min   (deck autopilot advances: ${result.meta.deckAdvances})`);
     emit(`scratch:   ${result.meta.runDir}`);
+
+    if (opts.assert) {
+      let spec = null;
+      if (opts.assertSpec !== null) {
+        const specPath = path.resolve(opts.assertSpec);
+        const specText = fs.readFileSync(specPath, 'utf8');
+        spec = parseAssertSpec(yaml.load(specText), specPath);
+      }
+      const assertResult = runAssertions({
+        plan: result.plan,
+        spec,
+        dayKeys: result.meta.dayKeys,
+        runDateKey: result.meta.dateKey,
+      });
+      for (const line of renderAssertionReport(assertResult)) emit(line);
+      if (!assertResult.pass) process.exitCode = 1;
+    }
   } catch (err) {
     console.error(`\ntimeline_dryrun FAILED: ${err.message}`);
     process.exitCode = 1;

@@ -1,0 +1,180 @@
+schemaVersion: 1
+name: white_day
+entries:
+  - id: e_white_day_silver_current
+    pattern: white_only/03_silver_current
+    label: Silver Current · Daylight
+    defaults:
+      sliderLocalSpeed: 0.18
+      sliderCurrentWidth: 0.12
+      sliderShimmer: 0.94
+      sliderDetail: 0.72
+      sliderLevel: 0.46
+    modulations: []
+    midiMappings: []
+    notes: Sparse moving seams with bright current catches.
+  - id: e_white_day_frost_lattice
+    pattern: white_only/04_frost_lattice
+    label: Frost Lattice · Daylight
+    defaults:
+      sliderLocalSpeed: 0.16
+      sliderLatticeScale: 0.22
+      sliderDetail: 0.82
+      sliderLevel: 0.42
+    modulations: []
+    midiMappings: []
+    notes: Fine structural glints without a broad white field.
+  - id: e_white_day_frosted_panes
+    pattern: white_only/16_frosted_panes
+    label: Frosted Panes · Daylight
+    defaults:
+      sliderLocalSpeed: 0.15
+      sliderPaneSize: 0.18
+      sliderSeamWidth: 0.06
+      sliderDrift: 0.20
+      sliderSeamGlow: 1.00
+      sliderLevel: 0.38
+    modulations: []
+    midiMappings: []
+    notes: Thin bright seams divide broad daylight negative space.
+  - id: e_white_day_lighthouse_watch
+    pattern: white_only/06_lighthouse_watch
+    label: Lighthouse Watch · Daylight
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderWidth: 0.08
+      sliderSafetyFloor: 0.00
+      sliderLevel: 0.52
+    modulations: []
+    midiMappings: []
+    notes: A narrow roaming white catch with no daytime wash floor.
+  - id: e_white_day_pale_garden
+    pattern: white_only/11_pale_garden
+    label: Pale Garden · Daylight
+    defaults:
+      sliderLocalSpeed: 0.15
+      sliderRadius: 0.18
+      sliderDetail: 0.78
+      sliderFrondDensity: 0.16
+      sliderLevel: 0.43
+    modulations: []
+    midiMappings: []
+    notes: A few fine white fronds distributed across the ship.
+  - id: e_white_day_porthole_liner
+    pattern: white_only/12_porthole_liner
+    label: Porthole Liner · Daylight
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderDetail: 0.12
+      sliderFlare: 0.96
+      sliderLevel: 0.44
+    modulations: []
+    midiMappings: []
+    notes: Sparse portholes with bright, legible flashes.
+  - id: e_white_day_ivory_louvers
+    pattern: white_only/15_ivory_louvers
+    label: Ivory Louvers · Daylight
+    defaults:
+      sliderLocalSpeed: 0.15
+      sliderDirection: 0.72
+      sliderSlatCount: 0.22
+      sliderOpen: 0.08
+      sliderEdgeGlow: 0.92
+      sliderLevel: 0.43
+    modulations: []
+    midiMappings: []
+    notes: Mostly closed slats with thin sun-bright edges.
+  - id: e_white_day_moon_pearls
+    pattern: white_only/17_moon_pearls
+    label: Moon Pearls · Daylight
+    defaults:
+      sliderLocalSpeed: 0.16
+      sliderDirection: 0.76
+      sliderPearlCount: 0.18
+      sliderPearlSize: 0.12
+      sliderLinkGlow: 0.02
+      sliderLevel: 0.55
+    modulations: []
+    midiMappings: []
+    notes: Isolated moving pearls; connecting glow is nearly absent.
+  - id: e_white_day_silver_frames
+    pattern: white_only/19_silver_frames
+    label: Silver Frames · Daylight
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderDirection: 0.74
+      sliderFrameCount: 0.16
+      sliderFrameWidth: 0.10
+      sliderTwist: 0.38
+      sliderLevel: 0.43
+    modulations: []
+    midiMappings: []
+    notes: A few thin traveling frames, never a full white box.
+  - id: e_white_day_frost_branch
+    pattern: white_only/20_frost_branch
+    label: Frost Branch · Daylight
+    defaults:
+      sliderLocalSpeed: 0.13
+      sliderBranchCount: 0.12
+      sliderGrowth: 0.46
+      sliderHold: 0.34
+      sliderMelt: 0.46
+      sliderLevel: 0.40
+    modulations: []
+    midiMappings: []
+    notes: One restrained crystal gesture with long negative space.
+  - id: e_white_day_playa_glint_field
+    pattern: white_only/21_playa_glint_field
+    label: Playa Glint Field · Draft
+    defaults:
+      sliderLocalSpeed: 0.24
+      sliderDensity: 0.22
+      sliderSparkle: 0.86
+      sliderLevel: 0.78
+    modulations: []
+    midiMappings: []
+    notes: DRAFT — scattered sequins wandering across every instrument.
+  - id: e_white_day_porthole_wink
+    pattern: white_only/22_porthole_wink
+    label: Porthole Wink · Draft
+    defaults:
+      sliderLocalSpeed: 0.26
+      sliderCount: 0.28
+      sliderWidth: 0.22
+      sliderLevel: 0.80
+    modulations: []
+    midiMappings: []
+    notes: DRAFT — orderly portholes wink in sparse rows.
+  - id: e_white_day_deck_hull_exchange
+    pattern: white_only/23_deck_hull_exchange
+    label: Deck Hull Exchange · Draft
+    defaults:
+      sliderLocalSpeed: 0.22
+      sliderSpacing: 0.36
+      sliderPulse: 0.82
+      sliderLevel: 0.76
+    modulations: []
+    midiMappings: []
+    notes: DRAFT — bright marks answer between hull and direct-view details.
+  - id: e_white_day_constellation_drift
+    pattern: white_only/24_constellation_drift
+    label: Constellation Drift · Draft
+    defaults:
+      sliderLocalSpeed: 0.20
+      sliderDensity: 0.32
+      sliderWidth: 0.18
+      sliderTwinkle: 0.84
+      sliderLevel: 0.74
+    modulations: []
+    midiMappings: []
+    notes: DRAFT — drifting line intersections create sparse star nodes.
+  - id: e_white_day_bow_stern_hello
+    pattern: white_only/25_bow_stern_hello
+    label: Bow Stern Hello · Draft
+    defaults:
+      sliderLocalSpeed: 0.21
+      sliderPulse: 0.86
+      sliderLevel: 0.78
+    modulations: []
+    midiMappings: []
+    notes: DRAFT — the ship ends exchange greetings via one courier glint.

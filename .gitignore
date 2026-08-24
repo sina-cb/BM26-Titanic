@@ -26,9 +26,9 @@ Desktop.ini
 .agent/pids/
 .vscode-antigravity/
 
-# Show-server manifest (real hostnames/IPs/shares). PRIVATE - lives in the
-# BM26-Firmware-Deployment repo, exported as $BM26_MACHINES; deploy.py ships it
-# to each server at deploy time. This public repo must never contain it. Use
+# Show-server manifest (real hostnames/IPs/shares). PRIVATE - supplied through
+# $BM26_MACHINES by an external deployment source; deploy.py ships it to each
+# server at deploy time. This public repo must never contain it. Use
 # deploy/machines.yaml.example (tracked, placeholder values) as the shape ref.
 deploy/machines.yaml
 

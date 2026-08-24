@@ -63,7 +63,7 @@
  * `lib/view_catalog.js` primitives engine.js itself calls (report _147), so the
  * Tier-A auto-views are present here too: `inView("LEFT")`,
  * `inView("Strands")`, `inView("CTRL_7")` resolve offline exactly as on the rig
- * (titanic: 58 names, not the 31 a hand-built table used to hold).
+ * (titanic: 59 names, not the 31 a hand-built table used to hold).
  *
  * Exit 0 on success. Any compile / model / synth / mapping failure prints a
  * *_FAIL line and exits 2 (fail loud).
@@ -234,7 +234,7 @@ if (loaded.pixelCount !== N) {
 // are appended to loaded.viewMasks first, then base groups land at word 0 and
 // every resolved preset/auto-view at its authored word. loadModelForGauge()
 // alone does NOT derive the auto-views, so hand-building the table here held
-// 31 of titanic's 58 names and made a documented view a COMPILE_FAIL offline
+// 31 of titanic's 59 names and made a documented view a COMPILE_FAIL offline
 // while it compiled on the rig (reports 20260804_146 §4, 20260804_147).
 const { viewTable, autoViews } = buildViewCatalog(loaded);
 // Auto-view warnings (non-exhaustive halves, a controller straddling the

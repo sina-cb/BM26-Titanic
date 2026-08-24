@@ -128,6 +128,7 @@ describe('prestige global header — shipped source guards', () => {
   const deck = readFileSync(join(here, 'DeckTopBar.tsx'), 'utf8');
   const fade = readFileSync(join(here, 'MasterFadeGroup.tsx'), 'utf8');
   const midi = readFileSync(join(here, 'MidiStatusChip.tsx'), 'utf8');
+  const midiLabel = readFileSync(join(here, 'midi_chip_label.ts'), 'utf8');
 
   it('keeps MODEL horizontal and switches the fade selector at the shared breakpoint', () => {
     expect(deck).toMatch(/compactHeader\s*=\s*isPortrait\s*\|\|\s*width\s*<=\s*HEADER_COMPACT_MAX_WIDTH/);
@@ -146,6 +147,22 @@ describe('prestige global header — shipped source guards', () => {
     expect(fade).toMatch(/numberOfLines=\{1\} style=\{styles\.labelCaps\}>FADE<\/Text>/);
     expect(fade).toMatch(/numberOfLines=\{1\} style=\{styles\.fadeActionText\}>TO BLACK<\/Text>/);
     expect(fade).toMatch(/numberOfLines=\{1\} style=\{styles\.fadeActionText\}>UP<\/Text>/);
-    expect(midi).toMatch(/numberOfLines=\{1\}[\s\S]{0,80}APC<\/Text>/);
+    // The MIDI header chip is CONTROLLER-NEUTRAL (2026-08-20 operator ask):
+    // it labels a joint state across APC + MFT + VSN1, so the compile-time
+    // text is `🎹 MIDI`, not `🎹 APC`. Runtime injects the connected count
+    // when 2+ controllers are up — see `midi_chip_label.ts` for the pure
+    // logic; `MidiStatusChip.tsx` renders `{label}` from it and imports the
+    // helper by that path.
+    expect(midi).toMatch(/numberOfLines=\{1\}[\s\S]{0,80}\{label\}<\/Text>/);
+    expect(midi).toMatch(/from ['"]@\/components\/midi_chip_label['"]/);
+    expect(midiLabel).toMatch(/return\s+['"]🎹 MIDI['"]/);
+    // …and the label file's EXECUTABLE code must NOT bake in any
+    // controller-specific name — that regression is the exact bug this
+    // suite is meant to catch. Strip comments first so the module's own
+    // header (which names APC + MFT + VSN1 as context) doesn't count.
+    const midiLabelCode = midiLabel
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(midiLabelCode).not.toMatch(/APC|Midi Fighter|MFT|VSN1/);
   });
 });

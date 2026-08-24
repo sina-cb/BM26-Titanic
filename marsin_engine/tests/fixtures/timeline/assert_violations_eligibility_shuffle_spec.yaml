@@ -1,0 +1,13 @@
+# assert_violations_eligibility_shuffle_spec.yaml — trips:
+#   - class 3: c_mood_real's real_window (20:00-23:00) does not match this
+#     eligibility window (21:00-23:00) — a deliberate start-time mismatch.
+#   - class 4: c_shuffle_bad is listed as directed but its look's autopilot
+#     has shuffle:true; c_missing_directed_cue does not exist in the plan.
+eligibility:
+  start:
+    clock: '21:00'
+  end:
+    clock: '23:00'
+directedCues:
+  - c_shuffle_bad
+  - c_missing_directed_cue

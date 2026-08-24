@@ -112,6 +112,13 @@ export function serializeChannel(ch) {
     followScale: (typeof ch.followScale === 'number' && Number.isFinite(ch.followScale))
       ? Math.max(0, Math.min(2, ch.followScale))
       : 1.0,
+    // Deck-overlay-only source state. The main Deck and mixer omit these keys;
+    // their render paths must never interpret overlay tint metadata.
+    ...(ch.sourceMode !== undefined ? {
+      sourceMode: ch.sourceMode === 'solid' ? 'solid' : 'playlist',
+      playlistTint: typeof ch.playlistTint === 'string' ? ch.playlistTint : null,
+      solidColor: typeof ch.solidColor === 'string' ? ch.solidColor : '#FFFFFF',
+    } : {}),
   };
 }
 

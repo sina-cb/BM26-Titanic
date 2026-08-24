@@ -18,7 +18,8 @@ import {
   awaitReboot,
   normalizeSubnetPrefix,
   deviceSupportsPerOutput,
-  readPerOutput,
+  readConfiguredPerOutput,
+  assertMappingPushAllowed,
   pushPerOutputUniverses,
   validatePerOutputPlan,
   applyPerOutputPlan,
@@ -92,6 +93,18 @@ function setSyncState(ctx, controllerId, state) {
 
 export function getSyncState(ctx, controllerId) {
   return syncCache.get(cacheKey(ctx, controllerId)) || null;
+}
+
+export function syncChipModel(ctx, controllerId, hasLastPush = true) {
+  const sync = getSyncState(ctx, controllerId) || {
+    state: hasLastPush ? 'checking' : 'never',
+  };
+  return {
+    state: sync.state,
+    className: `led-sync-chip led-sync-${sync.state}`,
+    label: SYNC_LABELS[sync.state] || sync.state,
+    title: describeSyncChipTooltip(sync),
+  };
 }
 
 // ── Live MAC cache (display-only; NEVER persisted) ───────────────────────────
@@ -773,7 +786,9 @@ export function describeSyncChipTooltip(sync) {
 /**
  * Recompute the sync chip for every bound LED controller (panel-open / post-
  * push). One getConfig + getStatus each; results land in syncCache and the
- * caller's panel re-renders. No background loop.
+ * caller paints only the affected read-state nodes. No background loop and no
+ * replacement of the controller pane: a late board response must not move the
+ * operator away from the controls they are using.
  */
 export function refreshSyncChips(ctx) {
   const registry = ctx.registry();
@@ -790,13 +805,16 @@ export function refreshSyncChips(ctx) {
     }
     setSyncState(ctx, controller.id, { state: 'checking' });
     computeSyncState(ctx, controller)
-      .then((res) => { setSyncState(ctx, controller.id, res); ctx.refresh(); })
+      .then((res) => {
+        setSyncState(ctx, controller.id, res);
+        ctx.refreshReadState(controller.id);
+      })
       .catch((err) => {
         setSyncState(ctx, controller.id, { state: 'unreachable', detail: err.message });
-        ctx.refresh();
+        ctx.refreshReadState(controller.id);
       });
   }
-  ctx.refresh();
+  ctx.refreshReadState();
 }
 
 export async function computeSyncState(ctx, controller) {
@@ -824,11 +842,9 @@ export async function computeSyncState(ctx, controller) {
   if (plan.collisions.length) {
     return { state: 'drift', detail: describeCollisions(plan.collisions) };
   }
-  const reported = readPerOutput(status);
+  const reported = readConfiguredPerOutput(snapshot);
   const changes = perOutputChanges(reported, plan);
-  const sacnOn = status.sacn && status.sacn.enabled;
   if (changes.length) return { state: 'drift', changes };
-  if (!sacnOn) return { state: 'drift', detail: 'device sACN receiver is disabled', changes: [] };
   // A SHARED universe does not make the device differ from the plan, so the chip
   // stays IN-SYNC — that is exactly what it measures. It still carries the
   // warning in its detail (and therefore its tooltip) so the fact is never only
@@ -1019,10 +1035,11 @@ export function renderDeviceBindingSection(ctx, controller) {
     section.appendChild(idLine);
 
     const chipRow = el('div', 'led-device-chip-row');
-    const sync = getSyncState(ctx, controller.id) || { state: dev.lastPush ? 'checking' : 'never' };
-    const chip = el('span', `led-sync-chip led-sync-${sync.state}`, SYNC_LABELS[sync.state] || sync.state);
+    const sync = syncChipModel(ctx, controller.id, !!dev.lastPush);
+    const chip = el('span', sync.className, sync.label);
+    chip.dataset.cmControllerId = controller.id;
     // Every chip states what it measures (slice S5) — device ≡ plan, never the feed.
-    chip.title = describeSyncChipTooltip(sync);
+    chip.title = sync.title;
     chipRow.appendChild(chip);
 
     if (dev.lastPush) {
@@ -1038,8 +1055,8 @@ export function renderDeviceBindingSection(ctx, controller) {
   // usable IP. Pushing an unbound card that answers will bind it on success.
   const pushBtn = el('button', 'cm-btn led-device-push', '⬆ Push to controller');
   if (validIp) {
-    pushBtn.title = 'Read device status, derive the per-output plan, and (after confirm) push + ' +
-      'reboot the device, then save the scene and notify the sACN bridge';
+    pushBtn.title = 'Read device status, derive and push the saved per-output mapping without ' +
+      'changing show mode, then save the scene and notify the sACN bridge';
     pushBtn.onclick = () => startPush(ctx, controller);
   } else {
     pushBtn.disabled = true;
@@ -1202,10 +1219,6 @@ async function startPush(ctx, controller) {
     ctx.showToast(`✋ ${controller.name}: set a valid device IP before pushing`, { error: true, ttl: 7000 });
     return;
   }
-  // Repair any port left without a universe BEFORE derive (base = first
-  // enabled output's port.universe, Slice D).
-  ensurePortUniverses(ctx, controller);
-
   let snapshot;
   let status;
   try {
@@ -1217,6 +1230,18 @@ async function startPush(ctx, controller) {
     ctx.refresh();
     return;
   }
+
+  try {
+    assertMappingPushAllowed(status, snapshot);
+  } catch (err) {
+    ctx.showToast(`✋ '${controller.name}': ${err.message}`, { error: true, ttl: 14000 });
+    setSyncState(ctx, controller.id, { state: 'drift', detail: err.message });
+    ctx.refresh();
+    return;
+  }
+
+  // Repair any port left without a universe only after the device mode gate.
+  ensurePortUniverses(ctx, controller);
 
   // Per-output DMX is the only push style. Firmware without it is too old — LOUD
   // refusal, never a legacy fallback (operator decision + codex P0).
@@ -1233,7 +1258,7 @@ async function startPush(ctx, controller) {
 // ── Per-output DMX push flow (firmware advertises capabilitiesExt.perOutputDmx) ─
 
 /**
- * Compare the device-reported `sacn.perOutput` to the plan we pushed — the
+ * Compare the device's saved strand mapping to the plan we pushed — the
  * read-back that ARBITRATES a lost write reply (report 20260725_69 §3).
  *
  * It asserts over `plan.universeByOutputIndex`, which since report 20260725_70
@@ -1272,7 +1297,7 @@ function diffPerOutput(reported, plan) {
 }
 
 /**
- * Structured drift between the device-reported `sacn.perOutput` and the plan, for
+ * Structured drift between the device's saved strand mapping and the plan, for
  * the sync-chip tooltip. Each change is `{path:'output N', from, to}`.
  *
  * The chip compares the FULL output map — assigned, PARKED and pending-enable —
@@ -1297,7 +1322,7 @@ function perOutputChanges(reported, plan) {
     }
     const matches = got && got.universe === universe && got.startAddress === 1 && got.enabled === true;
     if (matches) continue;
-    const from = got ? `U${got.universe}` : 'unset';
+    const from = got && Number.isInteger(got.universe) ? `U${got.universe}` : 'unset';
     changes.push({ path: `output ${index}`, from, to: `U${universe}` });
   }
   return changes;
@@ -1324,8 +1349,8 @@ const REBOOT_WAIT_SECONDS = Math.round(REBOOT_WAIT_TIMEOUT_MS / 1000);
 
 /**
  * Shared per-output push core (single-push + push-all use the SAME path). POST
- * the per-output plan (full read-modify-write), wait out the reboot, then VERIFY
- * by re-reading `sacn.perOutput` and asserting it matches the plan, and record
+ * the per-output plan (full read-modify-write), wait out any reboot, then VERIFY
+ * by re-reading the saved config strands and asserting they match the plan, and record
  * push provenance through the undo pipeline. THROWS on any failure (fail loud): a
  * network/device error propagates verbatim; a verify mismatch throws an Error
  * carrying `.perOutputMismatch` so the caller can render the drift. Takes an
@@ -1350,7 +1375,7 @@ const REBOOT_WAIT_SECONDS = Math.round(REBOOT_WAIT_TIMEOUT_MS / 1000);
  */
 async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
   const report = onStatus || (() => {});
-  report(`pushing per-output universes… (the device may take up to ${WRITE_BUDGET_SECONDS}s to ` +
+  report(`pushing saved per-output mapping… (the device may take up to ${WRITE_BUDGET_SECONDS}s to ` +
     'answer the write)');
   let reply = null;
   let writeError = null;
@@ -1362,6 +1387,10 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
     // failed pre-write read — is a device that spoke, and stays a hard failure.
     if (!err.writeResponseLost) throw err;
     writeError = err;
+  }
+  if (reply && (reply.outcome === 'deferred' || reply.suppressedBy === 'dmx')) {
+    throw new Error('mapping write was deferred by DMX mode — use the guarded Smokestack / ' +
+      'mass_deploy show-mode workflow before mapping; the write will not be retried');
   }
   const needsReboot = !!writeError || reply.reboot === true || reply.outcome === 'needs-reboot';
   if (needsReboot) {
@@ -1388,10 +1417,12 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
     }
   }
 
-  report('reading confirmed mapping…');
+  report('reading confirmed saved mapping…');
   const verifyStatus = await io.getStatus(controller.ip);
-  setDeviceOutputs(ctx, controller.id, verifyStatus.strands); // feeds the output selector
-  const reported = readPerOutput(verifyStatus);
+  const verifyConfig = await io.getConfig(controller.ip);
+  assertMappingPushAllowed(verifyStatus, verifyConfig);
+  setDeviceOutputs(ctx, controller.id, verifyConfig.strands); // feeds the output selector
+  const reported = readConfiguredPerOutput(verifyConfig);
   const mismatches = diffPerOutput(reported, plan);
   if (mismatches.length) {
     const lostNote = writeError
@@ -1430,7 +1461,7 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
 
   const configHash = await sha256Hex(JSON.stringify(plan.universeByOutputIndex));
   const firmwareSHA = verifyStatus.firmwareSHA;
-  ctx.mutate(`Pushed per-output universes to '${controller.name}'`, () => {
+  ctx.mutate(`Pushed per-output mapping to '${controller.name}'`, () => {
     // STICKY PARKING (report 20260725_70 §2.2). The park the device just
     // confirmed is persisted on the card so the NEXT derive reuses the same
     // number. A re-derived park would move whenever any other controller took a
@@ -1720,7 +1751,6 @@ async function startPerOutputPush(ctx, controller, snapshot, status) {
   }
   const payload = {
     strands: payloadStrands,
-    dmx: { enabled: true, protocol: 0, timeoutMs: 3000 },
   };
   // A device whose STORED deviceName is invalid rejects every config write, so
   // the push has to repair it with this card's name — or refuse now, before the
@@ -1747,13 +1777,12 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
   const card = el('div', 'vm-modal-card led-push-card');
   overlay.appendChild(card);
   card.appendChild(el('div', 'vm-modal-title',
-    `Push per-output universes to '${controller.name}' (${controller.ip})`));
+    `Push per-output mapping to '${controller.name}' (${controller.ip})`));
 
   card.appendChild(el('div', 'led-push-warn',
-    '⚠ This writes strands + dmx (per-output sACN universe on every enabled output) and the device ' +
-    `WILL REBOOT (~11 s measured; the push waits up to ${REBOOT_WAIT_SECONDS} s for it to answer, ` +
-    'and reads the mapping back before calling it done). Keep the sACN source streaming across ' +
-    'the reboot.'));
+    '⚠ This writes the saved strand mapping only; it NEVER changes DMX / swarm show mode. ' +
+    `A mapping change may reboot the device; the push waits up to ${REBOOT_WAIT_SECONDS} s for it ` +
+    'to answer and reads the saved mapping back before calling it done.'));
 
   // SHARED ADDRESSES — declared before anything else on the dialog, because it
   // is the one thing on this plan that changes what OTHER hardware sees
@@ -1857,7 +1886,7 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRe
   const actions = el('div', 'vm-modal-actions');
   const cancelBtn = el('button', 'vm-modal-btn', 'Cancel');
   cancelBtn.onclick = () => overlay.remove();
-  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Push + reboot');
+  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Push mapping');
   confirmBtn.onclick = () => runPerOutputPush(ctx, controller, plan, DEFAULT_DEVICE_IO, {
     overlay, statusLine, confirmBtn, cancelBtn,
   });
@@ -1955,10 +1984,10 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
 
 /**
  * Push every LED controller in the registry that carries a syntactically valid
- * IP, SEQUENTIALLY (each device reboots ~10 s, so they must serialize). This is
+ * IP, SEQUENTIALLY (a mapping change may reboot, so writes must serialize). This is
  * a FORCE push (addendum #2): each controller runs the SAME per-output path as
  * the single push — derive the plan from the CURRENT port state, push,
- * awaitReboot, verify the `sacn.perOutput` read-back — with NO in-sync
+ * awaitReboot when requested, verify the saved config read-back — with NO in-sync
  * short-circuit (sync state never gates a push). An UNBOUND card that answers is
  * bound on success (addendum #3). Firmware without per-output DMX gets the loud
  * firmware-too-old refusal, counted as a failure (no legacy fallback, codex P0).
@@ -1987,8 +2016,6 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
       continue;
     }
     try {
-      // Repair any port left without a universe from CURRENT state before derive.
-      ensurePortUniverses(ctx, controller);
       const status = await io.getStatus(controller.ip);
       // Per-output DMX is the only push style — refuse stale firmware loudly.
       if (!deviceSupportsPerOutput(status)) {
@@ -1998,6 +2025,9 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
         continue;
       }
       const snapshot = await io.getConfig(controller.ip);
+      assertMappingPushAllowed(status, snapshot);
+      // Repair any port left without a universe only after the device mode gate.
+      ensurePortUniverses(ctx, controller);
       setDeviceOutputs(ctx, controller.id, snapshot.strands);
       const plan = derivePerOutputPlan(controller, ctx.strandLedCounts(), snapshot,
         claimedUniversesFor(ctx, controller));
@@ -2024,7 +2054,7 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
         ip: controller.ip,
         stride: (controller.led && controller.led.stride) || 4,
       });
-      // FORCE: always push + reboot + verify, even when the device already
+      // FORCE: always push + verify, even when the device already
       // matches. Same three phase budgets and the same "a lost write reply is
       // settled by the read-back, not by a timeout" rule as the single push.
       const pushResult = await pushPerOutputVerifyRecord(ctx, controller, plan, io, null);
@@ -2052,7 +2082,7 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
 
 /**
  * Operator entry point for "Push all MarsinLED controllers" (the MarsinLED group
- * header button). One up-front confirm summarizing the count + the reboot
+ * header button). One up-front confirm summarizing the count + possible reboot
  * warning; then runs pushAllLedControllers and reports a per-controller summary.
  */
 export function startPushAll(ctx) {
@@ -2070,9 +2100,9 @@ export function startPushAll(ctx) {
   overlay.appendChild(card);
   card.appendChild(el('div', 'vm-modal-title', `Push all MarsinLED controllers (${pushable.length})`));
   card.appendChild(el('div', 'led-push-warn',
-    `⚠ This FORCE-pushes ${pushable.length} controller(s) SEQUENTIALLY — each is written and REBOOTS ` +
-    `(~11 s measured, waited out to ${REBOOT_WAIT_SECONDS} s each), even if already in sync. ` +
-    'Keep every sACN source streaming across the reboots.'));
+    `⚠ This FORCE-pushes ${pushable.length} controller(s) SEQUENTIALLY — each is written and may ` +
+    `reboot (waited out to ${REBOOT_WAIT_SECONDS} s each), even if already in sync. ` +
+    'These writes change saved mappings only and never change DMX / swarm show mode.'));
   card.appendChild(el('div', 'led-push-warn led-push-saves-scene',
     'Push writes the device AND saves the scene (mapping must land on disk for the sACN feed to ' +
     'follow). One scene save + bridge notify runs once, after the last controller.'));
@@ -2091,7 +2121,7 @@ export function startPushAll(ctx) {
   const actions = el('div', 'vm-modal-actions');
   const cancelBtn = el('button', 'vm-modal-btn', 'Cancel');
   cancelBtn.onclick = () => overlay.remove();
-  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Push all + reboot');
+  const confirmBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Push all mappings');
   confirmBtn.disabled = pushable.length === 0;
   confirmBtn.onclick = async () => {
     confirmBtn.disabled = true;

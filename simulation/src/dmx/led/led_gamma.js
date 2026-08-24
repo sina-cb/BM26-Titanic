@@ -50,6 +50,8 @@ export const LED_GAMMA_MAX = 3.0;
 export const LED_GAMMA_RECOMMENDED = RECOMMENDED_CONTROLLER_GAMMA;
 
 const GAMMA_EPSILON = 1e-3;
+export const GAMMA_REFRESH_TTL_MS = 60000;
+const gammaRefreshCache = new Map();
 
 /**
  * The gamma curve this controller's scene mirror currently declares. Falls back
@@ -60,9 +62,7 @@ const GAMMA_EPSILON = 1e-3;
 export function readGammaMirror(controller) {
   const wire = controller && controller.led && controller.led.wire;
   const src = (wire && wire.controllerGamma) || normalizeLedWireConfig(null, 'LED').controllerGamma;
-  const out = {};
-  for (const ch of LED_GAMMA_CHANNELS) out[ch] = Number(src[ch]);
-  return out;
+  return validateGammaMirror(src, `controller '${controller && controller.name}' gamma mirror`);
 }
 
 /**
@@ -81,8 +81,9 @@ export function validateGammaMirror(raw, label = 'gamma') {
   }
   const out = {};
   for (const ch of LED_GAMMA_CHANNELS) {
-    const v = Number(raw[ch]);
-    if (!Number.isFinite(v) || v < LED_GAMMA_MIN || v > LED_GAMMA_MAX) {
+    const v = raw[ch];
+    if (typeof v !== 'number' || !Number.isFinite(v) ||
+        v < LED_GAMMA_MIN || v > LED_GAMMA_MAX) {
       const err = new Error(`[LedGamma] ${label}.${ch} ${JSON.stringify(raw[ch])} must be a number ` +
         `in ${LED_GAMMA_MIN}–${LED_GAMMA_MAX} (1.0 = off) — the range the LED controller accepts`);
       err.channel = ch;
@@ -125,6 +126,50 @@ export function gammaEquals(a, b) {
 export function formatGamma(gamma) {
   if (!gamma) return '—';
   return LED_GAMMA_CHANNELS.map((ch) => String(Number(gamma[ch]))).join(' / ');
+}
+
+function gammaExactlyEquals(a, b) {
+  return LED_GAMMA_CHANNELS.every((channel) => a[channel] === b[channel]);
+}
+
+/** Resolve the one displayed source curve for a fleet run, without fallback. */
+export function fleetGammaSourcePlan(controllers, selectedSourceId = null) {
+  const choices = (controllers || []).filter(isLedController).map((controller) => ({
+    controller,
+    sourceId: String(controller.id),
+    gamma: Object.freeze(readGammaMirror(controller)),
+  }));
+  const sourceIds = choices.map((choice) => choice.sourceId);
+  if (new Set(sourceIds).size !== sourceIds.length) {
+    throw new Error('[LedGamma] fleet source selection requires unique controller ids');
+  }
+  if (choices.length === 0) {
+    return { choices, gamma: null, sourceLabel: null, requiresSelection: false };
+  }
+
+  const shared = choices.every((choice) => gammaExactlyEquals(choice.gamma, choices[0].gamma));
+  if (shared) {
+    return {
+      choices,
+      gamma: Object.freeze({ ...choices[0].gamma }),
+      sourceLabel: 'shared by every displayed LED controller',
+      requiresSelection: false,
+    };
+  }
+  if (selectedSourceId === null || selectedSourceId === undefined || selectedSourceId === '') {
+    return { choices, gamma: null, sourceLabel: null, requiresSelection: true };
+  }
+  const selected = choices.find((choice) => choice.sourceId === String(selectedSourceId));
+  if (!selected) {
+    throw new Error(`[LedGamma] selected fleet gamma source '${selectedSourceId}' is not displayed`);
+  }
+  return {
+    choices,
+    gamma: Object.freeze({ ...selected.gamma }),
+    sourceLabel: `${selected.controller.name} (${selected.controller.ip || 'no IP'})`,
+    sourceId: selected.sourceId,
+    requiresSelection: false,
+  };
 }
 
 // ── Curve presentation (pure, DOM-free — the UI never does this maths) ──────
@@ -307,7 +352,112 @@ export function commitGammaPush(controller, result) {
   return controller;
 }
 
+function validateGammaReadIdentity(controller, result) {
+  const device = controller.device;
+  if (device && device.controllerId && result.controllerId !== device.controllerId) {
+    throw new Error(`[LedGamma] '${controller.name}' gamma refresh identity mismatch — expected ` +
+      `controllerId '${device.controllerId}', got ${JSON.stringify(result.controllerId)}`);
+  }
+  if (device && device.boardId && result.boardId !== device.boardId) {
+    throw new Error(`[LedGamma] '${controller.name}' gamma refresh identity mismatch — expected ` +
+      `boardId '${device.boardId}', got ${JSON.stringify(result.boardId)}`);
+  }
+  if (!device && !result.controllerId) {
+    throw new Error(`[LedGamma] '${controller.name}' gamma refresh reported no controllerId`);
+  }
+}
+
+/** Mirror one validated saved-config read without stamping it as a push. */
+export function commitGammaRefresh(controller, result) {
+  validateGammaReadIdentity(controller, result);
+  const gamma = validateGammaMirror(result.gamma,
+    `controller '${controller.name}' saved gamma`);
+  setGammaMirror(controller, gamma);
+  if (!controller.device) {
+    bindControllerDevice(controller, {
+      vendor: LED_DEVICE_VENDOR_MARSINLED,
+      controllerId: result.controllerId,
+      deviceName: result.deviceName,
+      boardId: result.boardId,
+    });
+  }
+  return controller;
+}
+
+export function gammaRefreshState(controller) {
+  const entry = gammaRefreshCache.get(controller);
+  return entry && entry.record ? { ...entry.record } : null;
+}
+
+export function clearGammaRefreshCache(controller) {
+  if (controller) gammaRefreshCache.delete(controller);
+  else gammaRefreshCache.clear();
+}
+
+function cacheVerifiedGamma(controller, result, nowMs) {
+  const record = {
+    state: 'ok',
+    gamma: Object.freeze({ ...validateGammaMirror(result.gamma || result.verified) }),
+    controllerId: result.controllerId || null,
+    boardId: result.boardId || null,
+    firmwareSHA: result.firmwareSHA || null,
+    at: result.at || new Date(nowMs).toISOString(),
+    source: 'saved-config',
+    cached: false,
+  };
+  gammaRefreshCache.set(controller, { atMs: nowMs, record, inFlight: null });
+  return record;
+}
+
+/** One TTL-deduplicated saved-config read; never polls or retries. */
+export function refreshGammaFromController(controller, transport, commit, options = {}) {
+  const now = options.now || (() => Date.now());
+  const nowMs = now();
+  const ttlMs = options.ttlMs === undefined ? GAMMA_REFRESH_TTL_MS : options.ttlMs;
+  const existing = gammaRefreshCache.get(controller);
+  if (existing && existing.inFlight) return existing.inFlight;
+  if (!options.force && existing && existing.record && nowMs - existing.atMs < ttlMs) {
+    return Promise.resolve({ ...existing.record, cached: true });
+  }
+
+  const inFlight = (async () => {
+    let record;
+    try {
+      if (!isLedController(controller)) throw new Error('not an LED controller');
+      if (!isValidIp(controller.ip)) throw new Error(`no valid device IP ('${controller.ip}')`);
+      const result = await transport.readGamma(controller.ip);
+      validateGammaReadIdentity(controller, result);
+      const gamma = validateGammaMirror(result.gamma,
+        `controller '${controller.name}' saved gamma`);
+      const verified = { ...result, gamma, at: result.at || new Date(now()).toISOString() };
+      if (commit) commit(controller, verified);
+      record = cacheVerifiedGamma(controller, verified, now());
+    } catch (err) {
+      record = {
+        state: err.kind === 'unreachable' ? 'unreachable' : 'failed',
+        detail: err.message,
+        at: new Date(now()).toISOString(),
+        source: 'saved-config',
+        cached: false,
+      };
+      gammaRefreshCache.set(controller, { atMs: now(), record, inFlight: null });
+    }
+    return { ...record };
+  })();
+  gammaRefreshCache.set(controller, { atMs: nowMs, record: existing && existing.record, inFlight });
+  return inFlight;
+}
+
 // ── Transport (browser → sim save-server → controller) ──────────────────────
+
+/** Exact browser → save-server JSON body for one gamma push. */
+export function gammaPushRequestBody(ip, gamma, controllerName) {
+  return {
+    ip,
+    gamma: validateGammaMirror(gamma, `controller '${controllerName}' gamma request`),
+    controllerName,
+  };
+}
 
 async function postGamma(ip, gamma, controllerName) {
   // controllerName is the card's name, sent for exactly one server-side use:
@@ -317,7 +467,7 @@ async function postGamma(ip, gamma, controllerName) {
   const res = await fetch(saveHttpUrl('/led/gamma-push'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ip, gamma, controllerName }),
+    body: JSON.stringify(gammaPushRequestBody(ip, gamma, controllerName)),
   });
   let payload = null;
   try { payload = await res.json(); } catch { /* handled below */ }
@@ -354,8 +504,10 @@ export const DEFAULT_GAMMA_TRANSPORT = { pushGamma: postGamma, readGamma: getGam
  * every controller. `state` ∈ 'ok' | 'skipped' | 'unreachable' | 'failed'.
  * `commit` (usually a ctx.mutate wrapper) is invoked ONLY on a verified
  * success; a failure leaves the mirror exactly as it was.
+ * `options.gamma`, when supplied, is the immutable operator-confirmed curve;
+ * the live scene mirror is not reread after confirmation.
  */
-export async function pushGammaToController(controller, transport, commit) {
+export async function pushGammaToController(controller, transport, commit, options = {}) {
   const base = { id: controller.id, name: controller.name, ip: controller.ip };
   if (!isLedController(controller)) {
     return { ...base, state: 'skipped', detail: 'not an LED controller' };
@@ -365,7 +517,8 @@ export async function pushGammaToController(controller, transport, commit) {
   }
   let gamma;
   try {
-    gamma = validateGammaMirror(readGammaMirror(controller), `controller '${controller.name}' gamma`);
+    const requested = options.gamma === undefined ? readGammaMirror(controller) : options.gamma;
+    gamma = validateGammaMirror(requested, `controller '${controller.name}' gamma`);
   } catch (err) {
     return { ...base, state: 'failed', detail: err.message };
   }
@@ -379,22 +532,34 @@ export async function pushGammaToController(controller, transport, commit) {
       detail: err.message,
     };
   }
+  let verified;
   try {
-    const stamped = { ...result, at: result.at || new Date().toISOString() };
+    verified = validateGammaMirror(result.verified,
+      `controller '${controller.name}' verified gamma`);
+    if (!gammaEquals(verified, gamma)) {
+      throw new Error(`[LedGamma] '${controller.name}' saved-config read-back MISMATCH — ` +
+        `sent ${formatGamma(gamma)}, verified ${formatGamma(verified)}`);
+    }
+  } catch (err) {
+    return { ...base, state: 'failed', detail: err.message };
+  }
+  const stamped = { ...result, verified, at: result.at || new Date().toISOString() };
+  try {
     if (commit) commit(controller, stamped);
-    return {
-      ...base,
-      state: 'ok',
-      verified: validateGammaMirror(stamped.verified, `controller '${controller.name}' verified gamma`),
-      outcome: stamped.outcome === 'needs-reboot' ? 'needs-reboot' : 'applied',
-      backupPath: stamped.backupPath,
-    };
   } catch (err) {
     // The DEVICE was written and verified, but recording it failed (e.g. the
     // controller was deleted mid-push). Loud, and NOT reported as a success.
     return { ...base, state: 'failed', detail: `device written + verified, but the scene mirror ` +
       `could not be updated: ${err.message}` };
   }
+  cacheVerifiedGamma(controller, stamped, Date.now());
+  return {
+    ...base,
+    state: 'ok',
+    verified,
+    outcome: stamped.outcome === 'needs-reboot' ? 'needs-reboot' : 'applied',
+    backupPath: stamped.backupPath,
+  };
 }
 
 /**
@@ -405,14 +570,28 @@ export async function pushGammaToController(controller, transport, commit) {
  *
  * @param {Array<Object>} controllers - registry controllers (non-LED are skipped)
  * @param {{pushGamma: Function}} transport
- * @param {{commit?: Function, onResult?: Function}} [hooks]
+ * @param {{commit?: Function, onResult?: Function, gammaSnapshot?: Object}} [hooks]
  * @returns {Promise<Array<Object>>} one record per LED controller, in order.
  */
 export async function pushGammaFleet(controllers, transport, hooks = {}) {
   const leds = (controllers || []).filter(isLedController);
   const results = [];
   for (let i = 0; i < leds.length; i++) {
-    const record = await pushGammaToController(leds[i], transport, hooks.commit);
+    const controller = leds[i];
+    if (!hooks.gammaSnapshot) {
+      const record = {
+        id: controller.id,
+        name: controller.name,
+        ip: controller.ip,
+        state: 'failed',
+        detail: 'confirmed fleet gamma curve is missing — refusing to choose a card implicitly',
+      };
+      results.push(record);
+      if (hooks.onResult) hooks.onResult(record, i + 1, leds.length);
+      continue;
+    }
+    const record = await pushGammaToController(controller, transport, hooks.commit,
+      { gamma: hooks.gammaSnapshot });
     results.push(record);
     if (hooks.onResult) hooks.onResult(record, i + 1, leds.length);
   }

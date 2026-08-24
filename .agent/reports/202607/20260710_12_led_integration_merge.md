@@ -75,4 +75,4 @@ list). Operator-facing highlights:
   `bm26-titanic`) carries the most recent controller configs — consult it
   before any device firmware/config work.
 - Party plan (THE living tracker):
-  `BM26-Firmware-Deployment/.agent/plans/20260707_party_plan_20260711.md`.
+  the party plan in the external/private deployment source.

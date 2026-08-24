@@ -372,7 +372,7 @@ test('qualified package preserves the baseline identity and adds exactly one EQ-
   assert.equal(discovered.filter((name) => name === PATTERN_NAME).length, 1);
   assert.equal(manifest.filter((name) => name === PATTERN_NAME).length, 1);
   assert.equal(manifest.filter((name) => name === EQ_PATTERN_NAME).length, 1);
-  assert.equal(manifest.some((name) => /^134_/.test(name)), false);
+  assert.equal(manifest.some((name) => /^134_dom_/.test(name)), false); // the old top-level draft must stay relocated; 134_surge is an unrelated interior pattern
   assert.equal(playlist.schemaVersion, 1);
   assert.equal(playlist.name, 'party_dancers');
   assert.equal(playlist.entries.length, 2);

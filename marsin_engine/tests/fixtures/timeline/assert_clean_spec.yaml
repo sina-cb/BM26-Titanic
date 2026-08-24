@@ -1,0 +1,35 @@
+# assert_clean_spec.yaml — the --assert-spec whitelist for assert_clean.yaml.
+# Every field here is deliberately EXACT (no slack), so a passing run against
+# this spec proves timeline_assertions.mjs's happy path, including every
+# OPTIONAL sub-check (masterZeroCue, eligibility, expectedOrder, restartExpect).
+masterWriters:
+  - c_ignition
+  - c_sunrise_bloom
+  - c_morning_watch
+  - c_day_off
+masterZeroCue: c_day_off
+directedCues:
+  - c_ignition
+  - c_first_color
+  - c_morning_watch
+eligibility:
+  start:
+    clock: '21:30'
+  end:
+    sun: sunrise
+    offsetMin: -120
+solarSweep:
+  startDate: '2026-08-25'
+  days: 6
+restartExpect:
+  '02:00': c_midnight_refresh
+  '07:30': c_morning_watch
+expectedOrder:
+  - c_midnight_refresh
+  - c_sunrise_bloom
+  - c_morning_watch
+  - c_day_off
+  - c_ignition
+  - c_first_color
+  - c_early_night
+  - c_deep_block

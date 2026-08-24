@@ -142,6 +142,41 @@ describe('validateProfile', () => {
     const bad = { ...valid, device: { ...valid.device, nameEquals: '' } };
     expect(() => validateProfile(bad)).toThrow(/nameEquals/);
   });
+
+  it('accepts an exact-name alias allowlist for platform-specific driver names', () => {
+    const p = validateProfile({
+      ...valid,
+      device: {
+        ...valid.device,
+        nameEqualsAny: ['Intech Grid MIDI device', 'Grid'],
+      },
+    });
+    expect(p.device.nameEqualsAny).toEqual(['Intech Grid MIDI device', 'Grid']);
+  });
+
+  it('rejects empty, malformed, or duplicate exact-name aliases', () => {
+    for (const nameEqualsAny of [
+      [],
+      ['Grid', ''],
+      ['Grid', 42],
+      ['Grid', 'Grid'],
+    ]) {
+      const bad = { ...valid, device: { ...valid.device, nameEqualsAny } };
+      expect(() => validateProfile(bad, 'vsn1.yaml')).toThrow(/vsn1\.yaml.*nameEqualsAny/);
+    }
+  });
+
+  it('rejects nameEquals and nameEqualsAny together (one exact matching rule only)', () => {
+    const bad = {
+      ...valid,
+      device: {
+        ...valid.device,
+        nameEquals: 'Grid',
+        nameEqualsAny: ['Grid', 'Intech Grid MIDI device'],
+      },
+    };
+    expect(() => validateProfile(bad)).toThrow(/mutually exclusive/);
+  });
 });
 
 describe('validateProfileParams', () => {

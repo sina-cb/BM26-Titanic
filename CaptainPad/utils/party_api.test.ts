@@ -20,6 +20,9 @@ vi.mock('./apiBase', () => ({
 
 import {
   fetchPartyConfig,
+  forcePartySession,
+  resetPartyCooldown,
+  returnPartyToLiveAudio,
   setPartyConfig,
   parsePartyConfig,
   describePartyStatus,
@@ -30,6 +33,7 @@ import {
   stepPartyField,
   formatMinSec,
   formatMinutes,
+  partyTimerReadouts,
   PARTY_FIELD_BOUNDS,
 } from './party_api';
 
@@ -83,6 +87,22 @@ describe('fetchPartyConfig — GET /party-config', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe('Network request failed');
     expect(r.data).toBeUndefined();
+  });
+});
+
+describe('Party live commands', () => {
+  it('posts Force Party, Return to Live Audio, and Reset Cooldown to distinct engine commands', async () => {
+    for (const [call, path] of [
+      [forcePartySession, '/party/force'],
+      [returnPartyToLiveAudio, '/party/live-audio'],
+      [resetPartyCooldown, '/party/cooldown/reset'],
+    ] as const) {
+      stubFetch(CONFIG);
+      const result = await call();
+      expect(result.ok).toBe(true);
+      expect(lastUrl).toBe(`http://engine.test${path}`);
+      expect(lastInit?.method).toBe('POST');
+    }
   });
 });
 
@@ -140,6 +160,7 @@ describe('parsePartyConfig — fail loudly on a malformed payload', () => {
   it('accepts an omitted effectiveState but rejects an unknown one', () => {
     expect(parsePartyConfig(base).effectiveState).toBeUndefined();
     expect(parsePartyConfig({ ...base, effectiveState: 'cooldown' }).effectiveState).toBe('cooldown');
+    expect(parsePartyConfig({ ...base, effectiveState: 'waiting_window' }).effectiveState).toBe('waiting_window');
     expect(() => parsePartyConfig({ ...base, effectiveState: 'partying' })).toThrow(/'effectiveState' must be one of/);
   });
 
@@ -159,6 +180,7 @@ describe('parsePartyConfig — fail loudly on a malformed payload', () => {
       mode: 'armed',
       partyCueId: 'c_mood_to_party',
       sessionFollowsMusic: false,
+      sessionForced: false,
       sessionEndsAtMs: 1_800_000_000_000,
       cooldownRemainingSec: 0,
     };
@@ -206,6 +228,119 @@ describe('formatters', () => {
     expect(formatMinutes(900)).toBe('15 min');
     expect(formatMinutes(0)).toBe('0 min');
     expect(formatMinutes(90)).toBe('1.5 min');
+  });
+});
+
+describe('partyTimerReadouts — only the live stage counts', () => {
+  const readiness = {
+    enabled: true,
+    planActive: true,
+    partyWindowOpen: true,
+    planDriving: true,
+    triggerArmed: true,
+    cooldownClear: true,
+  };
+
+  it('counts sustain down to its threshold without displaying unbounded held time', () => {
+    const timers = partyTimerReadouts({
+      ...CONFIG,
+      effectiveState: 'armed',
+      strongSignal: true,
+      sustainHeldSec: 12,
+      sustainRequiredSec: 30,
+      readiness,
+    }, 1_000_000);
+    expect(timers[0]).toMatchObject({
+      id: 'sustain',
+      value: '0:18 LEFT',
+      detail: '0:12 OF 0:30',
+      tone: 'active',
+    });
+    expect(timers[1].value).toBe('WAITING');
+    expect(timers[2].value).toBe('READY');
+  });
+
+  it('stops sustain at COMPLETE and starts only the Party Time clock in session', () => {
+    const timers = partyTimerReadouts({
+      ...CONFIG,
+      effectiveState: 'in_session',
+      strongSignal: true,
+      sustainHeldSec: 377,
+      sustainRequiredSec: 30,
+      effectiveDurationMin: 12,
+      effectiveCooldownEnabled: true,
+      effectiveCooldownSec: 120,
+      sessionFollowsMusic: false,
+      sessionEndsAtMs: 1_090_000,
+      signalLossHeldSec: 0,
+      signalLossRequiredSec: 15,
+      signalLossProgress: 0,
+      readiness,
+    }, 1_000_000);
+    expect(timers[0]).toMatchObject({
+      label: 'TIMELINE RELEASE',
+      value: 'READY',
+      detail: '0:15 AFTER DETECTOR',
+    });
+    expect(timers[1]).toMatchObject({ value: '1:30 LEFT', tone: 'active' });
+    expect(timers[2]).toMatchObject({ value: 'READY', tone: 'ready' });
+  });
+
+  it('counts the 15-second no-party hold while a fixed session loses detection', () => {
+    const timers = partyTimerReadouts({
+      ...CONFIG,
+      effectiveState: 'in_session',
+      strongSignal: false,
+      sustainHeldSec: 0,
+      sustainRequiredSec: 30,
+      effectiveDurationMin: 12,
+      effectiveCooldownEnabled: true,
+      sessionFollowsMusic: false,
+      sessionEndsAtMs: 1_600_000,
+      signalLossHeldSec: 6,
+      signalLossRequiredSec: 15,
+      signalLossProgress: 0.4,
+      readiness,
+    }, 1_000_000);
+    expect(timers[0]).toMatchObject({
+      label: 'TIMELINE RELEASE',
+      value: '0:09 LEFT',
+      detail: 'AFTER DETECTOR OFF',
+      tone: 'active',
+    });
+  });
+
+  it('shows that detector state is ignored while the operator-forced session is latched', () => {
+    const timers = partyTimerReadouts({
+      ...CONFIG,
+      effectiveState: 'in_session',
+      strongSignal: false,
+      sessionForced: true,
+      sessionFollowsMusic: false,
+      sessionEndsAtMs: 1_600_000,
+      signalLossHeldSec: 0,
+      signalLossRequiredSec: 15,
+      readiness,
+    }, 1_000_000);
+    expect(timers[0]).toMatchObject({
+      label: 'LIVE AUDIO',
+      value: 'FORCED',
+      detail: 'SIGNAL IGNORED',
+      tone: 'active',
+    });
+  });
+
+  it('starts only cooldown after Party Time ends', () => {
+    const timers = partyTimerReadouts({
+      ...CONFIG,
+      effectiveState: 'cooldown',
+      strongSignal: false,
+      cooldownRemainingSec: 95,
+      effectiveCooldownEnabled: true,
+      readiness: { ...readiness, cooldownClear: false, triggerArmed: false },
+    }, 1_000_000);
+    expect(timers.map((timer) => timer.value)).toEqual(['WAITING', 'WAITING', '1:35 LEFT']);
+    expect(timers[2].tone).toBe('active');
   });
 });
 
@@ -389,6 +524,27 @@ describe('parsePartyConfig — live-view additions', () => {
     expect(() => parsePartyConfig({ ...LIVE, sessionFollowsMusic: 'yes' })).toThrow(/'sessionFollowsMusic' must be a boolean or null/);
     expect(() => parsePartyConfig({ ...LIVE, partyCueId: 7 })).toThrow(/'partyCueId' must be a string or null/);
   });
+
+  it('parses engine-owned sustain progress and readiness facts', () => {
+    const cfg = parsePartyConfig({
+      ...LIVE,
+      strongSignal: true,
+      sustainHeldSec: 12,
+      sustainRequiredSec: 30,
+      sustainProgress: 0.4,
+      readiness: {
+        enabled: true,
+        planActive: true,
+        partyWindowOpen: true,
+        planDriving: true,
+        triggerArmed: true,
+        cooldownClear: true,
+      },
+    });
+    expect(cfg.strongSignal).toBe(true);
+    expect(cfg.sustainProgress).toBe(0.4);
+    expect(cfg.readiness?.partyWindowOpen).toBe(true);
+  });
 });
 
 describe('describePartyRows — engine effective flag is authority', () => {
@@ -415,6 +571,12 @@ describe('describeEffectiveNote', () => {
 });
 
 describe('describePartyStatus — the six landed states', () => {
+  it('says the timed Party Window is closed instead of claiming detection is armed', () => {
+    const s = describePartyStatus({ enabled: true, effectiveState: 'waiting_window' });
+    expect(s.label).toBe('WINDOW CLOSED');
+    expect(s.detail).toMatch(/cannot switch playlists/i);
+  });
+
   it('MANUAL is its own state, not NO PLAN', () => {
     const s = describePartyStatus({ enabled: true, effectiveState: 'manual' });
     expect(s.label).toBe('MANUAL');

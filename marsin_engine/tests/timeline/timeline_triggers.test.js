@@ -177,6 +177,46 @@ test('mood calm->party fires only inside whenPhase, respects dwell and cooldown'
   assert.equal(r.fires.length, 0, 'second flip within cooldown should not fire');
 });
 
+test('whenPhase gates against its own window even when an earlier phase overlaps', () => {
+  const plan = basePlan({
+    phases: {
+      ambient_night: { start: { clock: '00:00' }, end: { clock: '23:59' } },
+      party_window: { start: { clock: '20:00' }, end: { clock: '23:00' } },
+    },
+    cues: [{
+      id: 'c_party',
+      trigger: {
+        type: 'mood',
+        from: 'calm',
+        to: 'party',
+        minDwellSec: 0,
+        cooldownSec: 0,
+        whenPhase: 'party_window',
+      },
+      action: { type: 'look', look: 'l1' },
+    }],
+  });
+  const inside = clockToEpochMs('21:00', NOON_UTC, TZ);
+  const dayTimes = resolveDayTimes({ plan, now: inside, sunEvents: {} });
+  assert.equal(activePhase({ plan, now: inside, dayTimes }), 'ambient_night');
+
+  let state = evaluateTick({
+    now: inside,
+    plan,
+    state: defaultTimelineState(),
+    mood: { party: 0 },
+    dayTimes,
+  }).state;
+  const result = evaluateTick({
+    now: inside + 1000,
+    plan,
+    state,
+    mood: { party: 1 },
+    dayTimes,
+  });
+  assert.deepEqual(result.fires, [{ cueId: 'c_party', reason: 'mood' }]);
+});
+
 test('mood blip that reverts before dwell does NOT fire', () => {
   const plan = basePlan({
     phases: { party_night: { start: { clock: '12:00' }, end: { clock: '23:59' } } },

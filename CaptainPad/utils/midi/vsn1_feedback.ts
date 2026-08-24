@@ -3,8 +3,9 @@
 // PAGE back to the Intech VSN1, so the device's on-device Lua (`eventrx_cb`,
 // authored by the device/tools track) can render the key LEDs, the encoder ring,
 // and the LCD without any flash write. This is the CaptainPad end of the
-// runtime-feedback contract: layout changes deploy Lua from the engine; live
-// VALUE changes (intensity/mode/active/page) ride this MIDI feedback stream.
+// runtime-feedback contract: the persistent base Lua comes from the engine's
+// serial deploy, active-page layout changes ride `vsn1_layout_feedback.ts`, and
+// live VALUE changes (intensity/mode/active/page) ride this MIDI stream.
 //
 // The device is the SOURCE of the keys (notes 32..39), the jog (CC 40), and the
 // side buttons (notes 41..44). Feedback echoes state on a set of DEDICATED

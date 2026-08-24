@@ -23,13 +23,18 @@ import { MidiTransport } from './transport';
 import { ControllerProfile, validateProfileParams, ParamKeyError } from './profile';
 import { decodeMidi, DecodedMidi } from './midi_message';
 import { resolveEvent, ResolvedAction, profileClaims, UnknownContextError } from './resolver';
-import { resolveEndpoints, EndpointResolutionError } from './endpoints';
+import {
+  resolveEndpoints,
+  hasMatchingEndpoint,
+  EndpointResolutionError,
+} from './endpoints';
 import { ControlCoalescer, CoalescerTimers } from './coalescer';
 import {
   createDispatcher, MidiDispatchApi, MidiDispatcher, MidiApiResult, GlobalEffectSlotBehavior,
 } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
 import { projectVsn1Feedback, Vsn1FeedbackDiff, vsn1WelcomeMessage, vsn1SelectCueMessage, vsn1ViewModeMessage, isDeviceHello, FB_ACTIVE_CH } from './vsn1_feedback';
+import { isVsn1LayoutAck, projectVsn1Layout } from './vsn1_layout_feedback';
 import { Vsn1ViewMode, viewModeCcValue } from './vsn1_view_mode';
 import { clampUnit } from './unit_clamp';
 import {
@@ -45,29 +50,6 @@ import { BANKS_UI_ENABLED } from '../../components/global_effect_macros_logic';
 import { recenterWindowStart } from './window_slot';
 import { buildConnectConfig } from './mft/config';
 import { TickAccelerator, MAX_WINDOW_STEP } from './accel';
-
-/** A stable LAYOUT signature for the 8 slots the given VSN1 page views. Keys on
- *  the LAYOUT identity — effect id + behavior + label — of each on-page slot, so
- *  a swap/clear (from any surface) changes it while a runtime value/mode/active
- *  twist does NOT. `sendVsn1Feedback` compares it frame-to-frame to force a full
- *  re-send on a layout edit (the device re-flashes + restarts its VM on a layout
- *  change; a diff would leave the rest of the frame dark after the restart). Uses
- *  a delimiter no field can contain so distinct layouts never alias. */
-function vsn1PageLayoutSig(
-  page: number,
-  slots: { slot: number; effectId?: string; behavior?: string; label?: string }[],
-): string {
-  const byId = new Map<number, { effectId?: string; behavior?: string; label?: string }>();
-  for (const s of slots) byId.set(s.slot, s);
-  const parts: string[] = [];
-  for (let i = 0; i < 8; i += 1) {
-    const rec = byId.get(page * 8 + i + 1);
-    // effectId '' or undefined = empty slot; the tuple still positionally encodes
-    // "slot i is empty" so a clear flips the signature.
-    parts.push(`${rec?.effectId ?? ''}␟${rec?.behavior ?? ''}␟${rec?.label ?? ''}`);
-  }
-  return parts.join('␞');
-}
 
 /** MFT identity colour for the focused channel's knob rings: deck = blue,
  *  overlay layers 1/2/3 = green/yellow/pink (docs/34 knob-layout table). The
@@ -130,6 +112,14 @@ export interface ControllerStatus {
    *  surfaces "N of your writes just failed" so a dead engine / dead LED strip
    *  isn't silent. Auto-clears on the next successful send. */
   warning?: string;
+  /** PERSISTENT ambiguity / endpoint-resolution notes from
+   *  `resolveEndpoints(...).notes` (e.g. MORE than two same-name matches on one
+   *  side — a second identical unit is plugged in and the portIndex pin is a
+   *  guess). Kept SEPARATE from `warning`: notes are steady-state facts about
+   *  the enumeration, not a "recent write failed" pulse, so they must NOT
+   *  auto-clear on the next successful dispatch. Re-computed on every
+   *  connect() pass so a replug that resolves the ambiguity drops the note. */
+  notes?: string[];
 }
 
 /** Everything the dispatcher + LED projector need from live engine state. */
@@ -170,6 +160,7 @@ export interface MidiEngineSnapshot {
      *  swaps). `effectId` empty/undefined = the slot is empty. */
     effectId?: string;
     label?: string;
+    color?: readonly [number, number, number] | null;
     /** Driver #3 (VSN1): the slot's live `intensity` (0..1) + its `intensityDefault`
      *  (the jog-press reset target). Threaded so the VSN1 jog's soft-takeover
      *  pickup guard seeds the SELECTED slot's current value on a selection change.
@@ -535,15 +526,24 @@ class ControllerRuntime {
    *  feedback frame, not a diff against state the device no longer holds.
    *  null until the first frame. */
   private lastVsn1FeedbackPage: number | null = null;
-  /** The LAYOUT signature (effect id + behavior + label per on-page slot) the last
-   *  VSN1 feedback frame was projected for. A slot swap/clear from ANY surface
-   *  (CaptainPad UI, another client) changes this — a LAYOUT change, which on the
-   *  device triggers a Lua re-flash + VM restart (the deploy is a separate wave;
-   *  here we only guarantee the runtime feedback stays whole). So a layout change
-   *  forces a FULL feedback re-send exactly like a page change, rather than a diff
-   *  that could leave the swapped slot's active/value/mode dark. null until the
-   *  first frame. */
+  /** Signature of the last active-page runtime layout sent to the VSN1
+   *  (identity/name/color/behavior/mode labels). A swap/clear/recolor/relabel
+   *  from ANY surface changes it, causing one full commit-delimited layout
+   *  transaction plus a full live-state repaint. null forces a layout send
+   *  after connect or any device VM-ready hello. */
   private lastVsn1LayoutSig: string | null = null;
+  /** Revision sent in the most recent layout commit, cleared only by a matching
+   *  device ACK. While pending, the keepalive retries the complete transaction. */
+  private pendingVsn1LayoutRevision: number | null = null;
+  /** Locally predicted VSN1 intensity per flat slot. Engine WS echoes can lag a
+   *  fast encoder by several frames; feeding those stale values back to Grid
+   *  makes its local absolute accumulator jump backward. Hold the latest device
+   *  value briefly, then clear as soon as the engine converges. */
+  private readonly vsn1OptimisticIntensity = new Map<
+    number,
+    { value: number; expiresAt: number }
+  >();
+  private static readonly VSN1_INTENSITY_ECHO_GUARD_MS = 750;
   /** Set to force the NEXT VSN1 feedback frame to be FULL (diff reset), regardless
    *  of what changed. Decouples "the device needs a whole frame" from the diff
    *  comparison so an unrelated onEngineUpdate landing between the trigger and the
@@ -843,9 +843,12 @@ class ControllerRuntime {
       // Device absent (no endpoint carries the name) → grey, not an error. A
       // real power-cycle passes through here, so clear `deviceConfigured` so the
       // eventual replug re-pushes the sysex config (survives an unplug).
-      const present = endpoints.some(
-        (e) => e.name.includes(this.profile.device.nameContains),
-      );
+      // Use the SAME declared matching policy as resolveEndpoints. In
+      // particular, VSN1 has exact platform aliases (Windows/Web MIDI:
+      // "Intech Grid MIDI device"; iPadOS/CoreMIDI: "Grid"). A duplicated
+      // `nameContains` check here previously discarded the valid iPad endpoint
+      // before the exact-alias resolver could open it.
+      const present = hasMatchingEndpoint(this.profile.device, endpoints);
       if (!present) {
         this.deviceConfigured = false;
         this.teardownBindings();
@@ -853,7 +856,9 @@ class ControllerRuntime {
         this.vsn1FeedbackState = {}; // replug re-sends a full feedback frame
         this.lastVsn1FeedbackPage = null; // forget the page so a replug forces a full frame
         this.lastVsn1LayoutSig = null; // and the layout, so a replug can't diff-suppress it
-        this.setStatus({ kind: 'disconnected', error: undefined, sourceName: undefined, destinationName: undefined });
+        this.pendingVsn1LayoutRevision = null;
+        this.vsn1OptimisticIntensity.clear();
+        this.setStatus({ kind: 'disconnected', error: undefined, sourceName: undefined, destinationName: undefined, notes: undefined });
         // Still listen for hotplug so a later plug-in connects us.
         this.bindHotplugOnly();
         return;
@@ -913,6 +918,12 @@ class ControllerRuntime {
         sourceName: resolved.sourceName,
         destinationName: resolved.destinationName,
         paramErrors: this.mergedParamErrors(),
+        // resolveEndpoints surfaces "more than two same-name matches" notes on
+        // its result — thread them into the status field the Config tab renders
+        // as a persistent yellow banner (a `warning` would auto-clear on the
+        // next successful send, which is wrong for a steady-state ambiguity).
+        // Set on EVERY connect pass so a replug that resolves it clears cleanly.
+        notes: resolved.notes,
       });
       // Force a FULL LED repaint only on a genuine (re)connect transition. When
       // the device was already configured and merely stayed connected across a
@@ -931,6 +942,8 @@ class ControllerRuntime {
         this.vsn1FeedbackState = {};
         this.lastVsn1FeedbackPage = null;
         this.lastVsn1LayoutSig = null;
+        this.pendingVsn1LayoutRevision = null;
+        this.vsn1OptimisticIntensity.clear();
         this.vsn1ForceFullResync = true;
         // Item 2: the welcome is now DEVICE-HELLO-DRIVEN. Arm the NEXT device
         // hello (the device pings "VM ready" on its first VM start after we
@@ -946,6 +959,9 @@ class ControllerRuntime {
       if (this.profile.device.id === 'vsn1' && this.vsn1KeepaliveTimer === null) {
         this.vsn1KeepaliveTimer = setInterval(() => {
           if (this.status.kind !== 'connected') return;
+          // A layout is not successful until the controller ACKs its revision.
+          // Retry the complete atomic transaction on each low-rate keepalive.
+          if (this.pendingVsn1LayoutRevision !== null) this.lastVsn1LayoutSig = null;
           this.vsn1ForceFullResync = true;
           this.projectAndSend();
         }, ControllerRuntime.VSN1_KEEPALIVE_MS);
@@ -956,7 +972,10 @@ class ControllerRuntime {
         : (err instanceof Error ? err.message : String(err));
       this.deviceConfigured = false;
       this.teardownBindings();
-      this.setStatus({ kind: 'error', error: message });
+      // An error state supersedes the connect's endpoint-resolution notes —
+      // clear them so a stale ambiguity note doesn't hover next to a red chip
+      // that already tells a bigger story.
+      this.setStatus({ kind: 'error', error: message, notes: undefined });
       this.bindHotplugOnly();
     }
   }
@@ -1047,6 +1066,16 @@ class ControllerRuntime {
     //    sendVsn1Feedback) repaints the device — WITHOUT re-arming the welcome
     //    (item 1: only a genuine connect / panel load ever arms the hello).
     if (this.profile.device.id === 'vsn1' && decoded.type === 'cc') {
+      if (isVsn1LayoutAck(
+        0xb0 | (decoded.channel & 0x0f),
+        decoded.cc,
+        decoded.value,
+        this.pendingVsn1LayoutRevision,
+      )) {
+        this.pendingVsn1LayoutRevision = null;
+        this.setStatus({ lastEvent: 'VSN1 layout applied from iPad' });
+        return;
+      }
       // 0.4) DEVICE HELLO (item 2): the device pings "VM ready" (CC controller
       //    DEVICE_HELLO_CC = 1) on EVERY VM restart — power-on, page load, and
       //    every layout re-flash — the moment its receiver re-registers. Answer it
@@ -1238,6 +1267,12 @@ class ControllerRuntime {
       // each addressing a DIFFERENT slot — coalesce PER SLOT (suffix the key) so
       // two keys turned inside one window can't last-write-wins each other's
       // value. Every other continuous control keeps its plain control-id key.
+      if (ev.resolved.kind === 'effectIntensitySlot') {
+        this.vsn1OptimisticIntensity.set(ev.resolved.slotId, {
+          value: ev.resolved.value,
+          expiresAt: this.nowMs() + ControllerRuntime.VSN1_INTENSITY_ECHO_GUARD_MS,
+        });
+      }
       const key = ev.resolved.kind === 'effectIntensitySlot'
         ? `${ev.controlId}#s${ev.resolved.slotId}`
         : ev.controlId;
@@ -2443,11 +2478,9 @@ class ControllerRuntime {
     this.sendVsn1Feedback(snap);
   }
 
-  /** Emit the VSN1 slot-state/page feedback frames (Effects v2). No-op for every
-   *  other driver. Uses the live snapshot's effectsPage + globalEffectSlots and
-   *  diffs against `vsn1FeedbackState` so a knob twist that changes one slot's
-   *  value sends one CC, not a full repaint. The device Lua reads these
-   *  (`eventrx_cb`) to render active/value/mode per key + the current page. */
+  /** Emit the VSN1 active-page layout plus slot-state/page feedback. No-op for
+   *  every other driver. Layout is signature-diffed; live state is field-diffed,
+   *  so a knob twist still sends one CC rather than a full layout transaction. */
   private sendVsn1Feedback(snap: MidiEngineSnapshot): void {
     if (this.profile.device.id !== 'vsn1') return;
     const page = snap.effectsPage ?? 0;
@@ -2470,16 +2503,15 @@ class ControllerRuntime {
     if (this.lastVsn1FeedbackPage !== null && this.lastVsn1FeedbackPage !== page) {
       this.vsn1ForceFullResync = true;
     }
-    // LAYOUT change (slot swap/clear from the CaptainPad UI or any surface) also
-    // forces a FULL re-send. A layout edit re-flashes the device Lua + restarts
-    // its VM (the deploy is a separate wave; the runtime feedback must still be
-    // whole), so a diff that only touched the changed slot's bytes could leave
-    // the rest dark after the restart. The signature keys on the LAYOUT identity
-    // (effectId + behavior + label) of the ON-PAGE slots — NOT the runtime
-    // active/value/mode, which stay diffed (a knob twist must not re-blast the
-    // frame). Computed against the SAME page window the frame projects.
-    const layoutSig = vsn1PageLayoutSig(page, snap.globalEffectSlots);
-    if (this.lastVsn1LayoutSig !== null && this.lastVsn1LayoutSig !== layoutSig) {
+    // LAYOUT stream (iPad → VSN1): names, colors, behavior, and mode labels ride
+    // ordinary CC messages so a controller plugged directly into the iPad no
+    // longer depends on the engine computer's USB-serial flash path. The pure
+    // projector's signature excludes active/value/current-mode state, so runtime
+    // tweaks stay diffed while swaps/clears/recolors/relabels send one complete,
+    // commit-delimited page transaction.
+    const layout = projectVsn1Layout(page, snap.globalEffectSlots);
+    const layoutChanged = this.lastVsn1LayoutSig !== layout.signature;
+    if (this.lastVsn1LayoutSig !== null && layoutChanged) {
       this.vsn1ForceFullResync = true;
     }
     if (this.vsn1ForceFullResync) {
@@ -2487,28 +2519,80 @@ class ControllerRuntime {
       this.vsn1FeedbackState = {}; // full frame — device VM was (or will be) wiped
     }
     this.lastVsn1FeedbackPage = page;
-    this.lastVsn1LayoutSig = layoutSig;
+    this.lastVsn1LayoutSig = layout.signature;
+    const now = this.nowMs();
+    const feedbackSlots = snap.globalEffectSlots.map((slot) => {
+      const optimistic = this.vsn1OptimisticIntensity.get(slot.slot);
+      if (!optimistic) return slot;
+      const converged = slot.intensity !== undefined
+        && Math.abs(slot.intensity - optimistic.value) <= (1 / 127);
+      if (converged || now >= optimistic.expiresAt) {
+        this.vsn1OptimisticIntensity.delete(slot.slot);
+        return slot;
+      }
+      return { ...slot, intensity: optimistic.value };
+    });
     const { messages, next } = projectVsn1Feedback(
-      { page, slots: snap.globalEffectSlots },
+      { page, slots: feedbackSlots },
       this.vsn1FeedbackState,
     );
     this.vsn1FeedbackState = next;
-    // WELCOME: when armed (a genuine (re)connect or the effects-panel load), emit
-    // the one-shot hello FIRST so the device greets before the state paints, then
-    // disarm. Consumed here (not diffed) so it fires exactly once per arm.
+    // WELCOME: when armed (a genuine (re)connect or the effects-panel load), add
+    // the one-shot hello to the live-state batch, then disarm. A changed layout
+    // transaction is intentionally sent before this batch so the welcome/state
+    // paint always targets the current slot identities.
     if (this.vsn1WelcomePending) {
       this.vsn1WelcomePending = false;
       messages.unshift(vsn1WelcomeMessage());
     }
-    for (const msg of messages) {
+    // Layout FIRST, then live state. The VSN1 receiver repaints only on the
+    // layout commit CC, after which active/value/mode feedback can safely paint
+    // against the new slot identities.
+    const layoutMessages = layoutChanged ? layout.messages : [];
+    let layoutFailures = 0;
+    let firstLayoutFailure = '';
+    let immediateFeedbackMessages = messages;
+
+    if (layoutMessages.length > 0) {
+      try {
+        if (this.transport.sendBatch) {
+          // Grid's Lua MIDI queue cannot absorb 100+ zero-timestamp packets in
+          // one driver turn. Native CoreMIDI timestamps the complete layout +
+          // live-state sequence 2 ms apart, preserving commit-before-state.
+          this.transport.sendBatch([...layoutMessages, ...messages], 2);
+          immediateFeedbackMessages = [];
+        } else {
+          // Web MIDI implementations retain their established per-message path.
+          for (const msg of layoutMessages) this.transport.send(msg);
+        }
+      } catch (err) {
+        this.ledFailStreak += 1;
+        layoutFailures = 1;
+        firstLayoutFailure = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    for (const msg of immediateFeedbackMessages) {
       try {
         this.transport.send(msg);
         this.recordOutboundNote(msg);
       } catch {
-        // A failed feedback send shares the LED-send fail-loud accounting: bump
-        // the same streak so a dead destination surfaces once, without breaking
-        // the dispatch path. (Feedback and LED sends go to the same endpoint.)
+        // Feedback and LED sends share one fail-loud destination streak.
         this.ledFailStreak += 1;
+      }
+    }
+    if (layoutChanged) {
+      if (layoutFailures > 0) {
+        this.pendingVsn1LayoutRevision = null;
+        this.lastVsn1LayoutSig = null;
+        this.setStatus({
+          warning: `VSN1 layout update failed (${layoutFailures} MIDI writes; ${firstLayoutFailure})`,
+        });
+      } else {
+        this.pendingVsn1LayoutRevision = layout.revision;
+        this.setStatus({
+          lastEvent: `VSN1 layout sent from iPad — awaiting controller (page ${page + 1})`,
+        });
       }
     }
   }
@@ -2568,6 +2652,7 @@ class ControllerRuntime {
     this.emitVsn1ViewMode();
     // Full frame — the device VM was wiped by the flash. This does NOT set
     // vsn1WelcomePending, so no hello rides along (no logo on a re-flash).
+    this.lastVsn1LayoutSig = null;
     this.vsn1ForceFullResync = true;
     this.projectAndSend();
   }
@@ -2603,6 +2688,9 @@ class ControllerRuntime {
     // is live again" signal, so re-asserting the current selection here makes
     // it restart-proof. No selection yet → nothing to re-assert.
     if (this.selectedSlot !== null) this.emitVsn1SelectCue(this.selectedSlot);
+    // A VM restart restores the flash-baked layout, so re-send the current
+    // engine-owned runtime layout even when its signature did not change.
+    this.lastVsn1LayoutSig = null;
     this.vsn1ForceFullResync = true;
     this.projectAndSend();
   }

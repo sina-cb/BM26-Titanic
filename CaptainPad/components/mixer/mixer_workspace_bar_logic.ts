@@ -126,6 +126,7 @@ export type MasterBarSeatStyle = typeof MASTER_BAR_SEAT_LANDSCAPE | typeof MASTE
 // ── Citizen titles (docs/64 §2.4) ───────────────────────────────────────────
 
 export const COLORS_TITLE = 'COLORS';
+export const AUDIO_TITLE = 'AUDIO';
 
 /** `1 · SPARKLE` — the index dot's label plus the derived title. Visual
  *  upper-casing is a TEXT STYLE concern (`textTransform: 'uppercase'`, same
@@ -162,6 +163,13 @@ export type MixerBarChipEntry =
       kind: 'citizen';
       surfaceId: MixerSurfaceId;
       citizen: 'colors';
+      title: string;
+      label: string;
+      open: boolean;
+    }
+  | {
+      kind: 'audio';
+      surfaceId: 'audioBar';
       title: string;
       label: string;
       open: boolean;
@@ -209,6 +217,16 @@ function citizenEntry(open: boolean): MixerBarChipEntry {
   };
 }
 
+function audioEntry(open: boolean): MixerBarChipEntry {
+  return {
+    kind: 'audio',
+    surfaceId: 'audioBar',
+    title: AUDIO_TITLE,
+    label: AUDIO_TITLE,
+    open,
+  };
+}
+
 /**
  * Builds the bar's complete render plan. Pure over its four inputs — same
  * inputs, same plan, every time.
@@ -230,6 +248,7 @@ export function buildMixerBarPlan(
   layout: MixerWorkspaceLayout,
   perfActive: boolean,
   floorChannelId: MixerChannelId | null | undefined,
+  audioBarOpen?: boolean,
 ): MixerBarPlan {
   const roster = channels.map((ch) => ch.id);
   const rosterSet = new Set(roster);
@@ -245,6 +264,7 @@ export function buildMixerBarPlan(
   });
 
   if (effectiveCitizenShown(layout, 'colors', perfActive)) shown.push(citizenEntry(true));
+  if (audioBarOpen === true) shown.push(audioEntry(true));
 
   const rail: MixerBarChipEntry[] = [];
   for (const rawId of layout.closed) {
@@ -260,6 +280,7 @@ export function buildMixerBarPlan(
     // 'section' and 'invalid' ids get no chip in this row (docs/64 §2.1:
     // sections have their own affordance on the strip, not here).
   }
+  if (audioBarOpen === false) rail.push(audioEntry(false));
 
   return { shown, rail, showHiddenDivider: rail.length > 0 };
 }

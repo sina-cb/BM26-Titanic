@@ -1,0 +1,111 @@
+# assert_violations_contiguity_master.yaml — deliberately violating fixture.
+#
+# Same shape as assert_clean.yaml MINUS c_midnight_refresh: without a cue
+# anchored at/after 00:00, resolveDeckStateAt (which resolves cue times per
+# CALENDAR DAY) finds nothing "passed" on the new calendar day until
+# c_sunrise_bloom fires that morning — a real, honest ownerless gap from
+# midnight to sunrise-20 every night (class 1). Also demonstrates class 2
+# (an unwhitelisted + a whitelist-stale master writer) via
+# assert_violations_contiguity_master_spec.yaml.
+schemaVersion: 2
+name: assert_violations_contiguity_master
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases: {}
+looks:
+  white_look:
+    playlist: white_only
+    autopilot:
+      active: true
+      delay_s: 120
+      shuffle: false
+    globals:
+      master: 0.8
+    target:
+      channel: deck
+      id: null
+  ambient_look:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    target:
+      channel: deck
+      id: null
+defaultCue:
+  label: Ambient default
+  action:
+    type: look
+    look: ambient_look
+cues:
+  - id: c_ignition
+    label: Ignition white
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: -30
+    action:
+      type: look
+      look: white_look
+    kind: program
+    hold:
+      min: 60
+    days: all
+  - id: c_early_night
+    label: Early night
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '21:30'
+    action:
+      type: look
+      look: ambient_look
+    kind: ambient
+    days: all
+  - id: c_sunrise_bloom
+    label: Sunrise bloom
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: -20
+    action:
+      type: look
+      look: white_look
+    kind: program
+    hold:
+      min: 80
+    days: all
+  - id: c_day_off
+    label: Day off
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '09:00'
+    action:
+      type: globals
+      set:
+        master: 0
+      target:
+        channel: deck
+        id: null
+    kind: program
+    days: all

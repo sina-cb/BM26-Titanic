@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CaptainPad Timeline — PERFORMANCE composition mock</title>
+<style>
+/* ==================================================================
+   CaptainPad Timeline — PERFORMANCE mode composition + passcode-gated
+   takeover. INTERACTIVE DESIGN MOCK, companion to the four-view mock.
+   Standalone, fully offline: no CDNs, no @font-face URLs, no images,
+   no fetch/XHR, no telemetry. System font stacks only.
+   Palettes copied from CaptainPad/constants/theme.ts (5 themes).
+   1 pt is rendered as 1 px here.
+   ================================================================== */
+
+:root[data-theme="light"]{
+  --text:#191c1d; --bg:#f8f9fa;
+  --surface:#f8f9fa; --surf-low:#f3f4f5; --surf-lowest:#ffffff; --surf-high:#e7e8e9; --surf-dim:#d9dadb;
+  --primary:#006875; --primary-container:#00e5ff; --on-primary:#ffffff;
+  --secondary:#466270; --secondary-container:#c6e4f4;
+  --error:#ba1a1a; --error-container:rgba(186,26,26,0.08); --error-border:rgba(186,26,26,0.3);
+  --tertiary:#1b9e77;
+  --warning:#6f4d00; --warning-container:rgba(111,77,0,0.08); --warning-border:rgba(111,77,0,0.3);
+  --ghost:rgba(186,201,204,0.4); --border-strong:rgba(70,98,112,0.85);
+  --shadow:rgba(25,28,29,0.05);
+  --sidebar-bg:rgba(255,255,255,0.6); --sidebar-active-bg:rgba(0,229,255,0.1); --sidebar-active-border:rgba(0,229,255,0.3);
+}
+:root[data-theme="dark"]{
+  --text:#e3e6e8; --bg:#0f1416;
+  --surface:#0f1416; --surf-low:#171d20; --surf-lowest:#0a0e10; --surf-high:#1f262a; --surf-dim:#0a0e10;
+  --primary:#5ae0ee; --primary-container:#003640; --on-primary:#003640;
+  --secondary:#a8c5d4; --secondary-container:#2a3e48;
+  --error:#ff8a82; --error-container:rgba(255,138,130,0.16); --error-border:rgba(255,138,130,0.45);
+  --tertiary:#34d39a;
+  --warning:#f5a623; --warning-container:rgba(245,166,35,0.16); --warning-border:rgba(245,166,35,0.45);
+  --ghost:rgba(180,195,200,0.18); --border-strong:rgba(180,195,200,0.55);
+  --shadow:rgba(0,0,0,0.5);
+  --sidebar-bg:rgba(15,20,22,0.85); --sidebar-active-bg:rgba(90,224,238,0.12); --sidebar-active-border:rgba(90,224,238,0.4);
+}
+:root[data-theme="midnight"]{
+  --text:#d4dde8; --bg:#06080c;
+  --surface:#06080c; --surf-low:#0d1320; --surf-lowest:#04060a; --surf-high:#152030; --surf-dim:#04060a;
+  --primary:#5cc0ff; --primary-container:#003a5c; --on-primary:#001827;
+  --secondary:#7a8a9e; --secondary-container:#2a3a4c;
+  --error:#ff7a82; --error-container:rgba(255,122,130,0.16); --error-border:rgba(255,122,130,0.45);
+  --tertiary:#3ad4a6;
+  --warning:#f5a623; --warning-container:rgba(245,166,35,0.16); --warning-border:rgba(245,166,35,0.45);
+  --ghost:rgba(150,170,200,0.18); --border-strong:rgba(150,170,200,0.65);
+  --shadow:rgba(0,0,0,0.6);
+  --sidebar-bg:rgba(6,8,12,0.88); --sidebar-active-bg:rgba(92,192,255,0.12); --sidebar-active-border:rgba(92,192,255,0.4);
+}
+:root[data-theme="sunset"]{
+  --text:#f4e8d8; --bg:#1a0f0a;
+  --surface:#1a0f0a; --surf-low:#251812; --surf-lowest:#100905; --surf-high:#2e2017; --surf-dim:#100905;
+  --primary:#ffb84a; --primary-container:#5a3a00; --on-primary:#3a2400;
+  --secondary:#b89478; --secondary-container:#3e2e1a;
+  --error:#ff8a6a; --error-container:rgba(255,138,106,0.16); --error-border:rgba(255,138,106,0.45);
+  --tertiary:#9acb87;
+  --warning:#ffd166; --warning-container:rgba(255,209,102,0.16); --warning-border:rgba(255,209,102,0.45);
+  --ghost:rgba(180,150,120,0.18); --border-strong:rgba(180,150,120,0.7);
+  --shadow:rgba(0,0,0,0.55);
+  --sidebar-bg:rgba(26,15,10,0.88); --sidebar-active-bg:rgba(255,184,74,0.12); --sidebar-active-border:rgba(255,184,74,0.4);
+}
+:root[data-theme="gruvbox"]{
+  --text:#ebdbb2; --bg:#282828;
+  --surface:#282828; --surf-low:#32302f; --surf-lowest:#1d2021; --surf-high:#3c3836; --surf-dim:#1d2021;
+  --primary:#fabd2f; --primary-container:#665c54; --on-primary:#282828;
+  --secondary:#a89984; --secondary-container:#3c3836;
+  --error:#fb4934; --error-container:rgba(251,73,52,0.16); --error-border:rgba(251,73,52,0.45);
+  --tertiary:#b8bb26;
+  --warning:#ffb04d; --warning-container:rgba(255,176,77,0.16); --warning-border:rgba(255,176,77,0.45);
+  --ghost:rgba(168,153,132,0.25); --border-strong:rgba(168,153,132,0.85);
+  --shadow:rgba(0,0,0,0.55);
+  --sidebar-bg:rgba(40,40,40,0.88); --sidebar-active-bg:rgba(250,189,47,0.12); --sidebar-active-border:rgba(250,189,47,0.4);
+}
+:root{
+  --perform-green:#00a86b;
+  --travel-purple:#8b5cf6;
+  --r-chip:4px; --r-control:8px; --r-card:12px; --r-panel:16px; --r-shell:24px;
+  --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px;
+  --f-head:"Space Grotesk", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --f-body:"Inter", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --t-perfhero:40px; --lh-perfhero:44px;
+  --t-hero:34px;  --lh-hero:38px;
+  --t-title:24px; --lh-title:28px;
+  --t-cue:21px;   --lh-cue:25px;   /* the performance composition reads at 21 */
+  --t-body:16px;  --lh-body:22px;
+  --t-meta:14px;  --lh-meta:18px;
+}
+:root[data-aplus="on"]{ --t-body:19px; --lh-body:25px; --t-cue:24px; --lh-cue:28px; }
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--f-body);
+  font-size:var(--t-body);line-height:var(--lh-body);-webkit-font-smoothing:antialiased;}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left;}
+button:disabled{cursor:not-allowed;opacity:0.45;}
+h1,h2,h3,h4{margin:0;font-family:var(--f-head);font-weight:700;}
+
+#glare{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:900;transition:opacity .2s;}
+body[data-glare="on"] #glare{opacity:0.30;}
+
+#ribbon{display:flex;align-items:center;gap:var(--sp-md);padding:8px 16px;
+  background:var(--warning-container);border-bottom:1px solid var(--warning-border);
+  font-size:var(--t-meta);line-height:var(--lh-meta);}
+#ribbon .dot{width:10px;height:10px;border-radius:50%;background:var(--warning);flex:0 0 auto;}
+#ribbon b{font-family:var(--f-head);letter-spacing:.6px;}
+
+#shell{display:flex;min-height:calc(100vh - 36px);}
+#rail{width:112px;flex:0 0 112px;background:var(--sidebar-bg);border-right:1px solid var(--ghost);
+  padding:10px 6px 16px;display:flex;flex-direction:column;gap:2px;}
+#rail .brand{font-family:var(--f-head);font-size:11px;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--secondary);text-align:center;padding:6px 0 10px;}
+#rail .group{font-family:var(--f-head);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--secondary);padding:10px 6px 4px;}
+#rail .item{min-height:44px;display:flex;flex-direction:column;justify-content:center;padding:6px 8px;
+  border-radius:var(--r-control);border:1px solid transparent;font-family:var(--f-head);
+  font-size:12px;letter-spacing:.4px;color:var(--secondary);}
+#rail .item .glyph{font-size:11px;opacity:.7;}
+#rail .item.on{background:var(--sidebar-active-bg);border-color:var(--sidebar-active-border);color:var(--text);}
+#rail .item.on .glyph{color:var(--primary);opacity:1;}
+#rail .item.hidden{opacity:.35;}
+#rail .ctx{margin-top:auto;font-size:9px;line-height:13px;color:var(--secondary);text-align:center;
+  padding-top:12px;border-top:1px solid var(--ghost);}
+
+#work{flex:1 1 auto;min-width:0;padding:var(--sp-lg) var(--sp-lg) 64px;
+  display:flex;flex-direction:column;gap:var(--sp-md);}
+
+.hdr{display:flex;align-items:center;gap:var(--sp-lg);background:var(--surf-low);
+  border:1px solid var(--ghost);border-radius:var(--r-panel);padding:var(--sp-md) var(--sp-lg);min-height:64px;}
+.hdr .ident{flex:0 0 auto;max-width:280px;min-width:0;}
+.kicker{font-family:var(--f-body);font-weight:600;font-size:var(--t-meta);line-height:var(--lh-meta);
+  letter-spacing:1px;text-transform:uppercase;color:var(--secondary);}
+.hdr .plan{font-family:var(--f-head);font-size:var(--t-title);line-height:var(--lh-title);
+  display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rundot{width:12px;height:12px;border-radius:50%;flex:0 0 auto;}
+.hdr .pills{display:flex;flex-wrap:wrap;gap:var(--sp-sm);flex:1 1 auto;min-width:0;}
+.pill{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:4px 10px;
+  border-radius:var(--r-control);border:1px solid var(--ghost);background:var(--surf-lowest);
+  font-family:var(--f-head);font-size:13px;letter-spacing:.5px;white-space:nowrap;}
+.pill .lb{color:var(--secondary);font-size:11px;letter-spacing:1.2px;}
+.pill .dt{width:9px;height:9px;border-radius:50%;}
+.pill.perf{border-color:var(--warning-border);background:var(--warning-container);color:var(--warning);}
+.pill.unlocked{border-color:var(--perform-green);background:rgba(0,168,107,0.14);color:var(--perform-green);}
+.ok{color:var(--tertiary);} .warn{color:var(--warning);} .bad{color:var(--error);}
+.bg-ok{background:var(--tertiary);} .bg-warn{background:var(--warning);}
+.bg-bad{background:var(--error);} .bg-sec{background:var(--secondary);}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 16px;
+  border-radius:var(--r-control);border:1px solid var(--border-strong);background:var(--surf-lowest);
+  color:var(--text);font-family:var(--f-head);font-size:15px;letter-spacing:.6px;text-transform:uppercase;}
+.btn.big{min-height:56px;font-size:16px;padding:0 20px;}
+.btn.evt{min-height:52px;}
+.btn.pri{background:var(--primary);color:var(--on-primary);border-color:var(--primary);}
+.btn.danger{background:var(--error-container);border-color:var(--error-border);color:var(--error);}
+.btn.unlock{min-height:56px;border-color:var(--warning);color:var(--warning);background:var(--warning-container);}
+.btn.quiet{border-color:var(--ghost);color:var(--secondary);}
+.btn.wide{width:100%;}
+
+.alert{border-radius:var(--r-card);border:1px solid var(--ghost);background:var(--surf-lowest);
+  padding:var(--sp-md) var(--sp-lg);}
+.alert.e{background:var(--error-container);border-color:var(--error-border);}
+.alert.w{background:var(--warning-container);border-color:var(--warning-border);}
+.alert.i{background:var(--surf-low);}
+.alert .row{display:flex;align-items:center;gap:var(--sp-md);flex-wrap:wrap;}
+.alert .ttl{font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);letter-spacing:.6px;}
+.alert .bod{font-size:var(--t-body);line-height:var(--lh-body);margin-top:2px;}
+.detrow{min-height:48px;display:flex;align-items:center;gap:var(--sp-md);padding:0 var(--sp-lg);
+  border-radius:var(--r-card);border:1px solid var(--ghost);background:var(--surf-low);
+  font-family:var(--f-head);font-size:14px;letter-spacing:.8px;text-transform:uppercase;color:var(--secondary);}
+.drawer{border-radius:var(--r-card);border:1px solid var(--ghost);background:var(--surf-low);
+  padding:var(--sp-md) var(--sp-lg);}
+.drawer .mini{border-left:3px solid var(--ghost);padding:6px 0 6px 10px;margin:6px 0;}
+
+.card{background:var(--surf-low);border:1px solid var(--ghost);border-radius:var(--r-panel);padding:var(--sp-lg);}
+.card.live{background:var(--surf-lowest);border-color:var(--tertiary);
+  box-shadow:0 0 0 1px var(--tertiary), 0 8px 28px var(--shadow);}
+.card h3{font-size:var(--t-cue);line-height:var(--lh-cue);letter-spacing:.8px;text-transform:uppercase;}
+.cardhead{display:flex;align-items:center;gap:var(--sp-sm);flex-wrap:wrap;margin-bottom:var(--sp-md);}
+.cardhead .spacer{flex:1 1 auto;}
+
+.tag{display:inline-flex;align-items:center;min-height:26px;padding:2px 8px;border-radius:var(--r-chip);
+  border:1px solid var(--ghost);background:var(--surf-high);font-family:var(--f-head);font-size:12px;
+  letter-spacing:1px;text-transform:uppercase;color:var(--secondary);}
+.tag.now{border-color:var(--tertiary);color:var(--tertiary);background:transparent;}
+.tag.stale{border-color:var(--warning-border);color:var(--warning);background:var(--warning-container);}
+.tag.dev{border-color:var(--warning-border);color:var(--warning);background:var(--warning-container);}
+
+/* ── the PERFORMANCE composition ───────────────────────────────────── */
+.perfhero{font-family:var(--f-head);font-size:var(--t-perfhero);line-height:var(--lh-perfhero);margin:8px 0 4px;}
+.perfsub{font-size:var(--t-body);line-height:var(--lh-body);color:var(--secondary);}
+.perftimes{display:flex;align-items:center;gap:var(--sp-md);margin-top:var(--sp-md);flex-wrap:wrap;
+  font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);font-variant-numeric:tabular-nums;}
+.bar{flex:1 1 140px;min-width:90px;height:10px;border-radius:5px;background:var(--surf-high);overflow:hidden;}
+.bar i{display:block;height:100%;background:var(--tertiary);}
+
+.nextstrip{display:flex;gap:var(--sp-md);}
+.nextcard{flex:1 1 0;min-width:0;border-radius:var(--r-card);border:1px solid var(--ghost);
+  background:var(--surf-lowest);padding:var(--sp-md);min-height:96px;display:flex;flex-direction:column;gap:4px;}
+.nextcard .t{font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);font-variant-numeric:tabular-nums;}
+.nextcard .l{font-size:var(--t-body);line-height:var(--lh-body);}
+
+.tiles{display:flex;gap:var(--sp-md);}
+.tile{flex:1 1 0;min-width:0;border-radius:var(--r-card);border:1px solid var(--ghost);
+  background:var(--surf-low);padding:var(--sp-md) var(--sp-lg);}
+.tile .h{font-family:var(--f-head);font-size:var(--t-meta);letter-spacing:1.4px;text-transform:uppercase;
+  color:var(--secondary);display:flex;align-items:center;gap:8px;}
+.tile .v{font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);margin-top:6px;
+  font-variant-numeric:tabular-nums;}
+.tile .s{font-size:var(--t-body);line-height:var(--lh-body);color:var(--secondary);margin-top:4px;}
+
+.ticker{border-radius:var(--r-card);border:1px solid var(--ghost);background:var(--surf-lowest);
+  padding:var(--sp-md) var(--sp-lg);}
+.ticker .line{font-size:var(--t-body);line-height:var(--lh-body);font-variant-numeric:tabular-nums;}
+.ticker .line .t{color:var(--secondary);}
+
+.unlockbar{display:flex;align-items:center;gap:var(--sp-md);margin-top:auto;}
+.unlockbar .note{flex:1 1 auto;min-width:0;font-size:var(--t-meta);line-height:var(--lh-meta);color:var(--secondary);}
+
+/* unlocked chrome: the four-view tabs, EDIT PLAN frozen by perf mode (SD-9b) */
+.seg{display:flex;gap:var(--sp-sm);}
+.seg button{flex:1 1 0;min-height:56px;border-radius:var(--r-control);border:1px solid var(--ghost);
+  background:var(--surf-lowest);display:flex;align-items:center;justify-content:center;gap:8px;
+  font-family:var(--f-head);font-size:16px;letter-spacing:1px;text-transform:uppercase;color:var(--secondary);}
+.seg button.on{background:var(--sidebar-active-bg);border-color:var(--sidebar-active-border);color:var(--text);}
+.grid2{display:flex;gap:var(--sp-lg);}
+.col-l{flex:62 1 0;min-width:0;display:flex;flex-direction:column;gap:var(--sp-lg);}
+.col-r{flex:38 1 0;min-width:0;display:flex;flex-direction:column;gap:var(--sp-lg);}
+.evtgrid{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-sm);}
+.pline{margin-top:var(--sp-sm);}
+.pline.a{font-family:var(--f-head);font-size:var(--t-title);line-height:var(--lh-title);}
+.pline.b{font-size:var(--t-body);line-height:var(--lh-body);color:var(--secondary);}
+.pline.c{font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);}
+.hint{font-size:var(--t-meta);line-height:var(--lh-meta);color:var(--secondary);margin-top:var(--sp-sm);}
+.nextlist{display:flex;flex-direction:column;gap:var(--sp-sm);}
+.nextrow{min-height:60px;display:flex;align-items:center;gap:var(--sp-md);padding:6px var(--sp-md);
+  border-radius:var(--r-card);border:1px solid var(--ghost);background:var(--surf-lowest);}
+.nextrow .t{font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);
+  font-variant-numeric:tabular-nums;flex:0 0 74px;}
+.nextrow .l{font-family:var(--f-head);font-size:var(--t-cue);line-height:var(--lh-cue);flex:1 1 auto;min-width:0;}
+
+/* SINA DECIDES chips */
+.sd{position:relative;display:inline-flex;align-items:center;justify-content:center;height:24px;padding:0 8px;
+  border-radius:var(--r-chip);border:1px solid var(--travel-purple);color:var(--travel-purple);
+  background:rgba(139,92,246,0.12);font-family:var(--f-head);font-size:11px;letter-spacing:1px;}
+.sd::before{content:'';position:absolute;left:-10px;right:-10px;top:50%;transform:translateY(-50%);height:44px;}
+
+/* modals + the passcode sheet */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,0.62);display:flex;align-items:center;justify-content:center;
+  z-index:1000;padding:24px;}
+.modal{background:var(--surf-low);border:1px solid var(--border-strong);border-radius:var(--r-panel);
+  box-shadow:0 24px 60px var(--shadow);padding:var(--sp-xl);max-width:660px;width:100%;max-height:90vh;overflow:auto;}
+.modal h3{font-size:var(--t-title);line-height:var(--lh-title);margin-bottom:var(--sp-sm);}
+.modal .btns{display:flex;gap:var(--sp-md);margin-top:var(--sp-xl);}
+.modal .btns .gap{flex:1 1 auto;}
+.masked{font-family:var(--f-head);font-size:34px;line-height:44px;letter-spacing:14px;min-height:56px;
+  display:flex;align-items:center;justify-content:center;border-radius:var(--r-control);
+  border:1px solid var(--border-strong);background:var(--surf-lowest);margin:var(--sp-md) 0;}
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-sm);}
+.keypad button{min-height:56px;border-radius:var(--r-control);border:1px solid var(--border-strong);
+  background:var(--surf-lowest);font-family:var(--f-head);font-size:24px;display:flex;
+  align-items:center;justify-content:center;}
+.rememberrow{display:flex;align-items:center;gap:var(--sp-md);min-height:48px;margin-top:var(--sp-md);}
+.rememberrow input{width:22px;height:22px;}
+
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:1200;background:var(--surf-high);
+  border:1px solid var(--border-strong);border-radius:var(--r-control);padding:12px 18px;
+  font-size:var(--t-body);box-shadow:0 12px 30px var(--shadow);display:none;max-width:70vw;}
+
+#dock{position:fixed;right:16px;bottom:16px;z-index:800;width:300px;max-height:86vh;overflow:auto;
+  background:var(--surf-low);border:1px solid var(--border-strong);border-radius:var(--r-panel);
+  box-shadow:0 18px 44px var(--shadow);padding:var(--sp-md);}
+#dock.min{width:auto;padding:6px;background:var(--surf-high);}
+#dock.min .tbtn{border-color:var(--primary);background:var(--sidebar-active-bg);color:var(--text);
+  min-height:48px;font-size:14px;}
+#dock h4{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--secondary);margin:10px 0 6px;}
+#dock .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+#dock .sbtn{min-height:44px;border-radius:var(--r-control);border:1px solid var(--ghost);
+  background:var(--surf-lowest);padding:4px 8px;font-family:var(--f-head);font-size:12px;
+  letter-spacing:.4px;display:flex;flex-direction:column;justify-content:center;}
+#dock .sbtn.on{border-color:var(--primary);background:var(--sidebar-active-bg);}
+#dock .sbtn .n{font-size:10px;color:var(--secondary);letter-spacing:1px;}
+#dock .tgrid{display:flex;flex-wrap:wrap;gap:6px;}
+#dock .tbtn{min-height:44px;padding:0 10px;border-radius:var(--r-control);border:1px solid var(--ghost);
+  background:var(--surf-lowest);font-family:var(--f-head);font-size:12px;letter-spacing:.8px;
+  display:inline-flex;align-items:center;}
+#dock .tbtn.on{border-color:var(--primary);background:var(--sidebar-active-bg);}
+#dock .close{position:absolute;top:6px;right:8px;font-family:var(--f-head);font-size:12px;color:var(--secondary);}
+
+#footnote{padding:10px 16px 22px;font-size:12px;line-height:18px;color:var(--secondary);}
+
+@media (max-width:1100px){
+  .perfhero{font-size:34px;line-height:38px;}
+  .nextcard{min-height:88px;}
+}
+</style>
+</head>
+<body data-glare="off">
+<div id="glare"></div>
+<div id="ribbon">
+  <span class="dot"></span>
+  <span><b>INTERACTIVE DESIGN MOCK</b> — no engine connection; nothing saves, fires, or authenticates.</span>
+  <span style="margin-left:auto;opacity:.8">Keys 1–6 = demo states · T = next theme</span>
+</div>
+<div id="shell">
+  <nav id="rail" aria-label="CaptainPad rail (context only)"></nav>
+  <main id="work"></main>
+</div>
+<div id="footnote"></div>
+<div id="dock"></div>
+<div id="toast"></div>
+<div id="overlay"></div>
+
+<script>
+/* ===================================================================
+   Demo dataset — the same night arc as the four-view mock, rendered
+   READ-ONLY here. Cue ids, labels, playlists and palettes mirror the
+   tracked show plan; sun times are representative demo values.
+   =================================================================== */
+
+var DAYS = [
+  { i:0, d:'D1', wd:'SUN', sunset:'19:36', sunrise:'06:16' },
+  { i:1, d:'D2', wd:'MON', sunset:'19:35', sunrise:'06:17' },
+  { i:2, d:'D3', wd:'TUE', sunset:'19:33', sunrise:'06:18' },
+  { i:3, d:'D4', wd:'WED', sunset:'19:32', sunrise:'06:19' },
+  { i:4, d:'D5', wd:'THU', sunset:'19:30', sunrise:'06:20' },
+  { i:5, d:'D6', wd:'FRI', sunset:'19:29', sunrise:'06:20' },
+  { i:6, d:'D7', wd:'SAT', sunset:'19:27', sunrise:'06:21' },
+  { i:7, d:'D8', wd:'SUN', sunset:'19:26', sunrise:'06:22' },
+  { i:8, d:'D9', wd:'MON', sunset:'19:24', sunrise:'06:23' }
+];
+var ALL = [0,1,2,3,4,5,6,7,8];
+
+var CUES = [
+  { id:'c_initial_off', label:'Initial festival morning — remain off until first ignition',
+    clock:'00:00', kind:'program', days:[0], playlist:'white_only', palette:'deep_sea', master:0 },
+  { id:'c_ignition_white', label:'Ignition — pure white visibility', sun:'sunset', off:-30,
+    kind:'program', days:[0,1,2,3,4,5,6,7], playlist:'white_only', palette:'electric_ice', master:0.8 },
+  { id:'c_first_color', label:'First color — white with gentle sprinkles', sun:'sunset', off:30,
+    kind:'program', days:[0,1,2,3,4,5,6,7], playlist:'dusk_sprinkles', palette:'lavender_dream' },
+  { id:'c_early_night', label:'Early night — cool animated welcome', clock:'21:30',
+    kind:'ambient', days:[0,1,2,3,4,5,6,7], playlist:'ambient', palette:'deep_sea' },
+  { id:'b1_midnight_drive', label:'Deep night 1 — Midnight Drive', clock:'23:30',
+    kind:'ambient', days:[0,1,2,3,4,5,6,7], playlist:'night_midnight_drive', palette:'deep_sea' },
+  { id:'b1_midnight_carry', label:'Deep night 1 — cross-midnight carry', clock:'00:00',
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_midnight_drive', palette:'deep_sea' },
+  { id:'r1_quiet_reset', label:'Quiet reset 1 — Aurora hush', clock:'01:00',
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_quiet_reset_aurora', palette:'aurora' },
+  { id:'b2_uv_lasers', label:'Deep night 2 — UV Lasers', clock:'01:10',
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_uv_lasers', palette:'ultraviolet' },
+  { id:'r2_quiet_reset', label:'Quiet reset 2 — Electric Ice hush', clock:'02:30',
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_quiet_reset_ice', palette:'electric_ice' },
+  { id:'b3_ember_hold', label:'Deep night 3 — Ember Hold', clock:'02:40',
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_ember_hold', palette:'phoenix' },
+  { id:'b4_open_sea', label:'Deep night 4 — Open Sea', clock:'04:00',
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_open_sea', palette:'deep_sea' },
+  { id:'c_pre_dawn', label:'Pre-dawn — pale maritime taper', sun:'sunrise', off:-120,
+    kind:'ambient', days:[1,2,3,4,5,6,7,8], playlist:'night_open_sea', palette:'electric_ice' },
+  { id:'c_sunrise_bloom', label:'Sunrise Bloom — expressive white', sun:'sunrise', off:-20,
+    kind:'program', days:[1,2,3,4,5,6,7,8], playlist:'white_only', palette:'sunset_coral', master:0.8 },
+  { id:'c_morning_watch', label:'Morning Watch — steady reduced visibility', sun:'sunrise', off:60,
+    kind:'program', days:[1,2,3,4,5,6,7,8], playlist:'white_only', palette:'electric_ice', master:0.4 },
+  { id:'c_day_off', label:'Day Off — output dark, engine available', clock:'09:00',
+    kind:'program', days:ALL, playlist:'white_only', palette:'deep_sea', master:0 },
+  { id:'c_burn_night', label:'Burn night spectacle', sun:'sunset', off:90,
+    kind:'program', days:[6], playlist:'default', palette:'bass_drop', master:1 },
+  { id:'c_temple', label:'Temple burn — reverent', sun:'sunset', off:60,
+    kind:'program', days:[7], playlist:'default', palette:'aurora', master:0.4 }
+];
+
+var MANUAL_CUES = [
+  { id:'c_dust_storm', label:'DUST STORM — high-visibility beacon', btn:'DUST STORM BEACON',
+    playlist:'dust_beacon', palette:'sunset_coral',
+    consequence:'Owns the deck until you press END SHOW. No hold is authored.' },
+  { id:'c_event_maxa', label:'EVENT — Maxa party', btn:'MAXA PARTY',
+    playlist:'party_high', palette:'bass_drop',
+    consequence:'Runs as a show for 120 minutes, then the plan resumes.' },
+  { id:'c_event_philharmonic', label:'EVENT — Philharmonic', btn:'PHILHARMONIC',
+    playlist:'default', palette:'sunset_coral',
+    consequence:'Runs as a show, holding at least 90 minutes.' },
+  { id:'c_baby_reveal', label:'BABY REVEAL', btn:'BABY REVEAL…',
+    playlist:'baby_tease → baby_reveal', palette:'baby_reveal_duet',
+    consequence:'Opens the protected pink/blue confirmation. Never fires from this button.' }
+];
+
+/* The four night states this composition is rendered against (the four-view
+   mock's S1 / S2 / S4 / S5), read-only in every locked state. */
+var SHOW_STATES = {
+  S1: { key:'S1', name:'NIGHT BLOCK', today:4, clock:'02:17', controller:'autopilot', mood:'calm',
+        party:{ enabled:true, state:'armed' } },
+  S2: { key:'S2', name:'PARTY COOLDOWN', today:4, clock:'02:37', controller:'autopilot', mood:'calm',
+        party:{ enabled:true, state:'cooldown', cooldownSec:683 } },
+  S4: { key:'S4', name:'DUST STORM', today:4, clock:'01:48', controller:'program', mood:'calm',
+        program:'c_dust_storm', party:{ enabled:true, state:'suppressed' } },
+  S5: { key:'S5', name:'MORNING WATCH', today:4, clock:'07:30', controller:'program', mood:'calm',
+        program:'c_morning_watch', party:{ enabled:true, state:'window_closed' } }
+};
+
+/* The six demo states of the PERFORMANCE composition itself. */
+var PSTATES = {
+  P1: { key:'P1', name:'LOCKED', data:'S1', lock:'locked', engine:true },
+  P2: { key:'P2', name:'KEYPAD', data:'S1', lock:'locked', engine:true, openKeypad:true },
+  P3: { key:'P3', name:'UNLOCKED', data:'S1', lock:'unlocked', engine:true, waiverSec:1781 },
+  P4: { key:'P4', name:'ENGINE RESTART', data:'S1', lock:'locked', engine:false,
+        lastData:'02:15:44', expiredNote:true },
+  P5: { key:'P5', name:'BENCH (AUTH OFF)', data:'S1', lock:'locked', engine:true, authDisabled:true },
+  P6: { key:'P6', name:'DUST STORM LOCKED', data:'S4', lock:'locked', engine:true }
+};
+var PSTATE_ORDER = ['P1','P2','P3','P4','P5','P6'];
+
+var SD = {
+  'SD-9': { t:'Unlock scope in performance mode',
+    a:'Unlock reveals the full four-view Timeline.',
+    b:'Unlock reveals LIVE controls only; EDIT PLAN stays locked during performance mode — the engine already 409s structural writes while perf mode is active.',
+    r:'(b) — implemented here: the EDIT PLAN tab renders disabled with the reason "frozen by performance mode".' },
+  'SD-10': { t:'Remember-30-min default',
+    a:'Pre-checked in the unlock sheet — fewer 3 am keypads.',
+    b:'Off by default — a passcode every time, matching the takeover ruling’s spirit.',
+    r:'(b) — implemented here: the row renders unchecked.' },
+  'SD-11': { t:'Emergency actions under VIEW-ONLY',
+    a:'Everything locked; the keypad is one tap away (implemented here — see the DUST STORM demo state).',
+    b:'END SHOW and/or DUST STORM reachable from the locked composition with a confirm but no passcode.',
+    r:'(a) — the keypad is fast and the ruling was "passcode every time".' }
+};
+
+/* =================================================================== */
+var S = {
+  pstate:'P1',
+  theme:'dark',
+  aplus:false,
+  glare:false,
+  dataOverride:null,
+  lock:'locked',            /* locked | unlocked */
+  waiverSec:0,
+  principal:'OWNER',
+  keypad:null,              /* {value, fails, error, lockoutSec, remember} */
+  offlineAgeSec:33,
+  reconnected:false,
+  expiredNotice:false,
+  detailsOpen:false,
+  partySettingsOpen:false,
+  dockMin:true,
+  overlay:null,
+  lastClickX:600
+};
+var _tick = null;
+
+function ps(){ return PSTATES[S.pstate]; }
+function sc(){ return SHOW_STATES[S.dataOverride || ps().data]; }
+function offline(){ return ps().engine === false && !S.reconnected; }
+function unlocked(){ return S.lock === 'unlocked'; }
+
+/* ── helpers ─────────────────────────────────────────────────────── */
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toMin(s){ var p = String(s).split(':'); return (+p[0])*60 + (+p[1]); }
+function hm(m){ m = ((Math.round(m)%1440)+1440)%1440; var h=Math.floor(m/60), x=m%60;
+  return (h<10?'0':'')+h+':'+(x<10?'0':'')+x; }
+function ms(sec){ sec=Math.max(0,Math.round(sec)); var m=Math.floor(sec/60), s=sec%60;
+  return m+':'+(s<10?'0':'')+s; }
+function hasDay(c, di){ return c.days === ALL ? true : c.days.indexOf(di) >= 0; }
+function cueMin(c, di){ return c.clock !== undefined ? toMin(c.clock) : toMin(DAYS[di][c.sun]) + c.off; }
+function dayLabel(di){ return DAYS[di].d + ' · ' + DAYS[di].wd; }
+function nowMin(){ return toMin(sc().clock); }
+
+function occurrences(di){
+  var out = [];
+  for (var i=0;i<CUES.length;i++){
+    var c = CUES[i];
+    if (!hasDay(c, di)) continue;
+    if (c.clock === undefined && c.sun === undefined) continue;
+    out.push({ cue:c, min:cueMin(c, di) });
+  }
+  out.sort(function(a,b){ return a.min - b.min; });
+  return out;
+}
+function segments(di){
+  var occ = occurrences(di), out = [];
+  for (var i=0;i<occ.length;i++){
+    out.push({ from:occ[i].min, to:(i+1<occ.length ? occ[i+1].min : 1440), cue:occ[i].cue });
+  }
+  return out;
+}
+function ownerAt(di, min){
+  var segs = segments(di);
+  for (var i=0;i<segs.length;i++) if (min >= segs[i].from && min < segs[i].to) return segs[i];
+  return segs.length ? segs[segs.length-1] : null;
+}
+function nextRows(di, min, n){
+  var out = [], occ = occurrences(di), i;
+  for (i=0;i<occ.length;i++) if (occ[i].min > min) out.push({ di:di, min:occ[i].min, cue:occ[i].cue });
+  var nd = di+1;
+  if (nd < DAYS.length){
+    var occ2 = occurrences(nd);
+    for (i=0;i<occ2.length && out.length<n;i++) out.push({ di:nd, min:occ2[i].min, cue:occ2[i].cue });
+  }
+  return out.slice(0, n);
+}
+function cueTags(cue){
+  var t = [];
+  if (cue.master === 0) t.push('MASTER 0%');
+  else if (cue.kind === 'program') t.push('SHOW');
+  else if (/^Quiet reset/.test(cue.label)) t.push('RESET');
+  else t.push('AMBIENT');
+  if (cue.sun) t.push('SUN');
+  return t;
+}
+function partyWindow(di){ return { start: toMin('21:30'), end: toMin(DAYS[di].sunrise) - 120 }; }
+function windowOpenAt(di, min){ var w = partyWindow(di); return (min >= w.start) || (min < w.end); }
+
+function nowModel(){
+  var s = sc(), di = s.today, min = nowMin(), seg = ownerAt(di, min);
+  var m = { chip:'LIVE CUE', name:'', playlist:'', palette:'', since:null, sinceNote:'',
+            until:null, untilLabel:'', holds:false, progress:0 };
+  if (s.program){
+    var mc = null, i;
+    for (i=0;i<MANUAL_CUES.length;i++) if (MANUAL_CUES[i].id === s.program) mc = MANUAL_CUES[i];
+    for (i=0;i<CUES.length;i++) if (CUES[i].id === s.program) {
+      mc = { label:CUES[i].label, playlist:CUES[i].playlist, palette:CUES[i].palette };
+    }
+    m.chip = 'SHOW'; m.name = mc.label; m.playlist = mc.playlist; m.palette = mc.palette;
+    if (s.program === 'c_dust_storm'){ m.holds = true; m.since = min - 6; m.sinceNote = 'fired'; }
+    else { m.since = cueMin(CUES[13], di); m.sinceNote = 'fired'; m.until = toMin('09:00');
+           m.untilLabel = 'Day Off — output dark'; }
+    if (m.since !== null && m.until !== null && m.until > m.since){
+      m.progress = Math.max(0, Math.min(1, (min - m.since) / (m.until - m.since)));
+    }
+    return m;
+  }
+  if (!seg){ m.chip = 'BASELINE'; m.name = 'Autopilot baseline — ambient';
+             m.playlist = 'ambient'; m.palette = 'deep_sea'; return m; }
+  m.chip = seg.cue.kind === 'program' ? 'SHOW' : 'LIVE CUE';
+  m.name = seg.cue.label; m.playlist = seg.cue.playlist; m.palette = seg.cue.palette;
+  m.since = seg.from; m.sinceNote = 'scheduled';
+  var nr = nextRows(di, min, 1);
+  m.until = seg.to >= 1440 ? null : seg.to;
+  m.untilLabel = nr.length ? nr[0].cue.label : '';
+  if (seg.to > seg.from) m.progress = Math.max(0, Math.min(1, (min - seg.from) / (seg.to - seg.from)));
+  return m;
+}
+function partyModel(){
+  var s = sc(), di = s.today, min = nowMin();
+  var w = partyWindow(di), open = windowOpenAt(di, min);
+  var p = { enabled:s.party.enabled, open:open,
+            windowText:'Window 21:30 → sunrise−2h (' + hm(w.end) + ') · ' + (open ? 'open now' : 'closed now'),
+            pill:'OFF', tone:'bad', line:'' };
+  if (offline()){ p.pill = 'ENGINE OFFLINE'; p.tone = 'bad';
+    p.line = 'Cannot reach the engine — party state unknown.'; return p; }
+  if (!p.enabled){ p.pill = 'OFF'; p.tone = 'bad';
+    p.line = 'Party sessions are blocked. Any running session was killed; detection keeps running.'; return p; }
+  switch (s.party.state){
+    case 'in_session': p.pill = 'IN SESSION'; p.tone = 'ok';
+      p.line = 'IN SESSION · ends ' + ms(s.party.sessionLeftSec); break;
+    case 'cooldown': p.pill = 'COOLDOWN ' + ms(s.party.cooldownSec); p.tone = 'warn';
+      p.line = 'COOLDOWN · ' + ms(s.party.cooldownSec) + ' — nothing can trigger until it clears.'; break;
+    case 'suppressed': p.pill = 'SUPPRESSED'; p.tone = 'warn';
+      p.line = 'SUPPRESSED — a show holds the deck'; break;
+    case 'window_closed': p.pill = 'WINDOW CLOSED'; p.tone = 'warn';
+      p.line = 'WINDOW CLOSED — outside the eligibility window, nothing can trigger.'; break;
+    default: p.pill = 'ARMED'; p.tone = 'ok'; p.line = 'ARMED — waiting for sustained music'; break;
+  }
+  return p;
+}
+
+/* ── alert ladder (section 6.2, verbatim ranks) ───────────────────── */
+function alertList(){
+  var s = sc(), a = [];
+  if (offline()){
+    a.push({ rank:1, cls:'e', ttl:'ENGINE OFFLINE',
+      bod:'Engine unreachable — last data ' + ps().lastData + ' (' + S.offlineAgeSec + ' s ago). The rig keeps running its plan on its own.',
+      act:'RECONNECT (DEMO)', actId:'reconnect' });
+  }
+  if (S.expiredNotice){
+    a.push({ rank:2, cls:'w', ttl:'UNLOCK EXPIRED',
+      bod:'Unlock expired — enter the passcode again. The engine restarted, and unlock sessions and waivers live only in engine memory.' });
+  }
+  if (s.moodStale){
+    a.push({ rank:5, cls:'w', ttl:'AUDIO COMPANION STALE',
+      bod:'Party detection is down; mood forced CALM.' });
+  }
+  a.sort(function(x,y){ return x.rank - y.rank; });
+  return a;
+}
+
+/* ── rail ────────────────────────────────────────────────────────── */
+function renderRail(){
+  var groups = [
+    ['LAYERS', [['Deck',0,1],['Mixer',0,1],['Live Touch',0,1]]],
+    ['TOOLS',  [['Audio',0,0],['2D Simulator',0,0]]],
+    ['SHOW',   [['Timeline',1,1],['Events',0,1],['Scheduler',0,0],['Dimmer Rack',0,0]]],
+    ['SYSTEM', [['Config',0,0]]]
+  ];
+  var h = '<div class="brand">CaptainPad</div>';
+  for (var g=0; g<groups.length; g++){
+    h += '<div class="group">'+groups[g][0]+'</div>';
+    var items = groups[g][1];
+    for (var i=0;i<items.length;i++){
+      var shown = items[i][2] === 1;
+      h += '<button class="item'+(items[i][1]?' on':'')+(shown?'':' hidden')+'" data-act="rail" data-name="'+esc(items[i][0])+'">'
+        + '<span class="glyph">'+(items[i][1]?'●':'○')+'</span>'
+        + '<span>'+esc(items[i][0])+'</span></button>';
+    }
+  }
+  h += '<div class="ctx">RAIL SHOWN AS CONTEXT ONLY. Dimmed entries are hidden by performance mode; TIMELINE now stays visible so the night can be READ during a show.</div>';
+  document.getElementById('rail').innerHTML = h;
+}
+
+/* ── header ──────────────────────────────────────────────────────── */
+function pillHtml(label, value, tone){
+  var toneCls = tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : tone === 'bad' ? 'bad' : '';
+  var dotCls  = tone === 'ok' ? 'bg-ok' : tone === 'warn' ? 'bg-warn' : tone === 'bad' ? 'bg-bad' : 'bg-sec';
+  return '<span class="pill"><span class="dt '+dotCls+'"></span><span class="lb">'+esc(label)+'</span>'
+    + '<span class="'+toneCls+'">'+esc(value)+'</span></span>';
+}
+function renderHeader(){
+  var s = sc(), p = partyModel(), engineOk = !offline();
+  var ctrl = s.controller === 'program' ? ['SHOW RUNNING','warn']
+           : s.controller === 'manual'  ? ['MANUAL','warn'] : ['AUTOPILOT','ok'];
+  var audio = s.moodStale ? ['STALE ' + s.moodStale + 's','warn']
+            : (s.mood === 'party' ? ['PARTY','ok'] : ['CALM','ok']);
+
+  var modeChip = unlocked()
+    ? '<span class="pill unlocked"><span class="lb">CONTROLS</span>UNLOCKED — '
+      + esc(S.principal) + ' · ' + ms(S.waiverSec)
+      + '</span><button class="btn" data-act="relock" style="min-height:48px">RE-LOCK</button>'
+    : '<span class="pill perf"><span class="lb">MODE</span>PERFORMANCE — VIEW ONLY</span>';
+
+  var h = '<div class="hdr">'
+    + '<div class="ident"><div class="kicker">Active plan</div>'
+      + '<div class="plan"><span class="rundot '+(engineOk?'bg-ok':'bg-sec')+'"></span>playa_default</div></div>'
+    + '<div class="pills">'
+      + pillHtml('ENGINE', engineOk?'LIVE':'OFFLINE', engineOk?'ok':'bad')
+      + pillHtml('CONTROL', ctrl[0], ctrl[1])
+      + pillHtml('PARTY', p.enabled ? p.pill : 'OFF', p.enabled ? p.tone : 'bad')
+      + pillHtml('AUDIO', audio[0], audio[1])
+      + modeChip
+    + '</div>'
+    + '<button class="btn'+(S.aplus?' pri':'')+'" data-act="aplus" style="min-width:64px">A+</button>'
+    + '</div>';
+
+  var list = alertList();
+  if (list.length){
+    var a = list[0];
+    h += '<div class="alert '+a.cls+'"><div class="row"><div style="min-width:0;flex:1 1 auto">'
+      + '<div class="ttl">'+esc(a.ttl)+'</div><div class="bod">'+esc(a.bod)+'</div></div>'
+      + (a.act ? '<button class="btn" data-act="'+a.actId+'">'+esc(a.act)+'</button>' : '')
+      + '</div></div>';
+  }
+  var collapsed = Math.max(0, list.length - 1);
+  h += '<button class="detrow" data-act="details"><span>'+(S.detailsOpen?'▾':'▸')+' Details ('+collapsed+')</span>'
+    + '<span style="flex:1 1 auto"></span>'
+    + '<span style="text-transform:none;font-family:var(--f-body);font-size:var(--t-meta)">'
+    + (offline() ? 'last data '+ps().lastData : 'live data · '+s.clock) + '</span></button>';
+  if (S.detailsOpen){
+    h += '<div class="drawer">';
+    for (var i=1;i<list.length;i++){
+      h += '<div class="mini"><b>'+esc(list[i].ttl)+'</b><br><span class="perfsub">'+esc(list[i].bod)+'</span></div>';
+    }
+    if (list.length <= 1) h += '<div class="perfsub">No lower-priority alerts.</div>';
+    h += '<div style="height:10px"></div><div class="kicker">Diagnostics</div>'
+      + '<div class="hint">Performance mode is engine-global: every pad renders the same broadcast, so this cannot be wandered out of by switching tabs. '
+      + 'Data age: ' + (offline() ? S.offlineAgeSec + ' s (engine unreachable)' : 'live · control bus connected') + '.</div>'
+      + '</div>';
+  }
+  return h;
+}
+
+/* ── the PERFORMANCE composition (view-only) ──────────────────────── */
+function renderPerf(){
+  var s = sc(), n = nowModel(), p = partyModel(), min = nowMin();
+  var stale = offline() ? '<span class="tag stale">STALE</span>' : '';
+  var h = '';
+
+  /* 2 — NOW hero */
+  h += '<div class="card'+(offline()?'':' live')+'">'
+    + '<div class="cardhead"><span class="kicker ok">● ON THE SHIP NOW</span>'
+    + '<span class="tag now">'+esc(n.chip)+'</span><span class="spacer"></span>'+stale+'</div>'
+    + '<div class="perfhero">'+esc(n.name)+'</div>'
+    + '<div class="perfsub">'+esc(n.playlist)+' · '+esc(n.palette)+'</div>'
+    + '<div class="perftimes">';
+  if (n.since !== null) h += '<span>since '+hm(n.since)+'</span><span class="tag">'+esc(n.sinceNote)+'</span>';
+  h += '<span class="bar"><i style="width:'+Math.round((n.holds?0.35:n.progress)*100)+'%"></i></span>';
+  if (n.holds) h += '<span class="warn">holds until an operator ends it</span>';
+  else if (n.until !== null) h += '<span>until '+hm(n.until)+' — NEXT: '+esc(n.untilLabel)+'</span>';
+  else h += '<span class="perfsub">no scheduled end in today’s plan</span>';
+  h += '</div>'
+    + '<div class="hint">View only. END SHOW and RESUME LIVE are rig mutations and do not render until this pad is unlocked. '+sdChip('SD-11')+'</div>'
+    + '</div>';
+
+  /* 3 — NEXT strip (non-interactive) */
+  var rows = nextRows(s.today, min, 4);
+  h += '<div><div class="cardhead"><h3>What happens next</h3>'
+    + '<span class="tag">not tappable in performance mode</span><span class="spacer"></span>'+stale+'</div>'
+    + '<div class="nextstrip">';
+  for (var i=0;i<rows.length;i++){
+    var r = rows[i];
+    h += '<div class="nextcard"><span class="t">'+hm(r.min)
+      + (r.di !== s.today ? ' <span class="tag">'+esc(DAYS[r.di].d)+'</span>' : '') + '</span>'
+      + '<span class="l">'+esc(r.cue.label)+'</span>'
+      + '<span>'+tagHtml(cueTags(r.cue))+'</span></div>';
+  }
+  h += '</div></div>';
+
+  /* 4 — status band */
+  h += '<div class="tiles">'
+    + '<div class="tile"><div class="h">Party '+stale+'</div>'
+      + '<div class="v '+(p.tone==='warn'?'warn':p.tone==='bad'?'bad':'ok')+'">'
+      + esc(p.enabled ? p.pill : 'OFF') + '</div>'
+      + '<div class="s">'+esc(p.enabled ? p.line : 'Party mode is OFF — music cannot start a session.')+'</div>'
+      + '<div class="s">'+esc(p.windowText)+'</div></div>'
+    + '<div class="tile"><div class="h">Phase / eligibility</div>'
+      + '<div class="v">'+(p.open ? 'PARTY WINDOW' : 'NO PHASE')+'</div>'
+      + '<div class="s">'+(p.open ? 'Inside the eligibility window.' : 'Outside the eligibility window.')+'</div>'
+      + '<div class="s">Window closes '+hm(partyWindow(s.today).end)+'.</div></div>'
+    + '<div class="tile"><div class="h">Audio '+stale+'</div>'
+      + '<div class="v '+(s.moodStale?'warn':'ok')+'">'+(s.moodStale ? 'STALE '+s.moodStale+'s' : (s.mood === 'party' ? 'PARTY' : 'CALM'))+'</div>'
+      + '<div class="s">'+(s.moodStale
+          ? 'Party detection is down; mood forced CALM.'
+          : 'The audio companion is reporting; mood drives the party path.')+'</div></div>'
+    + '</div>';
+
+  /* 5 — event-log ticker */
+  h += '<div class="ticker"><div class="kicker">Just happened</div>'
+    + tickerLine('02:30:00','r2_quiet_reset fired', 'schedule')
+    + tickerLine('01:10:00','b2_uv_lasers fired', 'schedule')
+    + tickerLine('00:00:00','b1_midnight_carry fired', 'schedule')
+    + '</div>';
+
+  /* 6 — the single interactive element */
+  h += '<div class="unlockbar">'
+    + '<span class="note">'
+    + (offline()
+        ? 'The engine is unreachable. The unlock button stays enabled — verification happens engine-side and will fail loudly rather than pretend.'
+        : 'Operator controls are locked on this pad. Unlocking verifies a passcode with the engine; it changes nothing on the ship by itself.')
+    + '</span>'
+    + '<button class="btn unlock" data-act="unlock">UNLOCK OPERATOR CONTROLS</button>'
+    + '</div>';
+  return h;
+}
+function tickerLine(t, what, src){
+  return '<div class="line"><span class="t">'+t+'</span>  '+esc(what)+'  <span class="t">('+esc(src)+')</span></div>';
+}
+function tagHtml(list){
+  var out = '';
+  for (var i=0;i<list.length;i++) out += '<span class="tag">'+esc(list[i])+'</span>';
+  return out;
+}
+function sdChip(id){ return '<button class="sd" data-act="sd" data-sd="'+id+'">'+id+'</button>'; }
+
+/* ── the UNLOCKED composition: four-view chrome + LIVE controls ───── */
+function renderUnlocked(){
+  var s = sc(), n = nowModel(), p = partyModel(), min = nowMin();
+  var h = '<div class="seg">'
+    + '<button class="on">LIVE</button>'
+    + '<button>CALENDAR VIEW</button>'
+    + '<button>TIME TRAVEL</button>'
+    + '<button disabled title="frozen by performance mode">EDIT PLAN</button>'
+    + '<div style="display:flex;align-items:center;padding-left:8px">'+sdChip('SD-9')+'</div>'
+    + '</div>'
+    + '<div class="hint">EDIT PLAN stays frozen while performance mode is active — the engine already refuses structural plan writes in this mode, so the tab renders disabled with that reason rather than failing on save.</div>';
+
+  h += '<div class="grid2"><div class="col-l">'
+    + '<div class="card live">'
+      + '<div class="cardhead"><span class="kicker ok">● ON THE SHIP NOW</span>'
+      + '<span class="tag now">'+esc(n.chip)+'</span></div>'
+      + '<div class="perfhero" style="font-size:var(--t-hero);line-height:var(--lh-hero)">'+esc(n.name)+'</div>'
+      + '<div class="perfsub">'+esc(n.playlist)+' · '+esc(n.palette)+'</div>'
+      + '<div class="perftimes">'
+        + (n.since !== null ? '<span>since '+hm(n.since)+'</span>' : '')
+        + '<span class="bar"><i style="width:'+Math.round(n.progress*100)+'%"></i></span>'
+        + (n.until !== null ? '<span>until '+hm(n.until)+' — NEXT: '+esc(n.untilLabel)+'</span>' : '')
+      + '</div>'
+      + '<div style="display:flex;gap:12px;margin-top:16px;flex-wrap:wrap">'
+        + (s.program ? '<button class="btn big danger" data-act="endshow">END SHOW</button>' : '')
+        + '<span class="hint" style="margin:0">Controls unlocked on this pad.</span>'
+      + '</div>'
+    + '</div>'
+    + '<div class="card"><div class="cardhead"><h3>What happens next</h3></div><div class="nextlist">';
+  var rows = nextRows(s.today, min, 4);
+  for (var i=0;i<rows.length;i++){
+    h += '<button class="nextrow"><span class="t">'+hm(rows[i].min)+'</span>'
+      + '<span class="l">'+esc(rows[i].cue.label)+'</span>'
+      + '<span>'+tagHtml(cueTags(rows[i].cue))+'</span></button>';
+  }
+  h += '</div></div></div>';
+
+  h += '<div class="col-r">'
+    + '<div class="card"><div class="cardhead"><h3>Party mode</h3></div>'
+      + '<div class="pline a">'+(p.enabled ? 'PARTY MODE ON' : 'PARTY MODE OFF')+'</div>'
+      + '<div class="pline b">'+esc(p.windowText)+'</div>'
+      + '<div class="pline c '+(p.tone==='warn'?'warn':p.tone==='bad'?'bad':'ok')+'">'+esc(p.line)+'</div>'
+      + '<div style="margin-top:16px"><button class="btn big wide '+(p.enabled?'danger':'pri')+'" data-act="partytoggle">'
+      + (p.enabled ? 'DISABLE PARTY MODE' : 'ENABLE PARTY MODE')+'</button></div>'
+    + '</div>'
+    + '<div class="card"><div class="cardhead"><h3>Manual events</h3><span class="spacer"></span>'
+      + '<span class="tag">CONFIRM TO FIRE</span></div><div class="evtgrid">';
+  for (var k=0;k<MANUAL_CUES.length;k++){
+    h += '<button class="btn evt" data-act="fire" data-cue="'+esc(MANUAL_CUES[k].id)+'">'+esc(MANUAL_CUES[k].btn)+'</button>';
+  }
+  h += '</div>'
+    + '<div class="hint">The waiver token rides every gated request. It expires on its own, on an engine restart, or when you press RE-LOCK.</div>'
+    + '</div></div></div>';
+  return h;
+}
+
+/* ── overlays: keypad, bench confirm, SD cards, confirms ──────────── */
+function shellModal(inner){
+  return '<div class="scrim" data-act="scrim"><div class="modal">'+inner+'</div></div>';
+}
+function renderOverlay(){
+  var o = S.overlay;
+  if (!o) return '';
+  if (o.type === 'keypad') return keypadOverlay();
+  if (o.type === 'bench') return benchOverlay();
+  if (o.type === 'sd') return sdOverlay(o.id);
+  if (o.type === 'sdlist') return sdListOverlay();
+  if (o.type === 'confirm') return confirmOverlay(o);
+  return '';
+}
+function keypadOverlay(){
+  var k = S.keypad;
+  var masked = k.value.replace(/./g, '•');
+  var emptyField = masked === '';
+  var lockedOut = k.lockoutSec > 0;
+  var h = '<h3>Unlock operator controls</h3>'
+    + '<div class="hint" style="margin-top:0">The passcode is verified by the engine, never on this pad. '
+    + 'Unlocking changes nothing on the ship by itself.</div>'
+    + '<div class="masked"'+(emptyField ? ' style="font-size:15px;letter-spacing:1.6px;color:var(--secondary)"' : '')+'>'
+    + (emptyField ? 'ENTER OPERATOR PASSCODE' : esc(masked)) + '</div>';
+  if (k.error){
+    h += '<div class="alert e"><div class="ttl">'+esc(k.error.ttl)+'</div>'
+      + '<div class="bod">'+esc(k.error.bod)+(lockedOut ? ' Retry in ' + ms(k.lockoutSec) + '.' : '')+'</div></div>';
+  }
+  h += '<div class="keypad" style="margin-top:16px">';
+  var keys = ['1','2','3','4','5','6','7','8','9','⌫','0','CLR'];
+  for (var i=0;i<keys.length;i++){
+    var kk = keys[i];
+    h += '<button data-act="key" data-k="'+esc(kk)+'"'+(lockedOut?' disabled':'')+'>'+esc(kk)+'</button>';
+  }
+  h += '</div>'
+    + '<label class="rememberrow"><input type="checkbox" data-act="remember"'+(k.remember?' checked':'')+'>'
+    + '<span>Remember for 30 minutes</span>'+sdChip('SD-10')+'</label>'
+    + '<div class="btns"><button class="btn big quiet" data-act="close">CANCEL</button><span class="gap"></span>'
+    + '<button class="btn big pri" data-act="submitcode"'+(lockedOut||k.value.length<4?' disabled':'')+'>UNLOCK</button></div>'
+    + '<div class="hint">Demo: <b>4242</b> unlocks. Any other four digits returns the engine’s verbatim 401; the fifth failure returns the 429 lockout with a live countdown.</div>';
+  return shellModal(h);
+}
+function benchOverlay(){
+  return shellModal('<h3>Unlock operator controls</h3>'
+    + '<div class="alert w"><div class="ttl">PRIVILEGED_AUTH_DISABLED (503)</div>'
+    + '<div class="bod">This bench engine has no operator passcodes configured.</div></div>'
+    + '<p>This bench engine has no operator passcodes — unlock controls?</p>'
+    + '<div class="hint">A keypad is never faked when there is nothing to verify against. On an auth-required engine this dialog does not appear.</div>'
+    + '<div class="btns"><button class="btn big quiet" data-act="close">CANCEL</button><span class="gap"></span>'
+    + '<button class="btn big pri" data-act="benchunlock">UNLOCK CONTROLS</button></div>');
+}
+function sdOverlay(id){
+  var d = SD[id];
+  return shellModal('<h3>'+id+' — '+esc(d.t)+'</h3><div class="body">'
+    + '<p><b>Option A.</b> '+esc(d.a)+'</p><p><b>Option B.</b> '+esc(d.b)+'</p>'
+    + '<p><b>Recommendation:</b> '+esc(d.r)+'</p></div>'
+    + '<div class="btns"><span class="gap"></span><button class="btn pri" data-act="close">CLOSE</button></div>');
+}
+function sdListOverlay(){
+  var h = '<h3>SINA DECIDES — the performance-mode choices</h3><div class="body">';
+  for (var k in SD){
+    h += '<div style="border-left:3px solid var(--travel-purple);padding-left:10px;margin:10px 0">'
+      + '<b>'+k+' — '+esc(SD[k].t)+'</b><br><span class="perfsub">A: '+esc(SD[k].a)+'</span><br>'
+      + '<span class="perfsub">B: '+esc(SD[k].b)+'</span><br>'
+      + '<span class="perfsub">Recommended: '+esc(SD[k].r)+'</span></div>';
+  }
+  h += '<p class="hint">SD-1 … SD-8 and SD-12 / SD-13 live in the four-view mock.</p></div>'
+    + '<div class="btns"><span class="gap"></span><button class="btn pri" data-act="close">CLOSE</button></div>';
+  return shellModal(h);
+}
+function confirmOverlay(o){
+  var right = S.lastClickX < (window.innerWidth / 2);
+  var cancel = '<button class="btn big quiet" data-act="close">CANCEL</button>';
+  var go = '<button class="btn big '+(o.tone||'danger')+'" data-act="confirmdone" data-arg="'+esc(o.arg||'')+'">'+esc(o.goLabel)+'</button>';
+  return shellModal('<h3>'+esc(o.title)+'</h3><p>'+esc(o.body)+'</p>'
+    + (o.note ? '<p class="perfsub">'+esc(o.note)+'</p>' : '')
+    + '<div class="btns">'+(right ? cancel+'<span class="gap"></span>'+go : go+'<span class="gap"></span>'+cancel)+'</div>');
+}
+
+/* ── demo dock ───────────────────────────────────────────────────── */
+function renderDock(){
+  if (S.dockMin) return '<button class="tbtn" data-act="dockmax">DEMO CONTROLS ▲</button>';
+  var h = '<button class="close" data-act="dockmin">HIDE ▼</button><h4>Demo state</h4><div class="sgrid">';
+  for (var i=0;i<PSTATE_ORDER.length;i++){
+    var k = PSTATE_ORDER[i];
+    h += '<button class="sbtn'+(S.pstate===k?' on':'')+'" data-act="pstate" data-p="'+k+'">'
+      + '<span class="n">'+k+'</span><span>'+esc(PSTATES[k].name)+'</span></button>';
+  }
+  h += '</div>';
+
+  h += '<h4>Night data underneath</h4><div class="tgrid">';
+  var ds = ['S1','S2','S4','S5'];
+  var cur = S.dataOverride || ps().data;
+  for (var d=0;d<ds.length;d++){
+    h += '<button class="tbtn'+(cur===ds[d]?' on':'')+'" data-act="data" data-d="'+ds[d]+'">'
+      + ds[d]+' '+esc(SHOW_STATES[ds[d]].name)+'</button>';
+  }
+  h += '</div>';
+
+  h += '<h4>Theme</h4><div class="tgrid">';
+  var themes = ['light','dark','midnight','sunset','gruvbox'];
+  for (var t=0;t<themes.length;t++){
+    h += '<button class="tbtn'+(S.theme===themes[t]?' on':'')+'" data-act="theme" data-t="'+themes[t]+'">'+themes[t].toUpperCase()+'</button>';
+  }
+  h += '</div>';
+
+  h += '<h4>Legibility</h4><div class="tgrid">'
+    + '<button class="tbtn'+(S.theme==='light'&&!S.aplus?' on':'')+'" data-act="preset" data-p="day">DAY</button>'
+    + '<button class="tbtn'+(S.theme==='midnight'?' on':'')+'" data-act="preset" data-p="night">NIGHT</button>'
+    + '<button class="tbtn'+(S.aplus?' on':'')+'" data-act="aplus">A+ LARGE TYPE</button>'
+    + '<button class="tbtn'+(S.glare?' on':'')+'" data-act="glare">SUN GLARE (mock aid)</button>'
+    + '</div>';
+
+  h += '<h4>Open decisions</h4>'
+    + '<button class="tbtn" data-act="sdlist" style="width:100%;justify-content:center">SINA DECIDES (3)</button>';
+  return h;
+}
+
+/* ── render ──────────────────────────────────────────────────────── */
+function render(){
+  document.documentElement.setAttribute('data-theme', S.theme);
+  document.documentElement.setAttribute('data-aplus', S.aplus ? 'on' : 'off');
+  document.body.setAttribute('data-glare', S.glare ? 'on' : 'off');
+
+  renderRail();
+  document.getElementById('work').innerHTML =
+    renderHeader() + (unlocked() ? renderUnlocked() : renderPerf());
+  document.getElementById('dock').className = S.dockMin ? 'min' : '';
+  document.getElementById('dock').innerHTML = renderDock();
+  document.getElementById('overlay').innerHTML = renderOverlay();
+  document.getElementById('footnote').innerHTML =
+    'Design mock for the CaptainPad Timeline PERFORMANCE composition. Fully offline: no CDNs, no web fonts, no images, no network calls of any kind. '
+  + 'Headings use a Space Grotesk stack and body text an Inter stack with system fallbacks — the app itself loads the real families from local packages. '
+  + 'Colour tokens are copied from the five CaptainPad palettes. 1 pt is drawn as 1 px. '
+  + '<b>Honest scope:</b> unlocking hides or reveals controls ON THIS PAD. Until the engine gates the remaining mutating timeline and party routes while performance mode is active (ENGINE GAP EG-8), a stale pad or a script can still mutate the running show without a passcode — which is exactly why the chip reads "controls unlocked on this pad" and never "timeline unlocked".';
+}
+
+/* ── interaction ─────────────────────────────────────────────────── */
+function toast(msg){
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(function(){ t.style.display = 'none'; }, 2600);
+}
+function startTick(){
+  clearInterval(_tick);
+  _tick = setInterval(function(){
+    var dirty = false;
+    if (offline()){ S.offlineAgeSec += 1; dirty = true; }
+    if (unlocked() && S.waiverSec > 0){
+      S.waiverSec -= 1; dirty = true;
+      if (S.waiverSec <= 0){ S.lock = 'locked'; S.expiredNotice = true; }
+    }
+    if (S.keypad && S.keypad.lockoutSec > 0){
+      S.keypad.lockoutSec -= 1;
+      if (S.keypad.lockoutSec <= 0){ S.keypad.fails = 0; S.keypad.error = null; }
+      dirty = true;
+    }
+    if (dirty) render();
+  }, 1000);
+}
+function applyPState(k){
+  S.pstate = k;
+  var p = PSTATES[k];
+  S.dataOverride = null;
+  S.lock = p.lock;
+  S.waiverSec = p.waiverSec || 0;
+  S.offlineAgeSec = 33;
+  S.reconnected = false;
+  S.expiredNotice = false;
+  S.keypad = null;
+  S.overlay = null;
+  if (p.openKeypad) openKeypad();
+  render();
+  startTick();
+}
+function openKeypad(){
+  if (ps().authDisabled){ S.overlay = { type:'bench' }; return; }
+  S.keypad = { value:'', fails:0, error:null, lockoutSec:0, remember:false };
+  S.overlay = { type:'keypad' };
+}
+
+document.addEventListener('click', function(ev){
+  var el = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!el) return;
+  S.lastClickX = ev.clientX || 600;
+  var a = el.getAttribute('data-act');
+  switch (a){
+    case 'rail':
+      toast(el.getAttribute('data-name') + ' — rail shown as context only in this mock. Nothing navigates.'); return;
+    case 'aplus': S.aplus = !S.aplus; render(); return;
+    case 'glare': S.glare = !S.glare; render(); return;
+    case 'theme': S.theme = el.getAttribute('data-t'); render(); return;
+    case 'preset':
+      if (el.getAttribute('data-p') === 'day'){ S.theme = 'light'; S.aplus = false; }
+      else S.theme = 'midnight';
+      render(); return;
+    case 'pstate': applyPState(el.getAttribute('data-p')); return;
+    case 'data': S.dataOverride = el.getAttribute('data-d'); render(); return;
+    case 'details': S.detailsOpen = !S.detailsOpen; render(); return;
+    case 'dockmin': S.dockMin = true; render(); return;
+    case 'dockmax': S.dockMin = false; render(); return;
+    case 'sd': S.overlay = { type:'sd', id:el.getAttribute('data-sd') }; render(); return;
+    case 'sdlist': S.overlay = { type:'sdlist' }; render(); return;
+    case 'close': S.overlay = null; S.keypad = null; render(); return;
+    case 'scrim': if (ev.target.classList.contains('scrim')){ S.overlay = null; S.keypad = null; render(); } return;
+
+    case 'reconnect':
+      S.reconnected = true;
+      S.lock = 'locked'; S.waiverSec = 0;
+      S.expiredNotice = true;
+      toast('Engine back. Sessions and waivers live only in engine memory — every pad comes back view-only.');
+      render(); return;
+    case 'unlock': S.expiredNotice = false; openKeypad(); render(); return;
+    case 'remember': S.keypad.remember = el.checked; render(); return;
+    case 'key': {
+      var k = el.getAttribute('data-k');
+      if (k === '⌫') S.keypad.value = S.keypad.value.slice(0, -1);
+      else if (k === 'CLR') S.keypad.value = '';
+      else if (S.keypad.value.length < 8) S.keypad.value += k;
+      S.keypad.error = null;
+      render(); return;
+    }
+    case 'submitcode': {
+      var kp = S.keypad;
+      if (kp.value === '4242'){
+        S.lock = 'unlocked';
+        S.principal = 'OWNER';
+        S.waiverSec = kp.remember ? 1800 : 1781;
+        S.overlay = null; S.keypad = null;
+        toast('Passcode verified by the engine — controls unlocked on this pad.');
+        render(); startTick(); return;
+      }
+      kp.fails += 1;
+      kp.value = '';
+      if (kp.fails >= 5){
+        kp.lockoutSec = 60;
+        kp.error = { ttl:'429 TOO MANY ATTEMPTS',
+          bod:'{"error":"passcode attempts locked out","retryAfterMs":60000} — 5 failures in 60 s locks this remote out.' };
+      } else {
+        kp.error = { ttl:'401 UNAUTHORIZED',
+          bod:'{"error":"invalid operator passcode"} — attempt ' + kp.fails + ' of 5.' };
+      }
+      render(); return;
+    }
+    case 'benchunlock':
+      S.lock = 'unlocked'; S.principal = 'BENCH'; S.waiverSec = 1800;
+      S.overlay = null;
+      toast('Bench engine has no passcodes — controls unlocked on this pad.');
+      render(); startTick(); return;
+    case 'relock':
+      S.lock = 'locked'; S.waiverSec = 0; S.expiredNotice = false;
+      toast('Re-locked. This pad is view-only again.'); render(); return;
+
+    case 'endshow':
+      S.overlay = { type:'confirm', title:'End this show?',
+        body:'End the running show? The plan resumes with whatever owns this moment.',
+        note:'The ended show is never resurrected.', goLabel:'END SHOW', arg:'END SHOW' };
+      render(); return;
+    case 'partytoggle': {
+      var on = partyModel().enabled;
+      S.overlay = { type:'confirm', title: on ? 'Disable party mode?' : 'Enable party mode?',
+        body: on ? 'Disabling party mode kills the running session immediately; detection keeps running.'
+                 : 'Enabling party mode lets sustained music start a session while the eligibility window is open.',
+        goLabel: on ? 'DISABLE PARTY MODE' : 'ENABLE PARTY MODE',
+        tone: on ? 'danger' : 'pri', arg:'PARTY MODE' };
+      render(); return;
+    }
+    case 'fire': {
+      var cid = el.getAttribute('data-cue'), mc = null;
+      for (var i=0;i<MANUAL_CUES.length;i++) if (MANUAL_CUES[i].id === cid) mc = MANUAL_CUES[i];
+      S.overlay = { type:'confirm', title:'Fire ' + mc.btn + '?',
+        body: mc.label + ' — ' + mc.consequence,
+        note:'The deck changes the moment you confirm.', goLabel:'FIRE ' + mc.btn, arg: mc.btn };
+      render(); return;
+    }
+    case 'confirmdone':
+      S.overlay = null;
+      toast(el.getAttribute('data-arg') + ' confirmed (mock) — nothing fired.');
+      render(); return;
+  }
+});
+
+document.addEventListener('keydown', function(ev){
+  if (ev.target && /INPUT|SELECT|TEXTAREA/.test(ev.target.tagName)) return;
+  var n = ev.key;
+  if (n >= '1' && n <= '6'){ applyPState(PSTATE_ORDER[(+n) - 1]); return; }
+  if (n === 't' || n === 'T'){
+    var ts = ['light','dark','midnight','sunset','gruvbox'];
+    S.theme = ts[(ts.indexOf(S.theme) + 1) % ts.length]; render(); return;
+  }
+  if (n === 'Escape' && S.overlay){ S.overlay = null; S.keypad = null; render(); }
+});
+
+applyPState('P1');
+</script>
+</body>
+</html>

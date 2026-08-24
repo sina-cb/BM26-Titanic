@@ -37,7 +37,7 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
   useEffect(() => {
     if (draggingRef.current) return;
     if (fadingTarget == null) animVal.setValue(value);
-  }, [value, fadingTarget]);
+  }, [animVal, value, fadingTarget]);
 
   // Smooth timed fade: animate animVal toward the fade target (0 = TO BLACK,
   // 1 = UP) over the fade's duration. Re-keyed ONLY on the target so per-
@@ -130,7 +130,7 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
         const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
         draggingRef.current = false;
         onChangeRef.current(nv);
-        if (onReleaseRef.current) onReleaseRef.current();
+        if (onReleaseRef.current) onReleaseRef.current(nv);
       },
       // A cancelled gesture (browser pointercancel, focus loss) never fires
       // Release — mirror it so draggingRef and the caller's drag-guard clear,
@@ -141,7 +141,7 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
         const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
         draggingRef.current = false;
         onChangeRef.current(nv);
-        if (onReleaseRef.current) onReleaseRef.current();
+        if (onReleaseRef.current) onReleaseRef.current(nv);
       }
     })
   ).current;

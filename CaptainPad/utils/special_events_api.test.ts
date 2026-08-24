@@ -71,7 +71,7 @@ const GOOD_STAGE = {
   ceremonial: false,
   kind: 'action',
   choices: [],
-  quickEffects: [{ id: 'strobe', label: 'STROBE', color: '#FFF6E8' }],
+  quickEffects: [{ id: 'strobe', label: 'STROBE', color: '#FFF6E8', mode: 'toggle' }],
   advance: { mode: 'manual', afterSec: null },
   extend: { label: 'RESTART TEASE', kind: 'actions' },
 };
@@ -111,7 +111,7 @@ describe('catalog parsing', () => {
     expect(show.id).toBe('baby_reveal');
     expect(show.stages[0].kind).toBe('action');
     expect(show.stages[0].effects)
-      .toEqual([{ id: 'strobe', label: 'STROBE', color: '#FFF6E8' }]);
+      .toEqual([{ id: 'strobe', label: 'STROBE', color: '#FFF6E8', mode: 'toggle' }]);
     expect(show.stages[0].extendLabel).toBe('RESTART TEASE');
     expect(show.stages[0].extendKind).toBe('actions');
     expect(show.stages[0].advanceSec).toBeNull();
