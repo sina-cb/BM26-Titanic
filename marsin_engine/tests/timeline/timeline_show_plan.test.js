@@ -27,6 +27,27 @@ test('round-trips through dump -> load via a tmp file', () => {
   assert.equal(dumpShowPlan(loaded), dumpShowPlan(saved));
 });
 
+test('plan transition persists as a complete validated plan-level policy', () => {
+  const plan = defaultShowPlan();
+  plan.transition = {
+    enabled: true,
+    mode: 'trans_flash',
+    durationMs: 2400,
+    shuffle: false,
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'showplan-transition-'));
+  const file = path.join(dir, 'plan.yaml');
+  saveShowPlan(plan, file);
+  const loaded = loadShowPlan(file);
+  assert.deepEqual(loaded.transition, plan.transition);
+});
+
+test('plan transition rejects a mode outside the authoritative Deck TX catalog', () => {
+  const plan = defaultShowPlan();
+  plan.transition = { mode: 'trans_not_real', durationMs: 1000 };
+  assert.throws(() => validateShowPlan(plan), /plan\.transition\.mode must be one of/);
+});
+
 test('loadShowPlan returns default on ENOENT', () => {
   const missing = path.join(os.tmpdir(), 'definitely-missing-showplan-xyz.yaml');
   const loaded = loadShowPlan(missing);

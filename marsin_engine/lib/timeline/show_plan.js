@@ -392,6 +392,24 @@ function validateCueTransition(transition, label) {
 }
 
 /**
+ * Optional plan-wide Deck transition policy. When authored it is the incoming
+ * plan's authority for every Deck-changing cue and baseline application,
+ * including plan activation. Absent preserves legacy per-cue/standing Deck
+ * behavior. Normalize a complete block so save/load never depends on mutable
+ * device state for omitted values.
+ */
+function validatePlanTransition(transition) {
+  if (transition === undefined) return undefined;
+  const out = validateCueTransition(transition, 'plan.transition');
+  return {
+    enabled: out.enabled !== undefined ? out.enabled : true,
+    mode: out.mode,
+    durationMs: out.durationMs !== undefined ? out.durationMs : 1000,
+    shuffle: out.shuffle !== undefined ? out.shuffle : false,
+  };
+}
+
+/**
  * A 'playlist' action's optional `colorAutopilot` block (docs/39) — configures the
  * engine's palette-cycling daemon when this deck cue fires. THROW-style. The wire
  * shape MUST match the engine ColorAutopilot + the deck REST route:
@@ -834,6 +852,7 @@ export function validateShowPlan(plan) {
   const phaseNames = new Set(Object.keys(phases));
   const lookNames = new Set(Object.keys(looks));
   const autopilot = validatePlanAutopilot(plan.autopilot, 'plan.autopilot');
+  const transition = validatePlanTransition(plan.transition);
 
   if (!Array.isArray(plan.cues)) throw new Error('plan.cues must be an array');
   // Bound the plan: buildOverview is O(days × cues) with per-cue Intl, so a huge
@@ -859,6 +878,7 @@ export function validateShowPlan(plan) {
   // festival:null + days:'all'). loadShowPlan still loads old files unchanged.
   // defaultCue is only present when authored (absent → no key, no regression).
   const out = { schemaVersion: 2, name, location, festival, autopilot, phases, looks, cues };
+  if (transition !== undefined) out.transition = transition;
   if (defaultCue !== undefined) out.defaultCue = defaultCue;
   return out;
 }

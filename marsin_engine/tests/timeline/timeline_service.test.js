@@ -900,6 +900,57 @@ test('§16.9 apply: absent transition/overlays leave the deck knobs untouched', 
   assert.equal(calls.setDeckOverlaysEnabled.length, 0, 'no overlays field → setDeckOverlaysEnabled untouched');
 });
 
+test('plan transition overrides cue TX and applies to every Deck playlist switch', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_dissolve', durationMs: 700 },
+  });
+  plan.transition = {
+    enabled: true,
+    mode: 'trans_flash',
+    durationMs: 2400,
+    shuffle: false,
+  };
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  assert.ok(
+    calls.setDeckTransition.some((patch) => patch.mode === 'trans_flash'),
+    'plan activation/baseline uses the saved plan transition',
+  );
+  calls.setDeckTransition.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.deepEqual(calls.setDeckTransition, [{
+    mode: 'trans_flash', enabled: true, durationMs: 2400, shuffle: false,
+  }]);
+});
+
+test('plan transition also applies to look actions that change the Deck playlist', async () => {
+  const plan = makePlan();
+  plan.transition = {
+    enabled: true,
+    mode: 'trans_iris',
+    durationMs: 1800,
+    shuffle: false,
+  };
+  const { svc, calls } = setupWithPlan(plan);
+  await svc.start();
+  calls.setDeckTransition.length = 0;
+
+  await svc._applyAction({ type: 'look', look: 'show' });
+  svc.stop();
+
+  assert.deepEqual(calls.setDeckTransition, [{
+    mode: 'trans_iris', enabled: true, durationMs: 1800, shuffle: false,
+  }]);
+  assert.ok(calls.loadPlaylist.some((call) => call.name === 'show_pl'));
+});
+
 test('§16.9 boot baseline pins the deck view (forceDeckView)', async () => {
   const { svc, calls } = setup();
   await svc.start();

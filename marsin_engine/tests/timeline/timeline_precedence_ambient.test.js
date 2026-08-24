@@ -300,7 +300,14 @@ test('FIX 3 (service): the show survives its full hold with a phase cue due mid-
 // ── FIX 7 — a hold expiring naturally lands on the ambient defaultCue ────────
 
 test('FIX 7 (G1): the deck goes to the defaultCue when a program hold expires', async () => {
-  const h = setup(makePlan(), { now: AT('19:55'), party: 0 });
+  // The PARTY RAMP is deliberately absent, EXACTLY like the boot half below
+  // (report 356, P1-5): with `c_party_start` in the plan the ramp's phase is
+  // still active at 21:00, so both boot AND a live hold expiry correctly land on
+  // the ramp — pinned by the companion test right after this one. What FIX 7
+  // pins is the narrower rule this isolated plan still shows: an EXPIRED program
+  // hold owns nothing afterwards, so with no other owner the deck goes to the
+  // defaultCue.
+  const h = setup(makePlan({ cues: [CUE_SHOW, CUE_MOOD] }), { now: AT('19:55'), party: 0 });
   await start(h);
   await runUntil(h, (x) => x.svc.state.controller === 'program', 20, 'the show starts');
   assert.equal(h.svc._deckWindowCueId, 'c_show');
@@ -317,6 +324,32 @@ test('FIX 7 (G1): the deck goes to the defaultCue when a program hold expires', 
     h.svc.recentFires.filter((f) => f.kind === 'lifecycle' && f.reason === 'hold-expired').length, 1,
     'the "Program ended (hold expired)" lifecycle line is still logged',
   );
+  h.svc.stop();
+});
+
+test('FIX 7 (P1-5): with the RAMP in the plan, hold expiry lands on it — boot and runtime agree', async () => {
+  // The live half of the boot rule the FIX 7 comments describe. `c_party_start`
+  // is a PHASE BASELINE (kind:ambient on a phase trigger) whose phase opened at
+  // 20:30 while the show still held, so the arbiter SUPPRESSED its one
+  // rising-edge fire (FIX 3 above). When the hold expires at 21:00 the plan's
+  // background layer for party_night is what owns the moment — `resolveDeckStateAt`
+  // says so at boot, and the live deck must not disagree. Before this fix a
+  // restart at 21:01 played party_pl while the running engine played ambient_pl,
+  // and the ramp never came back for the rest of the night.
+  const h = setup(makePlan(), { now: AT('19:55'), party: 0 });
+  await start(h);
+  await runUntil(h, (x) => x.svc.state.controller === 'program', 20, 'the show starts');
+  await runUntil(h, (x) => x.svc.state.controller === 'autopilot', 90, 'the hold expires');
+  assert.equal(h.deck.playlist, 'party_pl', 'the suppressed phase BASELINE owns the deck…');
+  assert.equal(h.deck.palette, 'bass_drop', '…including its palette');
+  assert.equal(h.svc._deckWindowCueId, 'c_party_start', 'and it holds the ownership latch');
+  assert.equal(h.svc._defaultCueActive, false, 'the flat defaultCue is NOT what drives here');
+  assert.equal(h.svc.state.currentPhase, 'party_night',
+    'the phase is latched so the next tick does not re-fire the rising edge');
+  const fires = h.svc.recentFires.filter((f) => f.kind === 'fire' && f.reason === 'hold-expired');
+  assert.deepEqual(fires.map((f) => f.cueId), ['c_party_start'], 'exactly one apply, and it is the ramp');
+  assert.ok(!h.svc.recentFires.some((f) => f.kind === 'fire' && f.reason === 'no-owning-cue'),
+    'and no tick-driven follow-up apply');
   h.svc.stop();
 });
 
@@ -380,7 +413,14 @@ test('FIX 6 (F1): the boot baseline does not clobber a restored non-program cue'
 });
 
 test('FIX 7 (boot half): a restart AFTER a hold expired lands on the defaultCue', async () => {
-  const h = setup(makePlan(), { now: AT('21:30'), party: 0 });
+  // The PARTY RAMP is deliberately absent from this plan (report 356, P1-5).
+  // Since P1-5 the resolver restores an AMBIENT `phase` cue whose phase is still
+  // active, so with `c_party_start` in the plan a 21:30 restart correctly lands
+  // on the ramp, not on the defaultCue — that is the F4 fix, and it is pinned by
+  // party_window / resolve_deck_state's own P1-5 cases. What FIX 7 pins is the
+  // narrower rule this plan still isolates: an EXPIRED program hold owns nothing
+  // afterwards, so with no other owner the deck goes to the defaultCue.
+  const h = setup(makePlan({ cues: [CUE_SHOW, CUE_MOOD] }), { now: AT('21:30'), party: 0 });
   await start(h);
   assert.equal(h.deck.playlist, 'ambient_pl', 'boot and runtime give the SAME answer');
   assert.equal(h.svc._deckWindowCueId, null);

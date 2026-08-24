@@ -390,6 +390,42 @@ test('travel {cueId} targets that cue fire instant; retarget is idempotent', asy
   await assert.rejects(svc.travel({ cueId: 'c_nope' }), /no resolvable time/);
 });
 
+test('travel {cueId,leadSeconds} lands exactly before the cue and next steps into it', async () => {
+  const { svc, deck } = await setup();
+  const exact = svc.resolveAt({ cueId: 'c_show', date: '2026-09-04' });
+  const before = await svc.travel({
+    cueId: 'c_show',
+    date: '2026-09-04',
+    leadSeconds: 10,
+  });
+
+  assert.equal(before.zoom.targetMs, exact.atMs - 10000);
+  assert.equal(before.zoom.targetLeadSec, 10);
+  assert.equal(before.zoom.targetCueLabel, 'Scheduled show');
+  assert.notEqual(before.resolved.owner.cueId, 'c_show');
+  assert.notEqual(deck.playlist, 'show_pl', 'pre-roll shows the deck before the cue');
+
+  const atCue = await svc.travel({ step: 'next' });
+  assert.equal(atCue.resolved.owner.cueId, 'c_show');
+  assert.equal(deck.playlist, 'show_pl', 'next-event applies the event snapshot');
+});
+
+test('travel leadSeconds is cue-only and range checked', async () => {
+  const { svc } = await setup();
+  await assert.rejects(
+    svc.travel({ date: '2026-09-04', time: '20:30', leadSeconds: 10 }),
+    /only valid with \{ cueId \}/,
+  );
+  await assert.rejects(
+    svc.travel({ cueId: 'c_show', date: '2026-09-04', leadSeconds: 0 }),
+    /integer from 1 to 300/,
+  );
+  await assert.rejects(
+    svc.travel({ cueId: 'c_show', date: '2026-09-04', leadSeconds: 301 }),
+    /integer from 1 to 300/,
+  );
+});
+
 test('travel {cueId} targets the start of a phase-gated Party Window', async () => {
   const { svc, plan } = await setup();
   const partyPlan = validateShowPlan({

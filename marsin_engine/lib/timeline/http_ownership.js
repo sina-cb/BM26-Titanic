@@ -31,6 +31,14 @@ const TIMELINE_AUTHORITY_MUTATIONS = new Set([
   'POST /timeline/program/end',
   'POST /timeline/program/enable',
   'POST /timeline/program/dismiss',
+  // PARTY session controls (report 356, P0-2). All three DISPATCH to the deck —
+  // FORCE loads the party look, RETURN hands the deck back to the plan's fill,
+  // and a cooldown reset re-arms a trigger that fires the moment the music is
+  // there. They are operator decisions about Timeline-owned show state and must
+  // outrank a Live Touch arm exactly like /party-config does.
+  'POST /party/force',
+  'POST /party/live-audio',
+  'POST /party/cooldown/reset',
 ]);
 
 const TIMELINE_PLAN_ITEM_MUTATION = /^(?:PUT|DELETE) \/timeline\/plans\/[^/]+$/;

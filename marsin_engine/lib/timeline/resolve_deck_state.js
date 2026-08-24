@@ -32,8 +32,9 @@ import { computeSunEvents } from './sun.js';
 import {
   resolveDayTimes, activePhase, dayKeyFor, dateClockToEpochMs,
 } from './triggers.js';
-import { applicableCues, festivalDayIndex } from './festival.js';
+import { applicableCues, festivalDayIndex, cueAppliesOn } from './festival.js';
 import { resolveHold } from './arbiter.js';
+import { phaseWindowAt } from './party_window.js';
 
 const MS_PER_MIN = 60000;
 const MS_PER_DAY = 86400000;
@@ -156,6 +157,46 @@ export function resolveDeckStateAt({ plan, atMs, sunEvents, dayTimes: injectedDa
     passedCueIds.push(cue.id);
     const restorable = (cue.action.type === 'look' || cue.action.type === 'playlist') && cue.catchUp !== false;
     if (restorable && (best === null || fireMs > best.fireMs)) best = { cue, fireMs };
+  }
+
+  // ── P1-5 (report 356, F4): PHASE-BASELINE cues ────────────────────────────
+  // A `kind: ambient` cue triggered by a PHASE is the plan's BACKGROUND LAYER
+  // for that phase — the Party Window baseline the maker authors next to the
+  // window. It has no clock/sun fire time, so the selection core above never
+  // saw it: the ribbon drew "Default (from deck) 00:00→24:00" while the phase
+  // cue actually owned the deck, and an engine restart mid-window landed on the
+  // default cue with no way back (a phase trigger is rising-edge, once a night).
+  //
+  // Its fire time is the NIGHT START of its phase, so a wrapping window
+  // (21:00→09:00) is one continuous ownership across midnight, and its `days:`
+  // are resolved against that night — NOT against the calendar day, which is
+  // the whole reason the two halves of a window used to disagree. Deliberately
+  // scanned over `plan.cues` rather than `dayPlan.cues` for exactly that reason.
+  //
+  // PRECEDENCE: a phase baseline is AMBIENT, so it never displaces a program
+  // whose hold is still live — that mirrors the arbiter, which suppresses an
+  // ambient fire under a running program. Without this term a restart at 23:00
+  // on burn night would restore the party-night ramp instead of the burn-night
+  // program that still owns the hold.
+  const clockBestHoldUntilMs = (best && best.cue.kind === 'program')
+    ? resolveHold(best.cue.hold, best.fireMs, dayTimes) : null;
+  const clockBestProgramLive = typeof clockBestHoldUntilMs === 'number'
+    && clockBestHoldUntilMs > atMs;
+  if (!clockBestProgramLive) {
+    for (const cue of plan.cues) {
+      if (cue.enabled === false) continue;
+      if (cue.kind !== 'ambient') continue;
+      const t = cue.trigger;
+      if (!t || t.type !== 'phase') continue;
+      if (!(cue.action.type === 'look' || cue.action.type === 'playlist')) continue;
+      if (cue.catchUp === false) continue;
+      const win = phaseWindowAt({ plan, phaseId: t.phase, atMs, dayTimes });
+      if (!win.active || win.nightStartMs === null) continue;
+      if (!cueAppliesOn(cue, plan, win.nightStartMs)) continue;
+      // Competes with the clock/sun pick by LATEST fire time, exactly like two
+      // clock cues do: whichever started most recently owns the moment.
+      if (best === null || win.nightStartMs > best.fireMs) best = { cue, fireMs: win.nightStartMs };
+    }
   }
 
   // ── the RESTORED cue: exactly what _catchUp dispatches ────────────────────

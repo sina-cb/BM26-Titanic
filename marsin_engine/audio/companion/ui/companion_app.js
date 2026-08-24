@@ -98,6 +98,12 @@ const S = {
   activePartyProfileId: null,
   partyState: null,    // 10 Hz meter snapshot
   partyOverride: 'auto',
+  // SIGNAL SOURCE: which detector publishes audioPartyStrong. Persisted server
+  // side in config.yaml → party: source; this is only the last server truth.
+  partySource: null,
+  partySources: [],
+  partySourceError: null,
+  partySourcePending: null,   // the source we asked for, until the server acks
   partyValidation: false,
   partyCaptures: { ambient: null, party: null },
   partySuggestions: null,
@@ -262,12 +268,15 @@ function connect() {
         S.activePartyProfileId = m.activePartyProfileId || null;
       }
       if (m.partyOverride) S.partyOverride = m.partyOverride;
+      if (m.partySource) S.partySource = m.partySource;
+      if (Array.isArray(m.partySources)) S.partySources = m.partySources;
       S.partyValidation = !!m.partyValidationMode;
       if (m.partyCaptures) S.partyCaptures = m.partyCaptures;
       S.partySuggestions = m.partySuggestions || null;
       seedTraces();
       frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
+      renderPartySourceBadge();
       // Boot in mic mode → load the device list so the dropdown resolves the
       // configured device (hello.device) to its real label and shows it
       // selected, instead of stranding on "Default input".
@@ -287,7 +296,17 @@ function connect() {
       if (S.page === 'osc') syncOscRateControl();
     } else if (m.type === 'partyState') {
       S.partyState = m;
-      if (S.page === 'party') renderPartyMeters();
+      // The 10 Hz snapshot carries the live source too — keep the DERIVED
+      // readout's SOURCE badge honest on every page, not just the PARTY tab.
+      if (m.source) S.partySource = m.source;
+      renderPartySourceBadge();
+      if (S.page === 'party') { renderPartyMeters(); renderPartySource(); }
+    } else if (m.type === 'partySource') {
+      S.partySource = m.source;
+      S.partySourcePending = null;
+      S.partySourceError = m.persisted ? null : (m.error || 'the companion refused the source change');
+      renderPartySourceBadge();
+      if (S.page === 'party') renderPartySource();
     } else if (m.type === 'partyParams') {
       S.partyParams = m.params;
       // Adopt server truth for any field the operator has NOT edited away from
@@ -2280,6 +2299,17 @@ function buildPartyPage() {
     for (const b of document.querySelectorAll('.pfake-btn')) {
       b.onclick = () => send({ type: 'setPartyOverride', mode: b.dataset.mode });
     }
+    // SIGNAL SOURCE — the server persists into config.yaml FIRST and only then
+    // switches, so the button stays "writing…" until its typed ack arrives.
+    for (const b of document.querySelectorAll('.psrc-btn')) {
+      b.onclick = () => {
+        if (b.dataset.source === S.partySource) return;
+        S.partySourcePending = b.dataset.source;
+        S.partySourceError = null;
+        renderPartySource();
+        send({ type: 'setPartySource', source: b.dataset.source });
+      };
+    }
     $('party-arm-toggle').onclick = () => {
       const cfg = S.partyConfig;
       if (!cfg) { flash('party config not loaded from the engine yet', true); return; }
@@ -2298,6 +2328,7 @@ function buildPartyPage() {
   renderPartyEditors();
   renderPartyDirty();
   renderPartyOverride();
+  renderPartySource();
   renderPartyCalib();
   renderPartyMeters();
   refreshPartySession();
@@ -2419,6 +2450,57 @@ function renderPartyOverride() {
   }
 }
 
+/**
+ * SIGNAL SOURCE selector: which detector is on the wire, both live verdicts,
+ * and what the LAST write did. Never guesses — until the server has told us a
+ * source, neither option is marked active and the note says so.
+ */
+function renderPartySource() {
+  const note = $('psrc-note');
+  if (!note) return;
+  const st = S.partyState;
+  const pending = S.partySourcePending;
+  for (const b of document.querySelectorAll('.psrc-btn')) {
+    const isActive = b.dataset.source === S.partySource;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    b.disabled = pending !== null;
+  }
+  // Live verdicts: `—` while the companion has not sent a party state yet, and
+  // `n/a` when the simple flag is not a registered key in this build.
+  const verdict = (id, value) => {
+    const out = $(id);
+    if (!out) return;
+    out.textContent = value === null || value === undefined
+      ? (st ? 'n/a' : '—')
+      : (value ? 'PARTY' : 'calm');
+    out.classList.toggle('on', value === true);
+  };
+  verdict('psrc-v-qualified', st ? st.qualifiedParty : undefined);
+  verdict('psrc-v-simple', st ? st.simpleParty : undefined);
+
+  note.classList.remove('err');
+  if (S.partySourceError) {
+    note.classList.add('err');
+    note.textContent = `source NOT changed — ${S.partySourceError}`;
+  } else if (pending) {
+    note.textContent = `writing ${pending.toUpperCase()} into config.yaml → party: source …`;
+  } else if (!S.partySource) {
+    note.textContent = 'the companion has not reported a signal source yet';
+  } else {
+    note.textContent = `audioPartyStrong is publishing the ${S.partySource.toUpperCase()} detector`
+      + ' · both detectors keep running, so switching takes effect on the next hop'
+      + ' · the FAKE TRIGGER below still overrides whichever source is selected';
+  }
+}
+
+/** SOURCE badge on the DERIVED readout's PARTY pill (simple = the live source). */
+function renderPartySourceBadge() {
+  const badge = $('party-pill-src');
+  if (!badge) return;
+  badge.style.display = S.partySource === 'simple' ? 'inline-block' : 'none';
+}
+
 function renderPartyMeters() {
   const st = S.partyState;
   if (!st || !$('pm-loud-fill')) return;
@@ -2499,16 +2581,22 @@ function renderPartyMeters() {
   debFill.style.width = pctOf(frac, 1);
   debFill.classList.toggle('ok', !!st.party);
 
-  // GATE pill = the PUBLISHED value; the truth line appears only when forced.
+  // GATE pill = the PUBLISHED value; the truth line appears whenever the meters
+  // above are NOT what is on the wire — a forced override, or the SIMPLE source.
   const gate = $('party-gate-pill');
   const published = st.publishedParty;
   gate.textContent = 'GATE ' + (published ? '1' : '0');
   gate.classList.toggle('on', !!published);
   const truth = $('pm-truth');
-  if (st.overrideMode && st.overrideMode !== 'auto') {
+  const forced = st.overrideMode && st.overrideMode !== 'auto';
+  const simpleSource = st.source === 'simple';
+  if (forced || simpleSource) {
+    const why = forced
+      ? `FORCED — ${st.overrideMode}`
+      : `SOURCE — simple, band loudness ${(st.simpleLoudness || 0).toFixed(3)}`;
     truth.style.display = 'block';
-    truth.innerHTML = `detector says <b>${st.party ? 'PARTY' : 'no party'}</b> · `
-      + `publishing <b>${published ? '1' : '0'}</b> (FORCED — ${st.overrideMode})`;
+    truth.innerHTML = `these meters are the <b>QUALIFIED</b> detector — it says `
+      + `<b>${st.party ? 'PARTY' : 'no party'}</b> · publishing <b>${published ? '1' : '0'}</b> (${why})`;
   } else {
     truth.style.display = 'none';
   }

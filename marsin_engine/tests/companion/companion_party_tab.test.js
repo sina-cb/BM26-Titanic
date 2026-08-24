@@ -21,7 +21,11 @@ import path from 'node:path';
 import {
   PARTY_TUNABLES, PARTY_TUNABLE_KEYS, patchPartyBlock, persistPartyConfig,
   formatYamlScalar, percentile, calibrationSuggestions,
+  DEFAULT_PARTY_SOURCE, PARTY_SOURCE_KEY, PARTY_SOURCES, parsePartySource,
 } from '../../audio/companion/party_tuning.js';
+import {
+  PARTY_OVERRIDE_MODES, partyVerdictOf, resolvePartySignal,
+} from '../../audio/companion/party_signal_source.js';
 import {
   buildBpmTrackerOptions,
   buildDerivedSignalsOptions,
@@ -55,6 +59,8 @@ timeline:
 # ── party detection (report 20260725_12 §2) ──────────────────────────────────
 # ambientFloor is CALIBRATED ON PLAYA — do not guess it.
 party:
+  # qualified = the gated detector below; simple = the derived PARTY flag.
+  source: qualified
   ambientFloor: 0.09      # quiet-night P95 of audioLoudness
   marginX: 2.5
   # the rhythmic evidence terms
@@ -177,6 +183,121 @@ test('the tunable spec covers exactly the config.yaml party: keys from report _1
   for (const t of PARTY_TUNABLES) {
     assert.ok(t.label && t.hint, `${t.key} needs a label + hint for the editor`);
   }
+});
+
+// ── 1b. SIGNAL SOURCE selector (`party.source`) ──────────────────────────────
+
+test('the source selector persists as a bare YAML word, surgically', () => {
+  const out = patchPartyBlock(COMMENTED_CONFIG, { [PARTY_SOURCE_KEY]: 'simple' });
+  assert.ok(out.includes('  source: simple'));
+  assert.deepEqual(
+    linesExcept(out, ['source']),
+    linesExcept(COMMENTED_CONFIG, ['source']),
+    'switching the source moved a line it had no business touching',
+  );
+  assert.ok(out.includes('  # qualified = the gated detector below; simple = the derived PARTY flag.'),
+    'the selector must keep its own explanatory comment');
+});
+
+test('the source line round-trips through the filesystem and re-parses', async () => {
+  const yaml = (await import('js-yaml')).default;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'partysrc-'));
+  const p = path.join(dir, 'config.yaml');
+  fs.writeFileSync(p, COMMENTED_CONFIG, 'utf8');
+  persistPartyConfig(p, { [PARTY_SOURCE_KEY]: 'simple' });
+  assert.equal(yaml.load(fs.readFileSync(p, 'utf8')).party.source, 'simple');
+  persistPartyConfig(p, { [PARTY_SOURCE_KEY]: 'qualified' });
+  assert.equal(yaml.load(fs.readFileSync(p, 'utf8')).party.source, 'qualified');
+});
+
+test('a config.yaml with no source: line FAILS LOUD and writes nothing', () => {
+  const withoutSource = COMMENTED_CONFIG.replace(/^ {2}source: .*$\n/m, '');
+  assert.throws(
+    () => patchPartyBlock(withoutSource, { [PARTY_SOURCE_KEY]: 'simple' }),
+    /key "source" not found in the party: block/,
+  );
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'partysrc-'));
+  const p = path.join(dir, 'config.yaml');
+  fs.writeFileSync(p, withoutSource, 'utf8');
+  assert.throws(() => persistPartyConfig(p, { [PARTY_SOURCE_KEY]: 'simple' }), /not found/);
+  assert.equal(fs.readFileSync(p, 'utf8'), withoutSource, 'the file was modified despite the failure');
+});
+
+test('an unknown source is refused everywhere — parse, format and persist', () => {
+  assert.deepEqual([...PARTY_SOURCES], ['qualified', 'simple']);
+  assert.equal(DEFAULT_PARTY_SOURCE, 'qualified', 'the default must be the behaviour that shipped');
+  assert.equal(parsePartySource('simple'), 'simple');
+  assert.throws(() => parsePartySource('sophisticated'), /must be one of qualified\/simple/);
+  assert.throws(() => parsePartySource(undefined), /must be one of qualified\/simple/);
+  assert.throws(() => formatYamlScalar('source', 'loud'), /must be one of qualified\/simple/);
+  assert.throws(() => patchPartyBlock(COMMENTED_CONFIG, { source: 'loud' }), /must be one of/);
+});
+
+test('the source is NOT a threshold — profiles and the gate never see it', () => {
+  assert.ok(!PARTY_TUNABLE_KEYS.includes(PARTY_SOURCE_KEY),
+    'source in PARTY_TUNABLES would be demanded of every profile and applied to the gate');
+  assert.ok(!(PARTY_SOURCE_KEY in PARTY_MODE_STRONG_DEFAULTS));
+  // Which is exactly why the boot path splits it out before setPartyStrongParams.
+  const d = makeDerived();
+  assert.throws(() => d.setPartyStrongParams({ source: 'simple' }), /unknown tunable/);
+});
+
+// ── 1c. PUBLISH precedence: override > source > detectors ────────────────────
+
+test('QUALIFIED is the default source and leaves the detector publish alone', () => {
+  const decision = resolvePartySignal({
+    source: 'qualified', override: 'auto', qualifiedParty: true, simpleParty: false,
+  });
+  assert.deepEqual(decision, { value: 1, writer: null, reason: 'qualified' });
+});
+
+test('SIMPLE republishes the band-loudness verdict over the gate', () => {
+  assert.deepEqual(
+    resolvePartySignal({ source: 'simple', override: 'auto', qualifiedParty: false, simpleParty: true }),
+    { value: 1, writer: 'partySource', reason: 'simple' },
+  );
+  assert.deepEqual(
+    resolvePartySignal({ source: 'simple', override: 'auto', qualifiedParty: true, simpleParty: false }),
+    { value: 0, writer: 'partySource', reason: 'simple' },
+  );
+});
+
+test('the FAKE TRIGGER still wins over the source selection', () => {
+  for (const source of PARTY_SOURCES) {
+    assert.deepEqual(
+      resolvePartySignal({ source, override: 'party', qualifiedParty: false, simpleParty: false }),
+      { value: 1, writer: 'partyOverride', reason: 'override' },
+      `override must beat source ${source}`,
+    );
+    assert.deepEqual(
+      resolvePartySignal({ source, override: 'off', qualifiedParty: true, simpleParty: true }),
+      { value: 0, writer: 'partyOverride', reason: 'override' },
+    );
+  }
+  assert.deepEqual([...PARTY_OVERRIDE_MODES], ['auto', 'party', 'off']);
+});
+
+test('the publish decision refuses to guess a verdict it was not given', () => {
+  const base = { source: 'qualified', override: 'auto', qualifiedParty: false, simpleParty: false };
+  assert.throws(() => resolvePartySignal({ ...base, source: 'nope' }), /must be one of/);
+  assert.throws(() => resolvePartySignal({ ...base, override: 'maybe' }), /party override must be one of/);
+  assert.throws(() => resolvePartySignal({ ...base, qualifiedParty: 1 }), /must be a boolean/);
+  assert.throws(() => resolvePartySignal({ ...base, simpleParty: 1 }), /boolean or null/);
+  // SIMPLE selected but the simple detector is not publishing ⇒ loud, not calm.
+  assert.throws(
+    () => resolvePartySignal({ ...base, source: 'simple', simpleParty: null }),
+    /refusing to guess a party verdict/,
+  );
+  // …while an unpublished simple flag is harmless when QUALIFIED is selected.
+  assert.equal(resolvePartySignal({ ...base, simpleParty: null }).reason, 'qualified');
+});
+
+test('a published 0/1 becomes a verdict, an unpublished key stays null', () => {
+  assert.equal(partyVerdictOf(1), true);
+  assert.equal(partyVerdictOf(0.5), true);
+  assert.equal(partyVerdictOf(0), false);
+  assert.equal(partyVerdictOf(null), null, 'an unregistered key must not read as calm');
+  assert.throws(() => partyVerdictOf(Number.NaN), /finite/);
 });
 
 // ── 2. calibration math (report _12 §6.2) ────────────────────────────────────

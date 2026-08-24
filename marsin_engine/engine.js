@@ -71,6 +71,12 @@ import { sceneStateDir, stateOverridesActive } from './lib/state_paths.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
+import {
+  buildBlackoutFrames,
+  verifyBlackoutFrames,
+  assertBlackoutSenders,
+  reportBlackoutFailure,
+} from './lib/shutdown_blackout.js';
 import { resolveVisConfig, createVisSampler, describeVisPlan } from './lib/vis_budget.js';
 import { assertNoDirectHardwareRoutes } from './lib/output_config_guard.js';
 import http from 'http';
@@ -2967,7 +2973,16 @@ async function main() {
     // the process exits anyway, but closing first is harmless.
     try { apiServer.closeNow && apiServer.closeNow(); } catch (_) { /* ignore */ }
 
-    // Send blackout frame
+    // Send blackout frame.
+    //
+    // The engine's own state goes dark first (so anything still reading
+    // model.pixels sees black), but the frame on the wire is NOT derived from
+    // it: mapPixelsToSacn only writes patched-PIXEL channel slots, which left
+    // every DMX-only relay — fogger, haze, horn, fire — holding whatever
+    // GlobalEffectsController.applyDmx last wrote into the router buffer. That
+    // frame is the last packet the rig ever gets, so a fogger caught mid-burst
+    // stayed ON after shutdown (report 20260823_361 §8). buildBlackoutFrames
+    // zeroes EVERY channel of EVERY universe instead — see lib/shutdown_blackout.js.
     for (let i = 0; i < model.pixels.length; i++) {
         model.pixels[i].r = 0;
         model.pixels[i].g = 0;
@@ -2976,31 +2991,67 @@ async function main() {
         model.pixels[i].a = 0;
         model.pixels[i].u = 0;
     }
-    mapPixelsToSacn(model.pixels, dmxRouter);
 
-    const blackBuffers = {};
-    for (const u of universeIds) {
-      blackBuffers[u] = dmxRouter.getFullFrame(u);
+    let blackout = null;
+    try {
+      blackout = buildBlackoutFrames({ dmxRouter, universeIds });
+      assertBlackoutSenders(blackout, sacnOut);
+      // Proven AFTER the sender check and immediately before the send, so a
+      // late writer between zeroing and transmit cannot slip a hot channel out.
+      verifyBlackoutFrames(blackout);
+    } catch (err) {
+      blackout = null;
+      process.exitCode = 1;
+      reportBlackoutFailure(err, { universes: universeIds.join(', ') || '(none)' });
     }
 
     const finish = () => {
       try { sacnOut.stop(); } catch (_) { /* ignore */ }
       try { mixer.destroy(); } catch (_) { /* ignore */ }
       try { wasmHost.shutdown(); } catch (_) { /* ignore */ }
-      console.log(`  ✅ Shutdown complete (${loop.frameCount} frames rendered)\n`);
+      const blackoutNote = process.exitCode ? ' — ⚠️ BLACKOUT NOT CONFIRMED' : '';
+      console.log(`  ✅ Shutdown complete (${loop.frameCount} frames rendered)${blackoutNote}\n`);
       if (typeof afterClose === 'function') {
         afterClose();
       } else {
-        process.exit(0);
+        process.exit(process.exitCode || 0);
       }
     };
 
-    sacnOut.sendFrame(blackBuffers).then(finish).catch(finish);
+    if (!blackout) {
+      finish();
+    } else {
+      // sendFrameChecked (not sendFrame) — it reports every datagram's fate, so
+      // a blackout that never reached the wire is loud instead of assumed.
+      sacnOut.sendFrameChecked(blackout.frames).then((result) => {
+        if (result.failures.length > 0) {
+          process.exitCode = 1;
+          reportBlackoutFailure('the blackout frame was NOT delivered on every route', {
+            delivered: `${result.delivered}/${result.attempted}`,
+            failures: result.failures
+              .map((f) => `U${f.universe}${f.destination ? ` → ${f.destination}` : ''}: ${f.error}`)
+              .join('; '),
+          });
+        } else {
+          console.log(`  🌑 Blackout confirmed — ${blackout.universes.length} universe(s) ` +
+            `[${blackout.universes.join(', ')}] zeroed on every channel, ` +
+            `${result.delivered}/${result.attempted} datagram(s) sent`);
+        }
+        finish();
+      }, (err) => {
+        process.exitCode = 1;
+        reportBlackoutFailure(err, { universes: blackout.universes.join(', ') });
+        finish();
+      });
+    }
 
     // Force exit after 2s — but ONLY when we're not handing off to a
     // restart callback (that path owns the exit after spawning the child).
     if (typeof afterClose !== 'function') {
-      setTimeout(() => process.exit(0), 2000);
+      // A blackout that never confirmed must not exit 0 just because the
+      // watchdog fired first — the supervisor's exit code is the only signal
+      // left once the process is gone.
+      setTimeout(() => process.exit(process.exitCode || 0), 2000);
     }
   }
 

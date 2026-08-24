@@ -1,0 +1,191 @@
+schemaVersion: 2
+name: test_week
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+festival:
+  startDate: '2026-08-23'
+  days: 4
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 60
+  shuffle: false
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  pw_c_mt60ll93qt:
+    start:
+      clock: '09:00'
+    end:
+      clock: '17:00'
+looks: {}
+cues:
+  - id: pwb_c_mt60ll93qt
+    label: Party Window baseline
+    enabled: true
+    catchUp: true
+    trigger:
+      type: phase
+      phase: pw_c_mt60ll93qt
+    action:
+      type: playlist
+      name: default
+      target:
+        channel: deck
+        id: null
+      autopilot:
+        active: true
+        delay_s: 30
+        shuffle: true
+      transition:
+        mode: trans_crossfade
+        durationMs: 1000
+        enabled: true
+        shuffle: false
+      overlays: disable
+      colorAutopilot:
+        active: true
+        mode: palettes
+        palettes:
+          - bass_drop
+          - cyberpunk
+          - phoenix
+        delay_s: 10
+        shuffle: false
+        transitionMs: 1000
+      globals:
+        speed: 0.25
+        bpmSpeedSync: 0
+    kind: ambient
+    days: all
+  - id: pwe_c_mt60ll93qt
+    label: Default after Party Window
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '17:00'
+    action:
+      type: playlist
+      name: ambient
+      target:
+        channel: deck
+        id: null
+      colorAutopilot:
+        active: true
+        mode: palettes
+        palettes:
+          - bass_drop
+          - cyberpunk
+          - phoenix
+        delay_s: 10
+        shuffle: false
+        transitionMs: 1000
+    kind: ambient
+    days: all
+  - id: c_mt60ll93qt
+    label: Party 1
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 30
+      cooldownSec: 300
+      whenPhase: pw_c_mt60ll93qt
+    action:
+      type: playlist
+      name: default
+      target:
+        channel: deck
+        id: null
+      autopilot:
+        active: true
+        delay_s: 30
+        shuffle: true
+      transition:
+        mode: trans_crossfade
+        durationMs: 1000
+        enabled: true
+        shuffle: false
+      overlays: disable
+      colorAutopilot:
+        active: true
+        mode: palettes
+        palettes:
+          - bass_drop
+          - cyberpunk
+          - phoenix
+        delay_s: 10
+        shuffle: false
+        transitionMs: 1000
+      globals:
+        speed: 0.25
+        bpmSpeedSync: 0
+    kind: mood
+    durationMin: 12
+    days: all
+  - id: c_mt6oh1qgf4
+    label: Cue 1
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '22:00'
+    action:
+      type: playlist
+      name: dust_beacon
+      target:
+        channel: deck
+        id: null
+      autopilot:
+        active: true
+        delay_s: 30
+        shuffle: true
+      transition:
+        mode: trans_crossfade
+        durationMs: 1000
+        enabled: true
+        shuffle: false
+      overlays: disable
+      colorAutopilot:
+        active: true
+        mode: palettes
+        palettes:
+          - bass_drop
+          - cyberpunk
+          - phoenix
+        delay_s: 10
+        shuffle: false
+        transitionMs: 1000
+      globals:
+        speed: 0.25
+        bpmSpeedSync: 0
+    kind: program
+    durationMin: 135
+    days:
+      - 0
+defaultCue:
+  label: Default (from deck)
+  action:
+    type: playlist
+    name: ambient
+    target:
+      channel: deck
+      id: null
+    colorAutopilot:
+      active: true
+      mode: palettes
+      palettes:
+        - bass_drop
+        - cyberpunk
+        - phoenix
+      delay_s: 10
+      shuffle: false
+      transitionMs: 1000

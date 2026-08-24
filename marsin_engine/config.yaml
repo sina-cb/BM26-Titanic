@@ -338,6 +338,17 @@ timeline:
     partyThreshold: 0.5
     staleSec: 10
 party:
+  # WHICH detector is published as audioPartyStrong (the show director's party
+  # signal). Switch it from the Audio Companion's PARTY tab — this line is where
+  # the choice actually lives; CaptainPad's LIVE Timeline card only exposes it.
+  #   qualified — the gated detector tuned by the thresholds below: level AND a
+  #               real kick train AND dance-music spectral shape AND not silent,
+  #               all held continuously. Rejects room noise and far camps.
+  #   simple    — the plain band-loudness Schmitt trigger already published as
+  #               audioParty and shown as the DERIVED panel's PARTY pill. Trips
+  #               on any loud sound; use it when the gates will not close.
+  # Both detectors always run; this only picks whose verdict goes on the wire.
+  source: qualified
   ambientFloor: 0.09
   marginX: 2.5
   kickRateMin: 1.2

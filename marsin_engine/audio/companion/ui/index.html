@@ -70,6 +70,10 @@
             <span class="d-item"><span class="d-lab">NOTE</span><span id="note-swatch" class="note-swatch"></span><span id="note-val" class="d-big">—</span></span>
             <span class="d-item"><span class="d-lab">GENRE</span><span id="genre-val" class="d-genre">—</span><span id="genre-conf" class="d-conf"></span></span>
             <span id="party-pill" class="party-pill">calm</span>
+            <!-- Lights up only while THIS (simple) detector is the selected
+                 party signal source — see the PARTY tab. -->
+            <span id="party-pill-src" class="party-src-badge" style="display:none"
+              title="this flag is the selected party signal source — it is what audioPartyStrong publishes">SOURCE</span>
           </div>
         </div>
       </div>
@@ -340,6 +344,34 @@
       <span class="pfb-txt">⚠ FAKE TRIGGER ACTIVE — publishing a forced value, ignoring the audio.
         The engine and CaptainPad cannot tell this from a real party.</span>
       <button id="party-fake-clear" class="primary">↩ back to AUTO</button>
+    </div>
+
+    <!-- ── SIGNAL SOURCE ────────────────────────────────────────────────────
+         WHICH detector publishes audioPartyStrong. THIS is where the choice
+         lives (config.yaml → party: source); CaptainPad only exposes it. Both
+         detectors always run, so both verdicts stay visible side by side. -->
+    <div class="party-source">
+      <div class="psrc-head">PARTY SIGNAL SOURCE
+        <span class="psrc-sub">which detector is published as <code>audioPartyStrong</code> —
+          written to <code>config.yaml</code> → <code>party:</code>, survives a restart</span>
+      </div>
+      <div class="psrc-opts">
+        <button class="psrc-btn" id="psrc-btn-qualified" data-source="qualified" aria-pressed="false">
+          <span class="psrc-name">QUALIFIED <em>(gates)</em></span>
+          <span class="psrc-desc">The gated detector tuned below: level AND a real kick train AND
+            dance-music spectral shape AND not silent, all held continuously. Rejects room noise
+            and far camps.</span>
+          <span class="psrc-verdict" id="psrc-v-qualified">—</span>
+        </button>
+        <button class="psrc-btn" id="psrc-btn-simple" data-source="simple" aria-pressed="false">
+          <span class="psrc-name">SIMPLE <em>(derived PARTY)</em></span>
+          <span class="psrc-desc">The plain band-loudness trigger published as <code>audioParty</code>
+            — the PARTY pill in the DERIVED readout. Trips on any loud sound; use it when the gates
+            will not close on a night that IS a party.</span>
+          <span class="psrc-verdict" id="psrc-v-simple">—</span>
+        </button>
+      </div>
+      <div class="psrc-note" id="psrc-note">—</div>
     </div>
 
     <div class="party-grid">

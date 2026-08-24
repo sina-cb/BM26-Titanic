@@ -27,6 +27,10 @@ test('classifies every operator Timeline mutation that must outrank Live Touch',
     ['POST', '/timeline/program/enable'],
     ['POST', '/timeline/program/dismiss'],
     ['POST', '/timeline/cues/c_sunset/fire'],
+    // PARTY session controls (report 356, P0-2): all three dispatch to the deck.
+    ['POST', '/party/force'],
+    ['POST', '/party/live-audio'],
+    ['POST', '/party/cooldown/reset'],
   ]) {
     assert.equal(isTimelineAuthorityMutation(method, url), true, `${method} ${url}`);
   }
@@ -46,6 +50,9 @@ test('does not grant priority to reads, preview, activity, near-miss, or unrelat
     ['POST', '/timeline/cues/c_sunset'],
     ['POST', '/timeline/cues/c_sunset/fire/extra'],
     ['PUT', '/section-brightness'],
+    ['GET', '/party/force'],
+    ['POST', '/party/cooldown'],
+    ['POST', '/party/force/extra'],
   ]) {
     assert.equal(isTimelineAuthorityMutation(method, url), false, `${method} ${url}`);
   }

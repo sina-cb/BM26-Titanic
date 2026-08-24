@@ -9450,15 +9450,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.url === '/party/cooldown/reset' && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
-      try {
-        const status = timelineService.resetPartyCooldown();
+      // Async since report 356 P0-3: the reset is serialized against the tick
+      // (it writes moodArmed/moodLastFire, which a mid-flight tick would clone
+      // and then overwrite). Same promise shape as /party/force above.
+      Promise.resolve(timelineService.resetPartyCooldown()).then((status) => {
         const payload = { ...status, availablePlaylists: timelineService.listAvailablePlaylists() };
         broadcastWs({ type: 'partyConfig', ...payload });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(payload));
-      } catch (e) {
+      }).catch((e) => {
         res.writeHead(409); res.end(JSON.stringify({ error: e.message }));
-      }
+      });
 
     // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
     // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
@@ -9634,7 +9636,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.url === '/timeline/travel' && req.method === 'POST') {
       // TIME TRAVEL (report _94 §3.3): enter a scoped takeover and put the
       // plan's RESOLVED deck state at the target instant on the rig. Body:
-      //   { date:'YYYY-MM-DD', time:'HH:MM' } | { cueId, date? } | { step:'prev'|'next' }
+      //   { date:'YYYY-MM-DD', time:'HH:MM' }
+      //   | { cueId, date?, leadSeconds? }
+      //   | { step:'prev'|'next' }
       // Static snapshot (D4) — the live clock is never warped and the real
       // night's bookkeeping is untouched. Exit via POST /timeline/resume.
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }

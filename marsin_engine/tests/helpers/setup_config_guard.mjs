@@ -10,8 +10,9 @@
 // Both modules resolve their persistence path from MARSIN_CONFIG_FILE (falling
 // back to the real config.yaml when unset), and since report _100 so does
 // engine.js's own boot read. Here we point that env var at a scratch COPY of
-// config.yaml, then disables the production OSC and fire-sync listeners in
-// that scratch copy. The engine otherwise boots from the real settings, and
+// config.yaml, then in that scratch copy we disable the production OSC and
+// fire-sync listeners AND black-hole the sACN output (report _361 BLOCKER 1 —
+// see below). The engine otherwise boots from the real settings, and
 // every autopilot save lands in the scratch file. Spawned
 // engine subprocesses inherit the env var (they inherit process.env), so this
 // one hook covers the whole suite — no per-test wiring.
@@ -27,6 +28,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
+
+import { SACN_BLACK_HOLE_HOST, assertSacnDestinationsBlackHoled } from './sacn_black_hole.mjs';
 
 if (!process.env.MARSIN_CONFIG_FILE) {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +47,28 @@ if (!process.env.MARSIN_CONFIG_FILE) {
   // OSC provide their own MARSIN_CONFIG_FILE and therefore bypass this guard.
   isolatedConfig.osc = { ...(isolatedConfig.osc || {}), enabled: false };
   isolatedConfig.fire_sync = { ...(isolatedConfig.fire_sync || {}), enabled: false };
+  // THE sACN OUTPUT WALL (report `_361` BLOCKER 1). Until this existed the
+  // guard left `sacn.destinations` at its PRODUCTION value — `127.0.0.1`,
+  // which is the operator's live simulation input bridge — so `npm test`,
+  // running four spawned engines at a time, transmitted real DMX into the
+  // running show and silently stole his frames (shared E1.31 CID → the sim's
+  // receiver discards on a poisoned sequence counter). The timeline e2e
+  // harness had already solved this for its own engines; every one of the
+  // other 88 test files was unwalled. See `sacn_black_hole.mjs` for why a
+  // loopback destination is NOT a black hole. `multicast: false` matters too:
+  // a multicast sender ignores the destination list entirely and would reach
+  // the sim regardless.
+  isolatedConfig.sacn = {
+    ...(isolatedConfig.sacn || {}),
+    destinations: [SACN_BLACK_HOLE_HOST],
+    multicast: false,
+  };
+  // Prove it rather than trust it — a bad edit here must stop the suite, not
+  // leak one frame.
+  assertSacnDestinationsBlackHoled(isolatedConfig.sacn.destinations, scratch);
+  if (isolatedConfig.sacn.multicast) {
+    throw new Error(`[sACN wall] ${scratch}: multicast must be false in test configs`);
+  }
   fs.writeFileSync(scratch, yaml.dump(isolatedConfig), 'utf8');
   process.env.MARSIN_CONFIG_FILE = scratch;
   process.on('exit', () => {
