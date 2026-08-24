@@ -92,6 +92,22 @@ export interface PartyConfig {
   partyWindowOpen?: boolean;
   /** Plan cue the party session fires (informational). */
   partyCueId?: string | null;
+  /**
+   * The party cue's LAST DISPATCH ERROR (e.g. a missing playlist), or null when
+   * clean. A cue that threw leaves the trigger latch down with no session and,
+   * before _356, no visible reason — this is that reason (_356 F6/P0-2).
+   */
+  cueError?: string | null;
+  /** Epoch ms the authored Party Window next opens; null when the engine has none. */
+  partyWindowOpensAtMs?: number | null;
+  /** Epoch ms the authored Party Window closes; null when the engine has none. */
+  partyWindowClosesAtMs?: number | null;
+  /**
+   * Engine mood-input health: true means the companion stopped publishing and
+   * the calm fallback is intentionally holding. Also on /timeline/state, which
+   * is where the card reads it from on an engine that omits it here.
+   */
+  moodStale?: boolean;
   /** The exact hard signal Timeline consumes (`audioPartyStrong`). */
   strongSignal?: boolean;
   /** Seconds the hard signal has continuously held. */
@@ -309,6 +325,283 @@ export function partyTimerReadouts(config: PartyConfig, nowMs: number): PartyTim
   return [sustain, party, cooldown];
 }
 
+// ── Readiness chips (_356 §4) ────────────────────────────────────────────
+// PURE, and deliberately fed ONLY by engine-authored fields. The chip row is
+// the operator's answer to "why is party not firing", so a chip computed from
+// `currentPhase`, a ribbon segment, `atLocal`, or any pad-local flag is worse
+// than no chip at all: those disagree with the evaluator across midnight
+// (_356 F2) and the row then lies with full confidence.
+//
+// Tones: 'ready' = the condition is met; 'alert' = it blocks party (red);
+// 'neutral' = normal but not met (nothing is wrong); 'live' = a session is
+// running right now.
+
+export type PartyChipTone = 'ready' | 'alert' | 'neutral' | 'live';
+
+export type PartyChipId =
+  | 'plan' | 'deck' | 'window' | 'partyOn' | 'signal' | 'session' | 'cooldown';
+
+export interface PartyReadinessChip {
+  id: PartyChipId;
+  /** Chip copy exactly as rendered, e.g. "× WINDOW · opens 21:00". */
+  text: string;
+  tone: PartyChipTone;
+}
+
+export interface PartyChipOptions {
+  /**
+   * Engine mood-input health. Read from `/party-config.moodStale` when the
+   * engine sends it, else `/timeline/state.moodStale`. Absent/null means the
+   * engine did not say — the chip then reports the signal only.
+   */
+  moodStale?: boolean | null;
+  /**
+   * IANA plan timezone, for the "opens HH:MM" detail. Null/absent means we
+   * cannot name a wall-clock time and the chip omits it rather than printing
+   * the pad's own device time, which is wrong off-playa.
+   */
+  planTz?: string | null;
+  /**
+   * Clock for "is that opening TODAY?" — pass the card's tick. Absent means we
+   * cannot tell today from tomorrow, so the chip keeps the WEEKDAY (the form
+   * that is never ambiguous) rather than printing a bare time that reads as
+   * "today" when it is not.
+   */
+  nowMs?: number | null;
+}
+
+/** Epoch ms → "HH:MM" in the plan tz. Null when the tz or the instant is unusable. */
+export function formatPartyClock(atMs: number | null | undefined, tz: string | null | undefined): string | null {
+  if (typeof atMs !== 'number' || !Number.isFinite(atMs) || !tz) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date(atMs));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    let hour = Number(get('hour'));
+    const minute = get('minute');
+    if (hour === 24) hour = 0;
+    if (Number.isNaN(hour) || !minute) return null;
+    return `${String(hour).padStart(2, '0')}:${minute}`;
+  } catch {
+    // A malformed tz makes Intl throw. Say nothing rather than device-local.
+    return null;
+  }
+}
+
+/** 'YYYY-MM-DD' calendar day of `atMs` in `tz`. Null when Intl refuses the tz. */
+function partyTzDateKey(atMs: number, tz: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date(atMs));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    const [y, m, d] = [get('year'), get('month'), get('day')];
+    if (!y || !m || !d) return null;
+    return `${y}-${m}-${d}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Short weekday of `atMs` in `tz` ("Mon"). Null when Intl refuses the tz. */
+function partyTzWeekday(atMs: number, tz: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' })
+      .formatToParts(new Date(atMs));
+    return parts.find((p) => p.type === 'weekday')?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Epoch ms → "HH:MM" in the plan tz, prefixed with the short WEEKDAY whenever
+ * that instant is NOT on the same plan-tz calendar day as `nowMs` — "Mon 09:00".
+ *
+ * A bare "opens 09:00" on a window that actually opens TOMORROW morning reads as
+ * "in a few minutes" to an operator standing in front of the ship at 09:23, so
+ * the day is part of the answer, not decoration (bug, 2026-08-23). With no
+ * `nowMs` we cannot tell the two apart and keep the weekday: unambiguous either
+ * way. Null when the tz or the instant is unusable — say nothing rather than
+ * print the pad's own device day.
+ */
+export function formatPartyClockOnDay(
+  atMs: number | null | undefined,
+  tz: string | null | undefined,
+  nowMs?: number | null,
+): string | null {
+  const clock = formatPartyClock(atMs, tz);
+  if (clock === null || !tz || typeof atMs !== 'number') return null;
+  const atKey = partyTzDateKey(atMs, tz);
+  const nowKey = typeof nowMs === 'number' && Number.isFinite(nowMs)
+    ? partyTzDateKey(nowMs, tz)
+    : null;
+  if (atKey !== null && nowKey !== null && atKey === nowKey) return clock;
+  const weekday = partyTzWeekday(atMs, tz);
+  return weekday ? `${weekday} ${clock}` : clock;
+}
+
+function chip(id: PartyChipId, text: string, tone: PartyChipTone): PartyReadinessChip {
+  return { id, text, tone };
+}
+
+function markChip(id: PartyChipId, label: string, ready: boolean): PartyReadinessChip {
+  return chip(id, `${ready ? '✓' : '×'} ${label}`, ready ? 'ready' : 'alert');
+}
+
+/**
+ * The PARTY card's readiness row. Returns [] when the engine sent no
+ * `readiness` block — an engine that cannot answer gets no row, not a row of
+ * guesses.
+ */
+export function partyReadinessChips(
+  config: PartyConfig,
+  options: PartyChipOptions = {},
+): PartyReadinessChip[] {
+  const readiness = config.readiness;
+  if (!readiness) return [];
+  const inSession = config.effectiveState === 'in_session';
+  const forced = config.sessionForced === true;
+  const cueError = config.cueError || null;
+  const moodStale = config.moodStale ?? options.moodStale ?? null;
+
+  // PLAN / DECK were the SAME boolean before _356 F8: "plan is on and in its
+  // festival days" is a different fact from "the Timeline actually owns the
+  // deck", and only the second one is broken by a takeover.
+  const chips: PartyReadinessChip[] = [
+    markChip('plan', 'PLAN', readiness.planActive),
+    markChip('deck', 'DECK', readiness.planDriving),
+  ];
+
+  // WINDOW. A forced session deliberately ignores the window, so a red ✗ there
+  // would be a false alarm — say BYPASSED and stay neutral.
+  if (forced) {
+    chips.push(chip('window', '· WINDOW BYPASSED', 'neutral'));
+  } else if (readiness.partyWindowOpen) {
+    chips.push(markChip('window', 'WINDOW', true));
+  } else {
+    const opensAt = formatPartyClockOnDay(
+      config.partyWindowOpensAtMs,
+      options.planTz,
+      options.nowMs,
+    );
+    chips.push(chip('window', opensAt ? `× WINDOW · opens ${opensAt}` : '× WINDOW', 'alert'));
+  }
+
+  // PARTY ON is the operator's policy toggle. It was labelled DETECTOR, which
+  // is the COMPANION's job — detector health lives in the detector panel.
+  chips.push(markChip('partyOn', 'PARTY ON', readiness.enabled));
+
+  // SIGNAL is the exact input the evaluator sees (the stale-guarded mood).
+  // Calm is normal, not a fault; STALE is the fault.
+  if (moodStale === true) {
+    chips.push(chip('signal', '× SIGNAL STALE', 'alert'));
+  } else if (config.strongSignal === true) {
+    chips.push(chip('signal', '✓ SIGNAL', 'ready'));
+  } else {
+    chips.push(chip('signal', '× SIGNAL', 'neutral'));
+  }
+
+  // SESSION replaces ARMED. The arm latch can only move on a session start/end
+  // or a dispatch error, so those are the only three things it may report —
+  // and red is reserved for the error (_356 F6).
+  if (cueError) {
+    chips.push(chip('session', '× SESSION ERROR', 'alert'));
+  } else if (inSession) {
+    chips.push(chip('session', '· SESSION LIVE', 'live'));
+  } else if (readiness.triggerArmed === true) {
+    chips.push(chip('session', '✓ SESSION ARMED', 'ready'));
+  } else if (readiness.triggerArmed === null) {
+    chips.push(chip('session', '× SESSION NO CUE', 'neutral'));
+  } else {
+    chips.push(chip('session', '× SESSION', 'neutral'));
+  }
+
+  if (readiness.cooldownClear) {
+    chips.push(markChip('cooldown', 'COOLDOWN', true));
+  } else {
+    const left = config.cooldownRemainingSec;
+    chips.push(chip(
+      'cooldown',
+      typeof left === 'number' && left > 0 ? `× COOLDOWN · ${formatMinSec(left)}` : '× COOLDOWN',
+      'alert',
+    ));
+  }
+  return chips;
+}
+
+// ── Button enablement (_356 §3 P0-4) ─────────────────────────────────────
+// PURE, and the ONLY place the card decides what is pressable. Before _356
+// both session buttons rendered enabled in every state, so RETURN TO LIVE
+// AUDIO looked live while the engine would refuse it (F5).
+
+export interface PartyButtonInput {
+  /** Server truth; null while the first GET is in flight. */
+  config: PartyConfig | null;
+  /** Engine control bus up. */
+  connected: boolean;
+  /** Performance mode / view-only lock. */
+  locked: boolean;
+  /** A write is already in flight. */
+  pending: boolean;
+  /** Settings disclosure state — labels the SETTINGS button only. */
+  expanded?: boolean;
+}
+
+export interface PartyButtonRule {
+  enabled: boolean;
+  label: string;
+}
+
+export interface PartyButtonRules {
+  force: PartyButtonRule;
+  returnToAudio: PartyButtonRule;
+  resetCooldown: PartyButtonRule;
+  enabledToggle: PartyButtonRule;
+  settings: PartyButtonRule;
+}
+
+export function partyButtonRules(input: PartyButtonInput): PartyButtonRules {
+  const { config, connected, locked, pending } = input;
+  // Every write needs a live, unlocked, idle transport. SETTINGS is the one
+  // control that touches nothing, so it is always available.
+  const canWrite = connected && !locked && !pending;
+  const inSession = config?.effectiveState === 'in_session';
+  const forced = config?.sessionForced === true;
+  const cooldownLeft = config?.cooldownRemainingSec ?? 0;
+
+  return {
+    // FORCE starts a session. It is meaningless (and the engine refuses it)
+    // while one is already running — the operator wants RETURN there.
+    force: {
+      enabled: canWrite
+        && !!config?.partyCueId
+        && config?.readiness?.planActive === true
+        && !inSession,
+      label: forced ? 'PARTY FORCED' : 'FORCE PARTY',
+    },
+    // RETURN ends ANY live session, forced or detected. With no session live
+    // the engine 409s, so the button is off rather than lying (_356 F5).
+    returnToAudio: {
+      enabled: canWrite && inSession,
+      label: forced ? 'RETURN TO LIVE AUDIO' : 'END PARTY SESSION',
+    },
+    resetCooldown: {
+      enabled: canWrite && cooldownLeft > 0,
+      label: 'RESET COOLDOWN',
+    },
+    enabledToggle: {
+      enabled: connected && !locked && !pending && !!config,
+      label: config?.enabled ? 'ENABLED' : 'DISABLED',
+    },
+    settings: {
+      enabled: true,
+      label: input.expanded ? 'LESS' : 'SETTINGS',
+    },
+  };
+}
+
 const PATH = '/party-config';
 
 /**
@@ -383,6 +676,7 @@ export function parsePartyConfig(raw: unknown): PartyConfig {
     'partyWindowOpen',
     'strongSignal',
     'sessionForced',
+    'moodStale',
   ] as const) {
     if (o[k] === undefined) continue;
     if (typeof o[k] !== 'boolean') {
@@ -403,11 +697,21 @@ export function parsePartyConfig(raw: unknown): PartyConfig {
     }
     cfg.sessionEndsAtMs = o.sessionEndsAtMs;
   }
-  if (o.partyCueId !== undefined) {
-    if (o.partyCueId !== null && typeof o.partyCueId !== 'string') {
-      throw new Error(`GET ${PATH}: 'partyCueId' must be a string or null, got ${JSON.stringify(o.partyCueId)}`);
+  for (const k of ['partyCueId', 'cueError'] as const) {
+    if (o[k] === undefined) continue;
+    if (o[k] !== null && typeof o[k] !== 'string') {
+      throw new Error(`GET ${PATH}: '${k}' must be a string or null, got ${JSON.stringify(o[k])}`);
     }
-    cfg.partyCueId = o.partyCueId;
+    cfg[k] = o[k];
+  }
+  // Party Window boundaries (_356 P0-2). Nullable: a plan with no Party Window
+  // has no next open, and that is information — not a reason to guess one.
+  for (const k of ['partyWindowOpensAtMs', 'partyWindowClosesAtMs'] as const) {
+    if (o[k] === undefined) continue;
+    if (o[k] !== null && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) {
+      throw new Error(`GET ${PATH}: '${k}' must be a finite number or null, got ${JSON.stringify(o[k])}`);
+    }
+    cfg[k] = o[k];
   }
   if (o.readiness !== undefined) {
     if (!o.readiness || typeof o.readiness !== 'object' || Array.isArray(o.readiness)) {

@@ -3,11 +3,22 @@ import { ScrollView, View } from 'react-native';
 
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
+import { useDayFrame } from '@/hooks/use_day_frame';
 import type { TimelineAlert } from '@/utils/timeline_alert_model';
 import type { TimelineOperatorView } from '@/utils/timeline_operator_model';
 import type { TimelineState } from '@/utils/timelineApi';
+import type { DayFrame } from './day_frame_logic';
+import { Segmented } from './makerControls';
 import { TimelineModeTabs } from './timeline_mode_tabs';
 import { TimelineStatusHeader } from './timeline_status_header';
+
+// §D.1: the frame toggle is visible on ALL FOUR views (LIVE NEXT reads it too)
+// and changes NOTHING except how time is sliced for rendering. Persisted per
+// device (hooks/use_day_frame.tsx).
+const FRAME_OPTIONS: { id: DayFrame; label: string }[] = [
+  { id: 'working', label: 'WORKING DAY · 6 PM → 6 PM' },
+  { id: 'regular', label: 'CALENDAR DAY · 12 AM → 12 AM' },
+];
 
 interface TimelineOperatorShellProps {
   state: TimelineState | null;
@@ -36,6 +47,7 @@ export function TimelineOperatorShell({
 }: TimelineOperatorShellProps) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const { frame, setFrame } = useDayFrame();
   return (
     <View style={styles.container}>
       <ScrollView
@@ -56,6 +68,11 @@ export function TimelineOperatorShell({
           editDisabled={editDisabled}
           travelDisabled={travelDisabled}
         />
+        <View style={styles.frameRow}>
+          <View style={styles.frameToggle}>
+            <Segmented options={FRAME_OPTIONS} value={frame} onChange={setFrame} />
+          </View>
+        </View>
         {children}
       </ScrollView>
     </View>
@@ -76,6 +93,15 @@ function makeStyles(C: Palette) {
       paddingTop: 14,
       paddingBottom: 36,
       gap: 14,
+    },
+    frameRow: {
+      flexDirection: 'row' as const,
+      justifyContent: 'flex-end' as const,
+      marginTop: -6,
+    },
+    frameToggle: {
+      minWidth: 420,
+      minHeight: 44,
     },
   };
 }

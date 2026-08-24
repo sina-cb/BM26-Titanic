@@ -1,5 +1,6 @@
 import type {
   ActionPlaylist,
+  CueDays,
   PlanCue,
   PlanPhase,
   ShowPlan,
@@ -82,15 +83,167 @@ function addDate(dateKey: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function partyWindowEndDays(days: PlanCue['days'], plan: ShowPlan): PlanCue['days'] | null {
+/* ── THE PARTY WINDOW DAY RULE ────────────────────────────────────────────
+ *
+ * A cue's `days` is a CALENDAR festival-day index in the plan timezone —
+ * `cueAppliesOn` in marsin_engine/lib/timeline/festival.js resolves it against
+ * the calendar day the cue fires on. For a Party Window the engine resolves the
+ * party cue's `days` against `nightStartMs`, the instant the window OPENED
+ * (marsin_engine/lib/timeline/party_window.js, NIGHT-START-DAY SEMANTICS). So:
+ *
+ *   phase baseline (pwb_) + party cue → the day the window OPENS   [N]
+ *   closer (pwe_, a clock cue at endAt) → the day the window ENDS
+ *       non-wrapping (start + length  <  24 h) → [N]
+ *       wrapping     (start + length >= 24 h) → [N+1]
+ *
+ * The 6 PM operator-day shift ordinary clock cues use (`operatorDayToWireDay`
+ * in cue_edit_logic.ts) must NOT be applied to a Party Window: it moved a
+ * daytime window (09:00 → 17:00) authored for festival day N onto day N+1, so
+ * the engine reported the window opening TOMORROW while the operator was
+ * standing in it (bug, 2026-08-23). The window's own start clock already says
+ * which calendar day it belongs to; there is nothing to shift.
+ */
+
+/** Does the window cross midnight (its end clock lands on the NEXT day)? */
+export function partyWindowWrapsMidnight(startAt: string, windowDurationMin: number): boolean {
+  const startMin = clockMinutes(startAt);
+  if (startMin === null) {
+    throw new Error(`Party Window start must be HH:MM, got ${JSON.stringify(startAt)}.`);
+  }
+  if (!Number.isFinite(windowDurationMin) || windowDurationMin <= 0 || windowDurationMin > 1440) {
+    throw new Error('Party Window length must be between 1 and 1,440 minutes.');
+  }
+  return startMin + windowDurationMin >= 1440;
+}
+
+export interface PartyWindowDaysResult {
+  days: CueDays;
+  /** Non-null when the selection cannot be authored — surface it, don't clamp. */
+  overflowError: string | null;
+}
+
+/**
+ * Serialize the editor's DAYS selection for the Party Window's OPENING day.
+ * Calendar semantics: the selection IS the wire day. Numeric entries are
+ * range-checked against the festival span so the editor fails loudly instead of
+ * emitting a day index the engine's `validateCueDays` will reject.
+ */
+export function partyWindowStartDays(
+  selection: CueDays | undefined,
+  festivalDays: number,
+): PartyWindowDaysResult {
+  if (selection === undefined || selection === 'all') return { days: 'all', overflowError: null };
+  if (!Array.isArray(selection) || selection.length === 0) {
+    return {
+      days: selection ?? 'all',
+      overflowError: 'Pick at least one day for this Party Window, or choose All days.',
+    };
+  }
+  if (selection.every((entry) => typeof entry === 'string')) {
+    return { days: selection, overflowError: null };
+  }
+  if (!selection.every((entry) => typeof entry === 'number')) {
+    return {
+      days: selection,
+      overflowError: 'A Party Window\'s days must be all day numbers or all dates, not a mix.',
+    };
+  }
+  const numeric = selection as number[];
+  const outOfSpan = numeric.find((day) =>
+    !Number.isInteger(day) || day < 0 || day > festivalDays - 1);
+  if (outOfSpan !== undefined) {
+    return {
+      days: selection,
+      overflowError:
+        `Day ${outOfSpan + 1} is outside this plan's festival span (D1–D${festivalDays}).`,
+    };
+  }
+  return { days: [...numeric].sort((a, b) => a - b), overflowError: null };
+}
+
+/**
+ * The closer's days: the same day for a window that ends before midnight, the
+ * NEXT day for one that wraps. A wrapping window on the LAST festival day has
+ * no day to close on — THROW (the engine's own validator rejects an index past
+ * the span, and silently dropping the closer would leave the window open
+ * forever).
+ */
+export function partyWindowEndDays(
+  days: PlanCue['days'],
+  plan: ShowPlan,
+  wraps: boolean,
+): PlanCue['days'] {
   if (days === undefined || days === 'all') return 'all';
-  if (days.length === 0) return days;
+  if (days.length === 0) {
+    throw new Error('A Party Window needs at least one day; pick a day or choose All days.');
+  }
+  if (!wraps) return days;
   if (typeof days[0] === 'number') {
-    const max = plan.festival ? plan.festival.days - 1 : Number.MAX_SAFE_INTEGER;
-    const shifted = (days as number[]).map((day) => day + 1).filter((day) => day <= max);
-    return shifted.length > 0 ? shifted : null;
+    const max = plan.festival ? plan.festival.days - 1 : null;
+    return (days as number[]).map((day) => {
+      const closer = day + 1;
+      if (max !== null && closer > max) {
+        throw new Error(
+          `This Party Window runs past midnight, so it closes on day D${closer + 1} — `
+          + `past the last festival day (D${max + 1}). Add a festival day, or end the `
+          + 'window before midnight.',
+        );
+      }
+      return closer;
+    });
   }
   return (days as string[]).map((date) => addDate(date, 1));
+}
+
+/** 'YYYY-MM-DD' → "Sun, Aug 23". Parsed at UTC noon so no tz shifts the date. */
+function shortDateLabel(dateKey: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return dateKey;
+  const at = new Date(`${dateKey}T12:00:00Z`);
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric',
+  }).format(at);
+}
+
+/** "D2 · Mon, Aug 24" for a festival day index, or "D2" on a plan with no span. */
+export function partyWindowDayLabel(plan: ShowPlan, dayIndex: number): string {
+  const name = `D${dayIndex + 1}`;
+  if (!plan.festival) return name;
+  return `${name} · ${shortDateLabel(addDate(plan.festival.startDate, dayIndex))}`;
+}
+
+/**
+ * The one sentence the editor renders under DAYS so the operator can SEE which
+ * calendar day the window they are authoring lands on — the choice used to be
+ * implicit in a "This day" pill (bug, 2026-08-23). Pure so vitest pins the copy.
+ */
+export function partyWindowDaysSummary(args: {
+  plan: ShowPlan;
+  days: CueDays | undefined;
+  startAt: string;
+  windowDurationMin: number;
+}): string {
+  const { plan, days, startAt, windowDurationMin } = args;
+  const wraps = partyWindowWrapsMidnight(startAt, windowDurationMin);
+  const startMin = clockMinutes(startAt) as number; // validated above
+  const endAt = minutesToClock(startMin + windowDurationMin);
+  const clock = `${startAt} → ${endAt}`;
+  if (days === undefined || days === 'all') {
+    return wraps
+      ? `Opens ${clock} EVERY festival day and closes the next morning.`
+      : `Opens ${clock} EVERY festival day and closes the same day.`;
+  }
+  if (!Array.isArray(days) || days.length === 0) {
+    return `Opens ${clock} — no day selected yet.`;
+  }
+  if (typeof days[0] !== 'number') {
+    return `Opens ${clock} on ${(days as string[]).join(', ')}`
+      + (wraps ? ' and closes the next morning.' : ' and closes the same day.');
+  }
+  const numeric = [...(days as number[])].sort((a, b) => a - b);
+  const opens = numeric.map((day) => partyWindowDayLabel(plan, day)).join(', ');
+  if (!wraps) return `Opens ${clock} on ${opens} and closes the same day.`;
+  const closes = numeric.map((day) => partyWindowDayLabel(plan, day + 1)).join(', ');
+  return `Opens ${clock} on ${opens} and closes the next morning on ${closes}.`;
 }
 
 export function partyWindowSeed(plan: ShowPlan, cue: PlanCue | null): PartyWindowSeed | null {
@@ -196,15 +349,21 @@ export function planWithPartyWindow(
     action: spec.baselineAction,
     days: cue.days,
   };
-  const endDays = partyWindowEndDays(cue.days, plan);
-  const endCue: PlanCue | null = endDays === null ? null : {
+  // The closer lands on the day the window ENDS — the same day when it ends
+  // before midnight, the next day only when it wraps. See THE PARTY WINDOW DAY
+  // RULE above; an out-of-span closer throws rather than being dropped.
+  const endCue: PlanCue = {
     id: endCueId,
     label: 'Default after Party Window',
     enabled: cue.enabled,
     kind: 'ambient',
     trigger: { type: 'clock', at: endAt },
     action: plan.defaultCue.action,
-    days: endDays,
+    days: partyWindowEndDays(
+      cue.days,
+      plan,
+      partyWindowWrapsMidnight(spec.startAt, spec.windowDurationMin),
+    ),
   };
 
   const removedIds = new Set([cue.id, baselineCueId, endCueId]);
@@ -222,7 +381,7 @@ export function planWithPartyWindow(
   return {
     ...plan,
     phases,
-    cues: [...cues, baselineCue, ...(endCue ? [endCue] : []), partyCue],
+    cues: [...cues, baselineCue, endCue, partyCue],
   };
 }
 

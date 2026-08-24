@@ -12,8 +12,14 @@ import { Palette, Type } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
   timelineTravelCuesForDay,
+  timelineTravelDayLabel,
   type TimelineTravelCue,
 } from '@/utils/timeline_operator_model';
+import {
+  frameNowSentence,
+  frameNowStatus,
+  type DayFrame,
+} from './day_frame_logic';
 import type {
   OverviewCue,
   TimelineOverview,
@@ -22,9 +28,17 @@ import type {
 } from '@/utils/timelineApi';
 import { shiftTimelineLocalTime } from '@/utils/timeline_travel_model';
 
+// §D.5: one copy line so the operator can never mis-read which calendar day an
+// ADVANCED time lands on.
+const TRAVEL_FRAME_NOTE =
+  'Times are plan-local. In the working-day frame, times before 6 PM fall on the next morning.';
+
 interface TimelineTravelViewProps {
   overview: TimelineOverview | null;
+  frame: DayFrame;
   todayDate: string | null;
+  /** Minutes-of-day in the plan tz — decides which span is badged TODAY. */
+  nowMinutes: number | null;
   targetDate: string | null;
   targetTime: string;
   selectedCueId: string | null;
@@ -33,6 +47,7 @@ interface TimelineTravelViewProps {
   previewError: string | null;
   resolving: boolean;
   busy: boolean;
+  pendingLeadSeconds: number | null;
   actionsDisabled: boolean;
   zoom: TimelineZoom | null | undefined;
   onTargetDate: (date: string) => void;
@@ -40,6 +55,7 @@ interface TimelineTravelViewProps {
   onSelectCue: (entry: TimelineTravelCue) => void;
   onToggleAdvanced: () => void;
   onTravel: () => void;
+  onTravelBefore: () => void;
   onResumeLive: () => void;
 }
 
@@ -65,7 +81,9 @@ function deckSummary(resolved: TimelineResolve | null, cue: OverviewCue | null):
 
 export function TimelineTravelView({
   overview,
+  frame,
   todayDate,
+  nowMinutes,
   targetDate,
   targetTime,
   selectedCueId,
@@ -74,6 +92,7 @@ export function TimelineTravelView({
   previewError,
   resolving,
   busy,
+  pendingLeadSeconds,
   actionsDisabled,
   zoom,
   onTargetDate,
@@ -81,6 +100,7 @@ export function TimelineTravelView({
   onSelectCue,
   onToggleAdvanced,
   onTravel,
+  onTravelBefore,
   onResumeLive,
 }: TimelineTravelViewProps) {
   const C = usePalette();
@@ -89,9 +109,14 @@ export function TimelineTravelView({
   const ipadLayout = width < 1280;
   const active = zoom?.scope === 'travel';
   const travelCues = useMemo(
-    () => timelineTravelCuesForDay(overview, targetDate),
-    [overview, targetDate],
+    () => timelineTravelCuesForDay(overview, frame, targetDate),
+    [frame, overview, targetDate],
   );
+  // The badge follows the FRAME, not the calendar (C-08): only the span that
+  // actually contains NOW is TODAY, and before the first night opens the first
+  // card reads TONIGHT instead (C-01).
+  const nowStatus = frameNowStatus(frame, overview?.days ?? [], todayDate, nowMinutes);
+  const nowSentence = frameNowSentence(frame, overview?.days ?? [], todayDate, nowMinutes);
   const selectedEntry = travelCues.find((entry) => entry.cue.id === selectedCueId) ?? null;
   const selectedCue = selectedEntry?.cue ?? null;
   const summary = deckSummary(resolved, selectedCue);
@@ -123,16 +148,20 @@ export function TimelineTravelView({
 
       <View style={[styles.columns, ipadLayout && styles.columnsIpad]}>
         <View style={[styles.card, styles.targetCard]}>
-          <Text style={styles.eyebrow}>1 · CHOOSE A FESTIVAL DAY</Text>
+          <Text style={styles.eyebrow}>
+            {frame === 'working' ? '1 · CHOOSE A FESTIVAL NIGHT' : '1 · CHOOSE A FESTIVAL DAY'}
+          </Text>
+          {nowSentence ? <Text style={styles.error}>{nowSentence}</Text> : null}
           <Text style={styles.title}>Run a saved cue as if it is happening now</Text>
           <Text style={styles.body}>
             Choosing only previews the result. The rig changes after a separate confirmation.
           </Text>
 
           <View style={styles.dayGrid}>
-            {(overview?.days || []).map((day) => {
+            {(overview?.days || []).map((day, index) => {
               const selected = day.date === targetDate;
-              const today = day.date === todayDate;
+              const isNow = nowStatus.kind === 'inside' && nowStatus.index === index;
+              const isTonight = nowStatus.kind === 'before-first' && index === 0;
               return (
                 <TouchableOpacity
                   key={day.date}
@@ -143,14 +172,18 @@ export function TimelineTravelView({
                   accessibilityState={{ selected }}
                 >
                   <Text style={[styles.dayLabel, selected && styles.dayLabelSelected]}>
-                    {day.weekday.slice(0, 3)}
+                    {timelineTravelDayLabel(overview, frame, index) ?? day.weekday.slice(0, 3)}
                   </Text>
                   <Text style={[styles.dayDate, selected && styles.dayLabelSelected]}>
                     {day.date.slice(5)}
                   </Text>
-                  {today ? (
+                  {isNow ? (
                     <Text style={[styles.todayLabel, selected && styles.dayLabelSelected]}>
                       TODAY
+                    </Text>
+                  ) : isTonight ? (
+                    <Text style={[styles.todayLabel, selected && styles.dayLabelSelected]}>
+                      TONIGHT
                     </Text>
                   ) : null}
                 </TouchableOpacity>
@@ -174,7 +207,7 @@ export function TimelineTravelView({
                 >
                   <View style={styles.cueTimeBlock}>
                     <Text style={[styles.cueTime, selected && styles.cueTextSelected]}>
-                      {cue.atLocal}
+                      {entry.rowLabel}
                     </Text>
                   </View>
                   <View style={styles.cueBody}>
@@ -215,6 +248,7 @@ export function TimelineTravelView({
               <Text style={styles.body}>
                 Exact-time travel is for rehearsal between cues.
               </Text>
+              <Text style={styles.body}>{TRAVEL_FRAME_NOTE}</Text>
               <View style={styles.timeRow}>
                 <TouchableOpacity
                   style={styles.stepButton}
@@ -273,12 +307,33 @@ export function TimelineTravelView({
             accessibilityRole="button"
             accessibilityState={{ disabled: travelDisabled }}
           >
-            {busy ? <ActivityIndicator size="small" color={C.onPrimary} /> : (
+            {busy && pendingLeadSeconds === null
+              ? <ActivityIndicator size="small" color={C.onPrimary} /> : (
               <Text style={styles.travelLabel}>
                 {selectedCue ? 'RUN THIS CUE AS NOW' : 'RUN THIS TIME AS NOW'}
               </Text>
             )}
           </TouchableOpacity>
+          {selectedCue ? (
+            <TouchableOpacity
+              style={[styles.preRollButton, travelDisabled && styles.disabled]}
+              onPress={onTravelBefore}
+              disabled={travelDisabled}
+              accessibilityRole="button"
+              accessibilityLabel="Start Time Travel ten seconds before this cue"
+              accessibilityState={{ disabled: travelDisabled }}
+            >
+              {busy && pendingLeadSeconds === 10
+                ? <ActivityIndicator size="small" color={C.primary} /> : (
+                <>
+                  <Text style={styles.preRollLabel}>⏪ START 10 SEC BEFORE CUE</Text>
+                  <Text style={styles.preRollHelp}>
+                    inspect the Deck, then tap ▶ to apply this cue
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
     </View>
@@ -543,6 +598,28 @@ function makeStyles(C: Palette) {
       backgroundColor: C.primary,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
+    },
+    preRollButton: {
+      minHeight: 64,
+      borderRadius: 12,
+      borderWidth: 2,
+      borderColor: C.primary,
+      backgroundColor: C.surfaceContainerLowest,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      paddingHorizontal: 18,
+      paddingVertical: 10,
+    },
+    preRollLabel: {
+      ...Type.timelineMeta,
+      color: C.primary,
+      textAlign: 'center' as const,
+    },
+    preRollHelp: {
+      ...Type.timelineBody,
+      color: C.secondary,
+      textAlign: 'center' as const,
+      marginTop: 4,
     },
     travelLabel: {
       ...Type.timelineMeta,

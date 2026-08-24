@@ -10,6 +10,7 @@ import { Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { SpaceGrotesk_400Regular, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
 
 import { ThemeProvider, useTheme } from '@/hooks/use-theme';
+import { DayFrameProvider } from '@/hooks/use_day_frame';
 import { warmColorPalettesCache } from '@/utils/api';
 import { useMidiControl } from '@/hooks/useMidiControl';
 import { CaptainPadAccessProvider } from '@/hooks/use_captainpad_access';
@@ -100,9 +101,11 @@ export default function RootLayout() {
   // unstyled intermediate screen.
   return (
     <ThemeProvider>
-      <CaptainPadAccessProvider>
-        <RootShell />
-      </CaptainPadAccessProvider>
+      <DayFrameProvider>
+        <CaptainPadAccessProvider>
+          <RootShell />
+        </CaptainPadAccessProvider>
+      </DayFrameProvider>
     </ThemeProvider>
   );
 }

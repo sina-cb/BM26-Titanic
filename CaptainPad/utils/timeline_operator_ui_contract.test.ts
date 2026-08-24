@@ -31,6 +31,14 @@ const eventSheetSource = fs.readFileSync(
   path.join(process.cwd(), 'components', 'timeline', 'EventSheet.tsx'),
   'utf8',
 );
+const timelineTravelViewSource = fs.readFileSync(
+  path.join(process.cwd(), 'components', 'timeline', 'timeline_travel_view.tsx'),
+  'utf8',
+);
+const planTransitionEditorSource = fs.readFileSync(
+  path.join(process.cwd(), 'components', 'timeline', 'plan_transition_editor.tsx'),
+  'utf8',
+);
 const leaseActivitySource = fs.readFileSync(
   path.join(process.cwd(), 'components', 'timeline', 'timeline_lease_activity_surface.tsx'),
   'utf8',
@@ -65,6 +73,22 @@ const planIndicatorSource = fs.readFileSync(
 );
 const planLockBannerSource = fs.readFileSync(
   path.join(process.cwd(), 'components', 'PlanLockBanner.tsx'),
+  'utf8',
+);
+const legendSource = fs.readFileSync(
+  path.join(process.cwd(), 'components', 'timeline', 'calendar_legend.tsx'),
+  'utf8',
+);
+const stripSource = fs.readFileSync(
+  path.join(process.cwd(), 'components', 'timeline', 'DayOverviewStrip.tsx'),
+  'utf8',
+);
+const dayViewSource = fs.readFileSync(
+  path.join(process.cwd(), 'components', 'timeline', 'DayView.tsx'),
+  'utf8',
+);
+const shellSource = fs.readFileSync(
+  path.join(process.cwd(), 'components', 'timeline', 'timeline_operator_shell.tsx'),
   'utf8',
 );
 
@@ -138,6 +162,27 @@ describe('Timeline operator UI wiring contract', () => {
     expect(handler).toContain('setEventBusy(true)');
     expect(handler).toContain('const outcome = await travel(spec)');
     expect(eventSheetSource).toContain('APPLYING TIME TRAVEL…');
+  });
+
+  it('offers an exact ten-second event pre-roll and explains the static comparison step', () => {
+    expect(timelineSource).toContain('onTravelBefore={() => { void handleTravel(10); }}');
+    expect(timelineSource).toContain('...(leadSeconds ? { leadSeconds } : {})');
+    expect(eventSheetSource).toContain('⏪ 10 SEC BEFORE');
+    expect(eventSheetSource).toContain('inspect the Deck, then tap ▶ to apply this event');
+    expect(timelineSource).toContain('onTravelBefore={() => { void handleLocalTravel(10); }}');
+    expect(timelineSource).toContain('...(leadSeconds ? { leadSeconds } : {})');
+    expect(timelineSource).toContain('setTravelLeadSecondsBusy(leadSeconds ?? null)');
+    expect(timelineTravelViewSource).toContain('⏪ START 10 SEC BEFORE CUE');
+    expect(timelineTravelViewSource).toContain('inspect the Deck, then tap ▶ to apply this cue');
+  });
+
+  it('persists one plan-level Deck transition policy from Edit Plan', () => {
+    expect(timelineSource).toContain('<PlanTransitionEditor');
+    expect(timelineSource).toContain('value={draft?.transition}');
+    expect(timelineSource).toContain('plan.transition = transition');
+    expect(planTransitionEditorSource).toContain('Saved with this plan.');
+    expect(planTransitionEditorSource).toContain("mode: 'trans_flash'");
+    expect(planTransitionEditorSource).toContain('<DeckTransitionControls');
   });
 
   it('offers a persistent plan pause distinct from temporary takeover', () => {
@@ -222,11 +267,38 @@ describe('Timeline operator UI wiring contract', () => {
     expect(partyCardSource).toContain('QUIET');
     expect(partyCardSource).toContain('Tap any gate');
     expect(partyCardSource).toContain('partyTimerReadouts');
-    expect(partyCardSource).toContain('config.readiness.partyWindowOpen');
-    expect(partyCardSource).toContain('FORCE PARTY');
-    expect(partyCardSource).toContain('RETURN TO LIVE AUDIO');
-    expect(partyCardSource).toContain('RESET COOLDOWN');
+    // _356 §4: the readiness row and every control's enablement/label come
+    // from the two PURE helpers, so the card cannot invent a chip or leave a
+    // button enabled that the engine would refuse. The chip fields and the
+    // button labels are pinned by utils/party_api.test.ts.
+    expect(partyCardSource).toContain('partyReadinessChips');
+    expect(partyCardSource).toContain('partyButtonRules');
+    expect(partyCardSource).toContain('buttons.force.enabled');
+    expect(partyCardSource).toContain('buttons.returnToAudio.enabled');
+    expect(partyCardSource).toContain('buttons.resetCooldown.enabled');
+    expect(partyCardSource).toContain('FORCE PARTY starts immediately');
     expect(partyCardSource).toContain('setInterval(() => { void refresh(); }, 1000)');
+    // No chip may be derived pad-side from the clock-only phase view.
+    expect(partyCardSource).not.toContain('currentPhase');
+  });
+
+  it('names the engine deck owner in the NOW card instead of the ribbon guess', () => {
+    expect(liveSource).toContain('nowOwner.sourceLabel');
+    expect(liveSource).toContain('nowOwner.rangeLabel');
+    expect(liveSource).toContain('timelineOwnerKindLabel(nowOwner.kind)');
+  });
+
+  it('shows the party cue error and a stale companion signal as alerts', () => {
+    expect(partyCardSource).toContain('PARTY CUE ERROR');
+    expect(partyCardSource).toContain('SIGNAL STALE — companion not publishing');
+  });
+
+  it('ends the party session on the ENGINE first and clears the companion override after', () => {
+    const engineCall = partyCardSource.indexOf('await returnPartyToLiveAudio()');
+    const companionCall = partyCardSource.indexOf("await setPartyTestOverride('auto')");
+    expect(engineCall).toBeGreaterThan(-1);
+    expect(companionCall).toBeGreaterThan(engineCall);
+    expect(partyCardSource).toContain('setOverrideError');
   });
 
   it('caps the entire sidebar Global mode area at two rows', () => {
@@ -234,6 +306,52 @@ describe('Timeline operator UI wiring contract', () => {
     expect(tabsLayoutSource).toContain('maxRows={1}');
     expect(tabsLayoutSource).toContain('leading={editSessionVisible ? <EditSessionChip /> : null}');
     expect(tabsLayoutSource).not.toContain('<View style={{ marginTop: 8 }}>\n          <EditSessionChip />');
+  });
+
+  // ── report _359: the working-day frame ────────────────────────────────
+
+  it('draws every calendar marker from the ONE shared legend (C-02)', () => {
+    // The legend renders from the frame model's id list, so a marker cannot be
+    // drawn without a row — and both calendars read the same colour table.
+    expect(legendSource).toContain('FRAME_LEGEND_IDS.map');
+    expect(legendSource).toContain('FRAME_SUN_COLORS');
+    expect(stripSource).toContain('FRAME_SUN_COLORS[marker.id]');
+    expect(dayViewSource).toContain('FRAME_SUN_COLORS[marker.id]');
+    // The unlabelled golden-hour tick is gone (it was in no legend).
+    expect(stripSource).not.toContain('goldenHourStart');
+    expect(legendSource).not.toContain("label=\"NIGHT\"");
+  });
+
+  it('mounts ONE week strip through one prop builder (C-12)', () => {
+    expect(timelineSource).toContain('const stripPropsFor = useCallback');
+    expect(timelineSource).toContain('<DayOverviewStrip {...stripPropsFor(overview.days)} />');
+    expect(timelineSource).not.toContain('todayIndex={todayIndex}');
+  });
+
+  it('offers the frame toggle on every Timeline view and persists it (D.1)', () => {
+    expect(shellSource).toContain('WORKING DAY · 6 PM → 6 PM');
+    expect(shellSource).toContain('CALENDAR DAY · 12 AM → 12 AM');
+    expect(shellSource).toContain('useDayFrame()');
+    expect(rootLayoutSource).toContain('<DayFrameProvider>');
+  });
+
+  it('drops the inert SHIFT TONIGHT slot and the day-latch jargon (C-11)', () => {
+    expect(dayViewSource).not.toContain('SHIFT TONIGHT');
+    expect(dayViewSource).not.toContain('midnight day-latch semantics');
+    expect(dayViewSource).toContain('frameExplainer(frame)');
+  });
+
+  it('never leaves NOW silent when it sits outside every span (C-01)', () => {
+    expect(stripSource).toContain('frameNowSentence');
+    expect(dayViewSource).toContain('frameNowSentence');
+    expect(stripSource).toContain('TONIGHT · opens 6:00 PM');
+  });
+
+  it('draws party bands from the engine partyWindow alone (C-03)', () => {
+    expect(stripSource).toContain('framePartyBands(span)');
+    expect(dayViewSource).toContain('framePartyBands(span)');
+    expect(stripSource).not.toContain("startsWith('pw_')");
+    expect(dayViewSource).not.toContain("startsWith('pw_')");
   });
 
   it('places manual cues on the day and allows a staged Special Event action', () => {

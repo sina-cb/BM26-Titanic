@@ -44,13 +44,12 @@
  *   - With NO draft, the strip shows the live active-plan overview.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { opConfirm, opInfo, opWarn } from '@/utils/op_dialog';
 import { useFocusEffect, router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useTimeline } from '@/hooks/useTimeline';
 import { usePerformanceMode } from '@/hooks/usePerformanceMode';
 import {
@@ -67,14 +66,12 @@ import {
   previewTimelineOverview,
   saveTimelinePlan,
   deleteTimelinePlan,
-  TimelineState,
-  TimelineCue,
-  TimelineRecentFire,
   TimelineOverview,
   TimelineResolve,
   TimelineTravelSpec,
-  TimelineActiveSequence,
   OverviewCue,
+  TimelineCue,
+  OverviewDay,
   ShowPlan,
   PlanCue,
   PlanDefaultCue,
@@ -95,17 +92,11 @@ import { PlanPickerSheet } from '@/components/timeline/PlanPickerSheet';
 import {
   FestivalEditor, addDaysToDateKey, FESTIVAL_MIN_DAYS, FESTIVAL_MAX_DAYS,
 } from '@/components/timeline/FestivalEditor';
+import { PlanTransitionEditor } from '@/components/timeline/plan_transition_editor';
 import {
-  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h, seedDefaultCue,
+  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, seedDefaultCue,
 } from '@/components/timeline/timelineTemplate';
-import {
-  fetchPartyConfig, setPartyConfig, describePartyStatus, describePartyRows,
-  describeEffectiveNote, stepPartyField, coalescePartyPatches, mergePartyPatch,
-  formatMinSec, formatMinutes, parsePartyConfig,
-  type PartyConfig, type PartyConfigPatch, type PartyNumericField,
-} from '@/utils/party_api';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
-import { companionUrlFromApiBase } from '@/utils/companion_url';
 import { babyRevealConfirmation } from '@/components/timeline/baby_reveal_confirmation';
 import { BabyRevealChoiceSheet } from '@/components/timeline/baby_reveal_choice_sheet';
 import { ManualCueReviewSheet } from '@/components/timeline/manual_cue_review_sheet';
@@ -126,7 +117,14 @@ import {
   timelinePriorityFeedbackText,
   type TimelinePriorityFeedback,
 } from '@/utils/timeline_priority_feedback';
-import { primaryTimelineAlert, TIMELINE_STALE_AFTER_MS } from '@/utils/timeline_alert_model';
+import {
+  primaryTimelineAlert,
+  timelineEditHeaderHelper,
+  TIMELINE_STALE_AFTER_MS,
+} from '@/utils/timeline_alert_model';
+import { useDayFrame } from '@/hooks/use_day_frame';
+import { frameNowStatus } from '@/components/timeline/day_frame_logic';
+import type { DayOverviewStripProps } from '@/components/timeline/DayOverviewStrip';
 import {
   manualTimelineCues,
   overviewForTimelineView,
@@ -141,8 +139,6 @@ import { roundTimelineLocalTime } from '@/utils/timeline_travel_model';
 import { normalizeCueColorAutopilot } from '@/components/timeline/cue_color_theme_logic';
 
 const PREVIEW_DEBOUNCE_MS = 350;
-// EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
-const EVENT_LOG_MAX_ROWS = 20;
 
 // ── Plan-timezone "now" helpers ─────────────────────────────────────────
 // The overview dates are festival-local (plan tz). To pick "today" and to
@@ -178,16 +174,6 @@ function minutesToLocalTime(minutes: number | null): string {
   if (minutes === null) return '00:00';
   const normalized = Math.max(0, Math.min(1439, Math.trunc(minutes)));
   return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
-}
-
-function formatCountdown(sec: number | null): string {
-  if (sec === null || sec === undefined || !Number.isFinite(sec) || sec < 0) return '—';
-  const total = Math.round(sec);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
-  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 // Snapshot the deck's CURRENT live state (playlist + pattern autopilot + color
@@ -243,44 +229,6 @@ async function snapshotDeckAsDefaultCue(): Promise<PlanDefaultCue> {
   return { label: 'Default (from deck)', action };
 }
 
-// Compact summary of the plan's default-cue action for the DEFAULT CUE row.
-// The maker only authors playlist actions, but the field is permissive for
-// hand-authored plans, so we summarise the other action types too.
-function defaultCueActionSummary(dc: PlanDefaultCue): string {
-  const a = dc.action;
-  switch (a.type) {
-    case 'playlist': return `playlist · ${a.name}`;
-    case 'look': return `look · ${a.look}`;
-    case 'globals': return 'globals';
-    default: return 'action';
-  }
-}
-
-// ── Controller pill (§14): AUTOPILOT green / PROGRAM amber / MANUAL grey ──
-function ControllerPill({ state, styles, C }: { state: TimelineState; styles: Styles; C: Palette }) {
-  const map: Record<TimelineState['controller'], { label: string; color: string }> = {
-    autopilot: { label: 'AUTOPILOT', color: C.tertiary },
-    program: { label: 'PROGRAM', color: '#f5a623' },
-    manual: { label: 'MANUAL', color: C.icon },
-  };
-  const m = map[state.controller] || { label: String(state.controller).toUpperCase(), color: C.secondary };
-  return (
-    <View style={[styles.pill, { borderColor: m.color }]}>
-      <Text style={[styles.pillText, { color: m.color }]}>{m.label}</Text>
-    </View>
-  );
-}
-
-function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | null; styles: Styles; C: Palette }) {
-  const color = party ? C.error : C.tertiary;
-  const label = party ? 'MUSIC · PARTY DETECTED' : `MUSIC · ${(mood || 'calm').toUpperCase()}`;
-  return (
-    <View style={[styles.pill, { borderColor: color }]}>
-      <Text style={[styles.pillText, { color }]}>{`● ${label}`}</Text>
-    </View>
-  );
-}
-
 export default function TimelineScreen() {
   return <TimelineScreenContent />;
 }
@@ -313,7 +261,6 @@ function TimelineScreenContent() {
   // operator may still write a structurally-valid draft while the engine blips.
   const [previewTransportError, setPreviewTransportError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [saveOk, setSaveOk] = useState<string | null>(null);
   // Auto-save (operator request 2026-07-02: the maker saves like a doc editor —
   // no SAVE / CANCEL buttons). `lastSavedVersionRef` is the last draftVersion
   // successfully written; the auto-save effect debounces writes and skips a
@@ -322,6 +269,7 @@ function TimelineScreenContent() {
   const lastSavedVersionRef = useRef<number | null>(null);
   const [autoSaveEvent, setAutoSaveEvent] = useState<TimelineDraftSaveEvent | null>(null);
   const [saveFailure, setSaveFailure] = useState<TimelineDraftSaveFailure | null>(null);
+  const [saveOk, setSaveOk] = useState<string | null>(null);
   const draftSaverRef = useRef<TimelineDraftSaver<ShowPlan> | null>(null);
   const [liveTouchLease, setLiveTouchLease] = useState<LayerSettingsState['liveTouch'] | null>(null);
   const liveTouchLeaseRef = useRef<LayerSettingsState['liveTouch'] | null>(null);
@@ -439,14 +387,15 @@ function TimelineScreenContent() {
   }, [beginPriorityHandoff, finishPriorityHandoff]);
 
   // ── UI sheet state ──
+  // WORKING DAY (6 PM → 6 PM) vs CALENDAR DAY. A device preference; the engine
+  // never learns about frames (_359 §C.1).
+  const { frame } = useDayFrame();
   const [operatorView, setOperatorView] = useState<TimelineOperatorView>('live');
   const [planPickerOpen, setPlanPickerOpen] = useState(false);
   // The operator-SELECTED day (highlighted in the strip + drives the cue
   // filter below it). Defaults to today; falls back to day 0. `null` only
   // until the first overview resolves.
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
-  // Whether the cue list shows the SELECTED day's cues or ALL days. Default =
-  // the selected day (per the brief).
   const [showAllDays, setShowAllDays] = useState(false);
   // ── ZOOM LADDER (report _94 §1) ──────────────────────────────────────
   //   FESTIVAL (the 8-day strip) ──tap a day──▶ DAY (full screen) ──tap an
@@ -486,6 +435,7 @@ function TimelineScreenContent() {
   const [travelResolveError, setTravelResolveError] = useState<string | null>(null);
   const [travelResolving, setTravelResolving] = useState(false);
   const [travelBusy, setTravelBusy] = useState(false);
+  const [travelLeadSecondsBusy, setTravelLeadSecondsBusy] = useState<number | null>(null);
   const [liveActionPending, setLiveActionPending] = useState(false);
   const [liveActionFeedback, setLiveActionFeedback] = useState<string | null>(null);
   const liveActionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -649,17 +599,20 @@ function TimelineScreenContent() {
   // minutes feed the playhead position.
   const nowInTz = nowPartsInTz(planTz);
 
-  // Today's festival index (the overview day whose date matches today in the
-  // plan tz). null when today is outside the festival span.
-  const todayIndex = useMemo(() => {
-    if (!overview || !nowInTz) return null;
-    const d = overview.days.find((day) => day.date === nowInTz.dateKey);
-    return d ? d.index : null;
-  }, [overview, nowInTz]);
-
   // Live minutes-of-day for the playhead (null when no tz could be read).
   const nowMinutes = nowInTz ? nowInTz.minutes : null;
   const nowLocal = minutesToLocalTime(nowMinutes);
+  const nowDate = nowInTz?.dateKey ?? null;
+
+  // The frame span NOW sits in — the ONLY thing that may be badged TODAY
+  // (C-01). `todayIndex` above is the CALENDAR day and is still what the
+  // engine's own day-scoped answers key on; the two are different in the
+  // working frame and must not be confused.
+  const frameNowIndex = useMemo(() => {
+    if (!overview) return null;
+    const status = frameNowStatus(frame, overview.days, nowDate, nowMinutes);
+    return status.kind === 'inside' ? status.index : null;
+  }, [frame, nowDate, nowMinutes, overview]);
   const liveToday = useMemo(() => {
     if (!liveOverview || !nowInTz) return liveOverview?.days[0] ?? null;
     return liveOverview.days.find((day) => day.date === nowInTz.dateKey)
@@ -670,9 +623,12 @@ function TimelineScreenContent() {
     () => resolveTimelineNowOwner(state, liveOverview, liveToday, nowLocal),
     [liveOverview, liveToday, nowLocal, state],
   );
+  // T-07: `nowDate` is the REAL calendar today in the plan tz, or null when we
+  // are outside the festival — never `days[0]`, which would badge a row TONIGHT
+  // on a day that is not tonight.
   const nextCues = useMemo(
-    () => upcomingTimelineCues(liveOverview, liveToday?.date ?? null, nowLocal, 4),
-    [liveOverview, liveToday?.date, nowLocal],
+    () => upcomingTimelineCues(liveOverview, frame, nowDate, nowLocal, 4),
+    [frame, liveOverview, nowDate, nowLocal],
   );
   const manualCues = useMemo(() => manualTimelineCues(liveOverview), [liveOverview]);
   const syncAgeSec = receivedAtMs === null
@@ -712,10 +668,11 @@ function TimelineScreenContent() {
     const validIndexes = new Set(overview.days.map((d) => d.index));
     setSelectedDay((prev) => {
       if (prev !== null && validIndexes.has(prev)) return prev;
-      if (todayIndex !== null) return todayIndex;
+      // The span NOW is in, in the ACTIVE frame — not the calendar day.
+      if (frameNowIndex !== null) return frameNowIndex;
       return overview.days[0].index;
     });
-  }, [overview, todayIndex]);
+  }, [frameNowIndex, overview]);
 
   // ── Draft mutators ──
   const mutateDraft = useCallback((fn: (p: ShowPlan) => void) => {
@@ -880,11 +837,6 @@ function TimelineScreenContent() {
     'FIRE CUE',
     () => fireCue(id),
   ), [fireCue, runPriorityBooleanAction]);
-
-  const handleSetAutopilot = useCallback((enabled: boolean) => runPriorityBooleanAction(
-    enabled ? 'ENABLE TIMELINE AUTO' : 'DISABLE TIMELINE AUTO',
-    () => setAutopilot(enabled),
-  ), [runPriorityBooleanAction, setAutopilot]);
 
   const handleEndProgram = useCallback(() => runPriorityBooleanAction(
     'END PROGRAM',
@@ -1233,8 +1185,8 @@ function TimelineScreenContent() {
   }, [overview, showAllDays, selectedDayOverview, selectedNextDayOverview]);
 
   const travelCueEntries = useMemo(
-    () => timelineTravelCuesForDay(overview, travelDate),
-    [overview, travelDate],
+    () => timelineTravelCuesForDay(overview, frame, travelDate),
+    [frame, overview, travelDate],
   );
   const selectedTravelEntry = useMemo(
     () => travelCueEntries.find((entry) => entry.cue.id === travelCueId) ?? null,
@@ -1272,6 +1224,20 @@ function TimelineScreenContent() {
   }, []);
 
   const backToWeek = useCallback(() => setZoomLevel('festival'), []);
+
+  // ONE prop builder for BOTH week-strip mounts (CALENDAR + EDIT PLAN) so the
+  // two can never drift apart by hand-copying (C-12).
+  const stripPropsFor = useCallback(
+    (days: OverviewDay[]): DayOverviewStripProps => ({
+      days,
+      frame,
+      selectedIndex: selectedDay,
+      nowDate,
+      nowMinutes,
+      onOpenDay: openDay,
+    }),
+    [frame, nowDate, nowMinutes, openDay, selectedDay],
+  );
 
   const stepDay = useCallback((delta: number) => {
     if (!overview) return;
@@ -1400,13 +1366,14 @@ function TimelineScreenContent() {
   // instant, as a STATIC snapshot (D4): a CUE's fire instant, or a bare
   // MOMENT tapped on the calendar ({date, time}). Works while the plan is
   // DORMANT: that is exactly when the operator rehearses.
-  const handleTravel = useCallback(async () => {
+  const handleTravel = useCallback(async (leadSeconds?: number) => {
     let spec: TimelineTravelSpec;
     if (eventCue) {
       const date = eventResolve?.date ?? selectedDayOverview?.date;
       spec = {
         cueId: eventCue.id,
         ...(date ? { date } : {}),
+        ...(leadSeconds ? { leadSeconds } : {}),
         ...(eventPlanName ? { planName: eventPlanName } : {}),
       };
     } else if (eventMoment) {
@@ -1457,9 +1424,12 @@ function TimelineScreenContent() {
     const targetLabel = `${resolved.date} ${resolved.atLocal}`;
     const ownerLabel = resolved.owner?.label ?? 'resolved baseline';
     const applied = [resolved.playlist, resolved.palette].filter(Boolean).join(' · ');
+    const leadLabel = leadSeconds && eventCue
+      ? ` · ${leadSeconds} sec before ${eventCue.label}`
+      : '';
     opInfo(
       'TIME TRAVEL APPLIED',
-      `${planLabel} → ${targetLabel} · ${ownerLabel}${applied ? ` · ${applied}` : ''}`,
+      `${planLabel} → ${targetLabel}${leadLabel} · ${ownerLabel}${applied ? ` · ${applied}` : ''}`,
     );
     router.push('/');
   }, [beginPriorityHandoff, eventCue, eventMoment, finishPriorityHandoff, travel,
@@ -1500,7 +1470,7 @@ function TimelineScreenContent() {
         return;
       }
       const exactResolveDate = selectedTravelEntry?.resolveDate
-        ?? timelineTravelResolveDateForOperatorTime(overview, travelDate, travelTime);
+        ?? timelineTravelResolveDateForOperatorTime(overview, frame, travelDate, travelTime);
       if (!exactResolveDate) {
         setTravelResolving(false);
         setTravelResolveError('This target falls beyond the selected plan’s last operator day.');
@@ -1530,6 +1500,7 @@ function TimelineScreenContent() {
     return () => { active = false; };
   }, [
     connected,
+    frame,
     operatorView,
     overview,
     prepareSelectedPlanForRehearsal,
@@ -1732,7 +1703,7 @@ function TimelineScreenContent() {
     }
   }, [actionsDisabled, handleFireCue]);
 
-  const handleLocalTravel = useCallback(async () => {
+  const handleLocalTravel = useCallback(async (leadSeconds?: number) => {
     if (!travelDate || !travelResolve || actionsDisabled) return;
     if (!travelCueId && !travelAdvancedOpen) return;
     const prepared = await prepareSelectedPlanForRehearsal();
@@ -1745,7 +1716,7 @@ function TimelineScreenContent() {
       return;
     }
     const exactResolveDate = selectedTravelEntry?.resolveDate
-      ?? timelineTravelResolveDateForOperatorTime(overview, travelDate, travelTime);
+      ?? timelineTravelResolveDateForOperatorTime(overview, frame, travelDate, travelTime);
     if (!exactResolveDate) {
       setTravelResolveError('This target falls beyond the selected plan’s last operator day.');
       return;
@@ -1754,6 +1725,7 @@ function TimelineScreenContent() {
       ? {
         cueId: selectedTravelEntry.cue.id,
         date: selectedTravelEntry.resolveDate,
+        ...(leadSeconds ? { leadSeconds } : {}),
         ...(prepared.planName ? { planName: prepared.planName } : {}),
       }
       : {
@@ -1762,14 +1734,17 @@ function TimelineScreenContent() {
         ...(prepared.planName ? { planName: prepared.planName } : {}),
       };
     const targetLabel = selectedTravelEntry
-      ? `“${selectedTravelEntry.cue.label}” on ${travelDate}`
+      ? `${leadSeconds ? `${leadSeconds} seconds before ` : ''}“${selectedTravelEntry.cue.label}” on ${travelDate}`
       : `${travelDate} at ${travelTime}`;
     const confirmed = await opConfirm({
       title: 'ENTER TIME TRAVEL?',
-      message: `Run ${targetLabel} as NOW on the live rig. Timeline autopilot stays paused until RESUME LIVE.`,
+      message: leadSeconds
+        ? `Run ${targetLabel} as NOW on the live rig. Inspect the Deck, then tap ▶ to apply the cue itself. Timeline autopilot stays paused until RESUME LIVE.`
+        : `Run ${targetLabel} as NOW on the live rig. Timeline autopilot stays paused until RESUME LIVE.`,
       confirmLabel: state?.zoom?.scope === 'travel' ? 'MOVE TIME TRAVEL' : 'RUN AS NOW',
     });
     if (!confirmed) return;
+    setTravelLeadSecondsBusy(leadSeconds ?? null);
     setTravelBusy(true);
     const priorityAttempt = beginPriorityHandoff('TIME TRAVEL');
     const outcome = await travel(spec);
@@ -1779,6 +1754,7 @@ function TimelineScreenContent() {
       outcome.ok ? null : outcome.error,
     );
     setTravelBusy(false);
+    setTravelLeadSecondsBusy(null);
     if (!outcome.ok) { setTravelResolveError(outcome.error); return; }
     // Confirm the applied travel by naming exactly what the engine resolved,
     // then hop to Deck so the operator sees the resulting look. The banner
@@ -1788,15 +1764,19 @@ function TimelineScreenContent() {
     const appliedTarget = `${resolved.date} ${resolved.atLocal}`;
     const ownerLabel = resolved.owner?.label ?? 'resolved baseline';
     const applied = [resolved.playlist, resolved.palette].filter(Boolean).join(' · ');
+    const leadLabel = leadSeconds && selectedTravelEntry
+      ? ` · ${leadSeconds} sec before ${selectedTravelEntry.cue.label}`
+      : '';
     opInfo(
       'TIME TRAVEL APPLIED',
-      `${planLabel} → ${appliedTarget} · ${ownerLabel}${applied ? ` · ${applied}` : ''}`,
+      `${planLabel} → ${appliedTarget}${leadLabel} · ${ownerLabel}${applied ? ` · ${applied}` : ''}`,
     );
     router.push('/');
   }, [
     actionsDisabled,
     beginPriorityHandoff,
     finishPriorityHandoff,
+    frame,
     overview,
     prepareSelectedPlanForRehearsal,
     selectedTravelEntry,
@@ -1869,6 +1849,7 @@ function TimelineScreenContent() {
             && (draft.cues ?? []).some((cue) => cue.id === eventCue.id)}
           onPerform={() => { void handlePerform(); }}
           onTravel={() => { void handleTravel(); }}
+          onTravelBefore={() => { void handleTravel(10); }}
           onEdit={() => {
             if (!eventCue || operatorView !== 'edit') return;
             const planCue = (draft?.cues ?? []).find((cue) => cue.id === eventCue.id);
@@ -1943,6 +1924,7 @@ function TimelineScreenContent() {
             state={state}
             connected={connected}
             controlsLocked={performanceMode.active}
+            planTz={planTz}
           />
         )}
         onReviewCue={(cue, date) => openEvent(cue, date)}
@@ -1960,7 +1942,9 @@ function TimelineScreenContent() {
     return renderOperatorWorkspace(
       <TimelineTravelView
         overview={overview}
-        todayDate={nowInTz?.dateKey ?? null}
+        frame={frame}
+        todayDate={nowDate}
+        nowMinutes={nowMinutes}
         targetDate={travelDate}
         targetTime={travelTime}
         selectedCueId={travelCueId}
@@ -1969,6 +1953,7 @@ function TimelineScreenContent() {
         previewError={travelResolveError}
         resolving={travelResolving}
         busy={travelBusy}
+        pendingLeadSeconds={travelLeadSecondsBusy}
         actionsDisabled={actionsDisabled}
         zoom={state?.zoom}
         onTargetDate={handleTravelDate}
@@ -1976,6 +1961,7 @@ function TimelineScreenContent() {
         onSelectCue={handleTravelCue}
         onToggleAdvanced={handleToggleTravelAdvanced}
         onTravel={() => { void handleLocalTravel(); }}
+        onTravelBefore={() => { void handleLocalTravel(10); }}
         onResumeLive={() => { void handleResumeLive(); }}
       />,
     );
@@ -1999,18 +1985,13 @@ function TimelineScreenContent() {
             </TouchableOpacity>
           </View>
           <DayView
-            day={selectedDayOverview}
-            nextDay={selectedNextDayOverview}
-            dayCount={overview?.days.length ?? 0}
+            days={overview?.days ?? []}
+            frame={frame}
+            index={selectedDay ?? 0}
             planCues={[]}
             nowMinutes={nowMinutes}
-            nowDate={nowInTz?.dateKey ?? null}
-            activeCueId={
-              selectedDayOverview.date === nowInTz?.dateKey
-              || selectedNextDayOverview?.date === nowInTz?.dateKey
-                ? nowOwner.cueId
-                : null
-            }
+            nowDate={nowDate}
+            activeCueId={frameNowIndex === selectedDay ? nowOwner.cueId : null}
             canEdit={false}
             showRibbon={false}
             onBackToWeek={backToWeek}
@@ -2031,13 +2012,7 @@ function TimelineScreenContent() {
           <Text style={[styles.helperLine, { fontSize: 16, lineHeight: 22 }]}>
             Cue and empty-time taps open review first. Nothing on this calendar fires immediately.
           </Text>
-          <DayOverviewStrip
-            days={overview.days}
-            todayIndex={todayIndex}
-            selectedIndex={selectedDay}
-            nowMinutes={nowMinutes}
-            onOpenDay={openDay}
-          />
+          <DayOverviewStrip {...stripPropsFor(overview.days)} />
         </View>
       ) : (
         <Text style={styles.emptyHint}>No saved plan overview is available.</Text>
@@ -2070,7 +2045,10 @@ function TimelineScreenContent() {
               EDIT PLAN · {draft?.name || 'NO DRAFT'}
             </Text>
             <Text style={styles.helperLine}>
-              Draft preview only. Autosave writes every valid change; there is no Save Draft button.
+              {timelineEditHeaderHelper({
+                draftName: draft?.name,
+                activePlan: state?.activePlan,
+              })}
             </Text>
           </View>
           <Text style={[styles.miniBtnText, { color: autoSaveTone }]}>
@@ -2087,18 +2065,13 @@ function TimelineScreenContent() {
 
         {zoomLevel === 'day' && selectedDayOverview ? (
           <DayView
-            day={selectedDayOverview}
-            nextDay={selectedNextDayOverview}
-            dayCount={overview?.days.length ?? 0}
+            days={overview?.days ?? []}
+            frame={frame}
+            index={selectedDay ?? 0}
             planCues={draft?.cues ?? []}
             nowMinutes={nowMinutes}
-            nowDate={nowInTz?.dateKey ?? null}
-            activeCueId={
-              selectedDayOverview.date === nowInTz?.dateKey
-              || selectedNextDayOverview?.date === nowInTz?.dateKey
-                ? nowOwner.cueId
-                : null
-            }
+            nowDate={nowDate}
+            activeCueId={frameNowIndex === selectedDay ? nowOwner.cueId : null}
             canEdit={!!draft}
             showRibbon={false}
             onBackToWeek={backToWeek}
@@ -2123,6 +2096,14 @@ function TimelineScreenContent() {
                 onSetTz={handleSetTz}
               />
             ) : null}
+            <PlanTransitionEditor
+              value={draft?.transition}
+              disabled={!draft}
+              onChange={(transition) => mutateDraft((plan) => {
+                if (transition) plan.transition = transition;
+                else delete plan.transition;
+              })}
+            />
             <TouchableOpacity
               style={[
                 styles.miniBtn,
@@ -2136,13 +2117,7 @@ function TimelineScreenContent() {
               <Text style={styles.miniBtnText}>EDIT DEFAULT CUE</Text>
             </TouchableOpacity>
             {overview ? (
-              <DayOverviewStrip
-                days={overview.days}
-                todayIndex={todayIndex}
-                selectedIndex={selectedDay}
-                nowMinutes={nowMinutes}
-                onOpenDay={openDay}
-              />
+              <DayOverviewStrip {...stripPropsFor(overview.days)} />
             ) : (
               <Text style={styles.emptyHint}>
                 {draft ? 'Previewing draft…' : 'Open PLANS to load or create a draft.'}
@@ -2154,1161 +2129,13 @@ function TimelineScreenContent() {
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.surface}>
-        {/* The "scheduled show pending" lease warning now lives in the GLOBAL,
-            non-disruptive PendingProgramOverlay (mounted in (tabs)/_layout.tsx)
-            so it floats over EVERY tab — including this one — without blocking
-            a live performance. It is intentionally NOT rendered inline here. */}
-
-        {/* ── A. Header / live status ── */}
-        <View style={styles.headerRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
-            <IconSymbol name="sun.max" size={28} color={C.primary} />
-            <View style={{ minWidth: 0 }}>
-              {/* ACTIVE PLAN made unmistakable (operator request 2026-07-02):
-                  a small caps label + a green ● RUNNING chip carrying the plan
-                  NAME, so the plan the engine is actually running never gets
-                  confused with a DRAFT being edited below (the maker header
-                  reads "MAKER — <name> (DRAFT)"). */}
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.4, color: C.secondary, textTransform: 'uppercase' }}>
-                ACTIVE PLAN
-              </Text>
-              {state?.activePlan ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: state.planActive ? '#00a86b' : C.secondary }} />
-                  <Text style={styles.headerTitle} numberOfLines={1}>{state.activePlan}</Text>
-                </View>
-              ) : (
-                <Text style={styles.headerTitle} numberOfLines={1}>— none —</Text>
-              )}
-              {state?.scene ? <Text style={styles.headerScene} numberOfLines={1}>{`scene · ${state.scene}`}</Text> : null}
-            </View>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {state ? <ControllerPill state={state} styles={styles} C={C} /> : null}
-            {state ? <MoodPill party={!!state.party} mood={state.currentMood} styles={styles} C={C} /> : null}
-            <View style={styles.engineDotWrap}>
-              <View style={[styles.engineDot, { backgroundColor: state?.engineConnected ? C.tertiary : C.error }]} />
-              <Text style={styles.engineDotLabel}>{state?.engineConnected ? 'ENGINE' : 'NO ENGINE'}</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Out-of-window note (plan-view ONLY — deliberately NOT shown on the
-            deck/mixer). When the plan is active but today is BEFORE its
-            festival span, the engine holds the lock OFF (inFestivalWindow
-            false) so the deck/mixer stay usable. Surface that here as a calm,
-            minimal note so the operator knows the plan is armed and merely
-            waiting, not broken. `festivalStartsInDays` is a positive int only
-            in this pre-festival window. */}
-        {state?.planActive && state?.inFestivalWindow === false && typeof state?.festivalStartsInDays === 'number' ? (
-          <View style={styles.nextCueRow}>
-            <IconSymbol name="clock" size={14} color="#f5a623" />
-            <Text style={[styles.nextCueText, { color: '#f5a623' }]} numberOfLines={2}>
-              {`Plan active — starts in ${state.festivalStartsInDays} day${state.festivalStartsInDays === 1 ? '' : 's'}. Deck & mixer stay unlocked until then.`}
-            </Text>
-          </View>
-        ) : null}
-
-        {/* NOW PLAYING — the live event driving the deck (engine activeCue),
-            shown clearly whenever one is active (operator request 2026-07-02:
-            "when an event is active, clearly show it in the timeline UI"). A
-            running program keeps its END affordance below; this green banner is
-            the always-visible "what's on the deck right now". */}
-        {state?.activeCue ? (
-          <View style={[styles.nextCueRow, { backgroundColor: 'rgba(0,168,107,0.12)', borderRadius: 8, borderWidth: 1, borderColor: 'rgba(0,168,107,0.4)', paddingHorizontal: 10, paddingVertical: 6 }]}>
-            <IconSymbol name="play.fill" size={14} color="#00a86b" />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: '#00a86b', textTransform: 'uppercase' }}>NOW</Text>
-            <Text style={[styles.nextCueText, { fontFamily: 'SpaceGrotesk_700Bold', color: C.text, flex: 1 }]} numberOfLines={1}>
-              {`${state.activeCue.label}${state.activeCue.kind === 'program' ? ' · show' : ''}`}
-            </Text>
-            {state.activeProgram ? (
-              <TouchableOpacity onPress={() => { void handleEndProgram(); }} style={styles.endProgramBtn} accessibilityLabel="End active program">
-                <Text style={styles.endProgramText}>END</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        ) : null}
-
-        {/* Active-program countdown */}
-        {state?.activeProgram && !state?.activeCue ? (
-          <View style={styles.nextCueRow}>
-            <IconSymbol name="play.fill" size={14} color="#f5a623" />
-            <Text style={styles.nextCueText} numberOfLines={1}>
-              {`program · ${state.activeProgram.cueId}${programCountdown != null ? ` · ${formatCountdown(programCountdown)} left` : ''}`}
-            </Text>
-            <TouchableOpacity onPress={() => { void handleEndProgram(); }} style={styles.endProgramBtn} accessibilityLabel="End active program">
-              <Text style={styles.endProgramText}>END</Text>
-            </TouchableOpacity>
-          </View>
-        ) : state?.nextCue ? (
-          <View style={styles.nextCueRow}>
-            <IconSymbol name="clock" size={14} color={C.secondary} />
-            <Text style={styles.nextCueText} numberOfLines={1}>
-              {`next in ${formatCountdown(state.nextCue.inSec)} · ${state.nextCue.label}`}
-            </Text>
-          </View>
-        ) : null}
-
-        {/* Banners */}
-        {isOffline ? (
-          <View style={styles.offlineBanner}>
-            <IconSymbol name="wifi.slash" size={24} color={C.error} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.offlineTitle}>TIMELINE OFFLINE</Text>
-              {/* Friendly explanation is primary; the raw error is a secondary
-                  detail so the operator still sees it but isn't led by it. */}
-              <Text style={styles.offlineBody}>
-                CaptainPad can&apos;t reach the engine timeline; it keeps firing cues on its own — reconnecting…
-              </Text>
-              {error ? <Text style={styles.offlineDetail}>{error}</Text> : null}
-            </View>
-          </View>
-        ) : null}
-        {!isOffline && error ? <Banner styles={styles} text={error} tone="error" /> : null}
-        {actionError ? <Banner styles={styles} text={actionError} tone="error" /> : null}
-        {priorityFeedback ? (
-          <Banner
-            styles={styles}
-            text={timelinePriorityFeedbackText(priorityFeedback)}
-            tone={priorityFeedback.phase === 'succeeded' ? 'ok' : 'error'}
-            C={C}
-          />
-        ) : null}
-        {liveTouchLease?.armed ? (
-          <Banner
-            styles={styles}
-            text={`LIVE TOUCH ARMED${liveTouchLease.ownerId ? ` by '${liveTouchLease.ownerId}'` : ''}. Timeline actions have priority: the engine will disarm Live Touch first, confirm the handoff, then run the requested action once. Draft preview remains read-only.`}
-            tone="error"
-          />
-        ) : null}
-        {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError.msg}`} tone="error" /> : null}
-        {previewTransportError ? (
-          <Banner
-            styles={styles}
-            text={`Preview unavailable: ${previewTransportError}. Preview is not being shown; save status remains separate below.`}
-            tone="error"
-          />
-        ) : null}
-        {saveFailure ? (
-          <View style={styles.actionErrorBanner}>
-            <Text style={styles.actionErrorText}>{saveFailure.title}</Text>
-            <Text style={[styles.actionErrorText, { marginTop: 4 }]}>{saveFailure.detail}</Text>
-            <TouchableOpacity
-              onPress={() => { void draftSaverRef.current?.retry(); }}
-              disabled={autoSaveEvent?.phase === 'saving'}
-              style={[
-                styles.miniBtn,
-                { marginTop: 8, alignSelf: 'flex-start' },
-                autoSaveEvent?.phase === 'saving'
-                  ? { opacity: 0.5 }
-                  : null,
-              ]}
-              accessibilityLabel="Retry saving Timeline draft"
-            >
-              <Text style={styles.miniBtnText}>
-                {liveTouchLease?.armed ? 'PREEMPT LIVE TOUCH + RETRY' : 'RETRY SAVE'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-        {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
-
-        {/* ── Live controls ──
-            PAUSE and HOLD were removed (2026-07-03 simplification): the only
-            way to interrupt a running plan is a TEMPORARY TAKE OVER from the
-            deck/mixer (which always auto-resumes), surfaced by the global plan
-            banner + its RESUME NOW. What stays here is the AUTO toggle (baseline
-            autopilot on/off) and the plan picker. */}
-        <View style={styles.controlsRow}>
-          <TouchableOpacity
-            onPress={() => { if (state) void handleSetAutopilot(!state.autopilotEnabled); }}
-            disabled={!state}
-            style={[
-              styles.controlButton,
-              state?.autopilotEnabled
-                ? { backgroundColor: C.tertiary }
-                : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 },
-            ]}
-            accessibilityLabel={state?.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
-          >
-            <IconSymbol name="shuffle" size={16} color={state?.autopilotEnabled ? '#FFF' : C.text} />
-            <Text style={[styles.controlLabel, { color: state?.autopilotEnabled ? '#FFF' : C.text }]}>
-              {state?.autopilotEnabled ? 'AUTO ON' : 'AUTO OFF'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={() => { refreshPlans(); setPlanPickerOpen(true); }}
-            style={[styles.controlButton, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 }]}
-            accessibilityLabel="Open plans"
-          >
-            <IconSymbol name="calendar.badge.clock" size={16} color={C.text} />
-            <Text style={[styles.controlLabel, { color: C.text }]} numberOfLines={1}>PLANS ▾</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── THE ZOOM LADDER, rung 2: DAY ──────────────────────────────
-            A full-screen day: phase bands, sun, the events, and the RESOLVED
-            ribbon of what actually plays. Pure browse — no engine calls. The
-            FESTIVAL body below is what you come back to via ◀ WEEK. */}
-        {zoomLevel === 'day' && selectedDayOverview ? (
-          <DayView
-            day={selectedDayOverview}
-            nextDay={selectedNextDayOverview}
-            dayCount={overview ? overview.days.length : 0}
-            planCues={draft?.cues ?? []}
-            nowMinutes={nowMinutes}
-            nowDate={nowInTz?.dateKey ?? null}
-            // LIVE is a property of TODAY's occurrence, not of the cue id. The
-            // same cue appears on every day it applies to; marking Thursday's
-            // row live because today's instance is running would be a lie — and
-            // it would offer PERFORM from a day that isn't happening.
-            activeCueId={selectedDayOverview.index === todayIndex ? (state?.activeCue?.id ?? null) : null}
-            canEdit={!!draft}
-            onBackToWeek={backToWeek}
-            onPrevDay={() => stepDay(-1)}
-            onNextDay={() => stepDay(1)}
-            onOpenEvent={openEvent}
-            onOpenMoment={openMoment}
-            onEditCue={openEditCue}
-            onDeleteCue={handleDeleteCue}
-            onAddCue={openAddCue}
-          />
-        ) : (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-          {/* ── PARTY MODE — session HANDLING (gate · playlist · numbers).
-              First block in the scroll body: show handling belongs with the
-              show plan, and the hard gate must be reachable mid-show. ── */}
-          <PartyModeSection
-            styles={styles}
-            C={C}
-            state={state}
-            connected={connected}
-            liveTouchLease={liveTouchLease}
-            onPriorityStart={beginPriorityHandoff}
-            onPriorityFinish={finishPriorityHandoff}
-          />
-
-          {/* ── Festival span + sun-estimate tz (top of the maker page) ── */}
-          {festivalView ? (
-            <FestivalEditor
-              startDate={festivalView.startDate}
-              days={festivalView.days}
-              tz={festivalView.tz}
-              onSetStartDate={handleSetStartDate}
-              onAddDay={handleAddDay}
-              onRemoveDay={handleRemoveDay}
-              onSetTz={handleSetTz}
-            />
-          ) : null}
-
-          {/* ── B. 8-day overview ── */}
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionLabel}>
-              {draft ? `MAKER — ${draft.name}` : '8-DAY OVERVIEW'}
-            </Text>
-            {draft ? (
-              <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-                {/* Auto-save status — no SAVE/CANCEL/DONE buttons (operator
-                    request 2026-07-03): the maker writes changes automatically
-                    and the tab is ALWAYS editing the active plan, so there's
-                    nothing to "close". A schema-invalid draft shows "⚠ fix to
-                    save" (the error banner below explains). */}
-                <Text style={{
-                  fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6,
-                  color: autoSaveTone,
-                }}>
-                  {autoSaveLabel}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-
-          {/* ── DEFAULT CUE (maker-only) — the deck's standing fallback that
-              runs in the gaps between cues + when the plan has no cues. Every
-              maker plan is seeded with one; tap EDIT to set its playlist. ── */}
-          {draft ? (
-            <View style={styles.defaultCueRow}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.defaultCueLabel}>DEFAULT CUE</Text>
-                <Text style={styles.defaultCueSub} numberOfLines={1}>
-                  {draft.defaultCue
-                    ? `${draft.defaultCue.label ? `${draft.defaultCue.label} · ` : ''}${defaultCueActionSummary(draft.defaultCue)}`
-                    : 'No default cue set — tap EDIT to add one.'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={openEditDefaultCue}
-                style={styles.miniBtn}
-                accessibilityLabel="Edit the plan default cue"
-              >
-                <Text style={styles.miniBtnText}>EDIT</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {overview ? (
-            <DayOverviewStrip
-              days={overview.days}
-              todayIndex={todayIndex}
-              selectedIndex={selectedDay}
-              nowMinutes={nowMinutes}
-              onOpenDay={(idx) => {
-                // ZOOM IN: FESTIVAL → DAY. Pure client navigation — nothing is
-                // sent to the engine, so reviewing never touches the rig.
-                //
-                // The DAY level also EDITS (＋ CUE, per-row EDIT/delete), and
-                // editing mutates a DRAFT. The always-editing maker normally has
-                // the active plan loaded already; if it doesn't (and there IS an
-                // active plan) we pull it in so the edit affordances are live.
-                // A failed / festival-less load leaves the level read-only
-                // rather than dangling — the DayView hides its edit controls.
-                openDay(idx);
-                if (!draft && state?.activePlan) void loadPlanIntoDraft(state.activePlan);
-              }}
-            />
-          ) : (
-            <Text style={styles.emptyHint}>
-              {draft ? 'Previewing draft…' : 'No active plan overview. Open PLANS to start one.'}
-            </Text>
-          )}
-
-          {!draft ? (
-            <Text style={styles.helperLine}>Tap a day to view its cues; tap EDIT DAY to edit it — the active plan loads into the maker.</Text>
-          ) : (
-            <Text style={styles.helperLine}>Edits preview live across all days. Save is confirmed separately; ACTIVATE (in PLANS) makes the plan run.</Text>
-          )}
-
-          {/* ── D. Cue list + controls (live) ── */}
-          {state ? (
-            <>
-              {/* CUES header with the ALL DAYS / DAY N toggle. The default view
-                  shows the SELECTED day's resolved cues. */}
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionLabel}>
-                  {showAllDays
-                    ? 'CUES (LIVE) · ALL DAYS'
-                    : `CUES (LIVE) · ${selectedDayOverview ? `DAY ${selectedDayOverview.index + 1}` : 'DAY'}`}
-                </Text>
-                <View style={styles.dayToggle}>
-                  <TouchableOpacity
-                    onPress={() => setShowAllDays(false)}
-                    style={[styles.dayToggleBtn, !showAllDays && { backgroundColor: C.primary }]}
-                    accessibilityLabel="Show selected day cues"
-                  >
-                    <Text style={[styles.dayToggleText, { color: !showAllDays ? C.onPrimary : C.text }]} numberOfLines={1}>
-                      {selectedDayOverview ? `DAY ${selectedDayOverview.index + 1}` : 'DAY'}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => setShowAllDays(true)}
-                    style={[styles.dayToggleBtn, showAllDays && { backgroundColor: C.primary }]}
-                    accessibilityLabel="Show all days cues"
-                  >
-                    <Text style={[styles.dayToggleText, { color: showAllDays ? C.onPrimary : C.text }]}>ALL DAYS</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {viewCues.length === 0 ? (
-                <Text style={styles.emptyHint}>
-                  {showAllDays ? 'The active plan has no cues.' : 'No cues on this day.'}
-                </Text>
-              ) : (
-                viewCues.map(({ cue, dayIndex }) => (
-                  <CueRow
-                    key={`${dayIndex}:${cue.id}`}
-                    cue={cue}
-                    dayIndex={showAllDays ? dayIndex : null}
-                    live={liveCueById.get(cue.id) ?? null}
-                    fireable={draft === null || liveCueIds.has(cue.id)}
-                    // Distinguish WHY a draft cue can't fire so the hint is
-                    // actionable (operator confusion 2026-07-02: a saved cue on
-                    // a non-active plan still said "save + activate"). Editing
-                    // the ACTIVE plan → an un-fireable cue is merely UNSAVED
-                    // ("Save to fire"; hot-reload makes it live). A DIFFERENT
-                    // plan loaded in the maker → the whole plan isn't running
-                    // ("Activate this plan to fire"). The engine's fireCue only
-                    // targets the ACTIVE plan, so activation is mandatory there.
-                    fireBlockedReason={
-                      (draft === null || liveCueIds.has(cue.id))
-                        ? null
-                        : (draft.name === activePlanName ? 'save' : 'activate')
-                    }
-                    // Mark the row that is the LIVE event right now so the
-                    // running cue is unmistakable in the list. Always-editing:
-                    // the draft is normally the ACTIVE plan, so show the
-                    // highlight when viewing live OR editing the active plan —
-                    // but never when a DIFFERENT plan is loaded in the maker.
-                    isActive={(draft === null || draft.name === activePlanName) && state?.activeCue?.id === cue.id}
-                    activeSequence={state?.activeSequence ?? null}
-                    onFire={handleFireCue}
-                    styles={styles}
-                    C={C}
-                  />
-                ))
-              )}
-
-              <Text style={styles.sectionLabel}>EVENT LOG</Text>
-              {(!Array.isArray(state.recentFires) || state.recentFires.length === 0) ? (
-                <Text style={styles.emptyHint}>No events yet.</Text>
-              ) : (
-                // Newest FIRST, capped to the latest EVENT_LOG_MAX_ROWS. The
-                // engine ring is newest-LAST, so reverse a copy (stable under
-                // same-ms entries — Array.reverse preserves relative order of
-                // the reversal deterministically).
-                [...state.recentFires].reverse().slice(0, EVENT_LOG_MAX_ROWS).map((f, i) => (
-                  <EventLogRow
-                    key={`${f.kind ?? 'fire'}:${f.cueId ?? f.label ?? 'event'}:${f.atMs}:${i}`}
-                    entry={f}
-                    styles={styles}
-                  />
-                ))
-              )}
-            </>
-          ) : !isOffline ? (
-            <Text style={styles.emptyHint}>Loading timeline…</Text>
-          ) : null}
-        </ScrollView>
-        )}
-      </View>
-
-      {/* ── Sheets ── */}
-      <PlanPickerSheet
-        visible={planPickerOpen}
-        plans={plans}
-        activePlan={state?.activePlan ?? null}
-        planActive={state?.planActive === true}
-        inFestivalWindow={state?.inFestivalWindow ?? null}
-        draftName={draft?.name ?? null}
-        onLoad={loadPlanIntoDraft}
-        onActivate={handleActivate}
-        onDuplicate={handleDuplicate}
-        onDelete={handleDeletePlan}
-        onNewTemplate={handleNewTemplate}
-        onNewBlank={handleNewBlank}
-        onClose={() => setPlanPickerOpen(false)}
-      />
-
-      {/* ── THE ZOOM LADDER, rung 3: EVENT ──────────────────────────────
-          Tap an event (agenda row OR calendar block) at the DAY level → one
-          sheet, one primary action, with the branch chosen by the ENGINE's own
-          state (is this cue the live deck owner?). A bare CALENDAR tap on empty
-          time opens the same sheet in MOMENT mode (time travel only). Both
-          branches land on the DECK tab under a mode banner. */}
-      {eventCue || eventMoment ? (
-      <EventSheet
-        cue={eventCue}
-        moment={eventMoment}
-        dayDate={selectedDayOverview?.date ?? null}
-        // Same rule as the DAY rows: only TODAY's occurrence can be performed.
-        activeCueId={
-          selectedDayOverview && selectedDayOverview.index === todayIndex
-            ? (state?.activeCue?.id ?? null)
-            : null
-        }
-        planActive={state?.planActive}
-        inFestivalWindow={state?.inFestivalWindow}
-        resolve={eventResolve}
-        resolveError={eventResolveError}
-        resolvePending={eventResolvePending}
-        busy={eventBusy}
-        actionError={eventActionError}
-        canEdit={!!draft && !!eventCue && (draft?.cues ?? []).some((c) => c.id === eventCue.id)}
-        onPerform={() => { void handlePerform(); }}
-        onTravel={() => { void handleTravel(); }}
-        onEdit={() => {
-          if (!eventCue) return; // MOMENT mode has no cue to edit
-          const planCue = (draft?.cues ?? []).find((c) => c.id === eventCue.id);
-          closeEvent();
-          if (planCue) openEditCue(planCue);
-        }}
-        onClose={closeEvent}
-      />
-      ) : null}
-
-      {draft ? (
-        <CueEditorSheet
-          visible={cueSheetOpen}
-          initialCue={editingCue}
-          plan={draft}
-          playlists={playlists}
-          palettes={getCachedColorPalettes()}
-          dayIndex={selectedDay ?? 0}
-          onSave={handleSaveCue}
-          onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
-          onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}
-        />
-      ) : null}
-
-      {draft ? (
-        <CueEditorSheet
-          visible={defaultCueSheetOpen}
-          mode="defaultCue"
-          initialCue={null}
-          initialDefaultCue={draft.defaultCue ?? null}
-          plan={draft}
-          playlists={playlists}
-          palettes={getCachedColorPalettes()}
-          dayIndex={0}
-          onSave={handleSaveCue}
-          onSaveDefault={handleSaveDefaultCue}
-          onDelete={null}
-          onClose={() => setDefaultCueSheetOpen(false)}
-        />
-      ) : null}
-    </View>
-  );
+  // Every member of TimelineOperatorView returns above. This assignment is
+  // the compiler's proof of that: adding a view to the union stops
+  // typechecking here until the new view gets its own branch, so the throw
+  // can never run.
+  const unreachable: never = operatorView;
+  throw new Error(`Timeline: no view for operator mode ${String(unreachable)}`);
 }
-
-// ── Banner ──
-// ── PARTY MODE (session HANDLING) ──────────────────────────────────────
-//
-// Division of concerns (operator, 2026-07-27): the Audio Companion configures
-// DETECTION (thresholds/params); THIS tab owns HANDLING — the hard gate, the
-// playlist a session triggers, and the session numbers. Show handling belongs
-// with the show plan, which is why the card lives here and not on Audio.
-//
-// Server truth is GET/PUT /party-config (utils/party_api.ts), persisted
-// engine-side. Codex P0: every edit is reconciled against the PUT response and
-// a rejection prints the engine's message VERBATIM — no silent revert.
-//
-// Editing model: stepper taps mutate a LOCAL pending value immediately (touch
-// feel) and a short debounce PUTs the settled value, so holding "+" through a
-// range doesn't fire ten writes. The row shows "· unsaved" while a commit is
-// pending and snaps to the server's number when it lands.
-
-const PARTY_COMMIT_DEBOUNCE_MS = 700;
-
-/** Row hint + an optional engine-effective note, as one line. */
-function joinHint(base: string, note: string | null): string {
-  return note ? `${base} · ${note}` : base;
-}
-
-/** ON/OFF pill used by the SESSION LENGTH + COOLDOWN rows. */
-function PartyRowToggle({
-  styles, C, on, disabled, onPress, label,
-}: {
-  styles: Styles;
-  C: Palette;
-  on: boolean;
-  disabled: boolean;
-  onPress: () => void;
-  label: string;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={disabled}
-      style={[
-        styles.partyToggle,
-        on
-          ? { backgroundColor: C.primary, borderColor: C.primary }
-          : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder },
-        disabled ? { opacity: 0.4 } : null,
-      ]}
-      accessibilityLabel={`${on ? 'Disable' : 'Enable'} ${label}`}
-    >
-      <Text style={[styles.partyToggleText, { color: on ? C.onPrimary : C.secondary }]}>
-        {on ? 'ON' : 'OFF'}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
-function PartyStepperRow({
-  styles, C, label, hint, valueText, dirty, disabled, onStep, toggle, greyed,
-}: {
-  styles: Styles;
-  C: Palette;
-  label: string;
-  hint: string;
-  valueText: string;
-  dirty: boolean;
-  disabled: boolean;
-  onStep: (dir: -1 | 1) => void;
-  /** Optional per-row enable switch (SESSION LENGTH / COOLDOWN). */
-  toggle?: { on: boolean; disabled: boolean; onPress: () => void };
-  /** Row is inert (its feature is off) — dim it and hide the stepper. */
-  greyed?: boolean;
-}) {
-  return (
-    <View style={styles.partyFieldRow}>
-      <View style={{ flex: 1, minWidth: 140, opacity: greyed ? 0.5 : 1 }}>
-        <Text style={styles.partyFieldLabel}>{label}</Text>
-        <Text style={styles.partyFieldHint}>{hint}</Text>
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        {toggle ? (
-          <PartyRowToggle
-            styles={styles}
-            C={C}
-            on={toggle.on}
-            disabled={toggle.disabled}
-            onPress={toggle.onPress}
-            label={label}
-          />
-        ) : null}
-        {greyed ? null : (
-          <>
-            <TouchableOpacity
-              onPress={() => onStep(-1)}
-              disabled={disabled}
-              style={[styles.partyStepBtn, disabled ? { opacity: 0.4 } : null]}
-              accessibilityLabel={`Decrease ${label}`}
-            >
-              <Text style={styles.partyStepBtnText}>−</Text>
-            </TouchableOpacity>
-            <Text style={[styles.partyFieldValue, dirty ? { color: C.secondary } : null]}>
-              {valueText}{dirty ? ' ·' : ''}
-            </Text>
-            <TouchableOpacity
-              onPress={() => onStep(1)}
-              disabled={disabled}
-              style={[styles.partyStepBtn, disabled ? { opacity: 0.4 } : null]}
-              accessibilityLabel={`Increase ${label}`}
-            >
-              <Text style={styles.partyStepBtnText}>+</Text>
-            </TouchableOpacity>
-          </>
-        )}
-      </View>
-    </View>
-  );
-}
-
-function PartyModeSection({
-  styles, C, state, connected, liveTouchLease, onPriorityStart, onPriorityFinish,
-}: {
-  styles: Styles;
-  C: Palette;
-  state: TimelineState | null;
-  connected: boolean;
-  liveTouchLease: LayerSettingsState['liveTouch'] | null;
-  onPriorityStart: (operation: string) => number | null;
-  onPriorityFinish: (attemptId: number | null, ok: boolean, detail?: string | null) => void;
-}) {
-  const [cfg, setCfg] = useState<PartyConfig | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  // ONE coalesced pending patch for every control on the card (toggles,
-  // playlist, steppers). Mashing a toggle or holding "+" collapses into a
-  // single debounced PUT whose body is the FINAL intent.
-  const [pending, setPending] = useState<PartyConfigPatch>({});
-  const [companionUrl, setCompanionUrl] = useState<string | null>(null);
-  // Clock for the live "ends in m:ss" / "cooling down m:ss" readouts.
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRef = useRef(pending);
-  pendingRef.current = pending;
-
-  const load = useCallback(async () => {
-    const r = await fetchPartyConfig();
-    if (r.ok && r.data) { setCfg(r.data); setLoadError(null); }
-    else { setCfg(null); setLoadError(r.error || 'unknown error'); }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => () => { if (commitTimer.current) clearTimeout(commitTimer.current); }, []);
-
-  // CROSS-SURFACE TRUTH: the engine broadcasts `partyConfig` on every PUT and
-  // replays it on /ws/control connect. Without this listener a change made from
-  // another surface (the companion PARTY tab, curl) left this card permanently
-  // contradicting itself — a DISABLED pill over an ENABLED toggle, with no way
-  // to fix it in-app. The payload is getPartyStatus() + availablePlaylists,
-  // exactly what parsePartyConfig validates (extra keys like `type` ignored).
-  useEffect(() => engineEvents.subscribe((msg: EngineMessage) => {
-    if (!msg || (msg as any).type !== 'partyConfig') return;
-    try { setCfg(parsePartyConfig(msg)); setLoadError(null); } catch (e: any) {
-      setLoadError(e?.message || 'partyConfig broadcast malformed');
-    }
-  }), []);
-
-  // The 5 s re-read runs while the card is MOUNTED — it is the only thing that
-  // discovers a session transition (the engine broadcasts partyConfig on PUTs,
-  // not on armed→in_session). It used to be gated on `livePhase`, i.e. on the
-  // very value it would refresh: the card could never learn it had entered a
-  // session, and once it landed on `disabled` it stopped polling forever. The
-  // card only exists while the Timeline tab renders, which IS the visible gate.
-  useEffect(() => {
-    const refresh = setInterval(() => { void load(); }, 5000);
-    return () => clearInterval(refresh);
-  }, [load]);
-
-  // The 1 s countdown clock stays gated: only a live phase has anything ticking.
-  const livePhase = cfg?.effectiveState === 'in_session' || cfg?.effectiveState === 'cooldown';
-  useEffect(() => {
-    if (!livePhase) return;
-    const tick = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [livePhase]);
-
-  // Deep-link target for "tuned in the Audio Companion" — same derivation the
-  // Audio tab's OPEN COMPANION button uses. Null (plain text, no link) if the
-  // base can't be parsed; we never link to a guessed address.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const base = await getApiBaseAsync();
-      if (!alive) return;
-      try { setCompanionUrl(companionUrlFromApiBase(base)); } catch { setCompanionUrl(null); }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  // Mirror a gate flip that arrived on the control bus (another surface, or
-  // the engine itself) so this card never shows a stale toggle.
-  const busEnabled = typeof state?.partyEnabled === 'boolean' ? state.partyEnabled : null;
-  useEffect(() => {
-    if (busEnabled === null) return;
-    setCfg((c) => (c && c.enabled !== busEnabled ? { ...c, enabled: busEnabled } : c));
-  }, [busEnabled]);
-
-  /**
-   * Send the accumulated patch. On success the RESPONSE replaces local state
-   * and the pending overlay clears. On failure (400 or an engine that went
-   * away mid-edit) the pending edits are KEPT so the operator doesn't lose
-   * their work — the error banner explains and offers RETRY.
-   */
-  const commit = useCallback(async () => {
-    const patch = pendingRef.current;
-    if (!Object.keys(patch).length) return;
-    setSaving(true);
-    setActionError(null);
-    const priorityAttempt = onPriorityStart('SAVE PARTY CONFIG');
-    const r = await setPartyConfig(patch);
-    onPriorityFinish(priorityAttempt, r.ok, r.error ?? null);
-    if (r.ok && r.data) {
-      setCfg(r.data);
-      // Only drop the edits this PUT actually carried; anything the operator
-      // touched while it was in flight survives for the next commit.
-      setPending((p) => {
-        const next: PartyConfigPatch = { ...p };
-        for (const k of Object.keys(patch) as (keyof PartyConfigPatch)[]) {
-          if ((next as any)[k] === (patch as any)[k]) delete (next as any)[k];
-        }
-        return next;
-      });
-    } else {
-      setActionError(r.error || 'request rejected');
-    }
-    setSaving(false);
-  }, [onPriorityFinish, onPriorityStart]);
-
-  /** Queue an edit: merge into the pending patch, restart the debounce. */
-  const queue = useCallback((patch: PartyConfigPatch) => {
-    setPending((p) => coalescePartyPatches([p, patch]));
-    if (commitTimer.current) clearTimeout(commitTimer.current);
-    commitTimer.current = setTimeout(() => { void commit(); }, PARTY_COMMIT_DEBOUNCE_MS);
-  }, [commit]);
-
-  const stepField = useCallback((field: PartyNumericField, dir: -1 | 1) => {
-    const base = cfg;
-    if (!base) return;
-    const current = (pendingRef.current[field] ?? base[field]) as number;
-    queue({ [field]: stepPartyField(field, current, dir) } as PartyConfigPatch);
-  }, [cfg, queue]);
-
-  // What the operator currently sees: server truth with pending edits on top.
-  const view = cfg ? mergePartyPatch(cfg, pending) : null;
-  const enabled = view ? view.enabled : null;
-  const hasPending = Object.keys(pending).length > 0;
-  const status = describePartyStatus({
-    enabled,
-    // /party-config is the AUTHORITY for every party field it reports; the
-    // control-bus timelineState only fills gaps a pre-addition engine leaves.
-    effectiveState: cfg?.effectiveState,
-    planActive: cfg?.planActive ?? state?.planActive ?? null,
-    inFestivalWindow: cfg?.inFestivalWindow ?? state?.inFestivalWindow ?? null,
-    party: state?.party,
-    currentMood: state?.currentMood,
-    sessionFollowsMusic: cfg?.sessionFollowsMusic,
-    sessionEndsAtMs: cfg?.sessionEndsAtMs,
-    cooldownRemainingSec: cfg?.cooldownRemainingSec ?? state?.partyCooldownRemainingSec,
-    nowMs,
-    engineOffline: !connected,
-  });
-  const statusColor =
-    status.tone === 'live' ? '#00a86b'
-    : status.tone === 'off' ? C.error
-    : status.tone === 'armed' ? C.primary
-    : status.tone === 'noplan' ? '#f5a623'
-    : status.tone === 'manual' ? '#f5a623'
-    : C.secondary;
-
-  const shown = (f: PartyNumericField): number => (view ? view[f] : 0);
-  // Row enable/grey states come from the engine's OWN fields (with any pending
-  // edit laid over them), and the cooldown-forced-off rule lives in ONE pure
-  // place, so the card can never show a combination the engine doesn't hold.
-  // Null until the config is loaded — the rows it drives don't render before then.
-  const rows = view ? describePartyRows(view) : null;
-
-  return (
-    <View style={styles.partyCard}>
-      <View style={styles.partyHeaderRow}>
-        <IconSymbol name="sparkles" size={20} color={C.primary} />
-        <View style={{ flex: 1, minWidth: 160 }}>
-          <Text style={styles.partyTitle}>PARTY MODE</Text>
-          <Text style={styles.partyDetail}>{status.detail}</Text>
-        </View>
-        <View style={[styles.pill, { borderColor: statusColor }]}>
-          <Text style={[styles.pillText, { color: statusColor }]}>{status.label}</Text>
-        </View>
-        <TouchableOpacity
-          onPress={() => { if (enabled !== null) queue({ enabled: !enabled }); }}
-          disabled={enabled === null || saving}
-          style={[
-            styles.controlButton,
-            enabled
-              ? { backgroundColor: C.primary }
-              : { backgroundColor: C.surfaceContainerHigh, borderColor: C.error, borderWidth: 1 },
-            (enabled === null || saving) ? { opacity: 0.6 } : null,
-          ]}
-          accessibilityLabel={enabled ? 'Disable party mode' : 'Enable party mode'}
-        >
-          <Text style={[styles.controlLabel, { color: enabled ? C.onPrimary : C.error }]}>
-            {saving && liveTouchLease?.armed
-              ? 'PREEMPTING LIVE TOUCH…'
-              : saving
-                ? 'SAVING…'
-                : enabled === null ? 'UNAVAILABLE' : enabled ? 'ENABLED' : 'DISABLED'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {loadError ? (
-        <View style={styles.actionErrorBanner}>
-          <Text style={styles.actionErrorText}>{`Party config unavailable — ${loadError}`}</Text>
-          <TouchableOpacity onPress={() => void load()} style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }]}>
-            <Text style={styles.miniBtnText}>RETRY</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      {actionError ? (
-        <View style={styles.actionErrorBanner}>
-          <Text style={styles.actionErrorText}>{`Rejected — ${actionError}`}</Text>
-          {hasPending ? (
-            <Text style={[styles.actionErrorText, { marginTop: 4 }]}>
-              Your edits are still here, unsaved. Fix the cause (or wait for the engine) and tap RETRY.
-            </Text>
-          ) : null}
-          <TouchableOpacity
-            onPress={() => { void commit(); }}
-            disabled={saving || !hasPending}
-            style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }, (saving || !hasPending) ? { opacity: 0.5 } : null]}
-          >
-            <Text style={styles.miniBtnText}>RETRY</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      {view && rows ? (
-        <>
-          <Text style={styles.partySubLabel}>{`DETECTED PARTY PLAYLIST (${view.availablePlaylists.length})`}</Text>
-          {view.availablePlaylists.length === 0 ? (
-            <Text style={styles.cueError}>
-              The engine reports no playlists — a party session would have nothing to run.
-            </Text>
-          ) : (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              {view.availablePlaylists.map((p) => {
-                const sel = p === view.playlist;
-                return (
-                  <TouchableOpacity
-                    key={p}
-                    onPress={() => { if (!sel) queue({ playlist: p }); }}
-                    style={[
-                      styles.partyChip,
-                      sel
-                        ? { backgroundColor: C.primary, borderColor: C.primary }
-                        : { backgroundColor: C.surfaceContainerLowest, borderColor: C.ghostBorder },
-                    ]}
-                  >
-                    <Text style={[styles.partyChipText, { color: sel ? C.onPrimary : C.text }]}>{p}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-
-          <Text style={styles.partySubLabel}>SESSION HANDLING</Text>
-
-          {/* SUSTAIN — the strong-detection guarantee. NO toggle, by design:
-              it is always in force. */}
-          <PartyStepperRow
-            styles={styles}
-            C={C}
-            label="SUSTAIN BEFORE TRIGGER"
-            hint="How long party audio must hold before a session starts."
-            valueText={formatMinSec(shown('minDwellSec'))}
-            dirty={pending.minDwellSec !== undefined}
-            disabled={saving}
-            onStep={(d) => stepField('minDwellSec', d)}
-          />
-
-          {/* SESSION LENGTH — toggle ON = fixed length. OFF = FOLLOW THE
-              MUSIC: the session simply ends when the party signal drops.
-              There is NO timeline-side release value to edit — the release IS
-              the companion's `offConfirmMs` detection param (one sustain, not
-              two stacked), so the OFF row is a HINT that points at the Audio
-              Companion, not an editor. */}
-          {rows.durationEnabled ? (
-            <PartyStepperRow
-              styles={styles}
-              C={C}
-              label="SESSION LENGTH"
-              hint={joinHint(
-                'How long a triggered party session runs.',
-                describeEffectiveNote(shown('durationMin'), cfg?.effectiveDurationMin, (n) => `${n} min`),
-              )}
-              valueText={`${shown('durationMin')} min`}
-              dirty={pending.durationMin !== undefined}
-              disabled={saving}
-              onStep={(d) => stepField('durationMin', d)}
-              toggle={{ on: true, disabled: saving, onPress: () => queue({ durationEnabled: false }) }}
-            />
-          ) : (
-            <View style={styles.partyFieldRow}>
-              <View style={{ flex: 1, minWidth: 140 }}>
-                <Text style={styles.partyFieldLabel}>SESSION LENGTH</Text>
-                <Text style={styles.partyFieldHint}>
-                  Follows the music — ends when the party signal drops (release sustain ={' '}
-                  <Text style={styles.partyMono}>offConfirmMs</Text>, tuned in the{' '}
-                  {companionUrl ? (
-                    <Text
-                      style={styles.partyLink}
-                      onPress={() => Linking.openURL(companionUrl)}
-                      accessibilityRole="link"
-                    >
-                      Audio Companion ↗
-                    </Text>
-                  ) : (
-                    <Text>Audio Companion</Text>
-                  )}
-                  ).
-                </Text>
-              </View>
-              <PartyRowToggle
-                styles={styles}
-                C={C}
-                on={false}
-                disabled={saving}
-                onPress={() => queue({ durationEnabled: true })}
-                label="SESSION LENGTH"
-              />
-            </View>
-          )}
-
-          {/* COOLDOWN — own toggle, but forced off + greyed while the session
-              follows the music (operator rule). Greying comes from
-              describePartyRows() over the engine's own fields, never from
-              local UI memory. */}
-          <PartyStepperRow
-            styles={styles}
-            C={C}
-            label="COOLDOWN"
-            hint={rows.cooldownHint ?? joinHint(
-              'Lockout after a session before another can trigger.',
-              describeEffectiveNote(shown('cooldownSec'), cfg?.effectiveCooldownSec, formatMinutes),
-            )}
-            valueText={formatMinutes(shown('cooldownSec'))}
-            dirty={pending.cooldownSec !== undefined}
-            disabled={saving}
-            greyed={!rows.cooldownEnabled}
-            onStep={(d) => stepField('cooldownSec', d)}
-            toggle={{
-              on: rows.cooldownEnabled,
-              disabled: saving || rows.cooldownToggleDisabled,
-              onPress: () => queue({ cooldownEnabled: !rows.cooldownEnabled }),
-            }}
-          />
-
-          <Text style={styles.helperLine}>
-            Disabling kills any running session immediately and blocks triggering (detection keeps running). Playlist and the numbers above take effect on the NEXT session.
-          </Text>
-        </>
-      ) : null}
-    </View>
-  );
-}
-
-function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone: 'error' | 'ok'; C?: Palette }) {
-  if (tone === 'ok' && C) {
-    return (
-      <View style={[styles.actionErrorBanner, { backgroundColor: 'transparent', borderColor: C.tertiary }]}>
-        <Text style={[styles.actionErrorText, { color: C.tertiary }]} numberOfLines={2}>{text}</Text>
-      </View>
-    );
-  }
-  return (
-    <View style={styles.actionErrorBanner}>
-      <Text style={styles.actionErrorText} numberOfLines={3}>{text}</Text>
-    </View>
-  );
-}
-
-// ── Cue row (overview-resolved, with live FIRE + countdown) ──
-// Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
-// cue (countdown / error / enabled) over it when one matches by id.
-function CueRow({
-  cue, dayIndex, live, fireable, fireBlockedReason, isActive, activeSequence, onFire, styles, C,
-}: {
-  cue: OverviewCue;
-  /** When set (ALL DAYS view), prefixes the row with its day number. */
-  dayIndex: number | null;
-  /** Matching live engine cue, or null when not live-tracked. */
-  live: TimelineCue | null;
-  /** Whether this cue exists in the ACTIVE plan (so it can be fired). */
-  fireable: boolean;
-  /** Why FIRE is blocked (drives the hint), or null when fireable. */
-  fireBlockedReason: 'save' | 'activate' | null;
-  /** True when this cue is the live event driving the deck right now. */
-  isActive: boolean;
-  activeSequence: TimelineActiveSequence | null;
-  onFire: (id: string) => void;
-  styles: Styles;
-  C: Palette;
-}) {
-  const hasError = !!live?.lastError;
-  const triggerText = triggerSummaryText(cue.trigger);
-  const atText = hhmmTo12h(cue.atLocal, '—');
-  const subtitle = dayIndex !== null
-    ? `D${dayIndex + 1} · ${atText} · ${triggerText}`
-    : `${atText} · ${triggerText}`;
-  const sequenceRunning = activeSequence?.cueId === cue.id;
-  const countdown = sequenceRunning
-    ? `STEP ${Math.min(activeSequence!.nextStepIndex + 1, activeSequence!.totalSteps)}/${activeSequence!.totalSteps} · ${formatCountdown(activeSequence!.nextInSec)}`
-    : live
-    ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
-    : atText;
-  // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan (`fireable`,
-  // computed from the active-plan overview). A row from an unsaved/unactivated
-  // DRAFT (an id not yet in the live plan) is NOT fireable — firing it would make
-  // the engine fireCue(id) throw `cue "<id>" not found`. So we disable FIRE with a
-  // clear "save + activate" hint for those; every active-plan cue fires normally.
-  const canFire = fireable;
-  const fireHint = fireBlockedReason === 'save'
-    ? 'save to fire'
-    : fireBlockedReason === 'activate'
-      ? 'activate this plan to fire'
-      : null;
-  // The ONLY alert in CaptainPad that ever carried buttons — and therefore the
-  // one that was outright BROKEN on the web build: RN-web drops Alert.alert
-  // button callbacks, so on the podium this confirmation rendered nothing and
-  // the cue simply never fired. opConfirm resolves on both platforms.
-  const fire = async () => {
-    const confirmation = babyRevealConfirmation(cue.id);
-    if (!confirmation) {
-      onFire(cue.id);
-      return;
-    }
-    const proceed = await opConfirm({
-      title: confirmation.title,
-      message: confirmation.body,
-      confirmLabel: confirmation.confirmLabel,
-    });
-    if (proceed) onFire(cue.id);
-  };
-  return (
-    <View style={[
-      styles.cueRow,
-      // Live-event highlight: a green wash + rule marks the cue driving the
-      // deck right now (never at the same time as an error row).
-      isActive && !hasError && { borderColor: '#00a86b', backgroundColor: 'rgba(0,168,107,0.10)' },
-      hasError && { borderColor: C.error, backgroundColor: C.errorContainer },
-    ]}>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          {isActive ? <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 1, color: '#00a86b', backgroundColor: 'rgba(0,168,107,0.18)', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, overflow: 'hidden' }}>● NOW</Text> : null}
-          <Text style={[styles.cueLabel, hasError && { color: C.error }]} numberOfLines={1}>{cue.label}</Text>
-        </View>
-        <Text style={styles.cueTrigger} numberOfLines={1}>{subtitle}</Text>
-        {hasError ? <Text style={styles.cueError} numberOfLines={2}>{live!.lastError}</Text> : null}
-        {fireHint ? <Text style={styles.cueTrigger} numberOfLines={1}>{fireHint}</Text> : null}
-      </View>
-      <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
-      <TouchableOpacity
-        onPress={() => { void fire(); }}
-        disabled={!canFire}
-        style={[styles.fireButton, !canFire && { opacity: 0.4 }]}
-        accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (${fireHint || 'unavailable'})`}
-        accessibilityState={{ disabled: !canFire }}
-      >
-        <Text style={styles.fireButtonLabel}>FIRE</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// Compact trigger summary for the overview cue subtitle. The live engine
-// cue carries a `trigger` string; the overview cue carries a structured
-// CueTrigger object, so summarise it here (parallels triggerSummary in the
-// template, kept local to avoid importing the maker helper into the live row).
-function triggerSummaryText(t: OverviewCue['trigger']): string {
-  switch (t.type) {
-    case 'clock': return `clock ${hhmmTo12h(t.at, t.at)}`;
-    case 'sun': {
-      const off = t.offsetMin ? ` ${t.offsetMin > 0 ? '+' : ''}${t.offsetMin}m` : '';
-      return `${t.event}${off}`;
-    }
-    case 'phase': return `phase ${t.phase}`;
-    case 'mood': return `mood ${t.from}→${t.to}`;
-    case 'manual': return 'manual';
-    default: return 'cue';
-  }
-}
-
-// One EVENT LOG row (engine wire shape
-// { kind:'fire'|'lifecycle', cueId?, label, reason, source, atMs }):
-//   fire      — a cue application: bold label + source·reason + time.
-//   lifecycle — a plan/mode transition: visibly dimmer, no FIRE affordances.
-// DEFENSIVE by contract: an unknown/missing kind renders as a fire row; a
-// missing label falls back to cueId then 'event'; non-string reason/source and
-// a bad atMs render harmlessly ('' / '—') — a malformed entry can never crash
-// the list. Times are DEVICE-LOCAL AM/PM wall-clock formatted from atMs (on
-// playa the device tz == the plan tz; off-playa the operator's own clock is
-// the least-surprising rendering — deliberate, matches the pre-existing rows).
-function EventLogRow({ entry, styles }: { entry: TimelineRecentFire; styles: Styles }) {
-  const label = (typeof entry.label === 'string' && entry.label)
-    || (typeof entry.cueId === 'string' && entry.cueId)
-    || 'event';
-  const reason = typeof entry.reason === 'string' ? entry.reason : '';
-  const source = typeof entry.source === 'string' ? entry.source : '';
-  let time = '—';
-  if (typeof entry.atMs === 'number' && Number.isFinite(entry.atMs)) {
-    const t = new Date(entry.atMs);
-    const h24 = t.getHours();
-    const period = h24 < 12 ? 'AM' : 'PM';
-    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-    time = `${h12}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')} ${period}`;
-  }
-  if (entry.kind === 'lifecycle') {
-    return (
-      <View style={[styles.fireLogRow, styles.lifecycleRow]}>
-        <Text style={styles.lifecycleLabel} numberOfLines={1}>{label}</Text>
-        <Text style={styles.lifecycleReason} numberOfLines={1}>{reason}</Text>
-        <Text style={styles.fireLogTime}>{time}</Text>
-      </View>
-    );
-  }
-  // 'auto' is the baseline fire source — only tag the noteworthy ones
-  // (manual / catchUp / default / anything unknown-but-present).
-  const detail = source && source !== 'auto' ? `${source} · ${reason}` : reason;
-  return (
-    <View style={styles.fireLogRow}>
-      <Text style={styles.fireLogCue} numberOfLines={1}>{label}</Text>
-      <Text style={styles.fireLogReason} numberOfLines={1}>{detail}</Text>
-      <Text style={styles.fireLogTime}>{time}</Text>
-    </View>
-  );
-}
-
-type Styles = ReturnType<typeof makeStyles>;
 
 function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   return StyleSheet.create({

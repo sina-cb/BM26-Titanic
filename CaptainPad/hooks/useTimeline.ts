@@ -35,6 +35,7 @@ import {
   postTimelineTakeover,
   postTimelineActivity,
   postTimelineTravel,
+  parseTimelineState,
   TimelineState,
   TimelineTravelSpec,
   TimelineTravelResult,
@@ -144,8 +145,19 @@ function _ensureInitialized() {
     // The engine sends the full state document inline on `timelineState`.
     const candidate = msg as unknown;
     if (!_isTimelineState(candidate)) return;
+    // The broadcast IS the /timeline/state document, so it gets the same
+    // contract check the REST seed gets (_356 P0-4). A malformed ownership
+    // field is surfaced as a LOUD error instead of quietly rendering a NOW
+    // card built from a half-understood payload.
+    let parsed: TimelineState;
+    try {
+      parsed = parseTimelineState(candidate);
+    } catch (err: any) {
+      _emit({ ..._cached, connected: true, error: err?.message || 'Timeline state malformed' });
+      return;
+    }
     _emit({
-      state: candidate as TimelineState,
+      state: parsed,
       connected: true,
       receivedAtMs: Date.now(),
       error: null,

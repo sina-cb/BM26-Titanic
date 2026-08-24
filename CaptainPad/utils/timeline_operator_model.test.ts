@@ -13,7 +13,9 @@ import {
   overviewForTimelineView,
   resolveTimelineNowOwner,
   timelineLiveStatus,
+  timelineOwnerKindLabel,
   timelineTravelCuesForDay,
+  timelineTravelDayLabel,
   timelineTravelResolveDateForOperatorTime,
   upcomingTimelineCues,
 } from './timeline_operator_model';
@@ -136,11 +138,44 @@ describe('Timeline operator authority model', () => {
       cues: [cue('c_dawn', 'Dawn', '00:15')],
     });
 
-    expect(upcomingTimelineCues(overview([first, second]), first.date, '23:00', 4)
+    expect(upcomingTimelineCues(overview([first, second]), 'working', first.date, '23:00', 4)
       .map((item) => [item.cue.id, item.relativeDay])).toEqual([
       ['c_late', 0],
       ['c_dawn', 1],
     ]);
+  });
+
+  it('labels NEXT rows in the WORKING frame: tonight, then the same night morning', () => {
+    const first = day({ cues: [cue('c_late', 'Late', '23:45')] });
+    const second = day({
+      date: '2026-08-25', weekday: 'TUESDAY', index: 1,
+      cues: [cue('c_dawn', 'Dawn', '00:15'), cue('c_next_night', 'Next night', '19:14')],
+    });
+    expect(upcomingTimelineCues(overview([first, second]), 'working', first.date, '23:00', 4)
+      .map((item) => item.rowLabel)).toEqual([
+      'TONIGHT 11:45 PM',
+      'TUE 12:15 AM',
+      'TOMORROW NIGHT 7:14 PM',
+    ]);
+  });
+
+  it('labels NEXT rows in the CALENDAR frame by today / weekday', () => {
+    const first = day({ cues: [cue('c_late', 'Late', '23:45')] });
+    const second = day({
+      date: '2026-08-25', weekday: 'TUESDAY', index: 1,
+      cues: [cue('c_dawn', 'Dawn', '00:15')],
+    });
+    expect(upcomingTimelineCues(overview([first, second]), 'regular', first.date, '23:00', 4)
+      .map((item) => item.rowLabel)).toEqual([
+      'TODAY 11:45 PM',
+      'TUE 12:15 AM',
+    ]);
+  });
+
+  it('never says TONIGHT when now is outside the festival (T-07)', () => {
+    const first = day({ cues: [cue('c_late', 'Late', '23:45')] });
+    expect(upcomingTimelineCues(overview([first]), 'working', '2026-07-04', '23:00', 4)
+      .map((item) => item.rowLabel)).toEqual(['MON 11:45 PM']);
   });
 
   it('deduplicates recurring ON DEMAND cues', () => {
@@ -157,7 +192,7 @@ describe('Timeline operator authority model', () => {
     const early = cue('c_early', 'Early', '19:30');
     const live = overview([day({ cues: [late, manual, early] })]);
 
-    expect(timelineTravelCuesForDay(live, live.days[0].date).map((item) => item.cue.id))
+    expect(timelineTravelCuesForDay(live, 'working', live.days[0].date).map((item) => item.cue.id))
       .toEqual(['c_early', 'c_late']);
   });
 
@@ -179,7 +214,7 @@ describe('Timeline operator authority model', () => {
     });
     const live = overview([saturday, sunday]);
 
-    expect(timelineTravelCuesForDay(live, saturday.date).map((entry) => [
+    expect(timelineTravelCuesForDay(live, 'working', saturday.date).map((entry) => [
       entry.cue.id,
       entry.operatorDate,
       entry.resolveDate,
@@ -187,10 +222,54 @@ describe('Timeline operator authority model', () => {
       ['c_sat_night', '2026-08-22', '2026-08-22'],
       ['c_sat_morning', '2026-08-22', '2026-08-23'],
     ]);
-    expect(timelineTravelCuesForDay(live, sunday.date).map((entry) => entry.cue.id))
+    expect(timelineTravelCuesForDay(live, 'working', sunday.date).map((entry) => entry.cue.id))
       .toEqual(['c_sun_night']);
-    expect(timelineTravelResolveDateForOperatorTime(live, saturday.date, '10:00'))
+    expect(timelineTravelResolveDateForOperatorTime(live, 'working', saturday.date, '10:00'))
       .toBe('2026-08-23');
+  });
+
+  it('keeps every cue on its own calendar day in the CALENDAR frame', () => {
+    const saturday = day({
+      date: '2026-08-22', weekday: 'SATURDAY', index: 0,
+      cues: [cue('c_sat_night', 'Saturday night', '21:00')],
+    });
+    const sunday = day({
+      date: '2026-08-23', weekday: 'SUNDAY', index: 1,
+      cues: [
+        cue('c_sun_morning', 'Sunday morning', '10:00'),
+        cue('c_sun_night', 'Sunday night', '20:00'),
+      ],
+    });
+    const live = overview([saturday, sunday]);
+
+    expect(timelineTravelCuesForDay(live, 'regular', saturday.date).map((e) => e.cue.id))
+      .toEqual(['c_sat_night']);
+    expect(timelineTravelCuesForDay(live, 'regular', sunday.date).map((e) => [
+      e.cue.id, e.resolveDate,
+    ])).toEqual([
+      ['c_sun_morning', '2026-08-23'],
+      ['c_sun_night', '2026-08-23'],
+    ]);
+    expect(timelineTravelResolveDateForOperatorTime(live, 'regular', saturday.date, '10:00'))
+      .toBe('2026-08-22');
+  });
+
+  it('refuses to resolve a morning time past the last festival night', () => {
+    const saturday = day({ date: '2026-08-22', weekday: 'SATURDAY', index: 0 });
+    const live = overview([saturday]);
+    expect(timelineTravelResolveDateForOperatorTime(live, 'working', saturday.date, '02:00'))
+      .toBeNull();
+    expect(timelineTravelResolveDateForOperatorTime(live, 'working', saturday.date, '20:00'))
+      .toBe('2026-08-22');
+  });
+
+  it('labels the Time Travel day grid in the active frame', () => {
+    const saturday = day({ date: '2026-08-22', weekday: 'SATURDAY', index: 0 });
+    const sunday = day({ date: '2026-08-23', weekday: 'SUNDAY', index: 1 });
+    const live = overview([saturday, sunday]);
+    expect(timelineTravelDayLabel(live, 'working', 0)).toBe('N1 · SAT → SUN');
+    expect(timelineTravelDayLabel(live, 'regular', 0)).toBe('D1 · SAT');
+    expect(timelineTravelDayLabel(live, 'working', 5)).toBeNull();
   });
 
   it('shows the operator Party Window and hides its implementation cues everywhere', () => {
@@ -216,9 +295,9 @@ describe('Timeline operator authority model', () => {
     const end = cue('pwe_c_party', 'Default after Party Window', '23:00');
     const live = overview([day({ cues: [end, baseline, party] })]);
 
-    expect(timelineTravelCuesForDay(live, live.days[0].date).map((item) => item.cue.id))
+    expect(timelineTravelCuesForDay(live, 'working', live.days[0].date).map((item) => item.cue.id))
       .toEqual(['c_party']);
-    expect(upcomingTimelineCues(live, live.days[0].date, '19:00', 4)
+    expect(upcomingTimelineCues(live, 'working', live.days[0].date, '19:00', 4)
       .map((item) => item.cue.id)).toEqual(['c_party']);
   });
 
@@ -298,5 +377,175 @@ describe('Timeline operator authority model', () => {
     expect(overviewForTimelineView('calendar', live, draft)).toBe(draft);
     expect(overviewForTimelineView('travel', live, draft)).toBe(draft);
     expect(overviewForTimelineView('edit', live, draft)).toBe(draft);
+  });
+});
+
+// ── _356 P0-4: the engine's runtime deckOwner is the NOW card's authority ──
+// The resolved ribbon cannot see phase-baseline cues, so while a Party Window
+// baseline owned the deck the segment said "Default (from deck) 00:00→24:00"
+// and the NOW card repeated it (F4). deckOwner now outranks the segment; the
+// segment keeps its one real job — supplying a start/end time — but only when
+// it is describing the SAME owner.
+
+function deckOwner(
+  overrides: Partial<NonNullable<TimelineState['deckOwner']>> = {},
+): NonNullable<TimelineState['deckOwner']> {
+  return {
+    kind: 'cue',
+    cueId: 'pwb',
+    label: 'Party Window baseline',
+    untilMs: null,
+    ...overrides,
+  };
+}
+
+describe('resolveTimelineNowOwner — runtime deck ownership (_356)', () => {
+  it('the engine owner beats the resolved segment and is badged ENGINE OWNER', () => {
+    const live = overview();
+    const state = {
+      controller: 'autopilot',
+      activeProgram: null,
+      activeCue: null,
+      deckOwner: deckOwner(),
+      nextCue: { id: 'pwe', label: 'Party Window end', inSec: 3600 },
+    } as TimelineState;
+
+    expect(resolveTimelineNowOwner(state, live, live.days[0], '20:30')).toMatchObject({
+      source: 'runtime-owner',
+      kind: 'cue',
+      label: 'Party Window baseline',
+      cueId: 'pwb',
+      sourceLabel: 'ENGINE OWNER',
+    });
+  });
+
+  it('a segment about a DIFFERENT owner lends no time range — the next cue does', () => {
+    const live = overview();   // segment owner is c_now, not pwb
+    const state = {
+      controller: 'autopilot',
+      deckOwner: deckOwner(),
+      nextCue: { id: 'pwe', label: 'Party Window end', inSec: 30 * 60 },
+    } as TimelineState;
+
+    const owner = resolveTimelineNowOwner(state, live, live.days[0], '20:30');
+    expect(owner.fromLocal).toBeNull();
+    expect(owner.toLocal).toBeNull();
+    expect(owner.rangeLabel).toBe('until Party Window end 21:00');
+  });
+
+  it('a segment about the SAME cue supplies the real window', () => {
+    const live = overview();
+    const state = {
+      controller: 'autopilot',
+      deckOwner: deckOwner({ cueId: 'c_now', label: 'Now Cue' }),
+      nextCue: { id: 'c_next', label: 'Next Cue', inSec: 1800 },
+    } as TimelineState;
+
+    expect(resolveTimelineNowOwner(state, live, live.days[0], '20:30')).toMatchObject({
+      source: 'runtime-owner',
+      fromLocal: '20:00',
+      toLocal: '21:00',
+      rangeLabel: '20:00–21:00',
+      playlist: 'c_now_playlist',
+      palette: 'c_now_palette',
+    });
+  });
+
+  it('two defaultCue owners match even though both carry a null cueId', () => {
+    const live = overview([day({
+      segments: [segment({
+        owner: { kind: 'defaultCue', cueId: null, label: 'Default (from deck)' },
+        source: 'default-cue',
+      })],
+    })]);
+    const state = {
+      controller: 'autopilot',
+      deckOwner: deckOwner({ kind: 'defaultCue', cueId: null, label: 'Default (from deck)' }),
+    } as TimelineState;
+
+    expect(resolveTimelineNowOwner(state, live, live.days[0], '20:30')).toMatchObject({
+      kind: 'defaultCue',
+      fromLocal: '20:00',
+      toLocal: '21:00',
+    });
+  });
+
+  it('with no next cue it claims no range at all rather than inventing an end', () => {
+    const live = overview();
+    const state = { controller: 'autopilot', deckOwner: deckOwner(), nextCue: null } as TimelineState;
+    expect(resolveTimelineNowOwner(state, live, live.days[0], '20:30').rangeLabel).toBeNull();
+  });
+
+  it('a running program and an operator takeover still outrank deckOwner', () => {
+    const live = overview();
+    const program = {
+      activeProgram: { cueId: 'c_show', startedAtMs: 0, untilMs: null },
+      activeCue: { id: 'c_show', label: 'Main Show', kind: 'program', untilMs: null },
+      deckOwner: deckOwner(),
+    } as TimelineState;
+    expect(resolveTimelineNowOwner(program, live, live.days[0], '20:30')).toMatchObject({
+      kind: 'program', label: 'Main Show',
+    });
+
+    const manual = {
+      controller: 'manual',
+      activeCue: null,
+      activeProgram: null,
+      zoom: null,
+      deckOwner: deckOwner(),
+    } as TimelineState;
+    expect(resolveTimelineNowOwner(manual, live, live.days[0], '20:30')).toMatchObject({
+      kind: 'manual', label: 'OPERATOR CONTROL',
+    });
+  });
+
+  it('an engine with no deckOwner still resolves from the ribbon as before', () => {
+    const live = overview();
+    const state = { controller: 'autopilot', activeCue: null, activeProgram: null } as TimelineState;
+    expect(resolveTimelineNowOwner(state, live, live.days[0], '20:30')).toMatchObject({
+      source: 'resolved-segment',
+      sourceLabel: 'RESOLVED PLAN OWNER',
+      rangeLabel: '20:00–21:00',
+    });
+  });
+
+  it('names owner kinds in operator words', () => {
+    expect(timelineOwnerKindLabel('defaultCue')).toBe('DEFAULT CUE');
+    expect(timelineOwnerKindLabel('baseline')).toBe('BASELINE');
+  });
+});
+
+describe('timelineLiveStatus — the banner names the same owner as the NOW card (_356 F7)', () => {
+  it('names the engine deckOwner and drops the word autopilot', () => {
+    const status = timelineLiveStatus({
+      activePlan: 'test_week',
+      planActive: true,
+      controller: 'autopilot',
+      autopilotEnabled: true,
+      inFestivalWindow: true,
+      festivalStartsInDays: null,
+      zoom: null,
+      deckOwner: deckOwner(),
+    } as TimelineState);
+
+    expect(status).toEqual({
+      sentence: '“test_week” is the active plan and inside its schedule window; the Timeline is driving the deck — now: Party Window baseline.',
+      tone: 'primary',
+    });
+    expect(status.sentence).not.toMatch(/autopilot/i);
+  });
+
+  it('an engine that sends no owner simply does not name one', () => {
+    expect(timelineLiveStatus({
+      activePlan: 'test_week',
+      planActive: true,
+      controller: 'autopilot',
+      autopilotEnabled: true,
+      inFestivalWindow: true,
+      festivalStartsInDays: null,
+      zoom: null,
+    } as TimelineState).sentence).toBe(
+      '“test_week” is the active plan and inside its schedule window; the Timeline is driving the deck.',
+    );
   });
 });

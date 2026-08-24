@@ -48,7 +48,7 @@ const PURPLE = '#8b5cf6';
 export function EventSheet({
   cue, moment, dayDate, activeCueId, planActive, inFestivalWindow,
   resolve, resolveError, resolvePending, busy, actionError, canEdit, actionsDisabled,
-  onPerform, onTravel, onEdit, onClose,
+  onPerform, onTravel, onTravelBefore, onEdit, onClose,
 }: {
   /**
    * The event being zoomed into (resolved overview cue), or null in MOMENT
@@ -81,6 +81,8 @@ export function EventSheet({
   actionsDisabled?: boolean;
   onPerform: () => void;
   onTravel: () => void;
+  /** Cue-only rehearsal shortcut: apply the resolved deck ten seconds before it fires. */
+  onTravelBefore: () => void;
   onEdit: () => void;
   onClose: () => void;
 }) {
@@ -233,6 +235,25 @@ export function EventSheet({
                   )}
                 </TouchableOpacity>
               )}
+
+              {cue && !performOffered ? (
+                <TouchableOpacity
+                  onPress={onTravelBefore}
+                  disabled={busy || actionsDisabled || resolvePending || !!resolveError || !resolve}
+                  style={[
+                    styles.preRollBtn,
+                    { borderColor: PURPLE },
+                    (busy || actionsDisabled || resolvePending || !!resolveError || !resolve)
+                      && { opacity: 0.5 },
+                  ]}
+                  accessibilityLabel="Time travel to ten seconds before this event"
+                >
+                  <Text style={[styles.preRollTitle, { color: PURPLE }]}>⏪ 10 SEC BEFORE</Text>
+                  <Text style={[styles.preRollSub, { color: C.secondary }]}>
+                    inspect the Deck, then tap ▶ to apply this event
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             {/* PERFORM is impossible out of the festival window — the engine's
@@ -309,7 +330,7 @@ function makeStyles(C: Palette) {
       borderWidth: 1, borderColor: C.errorContainerBorder, backgroundColor: C.errorContainer,
       borderRadius: 8, padding: 10, marginTop: 8,
     },
-    actionRow: { marginTop: 16 },
+    actionRow: { marginTop: 16, gap: 10 },
     bigBtn: {
       borderRadius: 14, paddingVertical: 16, paddingHorizontal: 18,
       alignItems: 'center', justifyContent: 'center', minHeight: 72,
@@ -319,6 +340,17 @@ function makeStyles(C: Palette) {
     },
     bigBtnSub: {
       fontFamily: 'Inter_400Regular', fontSize: 11.5, color: 'rgba(255,255,255,0.88)', marginTop: 4,
+    },
+    preRollBtn: {
+      borderRadius: 14, borderWidth: 2, paddingVertical: 12, paddingHorizontal: 18,
+      alignItems: 'center', justifyContent: 'center', minHeight: 64,
+      backgroundColor: C.surfaceContainerLowest,
+    },
+    preRollTitle: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, letterSpacing: 1,
+    },
+    preRollSub: {
+      fontFamily: 'Inter_400Regular', fontSize: 11.5, marginTop: 4,
     },
     footerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18 },
     ghostBtn: {

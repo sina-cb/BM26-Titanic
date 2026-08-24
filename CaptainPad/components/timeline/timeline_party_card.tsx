@@ -19,17 +19,25 @@ import {
   forcePartySession,
   formatMinSec,
   formatMinutes,
+  partyButtonRules,
+  partyReadinessChips,
   partyTimerReadouts,
   parsePartyConfig,
   resetPartyCooldown,
   returnPartyToLiveAudio,
   setPartyConfig,
   type PartyConfig,
+  type PartyReadinessChip,
 } from '@/utils/party_api';
 import {
+  partySignalHeadline,
+  partySignalSourceControl,
+  setPartySignalSource,
   setPartyTestOverride,
   subscribePartyDetector,
   type PartyDetectorState,
+  type PartySignalSource,
+  type PartySignalSourceControl,
 } from '@/utils/party_test_api';
 import { Dropdown } from './makerControls';
 
@@ -37,12 +45,18 @@ interface TimelinePartyCardProps {
   state: TimelineState | null;
   connected: boolean;
   controlsLocked?: boolean;
+  /**
+   * IANA plan timezone, for the WINDOW chip's "opens HH:MM". Absent means the
+   * chip omits the time — the pad's own clock is not the plan's clock.
+   */
+  planTz?: string | null;
 }
 
 export function TimelinePartyCard({
   state,
   connected,
   controlsLocked = false,
+  planTz = null,
 }: TimelinePartyCardProps) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
@@ -50,8 +64,16 @@ export function TimelinePartyCard({
   const [expanded, setExpanded] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The companion override reset is a SEPARATE step from the engine call
+  // (_356 F5), so it gets its own error line: a companion that is down must
+  // never make a successful engine RETURN look like a failure.
+  const [overrideError, setOverrideError] = useState<string | null>(null);
   const [detector, setDetector] = useState<PartyDetectorState | null>(null);
   const [detectorError, setDetectorError] = useState<string | null>(null);
+  // SIGNAL SOURCE is companion-owned config: its own pending flag and its own
+  // error line, so a refused source write never reads as an engine failure.
+  const [sourcePending, setSourcePending] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const liveDoc = useLiveParams();
   const signalsConnected = useLiveSignalsConnected();
@@ -173,8 +195,24 @@ export function TimelinePartyCard({
       ? `${config.planActive ? 'ACTIVE PLAN' : 'SAVED PLAN'} · ${config.partyCueId}`
       : 'NO ENABLED PARTY TRIGGER IN THIS PLAN';
 
+  // Every control's enablement and label comes from ONE pure rule set, and
+  // every readiness chip from ONE pure derivation over engine fields — the
+  // card itself decides nothing (_356 §4).
+  const buttons = partyButtonRules({
+    config,
+    connected,
+    locked: controlsLocked,
+    pending,
+    expanded,
+  });
+  const engineMoodStale = config?.moodStale ?? state?.moodStale ?? null;
+  const chips = config
+    ? partyReadinessChips(config, { moodStale: engineMoodStale, planTz, nowMs })
+    : [];
+  const cueError = config?.cueError || null;
+
   const toggleEnabled = async () => {
-    if (!config || pending || !connected || controlsLocked) return;
+    if (!buttons.enabledToggle.enabled || !config) return;
     if (config.enabled && active) {
       const confirmed = await opConfirm({
         title: 'END PARTY SESSION?',
@@ -209,7 +247,7 @@ export function TimelinePartyCard({
   };
 
   const forceParty = async () => {
-    if (pending || !connected || controlsLocked) return;
+    if (!buttons.force.enabled) return;
     setPending(true);
     try {
       const result = await forcePartySession();
@@ -223,20 +261,32 @@ export function TimelinePartyCard({
     }
   };
 
+  // ENGINE FIRST, companion second (_356 P0-4). The old order asked the
+  // companion to drop its test override before calling the engine, so a
+  // companion that was down aborted the whole action and the live session kept
+  // playing with no explanation. Ending the session is the operator's actual
+  // intent; clearing the override is housekeeping that reports its own failure.
   const returnToAudio = async () => {
-    if (pending || !connected || controlsLocked) return;
+    if (!buttons.returnToAudio.enabled) return;
     const cancellingForcedSession = config?.sessionForced === true;
     setPending(true);
     try {
-      await setPartyTestOverride('auto');
       const result = await returnPartyToLiveAudio();
       if (!result.ok || !result.data) throw new Error(result.error || 'The engine rejected live audio.');
       setConfig(result.data);
+      setOverrideError(null);
+      try {
+        await setPartyTestOverride('auto');
+      } catch (caught: any) {
+        setOverrideError(
+          `Session ended, but the companion test override could not be cleared: ${caught?.message || String(caught)}`,
+        );
+      }
       opInfo(
-        cancellingForcedSession ? 'FORCED PARTY CANCELLED' : 'LIVE AUDIO ACTIVE',
+        cancellingForcedSession ? 'FORCED PARTY CANCELLED' : 'PARTY SESSION ENDED',
         cancellingForcedSession
           ? 'The force-started session stopped immediately. Live detection is restored; normal cooldown applies.'
-          : 'The detector already controlled Party. No running audio-started session was changed.',
+          : 'The running session stopped immediately. Live detection is restored; normal cooldown applies.',
       );
     } catch (caught: any) {
       opError('LIVE AUDIO FAILED', caught?.message || String(caught));
@@ -245,8 +295,30 @@ export function TimelinePartyCard({
     }
   };
 
+  // SIGNAL SOURCE — exposure only. The companion persists `party.source` into
+  // its own config.yaml and answers with a typed ack; the pad never keeps a
+  // local copy of the selection, it just re-renders the telemetry it is sent.
+  const sourceControl = partySignalSourceControl({
+    detector,
+    connected,
+    locked: controlsLocked,
+    pending: sourcePending || pending,
+  });
+  const selectSignalSource = async (next: PartySignalSource) => {
+    if (sourceControl.disabled || next === sourceControl.source) return;
+    setSourcePending(true);
+    setSourceError(null);
+    try {
+      await setPartySignalSource(next);
+    } catch (caught: any) {
+      setSourceError(caught?.message || String(caught));
+    } finally {
+      setSourcePending(false);
+    }
+  };
+
   const clearCooldown = async () => {
-    if (pending || !connected || controlsLocked || !config?.cooldownRemainingSec) return;
+    if (!buttons.resetCooldown.enabled) return;
     setPending(true);
     try {
       const result = await resetPartyCooldown();
@@ -295,6 +367,10 @@ export function TimelinePartyCard({
         error={detectorError}
         styles={styles}
         onTune={() => router.push('/audio')}
+        sourceControl={sourceControl}
+        sourcePending={sourcePending}
+        sourceError={sourceError}
+        onSelectSource={(next) => { void selectSignalSource(next); }}
       />
 
       {timerReadouts.length > 0 ? (
@@ -308,15 +384,23 @@ export function TimelinePartyCard({
         </>
       ) : null}
 
-      {config?.readiness ? (
+      {chips.length > 0 ? (
         <View style={styles.readinessRow}>
-          <ReadinessChip label="PLAN" ready={config.readiness.planActive} styles={styles} />
-          <ReadinessChip label="WINDOW" ready={config.readiness.partyWindowOpen} styles={styles} />
-          <ReadinessChip label="DETECTOR" ready={config.readiness.enabled} styles={styles} />
-          <ReadinessChip label="DECK" ready={config.readiness.planDriving} styles={styles} />
-          <ReadinessChip label="ARMED" ready={config.readiness.triggerArmed === true} styles={styles} />
-          <ReadinessChip label="COOLDOWN" ready={config.readiness.cooldownClear} styles={styles} />
+          {chips.map((entry) => (
+            <ReadinessChip key={entry.id} chip={entry} styles={styles} />
+          ))}
         </View>
+      ) : null}
+
+      {cueError ? (
+        <Text style={styles.error} accessibilityRole="alert">
+          {`PARTY CUE ERROR — ${cueError}`}
+        </Text>
+      ) : null}
+      {engineMoodStale === true ? (
+        <Text style={styles.error} accessibilityRole="alert">
+          SIGNAL STALE — companion not publishing
+        </Text>
       ) : null}
 
       <View style={styles.actions}>
@@ -324,72 +408,70 @@ export function TimelinePartyCard({
           style={[
             styles.actionButton,
             config?.sessionForced && styles.actionButtonActive,
-            (!connected
-              || controlsLocked
-              || pending
-              || !config?.partyCueId
-              || config?.readiness?.planActive !== true) && styles.disabled,
+            !buttons.force.enabled && styles.disabled,
           ]}
           onPress={() => { void forceParty(); }}
-          disabled={!connected
-            || controlsLocked
-            || pending
-            || !config?.partyCueId
-            || config?.readiness?.planActive !== true}
+          disabled={!buttons.force.enabled}
           accessibilityRole="button"
+          accessibilityState={{ disabled: !buttons.force.enabled }}
         >
-          <Text style={styles.actionLabel}>
-            {config?.sessionForced ? 'PARTY FORCED' : 'FORCE PARTY'}
-          </Text>
+          <Text style={styles.actionLabel}>{buttons.force.label}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[
             styles.disclosure,
-            (!connected || controlsLocked) && styles.disabled,
+            !buttons.returnToAudio.enabled && styles.disabled,
           ]}
           onPress={() => { void returnToAudio(); }}
-          disabled={!connected || controlsLocked || pending}
+          disabled={!buttons.returnToAudio.enabled}
           accessibilityRole="button"
+          accessibilityState={{ disabled: !buttons.returnToAudio.enabled }}
         >
-          <Text style={styles.disclosureLabel}>RETURN TO LIVE AUDIO</Text>
+          <Text
+            style={styles.disclosureLabel}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
+            {buttons.returnToAudio.label}
+          </Text>
         </TouchableOpacity>
       </View>
       <Text style={styles.help}>
         FORCE PARTY starts immediately and ignores detection, sustain, window, and cooldown.
-        RETURN TO LIVE AUDIO cancels it immediately and restores live detection with normal cooldown.
+        The second button ends whichever session is running — forced or detected — and
+        restores live detection with normal cooldown.
       </Text>
 
       <TouchableOpacity
         style={[
           styles.cooldownReset,
-          (!connected
-            || controlsLocked
-            || pending
-            || !config?.cooldownRemainingSec) && styles.disabled,
+          !buttons.resetCooldown.enabled && styles.disabled,
         ]}
         onPress={() => { void clearCooldown(); }}
-        disabled={!connected || controlsLocked || pending || !config?.cooldownRemainingSec}
+        disabled={!buttons.resetCooldown.enabled}
         accessibilityRole="button"
-        accessibilityState={{
-          disabled: !connected || controlsLocked || pending || !config?.cooldownRemainingSec,
-        }}
+        accessibilityState={{ disabled: !buttons.resetCooldown.enabled }}
       >
-        <Text style={styles.cooldownResetLabel}>RESET COOLDOWN</Text>
+        <Text style={styles.cooldownResetLabel}>{buttons.resetCooldown.label}</Text>
       </TouchableOpacity>
 
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
+      {overrideError ? (
+        <Text style={styles.error} accessibilityRole="alert">{overrideError}</Text>
+      ) : null}
 
       <View style={styles.actions}>
         <TouchableOpacity
           style={[
             styles.actionButton,
             config?.enabled && styles.actionButtonActive,
-            (!connected || controlsLocked || !config || pending) && styles.disabled,
+            !buttons.enabledToggle.enabled && styles.disabled,
           ]}
           onPress={() => { void toggleEnabled(); }}
-          disabled={!connected || controlsLocked || !config || pending}
+          disabled={!buttons.enabledToggle.enabled}
           accessibilityRole="button"
-          accessibilityState={{ disabled: !connected || controlsLocked || !config || pending }}
+          accessibilityState={{ disabled: !buttons.enabledToggle.enabled }}
         >
           <Text
             style={styles.actionLabel}
@@ -397,7 +479,7 @@ export function TimelinePartyCard({
             adjustsFontSizeToFit
             minimumFontScale={0.8}
           >
-            {config?.enabled ? 'ENABLED' : 'DISABLED'}
+            {buttons.enabledToggle.label}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -412,7 +494,7 @@ export function TimelinePartyCard({
             adjustsFontSizeToFit
             minimumFontScale={0.8}
           >
-            {expanded ? 'LESS' : 'SETTINGS'}
+            {buttons.settings.label}
           </Text>
         </TouchableOpacity>
       </View>
@@ -535,11 +617,19 @@ function PartyDetectorPanel({
   error,
   styles,
   onTune,
+  sourceControl,
+  sourcePending,
+  sourceError,
+  onSelectSource,
 }: {
   detector: PartyDetectorState | null;
   error: string | null;
   styles: ReturnType<typeof makeStyles>;
   onTune: () => void;
+  sourceControl: PartySignalSourceControl;
+  sourcePending: boolean;
+  sourceError: string | null;
+  onSelectSource: (source: PartySignalSource) => void;
 }) {
   if (!detector) {
     return (
@@ -601,9 +691,48 @@ function PartyDetectorPanel({
           styles.detectorState,
           detector.publishedParty === true && styles.detectorStateOn,
         ]}>
-          {detector.publishedParty === null ? 'SIGNAL …' : detector.publishedParty ? 'SIGNAL ON' : 'SIGNAL OFF'}
+          {partySignalHeadline(detector)}
         </Text>
       </View>
+      <Text style={styles.layerLabel}>SIGNAL SOURCE</Text>
+      {sourceControl.visible ? (
+        <>
+          <View style={styles.sourceRow}>
+            {sourceControl.options.map((option) => {
+              const active = option.id === sourceControl.source;
+              return (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[
+                    styles.sourceSegment,
+                    active && styles.sourceSegmentActive,
+                    sourceControl.disabled && styles.disabled,
+                  ]}
+                  onPress={() => onSelectSource(option.id)}
+                  disabled={sourceControl.disabled}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active, disabled: sourceControl.disabled }}
+                  accessibilityLabel={`Publish the ${option.label} party detector`}
+                >
+                  <Text style={[styles.sourceSegmentText, active && styles.sourceSegmentTextActive]}>
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={styles.detectorHint}>
+            {sourcePending ? 'WRITING THE SOURCE TO THE COMPANION…' : sourceControl.note}
+          </Text>
+        </>
+      ) : (
+        <Text style={styles.detectorHint}>
+          {sourceControl.hiddenNote || 'Reading the companion signal source…'}
+        </Text>
+      )}
+      {sourceError ? (
+        <Text style={styles.error} accessibilityRole="alert">{sourceError}</Text>
+      ) : null}
       <View style={styles.detectorChipRow}>
         {gates.map((gate) => (
           <TouchableOpacity
@@ -634,19 +763,30 @@ function PartyDetectorPanel({
 }
 
 function ReadinessChip({
-  label,
-  ready,
+  chip,
   styles,
 }: {
-  label: string;
-  ready: boolean;
+  chip: PartyReadinessChip;
   styles: ReturnType<typeof makeStyles>;
 }) {
+  // 'ready' and 'live' are the two affirmative tones; 'neutral' is a condition
+  // that simply is not met right now (calm audio, a closed session) and must
+  // NOT read as an error; only 'alert' is red.
+  const box = chip.tone === 'ready' || chip.tone === 'live'
+    ? styles.readinessChipReady
+    : chip.tone === 'neutral'
+      ? styles.readinessChipNeutral
+      : null;
+  const text = chip.tone === 'ready'
+    ? styles.readinessTextReady
+    : chip.tone === 'live'
+      ? styles.readinessTextLive
+      : chip.tone === 'neutral'
+        ? styles.readinessTextNeutral
+        : null;
   return (
-    <View style={[styles.readinessChip, ready && styles.readinessChipReady]}>
-      <Text style={[styles.readinessText, ready && styles.readinessTextReady]}>
-        {`${ready ? '✓' : '×'} ${label}`}
-      </Text>
+    <View style={[styles.readinessChip, box]}>
+      <Text style={[styles.readinessText, text]}>{chip.text}</Text>
     </View>
   );
 }
@@ -773,6 +913,36 @@ function makeStyles(C: Palette) {
       flexWrap: 'wrap' as const,
       gap: 6,
     },
+    // SIGNAL SOURCE segmented control — gloved-hand targets (44pt), same
+    // vocabulary as the gate chips so it reads as part of the detector block.
+    sourceRow: {
+      flexDirection: 'row' as const,
+      gap: 6,
+    },
+    sourceSegment: {
+      flex: 1,
+      minWidth: 0,
+      minHeight: 44,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerLowest,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      paddingHorizontal: 10,
+    },
+    sourceSegmentActive: {
+      borderColor: C.tertiary,
+      backgroundColor: C.secondaryContainer,
+    },
+    sourceSegmentText: {
+      ...Type.labelCaps,
+      color: C.secondary,
+      fontSize: 10,
+    },
+    sourceSegmentTextActive: {
+      color: C.tertiary,
+    },
     detectorChip: {
       minHeight: 28,
       borderRadius: 8,
@@ -897,6 +1067,9 @@ function makeStyles(C: Palette) {
     readinessChipReady: {
       borderColor: C.tertiary,
     },
+    readinessChipNeutral: {
+      borderColor: C.ghostBorder,
+    },
     readinessText: {
       ...Type.labelCaps,
       fontSize: 9,
@@ -904,6 +1077,12 @@ function makeStyles(C: Palette) {
     },
     readinessTextReady: {
       color: C.tertiary,
+    },
+    readinessTextLive: {
+      color: C.tertiary,
+    },
+    readinessTextNeutral: {
+      color: C.secondary,
     },
     error: {
       ...Type.timelineBody,

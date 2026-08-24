@@ -34,7 +34,12 @@ import {
   formatMinSec,
   formatMinutes,
   partyTimerReadouts,
+  partyButtonRules,
+  partyReadinessChips,
+  formatPartyClock,
+  formatPartyClockOnDay,
   PARTY_FIELD_BOUNDS,
+  type PartyConfig,
 } from './party_api';
 
 const CONFIG = {
@@ -626,5 +631,317 @@ describe('describePartyStatus — the six landed states', () => {
     const s = describePartyStatus({ enabled: true, effectiveState: 'cooldown', cooldownRemainingSec: 95 });
     expect(s.label).toBe('COOLDOWN');
     expect(s.detail).toMatch(/1:35/);
+  });
+});
+
+// ── _356 §4: the button matrix and the readiness chips ──────────────────
+// Both are PURE and both are the code the card actually runs. Before _356 the
+// two session buttons rendered enabled in every state (F5) and the chip row
+// could not express "a session is live" at all (F6).
+
+function partyConfig(overrides: Partial<PartyConfig> = {}): PartyConfig {
+  return {
+    ...CONFIG,
+    availablePlaylists: CONFIG.availablePlaylists.slice(),
+    effectiveState: 'armed',
+    partyCueId: 'c_party',
+    cooldownRemainingSec: 0,
+    strongSignal: false,
+    sessionForced: false,
+    readiness: {
+      enabled: true,
+      planActive: true,
+      partyWindowOpen: true,
+      planDriving: true,
+      triggerArmed: true,
+      cooldownClear: true,
+    },
+    ...overrides,
+  };
+}
+
+const READY = partyConfig().readiness!;
+const LIVE = { connected: true, locked: false, pending: false };
+
+describe('partyButtonRules — one rule set for every control', () => {
+  it('IDLE and armed: FORCE is live, RETURN is not (no session to end)', () => {
+    const r = partyButtonRules({ config: partyConfig(), ...LIVE });
+    expect(r.force).toEqual({ enabled: true, label: 'FORCE PARTY' });
+    expect(r.returnToAudio).toEqual({ enabled: false, label: 'END PARTY SESSION' });
+    expect(r.resetCooldown.enabled).toBe(false);
+    expect(r.enabledToggle).toEqual({ enabled: true, label: 'ENABLED' });
+    expect(r.settings).toEqual({ enabled: true, label: 'SETTINGS' });
+  });
+
+  it('FORCED session: FORCE reads PARTY FORCED and is disabled; RETURN TO LIVE AUDIO is armed', () => {
+    const r = partyButtonRules({
+      config: partyConfig({ effectiveState: 'in_session', sessionForced: true }),
+      ...LIVE,
+    });
+    expect(r.force).toEqual({ enabled: false, label: 'PARTY FORCED' });
+    expect(r.returnToAudio).toEqual({ enabled: true, label: 'RETURN TO LIVE AUDIO' });
+  });
+
+  it('DETECTED session: the same button ends it, labelled END PARTY SESSION', () => {
+    const r = partyButtonRules({
+      config: partyConfig({ effectiveState: 'in_session', sessionForced: false }),
+      ...LIVE,
+    });
+    expect(r.returnToAudio).toEqual({ enabled: true, label: 'END PARTY SESSION' });
+    expect(r.force.enabled).toBe(false);
+  });
+
+  it('COOLDOWN: RESET COOLDOWN is the only session control that changes state', () => {
+    const r = partyButtonRules({
+      config: partyConfig({
+        effectiveState: 'cooldown',
+        cooldownRemainingSec: 42,
+        readiness: { ...READY, cooldownClear: false },
+      }),
+      ...LIVE,
+    });
+    expect(r.resetCooldown.enabled).toBe(true);
+    expect(r.returnToAudio.enabled).toBe(false);
+    expect(r.force.enabled).toBe(true);
+  });
+
+  it('DISCONNECTED: every write is off, SETTINGS still opens', () => {
+    const r = partyButtonRules({
+      config: partyConfig({ effectiveState: 'in_session', cooldownRemainingSec: 42 }),
+      connected: false,
+      locked: false,
+      pending: false,
+    });
+    expect([r.force.enabled, r.returnToAudio.enabled, r.resetCooldown.enabled, r.enabledToggle.enabled])
+      .toEqual([false, false, false, false]);
+    expect(r.settings.enabled).toBe(true);
+  });
+
+  it('LOCKED (performance mode) and PENDING behave like disconnected for writes', () => {
+    const config = partyConfig({ effectiveState: 'in_session', cooldownRemainingSec: 42 });
+    for (const flags of [{ ...LIVE, locked: true }, { ...LIVE, pending: true }]) {
+      const r = partyButtonRules({ config, ...flags });
+      expect([r.force.enabled, r.returnToAudio.enabled, r.resetCooldown.enabled, r.enabledToggle.enabled])
+        .toEqual([false, false, false, false]);
+      expect(r.settings.enabled).toBe(true);
+    }
+  });
+
+  it('no config yet, or no party cue in the plan, cannot force', () => {
+    expect(partyButtonRules({ config: null, ...LIVE }).force.enabled).toBe(false);
+    expect(partyButtonRules({ config: null, ...LIVE }).enabledToggle).toEqual({
+      enabled: false, label: 'DISABLED',
+    });
+    expect(partyButtonRules({ config: partyConfig({ partyCueId: null }), ...LIVE }).force.enabled)
+      .toBe(false);
+  });
+
+  it('a dormant plan cannot force even with a cue authored', () => {
+    const config = partyConfig({ readiness: { ...READY, planActive: false } });
+    expect(partyButtonRules({ config, ...LIVE }).force.enabled).toBe(false);
+  });
+
+  it('SETTINGS is the disclosure label and flips to LESS when open', () => {
+    expect(partyButtonRules({ config: partyConfig(), ...LIVE, expanded: true }).settings)
+      .toEqual({ enabled: true, label: 'LESS' });
+  });
+});
+
+describe('partyReadinessChips — engine fields only', () => {
+  const texts = (config: PartyConfig, options = {}) =>
+    partyReadinessChips(config, options).map((c) => c.text);
+  const byId = (config: PartyConfig, id: string, options = {}) =>
+    partyReadinessChips(config, options).find((c) => c.id === id)!;
+
+  it('renders the seven _356 chips in order, PARTY ON and SESSION renamed', () => {
+    expect(partyReadinessChips(partyConfig()).map((c) => c.id)).toEqual([
+      'plan', 'deck', 'window', 'partyOn', 'signal', 'session', 'cooldown',
+    ]);
+    expect(texts(partyConfig())).toContain('✓ PARTY ON');
+    expect(texts(partyConfig())).toContain('✓ SESSION ARMED');
+    expect(texts(partyConfig()).join(' ')).not.toMatch(/DETECTOR/);
+  });
+
+  it('PLAN and DECK are separate facts (a takeover breaks only DECK)', () => {
+    const config = partyConfig({ readiness: { ...READY, planDriving: false } });
+    expect(byId(config, 'plan')).toMatchObject({ text: '✓ PLAN', tone: 'ready' });
+    expect(byId(config, 'deck')).toMatchObject({ text: '× DECK', tone: 'alert' });
+  });
+
+  it('a closed WINDOW names the time it opens, in the PLAN tz', () => {
+    const config = partyConfig({
+      effectiveState: 'waiting_window',
+      partyWindowOpensAtMs: Date.UTC(2026, 7, 24, 4, 0), // Mon 21:00 PDT
+      readiness: { ...READY, partyWindowOpen: false },
+    });
+    // Same plan-tz calendar day as NOW (Mon 18:00 PDT) → bare clock.
+    expect(byId(config, 'window', {
+      planTz: 'America/Los_Angeles',
+      nowMs: Date.UTC(2026, 7, 24, 1, 0),
+    })).toEqual({
+      id: 'window', text: '× WINDOW · opens 21:00', tone: 'alert',
+    });
+  });
+
+  // The live bug (2026-08-23): a window that had been authored onto TOMORROW
+  // read "opens 09:00" at 09:23 in the morning, which the operator reasonably
+  // took to mean "in a moment". The day is part of the answer.
+  it('a WINDOW opening on ANOTHER plan-tz day names the weekday too', () => {
+    const config = partyConfig({
+      effectiveState: 'waiting_window',
+      partyWindowOpensAtMs: Date.UTC(2026, 7, 24, 16, 0), // Mon 09:00 PDT
+      readiness: { ...READY, partyWindowOpen: false },
+    });
+    expect(byId(config, 'window', {
+      planTz: 'America/Los_Angeles',
+      nowMs: Date.UTC(2026, 7, 23, 16, 23), // Sun 09:23 PDT
+    })).toEqual({
+      id: 'window', text: '× WINDOW · opens Mon 09:00', tone: 'alert',
+    });
+  });
+
+  it('with no nowMs the WINDOW chip keeps the weekday (never a bare, ambiguous time)', () => {
+    const config = partyConfig({
+      partyWindowOpensAtMs: Date.UTC(2026, 7, 24, 16, 0),
+      readiness: { ...READY, partyWindowOpen: false },
+    });
+    expect(byId(config, 'window', { planTz: 'America/Los_Angeles' }).text)
+      .toBe('× WINDOW · opens Mon 09:00');
+  });
+
+  it('without a plan tz the WINDOW chip omits the time rather than using device local', () => {
+    const config = partyConfig({
+      partyWindowOpensAtMs: Date.UTC(2026, 7, 24, 4, 0),
+      readiness: { ...READY, partyWindowOpen: false },
+    });
+    expect(byId(config, 'window').text).toBe('× WINDOW');
+  });
+
+  it('a FORCED session bypasses the window instead of flagging it red', () => {
+    const config = partyConfig({
+      effectiveState: 'in_session',
+      sessionForced: true,
+      readiness: { ...READY, partyWindowOpen: false },
+    });
+    expect(byId(config, 'window')).toEqual({ id: 'window', text: '· WINDOW BYPASSED', tone: 'neutral' });
+  });
+
+  it('SIGNAL reports the evaluator input: party, calm (neutral), or STALE (red)', () => {
+    expect(byId(partyConfig({ strongSignal: true }), 'signal'))
+      .toMatchObject({ text: '✓ SIGNAL', tone: 'ready' });
+    expect(byId(partyConfig({ strongSignal: false }), 'signal'))
+      .toMatchObject({ text: '× SIGNAL', tone: 'neutral' });
+    expect(byId(partyConfig({ strongSignal: true }), 'signal', { moodStale: true }))
+      .toMatchObject({ text: '× SIGNAL STALE', tone: 'alert' });
+    // The engine's own party-config field wins over the /timeline/state one.
+    expect(byId(partyConfig({ strongSignal: true, moodStale: true }), 'signal', { moodStale: false }))
+      .toMatchObject({ text: '× SIGNAL STALE', tone: 'alert' });
+  });
+
+  it('SESSION says LIVE (not red) during a session and red ONLY on a cue error', () => {
+    const live = partyConfig({
+      effectiveState: 'in_session',
+      readiness: { ...READY, triggerArmed: false },
+    });
+    expect(byId(live, 'session')).toEqual({ id: 'session', text: '· SESSION LIVE', tone: 'live' });
+
+    const errored = partyConfig({
+      cueError: 'playlist "party_bangers" not found',
+      readiness: { ...READY, triggerArmed: false },
+    });
+    expect(byId(errored, 'session')).toEqual({ id: 'session', text: '× SESSION ERROR', tone: 'alert' });
+
+    const noCue = partyConfig({
+      partyCueId: null,
+      readiness: { ...READY, triggerArmed: null },
+    });
+    expect(byId(noCue, 'session')).toEqual({ id: 'session', text: '× SESSION NO CUE', tone: 'neutral' });
+  });
+
+  it('COOLDOWN counts the lockout down as m:ss', () => {
+    const config = partyConfig({
+      effectiveState: 'cooldown',
+      cooldownRemainingSec: 95,
+      readiness: { ...READY, cooldownClear: false },
+    });
+    expect(byId(config, 'cooldown')).toEqual({ id: 'cooldown', text: '× COOLDOWN · 1:35', tone: 'alert' });
+  });
+
+  it('an engine that sends no readiness block gets no chip row (never a guessed one)', () => {
+    const bare = partyConfig();
+    delete bare.readiness;
+    expect(partyReadinessChips(bare)).toEqual([]);
+  });
+});
+
+describe('formatPartyClock', () => {
+  it('formats an instant in the plan tz, 24h, zero padded', () => {
+    expect(formatPartyClock(Date.UTC(2026, 7, 24, 4, 0), 'America/Los_Angeles')).toBe('21:00');
+    expect(formatPartyClock(Date.UTC(2026, 7, 24, 16, 5), 'America/Los_Angeles')).toBe('09:05');
+  });
+
+  it('says nothing when the instant or the tz is unusable', () => {
+    expect(formatPartyClock(null, 'America/Los_Angeles')).toBeNull();
+    expect(formatPartyClock(Date.UTC(2026, 7, 24, 4, 0), null)).toBeNull();
+    expect(formatPartyClock(Date.UTC(2026, 7, 24, 4, 0), 'Not/AZone')).toBeNull();
+  });
+});
+
+describe('formatPartyClockOnDay', () => {
+  const TZ = 'America/Los_Angeles';
+
+  it('drops the weekday only when the instant is TODAY in the plan tz', () => {
+    // Sun 09:23 PDT "now"; both instants are Sun in PDT.
+    const now = Date.UTC(2026, 7, 23, 16, 23);
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 23, 16, 0), TZ, now)).toBe('09:00');
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 24, 4, 0), TZ, now)).toBe('21:00');
+  });
+
+  it('keeps the weekday for another plan-tz day, past or future', () => {
+    const now = Date.UTC(2026, 7, 23, 16, 23);                      // Sun 09:23 PDT
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 24, 16, 0), TZ, now)).toBe('Mon 09:00');
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 22, 16, 0), TZ, now)).toBe('Sat 09:00');
+  });
+
+  it('uses the PLAN tz for the day boundary, not UTC', () => {
+    // 2026-08-24T04:00Z is Monday in UTC but Sunday 21:00 in PDT.
+    const now = Date.UTC(2026, 7, 23, 16, 23); // Sun 09:23 PDT
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 24, 4, 0), TZ, now)).toBe('21:00');
+  });
+
+  it('keeps the weekday when no clock was injected, and says nothing without a tz', () => {
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 24, 4, 0), TZ)).toBe('Sun 21:00');
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 24, 4, 0), null, Date.now())).toBeNull();
+    expect(formatPartyClockOnDay(null, TZ, Date.now())).toBeNull();
+    expect(formatPartyClockOnDay(Date.UTC(2026, 7, 24, 4, 0), 'Not/AZone', Date.now())).toBeNull();
+  });
+});
+
+describe('parsePartyConfig — the _356 additions', () => {
+  it('accepts cueError and the Party Window boundaries, null included', () => {
+    const parsed = parsePartyConfig({
+      ...CONFIG,
+      cueError: 'playlist missing',
+      partyWindowOpensAtMs: 1_700_000_000_000,
+      partyWindowClosesAtMs: null,
+      moodStale: true,
+    });
+    expect(parsed.cueError).toBe('playlist missing');
+    expect(parsed.partyWindowOpensAtMs).toBe(1_700_000_000_000);
+    expect(parsed.partyWindowClosesAtMs).toBeNull();
+    expect(parsed.moodStale).toBe(true);
+  });
+
+  it('omits them entirely on a pre-_356 engine', () => {
+    const parsed = parsePartyConfig(CONFIG);
+    expect('cueError' in parsed).toBe(false);
+    expect('partyWindowOpensAtMs' in parsed).toBe(false);
+  });
+
+  it('throws on a wrong-typed addition instead of coercing it', () => {
+    expect(() => parsePartyConfig({ ...CONFIG, cueError: 7 })).toThrow(/cueError/);
+    expect(() => parsePartyConfig({ ...CONFIG, partyWindowOpensAtMs: 'soon' }))
+      .toThrow(/partyWindowOpensAtMs/);
+    expect(() => parsePartyConfig({ ...CONFIG, moodStale: 'yes' })).toThrow(/moodStale/);
   });
 });

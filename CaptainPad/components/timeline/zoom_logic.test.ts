@@ -252,6 +252,17 @@ describe('zoomBannerModel', () => {
     expect(m.showSteppers).toBe(true);
   });
 
+  it('TRAVEL names an exact event pre-roll instead of mislabelling the prior owner', () => {
+    const m = zoomBannerModel({
+      scope: 'travel', cueId: 'c_show', label: 'Evening',
+      targetMs: 1756605590000, targetLocal: '20:29', targetDate: '2026-09-03',
+      targetLeadSec: 10, targetCueLabel: 'Scheduled show', pendingDeferred: null,
+    })!;
+    expect(m.detail).toContain('10 sec before Scheduled show');
+    expect(m.detail).not.toContain('Evening');
+    expect(m.showSteppers).toBe(true);
+  });
+
   it('carries the deferred-show line in EITHER scope', () => {
     const deferred = { cueId: 'c_show', label: 'Burn Night', dueAtLocal: '20:30' };
     const perform = zoomBannerModel({

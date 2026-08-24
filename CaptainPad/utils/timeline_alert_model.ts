@@ -129,15 +129,10 @@ export function primaryTimelineAlert(input: TimelineAlertInputs): TimelineAlert 
     };
   }
 
-  if (input.activePlanHotReload) {
-    return {
-      key: 'hot-reload',
-      tone: 'warning',
-      title: 'EDITING ACTIVE PLAN! :)',
-      detail: '',
-    };
-  }
-
+  // _359 §D.9 (T-08/T-13): a DRAFT THAT DID NOT SAVE outranks the standing
+  // "you are editing the live plan" notice. The hot-reload banner is a
+  // permanent condition of editing the active plan; a save failure is a thing
+  // that just went wrong and the operator has to act on.
   if (input.saveError) {
     return {
       key: 'save-error',
@@ -147,5 +142,31 @@ export function primaryTimelineAlert(input: TimelineAlertInputs): TimelineAlert 
     };
   }
 
+  if (input.activePlanHotReload) {
+    return {
+      key: 'hot-reload',
+      tone: 'warning',
+      title: 'EDITING THE LIVE PLAN',
+      detail: 'Every valid change is saved and applied to the ship immediately.',
+    };
+  }
+
   return null;
+}
+
+/**
+ * The one helper line under the EDIT PLAN header (_359 §D.9). It names the
+ * CONSEQUENCE of saving, which is entirely different for the live plan and for
+ * a copy — the old line said "Draft preview only" in both cases, which was
+ * false for the live plan.
+ */
+export function timelineEditHeaderHelper(args: {
+  draftName: string | null | undefined;
+  activePlan: string | null | undefined;
+}): string {
+  if (!args.draftName) return 'Open PLANS to load or create a draft.';
+  if (args.activePlan && args.draftName === args.activePlan) {
+    return 'EDITING THE LIVE SHOW — saves apply immediately.';
+  }
+  return 'Editing a saved copy. Activate it from PLANS to run it.';
 }
