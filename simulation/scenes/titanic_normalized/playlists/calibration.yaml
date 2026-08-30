@@ -111,10 +111,34 @@ entries:
     label: 10 — Group Walk (order + colour)
     defaults:
       sliderBackground: 0.3
+      sliderTeSign: 0
+      sliderTeSign2: 0
+      sliderRightFrontWall: 0
+      sliderRightSmokeStacks: 0
+      sliderRightFrontRails: 0
+      sliderRightAuditorium: 0
+      sliderLeftAuditorium: 0
+      sliderLeftBackWall: 0
+      sliderRightBackWall: 0
+      sliderLeftFrontWall: 0
+      sliderLeftSmokeStack: 0
+      sliderLeftFrontRails: 0
+      sliderRightBackRails: 0
+      sliderLeftBackRails: 0
+      sliderLeftSmallStack: 0
+      sliderRightSmallStack: 0
+      sliderStringsFrontLeft: 0
+      sliderStringsBackLeft: 0
+      sliderStringsBackRight: 0
+      sliderStringsFrontRight: 0
+      sliderStringsRBackLeft: 0
+      sliderStringsRBackRight: 0
+      sliderStringsRFrontRight: 0
+      sliderStringsRFrontLeft: 0
     modulations: []
     midiMappings: []
     notes: >-
-      One fader per pixel group. Raise a group fader from 0 to 1: its LEDs
-      light one by one in true wiring order, coloured red, green, blue, white
+      One fader per pixel group. Raise a group fader from 0 to 1: its LEDs light
+      one by one in true wiring order, coloured red, green, blue, white
       repeating by position. Out-of-sequence pixel = mis-mapped strand; wrong
       colour = swapped channel. Titanic-family only (baked group ranges).
