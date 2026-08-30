@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the titanic_normalized model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/titanic_normalized/views.yaml).
-// Updated: 2026-08-30T03:50:47.165Z
+// Updated: 2026-08-30T04:48:47.563Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails
