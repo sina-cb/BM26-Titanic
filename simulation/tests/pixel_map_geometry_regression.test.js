@@ -212,9 +212,9 @@ for (const [label, viewport] of [['screenshot', { width: 1440, height: 900 }],
 
       const r = await geometryReport(page);
       assert.equal(r.pixelCount, 964, 'model topology must expose 964 physical pixels');
-      assert.equal(r.totalMappedAllPresets, 1632,
-        'expected 1632 mapped glyph rows across all presets (964 top_down overlap counted per view)');
-      assert.equal(r.topDownCount, 768, 'top_down view maps 768 physical indices');
+      assert.equal(r.totalMappedAllPresets, 2322,
+        'expected 2322 mapped glyph rows across all presets (per-view sums since the all-LEDs + back-view order, 2026-08-29)');
+      assert.equal(r.topDownCount, 964, 'top_down view maps all 964 physical indices (all-LEDs order, 2026-08-29)');
       assert.deepEqual(r.paneIds, r.authIds,
         'pane glyph ID+coordinate set must match authoritative expandPanel output');
       assert.equal(r.pmvCount, 1, 'exactly one .pmv-canvas');

@@ -1329,6 +1329,18 @@ body.spatial-fullscreen-active { overflow: hidden; }
 .take-summary.is-looping {
   border-color: rgba(255,216,77,.65); color: var(--yellow); background: rgba(255,216,77,.12);
 }
+.take-summary-row { display: flex; align-items: stretch; gap: 6px; }
+.take-summary-row .take-summary { flex: 1 1 auto; }
+.take-rec-quick {
+  flex: 0 0 auto; min-height: 36px; margin-top: 4px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: rgba(255,255,255,.05); color: var(--text-soft);
+  font-family: inherit; font-size: .6rem; font-weight: 800; letter-spacing: .06em;
+  cursor: pointer; white-space: nowrap;
+}
+.take-rec-quick.is-recording {
+  border-color: rgba(255,90,90,.75); color: #ffb4b4; background: rgba(255,90,90,.14);
+}
 .brush-cluster {
   display: flex; flex-direction: column; min-width: 0; container-type: inline-size;
 }
@@ -3898,13 +3910,20 @@ if (window.parent !== window ||
              played back at the speed it was performed, and looped so a figure
              keeps running while the operator does something else. -->
         <div class="take-cluster" id="takeCluster">
-          <button type="button" class="brush-summary take-summary" id="takeSummary"
-                  aria-expanded="false" aria-controls="takeBody"
-                  title="Show take slots and transport">
-            <span class="brush-summary-label">TAKE</span>
-            <span class="brush-summary-val" id="takeSummaryVal" role="status" aria-live="polite">S1 · EMPTY</span>
-            <span class="brush-summary-chev">▾</span>
-          </button>
+          <!-- REC rides at top level (operator order 2026-08-29: "show the
+               record button") — it drives the SAME transport path as the
+               popover's arm button, so behavior and guards stay identical. -->
+          <div class="take-summary-row">
+            <button type="button" class="brush-summary take-summary" id="takeSummary"
+                    aria-expanded="false" aria-controls="takeBody"
+                    title="Show take slots and transport">
+              <span class="brush-summary-label">TAKE</span>
+              <span class="brush-summary-val" id="takeSummaryVal" role="status" aria-live="polite">S1 · EMPTY</span>
+              <span class="brush-summary-chev">▾</span>
+            </button>
+            <button type="button" class="take-rec-quick" id="recQuick"
+                    title="Record into the selected take slot">● REC</button>
+          </div>
           <div class="take-body is-take-collapsed" id="takeBody">
             <div class="take-panel-head" id="recRow">
               <div class="take-slots" id="takeSlots" role="tablist" aria-label="Take slots">
@@ -4981,6 +5000,13 @@ document.write('<script src="touch_control_take_playback_overlay.js?v=' + Date.n
       summary.classList.toggle('is-playing', state.playingCount > 0
         && !state.slots.some(function (slot) { return slot.phase === 'looping'; }));
     }
+    var quickRec = document.getElementById('recQuick');
+    if (quickRec) {
+      var recordingNow = state.recordingIndex !== null;
+      quickRec.classList.toggle('is-recording', recordingNow);
+      quickRec.textContent = recordingNow ? '■ STOP REC' : '● REC';
+      quickRec.disabled = selected.phase === 'settling';
+    }
     var eligible = takeEligibility('UI').ok === true;
     slotsHost.querySelectorAll('.take-slot').forEach(function (button) {
       var index = Number(button.dataset.take);
@@ -5063,6 +5089,13 @@ document.write('<script src="touch_control_take_playback_overlay.js?v=' + Date.n
     var slotsHost = document.getElementById('takeSlots');
     var host = document.getElementById('recModes');
     if (!slotsHost || !host) return;
+    var quickRec = document.getElementById('recQuick');
+    if (quickRec) {
+      quickRec.addEventListener('click', function () {
+        var armButton = host.querySelector('button[data-rec="arm"]');
+        if (armButton && !armButton.disabled) armButton.click();
+      });
+    }
     slotsHost.addEventListener('click', function (event) {
       var button = event.target.closest('.take-slot');
       if (!button || button.disabled) return;

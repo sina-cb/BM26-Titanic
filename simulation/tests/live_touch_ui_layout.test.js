@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { pixels as titanicPixels } from '../../marsin_engine/models/titanic.js';
+import { pixels as titanicPixels } from '../../marsin_engine/models/titanic_normalized.js';
 import { appendAutoViews } from '../../marsin_engine/lib/view_catalog.js';
 import { buildMaskRegistry } from '../../marsin_engine/lib/mask_registry.js';
 import { loadModelForGauge } from '../../marsin_engine/lib/model_loader.js';
@@ -22,8 +22,8 @@ const ARTIFACT = JSON.parse(fs.readFileSync(
   'utf8',
 ));
 const PIXEL_VIEW_SOURCES = {
-  'pixel_map_views.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml'), 'utf8'),
-  'cameras.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic/cameras.yaml'), 'utf8'),
+  'pixel_map_views.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/pixel_map_views.yaml'), 'utf8'),
+  'cameras.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/cameras.yaml'), 'utf8'),
   'pixel_map_layout.js': fs.readFileSync(path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_layout.js'), 'utf8'),
   'pixel_map_views.js': fs.readFileSync(path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_views.js'), 'utf8'),
 };
@@ -34,7 +34,7 @@ let groupCatalogPromise;
 
 function groupCatalog() {
   if (groupCatalogPromise) return groupCatalogPromise;
-  groupCatalogPromise = loadModelForGauge('titanic').then((model) => {
+  groupCatalogPromise = loadModelForGauge('titanic_normalized').then((model) => {
     appendAutoViews(model.pixels, model.viewMasks, model.groupBits);
     const registry = buildMaskRegistry({
       pixels: model.pixels,
@@ -183,7 +183,7 @@ async function installHermeticBrowser(page, nativeEmbed = false, catalog = null)
           { id: 'blue-hour', pattern: '01_blue_hour', label: 'Blue Hour' },
         ] });
         if (path === '/model/view-selection-options') return response(groupViews || { groups: [], namedViews: [] });
-        if (path === '/model/pixel-layout') return response({ scene: 'titanic', model: 'titanic', pixelCount: artifact.modelPixelCount, returnedCount: artifact.modelPixelCount, pixels });
+        if (path === '/model/pixel-layout') return response({ scene: 'titanic_normalized', model: 'titanic_normalized', pixelCount: artifact.modelPixelCount, returnedCount: artifact.modelPixelCount, pixels });
         if (path === '/audio-sources') return response({ sources: [] });
         if (path === '/layers/live_touch/presets') return response({ entries: [] });
       }
@@ -227,8 +227,8 @@ async function openPanel(page, viewport) {
   await page.evaluate(async (artifact, pixels) => {
     await window.TouchPixelViews.ready();
     await window.TouchPixelViews.verifyEngineLayout({
-      scene: 'titanic',
-      model: 'titanic',
+      scene: 'titanic_normalized',
+      model: 'titanic_normalized',
       pixelCount: artifact.modelPixelCount,
       returnedCount: artifact.modelPixelCount,
       pixels,
@@ -595,7 +595,7 @@ test('native TAKE records and replays acknowledged endpoint frames with atomic c
     await page.waitForFunction(() => window.TouchTake && window.TouchTakeBankRuntime && window.__wire
       && window.TouchPixelViews?.state().readyStatus === 'fulfilled');
     await page.evaluate(async (artifact, pixels) => {
-      await window.TouchPixelViews.verifyEngineLayout({ scene: 'titanic', model: 'titanic',
+      await window.TouchPixelViews.verifyEngineLayout({ scene: 'titanic_normalized', model: 'titanic_normalized',
         pixelCount: artifact.modelPixelCount, returnedCount: artifact.modelPixelCount, pixels });
       window.__takeRequests = [];
       window.__takeHoldLift = false;
@@ -770,7 +770,7 @@ test('multi-take bank mixes two slots concurrently with isolated contact keys', 
     await page.waitForFunction(() => window.TouchTakeBankRuntime && window.__wire
       && window.TouchPixelViews?.state().readyStatus === 'fulfilled');
     await page.evaluate(async (artifact, pixels) => {
-      await window.TouchPixelViews.verifyEngineLayout({ scene: 'titanic', model: 'titanic',
+      await window.TouchPixelViews.verifyEngineLayout({ scene: 'titanic_normalized', model: 'titanic_normalized',
         pixelCount: artifact.modelPixelCount, returnedCount: artifact.modelPixelCount, pixels });
       window.__takeRequests = [];
     }, ARTIFACT, titanicPixels);
@@ -1501,7 +1501,7 @@ test('ARM joins slow pixel verification and retries a prior transient failure', 
         if (path !== '/model/pixel-layout') throw new Error(`unexpected ARM request ${path}`);
         window.__pixelLayoutRequestCache = options.cache || null;
         return new Response(JSON.stringify({
-          scene: 'titanic', model: 'titanic', pixelCount: pixels.length,
+          scene: 'titanic_normalized', model: 'titanic_normalized', pixelCount: pixels.length,
           returnedCount: pixels.length, pixels,
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       };
@@ -1541,7 +1541,7 @@ test('ARM joins slow pixel verification and retries a prior transient failure', 
       pixels[0].nx += 0.0001;
       try {
         await window.TouchPixelViews.verifyEngineLayout({
-          scene: 'titanic', model: 'titanic', pixelCount: pixels.length,
+          scene: 'titanic_normalized', model: 'titanic_normalized', pixelCount: pixels.length,
           returnedCount: pixels.length, pixels,
         });
         return null;
@@ -1549,7 +1549,7 @@ test('ARM joins slow pixel verification and retries a prior transient failure', 
         return error.message;
       }
     });
-    assert.match(mismatch, /engine model 'titanic' \(964 pixels\) topology does not match/);
+    assert.match(mismatch, /engine model 'titanic_normalized' \(964 pixels\) topology does not match/);
     assert.match(mismatch, /cd simulation && npm run pixel-views:export/,
       'a true mismatch stays fail-closed and names the regeneration remedy');
     assert.doesNotMatch(mismatch, /f10607|\[\{|"pixels"/,
@@ -1585,7 +1585,7 @@ test('native ARM survives lost/reordered bridge readiness with one document-scop
         if (path !== '/model/pixel-layout') throw new Error(`unexpected native verify request ${path}`);
         window.__nativePixelRequests.push({ path, cache: options.cache || null });
         return new Response(JSON.stringify({
-          scene: 'titanic', model: 'titanic', pixelCount: pixels.length,
+          scene: 'titanic_normalized', model: 'titanic_normalized', pixelCount: pixels.length,
           returnedCount: pixels.length, pixels,
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       };
@@ -1688,7 +1688,7 @@ test('native ARM survives lost/reordered bridge readiness with one document-scop
       mismatched[0].nx += 0.0001;
       try {
         await window.TouchPixelViews.verifyEngineLayout({
-          scene: 'titanic', model: 'titanic', pixelCount: mismatched.length,
+          scene: 'titanic_normalized', model: 'titanic_normalized', pixelCount: mismatched.length,
           returnedCount: mismatched.length, pixels: mismatched,
         });
       } catch {
@@ -1771,7 +1771,7 @@ test('native ARM prepares safely when persisted layout hides Spatial before its 
         if (path !== '/model/pixel-layout') throw new Error(`unexpected native verify request ${path}`);
         if (options.cache !== 'no-store') throw new Error('native topology request was cacheable');
         return new Response(JSON.stringify({
-          scene: 'titanic', model: 'titanic', pixelCount: pixels.length,
+          scene: 'titanic_normalized', model: 'titanic_normalized', pixelCount: pixels.length,
           returnedCount: pixels.length, pixels,
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       };

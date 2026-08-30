@@ -14,6 +14,7 @@ import {
 import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
 import { fixtureModelScale } from "../fixtures/fixture_model_scale.js";
+import { normalizeModelPixels } from "./model_normalization.js";
 
 /**
  * The LED-bus lane table: name → { universe, addr, stride, order, whiteMode,
@@ -658,7 +659,16 @@ export function generatePixelMap() {
 }
 
 export function saveModelJS() {
-  const { pixels, specialEffects } = generatePixelMap();
+  let { pixels, specialEffects } = generatePixelMap();
+
+  // Scene-gated export-time normalization (titanic_normalized): rewrites the
+  // EXPORTED coordinates only — the live pixel list from generatePixelMap()
+  // (sim dots, in-browser pattern engine, 2D pixel-map layouts) is untouched.
+  // Throws on any precondition failure; a broken transform must abort the
+  // export, never fall back to writing untransformed coords (codex P0).
+  if (params.normalizeEngineExport) {
+    pixels = normalizeModelPixels(pixels, { xGap: params.normalizeXGap });
+  }
 
   const lines = [
     '// Auto-generated Pixelblaze model — do not edit manually',

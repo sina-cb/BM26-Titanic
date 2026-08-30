@@ -186,7 +186,18 @@ function refineCanvasSize(
       return { width: box.width, height: box.height, axis, aspect: boxAspect };
     }
     aspect += REFINE_DAMPING * (realAspect - aspect);
-    box = bandCanvasSizeForAspect(aspect, slotWidth, capHeight);
+    const next = bandCanvasSizeForAspect(aspect, slotWidth, capHeight);
+    if (next.width === box.width && next.height === box.height) {
+      // BOUND-PINNED fixed point: the box sits on a clamp (the
+      // MIN_BAND_CANVAS_HEIGHT floor, or the slot/cap ceiling) and no aspect
+      // movement can change it — e.g. the Back view's ~4.3 composite aspect
+      // wants a shallower box than the 72 px floor permits at narrow slots.
+      // The box genuinely cannot move, so this IS the settled answer of the
+      // constrained system; the residual letterbox inside it is the floor's
+      // doing — declared geometry, not an unverified guess.
+      return { width: box.width, height: box.height, axis, aspect: boxAspect };
+    }
+    box = next;
   }
   fail(
     `computeBandCanvasSize('${flat.id}', '${axis}'): the real-geometry refinement did not settle ` +

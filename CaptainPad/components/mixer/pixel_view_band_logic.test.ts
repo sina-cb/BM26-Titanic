@@ -346,10 +346,10 @@ describe('arrangedDesignAspect — the §3.2 aspect, off the real artifact', () 
     const topDown = realFlat('top_down');
     const columns = arrangedDesignAspect(topDown, 'columns');
     const rows = arrangedDesignAspect(topDown, 'rows');
-    // docs/64 §1 quotes 1.91:1 from the glyph EXTENT (694×364); the tight
-    // glyph-bounds figure measured here is 1.87 — the same ship, a slightly
-    // tighter box (bounds vs. extent), not a different number to chase.
-    expect(columns).toBeCloseTo(1.872, 2);
+    // The normalized scene's leveled, condensed rig (halves side by side
+    // with the flank stacks) is much wider than deep — ~4.62:1 measured off
+    // the real artifact.
+    expect(columns).toBeCloseTo(4.6156, 2);
     expect(rows).toBe(columns);
   });
 
@@ -360,20 +360,20 @@ describe('arrangedDesignAspect — the §3.2 aspect, off the real artifact', () 
     // than either panel alone (they sit at different heights within it), so
     // an independent-sum formula undercounts the composite. The real,
     // gap-free fixed point (bisected against `arrangePanels` itself) is
-    // ≈2.92 — noticeably higher, i.e. a WIDER true composite than the old
+    // ≈3.06 — noticeably higher, i.e. a WIDER true composite than the old
     // formula gave, which is why the old formula under-sized the canvas and
     // left a residual letterbox void on this exact view.
-    expect(arrangedDesignAspect(realFlat('front'), 'columns')).toBeCloseTo(2.9227, 3);
+    expect(arrangedDesignAspect(realFlat('front'), 'columns')).toBeCloseTo(3.7593, 3);
   });
 
   it('FRONT stacked (rows) — the same true-fixed-point correction', () => {
-    expect(arrangedDesignAspect(realFlat('front'), 'rows')).toBeCloseTo(0.7674, 3);
+    expect(arrangedDesignAspect(realFlat('front'), 'rows')).toBeCloseTo(0.9758, 3);
   });
 
   it('pins TE SIGN both ways off the real fixed point', () => {
     const teSign = realFlat('te_sign');
-    expect(arrangedDesignAspect(teSign, 'columns')).toBeCloseTo(1.4197, 3);
-    expect(arrangedDesignAspect(teSign, 'rows')).toBeCloseTo(0.3717, 3);
+    expect(arrangedDesignAspect(teSign, 'columns')).toBeCloseTo(1.6945, 3);
+    expect(arrangedDesignAspect(teSign, 'rows')).toBeCloseTo(0.4245, 3);
   });
 
   it('is a genuine fixed point: compositeAspectFor, probed at (aspect, 1), reproduces the same aspect (gap-free)', () => {
@@ -425,38 +425,40 @@ describe('bandCanvasSizeForAspect — the §3.2 clamp formula in isolation', () 
 describe('computeBandCanvasSize — docs/64 §8 W2 acceptance matrix (real artifact, slots 300/620/1220)', () => {
   const widths = [300, 620, 1220];
 
-  it('top-down (single-panel, ≈1.87:1): full-bleed at 300, ceiling-capped and IDENTICAL at 620 and 1220', () => {
+  it('top-down (single-panel, ≈4.62:1): floor-pinned at 300, natural at 620, ceiling-capped at 1220', () => {
     const flat = realFlat('top_down');
     const [w300, w620, w1220] = widths.map((w) => computeBandCanvasSize(flat, REAL_DESIGN, w, CHANNEL_EDIT_CAP_HEIGHT));
+    // the normalized rig's wide aspect wants a 65 px band at 300 — the
+    // MIN_BAND_CANVAS_HEIGHT floor holds it at 72 (bound-pinned box)
     expect(w300.width).toBeCloseTo(300, 1);
-    expect(w300.height).toBeCloseTo(160.34, 1);
-    expect(w620.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
-    expect(w620.width).toBeCloseTo(329.31, 1);
-    // Widening the slot further, once the ceiling already binds, does not
-    // grow the picture any more — 620 and 1220 land on the SAME box.
-    expect(w1220.width).toBeCloseTo(w620.width, 6);
-    expect(w1220.height).toBe(w620.height);
+    expect(w300.height).toBe(MIN_BAND_CANVAS_HEIGHT);
+    expect(w620.width).toBeCloseTo(620, 1);
+    expect(w620.height).toBeCloseTo(134.33, 1);
+    expect(w1220.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
+    expect(w1220.width).toBeCloseTo(812.34, 1);
   });
 
-  it('front (multi-panel, side-by-side ≈2.92 true aspect): same clamp shape, larger absolute size than top-down', () => {
+  it('front (multi-panel, ≈3.76:1 side by side): STACKS at a narrow slot, columns from 620 up', () => {
     const flat = realFlat('front');
     const [w300, w620] = widths.map((w) => computeBandCanvasSize(flat, REAL_DESIGN, w, CHANNEL_EDIT_CAP_HEIGHT));
-    expect(w300.axis).toBe('columns');
-    expect(w300.width).toBeCloseTo(300, 0);
-    expect(w300.height).toBeCloseTo(99.97, 0);
-    expect(w620.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
-    // Corrected (was 477.56 under the old, wrong independent-panel-sum
-    // formula) — the real fixed point draws a WIDER picture, not narrower,
-    // which is the direction M1's residual void needed correcting in.
-    expect(w620.width).toBeCloseTo(520.5, 1);
+    // the normalized composite is so wide that stacking wins the lit-area
+    // race at a 300 px slot ("measured, never named")
+    expect(w300.axis).toBe('rows');
+    expect(w300.width).toBeCloseTo(164.16, 1);
+    expect(w300.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
+    expect(w620.axis).toBe('columns');
+    expect(w620.width).toBeCloseTo(620, 1);
+    expect(w620.height).toBeCloseTo(163.32, 1);
   });
 
-  it('te_sign (multi-panel, ≈1.42:1 true aspect): ceiling-capped at EVERY tested width', () => {
+  it('te_sign (multi-panel, ≈1.69:1 true aspect): slot-bound at 300, ceiling-capped from 620 up', () => {
     const flat = realFlat('te_sign');
-    for (const w of widths) {
-      const size = computeBandCanvasSize(flat, REAL_DESIGN, w, CHANNEL_EDIT_CAP_HEIGHT);
+    const [w300, w620, w1220] = widths.map((w) => computeBandCanvasSize(flat, REAL_DESIGN, w, CHANNEL_EDIT_CAP_HEIGHT));
+    expect(w300.width).toBeCloseTo(300, 1);
+    expect(w300.height).toBeCloseTo(172.89, 1);
+    for (const size of [w620, w1220]) {
       expect(size.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
-      expect(size.width).toBeCloseTo(257.3, 1);
+      expect(size.width).toBeCloseTo(305.32, 1);
     }
   });
 
@@ -495,6 +497,12 @@ describe('computeBandCanvasSize — docs/64 §8 W2 acceptance matrix (real artif
           const boxAspect = size.width / size.height;
           const realAspect = compositeAspectFor(flat, REAL_DESIGN, size.width, size.height, size.axis);
           const pct = 100 * Math.abs(realAspect - boxAspect) / boxAspect;
+          // A bound-pinned box is exempt: when the view's composite wants a
+          // shallower band than MIN_BAND_CANVAS_HEIGHT permits (the
+          // normalized top_down at a 300 px slot), the residual letterbox is
+          // the floor's doing — declared geometry, not a sizing error.
+          const floorPinned = size.height === MIN_BAND_CANVAS_HEIGHT && realAspect > boxAspect;
+          if (floorPinned) continue;
           worstPct = Math.max(worstPct, pct);
           expect(pct, `${id} @ w=${w} cap=${cap}: ${pct.toFixed(3)}% void — box ${size.width.toFixed(1)}×${size.height.toFixed(1)}`)
             .toBeLessThan(1);

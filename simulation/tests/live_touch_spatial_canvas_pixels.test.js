@@ -19,7 +19,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { pixels as titanicPixels } from '../../marsin_engine/models/titanic.js';
+import { pixels as titanicPixels } from '../../marsin_engine/models/titanic_normalized.js';
 import {
   buildArtifact,
   serializeArtifact,
@@ -37,9 +37,9 @@ const RUNTIME_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_p
 const RENDER_DIR = path.join(REPO_ROOT, '.agent_renders');
 const PIXEL_VIEW_SOURCES = {
   'pixel_map_views.yaml': fs.readFileSync(
-    path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml'), 'utf8'),
+    path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/pixel_map_views.yaml'), 'utf8'),
   'cameras.yaml': fs.readFileSync(
-    path.join(REPO_ROOT, 'simulation/scenes/titanic/cameras.yaml'), 'utf8'),
+    path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/cameras.yaml'), 'utf8'),
   'pixel_map_layout.js': fs.readFileSync(
     path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_layout.js'), 'utf8'),
   'pixel_map_views.js': fs.readFileSync(
@@ -54,24 +54,34 @@ const runtime = require(RUNTIME_PATH);
 /** Authoritative per-view visible pixel counts from the resolver/exporter. */
 const VIEW_CONTRACTS = Object.freeze({
   top_down: Object.freeze({
-    pixelCount: 768,
+    pixelCount: 964,
     axisX: 'nx',
     axisY: 'nz',
     samples: Object.freeze([
-      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 212.26354258029485, y: 454.46099068621317 },
-      { pixelIndex: 212, fixtureKey: 'Right Front Wall 4', x: 742.7200852023556, y: 279.2299419454538 },
-      { pixelIndex: 643, fixtureKey: 'Right Small SmokeStack 4', x: 734.9272856367206, y: 118.19540157874955 },
+      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 230.74573974745786, y: 316.94352720974416 },
+      { pixelIndex: 212, fixtureKey: 'Right Front Wall 4', x: 648.9683484188178, y: 348.4915772712035 },
+      { pixelIndex: 643, fixtureKey: 'Right Small SmokeStack 4', x: 798.2473460721868, y: 229.53011509665888 },
     ]),
   }),
   front: Object.freeze({
-    pixelCount: 396,
-    paintPixelCount: 792,
+    pixelCount: 470,
+    paintPixelCount: 866,
     axisX: 'nx',
     axisY: 'ny',
     samples: Object.freeze([
-      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 148.53658536585368, y: 466 },
-      { pixelIndex: 884, fixtureKey: 'Right_Front_Right', x: 786.368, y: 434 },
-      { pixelIndex: 245, fixtureKey: 'Right SmokeStacks 8', x: 595.6860800000001, y: 162.51584000000003 },
+      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 30, y: 388.9356696915571 },
+      { pixelIndex: 884, fixtureKey: 'Right_Front_Right', x: 870, y: 359.46404341926734 },
+      { pixelIndex: 245, fixtureKey: 'Right SmokeStacks 8', x: 530.1492537313433, y: 338.7856173677069 },
+    ]),
+  }),
+  back: Object.freeze({
+    pixelCount: 420,
+    axisX: 'nx',
+    axisY: 'ny',
+    samples: Object.freeze([
+      { pixelIndex: 286, fixtureKey: 'Left Back Wall 1', x: 707.6535137578807, y: 327.0783281989918 },
+      { pixelIndex: 278, fixtureKey: 'Left Auditorium 1', x: 814, y: 295.4465488549013 },
+      { pixelIndex: 804, fixtureKey: 'Right_Back_Left', x: 35.902631164329605, y: 297.4936190326138 },
     ]),
   }),
   strands: Object.freeze({
@@ -79,9 +89,9 @@ const VIEW_CONTRACTS = Object.freeze({
     axisX: 'nx',
     axisY: 'nz',
     samples: Object.freeze([
-      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 299.5, y: 353.08448540706604 },
-      { pixelIndex: 804, fixtureKey: 'Right_Back_Left', x: 611.6013824884793, y: 197.69585253456222 },
-      { pixelIndex: 963, fixtureKey: 'Right_Front_Left', x: 785.5337941628264, y: 165.2457757296467 },
+      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 296.99999999999994, y: 252.2844768007833 },
+      { pixelIndex: 804, fixtureKey: 'Right_Back_Left', x: 425.18984716228863, y: 157.88015912277518 },
+      { pixelIndex: 963, fixtureKey: 'Right_Front_Left', x: 677.8191843428858, y: 269.2804035295799 },
     ]),
   }),
   te_sign: Object.freeze({
@@ -89,9 +99,9 @@ const VIEW_CONTRACTS = Object.freeze({
     axisX: 'nz',
     axisY: 'ny',
     samples: Object.freeze([
-      { pixelIndex: 0, fixtureKey: 'TE Sign V3 A', x: 498.01395348837207, y: 341.7534883720928 },
-      { pixelIndex: 74, fixtureKey: 'TE Sign 2 V3 A', x: 501.7621247113164, y: 337.6431870669744 },
-      { pixelIndex: 147, fixtureKey: 'TE Sign 2 V3 B', x: 368.8129330254042, y: 120.49999999999996 },
+      { pixelIndex: 0, fixtureKey: 'TE Sign V3 A', x: 507.44408945686916, y: 340.9664536741214 },
+      { pixelIndex: 74, fixtureKey: 'TE Sign 2 V3 A', x: 523.0042575838212, y: 335.3552421500799 },
+      { pixelIndex: 147, fixtureKey: 'TE Sign 2 V3 B', x: 336.6577967003725, y: 126.73629590207564 },
     ]),
   }),
 });
@@ -151,7 +161,7 @@ test('artifact freshness and full per-view glyph counts stay pinned to the expor
   assert.equal(fs.readFileSync(ARTIFACT_PATH, 'utf8'), serializeArtifact(artifact));
   assert.equal(artifact.modelPixelCount, 964);
   assert.deepEqual(artifact.views.map((view) => view.id),
-    ['top_down', 'front', 'strands', 'te_sign']);
+    ['top_down', 'front', 'back', 'strands', 'te_sign']);
 
   for (const [id, contract] of Object.entries(VIEW_CONTRACTS)) {
     const view = findView(artifact, id);
@@ -224,8 +234,8 @@ test('legacy merged reprojection overlaps Front panels — the regression we ref
   const height = 411;
   const fixed = runtime.reprojectView(view, artifact.design, width, height);
   const legacy = legacyMergedReproject(view, artifact.design, width, height);
-  assert.equal(fixed.length, 396);
-  assert.equal(legacy.length, 396);
+  assert.equal(fixed.length, 470);
+  assert.equal(legacy.length, 470);
 
   const panelBounds = (panelId, glyphs) => glyphs.filter((glyph) => glyph.panelId === panelId).reduce((bounds, glyph) => {
     const box = glyphBox(glyph);
@@ -282,8 +292,8 @@ test('browser spatial canvas paints every mapped pixel for each Titanic 2D prese
         }
         if (url.includes(':6968/model/pixel-layout')) {
           return Promise.resolve(new Response(JSON.stringify({
-            scene: 'titanic',
-            model: 'titanic',
+            scene: 'titanic_normalized',
+            model: 'titanic_normalized',
             pixelCount: loadedArtifact.modelPixelCount,
             returnedCount: loadedArtifact.modelPixelCount,
             pixels: modelPixels,
@@ -298,8 +308,8 @@ test('browser spatial canvas paints every mapped pixel for each Titanic 2D prese
     await page.evaluate(async (modelPixels) => {
       await window.TouchPixelViews.ready();
       await window.TouchPixelViews.verifyEngineLayout({
-        scene: 'titanic',
-        model: 'titanic',
+        scene: 'titanic_normalized',
+        model: 'titanic_normalized',
         pixelCount: modelPixels.length,
         returnedCount: modelPixels.length,
         pixels: modelPixels,

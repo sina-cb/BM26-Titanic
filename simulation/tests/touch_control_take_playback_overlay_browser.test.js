@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { pixels as titanicPixels } from '../../marsin_engine/models/titanic.js';
+import { pixels as titanicPixels } from '../../marsin_engine/models/titanic_normalized.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
@@ -19,8 +19,8 @@ const ARTIFACT = JSON.parse(fs.readFileSync(
   'utf8',
 ));
 const PIXEL_VIEW_SOURCES = {
-  'pixel_map_views.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml'), 'utf8'),
-  'cameras.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic/cameras.yaml'), 'utf8'),
+  'pixel_map_views.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/pixel_map_views.yaml'), 'utf8'),
+  'cameras.yaml': fs.readFileSync(path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/cameras.yaml'), 'utf8'),
   'pixel_map_layout.js': fs.readFileSync(path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_layout.js'), 'utf8'),
   'pixel_map_views.js': fs.readFileSync(path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_views.js'), 'utf8'),
 };
@@ -81,8 +81,8 @@ async function openPanel(page) {
     window.TouchTakeEligibility = () => ({ ok: true });
     await window.TouchPixelViews.ready();
     await window.TouchPixelViews.verifyEngineLayout({
-      scene: 'titanic',
-      model: 'titanic',
+      scene: 'titanic_normalized',
+      model: 'titanic_normalized',
       pixelCount: artifact.modelPixelCount,
       returnedCount: artifact.modelPixelCount,
       pixels,

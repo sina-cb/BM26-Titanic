@@ -21,7 +21,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { pixels as titanicPixels } from '../../marsin_engine/models/titanic.js';
+import { pixels as titanicPixels } from '../../marsin_engine/models/titanic_normalized.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
@@ -32,8 +32,8 @@ const ARTIFACT_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_
 /* The runtime fetches its artifact and the resolver sources it fingerprints. */
 const FETCHABLE = new Map([
   ['touch_control_pixel_views.json', 'CaptainPad/live_touch/touch_control_pixel_views.json'],
-  ['/simulation/scenes/titanic/pixel_map_views.yaml', 'simulation/scenes/titanic/pixel_map_views.yaml'],
-  ['/simulation/scenes/titanic/cameras.yaml', 'simulation/scenes/titanic/cameras.yaml'],
+  ['/simulation/scenes/titanic_normalized/pixel_map_views.yaml', 'simulation/scenes/titanic_normalized/pixel_map_views.yaml'],
+  ['/simulation/scenes/titanic_normalized/cameras.yaml', 'simulation/scenes/titanic_normalized/cameras.yaml'],
   ['/simulation/src/gui/pixel_map/pixel_map_layout.js', 'simulation/src/gui/pixel_map/pixel_map_layout.js'],
   ['/simulation/src/gui/pixel_map/pixel_map_views.js', 'simulation/src/gui/pixel_map/pixel_map_views.js'],
 ]);
@@ -106,8 +106,8 @@ const DESIGN = JSON.parse(fs.readFileSync(ARTIFACT_PATH, 'utf8')).design;
 const DEFAULT_FRACTION = 0.035;
 
 const LIVE_LAYOUT = {
-  scene: 'titanic',
-  model: 'titanic',
+  scene: 'titanic_normalized',
+  model: 'titanic_normalized',
   pixelCount: titanicPixels.length,
   returnedCount: titanicPixels.length,
   pixels: titanicPixels,

@@ -196,10 +196,17 @@ export function validatePanelDef(panel, where) {
       throw new Error(`[PixelMapViews] ${pWhere}: expandPitch must be an object ` +
         'keyed by fixtureType, e.g. { VintageLed: 0.6 }');
     }
-    for (const [type, pitch] of Object.entries(e)) {
-      if (typeof pitch !== 'number' || !(pitch > 0)) {
+    for (const [type, val] of Object.entries(e)) {
+      const plainPitch = typeof val === 'number' && val > 0;
+      const lineForm = !!val && typeof val === 'object' && !Array.isArray(val) &&
+        typeof val.pitch === 'number' && val.pitch > 0 && val.layout === 'line' &&
+        (val.direction === undefined || val.direction === 'vertical') &&
+        Object.keys(val).every((k) => k === 'pitch' || k === 'layout' || k === 'direction');
+      if (!plainPitch && !lineForm) {
         throw new Error(`[PixelMapViews] ${pWhere}: expandPitch['${type}'] must ` +
-          `be a positive number of WORLD units, got ${JSON.stringify(pitch)}`);
+          `be a positive number of WORLD units or ` +
+          `{ pitch, layout: 'line', direction?: 'vertical' }, ` +
+          `got ${JSON.stringify(val)}`);
       }
     }
     if (panel.layout !== 'spatial') {

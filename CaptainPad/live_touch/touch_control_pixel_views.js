@@ -17,6 +17,7 @@
   var VIEW_AXES = {
     top_down: ['nx', 'nz'],
     front: ['nx', 'ny'],
+    back: ['nx', 'ny'],
     strands: ['nx', 'nz'],
     te_sign: ['nz', 'ny'],
   };
@@ -25,8 +26,8 @@
   var MAX_VIEW_ZOOM = 4;
   var VIEW_ZOOM_STEP = 1.25;
   var ARTIFACT_URL = 'touch_control_pixel_views.json';
-  var VIEWS_SOURCE_URL = '/simulation/scenes/titanic/pixel_map_views.yaml';
-  var CAMERAS_SOURCE_URL = '/simulation/scenes/titanic/cameras.yaml';
+  var VIEWS_SOURCE_URL = '/simulation/scenes/titanic_normalized/pixel_map_views.yaml';
+  var CAMERAS_SOURCE_URL = '/simulation/scenes/titanic_normalized/cameras.yaml';
   var RESOLVER_SOURCE_URLS = [
     '/simulation/src/gui/pixel_map/pixel_map_layout.js',
     '/simulation/src/gui/pixel_map/pixel_map_views.js',
@@ -229,7 +230,7 @@
     if (!artifact || artifact.schemaVersion !== SCHEMA_VERSION) {
       throw new Error('unsupported or missing pixel-view artifact schema');
     }
-    if (!artifact.source || artifact.source.scene !== 'titanic') {
+    if (!artifact.source || artifact.source.scene !== 'titanic_normalized') {
       throw new Error('pixel-view artifact is not for the Titanic scene');
     }
     ['modelFingerprint', 'modelSourceFingerprint', 'viewsFingerprint', 'camerasFingerprint', 'resolverFingerprint',
@@ -605,7 +606,13 @@
     var sy = (options.targetY - ay) / options.radiusY;
     var segmentLength2 = sx * sx + sy * sy;
     var selected = new Set();
+    // A stroke lives in ONE panel. Panels of a view can share world-axis
+    // ranges (the normalized model z-aligns both TE signs onto one nz/ny
+    // band), so an unscoped world ellipse would spill into the sibling
+    // panel's surface; the tapped panel bounds the selection.
+    var panelScope = options.panelId == null ? null : options.panelId;
     glyphs.forEach(function (glyph) {
+      if (panelScope !== null && glyph.panelId !== panelScope) return;
       var dx = (glyph.world[axisX] - ax) / options.radius;
       var dy = (glyph.world[axisY] - ay) / options.radiusY;
       if (segmentLength2 > 0) {
@@ -649,6 +656,7 @@
     if (!glyph) throw new Error('pixel view contains no addressable glyphs');
     return {
       pixelIndex: glyph.pixelIndex,
+      panelId: glyph.panelId,
       axisX: view.axisX,
       axisY: view.axisY,
       targetX: glyph.world[view.axisX],
@@ -797,9 +805,9 @@
     if (!state.staticVerified || !state.artifact) {
       return Promise.reject(new Error('pixel-view artifact has not passed source verification'));
     }
-    if (!layout || layout.scene !== 'titanic' || layout.model !== 'titanic') {
+    if (!layout || layout.scene !== 'titanic_normalized' || layout.model !== 'titanic_normalized') {
       var error = new Error("engine model is '" + actualModel + "' (" + actualCount
-        + " pixels), expected 'titanic' (" + expectedCount + ' pixels)' + REGEN_HINT);
+        + " pixels), expected 'titanic_normalized' (" + expectedCount + ' pixels)' + REGEN_HINT);
       failEngine(error.message);
       return Promise.reject(error);
     }
@@ -1083,6 +1091,7 @@
         {
           axisX: state.view.axisX,
           axisY: state.view.axisY,
+          panelId: target.panelId,
           targetX: target.targetX,
           targetY: target.targetY,
           prevX: previous && previous.targetX,

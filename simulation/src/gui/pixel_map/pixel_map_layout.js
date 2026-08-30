@@ -27,21 +27,21 @@ export const TYPE_STYLES = {
   // in design units it scales with zoom instead of being a fixed screen weight.
   // In `spatial`/`planar` layouts a bar's LENGTH comes from world coords, so this
   // is a thickness change with only ~4 design units of extra end-cap.
-  ShehdsBar:  { shape: 'square', sizeX: 17, sizeY: 17, gap: 3, sectionEvery: 6, sectionGap: 4 },
+  ShehdsBar:  { shape: 'circle', sizeX: 17, sizeY: 17, gap: 3, sectionEvery: 6, sectionGap: 4 },
   VintageLed: { shape: 'circle', sizeX: 15, sizeY: 15, gap: 5, specular: true },
   UkingPar:   { shape: 'circle', sizeX: 24, sizeY: 24, gap: 0, bezelRing: true },
   // LED strand pixels are many & small — tight dots so a 40-px strand reads as
   // a strand, not a wall. TeLedGrid40 is the TE sign (a true 2-D grid, expanded
   // via the `planar` layout): compact square cells with a hair of gap.
-  LedStrand:   { shape: 'square', sizeX: 7,  sizeY: 7,  gap: 2 },
-  TeLedGrid40: { shape: 'square', sizeX: 9,  sizeY: 9,  gap: 2 },
+  LedStrand:   { shape: 'circle', sizeX: 7,  sizeY: 7,  gap: 2 },
+  TeLedGrid40: { shape: 'circle', sizeX: 9,  sizeY: 9,  gap: 2 },
   // TE Sign V3 — the real sign's two interlocking logo halves (LED-class, DMX
   // transport). Irregular per-pixel `dots` (not a grid): expanded via `planar`
   // from real world coords, so these are just the dot sizes. Small dots so the
   // 74-px logo reads as a sign, not a wall.
-  TeSignV3A40: { shape: 'square', sizeX: 7,  sizeY: 7,  gap: 1 },
-  TeSignV3B34: { shape: 'square', sizeX: 7,  sizeY: 7,  gap: 1 },
-  _default:   { shape: 'square', sizeX: 13, sizeY: 13, gap: 3 },
+  TeSignV3A40: { shape: 'circle', sizeX: 7,  sizeY: 7,  gap: 1 },
+  TeSignV3B34: { shape: 'circle', sizeX: 7,  sizeY: 7,  gap: 1 },
+  _default:   { shape: 'circle', sizeX: 13, sizeY: 13, gap: 3 },
 };
 
 export const DEFAULT_CANVAS = { w: 900, h: 520 };
@@ -617,23 +617,94 @@ export function compressProjectedGaps(P, spec) {
  * Declared per fixtureType on purpose: applied to `ShehdsBar` (18 px at the same
  * sub-pitch) this would draw a bar eighteen pitches long and wreck the view.
  *
+ * A declared type may instead carry `{ pitch, layout: 'line' }` — the LINE
+ * form lays the fixture's LEDs on a single evenly-pitched line (never the
+ * VintageLed 2×3 grid), oriented along the GROUP's run direction (the
+ * farthest pair of same-group fixture centroids). That group direction is
+ * the point: a vertical vintage column projects to a near-point in Top, so
+ * its own first→last vector is tilt noise, while the rail run it hangs on
+ * is a real, stable axis (operator, 2026-08-29 — vintage as a 6-px line).
+ *
  * @param {Array} P projected points, mutated in place (`u`/`v` re-laid)
- * @param {Object<string,number>} pitchByType world units between LED centres
+ * @param {Object<string,number|{pitch:number,layout:string}>} pitchByType
+ *        world units between LED centres, or the `{ pitch, layout }` form
  * @returns {{expanded: number, types: Array<string>}}
  */
 export function expandFixturePitch(P, pitchByType) {
+  const specFor = (type) => {
+    const v = pitchByType[type];
+    if (v === undefined) return null;
+    return typeof v === 'number' ? { pitch: v, layout: 'auto' } : { layout: 'auto', ...v };
+  };
   const byFix = new Map();
   for (const p of P) {
-    if (!(p.fixtureType in pitchByType)) continue;
+    if (!specFor(p.fixtureType)) continue;
     if (!byFix.has(p.fixKey)) byFix.set(p.fixKey, []);
     byFix.get(p.fixKey).push(p);
+  }
+  // group-run directions for line-mode fixtures: unit vector through the
+  // farthest pair of same-group fixture centroids (deterministic, ≥2 needed)
+  const lineGroups = new Map();
+  for (const pts of byFix.values()) {
+    if (specFor(pts[0].fixtureType).layout !== 'line') continue;
+    const cu = pts.reduce((a, p) => a + p.u, 0) / pts.length;
+    const cv = pts.reduce((a, p) => a + p.v, 0) / pts.length;
+    if (!lineGroups.has(pts[0].group)) lineGroups.set(pts[0].group, []);
+    lineGroups.get(pts[0].group).push([cu, cv]);
+  }
+  const groupRun = new Map();
+  for (const [g, cs] of lineGroups) {
+    let best = 0, bu = 0, bv = 0;
+    for (let i = 0; i < cs.length; i++) {
+      for (let j = i + 1; j < cs.length; j++) {
+        const du = cs[j][0] - cs[i][0];
+        const dv = cs[j][1] - cs[i][1];
+        const d2 = du * du + dv * dv;
+        if (d2 > best) { best = d2; bu = du; bv = dv; }
+      }
+    }
+    if (best > 1e-12) {
+      const len = Math.sqrt(best);
+      groupRun.set(g, [bu / len, bv / len]);
+    }
   }
   const types = new Set();
   for (const pts of byFix.values()) {
     if (pts.length < 2) continue;
-    const pitch = pitchByType[pts[0].fixtureType];
+    const spec = specFor(pts[0].fixtureType);
+    const pitch = spec.pitch;
     const cu = pts.reduce((a, p) => a + p.u, 0) / pts.length;
     const cv = pts.reduce((a, p) => a + p.v, 0) / pts.length;
+    if (spec.layout === 'line') {
+      // direction: `direction: 'vertical'` pins the line to the projection's
+      // vertical axis (the fixtures hang plumb — a pendant bulb column is
+      // vertical no matter how the structure under it lists), signed so the
+      // heads keep their real projected order. Otherwise: the fixture's OWN
+      // projected axis whenever it is real (spans at least one pitch); the
+      // group run only substitutes when the fixture projects to a near-point
+      // and its own first→last vector is tilt noise (Top view).
+      let dir = null;
+      const du = pts[pts.length - 1].u - pts[0].u;
+      const dv = pts[pts.length - 1].v - pts[0].v;
+      const len = Math.hypot(du, dv);
+      if (spec.direction === 'vertical') {
+        dir = [0, dv >= 0 ? 1 : -1];
+      } else if (len > pitch) {
+        dir = [du / len, dv / len];
+      } else {
+        dir = groupRun.get(pts[0].group) || (len > 1e-9 ? [du / len, dv / len] : null);
+      }
+      if (!dir) continue; // lone point-projected fixture — leave it exactly put
+      pts.sort((a, b) => (a.gi || 0) - (b.gi || 0));
+      const half = (pts.length - 1) / 2;
+      pts.forEach((p, i) => {
+        const t = (i - half) * pitch;
+        p.u = cu + dir[0] * t;
+        p.v = cv + dir[1] * t;
+      });
+      types.add(pts[0].fixtureType);
+      continue;
+    }
     // VintageLed is six heads on a vertical body — expand to 2×3 so the Front
     // view reads as two distinct rows of three circles, not one cramped column
     // (operator, 2026-08-18).

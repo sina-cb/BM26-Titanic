@@ -1,0 +1,132 @@
+schemaVersion: 1
+name: party_low
+entries:
+  - id: e_party_low_0_05_orbital_attractor_field
+    pattern: 05_orbital_attractor_field
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_1_06_neon_elevator
+    pattern: 06_neon_elevator
+    label: null
+    defaults:
+      sliderSteps: 0.2
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_2_10_chasers
+    pattern: 10_chasers
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_3_15_silk_prism_ribbons
+    pattern: 15_silk_prism_ribbons
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_4_17_rolling_color_dunes
+    pattern: 17_rolling_color_dunes
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_5_23_prismatic_strange_attractors
+    pattern: 23_prismatic_strange_attractors
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_6_24_chromatic_murmuration
+    pattern: 24_chromatic_murmuration
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_7_26_dom_dancers_chevron
+    pattern: 26_dom_dancers_chevron
+    label: null
+    defaults:
+      sliderBall1Energy: 0.333333
+      sliderBall2Energy: 0.333333
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_8_27_swipe
+    pattern: 27_swipe
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_9_34_moire_interference
+    pattern: 34_moire_interference
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_10_37_chevron_chase
+    pattern: 37_chevron_chase
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_11_38_prism_helix
+    pattern: 38_prism_helix
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_12_39_tide_riser
+    pattern: 39_tide_riser
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_13_40_lissajous_weave
+    pattern: 40_lissajous_weave
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_14_42_phyllotaxis_spiral
+    pattern: 42_phyllotaxis_spiral
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_15_47_quasicrystal_dunes
+    pattern: 47_quasicrystal_dunes
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_16_52_silk_ribbons
+    pattern: 52_silk_ribbons
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_low_17_53_neon_elevator_hd
+    pattern: 53_neon_elevator_hd
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

@@ -1,0 +1,210 @@
+# Baby Reveal — SPECIAL EVENT show #1 (docs/52)
+#
+# The operator's flow, verbatim: "assume we have only 3 playlists: baby tease,
+# baby girl, baby boy. We start with the first, and have some effects like
+# strobe, and maybe some other minimal effects, like flash all vintage white
+# (shown in front of the UI button that starts the baby reveal). When baby
+# reveal is going, allow 2 buttons to enable baby pink or blue. In between
+# there's another state, which is blackout. When baby is pressed, we flash all
+# white, then enable the selected playlist."
+#
+# WHAT IS DATA HERE. Everything: the stage order, the button words, the accent
+# colours, the quick-effect palette, and every timing number below. Retuning the
+# reveal is a YAML edit, never a code change.
+#
+# WHAT THIS FILE DOES NOT OWN. Playlist CONTENT. `baby_tease` and
+# `baby_reveal` (docs/73 — the unified colour-blind answer set that replaced
+# the boy/girl twin playlists) are the operator's playlists in
+# simulation/scenes/titanic_normalized/playlists/. The runner refuses to ARM — loudly, by
+# name — if either is missing or has no loadable entry, and it never authors
+# playlist content itself. `baby_reveal` is now BOTH this show's id and a
+# playlist name — deliberately: the show answers the question it asks, with
+# one playlist coloured by whichever `globals` choice fired.
+#
+# ARM (not a stage) captures the pre-show look as the reserved snapshot
+# `ev_prev`, disarms the deck's pattern + colour autopilots, and takes the
+# timeline's operator lease. FINISH / ABORT morph `ev_prev` back over 3 s,
+# re-arm the autopilots and hand the plan back. PANIC always wins and skips the
+# snapshot recall.
+
+schemaVersion: 1
+id: baby_reveal
+name: Baby Reveal
+color: '#FF9EC4'
+# No `icon:` — CaptainPad's IconSymbol map has no glyph for a gift/baby yet, and
+# an unmapped SF name renders a blank 0x0 (report _206 §4). The picker card
+# identifies the show by its accent bar and name. Add `icon:` back the day the
+# tab maps one.
+description: Three playlists, a safe white hold, and a flash-bloom reveal.
+leaseDurationSec: 1800
+
+stages:
+  # ── 1. TEASE ─────────────────────────────────────────────────────────────
+  # Pink and blue both on the ship, neither winning. Runs indefinitely — the
+  # operator holds here as long as the crowd needs. The quick effects are
+  # momentary PULSES: they fire and release themselves, and they never advance
+  # the stage, so they can be drummed on at will.
+  - id: tease
+    label: START TEASE
+    color: '#FF9EC4'
+    hint: Pink and blue, no answer yet. Hold as long as you like.
+    advance: manual
+    actions:
+      - { type: playlist, playlist: baby_tease }
+    # PATTERN ROTATION for this stage — the deck's AUTOPILOT PATTERNS behaviour,
+    # scoped to the tease (operator, 2026-08-15: "an auto transition between
+    # those patterns that I can set the timer for in the UI … use crossfade").
+    # These are DEFAULTS: the tab shows the same controls the deck does (minus
+    # colour) and the operator's live changes are remembered per stage.
+    #
+    # Tease rotation shuffles the full mixed-colour playlist. The revealed
+    # Baby stage below owns its answer playlist until END SHOW; blackout never
+    # rotates.
+    # The SHOW card offers 5 / 15 / 30 / 60 SECOND cadence pills. Both Tease
+    # and Reveal start active at 15 seconds with a one-second transition.
+    autopilot:
+      active: true
+      everySec: 15
+      shuffle: true
+      transition:
+        enabled: true
+        mode: trans_crossfade
+        durationMs: 1000
+        shuffle: false
+    extend:
+      label: RESTART TEASE
+      actions:
+        - { type: playlist, playlist: baby_tease }
+    # Each chip ends on a SOFT RELEASE (docs/57 §2): the boost ramps out over
+    # `releaseMs` while the running pattern rises back through it, instead of
+    # vanishing on a frame boundary. `releaseTo: show` is the default and is
+    # what these want — the tease keeps playing underneath the whole time.
+    #
+    # FLASH ALL WHITE is deliberately NOT here. The all-white slam is a staged
+    # moment (see THE REVEAL below), not a drummable chip — the schema refuses
+    # `blastWhite` inside quickEffects, so re-adding it here breaks the load.
+    quickEffects:
+      - id: strobe
+        label: STROBE ON / OFF
+        color: '#FFF6E8'
+        actions:
+          - { type: effect, effectId: strobe, hz: 6, toggle: true }
+      - id: vintage_white
+        label: VINTAGE WHITE
+        color: '#FFD9A0'
+        actions:
+          - { type: effect, effectId: vintageWhite, holdMs: 600, releaseMs: 800 }
+      - id: uv_blast
+        label: UV BLAST
+        color: '#9E6BFF'
+        actions:
+          - { type: effect, effectId: uvBlast, holdMs: 800, releaseMs: 800 }
+
+  # ── 2. BLACKOUT ──────────────────────────────────────────────────────────
+  # The historical blackout stage keeps its stable id, but never takes the rig
+  # black. blastWhite supplies a neutral full-rig source while the grand master
+  # rides to the 10 percent safety floor. The e-stop remains the operator's
+  # separate emergency and is never used as show choreography.
+  - id: blackout
+    label: HOLD WHITE 10%
+    color: '#FFF6E8'
+    hint: Drum roll. The ship holds at a safe white floor until you call it.
+    advance: manual
+    actions:
+      - { type: effect, effectId: blastWhite, state: true }
+      - { type: masterFade, target: 0.1, durationMs: 1500 }
+
+  # ── 3. THE REVEAL ────────────────────────────────────────────────────────
+  # The ceremonial moment: two buttons, and the answer is chosen AT the button,
+  # so the envelope stays sealed until this second.
+  #
+  # THE FLASH-BLOOM-THEN-PLAYLIST ORDERING is authored as offsets from the tap:
+  #   t=0 ms    release the 10 percent white hold and lift the master
+  #   t=0 ms    rapid full-rig white flashes begin for two seconds
+  #   t=2000 ms one full-rig white blast lands and holds for 1000 ms
+  #   t=3000 ms Diamond Quilt activates under the blast's soft release
+  #   t=4000 ms the bloom is out and the selected color owns the ship
+  #
+  # The landed release path lets Diamond Quilt rise through the white bloom.
+  # No fake white-tail pattern is involved; entryId pins the hero independently
+  # of playlist order or later operator curation.
+  - id: reveal
+    label: THE REVEAL
+    color: '#FFF6E8'
+    ceremonial: true
+    hint: Pick the answer. Its playlist shuffles here until you END SHOW.
+    advance: manual
+    # This is the final holding stage. The answer playlist activates under the
+    # flash, then its engine-side autopilot keeps that Baby family alive until
+    # END SHOW. Pattern order is shuffled; transition style can stay SINGLE or
+    # be changed to SHUFFLE ALL from the simplified card. Every swap is 1 s.
+    autopilot:
+      active: true
+      everySec: 15
+      shuffle: true
+      transition:
+        enabled: true
+        mode: trans_crossfade
+        durationMs: 1000
+        shuffle: false
+    # THE ANSWER'S COLOUR (docs/73 — Baby Reveal unification, PALETTE CONTRACT
+    # v2, operator ruling 2026-08-17). `baby_reveal` replaced the boy/girl twin
+    # answer families with ONE colour-blind pattern set
+    # (`marsin_engine/patterns/baby_reveal/`) that does not know pink from blue
+    # — the show tells it. What a reader needs before touching either choice:
+    #
+    # (a) `colorPalette1` IS THE ANSWER. The patterns render exactly that
+    #     colour and DERIVE their own second tone from it (the primary's value
+    #     x DARK_K = 0.28), so ONE slot decides everything. There is no
+    #     two-slot handshake to satisfy and no handshake blackout: these looks
+    #     also play on the DECK under any ordinary global palette, which is
+    #     what the v2 ruling bought.
+    # (b) `colorPalette2` is still written — same hue, `v: 0.28` — but FOR
+    #     OTHER CONSUMERS ONLY. The reveal patterns never read slot 2. It
+    #     mirrors the dark tone the ship is actually showing so the engine's
+    #     global palette PAIR stays coherent for anything else reading the
+    #     slots. It is not validated by anything on the pattern side.
+    # (c) `colorTransitionMs: 0` matters MORE under v2, not less. The slots are
+    #     slewed by default (800 ms, operator-tunable to 10 s). With the
+    #     handshake blackout gone, a slewed palette no longer goes BLACK
+    #     mid-ramp — it shows an INTERMEDIATE HUE crossing the wheel toward the
+    #     answer, a visibly wrong colour in the middle of the ceremony. Pinned
+    #     to 0, the answer SNAPS. The operator's own value is restored at END
+    #     SHOW by the runner's globals capture/restore (api_server.js
+    #     `captureGlobals` / `setGlobals`, docs/57 §6 G1).
+    # (d) THE WRITE IS VERIFIED. `setGlobals` swallows a ParamCenter
+    #     `source_lock` refusal as runtime arbitration, so a palette write can
+    #     be silently dropped while Live Touch holds the lock — which under v2
+    #     means the reveal runs in whatever colour was already loaded. The
+    #     runner therefore READS THE VALUES BACK and refuses the stage if any
+    #     key did not land (`_assertGlobalsLanded` in
+    #     `lib/special_events/special_events_service.js`). The show refuses to
+    #     start rather than start in a stale colour.
+    # (e) Re-firing a choice (the operator's pink<->blue correction) replays
+    #     this whole action list, so the palette write re-issues automatically
+    #     — there is no stale-palette state to clear by hand.
+    choices:
+      # The operator's own words for these two buttons were "baby pink or blue",
+      # so that is what they say. `IT'S A GIRL` / `IT'S A BOY` is a one-line
+      # edit here if the moment wants it — the button words are show DATA and
+      # the ids below are what bind to the playlists.
+      - id: girl
+        label: BABY PINK
+        color: '#FF9EC4'
+        actions:
+          - { type: globals, set: { colorTransitionMs: 0, colorPalette1: { h: 0.943869, s: 0.965, v: 1.0 }, colorPalette2: { h: 0.943869, s: 0.965, v: 0.28 } } }
+          - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
+          - { type: masterFade, target: 1.0, durationMs: 200 }
+          - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
+          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 1000, releaseMs: 1000, releaseTo: show }
+          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 3000 }
+      - id: boy
+        label: BABY BLUE
+        color: '#4FA8FF'
+        actions:
+          - { type: globals, set: { colorTransitionMs: 0, colorPalette1: { h: 0.594795, s: 0.967, v: 1.0 }, colorPalette2: { h: 0.594795, s: 0.967, v: 0.28 } } }
+          - { type: effect, effectId: blastWhite, state: false, releaseMs: 100, releaseTo: show }
+          - { type: masterFade, target: 1.0, durationMs: 200 }
+          - { type: effect, effectId: strobe, hz: 10, durationMs: 2000, fadeOutMs: 200 }
+          - { type: effect, effectId: blastWhite, delayMs: 2000, holdMs: 1000, releaseMs: 1000, releaseTo: show }
+          - { type: playlist, playlist: baby_reveal, entryId: e_baby_reveal_diamond_quilt, delayMs: 3000 }

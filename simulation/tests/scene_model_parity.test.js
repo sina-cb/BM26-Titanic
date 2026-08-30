@@ -762,6 +762,20 @@ test('real scene titanic: the model is fresh and complete, and the exterior is f
   assert.deepEqual(result.findings.filter((f) => f.code === 'placeholder_controller'), []);
 });
 
+test('real scene titanic_normalized: the normalized export stays parity-green', async () => {
+  // The scene is a duplicate of titanic whose ENGINE MODEL is exported with
+  // normalized (leveled/aligned/condensed) coordinates. Parity is blind to
+  // coordinates by design, so this gate proves the roster/patch/view truth
+  // never drifts from the scene while the transform rewrites geometry.
+  const result = await runRealScene('titanic_normalized');
+  const dirty = result.findings.filter(
+    (f) => f.severity === 'error' && MUST_BE_CLEAN.includes(f.check));
+  assert.deepEqual(dirty, [],
+    'the titanic_normalized model is a current, complete export — ' +
+    'coverage/patch-truth/views/drift clean');
+  assert.equal(result.stats.errors, 0, 'the titanic_normalized gate is GREEN');
+});
+
 test('real scene titanic: the TE signs are LED, not DMX, everywhere the model can say so', async () => {
   const loaded = await loadScene('titanic');
   const signPixels = loaded.model.pixels.filter((p) => /^TeSignV3/.test(p.fixtureType || ''));

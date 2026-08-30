@@ -697,16 +697,16 @@ describe('pixel_view_logic — the checked-in simulation artifact', () => {
   });
 
   it('FRONT stacks in a deck window and columns in a wide one — measured, not named', () => {
-    // The operator's report was FRONT "squeezed into a band". Two 1.5:1 panels
-    // side by side composite to ~2.9:1, which in a deck-window canvas can only
-    // letterbox to a band. Stacked, the same pixels come out ~25 % larger
-    // (measured below). On a wide enough canvas the sim's own column split wins
-    // again, as it should.
+    // The operator's report was FRONT "squeezed into a band". The normalized
+    // scene's two panels composite to ~3.76:1 side by side, so stacking wins
+    // in any deck-shaped window — even 900x500 — and the column split only
+    // takes over on a genuinely banner-shaped canvas (measured below).
     const raw = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
     const parsed = parsePixelViewArtifact(raw);
     const front = flattenView(parsed.views.find((v) => v.id === 'front')!);
     expect(panelAxisFor(front, parsed.design, 618, 463)).toBe('rows');
-    expect(panelAxisFor(front, parsed.design, 900, 500)).toBe('columns');
+    expect(panelAxisFor(front, parsed.design, 900, 500)).toBe('rows');
+    expect(panelAxisFor(front, parsed.design, 1400, 400)).toBe('columns');
     // The gain is real, not marginal.
     const stacked = arrangePanels(front, parsed.design, 618, 463, 'rows').glyphScale;
     const side = arrangePanels(front, parsed.design, 618, 463, 'columns').glyphScale;

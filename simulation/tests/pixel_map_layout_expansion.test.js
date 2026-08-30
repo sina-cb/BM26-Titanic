@@ -566,3 +566,74 @@ test('expandPitch: a single-pixel fixture has no axis and is left alone', () => 
   assert.equal(pts.filter((p) => p.fixKey === 'Par 1').length, 1);
   assert.ok(pts.every((p) => Number.isFinite(p.cx) && Number.isFinite(p.cy)));
 });
+
+test("expandPitch line form: vintage heads open on the group's run, not the tilt noise", async () => {
+  const { expandFixturePitch } = await import('../src/gui/pixel_map/pixel_map_layout.js');
+  // Two 6-head vintage columns of one rail group, each projecting to a
+  // near-point (heads jittered ~0.01 in u/v — pure tilt noise), with fixture
+  // centroids 10 apart along +u: the rail run every head must open along.
+  const P = [];
+  for (const [fixKey, cu] of [['Rail 1', 100], ['Rail 2', 110]]) {
+    for (let i = 0; i < 6; i++) {
+      P.push({
+        gi: P.length, fixKey, fixtureType: 'VintageLed', group: 'Left Back Rails',
+        u: cu + (i % 2) * 0.01, v: 200 + (i % 3) * 0.01,
+      });
+    }
+  }
+  // …and a third fixture with a REAL projected axis (a visible tilted column,
+  // as in a Front view): its own direction must win — no group run needed.
+  for (let i = 0; i < 6; i++) {
+    P.push({
+      gi: P.length, fixKey: 'Rail 3', fixtureType: 'VintageLed', group: 'Right Back Rails',
+      u: 300 + i * 3, v: 200 + i * 4,
+    });
+  }
+  const r = expandFixturePitch(P, { VintageLed: { pitch: 2, layout: 'line' } });
+  assert.equal(r.expanded, 3);
+  assert.deepEqual(r.types, ['VintageLed']);
+  for (const fixKey of ['Rail 1', 'Rail 2']) {
+    const pts = P.filter((p) => p.fixKey === fixKey).sort((a, b) => a.gi - b.gi);
+    // one straight evenly-pitched LINE along +u (the group run), never a 2×3 grid
+    for (let i = 1; i < pts.length; i++) {
+      assert.ok(Math.abs((pts[i].u - pts[i - 1].u) - 2) < 1e-9,
+        `${fixKey} head ${i} pitch along the run`);
+      assert.ok(Math.abs(pts[i].v - pts[0].v) < 1e-9, `${fixKey} head ${i} stays on the line`);
+    }
+  }
+
+  // Rail 3 opened along its OWN axis (slope 4/3), not the group's +u run
+  const own3 = P.filter((p) => p.fixKey === 'Rail 3').sort((a, b) => a.gi - b.gi);
+  const d3u = own3[1].u - own3[0].u;
+  const d3v = own3[1].v - own3[0].v;
+  assert.ok(Math.abs(d3u - 2 * 0.6) < 1e-9 && Math.abs(d3v - 2 * 0.8) < 1e-9,
+    `Rail 3 must open on its own 3-4-5 axis, got du=${d3u} dv=${d3v}`);
+  // direction: 'vertical' pins the line to the projection's vertical axis
+  // regardless of the fixture's own (tilted) axis — pendant bulbs hang plumb
+  const V = [];
+  for (let i = 0; i < 6; i++) {
+    V.push({
+      gi: i, fixKey: 'Rail 9', fixtureType: 'VintageLed', group: 'Left Front Rails',
+      u: 500 + i * 3, v: 300 + i * 4,
+    });
+  }
+  expandFixturePitch(V, { VintageLed: { pitch: 2, layout: 'line', direction: 'vertical' } });
+  const vu = new Set(V.map((pt) => Math.round(pt.u * 1000)));
+  assert.equal(vu.size, 1, 'vertical line: one u for all heads');
+  const vv = V.sort((a, b) => a.gi - b.gi).map((pt) => pt.v);
+  for (let i = 1; i < vv.length; i++) {
+    assert.ok(Math.abs((vv[i] - vv[i - 1]) - 2) < 1e-9, 'vertical line: even pitch, real head order');
+  }
+
+  // the number form is untouched: same input still opens to the 2×3 grid
+  const G = [];
+  for (let i = 0; i < 6; i++) {
+    G.push({
+      gi: i, fixKey: 'Rail 1', fixtureType: 'VintageLed', group: 'Left Back Rails',
+      u: 100 + (i % 2) * 0.01, v: 200 + (i % 3) * 0.01,
+    });
+  }
+  expandFixturePitch(G, { VintageLed: 2 });
+  const vs = new Set(G.map((p) => Math.round(p.v * 1000)));
+  assert.ok(vs.size > 1, 'the legacy number form still spreads onto two rows (2×3 grid)');
+});

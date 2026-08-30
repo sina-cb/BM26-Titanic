@@ -1,0 +1,578 @@
+nextControllerId: 26
+nextUniverse: 842
+controllers:
+  - id: 3
+    name: LeftFrontWall
+    ip: 10.1.1.10
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 2
+        chain:
+          - fixture: Left Front Wall 1
+            at: 1
+          - fixture: Left Front Wall 2
+            at: 120
+      - port: 2
+        universe: 3
+        chain:
+          - fixture: Left Front Wall 3
+            at: 1
+          - fixture: Left Front Wall 4
+            at: 120
+      - port: 3
+        universe: 4
+        chain:
+          - fixture: Left Front Wall 5
+            at: 1
+  - id: 5
+    name: LeftFrontDeck
+    ip: 10.1.1.11
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 5
+        chain:
+          - fixture: Left Front Rails 1
+            at: 1
+          - fixture: Left Front Rails 2
+            at: 34
+          - fixture: Left Front Rails 3
+            at: 67
+          - fixture: Left Front Rails 4
+            at: 100
+      - port: 2
+        universe: 6
+        chain:
+          - fixture: Left Auditorium 5
+            at: 1
+          - fixture: Left Auditorium 6
+            at: 11
+          - fixture: Left Auditorium 7
+            at: 21
+          - fixture: Left Auditorium 8
+            at: 31
+  - id: 6
+    name: LeftBackDeck
+    ip: 10.1.1.12
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 7
+        chain:
+          - fixture: Left Back Rails 1
+            at: 1
+          - fixture: Left Back Rails 2
+            at: 34
+          - fixture: Left Back Rails 3
+            at: 67
+          - fixture: Left Back Rails 4
+            at: 100
+      - port: 2
+        universe: 8
+        chain:
+          - fixture: Left Auditorium 1
+            at: 1
+          - fixture: Left Auditorium 2
+            at: 11
+          - fixture: Left Auditorium 3
+            at: 21
+          - fixture: Left Auditorium 4
+            at: 31
+  - id: 7
+    name: LeftBackWall
+    ip: 10.1.1.13
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 9
+        chain:
+          - fixture: Left Back Wall 1
+            at: 1
+          - fixture: Left Back Wall 2
+            at: 120
+      - port: 2
+        universe: 10
+        chain:
+          - fixture: Left Back Wall 3
+            at: 1
+          - fixture: Left Back Wall 4
+            at: 120
+      - port: 3
+        universe: 11
+        chain:
+          - fixture: Left Back Wall 5
+            at: 1
+  - id: 12
+    name: LeftSmokeStacks
+    ip: 10.1.1.14
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 12
+        chain:
+          - fixture: Left SmokeStack 1
+            at: 1
+          - fixture: Left SmokeStack 2
+            at: 11
+          - fixture: Left SmokeStack 3
+            at: 21
+          - fixture: Left SmokeStack 4
+            at: 31
+      - port: 2
+        universe: 13
+        chain:
+          - fixture: Left SmokeStack 5
+            at: 1
+          - fixture: Left SmokeStack 6
+            at: 11
+          - fixture: Left SmokeStack 7
+            at: 21
+          - fixture: Left SmokeStack 8
+            at: 31
+  - id: 13
+    name: LeftLeftRopes
+    ip: 10.1.1.61
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 30
+        startAddress: 1
+        chain:
+          - Left_Front_Left
+        output: 1
+      - port: 2
+        universe: 31
+        startAddress: 1
+        chain:
+          - Left_Back_Left
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
+        controllerGamma:
+          r: 2.599999905
+          g: 2.599999905
+          b: 2.599999905
+          w: 1
+        controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      controllerId: ss_left_left
+      boardId: angio4-new
+      lastPush:
+        at: '2026-08-23T03:04:10.205Z'
+        outcome: applied
+        firmwareSHA: e046e8842986
+        configHash: 20fca5427b2aabcc39397b39cc1c6045f8caef51f84d6bddbfa7951cc21bdd17
+  - id: 14
+    name: LeftSmallSmokeStack
+    ip: 10.1.1.15
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 14
+        chain:
+          - fixture: Left Small SmokeStack 1
+            at: 1
+          - fixture: Left Small SmokeStack 2
+            at: 11
+          - fixture: Left Small SmokeStack 3
+            at: 21
+          - fixture: Left Small SmokeStack 4
+            at: 31
+  - id: 15
+    name: LeftRightRopes
+    ip: 10.1.1.62
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 32
+        startAddress: 1
+        chain:
+          - Left_Front_Right
+        output: 1
+      - port: 2
+        universe: 33
+        startAddress: 1
+        chain:
+          - Left_Back_Right
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
+        controllerGamma:
+          r: 2.599999905
+          g: 2.599999905
+          b: 2.599999905
+          w: 1
+        controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      controllerId: ss_left_right
+      boardId: angio4-new
+      lastPush:
+        at: '2026-08-24T06:00:02.747Z'
+        outcome: needs-reboot
+        firmwareSHA: b05cfb1068ca
+        configHash: bf9dde41b431c985cb07e76d30d3ee2c6196ce776db091e1a404e8bf42d566f5
+        perOutput:
+          - index: 0
+            enabled: true
+            universe: 32
+            count: 40
+          - index: 1
+            enabled: true
+            universe: 33
+            count: 40
+          - index: 2
+            enabled: false
+          - index: 3
+            enabled: false
+  - id: 16
+    name: RightFrontWall
+    ip: 10.1.1.16
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 15
+        chain:
+          - fixture: Right Front Wall 1
+            at: 1
+          - fixture: Right Front Wall 2
+            at: 120
+      - port: 2
+        universe: 16
+        chain:
+          - fixture: Right Front Wall 3
+            at: 1
+          - fixture: Right Front Wall 4
+            at: 120
+      - port: 3
+        universe: 17
+        chain:
+          - fixture: Right Front Wall 5
+            at: 1
+  - id: 17
+    name: RightFrontDeck
+    ip: 10.1.1.17
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 18
+        chain:
+          - fixture: Right Front Rails 1
+            at: 1
+          - fixture: Right Front Rails 2
+            at: 34
+          - fixture: Right Front Rails 3
+            at: 67
+          - fixture: Right Front Rails 4
+            at: 100
+      - port: 2
+        universe: 19
+        chain:
+          - fixture: Right Auditorium 5
+            at: 1
+          - fixture: Right Auditorium 6
+            at: 11
+          - fixture: Right Auditorium 7
+            at: 21
+          - fixture: Right Auditorium 8
+            at: 31
+  - id: 18
+    name: RightBackDeck
+    ip: 10.1.1.18
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 20
+        chain:
+          - fixture: Right Back Rails 1
+            at: 1
+          - fixture: Right Back Rails 2
+            at: 34
+          - fixture: Right Back Rails 3
+            at: 67
+          - fixture: Right Back Rails 4
+            at: 100
+      - port: 2
+        universe: 21
+        chain:
+          - fixture: Right Auditorium 1
+            at: 1
+          - fixture: Right Auditorium 2
+            at: 11
+          - fixture: Right Auditorium 3
+            at: 21
+          - fixture: Right Auditorium 4
+            at: 31
+  - id: 19
+    name: RightBackWall
+    ip: 10.1.1.19
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 22
+        chain:
+          - fixture: Right Back Wall 1
+            at: 1
+          - fixture: Right Back Wall 2
+            at: 120
+      - port: 2
+        universe: 23
+        chain:
+          - fixture: Right Back Wall 3
+            at: 1
+          - fixture: Right Back Wall 4
+            at: 120
+      - port: 3
+        universe: 24
+        chain:
+          - fixture: Right Back Wall 5
+            at: 1
+  - id: 20
+    name: RightSmokeStack
+    ip: 10.1.1.20
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 25
+        chain:
+          - fixture: Right SmokeStacks 1
+            at: 1
+          - fixture: Right SmokeStacks 2
+            at: 11
+          - fixture: Right SmokeStacks 3
+            at: 21
+          - fixture: Right SmokeStacks 4
+            at: 31
+      - port: 2
+        universe: 26
+        chain:
+          - fixture: Right SmokeStacks 5
+            at: 1
+          - fixture: Right SmokeStacks 6
+            at: 11
+          - fixture: Right SmokeStacks 7
+            at: 21
+          - fixture: Right SmokeStacks 8
+            at: 31
+  - id: 21
+    name: RightSmallSmokeStack
+    ip: 10.1.1.21
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 27
+        chain:
+          - fixture: Right Small SmokeStack 1
+            at: 1
+          - fixture: Right Small SmokeStack 2
+            at: 11
+          - fixture: Right Small SmokeStack 3
+            at: 21
+          - fixture: Right Small SmokeStack 4
+            at: 31
+  - id: 22
+    name: RightTESign
+    ip: 10.1.1.63
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 40
+        chain:
+          - fixture: TE Sign 2 V3 A
+            at: 1
+        output: 1
+      - port: 2
+        universe: 41
+        chain:
+          - fixture: TE Sign 2 V3 B
+            at: 1
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      provisional: true
+  - id: 23
+    name: LeftTeSign
+    ip: 10.1.1.64
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 38
+        chain:
+          - fixture: TE Sign V3 A
+            at: 1
+        output: 1
+      - port: 2
+        universe: 39
+        chain:
+          - fixture: TE Sign V3 B
+            at: 1
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      provisional: true
+  - id: 24
+    name: RightRightRopes
+    ip: 10.1.1.65
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 36
+        startAddress: 1
+        chain:
+          - Right_Front_Right
+        output: 1
+      - port: 2
+        universe: 37
+        startAddress: 1
+        chain:
+          - Right_Back_Right
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
+        controllerGamma:
+          r: 1
+          g: 1
+          b: 1
+          w: 1
+        controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      controllerId: ss_right_right
+      boardId: angio4-new
+      lastPush:
+        at: '2026-08-24T03:58:22.838Z'
+        outcome: applied
+        firmwareSHA: b05cfb1068ca
+        configHash: c1ff5951311cf079fd497f7e710b740b8d59cf92db3a2b41f602b9625b4bb5a5
+        perOutput:
+          - index: 0
+            enabled: true
+            universe: 36
+            count: 40
+          - index: 1
+            enabled: true
+            universe: 37
+            count: 40
+          - index: 2
+            enabled: false
+          - index: 3
+            enabled: false
+  - id: 25
+    name: RightLeftRopes
+    ip: 10.1.1.66
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 34
+        startAddress: 1
+        chain:
+          - Right_Front_Left
+        output: 1
+      - port: 2
+        universe: 35
+        startAddress: 1
+        chain:
+          - Right_Back_Left
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
+        controllerGamma:
+          r: 1
+          g: 1
+          b: 1
+          w: 1
+        controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      controllerId: ss_right_left
+      boardId: angio4-new
+      lastPush:
+        at: '2026-08-24T03:59:51.055Z'
+        outcome: applied
+        firmwareSHA: b05cfb1068ca
+        configHash: 1ddb9936c5293454a80e615564c91cb8020991c3a0b5811e4c1f40bc431d0915
+        perOutput:
+          - index: 0
+            enabled: true
+            universe: 34
+            count: 40
+          - index: 1
+            enabled: true
+            universe: 35
+            count: 40
+          - index: 2
+            enabled: false
+          - index: 3
+            enabled: false

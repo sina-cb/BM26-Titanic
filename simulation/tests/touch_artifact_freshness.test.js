@@ -83,8 +83,8 @@ before(async () => {
   port = await freePort();
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'touch_artifact_freshness_'));
   artifactPath = path.join(tmpRoot, 'touch_control_pixel_views.json');
-  fs.mkdirSync(path.join(tmpRoot, 'scenes', 'titanic'), { recursive: true });
-  fs.writeFileSync(path.join(tmpRoot, 'scenes', 'titanic', 'scene_config.yaml'),
+  fs.mkdirSync(path.join(tmpRoot, 'scenes', 'titanic_normalized'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'scenes', 'titanic_normalized', 'scene_config.yaml'),
     'modelTransform: {}\n');
 
   child = spawn(process.execPath, [SAVE_SERVER], {
@@ -120,7 +120,7 @@ test('startup regenerates the Live Touch artifact before any save arrives', () =
     'boot must export the artifact into the (overridden) root');
   const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
   assert.equal(artifact.schemaVersion, 4);
-  assert.equal(artifact.source.scene, 'titanic');
+  assert.equal(artifact.source.scene, 'titanic_normalized');
 });
 
 test('the server-exported artifact is byte-identical to a direct exporter run', () => {
@@ -134,7 +134,7 @@ test('the server-exported artifact is byte-identical to a direct exporter run', 
 test('/save-cameras (titanic) re-exports the artifact — camera presets no longer brick Live Touch',
   async () => {
     fs.rmSync(artifactPath);
-    const reply = await request('POST', '/save-cameras?scene=titanic', 'presets: []\n');
+    const reply = await request('POST', '/save-cameras?scene=titanic_normalized', 'presets: []\n');
     assert.equal(reply.status, 200);
     assert.match(reply.body, /^Saved/);
     assert.ok(!/WARNING/.test(reply.body),
@@ -156,7 +156,7 @@ test('/save-cameras for a NON-titanic scene does not touch the Titanic artifact'
 
 test('/save (titanic) re-exports the artifact — views.yaml is a resolver input', async () => {
   assert.ok(!fs.existsSync(artifactPath), 'precondition: artifact absent');
-  const reply = await request('POST', '/save?scene=titanic',
+  const reply = await request('POST', '/save?scene=titanic_normalized',
     'modelTransform: {}\nviews: { groupBits: {}, custom: [] }\n');
   assert.equal(reply.status, 200);
   assert.match(reply.body, /^Saved/);
@@ -165,7 +165,7 @@ test('/save (titanic) re-exports the artifact — views.yaml is a resolver input
 
 test('/save-pixel-map-views (titanic) still re-exports through the shared helper', async () => {
   fs.rmSync(artifactPath);
-  const reply = await request('POST', '/save-pixel-map-views?scene=titanic',
+  const reply = await request('POST', '/save-pixel-map-views?scene=titanic_normalized',
     JSON.stringify({ version: 1, views: [] }));
   assert.equal(reply.status, 200);
   assert.match(reply.body, /^Saved/);
@@ -183,19 +183,19 @@ test('an export failure is a named WARNING with the remedy; the save itself stil
     // around, exactly like a corrupt scene source would fail its build step.
     fs.mkdirSync(artifactPath);
     try {
-      const reply = await request('POST', '/save-cameras?scene=titanic', 'presets: [broken]\n');
+      const reply = await request('POST', '/save-cameras?scene=titanic_normalized', 'presets: [broken]\n');
       assert.equal(reply.status, 200, 'the cameras write itself must still succeed');
       assert.match(reply.body, /WARNING/, 'the failed export must be named in the response');
       assert.match(reply.body, /pixel-views:export/,
         'the warning must name the manual remedy');
       const saved = fs.readFileSync(
-        path.join(tmpRoot, 'scenes', 'titanic', 'cameras.yaml'), 'utf8');
+        path.join(tmpRoot, 'scenes', 'titanic_normalized', 'cameras.yaml'), 'utf8');
       assert.match(saved, /broken/, 'the operator\'s edit must be on disk despite the warning');
     } finally {
       fs.rmSync(artifactPath, { recursive: true, force: true });
     }
     // …and the very next save heals the artifact with no warning.
-    const healed = await request('POST', '/save-cameras?scene=titanic', 'presets: []\n');
+    const healed = await request('POST', '/save-cameras?scene=titanic_normalized', 'presets: []\n');
     assert.equal(healed.status, 200);
     assert.ok(!/WARNING/.test(healed.body), `heal-after-failure must not warn: ${healed.body}`);
     assert.ok(fs.existsSync(artifactPath));

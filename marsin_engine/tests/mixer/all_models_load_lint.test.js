@@ -69,7 +69,7 @@ test('every model file under models/ is discovered (sanity on the enumeration fi
   assert.ok(names.includes('test_bench'));
   assert.equal(names.includes('summer_camp_dome.js.original' .replace(/\.js$/, '')), false);
   // 9 active model source files at catalog time (G-3's own count).
-  assert.equal(names.length, 10, `expected 10 model files, got ${names.length}: ${names.join(', ')}`);
+  assert.equal(names.length, 11, `expected 11 model files, got ${names.length}: ${names.join(', ')}`);
 });
 
 // ── dev_test_bench repair pin ────────────────────────────────────────────
@@ -99,6 +99,7 @@ const EXPECTED_OVERLAP_COUNTS = {
   test_bench: 0,
   titanic: 0,
   titanic_interior: 0,
+  titanic_normalized: 0,
 };
 
 // Mirrors sacn_mapper.js's numeric-`channels` polyfill (:284-299) closely

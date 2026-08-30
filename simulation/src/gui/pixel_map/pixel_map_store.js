@@ -35,6 +35,7 @@ import { attachPaneInteraction } from './pixel_map_interaction.js';
 import {
   setPixelMapViewsSource, schedulePixelMapViewsSave,
 } from './pixel_map_persist.js';
+import { normalizeModelPixels } from '../../dmx/model_normalization.js';
 
 export const store = {
   visible: signal(false),
@@ -393,6 +394,30 @@ export function resetViewToDefault(id) {
 
 // ─── Frame source + topology bridge ────────────────────────────────────────
 
+// Scene-gated (normalizeEngineExport): the 2D pixel map lays out on the SAME
+// normalized coordinates the engine model exports with, while the 3D view and
+// the in-browser pattern engine keep as-built geometry. Entries are
+// prototype-linked clones — own wx/wy/wz (+nx/ny/nz) shadow the layout
+// coords; every other read (live r/g/b, group, patch) falls through to the
+// live entry, so per-frame colors stay live. A transform failure throws —
+// the map must never silently fall back to as-built coords (codex P0).
+function pixelMapTopologyList(list) {
+  if (!params.normalizeEngineExport || !list || !list.length) return list;
+  const normalized = normalizeModelPixels(
+    list.map(e => ({ x: e.wx, y: e.wy, z: e.wz, group: e.group })),
+    { xGap: params.normalizeXGap });
+  return list.map((e, i) => {
+    const entry = Object.create(e);
+    entry.wx = normalized[i].x;
+    entry.wy = normalized[i].y;
+    entry.wz = normalized[i].z;
+    entry.nx = normalized[i].nx;
+    entry.ny = normalized[i].ny;
+    entry.nz = normalized[i].nz;
+    return entry;
+  });
+}
+
 /** Start the single shared frame source (one onPixelFrame subscription for the
  *  whole multiview) and the recluster bridge. Idempotent. */
 export function startPixelMapDataPlane() {
@@ -400,13 +425,13 @@ export function startPixelMapDataPlane() {
   store._started = true;
   startFrameSource(onPixelFrame);
   store._frameTopoUnsub = frameOnTopology((list, version) => {
-    store.list = list;
+    store.list = pixelMapTopologyList(list);
     store.version = version;
-    store.clusters = buildClusters(list);
+    store.clusters = buildClusters(store.list);
     store.fixtureCount.value = store.clusters.length;
     store.pixelCount.value = list ? list.length : 0;
     for (const fn of [...store._topoListeners]) {
-      try { fn(store.clusters, list, version); }
+      try { fn(store.clusters, store.list, version); }
       catch (err) {
         console.error('[PixelMap] topology consumer threw — dropped:', err);
         store._topoListeners.delete(fn);

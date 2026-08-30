@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
-import { pixels as modelPixels } from '../../marsin_engine/models/titanic.js';
+import { pixels as modelPixels } from '../../marsin_engine/models/titanic_normalized.js';
 import { createViewRegistry } from '../src/dmx/view_registry.js';
 import {
   DEFAULT_CANVAS,
@@ -25,10 +25,10 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
-const PIXEL_MAP_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml');
-const CAMERAS_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/cameras.yaml');
-const VIEW_REGISTRY_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/views.yaml');
-const MODEL_PATH = path.join(REPO_ROOT, 'marsin_engine/models/titanic.js');
+const PIXEL_MAP_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/pixel_map_views.yaml');
+const CAMERAS_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/cameras.yaml');
+const VIEW_REGISTRY_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/views.yaml');
+const MODEL_PATH = path.join(REPO_ROOT, 'marsin_engine/models/titanic_normalized.js');
 const RESOLVER_PATHS = [
   path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_layout.js'),
   path.join(REPO_ROOT, 'simulation/src/gui/pixel_map/pixel_map_views.js'),
@@ -38,6 +38,7 @@ const ARTIFACT_SCHEMA_VERSION = 4;
 const VIEW_AXIS_PAIRS = Object.freeze({
   top_down: Object.freeze(['nx', 'nz']),
   front: Object.freeze(['nx', 'ny']),
+  back: Object.freeze(['nx', 'ny']),
   strands: Object.freeze(['nx', 'nz']),
   te_sign: Object.freeze(['nz', 'ny']),
 });
@@ -302,10 +303,10 @@ export function buildArtifact() {
     schemaVersion: ARTIFACT_SCHEMA_VERSION,
     generatedBy: 'simulation/tools/export_touch_control_pixel_views.mjs',
     source: {
-      scene: 'titanic',
-      modelPath: 'marsin_engine/models/titanic.js',
-      pixelMapViewsPath: 'simulation/scenes/titanic/pixel_map_views.yaml',
-      camerasPath: 'simulation/scenes/titanic/cameras.yaml',
+      scene: 'titanic_normalized',
+      modelPath: 'marsin_engine/models/titanic_normalized.js',
+      pixelMapViewsPath: 'simulation/scenes/titanic_normalized/pixel_map_views.yaml',
+      camerasPath: 'simulation/scenes/titanic_normalized/cameras.yaml',
       modelFingerprint: topologyFingerprint(modelPixels),
       modelSourceFingerprint: sha256(canonicalSource(modelText)),
       viewsFingerprint: sha256(canonicalSource(pixelMapText)),

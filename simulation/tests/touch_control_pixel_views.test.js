@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
-import { pixels as titanicPixels } from '../../marsin_engine/models/titanic.js';
+import { pixels as titanicPixels } from '../../marsin_engine/models/titanic_normalized.js';
 import { applySpatialPaint } from '../../marsin_engine/effects/spatial_paint.js';
 import { createViewRegistry } from '../src/dmx/view_registry.js';
 import {
@@ -32,15 +32,18 @@ const ARTIFACT_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_
 const PANEL_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control.html');
 const RUNTIME_PATH = path.join(REPO_ROOT, 'CaptainPad/live_touch/touch_control_pixel_views.js');
 const PROJECTION_PATH = path.join(REPO_ROOT, 'CaptainPad/shared/pixel_view_projection.js');
-const PIXEL_MAP_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/pixel_map_views.yaml');
-const VIEW_REGISTRY_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic/views.yaml');
+const PIXEL_MAP_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/pixel_map_views.yaml');
+const VIEW_REGISTRY_PATH = path.join(REPO_ROOT, 'simulation/scenes/titanic_normalized/views.yaml');
 const require = createRequire(import.meta.url);
 const projection = require(PROJECTION_PATH);
 globalThis.DeckPixelProjection = projection;
 const runtime = require(RUNTIME_PATH);
 const VIEW_CONTRACTS = new Map([
-  ['top_down', { pixelCount: 768, axisX: 'nx', axisY: 'nz' }],
-  ['front', { pixelCount: 396, axisX: 'nx', axisY: 'ny' }],
+  // top_down carries the WHOLE rig (all 964 px, operator order 2026-08-29:
+  // every LED in every 2D view); front+back split the elevation between them.
+  ['top_down', { pixelCount: 964, axisX: 'nx', axisY: 'nz' }],
+  ['front', { pixelCount: 470, axisX: 'nx', axisY: 'ny' }],
+  ['back', { pixelCount: 420, axisX: 'nx', axisY: 'ny' }],
   ['strands', { pixelCount: 320, axisX: 'nx', axisY: 'nz' }],
   ['te_sign', { pixelCount: 148, axisX: 'nz', axisY: 'ny' }],
 ]);
@@ -103,7 +106,7 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
   assert.equal(artifact.schemaVersion, 4);
   assert.equal(artifact.modelPixelCount, 964);
   assert.deepEqual(artifact.views.map((view) => view.id),
-    ['top_down', 'front', 'strands', 'te_sign']);
+    ['top_down', 'front', 'back', 'strands', 'te_sign']);
 
   for (const [id, contract] of VIEW_CONTRACTS) {
     const view = findView(artifact, id);
@@ -124,9 +127,10 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
     .find((view) => view.id === 'top_down');
   assert.deepEqual(top.framing, authoredTop.framing,
     'resolved artifact must carry the authored Top-Down framing unchanged');
-  assert.equal(new Set(top.panels[0].glyphs.map((glyph) => glyph.group)).size, 20);
-  assert.ok(top.panels[0].glyphs.every((glyph) =>
-    glyph.fixtureType !== 'TeSignV3A40' && glyph.fixtureType !== 'TeSignV3B34'));
+  assert.equal(new Set(top.panels[0].glyphs.map((glyph) => glyph.group)).size, 24);
+  assert.equal(top.panels[0].glyphs.filter((glyph) =>
+    glyph.fixtureType === 'TeSignV3A40' || glyph.fixtureType === 'TeSignV3B34').length, 148,
+  'both TE signs ride in Top-Down since the all-LEDs order (2026-08-29)');
   for (const group of ['Left Back Rails', 'Right Back Rails']) {
     assert.equal(top.panels[0].glyphs.filter((glyph) => glyph.group === group).length, 24,
       `${group} must contribute all 24 rail pixels to Top-Down`);
@@ -137,14 +141,18 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
   }
 
   const front = findView(artifact, 'front');
-  assert.equal(front.paintPixelCount, 792,
+  // 470 visible (front surfaces + TE Sign 2 — sign 1 faces sideways and is
+  // edge-on here, so it lives in top_down + te_sign instead) + the 396
+  // mirrored Back surface pixels the brush paints through to
+  assert.equal(front.paintPixelCount, 866,
     'Front brush mask must include the corresponding Back surface pixels');
   assert.ok(front.paintPixelIndices.some((index) => titanicPixels[index].group === 'Left Back Wall'));
   assert.ok(front.paintPixelIndices.some((index) => titanicPixels[index].group === 'Right Back Wall'));
+  // every glyph is a plain round dot (operator order 2026-08-29: all circles,
+  // no upwash ellipses, each pixel individually visible)
   const upwash = front.panels.flatMap((panel) => panel.glyphs)
     .filter((glyph) => glyph.effect === 'upwash');
-  assert.equal(upwash.length, 8);
-  assert.deepEqual(new Set(upwash.map((glyph) => glyph.rotation)), new Set([-30, 33]));
+  assert.equal(upwash.length, 0, 'upwash retired — pars are round dots now');
 });
 
 test('Deck and Live Touch execute one projection authority with exact identities and coordinates', () => {
@@ -200,11 +208,13 @@ test('Live display orientation preserves authoritative 3D axes beneath authored 
   };
 
   const topGlyphs = findView(artifact, 'top_down').panels[0].glyphs;
-  assert.ok(topGlyphs.some((glyph) => {
-    const offset = authoredViews.find((view) => view.id === 'top_down')
-      .offsets?.[glyph.fixtureKey];
-    return (offset?.dx ?? 0) !== 0 || (offset?.dy ?? 0) !== 0;
-  }), 'the test must exercise the operator-authored offset feature');
+  // the normalized scene needs no top_down nudges (the whole point of the
+  // normalized layout); the authored-offset feature is exercised by the BACK
+  // view, whose end-on auditorium row is separated by hand-authored offsets
+  const authoredBack = authoredViews.find((view) => view.id === 'back');
+  assert.ok(Object.values(authoredBack.offsets ?? {}).some((offset) =>
+    (offset.dx ?? 0) !== 0 || (offset.dy ?? 0) !== 0),
+  'the test must exercise the operator-authored offset feature');
   const top = removeOffsets(topGlyphs, 'top_down');
   assert.ok(correlation(top.map((glyph) => glyph.x), top.map((glyph) => glyph.world.nx)) > 0.999);
   assert.ok(correlation(top.map((glyph) => glyph.y), top.map((glyph) => glyph.world.nz)) > 0.999,
@@ -298,9 +308,13 @@ test('runtime projection preserves identities and fits every view to the centere
       `${view.id} visible glyph bounds must be horizontally centered (got ${centerX})`);
     assert.ok(Math.abs(centerY - height / 2) < 1,
       `${view.id} visible glyph bounds must be vertically centered (got ${centerY})`);
-    assert.ok(Math.max(fillX, fillY) >= 0.90 && Math.max(fillX, fillY) <= 0.921,
+    // ceiling 0.93: the fit normalizes glyph CENTRES to FIT_FILL (0.92); the
+    // measured bounds here are inflated by glyph extents at the border, which
+    // grew a hair when the views moved to small separated round dots
+    // (operator order 2026-08-29). Still comfortably clear of the viewport.
+    assert.ok(Math.max(fillX, fillY) >= 0.90 && Math.max(fillX, fillY) <= 0.93,
       `${view.id} must fit about 92% of the Live viewport (got ${fillX}, ${fillY})`);
-    assert.ok(fillX <= 0.921 && fillY <= 0.921,
+    assert.ok(fillX <= 0.93 && fillY <= 0.93,
       `${view.id} must not clip visible glyph extents (got ${fillX}, ${fillY})`);
   }
 });
@@ -471,7 +485,8 @@ test('TE Sign XS brush remains a local circle instead of selecting a full LED ro
   const radiusY = radiusPx * range(panelGlyphs.map((glyph) => glyph.world.ny)) /
     range(panelGlyphs.map((glyph) => glyph.y));
   const selected = runtime.affectedPixelIndices(glyphs, {
-    axisX: 'nz', axisY: 'ny', targetX: target.world.nz, targetY: target.world.ny,
+    axisX: 'nz', axisY: 'ny', panelId: target.panelId,
+    targetX: target.world.nz, targetY: target.world.ny,
     radius, radiusY,
   });
   const selectedGlyphs = glyphs.filter((glyph) => selected.has(glyph.pixelIndex));

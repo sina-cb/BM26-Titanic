@@ -937,7 +937,16 @@ Promise.all([
   // Generate initial model file for Pixelblaze patterns. On static hosts there
   // is no save-server to receive the POST, so the call is skipped at the
   // exporter level — see pixelblaze_model_exporter.js.
-  if (window.saveModelJS) window.saveModelJS();
+  // Contained: an export throw (e.g. a scene-gated normalization refusal) must
+  // stay a loud export failure — NOT unwind the bootstrap into the boot .catch,
+  // which would re-run init() on an already-initialized sim.
+  if (window.saveModelJS) {
+    try {
+      window.saveModelJS();
+    } catch (err) {
+      console.error("[Boot] engine model export FAILED — model file on disk is stale:", err);
+    }
+  }
 
   // Restore camera view from saved state
   // ES module exports are live bindings — these reflect init()'s setters

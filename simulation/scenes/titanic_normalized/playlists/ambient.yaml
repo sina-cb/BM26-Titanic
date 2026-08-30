@@ -1,0 +1,737 @@
+schemaVersion: 1
+name: ambient
+entries:
+  - id: e_ambient_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.38
+      sliderLevel: 0.2
+      sliderGrain: 0.67
+      sliderEmberSwell: 0.95
+      sliderJewelryWhite: 0.64
+      sliderJewelrySpeed: 0.72
+      sliderJewelryFlash: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_1_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.17
+      sliderDirection: 0.16
+      sliderLevel: 0.73
+      sliderKick: 0.08
+      sliderRadius: 0.92
+      sliderSharpness: 0.83
+      sliderCount: 0.59
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_2_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.26
+      sliderLevel: 0.68
+      sliderDetail: 0.9
+      sliderKick: 0.86
+      sliderJewelryWhite: 0.82
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_3_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderLevel: 0.87
+      sliderKick: 0.12
+      sliderDetail: 0.89
+      sliderPortholeWhite: 0.87
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_4_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderLevel: 0.71
+      sliderKick: 0.17
+      sliderRadius: 0.23
+      sliderDetail: 0.64
+      sliderDensity: 0.39
+      sliderUvGlow: 0.89
+      sliderWhiteLevel: 0.89
+      sliderWhiteSpeed: 0.48
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_5_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.87
+      sliderKick: 0.13
+      sliderBreathDepth: 0.69
+      sliderBreathShape: 0.23
+      sliderBloom: 0.94
+      sliderRibbing: 0.19
+      sliderSparkle: 0.37
+      sliderWhiteGlow: 0.69
+      sliderFieldDetail: 0.91
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_6_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.57
+      sliderLevel: 0.17
+      sliderStarCount: 0.73
+      sliderBrilliance: 0.59
+      sliderTwinkleFocus: 0.88
+      sliderAfterglow: 0.13
+      sliderStarChorus: 0.63
+      sliderBurst: 0.15
+      sliderJewelryWhite: 0.81
+      sliderUvStars: 0.78
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_7_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderLevel: 0.85
+      sliderKick: 0.26
+      sliderCurrentWidth: 0.89
+      sliderShimmer: 0.82
+      sliderDetail: 0.88
+      sliderJewelryWhite: 0.75
+      sliderUvUndertow: 0.66
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_8_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.86
+      sliderKick: 0.31
+      sliderRadius: 0.5
+      sliderTideWidth: 0.5
+      sliderWhiteLevel: 0.6
+      sliderUvLevel: 0.45
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_9_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0.18
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderLineSoftness: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_10_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.45
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderLatticeScale: 0.5
+      sliderCounterPhase: 0.5
+      sliderFloorLevel: 0.45
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0
+      sliderWhiteSpread: 0.5
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_11_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.39
+      sliderKick: 0.29
+      sliderRadius: 0.85
+      sliderDetail: 0.24
+      sliderFocus: 0.67
+      sliderTrailBlend: 0.11
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_12_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.91
+      sliderLevel: 0.79
+      sliderKick: 0.17
+      sliderRadius: 0.3
+      sliderDetail: 0.71
+      sliderWhiteFoam: 0.11
+      sliderUvUndertow: 0.71
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_13_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.24
+      sliderLevel: 0.22
+      sliderKick: 0
+      sliderRadius: 1
+      sliderDetail: 0.86
+      sliderFrondDensity: 0.68
+      sliderTipGlow: 0.34
+      sliderBaseDarkness: 0.68
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_14_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0.75
+      sliderRipple: 0
+      sliderDepth: 0.6
+      sliderBase: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_15_33_aurora_breath
+    pattern: 33_aurora_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.66
+      sliderLevel: 0.17
+      sliderShimmer: 0.76
+      sliderBreathRate: 0.21
+      sliderBreathDepth: 0.41
+      sliderRibbons: 0.14
+      sliderSoft: 0.58
+      sliderBase: 0.06
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_16_35_sparkle_rain
+    pattern: 35_sparkle_rain
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.65
+      sliderLevel: 0.76
+      sliderDensity: 0.5
+      sliderKick: 0.19
+      sliderFall: 0.81
+      sliderIntensity: 0.87
+      sliderBase: 0.13
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_17_41_reaction_diffusion
+    pattern: 41_reaction_diffusion
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderLevel: 0.45
+      sliderFeed: 0.5
+      sliderSeed: 0.05
+      sliderBase: 0.15
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_18_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderSwell: 0.13
+      sliderBlinder: 1
+      sliderShimmer: 0.5
+      sliderNoiseScale: 0.75
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_19_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderSwell: 0.45
+      sliderSparkle: 0.75
+      sliderKick: 0.01
+      sliderUvGlow: 0.81
+      sliderBase: 0.16
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_20_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderSwell: 0.75
+      sliderFoam: 0.12
+      sliderSpan: 0.76
+      sliderDepth: 0.6
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_21_46_abyssal_fronds
+    pattern: 46_abyssal_fronds
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.25
+      sliderLevel: 0.82
+      sliderGlints: 0.88
+      sliderBreathRate: 0.32
+      sliderBreathDepth: 0.92
+      sliderFrondDensity: 0.85
+      sliderBaseGlow: 0.86
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_22_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderInk: 0.72
+      sliderFlow: 0.81
+      sliderDiffuse: 0.92
+      sliderBase: 0.09
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_23_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBeam: 0.15
+      sliderFlash: 0.54
+      sliderWidth: 0.2
+      sliderSafetyFloor: 0.12
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_24_118_grand_orbit_rings
+    pattern: 118_grand_orbit_rings
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.47
+      sliderLevel: 0.72
+      sliderRingWidth: 0.26
+      sliderOrbitTilt: 0.83
+      sliderContrast: 0.89
+      sliderSafetyFloor: 0.05
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_25_119_bow_stern_tidal_push
+    pattern: 119_bow_stern_tidal_push
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.44
+      sliderLevel: 0.55
+      sliderWaveWidth: 0.42
+      sliderRecoil: 0.92
+      sliderContrast: 0.84
+      sliderSafetyFloor: 0.09
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_26_120_crossing_beacons
+    pattern: 120_crossing_beacons
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.65
+      sliderBeamWidth: 0.32
+      sliderCrossing: 0.83
+      sliderAfterglow: 0.66
+      sliderSafetyFloor: 0.16
+      sliderFlash: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_27_121_spiral_wake
+    pattern: 121_spiral_wake
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.79
+      sliderSpiralWidth: 0.78
+      sliderTurns: 0.8
+      sliderWakeContrast: 0.85
+      sliderSafetyFloor: 0.14
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_28_122_breathing_horizon
+    pattern: 122_breathing_horizon
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderLevel: 0.48
+      sliderHorizonWidth: 0.7
+      sliderBreathDepth: 0.81
+      sliderAfterglow: 0.63
+      sliderSafetyFloor: 0.17
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_29_123_mirrored_broadside_call
+    pattern: 123_mirrored_broadside_call
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.36
+      sliderLevel: 0.85
+      sliderWallWidth: 0.49
+      sliderExpansion: 0.26
+      sliderContrast: 0.85
+      sliderSafetyFloor: 0.12
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_30_124_aurora_crown
+    pattern: 124_aurora_crown
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderLevel: 0.65
+      sliderCrownHeight: 0.81
+      sliderArcWidth: 0.92
+      sliderCurl: 0.73
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_31_125_eclipse_orbit
+    pattern: 125_eclipse_orbit
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.18
+      sliderLevel: 0.79
+      sliderEclipseSize: 0.84
+      sliderRimWidth: 0.88
+      sliderDepth: 0.85
+      sliderSafetyFloor: 0.11
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_32_126_cathedral_rib_wave
+    pattern: 126_cathedral_rib_wave
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderLevel: 0.51
+      sliderRibCount: 0.67
+      sliderRibWidth: 0.74
+      sliderBow: 0.9
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_33_127_grand_maelstrom
+    pattern: 127_grand_maelstrom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.84
+      sliderLevel: 0.82
+      sliderArmWidth: 0.58
+      sliderArmCount: 0.32
+      sliderDepth: 0.56
+      sliderSafetyFloor: 0.5
+      sliderPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_01_harbor_glass
+    pattern: ambient_extra/01_harbor_glass
+    label: Harbor Glass
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCellSize: 0.5
+      sliderBorderWidth: 0.28
+      sliderDrift: 0.35
+      sliderRefraction: 0.42
+      sliderJewelryGlint: 0.22
+      sliderSafetyFloor: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_02_brass_compass
+    pattern: ambient_extra/02_brass_compass
+    label: Brass Compass
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.75
+      sliderDialRadius: 0.6
+      sliderNeedleWidth: 0.28
+      sliderTickGlow: 0.3
+      sliderLevel: 0.58
+      sliderSafetyFloor: 0.25
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_03_pearl_chain
+    pattern: ambient_extra/03_pearl_chain
+    label: Pearl Chain
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderPearlCount: 0.48
+      sliderPearlSize: 0.32
+      sliderLinkGlow: 0.24
+      sliderFocusTravel: 0.72
+      sliderJewelryWhite: 0.76
+      sliderSafetyFloor: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_05_open_gate
+    pattern: ambient_extra/05_open_gate
+    label: Open Gate
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderAperture: 0.58
+      sliderEdgeWidth: 0.24
+      sliderHold: 0.46
+      sliderDepth: 0.56
+      sliderLevel: 0.66
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_07_keel_glow
+    pattern: ambient_extra/07_keel_glow
+    label: Keel Glow
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderKeelWidth: 0.38
+      sliderLift: 0.34
+      sliderTraceLength: 0.54
+      sliderOrganGlow: 0.38
+      sliderLevel: 0.62
+      sliderSafetyFloor: 0.32
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_09_shadow_slats
+    pattern: ambient_extra/09_shadow_slats
+    label: Shadow Slats
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.74
+      sliderSlatCount: 0.48
+      sliderOpen: 0.47
+      sliderTilt: 0.58
+      sliderRimGlow: 0.24
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_10_chart_lines
+    pattern: ambient_extra/10_chart_lines
+    label: Chart Lines
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderLineCount: 0.48
+      sliderLineWidth: 0.36
+      sliderRelief: 0.42
+      sliderDrift: 0.38
+      sliderJewelryMark: 0.2
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_11_paper_fold
+    pattern: ambient_extra/11_paper_fold
+    label: Paper Fold
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCreaseCount: 0.48
+      sliderFoldAngle: 0.42
+      sliderCreaseWidth: 0.18
+      sliderFacetDepth: 0.58
+      sliderLevel: 0.68
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_12_floating_frames
+    pattern: ambient_extra/12_floating_frames
+    label: Floating Frames
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.76
+      sliderFrameCount: 0.46
+      sliderFrameWidth: 0.19
+      sliderDepth: 0.48
+      sliderTwist: 0.44
+      sliderLevel: 0.7
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_16_turning_tiles
+    pattern: ambient_extra/16_turning_tiles
+    label: Turning Tiles
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderTileSize: 0.56
+      sliderFaceDepth: 0.4
+      sliderFaceHold: 0.64
+      sliderGrout: 0.46
+      sliderJewelryCatch: 0.26
+      sliderSafetyFloor: 0.28
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_17_frost_branch
+    pattern: ambient_extra/17_frost_branch
+    label: Frost Branch
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBranchCount: 0.52
+      sliderGrowth: 0.58
+      sliderHold: 0.46
+      sliderMelt: 0.34
+      sliderJewelryIce: 0.18
+      sliderSafetyFloor: 0.24
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_22_balance_beam
+    pattern: ambient_extra/22_balance_beam
+    label: Balance Beam
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBalance: 0.5
+      sliderTransferWidth: 0.38
+      sliderSettle: 0.62
+      sliderCounterweight: 0.36
+      sliderLevel: 0.64
+      sliderSafetyFloor: 0.34
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_extra_35_turning_box
+    pattern: ambient_extra/35_turning_box
+    label: Turning Box
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBoxSize: 0.54
+      sliderEdgeWidth: 0.42
+      sliderPerspective: 0.34
+      sliderCornerGlow: 0.2
+      sliderSafetyFloor: 0.27
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_crisp_01_orbiting_circle
+    pattern: crisp/01_orbiting_circle
+    label: Crisp - Orbiting Circle
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderBodyRadius: 0.56
+      sliderCount: 0.5
+      sliderSpacing: 0.58
+      sliderTrail: 0.46
+      sliderSafetyFloor: 0
+    modulations: []
+    midiMappings: []
+    notes: Nested orbital cartography with eclipse moats and paired sign planetariums.
+  - id: e_crisp_02_dimensional_slicer
+    pattern: crisp/02_dimensional_slicer
+    label: Crisp - Dimensional Slicer
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderSliceCount: 0.78
+      sliderRotationPhase: 0.12
+      sliderSliceGap: 0.12
+      sliderKickOffset: 0
+      sliderAxisWarp: 0.22
+    modulations: []
+    midiMappings: []
+    notes: Engraved rotating planes with bounded voids and razor-black kerfs.
+  - id: e_crisp_03_magnetic_field_collision
+    pattern: crisp/03_magnetic_field_collision
+    label: Crisp - Magnetic Field Collision
+    defaults:
+      sliderLocalSpeed: 0.2
+      sliderAttractionStrength: 0.56
+      sliderPoleSpacing: 0.62
+      sliderFieldWarp: 0.3
+      sliderCollisionKick: 0
+      sliderTensionStrength: 0
+    modulations: []
+    midiMappings: []
+    notes: Calm opposing fields compress a black saddle between Cassini cages.
+  - id: e_crisp_06_impossible_corridor
+    pattern: crisp/06_impossible_corridor
+    label: Crisp - Impossible Corridor
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderCorridorWidth: 0.48
+      sliderPerspectiveDepth: 0.58
+      sliderRoomScale: 0.42
+      sliderSplitWidth: 0.34
+      sliderSafetyFloor: 0
+    modulations: []
+    midiMappings: []
+    notes: A black corridor turns through an impossible fold, room, split, and rejoin.
+  - id: e_crisp_08_topology_knot
+    pattern: crisp/08_topology_knot
+    label: Crisp - Topology Knot
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderRibbonWidth: 0.4
+      sliderTightnessAmount: 0.62
+      sliderTwistAmount: 0.48
+      sliderDepthOrder: 0.6
+      sliderRelease: 0.16
+    modulations: []
+    midiMappings: []
+    notes: Two contoured ribbons tie through three black undercut crossings.
+  - id: e_crisp_10_geometric_echo
+    pattern: crisp/10_geometric_echo
+    label: Crisp - Geometric Echo
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderEchoSpacing: 0.52
+      sliderShellWidth: 0.3
+      sliderOriginSpread: 0.4
+      sliderDeformationAmount: 0.36
+      sliderEchoPulse: 0
+    modulations: []
+    midiMappings: []
+    notes: A faceted birth scans through a finite archive of black-separated shells.

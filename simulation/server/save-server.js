@@ -546,7 +546,7 @@ http.createServer((req, res) => {
         // stale geometry (the panel only fingerprints the other inputs).
         // Re-export; idempotent no-op when nothing resolver-visible changed.
         let exportNote = '';
-        if ((sceneName || 'titanic') === 'titanic') {
+        if ((sceneName || 'titanic') === 'titanic_normalized') {
           const refreshed = refreshTouchPixelViews('save');
           if (!refreshed.ok) exportNote = touchExportWarning('scene', refreshed.detail);
         }
@@ -582,7 +582,7 @@ http.createServer((req, res) => {
         // Touch ("stale against cameras.yaml") until the manual export was
         // remembered. Re-export here, exactly like /save-pixel-map-views.
         let exportNote = '';
-        if ((sceneName || 'titanic') === 'titanic') {
+        if ((sceneName || 'titanic') === 'titanic_normalized') {
           const refreshed = refreshTouchPixelViews('save-cameras');
           if (!refreshed.ok) exportNote = touchExportWarning('cameras', refreshed.detail);
         }
@@ -642,7 +642,7 @@ http.createServer((req, res) => {
         // fail the save and lose the operator's arrangement. It is reported in
         // the response body and logged loudly instead of passing silently.
         let exportNote = '';
-        if ((sceneName || 'titanic') === 'titanic') {
+        if ((sceneName || 'titanic') === 'titanic_normalized') {
           const refreshed = refreshTouchPixelViews('save-pixel-map-views');
           if (!refreshed.ok) exportNote = touchExportWarning('layout', refreshed.detail);
         }
@@ -768,7 +768,7 @@ http.createServer((req, res) => {
         // viewmasks companions are NOT exporter inputs, so the model-export
         // burst (model + effects + viewmasks) refreshes exactly once.
         let exportNote = '';
-        if (safeScene === 'titanic' && suffix === '.js') {
+        if (safeScene === 'titanic_normalized' && suffix === '.js') {
           const refreshed = refreshTouchPixelViews('save-model');
           if (!refreshed.ok) exportNote = touchExportWarning('model', refreshed.detail);
         }

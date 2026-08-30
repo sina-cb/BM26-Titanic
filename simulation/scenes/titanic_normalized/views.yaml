@@ -1,0 +1,85 @@
+views:
+  groupBits:
+    Left Back Wall: 16
+    Left Front Wall: 64
+    Left_Front_Left: 1024
+    Left_Back_Left: 2048
+    Left_Back_Right: 4096
+    Left_Front_Right: 8192
+    Right_Back_Left: 16384
+    Right_Back_Right: 32768
+    Right_Front_Right: 65536
+    Right_Front_Left: 131072
+    TE Sign: 1048576
+    Right SmokeStacks: 2
+    Left Small SmokeStack: 2097152
+    Right Small SmokeStack: 4194304
+    Right Front Wall: 1
+    Right Front Rails: 4
+    Right Auditorium: 8
+    Left Auditorium: 512
+    Right Back Wall: 32
+    Left SmokeStack: 128
+    Left Front Rails: 256
+    Right Back Rails: 67108864
+    Left Back Rails: 134217728
+    TE Sign 2: 8388608
+  custom:
+    - name: Hull Canvas
+      bit: 1024
+      word: 1
+      groups:
+        - Left Front Wall
+        - Left Back Wall
+        - Right Front Wall
+        - Right Back Wall
+    - name: Silhouette
+      bit: 8192
+      word: 1
+      groups:
+        - Left_Front_Left
+        - Left_Front_Right
+        - Left_Back_Left
+        - Left_Back_Right
+        - Right_Front_Left
+        - Right_Front_Right
+        - Right_Back_Left
+        - Right_Back_Right
+    - name: Jewelry
+      bit: 65536
+      word: 1
+      groups:
+        - Left Front Rails
+        - Left Back Rails
+        - Right Front Rails
+        - Right Back Rails
+    - name: Organs
+      bit: 4
+      word: 1
+      groups:
+        - Left SmokeStack
+        - Left Small SmokeStack
+        - Right SmokeStacks
+        - Right Small SmokeStack
+        - Left Auditorium
+        - Right Auditorium
+    - name: Identity
+      bit: 32
+      word: 1
+      groups:
+        - TE Sign
+        - TE Sign 2
+    - name: Stacks
+      bit: 64
+      word: 1
+      groups:
+        - Left SmokeStack
+        - Left Small SmokeStack
+        - Right SmokeStacks
+        - Right Small SmokeStack
+    - name: Auditoriums
+      bit: 512
+      word: 1
+      groups:
+        - Left Auditorium
+        - Right Auditorium
