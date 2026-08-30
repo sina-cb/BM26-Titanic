@@ -5,8 +5,8 @@ entries:
     pattern: 66_calibration_x_plane
     label: 01 — X Plane (left/right)
     defaults:
-      sliderPosition: 0.41
-      sliderWidth: 0.01
+      sliderPosition: 1
+      sliderWidth: 0.34
       sliderBackground: 0
     modulations: []
     midiMappings: []
@@ -17,9 +17,9 @@ entries:
     pattern: 67_calibration_y_plane
     label: 02 — Y Plane (low/high)
     defaults:
-      sliderPosition: 0
-      sliderWidth: 0.01
-      sliderBackground: 0.2
+      sliderPosition: 0.09
+      sliderWidth: 0.47
+      sliderBackground: 0.38
     modulations: []
     midiMappings: []
     notes: >-
@@ -29,9 +29,9 @@ entries:
     pattern: 68_calibration_z_plane
     label: 03 — Z Plane (depth)
     defaults:
-      sliderPosition: 0.69
-      sliderWidth: 0.27
-      sliderBackground: 0.2
+      sliderPosition: 0.75
+      sliderWidth: 0.28
+      sliderBackground: 0.1
     modulations: []
     midiMappings: []
     notes: >-
@@ -41,7 +41,7 @@ entries:
     pattern: 69_calibration_coordinate_rgb
     label: 04 — XYZ Coordinate RGB
     defaults:
-      sliderLevel: 0.8
+      sliderLevel: 0.99
       sliderFloor: 0.05
     modulations: []
     midiMappings: []
@@ -52,7 +52,7 @@ entries:
     pattern: 70_calibration_fixture_types
     label: 05 — Fixture Types
     defaults:
-      sliderLevel: 0.3
+      sliderLevel: 0.33
     modulations: []
     midiMappings: []
     notes: >-
@@ -73,8 +73,8 @@ entries:
     pattern: 72_calibration_controller_focus
     label: 07 — Controller Focus
     defaults:
-      sliderController: 0.09
-      sliderBackground: 0
+      sliderController: 0.54
+      sliderBackground: 0.21
     modulations: []
     midiMappings: []
     notes: >-
@@ -106,3 +106,15 @@ entries:
       warm-white flash marks beat one. At SPEED 0.50 it matches 120 BPM. Align
       Phase Offset once, then adjust only global SPEED. Expected fader points:
       60 BPM 0.250, 90 BPM 0.396, 120 BPM 0.500, 150 BPM 0.580, 180 BPM 0.646.
+  - id: e_calibration_9_75_calibration_group_walk
+    pattern: 75_calibration_group_walk
+    label: 10 — Group Walk (order + colour)
+    defaults:
+      sliderBackground: 0.3
+    modulations: []
+    midiMappings: []
+    notes: >-
+      One fader per pixel group. Raise a group fader from 0 to 1: its LEDs
+      light one by one in true wiring order, coloured red, green, blue, white
+      repeating by position. Out-of-sequence pixel = mis-mapped strand; wrong
+      colour = swapped channel. Titanic-family only (baked group ranges).

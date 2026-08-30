@@ -106,3 +106,15 @@ entries:
       warm-white flash marks beat one. At SPEED 0.50 it matches 120 BPM. Align
       Phase Offset once, then adjust only global SPEED. Expected fader points:
       60 BPM 0.250, 90 BPM 0.396, 120 BPM 0.500, 150 BPM 0.580, 180 BPM 0.646.
+  - id: e_calibration_9_75_calibration_group_walk
+    pattern: 75_calibration_group_walk
+    label: 10 — Group Walk (order + colour)
+    defaults:
+      sliderBackground: 0.3
+    modulations: []
+    midiMappings: []
+    notes: >-
+      One fader per pixel group. Raise a group fader from 0 to 1: its LEDs
+      light one by one in true wiring order, coloured red, green, blue, white
+      repeating by position. Out-of-sequence pixel = mis-mapped strand; wrong
+      colour = swapped channel. Titanic-family only (baked group ranges).
