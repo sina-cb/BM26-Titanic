@@ -48,7 +48,7 @@ modelTransform:
     value: true
     label: Normalize Engine Export
   normalizeXGap:
-    value: 2
+    value: 6
     label: Normalize X Gap (m)
     min: 2
     max: 10

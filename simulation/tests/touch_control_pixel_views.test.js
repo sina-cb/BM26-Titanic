@@ -42,7 +42,7 @@ const VIEW_CONTRACTS = new Map([
   // top_down carries the WHOLE rig (all 964 px, operator order 2026-08-29:
   // every LED in every 2D view); front+back split the elevation between them.
   ['top_down', { pixelCount: 964, axisX: 'nx', axisY: 'nz' }],
-  ['front', { pixelCount: 470, axisX: 'nx', axisY: 'ny' }],
+  ['front', { pixelCount: 396, axisX: 'nx', axisY: 'ny' }],
   ['back', { pixelCount: 420, axisX: 'nx', axisY: 'ny' }],
   ['strands', { pixelCount: 320, axisX: 'nx', axisY: 'nz' }],
   ['te_sign', { pixelCount: 148, axisX: 'nz', axisY: 'ny' }],
@@ -141,10 +141,11 @@ test('artifact is resolved from all authored Titanic pixel-map views', () => {
   }
 
   const front = findView(artifact, 'front');
-  // 470 visible (front surfaces + TE Sign 2 — sign 1 faces sideways and is
-  // edge-on here, so it lives in top_down + te_sign instead) + the 396
-  // mirrored Back surface pixels the brush paints through to
-  assert.equal(front.paintPixelCount, 866,
+  // 396 visible front surfaces + the 396 mirrored Back surface pixels the
+  // brush paints through to. Both TE signs live in top_down + te_sign only:
+  // sign 1 faces sideways as built, and the de-yawed right half turns sign 2
+  // near-edge-on too — neither can separate in a front projection.
+  assert.equal(front.paintPixelCount, 792,
     'Front brush mask must include the corresponding Back surface pixels');
   assert.ok(front.paintPixelIndices.some((index) => titanicPixels[index].group === 'Left Back Wall'));
   assert.ok(front.paintPixelIndices.some((index) => titanicPixels[index].group === 'Right Back Wall'));

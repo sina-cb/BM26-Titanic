@@ -81,7 +81,6 @@ views:
           - group: Right Front Rails
           - group: Right_Front_Right
           - group: Right_Front_Left
-          - group: TE Sign 2
           - name: Right SmokeStacks 5
           - name: Right SmokeStacks 6
           - name: Right SmokeStacks 7
@@ -226,21 +225,39 @@ views:
       Left SmokeStack 7:
         dx: -8
         dy: 2
-      Right Auditorium 1:
-        dx: 0
-        dy: 16
-      Right Auditorium 2:
-        dx: 0
-        dy: 16
-      Right Auditorium 4:
-        dx: -4
-        dy: 16
       Right Small SmokeStack 2:
         dx: 8
         dy: 0
       Right Small SmokeStack 4:
         dx: 20
         dy: 12
+      Right Auditorium 1:
+        dx: -56
+        dy: 0
+      Right Auditorium 2:
+        dx: -40
+        dy: 0
+      Right Auditorium 3:
+        dx: -24
+        dy: 0
+      Right Auditorium 4:
+        dx: -8
+        dy: 0
+      Right Auditorium 5:
+        dx: 8
+        dy: 14
+      Right Auditorium 6:
+        dx: 24
+        dy: 0
+      Right Auditorium 7:
+        dx: 40
+        dy: 0
+      Right Auditorium 8:
+        dx: 56
+        dy: 0
+      Right SmokeStacks 1:
+        dx: 16
+        dy: 0
       Right SmokeStacks 2:
         dx: 18
         dy: 0

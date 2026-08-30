@@ -58,20 +58,20 @@ const VIEW_CONTRACTS = Object.freeze({
     axisX: 'nx',
     axisY: 'nz',
     samples: Object.freeze([
-      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 230.74573974745786, y: 316.94352720974416 },
-      { pixelIndex: 212, fixtureKey: 'Right Front Wall 4', x: 648.9683484188178, y: 348.4915772712035 },
-      { pixelIndex: 643, fixtureKey: 'Right Small SmokeStack 4', x: 798.2473460721868, y: 229.53011509665888 },
+      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 220.1496057783893, y: 313.93032331463644 },
+      { pixelIndex: 212, fixtureKey: 'Right Front Wall 4', x: 660.6379246481109, y: 343.80898772356863 },
+      { pixelIndex: 643, fixtureKey: 'Right Small SmokeStack 4', x: 802.0177267435707, y: 231.14244893639537 },
     ]),
   }),
   front: Object.freeze({
-    pixelCount: 470,
-    paintPixelCount: 866,
+    pixelCount: 396,
+    paintPixelCount: 792,
     axisX: 'nx',
     axisY: 'ny',
     samples: Object.freeze([
       { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 30, y: 388.9356696915571 },
-      { pixelIndex: 884, fixtureKey: 'Right_Front_Right', x: 870, y: 359.46404341926734 },
-      { pixelIndex: 245, fixtureKey: 'Right SmokeStacks 8', x: 530.1492537313433, y: 338.7856173677069 },
+      { pixelIndex: 884, fixtureKey: 'Right_Front_Right', x: 870, y: 393.6082519050897 },
+      { pixelIndex: 245, fixtureKey: 'Right SmokeStacks 8', x: 530.1492537313433, y: 372.92982585352934 },
     ]),
   }),
   back: Object.freeze({
@@ -89,9 +89,9 @@ const VIEW_CONTRACTS = Object.freeze({
     axisX: 'nx',
     axisY: 'nz',
     samples: Object.freeze([
-      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 296.99999999999994, y: 252.2844768007833 },
-      { pixelIndex: 804, fixtureKey: 'Right_Back_Left', x: 425.18984716228863, y: 157.88015912277518 },
-      { pixelIndex: 963, fixtureKey: 'Right_Front_Left', x: 677.8191843428858, y: 269.2804035295799 },
+      { pixelIndex: 644, fixtureKey: 'Left_Front_Left', x: 297, y: 244.56847382475064 },
+      { pixelIndex: 804, fixtureKey: 'Right_Back_Left', x: 458.4712768095381, y: 165.43600080020815 },
+      { pixelIndex: 963, fixtureKey: 'Right_Front_Left', x: 692.4085825649557, y: 268.5937469585371 },
     ]),
   }),
   te_sign: Object.freeze({
@@ -234,8 +234,8 @@ test('legacy merged reprojection overlaps Front panels — the regression we ref
   const height = 411;
   const fixed = runtime.reprojectView(view, artifact.design, width, height);
   const legacy = legacyMergedReproject(view, artifact.design, width, height);
-  assert.equal(fixed.length, 470);
-  assert.equal(legacy.length, 470);
+  assert.equal(fixed.length, 396);
+  assert.equal(legacy.length, 396);
 
   const panelBounds = (panelId, glyphs) => glyphs.filter((glyph) => glyph.panelId === panelId).reduce((bounds, glyph) => {
     const box = glyphBox(glyph);

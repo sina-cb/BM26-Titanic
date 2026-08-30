@@ -212,8 +212,8 @@ for (const [label, viewport] of [['screenshot', { width: 1440, height: 900 }],
 
       const r = await geometryReport(page);
       assert.equal(r.pixelCount, 964, 'model topology must expose 964 physical pixels');
-      assert.equal(r.totalMappedAllPresets, 2322,
-        'expected 2322 mapped glyph rows across all presets (per-view sums since the all-LEDs + back-view order, 2026-08-29)');
+      assert.equal(r.totalMappedAllPresets, 2248,
+        'expected 2248 mapped glyph rows across all presets (per-view sums: both TE signs live in top_down + te_sign only (edge-on in elevations))');
       assert.equal(r.topDownCount, 964, 'top_down view maps all 964 physical indices (all-LEDs order, 2026-08-29)');
       assert.deepEqual(r.paneIds, r.authIds,
         'pane glyph ID+coordinate set must match authoritative expandPanel output');

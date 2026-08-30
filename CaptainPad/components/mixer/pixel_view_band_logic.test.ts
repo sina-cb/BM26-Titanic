@@ -347,9 +347,9 @@ describe('arrangedDesignAspect — the §3.2 aspect, off the real artifact', () 
     const columns = arrangedDesignAspect(topDown, 'columns');
     const rows = arrangedDesignAspect(topDown, 'rows');
     // The normalized scene's leveled, condensed rig (halves side by side
-    // with the flank stacks) is much wider than deep — ~4.62:1 measured off
+    // with the flank stacks) is much wider than deep — ~4.86:1 measured off
     // the real artifact.
-    expect(columns).toBeCloseTo(4.6156, 2);
+    expect(columns).toBeCloseTo(4.8631, 2);
     expect(rows).toBe(columns);
   });
 
@@ -363,11 +363,11 @@ describe('arrangedDesignAspect — the §3.2 aspect, off the real artifact', () 
     // ≈3.06 — noticeably higher, i.e. a WIDER true composite than the old
     // formula gave, which is why the old formula under-sized the canvas and
     // left a residual letterbox void on this exact view.
-    expect(arrangedDesignAspect(realFlat('front'), 'columns')).toBeCloseTo(3.7593, 3);
+    expect(arrangedDesignAspect(realFlat('front'), 'columns')).toBeCloseTo(4.4097, 3);
   });
 
   it('FRONT stacked (rows) — the same true-fixed-point correction', () => {
-    expect(arrangedDesignAspect(realFlat('front'), 'rows')).toBeCloseTo(0.9758, 3);
+    expect(arrangedDesignAspect(realFlat('front'), 'rows')).toBeCloseTo(1.0325, 3);
   });
 
   it('pins TE SIGN both ways off the real fixed point', () => {
@@ -433,22 +433,22 @@ describe('computeBandCanvasSize — docs/64 §8 W2 acceptance matrix (real artif
     expect(w300.width).toBeCloseTo(300, 1);
     expect(w300.height).toBe(MIN_BAND_CANVAS_HEIGHT);
     expect(w620.width).toBeCloseTo(620, 1);
-    expect(w620.height).toBeCloseTo(134.33, 1);
+    expect(w620.height).toBeCloseTo(127.49, 1);
     expect(w1220.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
-    expect(w1220.width).toBeCloseTo(812.34, 1);
+    expect(w1220.width).toBeCloseTo(855.91, 1);
   });
 
   it('front (multi-panel, ≈3.76:1 side by side): STACKS at a narrow slot, columns from 620 up', () => {
     const flat = realFlat('front');
     const [w300, w620] = widths.map((w) => computeBandCanvasSize(flat, REAL_DESIGN, w, CHANNEL_EDIT_CAP_HEIGHT));
-    // the normalized composite is so wide that stacking wins the lit-area
+    // the normalized composite (~4.41:1) is so wide that stacking wins the lit-area
     // race at a 300 px slot ("measured, never named")
     expect(w300.axis).toBe('rows');
-    expect(w300.width).toBeCloseTo(164.16, 1);
+    expect(w300.width).toBeCloseTo(183.93, 1);
     expect(w300.height).toBe(CHANNEL_EDIT_CAP_HEIGHT);
     expect(w620.axis).toBe('columns');
     expect(w620.width).toBeCloseTo(620, 1);
-    expect(w620.height).toBeCloseTo(163.32, 1);
+    expect(w620.height).toBeCloseTo(139.23, 1);
   });
 
   it('te_sign (multi-panel, ≈1.69:1 true aspect): slot-bound at 300, ceiling-capped from 620 up', () => {
