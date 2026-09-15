@@ -81,6 +81,16 @@ test('the remedy names the exact Windows path and the chrome://gpu check', () =>
   assert.match(GPU_ADAPTER_REMEDY, /chrome:\/\/gpu/);
 });
 
+test('the remedy demands a FULL browser quit and is per-EXE, not Chrome-only (20260914_372)', () => {
+  // The preference had been set for weeks and the running Chrome still sat on
+  // the iGPU — only a full quit/relaunch moved it. And the Windows setting is
+  // keyed to the exe, so Edge / an Electron app's embedded browser need their
+  // own entry: "add Chrome" was wrong advice for anything but Chrome.
+  assert.match(GPU_ADAPTER_REMEDY, /QUIT the browser completely/);
+  assert.match(GPU_ADAPTER_REMEDY, /msedge\.exe/);
+  assert.doesNotMatch(GPU_ADAPTER_REMEDY, /add Chrome/);
+});
+
 test('a healthy adapter produces no warning text at all', () => {
   assert.equal(adapterWarningText(classifyAdapter(NVIDIA)), null);
   assert.equal(adapterWarningText(null), null);

@@ -45,6 +45,12 @@ autonomous.
   (Notion task-board writes are **allowed** per `task_tracking.md`; other
   external publishing is gated.)
 
+- **The operator's own running apps** — quitting or relaunching their
+  browser (`browser_gpu_check.cjs --fix`), or writing their Windows
+  per-app settings (`--set-preference`). Reporting is free; disrupting
+  what they have open is theirs to authorize (`gpu_rendering.md` R8,
+  added 2026-09-14).
+
 If it's not on this list, you don't need to ask.
 
 ## Autonomy in multi-agent runs
