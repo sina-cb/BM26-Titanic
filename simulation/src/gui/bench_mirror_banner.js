@@ -23,6 +23,8 @@
  * boxes that changed hands is not actionable.
  */
 
+import { createHudBanner } from './hud_banner.js';
+
 const BANNER_ID = 'bench-mirror-banner';
 
 /**
@@ -64,37 +66,37 @@ export function bannerStateForStatus(status) {
   };
 }
 
+// Fixed top-center, stacked BELOW the multi-client warning (top:44px) so both
+// can be visible at once — arming with >1 window connected is allowed-but-
+// warned, which is exactly when both appear. Primary (amber) palette rather
+// than error red: armed is a deliberate mode, not a fault, and it must be
+// distinguishable at a glance from the contention warning. Pointer events off;
+// only its ✕ (hud_banner.js) takes the pointer.
+const BANNER_CSS =
+  'position:fixed;top:78px;left:50%;transform:translateX(-50%);' +
+  'background:color-mix(in srgb, var(--primary) 22%, var(--surface));' +
+  'border:1px solid var(--primary);color:var(--primary);' +
+  'padding:6px 18px;border-radius:8px;font-family:var(--font-headline);' +
+  'font-size:12px;font-weight:700;letter-spacing:0.06em;' +
+  'pointer-events:none;z-index:1000;';
+
+const _banner = createHudBanner({
+  id: BANNER_ID,
+  cssText: BANNER_CSS,
+  role: 'status',
+  ariaLive: 'polite',
+  closeTitle: 'Hide this banner — BENCH MIRROR stays armed (DISARM lives in the Controllers view)',
+});
+
 /**
  * Apply a bench-mirror status update to the HUD banner. Creates the element
  * lazily; safe to call before <body> exists (defers via DOMContentLoaded once).
+ *
+ * Dismissable (✕ or `H` → hide_all): a dismissal holds through every status
+ * re-push of the SAME arm and re-arms on disarm (or socket loss) so the next
+ * arm is announced again. Hiding the banner never disarms anything.
  * @param {Object|null} status
  */
 export function handleBenchMirrorStatus(status) {
-  const state = bannerStateForStatus(status);
-  const render = () => {
-    let el = document.getElementById(BANNER_ID);
-    if (!el) {
-      if (!state.show) return; // nothing to hide
-      el = document.createElement('div');
-      el.id = BANNER_ID;
-      // Fixed top-center, stacked BELOW the multi-client warning (top:44px) so
-      // both can be visible at once — arming with >1 window connected is
-      // allowed-but-warned, which is exactly when both appear. Primary (amber)
-      // palette rather than error red: armed is a deliberate mode, not a fault,
-      // and it must be distinguishable at a glance from the contention warning.
-      el.style.cssText =
-        'position:fixed;top:78px;left:50%;transform:translateX(-50%);' +
-        'background:color-mix(in srgb, var(--primary) 22%, var(--surface));' +
-        'border:1px solid var(--primary);color:var(--primary);' +
-        'padding:6px 18px;border-radius:8px;font-family:var(--font-headline);' +
-        'font-size:12px;font-weight:700;letter-spacing:0.06em;' +
-        'pointer-events:none;z-index:1000;transition:opacity 0.3s;';
-      document.body.appendChild(el);
-    }
-    el.textContent = state.text;
-    el.style.opacity = state.show ? '1' : '0';
-  };
-  if (typeof document === 'undefined') return;
-  if (document.body) render();
-  else window.addEventListener('DOMContentLoaded', render, { once: true });
+  _banner.update(bannerStateForStatus(status));
 }

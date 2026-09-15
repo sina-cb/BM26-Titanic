@@ -19,13 +19,16 @@
  *   - main.js: calls recompute() after scene load
  */
 import { params } from "../core/state.js";
+import { DismissalLatch, createDismissButton } from "../gui/hud_banner.js";
 
 // ─── Internal State ──────────────────────────────────────────────────────
 let _patchedCount = 0;    // number of fixtures with valid patches
 let _totalCount = 0;      // total number of fixtures
 let _warningEl = null;
+const _unpatchedLatch = new DismissalLatch(); // ✕: hidden until patched → unpatched again
 let _universeWarningEl = null;
 let _lastUniverseWarning = ''; // dedupe
+const _universeLatch = new DismissalLatch(); // ✕ / click: hidden until the missing set changes or clears
 
 /**
  * Parse a comma-separated `sacn_universes` config string into a sorted
@@ -134,6 +137,11 @@ function autoSubscribePatchUniverses(fixtures) {
  * Runs AFTER autoSubscribePatchUniverses, so by here a mismatch means a
  * universe genuinely could not be subscribed — fail loudly, don't paper over.
  */
+function _dismissUniverseWarning() {
+  _universeLatch.dismiss();
+  if (_universeWarningEl) _universeWarningEl.style.display = 'none';
+}
+
 function _validatePatchUniverses(fixtures) {
   if (!fixtures || fixtures.length === 0) return;
 
@@ -160,21 +168,29 @@ function _validatePatchUniverses(fixtures) {
       console.error(`[PatchManager] ${msg}`);
     }
 
-    // Show persistent red warning banner
+    // Show persistent red warning banner. Dismissable (click anywhere on it,
+    // its ✕, or `H` → hide_all): the dismissal is keyed on the missing set, so
+    // the 10 s safety poll re-running this check does NOT resurrect it (it used
+    // to, report `20260914_372`), while a DIFFERENT missing set is shown again.
+    const visible = _universeLatch.apply({ show: true, key: missing.join(',') });
     if (!_universeWarningEl) {
       _universeWarningEl = document.createElement('div');
       _universeWarningEl.id = 'universe-mismatch-warning';
+      _universeWarningEl.setAttribute('role', 'alert');
       _universeWarningEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#cc0000;color:white;font-weight:bold;font-size:13px;padding:10px 16px;text-align:center;font-family:monospace;cursor:pointer;line-height:1.6;';
-      _universeWarningEl.title = 'Click to dismiss';
-      _universeWarningEl.onclick = () => { _universeWarningEl.style.display = 'none'; };
+      _universeWarningEl.title = 'Click to hide (the mismatch is unchanged)';
+      _universeWarningEl.onclick = _dismissUniverseWarning;
       document.body.appendChild(_universeWarningEl);
     }
     _universeWarningEl.innerHTML = 
       `🚨 UNIVERSE MISMATCH: Patches reference universe(s) [${missing.join(', ')}] not in Subscribed Universes [${configList}]<br>` +
       `<span style="font-weight:normal;font-size:12px;">Fix: ⚡ Lighting Engine → 📡 sACN Settings → 📡 Subscribed Universes — add the missing universe(s), save, and restart the simulation.</span>`;
-    _universeWarningEl.style.display = '';
+    _universeWarningEl.appendChild(createDismissButton(
+      _dismissUniverseWarning, 'Hide this warning (the mismatch is unchanged)'));
+    _universeWarningEl.style.display = visible ? '' : 'none';
   } else {
-    // All good — hide warning if it was shown
+    // All good — hide warning if it was shown, and re-arm the dismissal
+    _universeLatch.apply({ show: false });
     if (_universeWarningEl) _universeWarningEl.style.display = 'none';
     _lastUniverseWarning = '';
   }
@@ -182,12 +198,21 @@ function _validatePatchUniverses(fixtures) {
 
 // ─── Warning Banner ──────────────────────────────────────────────────────
 function _updateWarning(show) {
-  if (show) {
+  // Dismissable (✕ or `H` → hide_all): hidden until the scene is patched and
+  // later unpatched again. Hiding the pill changes nothing about the patch.
+  const visible = _unpatchedLatch.apply({ show: !!show });
+  if (visible) {
     if (!_warningEl) {
       _warningEl = document.createElement('div');
       _warningEl.id = 'unpatched-warning';
       _warningEl.setAttribute('role', 'status');
-      _warningEl.textContent = '\u26A0 UNPATCHED \u2014 SIM-ONLY MODE';
+      const text = document.createElement('span');
+      text.textContent = '\u26A0 UNPATCHED \u2014 SIM-ONLY MODE';
+      _warningEl.appendChild(text);
+      _warningEl.appendChild(createDismissButton(() => {
+        _unpatchedLatch.dismiss();
+        _warningEl.classList.add('hidden');
+      }, 'Hide this pill (the scene stays unpatched)'));
       document.body.appendChild(_warningEl);
     }
     _warningEl.classList.remove('hidden');
@@ -202,6 +227,12 @@ function _isPatched(f) {
 
 let _ipWarningEl = null;
 let _lastIpWarning = '';
+const _ipLatch = new DismissalLatch(); // ✕ / click: hidden until the message changes or clears
+
+function _dismissIpWarning() {
+  _ipLatch.dismiss();
+  if (_ipWarningEl) _ipWarningEl.style.display = 'none';
+}
 
 /**
  * Validate that all patched fixtures have a controllerIp set.
@@ -231,18 +262,26 @@ function _validateControllerIps(fixtures) {
       console.warn(`[PatchManager] ${msg}`);
     }
 
+    // Dismissable (click anywhere on it, its ✕, or `H` → hide_all); keyed on
+    // the message so the 10 s poll cannot resurrect it while the same fixtures
+    // are still missing an IP.
+    const visible = _ipLatch.apply({ show: true, key: msg });
     if (!_ipWarningEl) {
       _ipWarningEl = document.createElement('div');
       _ipWarningEl.id = 'controller-ip-warning';
+      _ipWarningEl.setAttribute('role', 'alert');
       _ipWarningEl.style.cssText = 'position:fixed;top:40px;left:50%;transform:translateX(-50%);max-width:500px;z-index:99998;background:rgba(180,100,0,0.92);color:white;font-size:10px;padding:6px 12px;text-align:center;font-family:monospace;border-radius:6px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.4);backdrop-filter:blur(8px);line-height:1.4;';
-      _ipWarningEl.title = 'Click to dismiss';
-      _ipWarningEl.onclick = () => { _ipWarningEl.style.display = 'none'; };
+      _ipWarningEl.title = 'Click to hide (the fixtures still have no controller IP)';
+      _ipWarningEl.onclick = _dismissIpWarning;
       document.body.appendChild(_ipWarningEl);
     }
     const names = missingIp.slice(0, 6).join(', ') + (missingIp.length > 6 ? ` (+${missingIp.length - 6} more)` : '');
     _ipWarningEl.textContent = `⚠ ${missingIp.length} patched fixture(s) missing Controller IP: ${names}`;
-    _ipWarningEl.style.display = '';
+    _ipWarningEl.appendChild(createDismissButton(
+      _dismissIpWarning, 'Hide this warning (the fixtures still have no controller IP)'));
+    _ipWarningEl.style.display = visible ? '' : 'none';
   } else {
+    _ipLatch.apply({ show: false });
     if (_ipWarningEl) _ipWarningEl.style.display = 'none';
     _lastIpWarning = '';
   }

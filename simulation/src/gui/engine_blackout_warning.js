@@ -1,4 +1,5 @@
 import { engineWsUrl } from "../core/engine_endpoint.js";
+import { DismissalLatch, createDismissButton } from "./hud_banner.js";
 
 let warningEl = null;
 let titleEl = null;
@@ -7,6 +8,13 @@ let clearBtn = null;
 let readonlyMode = false;
 let clearInFlight = false;
 let ws = null;
+
+// Which condition the card is voicing: 'blackout' | 'stale' | null. Dismissable
+// (✕ or `H` → hide_all) PER condition: hiding the blackout wording does not hide
+// a later stale-model wording, and the card re-arms when the engine clears the
+// condition. Hiding never touches the engine — RESUME lives in the sACN OUT panel.
+let _condition = null;
+const _latch = new DismissalLatch();
 
 function ensureWarningElement() {
   if (warningEl) return warningEl;
@@ -26,13 +34,22 @@ function ensureWarningElement() {
   messageEl.textContent = 'MarsinEngine output is intentionally black. sACN packets may still look healthy.';
 
   warningEl.append(titleEl, messageEl);
+  warningEl.appendChild(createDismissButton(() => {
+    _latch.dismiss();
+    applyVisibility();
+  }, 'Hide this banner — the engine is unchanged (BLACKOUT / RESUME lives in the sACN OUT panel)'));
   document.body.appendChild(warningEl);
   return warningEl;
 }
 
-function setWarningVisible(visible) {
+function applyVisibility() {
   const el = ensureWarningElement();
+  const visible = _latch.apply({ show: _condition !== null, key: _condition });
   el.classList.toggle('hidden', !visible);
+}
+
+function setWarningVisible(visible) {
+  ensureWarningElement();
   document.body.classList.toggle('engine-blackout-active', visible);
   
   window._sacnBlackoutActivated = visible;
@@ -87,18 +104,22 @@ function connectEngineWebSocket() {
         const modelStale = data.modelStale === true;
         setWarningVisible(blackoutActive);
         if (blackoutActive) {
+          _condition = 'blackout';
           titleEl.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
           messageEl.textContent = 'MarsinEngine output is intentionally black. sACN packets may still look healthy.';
         } else if (modelStale) {
           // Stale-model warning reuses the banner element. Blackout takes
-          // precedence; this branch only runs when blackout is off, and it
-          // deliberately skips setWarningVisible so the sACN blackout
-          // button is not repainted into its RESUME state.
-          warningEl.classList.remove('hidden');
+          // precedence; this branch only runs when blackout is off, and
+          // setWarningVisible(false) above keeps the sACN blackout button
+          // out of its RESUME state.
+          _condition = 'stale';
           titleEl.textContent = 'ENGINE MODEL STALE — RESTART ENGINE';
           messageEl.textContent = data.modelStaleMessage ||
             'Engine refused a model hot reload and is still rendering the old model.';
+        } else {
+          _condition = null;
         }
+        applyVisibility();
       }
     } catch (err) {
       console.warn('Failed to parse engine WS message:', err);

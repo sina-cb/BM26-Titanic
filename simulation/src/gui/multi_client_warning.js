@@ -10,11 +10,15 @@
  *
  * This is a warning surface ONLY — no auto-kick, no writer arbitration; that
  * decision (options i/ii/iii in the report) stays with the operator.
+ * Dismissable by the operator (✕ / `H`, hud_banner.js): hiding the words
+ * changes nothing at the bridge.
  *
  * Top-level HUD element (own module, not part of the pixel-map UI). The pure
  * state function is exported separately so Node unit tests can cover the
  * transitions without a DOM (multi_client_warning.test.js).
  */
+
+import { createHudBanner } from './hud_banner.js';
 
 const BANNER_ID = 'multi-client-warning';
 
@@ -34,35 +38,32 @@ export function bannerStateForCount(count) {
   };
 }
 
+// Fixed top-center, just below the unsaved-changes chip; error palette via
+// theme vars (matches the spotlight-cap toast recipe). Pointer events off — it
+// warns, it never blocks the UI; only its ✕ (hud_banner.js) takes the pointer.
+const BANNER_CSS =
+  'position:fixed;top:44px;left:50%;transform:translateX(-50%);' +
+  'background:color-mix(in srgb, var(--error) 22%, var(--surface));' +
+  'border:1px solid var(--error-container-border);color:var(--error);' +
+  'padding:6px 18px;border-radius:8px;font-family:var(--font-headline);' +
+  'font-size:12px;font-weight:700;letter-spacing:0.06em;' +
+  'pointer-events:none;z-index:1000;';
+
+const _banner = createHudBanner({
+  id: BANNER_ID,
+  cssText: BANNER_CSS,
+  closeTitle: 'Hide this warning — the extra sim windows stay connected',
+});
+
 /**
  * Apply a census update to the HUD banner. Creates the element lazily; safe
  * to call before <body> exists (defers via DOMContentLoaded once).
+ *
+ * Dismissable (✕ or `H` → hide_all): once dismissed it stays hidden through
+ * every census re-push while the count is still >1, and re-arms when the census
+ * drops to one window (or goes unknown) and later climbs again.
  * @param {number|null} count
  */
 export function handleClientCensus(count) {
-  const state = bannerStateForCount(count);
-  const render = () => {
-    let el = document.getElementById(BANNER_ID);
-    if (!el) {
-      if (!state.show) return; // nothing to hide
-      el = document.createElement('div');
-      el.id = BANNER_ID;
-      // Fixed top-center, just below the unsaved-changes chip; error palette
-      // via theme vars (matches the spotlight-cap toast recipe). Pointer
-      // events off — it warns, it never blocks the UI.
-      el.style.cssText =
-        'position:fixed;top:44px;left:50%;transform:translateX(-50%);' +
-        'background:color-mix(in srgb, var(--error) 22%, var(--surface));' +
-        'border:1px solid var(--error-container-border);color:var(--error);' +
-        'padding:6px 18px;border-radius:8px;font-family:var(--font-headline);' +
-        'font-size:12px;font-weight:700;letter-spacing:0.06em;' +
-        'pointer-events:none;z-index:1000;transition:opacity 0.3s;';
-      document.body.appendChild(el);
-    }
-    el.textContent = state.text;
-    el.style.opacity = state.show ? '1' : '0';
-  };
-  if (typeof document === 'undefined') return;
-  if (document.body) render();
-  else window.addEventListener('DOMContentLoaded', render, { once: true });
+  _banner.update(bannerStateForCount(count));
 }
