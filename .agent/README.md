@@ -25,7 +25,7 @@ it, never to override it.
 |---|---|---|
 | `codex.md` | **The holy word** — mission, P0 rules. Sina-only, never edit. | Read first, every session. |
 | `README.md` | This map — OS layout, precedence, boot pointer. | After the codex. |
-| `os/` | **The specs** — git, style guides, ui_design, multi_agent, **interface_agent**, task_tracking, security_privacy, **autonomy**, **memory**. | Before committing, writing code, fanning out, or acting on your own initiative. |
+| `os/` | **The specs** — git, style guides, ui_design, multi_agent, **interface_agent**, task_tracking, security_privacy, **autonomy**, **memory**, **gpu_rendering**. | Before committing, writing code, fanning out, measuring FPS, or acting on your own initiative. |
 | `ops/` | **Runbooks + auto-checks** — how to run each subsystem, and the checks that prove it works. | Before running or before claiming a subsystem is merge-ready. |
 | `skills/` | **How-tos** — reusable procedures (see the sim, place lights, PB patterns, smoke tests…). | When the task matches a skill, follow it instead of improvising. |
 | `roles/` | **Role briefs** — coordinator, planner, designer, developer (+ subsystem experts), reviewer, deployment, artist, investigator, validator, task_manager, **curator** (the operator's Codex agent — content curation; if you are Codex, read `roles/curator.md` first). | Adopt the matching role's mindset and checklist. |
@@ -55,6 +55,11 @@ list of operator gates live in **[`os/autonomy.md`](os/autonomy.md)**.
 - **No numeric prefixes** on any file — the old `00_`/`01_` scheme is gone.
   The **only** exception is the date prefix on `plans/` and `reports/`
   entries (`YYYYMMDD_N_slug.md`), which orders them chronologically.
+- **`N` in `YYYYMMDD_N_slug.md` is a repo-wide running counter, not a
+  per-day one.** Take the next number after the highest that already exists
+  (`ls .agent/reports/*/` — it does not restart each day), and when several
+  agents write at once, hand the numbers out at spawn time
+  (`os/interface_agent.md`).
 
 ## Historical note — old paths in the record
 

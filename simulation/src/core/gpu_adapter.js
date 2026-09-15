@@ -28,12 +28,21 @@
 // GPU and renders this scene fine.
 const INTEGRATED_ADAPTER_RE = /intel|uhd|iris|integrated|basic render/i;
 
-// The one-time operator remedy. Verbatim from `20260725_38` §4.2/§4.5 — this
+// The operator remedy (`20260725_38` §4.2/§4.5, revised by `20260914_372`). This
 // exact string is what the banner shows and what the low-FPS escalation logs,
 // so the fix is always one copy-paste away from wherever the symptom appears.
+// Two things it must say, both learned the hard way: the Windows preference is
+// keyed to the EXE of whatever shows this page (Chrome, Edge, an Electron
+// app's embedded browser — on the operator's box every one of those sits on
+// the iGPU unless it is listed), and a GPU process keeps the adapter it started
+// on, so closing windows is not enough — the browser must fully quit (the
+// preference had been set for weeks; the running Chrome still sat on the iGPU;
+// a full relaunch put it on the RTX 4090).
 export const GPU_ADAPTER_REMEDY =
-  'Windows Settings → Display → Graphics → add Chrome → High performance, ' +
-  'then restart Chrome. Verify chrome://gpu shows the NVIDIA GPU ACTIVE.';
+  'Windows Settings → Display → Graphics → add this browser\'s .exe ' +
+  '(chrome.exe / msedge.exe / the app showing this page) → High performance, ' +
+  'then QUIT the browser completely and reopen it — a running GPU process ' +
+  'keeps the GPU it started on. Verify chrome://gpu shows the NVIDIA GPU ACTIVE.';
 
 /**
  * Classify an unmasked adapter string.

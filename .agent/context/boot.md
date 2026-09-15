@@ -15,6 +15,8 @@ ask what to read (`os/autonomy.md`).
    - `security_privacy.md` — **always**, if you'll commit (public repo).
    - `python_style.md` / `nodejs_style.md` — if you'll write code.
    - `multi_agent.md` — if you'll fan work out to sub-agents.
+   - `gpu_rendering.md` — if you'll measure FPS, screenshot the sim, or
+     add/touch a warning banner.
 7. **The `ops/` runbooks + auto-checks** for **every subsystem you'll
    touch** — how to run it, and the checks that prove it works.
 8. **The active project dossier in `.agent/projects/`** and its plan in

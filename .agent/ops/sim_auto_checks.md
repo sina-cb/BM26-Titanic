@@ -118,6 +118,18 @@ Rules:
   `console.error` at boot, and a one-shot `[LowFPS] …` `console.error` after
   **10 consecutive seconds under 20 FPS** that names the adapter. Seeing either
   in a console dump means STOP and fix the environment, not the code.
+- **Spec:** `.agent/os/gpu_rendering.md` — the rules (evidence standard,
+  no-fallback, banner dismissal contract, operator gates).
+- **Fix + proof:** `.agent/skills/browser_gpu_fix.md` —
+  `node tools/browser_gpu_check.cjs` names the adapter every browser GPU
+  process is on (nvidia-smi is the oracle); `--fix` fully quits and
+  relaunches Chrome, then re-verifies. A GPU process keeps the adapter it
+  started on, so nothing short of a full quit moves it (report `20260914_372`).
+- The banner is **dismissable** (its ✕, or `H` → hide_all) since 2026-09-14,
+  like every other persistent sim banner (`src/gui/hud_banner.js`). A
+  dismissal lives in that page only — a probe launches a fresh browser and
+  always sees the banner, so screenshots on the wrong GPU still carry the
+  stamp.
 - The low-FPS escalation also catches the *right* adapter under contention —
   leftover probe browser windows and extra sim tabs steal the GPU. Close every
   probe browser after use and keep exactly one sim window open while measuring.

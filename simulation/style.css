@@ -612,6 +612,52 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
+/* ─── HUD banner ✕ (src/gui/hud_banner.js) ───
+   Every persistent warning banner carries one (operator ruling 2026-09-14).
+   The banner itself stays pointer-events:none — it warns, it never blocks the
+   canvas — so only this button opts back in. Hiding never changes the
+   condition; the banner re-arms when its condition clears and returns. */
+.hud-banner-close {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-left: 12px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, var(--surface-container-lowest) 20%, transparent);
+  color: inherit;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.75;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.hud-banner-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+#unpatched-warning .hud-banner-close {
+  width: 16px;
+  height: 16px;
+  margin-left: 8px;
+  font-size: 0.55rem;
+}
+
+#engine-blackout-warning .hud-banner-close {
+  align-self: flex-start;
+  margin-left: 4px;
+}
+
 /* View presets */
 #view-presets {
   position: fixed;

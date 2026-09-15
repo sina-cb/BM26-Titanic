@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   PANEL_VISIBILITY_KEY,
   VISIBILITY_MODES,
+  HIDE_ALL_ONLY_SELECTORS,
   normalizeMode,
   nextVisibilityMode,
 } from '../src/gui/panel_visibility.js';
@@ -57,4 +58,24 @@ test('normalizeMode maps legacy {hidden:false} and junk to show_all', () => {
   assert.equal(normalizeMode(undefined), 'show_all');
   assert.equal(normalizeMode('bogus'), 'show_all');
   assert.equal(normalizeMode({}), 'show_all');
+});
+
+// ── hide_all covers every persistent banner + toast (operator ruling 2026-09-14) ──
+
+test('HIDE_ALL_ONLY_SELECTORS lists every persistent warning banner and toast', () => {
+  const required = [
+    '#engine-blackout-warning', '#unpatched-warning', '#spotlight-warning',
+    '#gpu-adapter-warning', '#multi-client-warning', '#bench-mirror-banner',
+    '#universe-mismatch-warning', '#controller-ip-warning',
+    '#spotlight-cap-toast', '#overlap-toast', '#save-toast', '#auto-patch-toast',
+    '#pm-manager-toast', '#cm-toast',
+  ];
+  for (const sel of required) {
+    assert.ok(HIDE_ALL_ONLY_SELECTORS.includes(sel), `${sel} must be hidden by hide_all`);
+  }
+});
+
+test('hide_all keeps the H-key feedback toast and the fatal boot screen visible', () => {
+  assert.ok(!HIDE_ALL_ONLY_SELECTORS.includes('#panel-visibility-toast'));
+  assert.ok(!HIDE_ALL_ONLY_SELECTORS.includes('#fatal-boot-error'));
 });

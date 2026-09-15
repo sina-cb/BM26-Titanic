@@ -39,16 +39,36 @@ const CRITICAL_PANEL_IDS = new Set([
 
 // Overlays that are not registered floating panels, hidden only in
 // `hide_all` (via a body class, so lazily-created ones are covered too) for
-// a genuinely clean canvas. Two groups, same timing:
-//   - critical alert banners (kept visible through hide_noncritical)
+// a genuinely clean canvas. Three groups, same timing:
+//   - alert banners (kept visible through hide_noncritical) — EVERY persistent
+//     banner is listed (operator ruling 2026-09-14: all of them must be
+//     hideable); each also carries its own ✕ (hud_banner.js)
+//   - transient toasts (self-hiding, but "everything hidden" means everything)
 //   - persistent navigation/status chrome (HUD frame, view-preset row, the
 //     Shortcuts hint) — kept through hide_noncritical so you can still
 //     navigate and read status, gone only at hide_all.
-const HIDE_ALL_ONLY_SELECTORS = [
+// NOT listed on purpose: `#panel-visibility-toast` (the H-key feedback — the one
+// thing the operator must still see in hide_all) and `#fatal-boot-error` (the
+// sim is dead behind it; there is nothing to reveal).
+// Exported for the contract test (tests/panel_visibility.test.js).
+export const HIDE_ALL_ONLY_SELECTORS = [
+  // alert banners
   '#engine-blackout-warning',
   '#unpatched-warning',
   '#spotlight-warning',
+  '#gpu-adapter-warning',
+  '#multi-client-warning',
+  '#bench-mirror-banner',
+  '#universe-mismatch-warning',
+  '#controller-ip-warning',
+  // transient toasts
   '#spotlight-cap-toast',
+  '#overlap-toast',
+  '#save-toast',
+  '#auto-patch-toast',
+  '#pm-manager-toast',
+  '#cm-toast',
+  // navigation / status chrome
   '#dirty-indicator',
   '#hud-frame',
   '#view-presets',

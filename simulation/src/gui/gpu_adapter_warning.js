@@ -9,13 +9,20 @@
  * be impossible to mistake for one again.
  *
  * Warning surface ONLY — no auto-fallback, no profile downgrade, no backend
- * switch. The remedy is a one-time Windows per-app GPU preference.
+ * switch. The remedy is a Windows per-app GPU preference plus a FULL browser
+ * relaunch (report `20260914_372`).
+ *
+ * Dismissable (✕, or `H` → hide_all) since 2026-09-14: the adapter is fixed for
+ * the life of the page, so a dismissal lasts until reload. Agent screenshots
+ * (agent_render.cjs) run in a fresh browser where nothing has been dismissed,
+ * so a capture taken on the wrong GPU still carries the stamp that says so.
  *
  * The pure state function is exported separately so Node unit tests can cover
  * it without a DOM (`gpu_adapter.test.js`).
  */
 
 import { adapterWarningText } from '../core/gpu_adapter.js';
+import { createHudBanner } from './hud_banner.js';
 
 const BANNER_ID = 'gpu-adapter-warning';
 
@@ -33,40 +40,32 @@ export function bannerStateForAdapter(adapter) {
   return { show: true, text };
 }
 
+// Fixed top-center, below the multi-client banner (top: 44px, ~30px tall) and
+// the BENCH MIRROR banner (top: 78px, ~30px tall) so all three can co-exist —
+// the old top: 84px sat on top of the bench banner. Error palette via theme
+// vars; pointer events off — it warns, it never blocks the UI; only its ✕
+// (hud_banner.js) takes the pointer. Still NOT hidden by the render tool's
+// UI-hiding pass: a screenshot taken on the wrong GPU should carry the stamp.
+const BANNER_CSS =
+  'position:fixed;top:112px;left:50%;transform:translateX(-50%);' +
+  'max-width:min(880px, calc(100vw - 28px));' +
+  'background:color-mix(in srgb, var(--error) 26%, var(--surface));' +
+  'border:2px solid var(--error-container-border);color:var(--error);' +
+  'padding:10px 20px;border-radius:8px;font-family:var(--font-headline);' +
+  'font-size:12px;font-weight:700;letter-spacing:0.04em;line-height:1.5;' +
+  'text-align:center;pointer-events:none;z-index:10001;';
+
+const _banner = createHudBanner({
+  id: BANNER_ID,
+  cssText: BANNER_CSS,
+  closeTitle: 'Hide this warning until reload — the sim still renders on this GPU',
+});
+
 /**
  * Mount / update the banner for a detected adapter. Creates the element lazily;
  * safe to call before <body> exists (defers via DOMContentLoaded once).
  * @param {{renderer: string|null, integrated: boolean, detectionFailed: boolean}|null} adapter
  */
 export function setupGpuAdapterWarning(adapter) {
-  const state = bannerStateForAdapter(adapter);
-  const render = () => {
-    let el = document.getElementById(BANNER_ID);
-    if (!el) {
-      if (!state.show) return; // healthy adapter — nothing to mount, nothing to hide
-      el = document.createElement('div');
-      el.id = BANNER_ID;
-      el.setAttribute('role', 'alert');
-      el.setAttribute('aria-live', 'assertive');
-      // Fixed top-center, below the multi-client banner (top: 44px) so the two
-      // can co-exist. Error palette via theme vars; pointer events off — it
-      // warns, it never blocks the UI. Deliberately NOT in the edit-mode hide
-      // list and NOT hidden by the render tool's UI-hiding pass: a screenshot
-      // taken on the wrong GPU should carry the stamp that says so.
-      el.style.cssText =
-        'position:fixed;top:84px;left:50%;transform:translateX(-50%);' +
-        'max-width:min(880px, calc(100vw - 28px));' +
-        'background:color-mix(in srgb, var(--error) 26%, var(--surface));' +
-        'border:2px solid var(--error-container-border);color:var(--error);' +
-        'padding:10px 20px;border-radius:8px;font-family:var(--font-headline);' +
-        'font-size:12px;font-weight:700;letter-spacing:0.04em;line-height:1.5;' +
-        'text-align:center;pointer-events:none;z-index:10001;';
-      document.body.appendChild(el);
-    }
-    el.textContent = state.text;
-    el.style.display = state.show ? '' : 'none';
-  };
-  if (typeof document === 'undefined') return;
-  if (document.body) render();
-  else window.addEventListener('DOMContentLoaded', render, { once: true });
+  _banner.update(bannerStateForAdapter(adapter));
 }

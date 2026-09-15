@@ -111,7 +111,10 @@ All commands run from `simulation/agent_tools/`:
 > adapter **invalidates the measurement** — the sim shows a red
 > `#gpu-adapter-warning` banner and logs `console.error` in that case, and it
 > will appear in your screenshots on purpose. Full rule:
-> `.agent/ops/sim_auto_checks.md` → "GPU Adapter Check".
+> `.agent/ops/sim_auto_checks.md` → "GPU Adapter Check". Fix + tool:
+> `.agent/skills/browser_gpu_fix.md` (`node tools/browser_gpu_check.cjs --fix`).
+> The banner carries a ✕ (and `H` → hide_all hides it) — dismissals are
+> per-page, so a fresh probe browser always sees it.
 
 ---
 
