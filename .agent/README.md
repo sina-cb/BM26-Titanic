@@ -55,6 +55,11 @@ list of operator gates live in **[`os/autonomy.md`](os/autonomy.md)**.
 - **No numeric prefixes** on any file — the old `00_`/`01_` scheme is gone.
   The **only** exception is the date prefix on `plans/` and `reports/`
   entries (`YYYYMMDD_N_slug.md`), which orders them chronologically.
+- **`N` in `YYYYMMDD_N_slug.md` is a repo-wide running counter, not a
+  per-day one.** Take the next number after the highest that already exists
+  (`ls .agent/reports/*/` — it does not restart each day), and when several
+  agents write at once, hand the numbers out at spawn time
+  (`os/interface_agent.md`).
 
 ## Historical note — old paths in the record
 
